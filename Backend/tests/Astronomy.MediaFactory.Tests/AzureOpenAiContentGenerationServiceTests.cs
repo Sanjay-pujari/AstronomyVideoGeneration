@@ -134,7 +134,7 @@ public sealed class AzureOpenAiContentGenerationServiceTests
 
     private sealed class StubPromptBuilder : IPromptBuilder
     {
-        public string Build(ContentType contentType, AstronomyContext context) => "prompt";
+        public string Build(ContentType contentType, AstronomyContext context, PromptFeedbackContext? feedbackContext = null) => "prompt";
     }
 
     private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler

@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.ContentGen;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Xunit;
@@ -12,5 +13,27 @@ public sealed class PromptBuilderTests
         var prompt = AstronomyPromptBuilder.Build(ContentType.DailySkyGuide, context);
         Assert.Contains("Jupiter", prompt);
         Assert.Contains("Udaipur, India", prompt);
+    }
+
+    [Fact]
+    public void Build_IncludesStructuredFeedbackContext_WhenProvided()
+    {
+        var builder = new PromptBuilder();
+        var context = new AstronomyContext { Date = new DateOnly(2026, 3, 16), LocationName = "Udaipur, India", TimeZone = "Asia/Kolkata" };
+        var feedback = new PromptFeedbackContext
+        {
+            ContentType = ContentType.DailySkyGuide,
+            RecommendedKeywords = ["jupiter", "tonight"],
+            AvoidKeywords = ["saturn"],
+            RecommendedToneNotes = ["Emphasize what is visible tonight."],
+            RecentOverusedTopics = ["Jupiter"],
+            TopicSelectionRationale = "Selected because score=0.92"
+        };
+
+        var prompt = builder.Build(ContentType.DailySkyGuide, context, feedback);
+
+        Assert.Contains("Feedback context", prompt);
+        Assert.Contains("\"RecommendedKeywords\"", prompt);
+        Assert.Contains("Selected because score=0.92", prompt);
     }
 }

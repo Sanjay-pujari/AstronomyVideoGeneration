@@ -23,6 +23,7 @@ public sealed class PipelineOrchestrator
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
     private readonly IYouTubeThumbnailPublisher? _youTubeThumbnailPublisher;
     private readonly ITopicSelectionService? _topicSelectionService;
+    private readonly IPromptFeedbackService? _promptFeedbackService;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -41,7 +42,8 @@ public sealed class PipelineOrchestrator
         ILogger<PipelineOrchestrator> logger,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
         IYouTubeThumbnailPublisher? youTubeThumbnailPublisher = null,
-        ITopicSelectionService? topicSelectionService = null)
+        ITopicSelectionService? topicSelectionService = null,
+        IPromptFeedbackService? promptFeedbackService = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -60,6 +62,7 @@ public sealed class PipelineOrchestrator
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
         _youTubeThumbnailPublisher = youTubeThumbnailPublisher;
         _topicSelectionService = topicSelectionService;
+        _promptFeedbackService = promptFeedbackService;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -85,9 +88,10 @@ public sealed class PipelineOrchestrator
             Directory.CreateDirectory(outputDir);
 
             var context = await _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken);
+            TopicSelectionPlan? topicSelectionPlan = null;
             if (request.UseTopicPlanner && _topicSelectionService is not null)
             {
-                var plan = await _topicSelectionService.BuildPlanAsync(new TopicSelectionRequest
+                topicSelectionPlan = await _topicSelectionService.BuildPlanAsync(new TopicSelectionRequest
                 {
                     Date = request.Date,
                     ContentType = request.ContentType,
@@ -96,7 +100,7 @@ public sealed class PipelineOrchestrator
                     MaxCandidates = 5
                 }, cancellationToken);
 
-                var selected = plan.PrimaryLongForm;
+                var selected = topicSelectionPlan.PrimaryLongForm;
                 if (selected is not null)
                 {
                     var selectedEvent = context.Events.FirstOrDefault(x => x.ObjectName.Equals(selected.ObjectName, StringComparison.OrdinalIgnoreCase));
@@ -115,6 +119,18 @@ public sealed class PipelineOrchestrator
                     });
                 }
             }
+
+            context.TopicSelectionPlan = topicSelectionPlan;
+            if (_promptFeedbackService is not null)
+            {
+                context.PromptFeedbackContext = await _promptFeedbackService.BuildContextAsync(new PromptFeedbackRequest
+                {
+                    ContentType = request.ContentType,
+                    IsShortForm = false,
+                    TopicSelectionPlan = topicSelectionPlan
+                }, cancellationToken);
+            }
+
             var feedbackSignals = _analyticsFeedbackProvider is null
                 ? new FeedbackSignals()
                 : await _analyticsFeedbackProvider.GetSignalsAsync(10, cancellationToken);
@@ -128,7 +144,8 @@ public sealed class PipelineOrchestrator
                 SourceDescription = script.Description,
                 SourceTags = script.Tags,
                 SourceScript = script.ScriptBody,
-                FeedbackKeywords = feedbackSignals.TopKeywords
+                FeedbackKeywords = feedbackSignals.TopKeywords,
+                FeedbackContext = context.PromptFeedbackContext
             }, cancellationToken);
             script = new ScriptResult
             {
@@ -161,6 +178,7 @@ public sealed class PipelineOrchestrator
                 OptimizedHashtagsCsv = string.Join(",", script.OptimizedMetadata?.Hashtags ?? []),
                 ThumbnailTextSuggestionsCsv = string.Join("|", script.OptimizedMetadata?.ThumbnailTextSuggestions ?? []),
                 HookLine = script.OptimizedMetadata?.HookLine
+                ,PromptFeedbackContextJson = System.Text.Json.JsonSerializer.Serialize(context.PromptFeedbackContext)
             }, cancellationToken);
 
             await _repository.AddAssetAsync(new MediaAsset

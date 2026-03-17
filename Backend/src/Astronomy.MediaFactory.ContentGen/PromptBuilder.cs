@@ -7,12 +7,12 @@ namespace Astronomy.MediaFactory.ContentGen;
 
 public interface IPromptBuilder
 {
-    string Build(ContentType contentType, AstronomyContext context);
+    string Build(ContentType contentType, AstronomyContext context, PromptFeedbackContext? feedbackContext = null);
 }
 
 public sealed class PromptBuilder : IPromptBuilder
 {
-    public string Build(ContentType contentType, AstronomyContext context)
+    public string Build(ContentType contentType, AstronomyContext context, PromptFeedbackContext? feedbackContext = null)
     {
         var astronomyInput = new
         {
@@ -50,6 +50,30 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("2) Include practical observation guidance (when to look, where to look, and what tool to use).");
         sb.AppendLine("3) Do not invent or hallucinate numeric values.");
         sb.AppendLine("4) Return ONLY valid JSON with no markdown, no code fences, and no commentary.");
+
+        if (feedbackContext is not null)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Feedback context (bounded deterministic hints):");
+            sb.AppendLine(JsonSerializer.Serialize(new
+            {
+                feedbackContext.ContentType,
+                feedbackContext.RecommendedKeywords,
+                feedbackContext.AvoidKeywords,
+                feedbackContext.RecommendedHookPatterns,
+                feedbackContext.AvoidHookPatterns,
+                feedbackContext.RecommendedTitlePatterns,
+                feedbackContext.AvoidTitlePatterns,
+                feedbackContext.RecommendedToneNotes,
+                feedbackContext.RecentWinningTopics,
+                feedbackContext.RecentOverusedTopics,
+                feedbackContext.AvoidObjectEmphasis,
+                feedbackContext.MetadataOptimizationHints,
+                feedbackContext.TopicSelectionRationale,
+                feedbackContext.UsedFallbackDefaults
+            }, new JsonSerializerOptions { WriteIndented = true }));
+        }
+
         sb.AppendLine();
         sb.AppendLine("Output JSON schema:");
         sb.AppendLine("{");

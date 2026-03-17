@@ -75,6 +75,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IFeedbackSignalExtractor, TopKeywordSignalExtractor>();
         services.AddScoped<IFeedbackSignalExtractor, TopHookSignalExtractor>();
         services.AddScoped<IAnalyticsFeedbackProvider, AnalyticsFeedbackProvider>();
+        services.AddScoped<IPromptFeedbackService, PromptFeedbackService>();
         services.AddScoped<StellariumScriptBuilder>(sp =>
             new StellariumScriptBuilder(sp.GetRequiredService<IOptions<StellariumOptions>>().Value));
         services.AddScoped<PipelineOrchestrator>();

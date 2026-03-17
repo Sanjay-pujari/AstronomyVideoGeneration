@@ -50,6 +50,8 @@ app.MapGet("/api/topics/recommended", async (DateOnly? date, ContentType? conten
 });
 app.MapPost("/api/topics/plan", async (TopicSelectionRequest request, ITopicSelectionService topicSelectionService, CancellationToken ct) =>
     Results.Ok(await topicSelectionService.BuildPlanAsync(request, ct)));
+app.MapPost("/api/prompts/feedback-preview", async (PromptFeedbackRequest request, IPromptFeedbackService promptFeedbackService, CancellationToken ct) =>
+    Results.Ok(await promptFeedbackService.BuildContextAsync(request, ct)));
 app.MapGet("/api/analytics/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentAnalyticsAsync(50, ct)));
 app.MapGet("/api/analytics/top-performing", async (int? topN, IAnalyticsAggregationService aggregationService, CancellationToken ct) =>
 {
