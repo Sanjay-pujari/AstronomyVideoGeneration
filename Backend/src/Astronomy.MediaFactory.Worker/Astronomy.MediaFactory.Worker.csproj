@@ -7,5 +7,6 @@
     <PackageReference Include="Quartz.Extensions.Hosting" />
     <PackageReference Include="Serilog.AspNetCore" />
     <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" />
   </ItemGroup>
 </Project>

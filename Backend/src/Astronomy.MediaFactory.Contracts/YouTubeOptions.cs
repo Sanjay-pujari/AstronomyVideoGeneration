@@ -10,4 +10,5 @@ public sealed class YouTubeOptions
     public string? RefreshToken { get; set; }
     public string? AccessToken { get; set; }
     public string? TokenFilePath { get; set; }
+    public bool PublishingEnabled { get; set; }
 }

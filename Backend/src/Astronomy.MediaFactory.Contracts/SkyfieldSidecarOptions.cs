@@ -6,7 +6,8 @@ public sealed class SkyfieldSidecarOptions
 {
     public const string SectionName = "SkyfieldSidecar";
 
-    [Required]
+    public bool Enabled { get; set; } = true;
+
     [Url]
     public string BaseUrl { get; set; } = "http://localhost:8010";
 }

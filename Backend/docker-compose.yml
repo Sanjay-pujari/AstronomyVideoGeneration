@@ -8,6 +8,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite
@@ -18,3 +23,18 @@ services:
     build:
       context: ./python/skyfield_sidecar
     ports: ["8010:8010"]
+
+  api:
+    build:
+      context: .
+      dockerfile: src/Astronomy.MediaFactory.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=astronomy_media_factory;Username=postgres;Password=postgres
+      SkyfieldSidecar__BaseUrl: http://skyfield-sidecar:8010
+    ports: ["8080:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      skyfield-sidecar:
+        condition: service_started

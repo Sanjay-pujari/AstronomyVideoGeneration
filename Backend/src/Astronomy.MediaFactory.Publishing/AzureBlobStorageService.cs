@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Azure.Identity;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -19,13 +20,13 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
 
     public async Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_options.ConnectionString))
+        var container = BuildContainerClient();
+        if (container is null)
         {
-            _logger.LogWarning("AzureBlob:ConnectionString is not configured. Skipping blob upload.");
+            _logger.LogWarning("Azure blob storage is not configured. Skipping blob upload.");
             return new BlobUploadResult();
         }
 
-        var container = new BlobContainerClient(_options.ConnectionString, _options.ContainerName);
         await container.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
 
         return new BlobUploadResult
@@ -34,6 +35,29 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
             AudioUrl = await UploadIfExistsAsync(container, request.AudioPath, request.BasePath, cancellationToken),
             ThumbnailUrl = await UploadIfExistsAsync(container, request.ThumbnailPath, request.BasePath, cancellationToken)
         };
+    }
+
+    private BlobContainerClient? BuildContainerClient()
+    {
+        if (!string.IsNullOrWhiteSpace(_options.ConnectionString))
+        {
+            return new BlobContainerClient(_options.ConnectionString, _options.ContainerName);
+        }
+
+        if (_options.UseManagedIdentity)
+        {
+            var serviceUri = _options.ServiceUri;
+            if (string.IsNullOrWhiteSpace(serviceUri) && !string.IsNullOrWhiteSpace(_options.AccountName))
+                serviceUri = $"https://{_options.AccountName}.blob.core.windows.net";
+
+            if (!string.IsNullOrWhiteSpace(serviceUri) && Uri.TryCreate(serviceUri, UriKind.Absolute, out var uri))
+            {
+                var serviceClient = new BlobServiceClient(uri, new DefaultAzureCredential());
+                return serviceClient.GetBlobContainerClient(_options.ContainerName);
+            }
+        }
+
+        return null;
     }
 
     private async Task<string?> UploadIfExistsAsync(BlobContainerClient container, string? localPath, string basePath, CancellationToken cancellationToken)

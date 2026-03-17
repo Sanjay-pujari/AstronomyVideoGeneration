@@ -18,6 +18,13 @@ public sealed class PipelineJobExecutor : IPipelineJobExecutor
 
     public async Task ExecuteAsync(PipelineJob job, CancellationToken cancellationToken)
     {
+        using var logScope = _logger.BeginScope(new Dictionary<string, object>
+        {
+            ["jobId"] = job.Id,
+            ["jobType"] = job.JobType.ToString(),
+            ["pipelineRunId"] = job.ParentPipelineRunId
+        });
+        _logger.LogInformation("Executing pipeline job {JobId} of type {JobType}.", job.Id, job.JobType);
         switch (job.JobType)
         {
             case PipelineJobType.GenerateMainVideo:

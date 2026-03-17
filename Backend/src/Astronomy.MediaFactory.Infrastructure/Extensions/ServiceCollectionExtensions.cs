@@ -3,31 +3,82 @@ using Astronomy.MediaFactory.AstroData.Services;
 using Astronomy.MediaFactory.ContentGen;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Alerting;
+using Astronomy.MediaFactory.Infrastructure.Configuration;
+using Astronomy.MediaFactory.Infrastructure.Operations;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Publishing;
 using Astronomy.MediaFactory.Rendering;
-using Astronomy.MediaFactory.Infrastructure.Operations;
-using Astronomy.MediaFactory.Infrastructure.Alerting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+
 namespace Astronomy.MediaFactory.Infrastructure.Extensions;
+
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddMediaFactory(this IServiceCollection services, IConfiguration configuration)
     {
-        services.Configure<RenderingOptions>(configuration.GetSection(RenderingOptions.SectionName));
-        services.Configure<AstronomyApiOptions>(configuration.GetSection(AstronomyApiOptions.SectionName));
-        services.Configure<AzureOpenAiOptions>(configuration.GetSection(AzureOpenAiOptions.SectionName));
-        services.Configure<AzureSpeechOptions>(configuration.GetSection(AzureSpeechOptions.SectionName));
-        services.Configure<AzureBlobOptions>(configuration.GetSection(AzureBlobOptions.SectionName));
-        services.Configure<YouTubeOptions>(configuration.GetSection(YouTubeOptions.SectionName));
-        services.Configure<SchedulingOptions>(configuration.GetSection(SchedulingOptions.SectionName));
-        services.Configure<AnalyticsOptions>(configuration.GetSection(AnalyticsOptions.SectionName));
-        services.Configure<TopicSelectionOptions>(configuration.GetSection(TopicSelectionOptions.SectionName));
-        services.Configure<OperationsOptions>(configuration.GetSection(OperationsOptions.SectionName));
-        services.Configure<AlertingOptions>(configuration.GetSection(AlertingOptions.SectionName));
+        services.AddOptions<RenderingOptions>()
+            .Bind(configuration.GetSection(RenderingOptions.SectionName))
+            .Validate(opt => opt.VideoWidth > 0 && opt.VideoHeight > 0 && opt.FrameRate > 0, "Rendering dimensions and frame rate must be > 0.")
+            .ValidateOnStart();
+
+        services.AddOptions<AstronomyApiOptions>()
+            .Bind(configuration.GetSection(AstronomyApiOptions.SectionName))
+            .ValidateOnStart();
+
+        services.AddOptions<AzureOpenAiOptions>()
+            .Bind(configuration.GetSection(AzureOpenAiOptions.SectionName))
+            .Validate(options => string.IsNullOrWhiteSpace(options.Endpoint) || Uri.TryCreate(options.Endpoint, UriKind.Absolute, out _), "AzureOpenAI:Endpoint must be an absolute URI when provided.")
+            .ValidateOnStart();
+
+        services.AddOptions<AzureSpeechOptions>()
+            .Bind(configuration.GetSection(AzureSpeechOptions.SectionName))
+            .Validate(options => !string.IsNullOrWhiteSpace(options.Region) || !string.IsNullOrWhiteSpace(options.Endpoint), "AzureSpeech:Region or AzureSpeech:Endpoint is required.")
+            .ValidateOnStart();
+
+        services.AddOptions<AzureBlobOptions>()
+            .Bind(configuration.GetSection(AzureBlobOptions.SectionName))
+            .Validate(options => !string.IsNullOrWhiteSpace(options.ContainerName), "AzureBlob:ContainerName is required.")
+            .Validate(options => string.IsNullOrWhiteSpace(options.ServiceUri) || Uri.TryCreate(options.ServiceUri, UriKind.Absolute, out _), "AzureBlob:ServiceUri must be an absolute URI when provided.")
+            .ValidateOnStart();
+
+        services.AddOptions<YouTubeOptions>()
+            .Bind(configuration.GetSection(YouTubeOptions.SectionName))
+            .Validate(options => string.IsNullOrWhiteSpace(options.PrivacyStatus) || options.PrivacyStatus is "private" or "public" or "unlisted", "YouTube:PrivacyStatus must be private, public, or unlisted.")
+            .ValidateOnStart();
+
+        services.AddOptions<SchedulingOptions>()
+            .Bind(configuration.GetSection(SchedulingOptions.SectionName))
+            .Validate(opt => opt.MaxRetryAttempts > 0 && opt.RetryBackoffSeconds > 0 && opt.QueuePollIntervalSeconds > 0, "Scheduling values must be > 0.")
+            .ValidateOnStart();
+
+        services.AddOptions<AnalyticsOptions>()
+            .Bind(configuration.GetSection(AnalyticsOptions.SectionName))
+            .Validate(opt => opt.FetchIntervalMinutes > 0 && opt.TopN > 0, "Analytics values must be > 0.")
+            .ValidateOnStart();
+
+        services.AddOptions<TopicSelectionOptions>()
+            .Bind(configuration.GetSection(TopicSelectionOptions.SectionName))
+            .Validate(opt => opt.RepetitionWindowDays > 0, "TopicSelection:RepetitionWindowDays must be > 0.")
+            .ValidateOnStart();
+
+        services.AddOptions<OperationsOptions>()
+            .Bind(configuration.GetSection(OperationsOptions.SectionName))
+            .Validate(opt => opt.RetainDays > 0 && opt.SlowStageThresholdMs > 0, "Operations values must be > 0.")
+            .ValidateOnStart();
+
+        services.AddOptions<AlertingOptions>()
+            .Bind(configuration.GetSection(AlertingOptions.SectionName))
+            .Validate(opt => !opt.Enabled || string.IsNullOrWhiteSpace(opt.SlackWebhookUrl) || Uri.TryCreate(opt.SlackWebhookUrl, UriKind.Absolute, out _), "Alerting:SlackWebhookUrl must be an absolute URI when provided.")
+            .ValidateOnStart();
+
+        services.AddOptions<TelemetryOptions>()
+            .Bind(configuration.GetSection(TelemetryOptions.SectionName))
+            .ValidateOnStart();
+
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
             .ValidateDataAnnotations()
@@ -35,20 +86,31 @@ public static class ServiceCollectionExtensions
             .Validate(options => string.IsNullOrWhiteSpace(options.ScriptsDirectory) || Path.IsPathRooted(options.ScriptsDirectory), "Stellarium:ScriptsDirectory must be an absolute path when provided.")
             .Validate(options => string.IsNullOrWhiteSpace(options.CaptureDirectory) || Path.IsPathRooted(options.CaptureDirectory), "Stellarium:CaptureDirectory must be an absolute path when provided.")
             .ValidateOnStart();
+
         services.AddOptions<SkyfieldSidecarOptions>()
             .Bind(configuration.GetSection(SkyfieldSidecarOptions.SectionName))
             .ValidateDataAnnotations()
-            .Validate(options => Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _), "SkyfieldSidecar:BaseUrl must be an absolute URI.")
+            .Validate(options => !options.Enabled || Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _), "SkyfieldSidecar:BaseUrl must be an absolute URI when enabled.")
             .ValidateOnStart();
+
+        services.AddOptions<StartupValidationOptions>()
+            .Bind(configuration.GetSection(StartupValidationOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<StartupValidationOptions>, ProductionStartupValidator>();
+
         services.AddHttpClient<NasaApodClient>();
         services.AddHttpClient<NasaNeoWsClient>();
         services.AddHttpClient<MinorPlanetCenterClient>();
         services.AddHttpClient<ISkyfieldSidecarClient, SkyfieldSidecarClient>((sp, client) =>
         {
-            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SkyfieldSidecarOptions>>().Value;
+            var options = sp.GetRequiredService<IOptions<SkyfieldSidecarOptions>>().Value;
             client.BaseAddress = new Uri(options.BaseUrl);
         });
-        var cs = configuration.GetConnectionString("Postgres") ?? configuration["ConnectionStrings:Postgres"] ?? "Host=localhost;Port=5432;Database=astronomy_media_factory;Username=postgres;Password=postgres";
+
+        var cs = configuration.GetConnectionString("Postgres")
+                 ?? configuration["ConnectionStrings:Postgres"]
+                 ?? "Host=localhost;Port=5432;Database=astronomy_media_factory;Username=postgres;Password=postgres";
+
         services.AddDbContext<MediaFactoryDbContext>(o => o.UseNpgsql(cs));
         services.AddScoped<IPipelineRepository, EfPipelineRepository>();
         services.AddScoped<IAstronomyContextProvider, AstronomyContextProvider>();
@@ -106,10 +168,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOperationalAlertNotifier, SafeOperationalAlertNotifier>();
         services.AddScoped<IStageAlertPublisher, RoutingStageAlertPublisher>();
         services.AddScoped<IPipelineMonitoringService, PipelineMonitoringService>();
+
         services.AddHealthChecks()
             .AddCheck<DatabaseConnectivityHealthCheck>("database", tags: ["ready"])
             .AddCheck<QueueProcessorReadinessHealthCheck>("queue", tags: ["ready"])
             .AddCheck<OperationsConfigHealthCheck>("config", tags: ["ready"]);
+
         return services;
     }
 }
