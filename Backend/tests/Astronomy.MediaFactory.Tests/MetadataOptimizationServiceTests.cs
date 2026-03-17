@@ -77,6 +77,40 @@ public sealed class MetadataOptimizationServiceTests
         Assert.NotEmpty(result.Tags);
     }
 
+    [Fact]
+    public async Task OptimizeForVideoAsync_Uses_DeterministicFallback_WhenAiPayloadIsInvalid()
+    {
+        var service = new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance, new InvalidPayloadModelClient());
+
+        var result = await service.OptimizeForVideoAsync(new MetadataOptimizationInput
+        {
+            ContentType = ContentType.SpaceNews,
+            Context = BuildContext(),
+            SourceTitle = "Source title",
+            SourceDescription = "Source description",
+            SourceTags = ["space"]
+        }, CancellationToken.None);
+
+        Assert.NotEmpty(result.Tags);
+        Assert.NotEmpty(result.Hashtags);
+        Assert.False(string.IsNullOrWhiteSpace(result.OptimizedDescription));
+    }
+
+    [Fact]
+    public async Task OptimizeForVideoAsync_Throws_WhenSourceDescriptionMissing()
+    {
+        var service = new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.OptimizeForVideoAsync(new MetadataOptimizationInput
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildContext(),
+            SourceTitle = "Title",
+            SourceDescription = " ",
+            SourceTags = ["astronomy"]
+        }, CancellationToken.None));
+    }
+
     private static AstronomyContext BuildContext() => new()
     {
         Date = new DateOnly(2026, 3, 17),
@@ -92,5 +126,17 @@ public sealed class MetadataOptimizationServiceTests
     {
         public Task<OptimizedVideoMetadata?> TryOptimizeAsync(MetadataOptimizationInput input, bool isShort, CancellationToken cancellationToken)
             => throw new InvalidOperationException("fail");
+    }
+
+    private sealed class InvalidPayloadModelClient : IMetadataOptimizationModelClient
+    {
+        public Task<OptimizedVideoMetadata?> TryOptimizeAsync(MetadataOptimizationInput input, bool isShort, CancellationToken cancellationToken)
+            => Task.FromResult<OptimizedVideoMetadata?>(new OptimizedVideoMetadata
+            {
+                PrimaryTitle = "",
+                OptimizedDescription = "",
+                Tags = [],
+                Hashtags = []
+            });
     }
 }
