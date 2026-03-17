@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Astronomy.MediaFactory.Contracts\Astronomy.MediaFactory.Contracts.csproj" />
+    <ProjectReference Include="..\Astronomy.MediaFactory.Core\Astronomy.MediaFactory.Core.csproj" />
+    <PackageReference Include="Microsoft.CognitiveServices.Speech" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <ProjectReference Include="..\Astronomy.MediaFactory.Contracts\Astronomy.MediaFactory.Contracts.csproj" />
+    <ProjectReference Include="..\Astronomy.MediaFactory.Core\Astronomy.MediaFactory.Core.csproj" />
+    <ProjectReference Include="..\Astronomy.MediaFactory.Infrastructure\Astronomy.MediaFactory.Infrastructure.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+  </ItemGroup>
+</Project>

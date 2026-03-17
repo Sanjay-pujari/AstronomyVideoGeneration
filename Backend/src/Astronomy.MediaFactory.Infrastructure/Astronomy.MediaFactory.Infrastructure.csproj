@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Astronomy.MediaFactory.Contracts\Astronomy.MediaFactory.Contracts.csproj" />
+    <ProjectReference Include="..\Astronomy.MediaFactory.Core\Astronomy.MediaFactory.Core.csproj" />
+    <ProjectReference Include="..\Astronomy.MediaFactory.AstroData\Astronomy.MediaFactory.AstroData.csproj" />
+    <ProjectReference Include="..\Astronomy.MediaFactory.ContentGen\Astronomy.MediaFactory.ContentGen.csproj" />
+    <ProjectReference Include="..\Astronomy.MediaFactory.Rendering\Astronomy.MediaFactory.Rendering.csproj" />
+    <ProjectReference Include="..\Astronomy.MediaFactory.Publishing\Astronomy.MediaFactory.Publishing.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+  </ItemGroup>
+</Project>

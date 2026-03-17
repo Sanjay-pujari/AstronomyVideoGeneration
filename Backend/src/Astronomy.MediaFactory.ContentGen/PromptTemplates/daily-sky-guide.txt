@@ -1,0 +1,9 @@
+System goal:
+Create a clear and educational daily sky guide.
+Sections:
+1. Hook
+2. What stands out tonight
+3. Best time and direction
+4. Naked-eye and binocular targets
+5. Telescope targets
+6. Closing reminder

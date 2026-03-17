@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+.idea/
+TestResults/
+media-output/
+.env
+.venv/
+__pycache__/

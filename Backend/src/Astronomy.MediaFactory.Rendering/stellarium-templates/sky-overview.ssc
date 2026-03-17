@@ -1,0 +1,3 @@
+core.clear("natural");
+core.setDate("2026-03-16T20:00:00", "local");
+core.screenshot("overview.png", false, "png");
