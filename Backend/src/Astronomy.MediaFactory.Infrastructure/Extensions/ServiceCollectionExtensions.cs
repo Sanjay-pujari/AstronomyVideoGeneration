@@ -21,7 +21,13 @@ public static class ServiceCollectionExtensions
         services.Configure<AzureSpeechOptions>(configuration.GetSection(AzureSpeechOptions.SectionName));
         services.Configure<AzureStorageOptions>(configuration.GetSection(AzureStorageOptions.SectionName));
         services.Configure<YouTubeOptions>(configuration.GetSection(YouTubeOptions.SectionName));
-        services.Configure<StellariumOptions>(configuration.GetSection(StellariumOptions.SectionName));
+        services.AddOptions<StellariumOptions>()
+            .Bind(configuration.GetSection(StellariumOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(options => string.IsNullOrWhiteSpace(options.ExecutablePath) || Path.IsPathRooted(options.ExecutablePath), "Stellarium:ExecutablePath must be an absolute path when provided.")
+            .Validate(options => string.IsNullOrWhiteSpace(options.ScriptsDirectory) || Path.IsPathRooted(options.ScriptsDirectory), "Stellarium:ScriptsDirectory must be an absolute path when provided.")
+            .Validate(options => string.IsNullOrWhiteSpace(options.CaptureDirectory) || Path.IsPathRooted(options.CaptureDirectory), "Stellarium:CaptureDirectory must be an absolute path when provided.")
+            .ValidateOnStart();
         services.AddOptions<SkyfieldSidecarOptions>()
             .Bind(configuration.GetSection(SkyfieldSidecarOptions.SectionName))
             .ValidateDataAnnotations()
