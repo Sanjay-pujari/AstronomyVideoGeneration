@@ -21,7 +21,7 @@ public sealed class PipelineJobExecutor : IPipelineJobExecutor
         switch (job.JobType)
         {
             case PipelineJobType.GenerateMainVideo:
-                var run = await _orchestrator.RunAsync(new RunPipelineRequest(job.RunDate, job.ContentType, job.LocationName, job.TimeZone, job.PublishToYouTube), cancellationToken);
+                var run = await _orchestrator.RunAsync(new RunPipelineRequest(job.RunDate, job.ContentType, job.LocationName, job.TimeZone, job.PublishToYouTube, job.UseTopicPlanner), cancellationToken);
                 job.ParentPipelineRunId = run.Id;
                 break;
             case PipelineJobType.GenerateShorts:

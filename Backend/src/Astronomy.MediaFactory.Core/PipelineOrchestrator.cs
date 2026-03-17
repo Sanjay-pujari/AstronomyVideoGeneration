@@ -22,6 +22,7 @@ public sealed class PipelineOrchestrator
     private readonly ILogger<PipelineOrchestrator> _logger;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
     private readonly IYouTubeThumbnailPublisher? _youTubeThumbnailPublisher;
+    private readonly ITopicSelectionService? _topicSelectionService;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -39,7 +40,8 @@ public sealed class PipelineOrchestrator
         IOptions<YouTubeOptions> youTubeOptions,
         ILogger<PipelineOrchestrator> logger,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
-        IYouTubeThumbnailPublisher? youTubeThumbnailPublisher = null)
+        IYouTubeThumbnailPublisher? youTubeThumbnailPublisher = null,
+        ITopicSelectionService? topicSelectionService = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -57,6 +59,7 @@ public sealed class PipelineOrchestrator
         _logger = logger;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
         _youTubeThumbnailPublisher = youTubeThumbnailPublisher;
+        _topicSelectionService = topicSelectionService;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -82,6 +85,36 @@ public sealed class PipelineOrchestrator
             Directory.CreateDirectory(outputDir);
 
             var context = await _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken);
+            if (request.UseTopicPlanner && _topicSelectionService is not null)
+            {
+                var plan = await _topicSelectionService.BuildPlanAsync(new TopicSelectionRequest
+                {
+                    Date = request.Date,
+                    ContentType = request.ContentType,
+                    LocationName = request.LocationName,
+                    TimeZone = request.TimeZone,
+                    MaxCandidates = 5
+                }, cancellationToken);
+
+                var selected = plan.PrimaryLongForm;
+                if (selected is not null)
+                {
+                    var selectedEvent = context.Events.FirstOrDefault(x => x.ObjectName.Equals(selected.ObjectName, StringComparison.OrdinalIgnoreCase));
+                    if (selectedEvent is not null)
+                    {
+                        context.Events.Remove(selectedEvent);
+                        context.Events.Insert(0, selectedEvent);
+                    }
+
+                    context.NewsItems.Insert(0, new NewsItemModel
+                    {
+                        Headline = selected.TitleCandidate,
+                        Summary = selected.Rationale,
+                        SourceName = "Topic Planner",
+                        PublishedDate = request.Date
+                    });
+                }
+            }
             var feedbackSignals = _analyticsFeedbackProvider is null
                 ? new FeedbackSignals()
                 : await _analyticsFeedbackProvider.GetSignalsAsync(10, cancellationToken);
