@@ -69,3 +69,21 @@ public sealed class ShortVideo : EntityBase
     public int Duration { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
+
+public sealed class PipelineJob : EntityBase
+{
+    public PipelineJobType JobType { get; set; }
+    public Guid? ParentPipelineRunId { get; set; }
+    public PipelineJobStatus Status { get; set; } = PipelineJobStatus.Pending;
+    public int AttemptCount { get; set; }
+    public DateTimeOffset ScheduledAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? StartedAt { get; set; }
+    public DateTimeOffset? FinishedAt { get; set; }
+    public string? ErrorMessage { get; set; }
+    public DateOnly RunDate { get; set; }
+    public ContentType ContentType { get; set; }
+    public string LocationName { get; set; } = "";
+    public string TimeZone { get; set; } = "Asia/Kolkata";
+    public bool PublishToYouTube { get; set; }
+    public DateTimeOffset? NextAttemptAt { get; set; }
+}

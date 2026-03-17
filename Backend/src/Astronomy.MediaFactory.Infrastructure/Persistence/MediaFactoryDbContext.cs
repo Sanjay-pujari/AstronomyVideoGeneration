@@ -13,6 +13,7 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<MediaAsset> MediaAssets => Set<MediaAsset>();
     public DbSet<PublishedVideo> PublishedVideos => Set<PublishedVideo>();
     public DbSet<ShortVideo> ShortVideos => Set<ShortVideo>();
+    public DbSet<PipelineJob> PipelineJobs => Set<PipelineJob>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -22,5 +23,6 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<MediaAsset>().ToTable("media_assets").HasKey(x => x.Id);
         modelBuilder.Entity<PublishedVideo>().ToTable("published_videos").HasKey(x => x.Id);
         modelBuilder.Entity<ShortVideo>().ToTable("short_videos").HasKey(x => x.Id);
+        modelBuilder.Entity<PipelineJob>().ToTable("pipeline_jobs").HasKey(x => x.Id);
     }
 }
