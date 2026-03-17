@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.ContentGen;
 
-public sealed class AzureOpenAiContentGenerationService : IScriptGenerationService, IShortsScriptGenerationService
+public sealed class AzureOpenAiContentGenerationService : IScriptGenerationService, IShortsScriptGenerationService, IMetadataOptimizationModelClient
 {
     private const string ApiVersion = "2024-10-21";
     private const int MaxGenerationAttempts = 3;
@@ -423,6 +423,106 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             Tags = ["shorts", "astronomy", contentType.ToString()],
             EstimatedDurationSeconds = 45
         };
+    }
+
+
+    public async Task<OptimizedVideoMetadata?> TryOptimizeAsync(MetadataOptimizationInput input, bool isShort, CancellationToken cancellationToken)
+    {
+        var prompt = BuildMetadataPrompt(input, isShort);
+        try
+        {
+            var completion = await RequestCompletionAsync(prompt, cancellationToken);
+            return TryParseOptimizedMetadata(completion, isShort, out var metadata, out _) ? metadata : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string BuildMetadataPrompt(MetadataOptimizationInput input, bool isShort)
+    {
+        return "You optimize YouTube astronomy metadata. Return ONLY strict JSON with these exact fields: " +
+               "primaryTitle(string), alternateTitles(array), optimizedDescription(string), tags(array), hashtags(array), thumbnailTextSuggestions(array), hookLine(string|null). " +
+               "No additional fields. Keep titles trustworthy and readable; no spammy clickbait. " +
+               $"shortForm={isShort}. contentType={input.ContentType}. date={input.Context.Date:yyyy-MM-dd}. location={input.Context.LocationName}. " +
+               $"sourceTitle={input.SourceTitle}. sourceDescription={input.SourceDescription}. sourceTags={string.Join(',', input.SourceTags)}. " +
+               $"sourceHook={input.SourceHookLine}.";
+    }
+
+    private static bool TryParseOptimizedMetadata(string rawContent, bool isShort, out OptimizedVideoMetadata metadata, out string failureReason)
+    {
+        metadata = new OptimizedVideoMetadata();
+        failureReason = string.Empty;
+        try
+        {
+            using var document = JsonDocument.Parse(rawContent);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                failureReason = "Payload root is not a JSON object.";
+                return false;
+            }
+
+            string? primaryTitle = null;
+            string? optimizedDescription = null;
+            string? hookLine = null;
+            var alternateTitles = new List<string>();
+            var tags = new List<string>();
+            var hashtags = new List<string>();
+            var thumbnailTexts = new List<string>();
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                switch (property.Name)
+                {
+                    case "primaryTitle": primaryTitle = property.Value.GetString()?.Trim(); break;
+                    case "optimizedDescription": optimizedDescription = property.Value.GetString()?.Trim(); break;
+                    case "hookLine": hookLine = property.Value.ValueKind == JsonValueKind.Null ? null : property.Value.GetString()?.Trim(); break;
+                    case "alternateTitles":
+                        if (property.Value.ValueKind != JsonValueKind.Array) { failureReason = "alternateTitles must be array"; return false; }
+                        alternateTitles.AddRange(property.Value.EnumerateArray().Select(x => x.GetString()?.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>());
+                        break;
+                    case "tags":
+                        if (property.Value.ValueKind != JsonValueKind.Array) { failureReason = "tags must be array"; return false; }
+                        tags.AddRange(property.Value.EnumerateArray().Select(x => x.GetString()?.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>());
+                        break;
+                    case "hashtags":
+                        if (property.Value.ValueKind != JsonValueKind.Array) { failureReason = "hashtags must be array"; return false; }
+                        hashtags.AddRange(property.Value.EnumerateArray().Select(x => x.GetString()?.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>());
+                        break;
+                    case "thumbnailTextSuggestions":
+                        if (property.Value.ValueKind != JsonValueKind.Array) { failureReason = "thumbnailTextSuggestions must be array"; return false; }
+                        thumbnailTexts.AddRange(property.Value.EnumerateArray().Select(x => x.GetString()?.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>());
+                        break;
+                    default:
+                        failureReason = $"Unexpected property '{property.Name}' detected in metadata JSON payload.";
+                        return false;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(primaryTitle) || string.IsNullOrWhiteSpace(optimizedDescription))
+            {
+                failureReason = "Metadata payload must include non-empty primaryTitle and optimizedDescription.";
+                return false;
+            }
+
+            metadata = new OptimizedVideoMetadata
+            {
+                PrimaryTitle = primaryTitle,
+                AlternateTitles = alternateTitles.ToArray(),
+                OptimizedDescription = optimizedDescription,
+                Tags = tags.ToArray(),
+                Hashtags = hashtags.ToArray(),
+                ThumbnailTextSuggestions = thumbnailTexts.ToArray(),
+                HookLine = isShort ? hookLine : null
+            };
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            failureReason = $"Invalid JSON: {ex.Message}";
+            return false;
+        }
     }
 
     private sealed class AzureChatResponse

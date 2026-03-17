@@ -12,6 +12,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private readonly IVideoRenderService _videoRenderService;
     private readonly IAzureBlobStorageService _blobStorageService;
     private readonly IYouTubePublishingService _youTubePublishingService;
+    private readonly IMetadataOptimizationService _metadataOptimizationService;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<ShortsVideoRenderService> _logger;
 
@@ -22,6 +23,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         IVideoRenderService videoRenderService,
         IAzureBlobStorageService blobStorageService,
         IYouTubePublishingService youTubePublishingService,
+        IMetadataOptimizationService metadataOptimizationService,
         IOptions<YouTubeOptions> youTubeOptions,
         ILogger<ShortsVideoRenderService> logger)
     {
@@ -31,6 +33,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         _videoRenderService = videoRenderService;
         _blobStorageService = blobStorageService;
         _youTubePublishingService = youTubePublishingService;
+        _metadataOptimizationService = metadataOptimizationService;
         _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
     }
@@ -38,7 +41,26 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     public async Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken)
     {
         var shortScript = await _shortsScriptGenerationService.GenerateShortAsync(contentType, context, cancellationToken);
-        var scriptBody = $"{shortScript.Hook} {shortScript.ShortScript}";
+        var optimizedMetadata = await _metadataOptimizationService.OptimizeForShortAsync(new MetadataOptimizationInput
+        {
+            ContentType = contentType,
+            Context = context,
+            SourceTitle = shortScript.Title,
+            SourceDescription = shortScript.ShortScript,
+            SourceTags = shortScript.Tags,
+            SourceScript = shortScript.ShortScript,
+            SourceHookLine = shortScript.Hook
+        }, cancellationToken);
+        shortScript = new ShortScriptResult
+        {
+            Hook = shortScript.Hook,
+            ShortScript = shortScript.ShortScript,
+            Title = shortScript.Title,
+            Tags = shortScript.Tags,
+            EstimatedDurationSeconds = shortScript.EstimatedDurationSeconds,
+            OptimizedMetadata = optimizedMetadata
+        };
+        var scriptBody = $"{shortScript.OptimizedMetadata?.HookLine ?? shortScript.Hook} {shortScript.ShortScript}";
         var shortAudioPath = await _speechSynthesisService.SynthesizeAsync(scriptBody, outputDirectory, cancellationToken);
 
         var visualCandidates = sourceVisuals.Where(File.Exists).ToList();
@@ -53,7 +75,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
         var manifest = new RenderManifest
         {
-            Title = shortScript.Title,
+            Title = shortScript.OptimizedMetadata?.PrimaryTitle ?? shortScript.Title,
             AudioPath = shortAudioPath,
             OutputPath = shortVideoPath,
             OutputWidth = 1080,
@@ -92,9 +114,11 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         {
             try
             {
-                var title = shortScript.Title.Length > 90 ? shortScript.Title[..90] : shortScript.Title;
-                var tags = shortScript.Tags.Concat(["#shorts"]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                youtubeVideoId = await _youTubePublishingService.UploadAsync(videoPath, title, shortScript.ShortScript, tags, _youTubeOptions.PrivacyStatus, cancellationToken);
+                var chosenTitle = shortScript.OptimizedMetadata?.PrimaryTitle ?? shortScript.Title;
+                var title = chosenTitle.Length > 90 ? chosenTitle[..90] : chosenTitle;
+                var tags = (shortScript.OptimizedMetadata?.Tags ?? shortScript.Tags).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (!tags.Contains("shorts", StringComparer.OrdinalIgnoreCase)) tags.Add("shorts");
+                youtubeVideoId = await _youTubePublishingService.UploadAsync(videoPath, title, shortScript.OptimizedMetadata?.OptimizedDescription ?? shortScript.ShortScript, tags.ToArray(), _youTubeOptions.PrivacyStatus, cancellationToken);
                 if (string.IsNullOrWhiteSpace(youtubeVideoId))
                 {
                     publishStatus = "UploadFailed";

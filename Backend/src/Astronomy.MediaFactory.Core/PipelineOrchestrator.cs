@@ -15,6 +15,7 @@ public sealed class PipelineOrchestrator
     private readonly IAzureBlobStorageService _azureBlobStorageService;
     private readonly IYouTubePublishingService _youTubePublishingService;
     private readonly IShortsVideoRenderService _shortsVideoRenderService;
+    private readonly IMetadataOptimizationService _metadataOptimizationService;
     private readonly IPipelineRepository _repository;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<PipelineOrchestrator> _logger;
@@ -29,6 +30,7 @@ public sealed class PipelineOrchestrator
         IAzureBlobStorageService azureBlobStorageService,
         IYouTubePublishingService youTubePublishingService,
         IShortsVideoRenderService shortsVideoRenderService,
+        IMetadataOptimizationService metadataOptimizationService,
         IPipelineRepository repository,
         IOptions<YouTubeOptions> youTubeOptions,
         ILogger<PipelineOrchestrator> logger)
@@ -42,6 +44,7 @@ public sealed class PipelineOrchestrator
         _azureBlobStorageService = azureBlobStorageService;
         _youTubePublishingService = youTubePublishingService;
         _shortsVideoRenderService = shortsVideoRenderService;
+        _metadataOptimizationService = metadataOptimizationService;
         _repository = repository;
         _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
@@ -72,6 +75,25 @@ public sealed class PipelineOrchestrator
             var context = await _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken);
             _ = await _topicRankingService.RankAsync(context, request.ContentType, cancellationToken);
             var script = await _scriptGenerationService.GenerateAsync(request.ContentType, context, cancellationToken);
+            var optimizedMetadata = await _metadataOptimizationService.OptimizeForVideoAsync(new MetadataOptimizationInput
+            {
+                ContentType = request.ContentType,
+                Context = context,
+                SourceTitle = script.Title,
+                SourceDescription = script.Description,
+                SourceTags = script.Tags,
+                SourceScript = script.ScriptBody
+            }, cancellationToken);
+            script = new ScriptResult
+            {
+                Prompt = script.Prompt,
+                Title = script.Title,
+                Description = script.Description,
+                ScriptBody = script.ScriptBody,
+                Tags = script.Tags,
+                EstimatedDurationSeconds = script.EstimatedDurationSeconds,
+                OptimizedMetadata = optimizedMetadata
+            };
             var audioPath = await _speechSynthesisService.SynthesizeAsync(script.ScriptBody, outputDir, cancellationToken);
             var visuals = await _visualAssetProvider.PrepareVisualsAsync(context, outputDir, cancellationToken);
 
@@ -82,10 +104,17 @@ public sealed class PipelineOrchestrator
                 ScriptDate = request.Date,
                 Prompt = script.Prompt,
                 ScriptBody = script.ScriptBody,
-                Title = script.Title,
+                Title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
                 Description = script.Description,
                 TagsCsv = string.Join(",", script.Tags),
-                EstimatedDurationSeconds = script.EstimatedDurationSeconds
+                EstimatedDurationSeconds = script.EstimatedDurationSeconds,
+                OptimizedTitle = script.OptimizedMetadata?.PrimaryTitle,
+                AlternateTitlesCsv = string.Join("|", script.OptimizedMetadata?.AlternateTitles ?? []),
+                OptimizedDescription = script.OptimizedMetadata?.OptimizedDescription,
+                OptimizedTagsCsv = string.Join(",", script.OptimizedMetadata?.Tags ?? []),
+                OptimizedHashtagsCsv = string.Join(",", script.OptimizedMetadata?.Hashtags ?? []),
+                ThumbnailTextSuggestionsCsv = string.Join("|", script.OptimizedMetadata?.ThumbnailTextSuggestions ?? []),
+                HookLine = script.OptimizedMetadata?.HookLine
             }, cancellationToken);
 
             await _repository.AddAssetAsync(new MediaAsset
@@ -113,7 +142,7 @@ public sealed class PipelineOrchestrator
             var durationPerScene = Math.Max(6, script.EstimatedDurationSeconds / totalScenes);
             var manifest = new RenderManifest
             {
-                Title = script.Title,
+                Title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
                 AudioPath = audioPath,
                 OutputPath = Path.Combine(outputDir, "final-video.mp4"),
                 Scenes = visuals.Select((v, i) => new RenderScene
@@ -160,9 +189,9 @@ public sealed class PipelineOrchestrator
                 {
                     run.YouTubeVideoId = await _youTubePublishingService.UploadAsync(
                         videoPath,
-                        script.Title,
-                        script.Description,
-                        script.Tags,
+                        script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
+                        script.OptimizedMetadata?.OptimizedDescription ?? script.Description,
+                        script.OptimizedMetadata?.Tags ?? script.Tags,
                         _youTubeOptions.PrivacyStatus,
                         cancellationToken);
 
@@ -178,7 +207,10 @@ public sealed class PipelineOrchestrator
 
             var publishedVideo = new PublishedVideo
             {
-                Title = script.Title,
+                Title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
+                OptimizedTitle = script.OptimizedMetadata?.PrimaryTitle,
+                OptimizedDescription = script.OptimizedMetadata?.OptimizedDescription,
+                OptimizedTagsCsv = string.Join(",", script.OptimizedMetadata?.Tags ?? []),
                 YouTubeVideoId = run.YouTubeVideoId,
                 BlobUrl = blobUploadResult.VideoUrl,
                 CreatedAt = DateTimeOffset.UtcNow,
