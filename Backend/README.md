@@ -61,3 +61,49 @@ export SkyfieldSidecar__BaseUrl=http://localhost:8010
 ## Important note
 This environment did not include the .NET SDK, so the package is not build-verified here.
 Use it as the next implementation scaffold on top of your local working solution.
+
+## Stellarium local visual generation (PASS 4)
+The daily sky guide pipeline now generates Stellarium scene scripts and screenshot manifests under the run output directory:
+
+```text
+media-output/<ContentType>/<yyyy-MM-dd>/<run-id>/visuals/
+  001-sky-overview.ssc
+  001-sky-overview.json
+  002-moon.ssc
+  002-moon.json
+  003-jupiter.ssc
+  003-jupiter.json
+  004-orion-nebula.ssc
+  004-orion-nebula.json
+  005-wide-sky-close.ssc
+  005-wide-sky-close.json
+  capture-manifest.json
+  screenshots/
+    001-sky-overview.png
+    ...
+```
+
+### Configure Stellarium
+Set the `Stellarium` section in `appsettings.json` (API/Worker) or environment variables:
+
+```json
+"Stellarium": {
+  "ExecutablePath": "",
+  "ScriptsDirectory": "",
+  "CaptureDirectory": "",
+  "DefaultLandscape": "guereins",
+  "DefaultProjection": "ProjectionPerspective"
+}
+```
+
+- `ExecutablePath`: optional full path to Stellarium executable.
+- `ScriptsDirectory`: optional override directory for generated `.ssc` and scene metadata `.json`.
+- `CaptureDirectory`: optional override for screenshot output folder.
+
+If `ExecutablePath` is empty or missing, the pipeline logs a warning and writes placeholder PNGs so FFmpeg rendering still proceeds.
+
+### Local execution workflow
+1. Run the daily pipeline as usual.
+2. Open generated `.ssc` files from the run's `visuals` directory.
+3. If Stellarium executable is configured, the service attempts optional startup-script invocation for each scene.
+4. `capture-manifest.json` lists expected screenshot paths and scene metadata for renderer consumption.

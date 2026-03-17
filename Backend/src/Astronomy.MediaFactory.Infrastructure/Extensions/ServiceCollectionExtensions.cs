@@ -21,6 +21,7 @@ public static class ServiceCollectionExtensions
         services.Configure<AzureSpeechOptions>(configuration.GetSection(AzureSpeechOptions.SectionName));
         services.Configure<AzureStorageOptions>(configuration.GetSection(AzureStorageOptions.SectionName));
         services.Configure<YouTubeOptions>(configuration.GetSection(YouTubeOptions.SectionName));
+        services.Configure<StellariumOptions>(configuration.GetSection(StellariumOptions.SectionName));
         services.AddOptions<SkyfieldSidecarOptions>()
             .Bind(configuration.GetSection(SkyfieldSidecarOptions.SectionName))
             .ValidateDataAnnotations()
@@ -39,7 +40,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPipelineRepository, EfPipelineRepository>();
         services.AddScoped<IAstronomyContextProvider, AstronomyContextProvider>();
         services.AddScoped<ITopicRankingService, TopicRankingService>();
-        services.AddScoped<IVisualAssetProvider, FileVisualAssetProvider>();
+        services.AddScoped<IVisualAssetProvider, StellariumVisualGenerationService>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
         services.AddHttpClient<IScriptGenerationService, AzureOpenAiContentGenerationService>();
         services.AddScoped<IAzureSpeechClient, AzureSpeechClient>();
@@ -48,7 +49,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
         services.AddScoped<IArchivalService, AzureBlobArchivalService>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
-        services.AddScoped<StellariumScriptService>();
+        services.AddScoped<StellariumScriptBuilder>(sp =>
+            new StellariumScriptBuilder(sp.GetRequiredService<IOptions<StellariumOptions>>().Value));
         services.AddScoped<PipelineOrchestrator>();
         return services;
     }
