@@ -16,10 +16,12 @@ public sealed class PipelineOrchestrator
     private readonly IYouTubePublishingService _youTubePublishingService;
     private readonly IShortsVideoRenderService _shortsVideoRenderService;
     private readonly IMetadataOptimizationService _metadataOptimizationService;
+    private readonly IThumbnailGenerationService _thumbnailGenerationService;
     private readonly IPipelineRepository _repository;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<PipelineOrchestrator> _logger;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
+    private readonly IYouTubeThumbnailPublisher? _youTubeThumbnailPublisher;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -32,10 +34,12 @@ public sealed class PipelineOrchestrator
         IYouTubePublishingService youTubePublishingService,
         IShortsVideoRenderService shortsVideoRenderService,
         IMetadataOptimizationService metadataOptimizationService,
+        IThumbnailGenerationService thumbnailGenerationService,
         IPipelineRepository repository,
         IOptions<YouTubeOptions> youTubeOptions,
         ILogger<PipelineOrchestrator> logger,
-        IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null)
+        IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
+        IYouTubeThumbnailPublisher? youTubeThumbnailPublisher = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -47,10 +51,12 @@ public sealed class PipelineOrchestrator
         _youTubePublishingService = youTubePublishingService;
         _shortsVideoRenderService = shortsVideoRenderService;
         _metadataOptimizationService = metadataOptimizationService;
+        _thumbnailGenerationService = thumbnailGenerationService;
         _repository = repository;
         _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
+        _youTubeThumbnailPublisher = youTubeThumbnailPublisher;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -163,7 +169,34 @@ public sealed class PipelineOrchestrator
             };
 
             var videoPath = await _videoRenderService.RenderAsync(manifest, cancellationToken);
-            var thumbnailPath = visuals.FirstOrDefault(File.Exists);
+
+            ThumbnailPlan thumbnailPlan;
+            try
+            {
+                thumbnailPlan = await _thumbnailGenerationService.GenerateAsync(new ThumbnailGenerationRequest
+                {
+                    ContentType = request.ContentType,
+                    Context = context,
+                    Metadata = optimizedMetadata,
+                    AvailableVisuals = visuals,
+                    OutputDirectory = outputDir,
+                    FeedbackSignals = feedbackSignals
+                }, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Thumbnail generation failed for run {PipelineRunId}. Continuing without a generated thumbnail.", run.Id);
+                thumbnailPlan = new ThumbnailPlan
+                {
+                    PrimaryThumbnailText = optimizedMetadata.ThumbnailTextSuggestions.FirstOrDefault() ?? "ASTRONOMY UPDATE",
+                    AlternateThumbnailTexts = optimizedMetadata.ThumbnailTextSuggestions,
+                    SelectedVisualPath = visuals.FirstOrDefault(File.Exists),
+                    ThumbnailPath = visuals.FirstOrDefault(File.Exists),
+                    LayoutType = ThumbnailLayoutType.CenteredTitleOverlay
+                };
+            }
+
+            var thumbnailPath = thumbnailPlan.ThumbnailPath;
             await _repository.AddAssetAsync(new MediaAsset
             {
                 PipelineRunId = run.Id,
@@ -172,6 +205,18 @@ public sealed class PipelineOrchestrator
                 LocalPath = videoPath,
                 SizeBytes = File.Exists(videoPath) ? new FileInfo(videoPath).Length : 0
             }, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+            {
+                await _repository.AddAssetAsync(new MediaAsset
+                {
+                    PipelineRunId = run.Id,
+                    AssetType = "thumbnail",
+                    FileName = Path.GetFileName(thumbnailPath),
+                    LocalPath = thumbnailPath,
+                    SizeBytes = new FileInfo(thumbnailPath).Length
+                }, cancellationToken);
+            }
 
             BlobUploadResult blobUploadResult = new();
             try
@@ -190,6 +235,7 @@ public sealed class PipelineOrchestrator
             }
 
             var publishStatus = "Published";
+            var youtubeThumbnailUploaded = false;
             if (request.PublishToYouTube)
             {
                 try
@@ -203,7 +249,20 @@ public sealed class PipelineOrchestrator
                         cancellationToken);
 
                     if (string.IsNullOrWhiteSpace(run.YouTubeVideoId))
+                    {
                         publishStatus = "UploadFailed";
+                    }
+                    else if (_youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+                    {
+                        try
+                        {
+                            youtubeThumbnailUploaded = await _youTubeThumbnailPublisher.UploadThumbnailAsync(run.YouTubeVideoId, thumbnailPath, cancellationToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "YouTube thumbnail upload failed for pipeline run {PipelineRunId}.", run.Id);
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -220,6 +279,9 @@ public sealed class PipelineOrchestrator
                 OptimizedTagsCsv = string.Join(",", script.OptimizedMetadata?.Tags ?? []),
                 YouTubeVideoId = run.YouTubeVideoId,
                 BlobUrl = blobUploadResult.VideoUrl,
+                ThumbnailPath = thumbnailPath,
+                ThumbnailUrl = blobUploadResult.ThumbnailUrl,
+                ThumbnailUploadedToYouTube = youtubeThumbnailUploaded,
                 CreatedAt = DateTimeOffset.UtcNow,
                 Status = publishStatus
             };

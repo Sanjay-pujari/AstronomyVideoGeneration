@@ -16,6 +16,7 @@ public interface IVideoRenderService { Task<string> RenderAsync(RenderManifest m
 public interface IShortsVideoRenderService { Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken); }
 public interface IAzureBlobStorageService { Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken); }
 public interface IYouTubePublishingService { Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken); }
+public interface IYouTubeThumbnailPublisher { Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken); }
 public interface IYouTubeAnalyticsService { Task<YouTubeVideoAnalyticsSnapshot?> GetVideoAnalyticsAsync(string videoId, CancellationToken cancellationToken); }
 public interface IAnalyticsAggregationService
 {
@@ -29,6 +30,16 @@ public interface IAnalyticsFeedbackProvider
 public interface IFeedbackSignalExtractor
 {
     void Extract(AnalyticsAggregationSummary summary, int topN, FeedbackSignalCollector collector);
+}
+
+public interface IThumbnailStrategyService
+{
+    ThumbnailPlan BuildPlan(ThumbnailGenerationRequest request);
+}
+
+public interface IThumbnailGenerationService
+{
+    Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken);
 }
 
 public interface IPipelineRepository {

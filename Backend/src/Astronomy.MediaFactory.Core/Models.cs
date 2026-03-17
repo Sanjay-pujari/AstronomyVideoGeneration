@@ -78,6 +78,33 @@ public sealed class OptimizedVideoMetadata
     public string? HookLine { get; init; }
 }
 
+public enum ThumbnailLayoutType
+{
+    TextLeftVisualRight = 1,
+    CenteredTitleOverlay = 2,
+    TopBanner = 3
+}
+
+public sealed class ThumbnailPlan
+{
+    public string PrimaryThumbnailText { get; init; } = "";
+    public string[] AlternateThumbnailTexts { get; init; } = [];
+    public string? SelectedVisualPath { get; init; }
+    public string? ThumbnailPath { get; init; }
+    public ThumbnailLayoutType LayoutType { get; init; } = ThumbnailLayoutType.CenteredTitleOverlay;
+}
+
+public sealed class ThumbnailGenerationRequest
+{
+    public required ContentType ContentType { get; init; }
+    public required AstronomyContext Context { get; init; }
+    public required OptimizedVideoMetadata Metadata { get; init; }
+    public required IReadOnlyCollection<string> AvailableVisuals { get; init; }
+    public required string OutputDirectory { get; init; }
+    public bool IsShortForm { get; init; }
+    public FeedbackSignals? FeedbackSignals { get; init; }
+}
+
 public sealed class RenderManifest
 {
     public string Title { get; set; } = "";

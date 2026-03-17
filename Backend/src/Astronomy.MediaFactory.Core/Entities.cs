@@ -69,6 +69,9 @@ public sealed class PublishedVideo : EntityBase
     public string? OptimizedTitle { get; set; }
     public string? OptimizedDescription { get; set; }
     public string? OptimizedTagsCsv { get; set; }
+    public string? ThumbnailPath { get; set; }
+    public string? ThumbnailUrl { get; set; }
+    public bool ThumbnailUploadedToYouTube { get; set; }
 }
 
 
