@@ -62,8 +62,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<FfmpegArgumentBuilder>();
         services.AddScoped<ISpeechSynthesisService, AzureSpeechSynthesisService>();
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
+        services.AddScoped<IThumbnailStrategyService, ThumbnailStrategyService>();
+        services.AddScoped<IThumbnailGenerationService, ThumbnailGenerationService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
+        services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
         services.AddScoped<IYouTubeAnalyticsService, YouTubeAnalyticsService>();
         services.AddScoped<IShortsVideoRenderService, ShortsVideoRenderService>();
         services.AddScoped<IAnalyticsAggregationService, AnalyticsAggregationService>();

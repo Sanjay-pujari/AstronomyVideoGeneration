@@ -59,6 +59,7 @@ public sealed class PublishingFlowTests
             new ThrowingYouTubeService(),
             new FakeShortsVideoRenderService(),
             new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new FakeThumbnailGenerationService(),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
             NullLogger<PipelineOrchestrator>.Instance);
@@ -68,6 +69,62 @@ public sealed class PublishingFlowTests
         Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
         Assert.Single(repository.PublishedVideos);
         Assert.Equal("UploadFailed", repository.PublishedVideos[0].Status);
+    }
+
+    [Fact]
+    public async Task PipelineOrchestrator_UploadsThumbnailToYouTube_WhenVideoUploadSucceeds()
+    {
+        var repository = new FakePipelineRepository();
+        var thumbnailPublisher = new TrackingThumbnailPublisher();
+        var orchestrator = new PipelineOrchestrator(
+            new FakeContextProvider(),
+            new FakeTopicRankingService(),
+            new FakeVisualProvider(),
+            new FakeScriptService(),
+            new FakeSpeechService(),
+            new FakeRenderService(),
+            new PassThroughBlobService(),
+            new SuccessfulYouTubeService(),
+            new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new FakeThumbnailGenerationService(),
+            repository,
+            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            NullLogger<PipelineOrchestrator>.Instance,
+            youTubeThumbnailPublisher: thumbnailPublisher);
+
+        var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.SpaceNews, "Pune", PublishToYouTube: true), CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
+        Assert.True(thumbnailPublisher.WasCalled);
+        Assert.Single(repository.PublishedVideos);
+        Assert.True(repository.PublishedVideos[0].ThumbnailUploadedToYouTube);
+    }
+
+    [Fact]
+    public async Task PipelineOrchestrator_Continues_WhenThumbnailGenerationFails()
+    {
+        var repository = new FakePipelineRepository();
+        var orchestrator = new PipelineOrchestrator(
+            new FakeContextProvider(),
+            new FakeTopicRankingService(),
+            new FakeVisualProvider(),
+            new FakeScriptService(),
+            new FakeSpeechService(),
+            new FakeRenderService(),
+            new PassThroughBlobService(),
+            new SuccessfulYouTubeService(),
+            new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new ThrowingThumbnailGenerationService(),
+            repository,
+            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            NullLogger<PipelineOrchestrator>.Instance);
+
+        var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: false), CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
+        Assert.Single(repository.PublishedVideos);
     }
 
     private sealed class FakePipelineRepository : IPipelineRepository
@@ -183,9 +240,62 @@ public sealed class PublishingFlowTests
             => throw new InvalidOperationException("blob fail");
     }
 
-    private sealed class ThrowingYouTubeService : IYouTubePublishingService
+    private sealed class PassThroughBlobService : IAzureBlobStorageService
+    {
+        public Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(new BlobUploadResult
+            {
+                VideoUrl = "https://blob/video.mp4",
+                ThumbnailUrl = request.ThumbnailPath is null ? null : "https://blob/thumbnail.png"
+            });
+    }
+
+    private sealed class SuccessfulYouTubeService : IYouTubePublishingService
+    {
+        public Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken)
+            => Task.FromResult<string?>("video-123");
+    }
+
+    private sealed class TrackingThumbnailPublisher : IYouTubeThumbnailPublisher
+    {
+        public bool WasCalled { get; private set; }
+
+        public Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken)
+        {
+            WasCalled = true;
+            return Task.FromResult(true);
+        }
+    }
+
+    private sealed class ThrowingYouTubeService : IYouTubePublishingService, IYouTubeThumbnailPublisher
     {
         public Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken)
             => throw new InvalidOperationException("youtube fail");
+
+        public Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("youtube thumb fail");
+    }
+
+    private sealed class FakeThumbnailGenerationService : IThumbnailGenerationService
+    {
+        public async Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
+        {
+            var path = Path.Combine(request.OutputDirectory, "thumbnail.png");
+            await File.WriteAllTextAsync(path, "thumb", cancellationToken);
+            return new ThumbnailPlan
+            {
+                PrimaryThumbnailText = "TONIGHT'S SKY",
+                AlternateThumbnailTexts = ["ASTRONOMY"],
+                SelectedVisualPath = request.AvailableVisuals.FirstOrDefault(),
+                ThumbnailPath = path,
+                LayoutType = ThumbnailLayoutType.TopBanner
+            };
+        }
+    }
+
+    private sealed class ThrowingThumbnailGenerationService : IThumbnailGenerationService
+    {
+        public Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("thumbnail fail");
     }
 }

@@ -4,5 +4,7 @@
     <ProjectReference Include="..\Astronomy.MediaFactory.Core\Astronomy.MediaFactory.Core.csproj" />
     <PackageReference Include="Microsoft.CognitiveServices.Speech" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+    <PackageReference Include="SixLabors.ImageSharp" />
+    <PackageReference Include="SixLabors.ImageSharp.Drawing" />
   </ItemGroup>
 </Project>

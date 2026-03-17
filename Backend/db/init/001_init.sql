@@ -123,3 +123,7 @@ create table if not exists video_analytics
 );
 
 create index if not exists ix_video_analytics_video_id on video_analytics(video_id, retrieved_at desc);
+
+alter table if exists published_videos add column if not exists thumbnail_path text null;
+alter table if exists published_videos add column if not exists thumbnail_url text null;
+alter table if exists published_videos add column if not exists thumbnail_uploaded_to_youtube boolean not null default false;

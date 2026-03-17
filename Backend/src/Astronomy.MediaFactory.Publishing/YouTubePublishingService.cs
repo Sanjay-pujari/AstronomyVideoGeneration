@@ -13,7 +13,7 @@ using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Publishing;
 
-public sealed class YouTubePublishingService : IYouTubePublishingService
+public sealed class YouTubePublishingService : IYouTubePublishingService, IYouTubeThumbnailPublisher
 {
     private static readonly string[] Scopes = [YouTubeService.Scope.YoutubeUpload];
 
@@ -78,6 +78,31 @@ public sealed class YouTubePublishingService : IYouTubePublishingService
         }
 
         return insertRequest.ResponseBody.Id;
+    }
+
+    public async Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(videoId) || !File.Exists(thumbnailPath))
+            return false;
+
+        var credential = await BuildCredentialAsync(cancellationToken);
+        if (credential is null)
+            return false;
+
+        var youtube = new YouTubeService(new BaseClientService.Initializer
+        {
+            HttpClientInitializer = credential,
+            ApplicationName = _options.ApplicationName
+        });
+
+        await using var stream = File.OpenRead(thumbnailPath);
+        var mimeType = Path.GetExtension(thumbnailPath).Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+            || Path.GetExtension(thumbnailPath).Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+            ? "image/jpeg"
+            : "image/png";
+        var setRequest = youtube.Thumbnails.Set(videoId, stream, mimeType);
+        await setRequest.UploadAsync(cancellationToken);
+        return setRequest.GetProgress().Status == UploadStatus.Completed;
     }
 
     private async Task<UserCredential?> BuildCredentialAsync(CancellationToken cancellationToken)
