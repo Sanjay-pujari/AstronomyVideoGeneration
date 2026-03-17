@@ -51,6 +51,9 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IScriptGenerationService, AzureOpenAiContentGenerationService>();
         services.AddScoped<IAzureSpeechClient, AzureSpeechClient>();
         services.AddScoped<IFileSystem, PhysicalFileSystem>();
+        services.AddScoped<IProcessRunner, ProcessRunner>();
+        services.AddScoped<RenderManifestBuilder>();
+        services.AddScoped<FfmpegArgumentBuilder>();
         services.AddScoped<ISpeechSynthesisService, AzureSpeechSynthesisService>();
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
         services.AddScoped<IArchivalService, AzureBlobArchivalService>();
