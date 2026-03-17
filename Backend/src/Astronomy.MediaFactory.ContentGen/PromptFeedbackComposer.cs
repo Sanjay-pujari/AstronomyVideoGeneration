@@ -16,18 +16,25 @@ internal static class PromptFeedbackComposer
 
     public static string BuildFeedbackSection(PromptFeedbackContext? feedbackContext, bool isShortForm)
     {
-        var payload = feedbackContext is null
-            ? new
+        object payload;
+
+        if (feedbackContext is null)
+        {
+            payload = new
             {
                 available = false,
+                feedback = (object?)null,
                 adaptiveOptimization = new
                 {
                     objective = "baseline-quality",
                     confidence = "low",
                     directives = new[] { "Use neutral astronomy best practices when feedback is unavailable." }
                 }
-            }
-            : new
+            };
+        }
+        else
+        {
+            payload = new
             {
                 available = true,
                 feedback = new
@@ -54,6 +61,7 @@ internal static class PromptFeedbackComposer
                     directives = BuildAdaptiveDirectives(feedbackContext)
                 }
             };
+        }
 
         return "Feedback context (JSON data block):\n<BEGIN_FEEDBACK_CONTEXT_JSON>\n" +
                JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }) +
