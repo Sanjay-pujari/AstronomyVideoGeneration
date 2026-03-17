@@ -78,3 +78,26 @@ create table if not exists short_videos
     duration integer not null,
     created_at timestamptz not null
 );
+
+create table if not exists pipeline_jobs
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    updated_utc timestamptz null,
+    job_type integer not null,
+    parent_pipeline_run_id uuid null,
+    status integer not null,
+    attempt_count integer not null,
+    scheduled_at timestamptz not null,
+    started_at timestamptz null,
+    finished_at timestamptz null,
+    error_message text null,
+    run_date date not null,
+    content_type integer not null,
+    location_name text not null,
+    time_zone text not null,
+    publish_to_youtube boolean not null,
+    next_attempt_at timestamptz null
+);
+
+create index if not exists ix_pipeline_jobs_sched_status on pipeline_jobs(status, scheduled_at, next_attempt_at);

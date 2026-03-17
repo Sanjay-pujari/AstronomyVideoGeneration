@@ -21,6 +21,7 @@ public static class ServiceCollectionExtensions
         services.Configure<AzureSpeechOptions>(configuration.GetSection(AzureSpeechOptions.SectionName));
         services.Configure<AzureBlobOptions>(configuration.GetSection(AzureBlobOptions.SectionName));
         services.Configure<YouTubeOptions>(configuration.GetSection(YouTubeOptions.SectionName));
+        services.Configure<SchedulingOptions>(configuration.GetSection(SchedulingOptions.SectionName));
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
             .ValidateDataAnnotations()
@@ -64,6 +65,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<StellariumScriptBuilder>(sp =>
             new StellariumScriptBuilder(sp.GetRequiredService<IOptions<StellariumOptions>>().Value));
         services.AddScoped<PipelineOrchestrator>();
+        services.AddScoped<IPipelineJobQueue, PipelineJobQueue>();
+        services.AddScoped<IPipelineJobExecutor, PipelineJobExecutor>();
+        services.AddScoped<PipelineJobProcessor>();
         return services;
     }
 }

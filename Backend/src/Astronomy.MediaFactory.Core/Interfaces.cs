@@ -19,5 +19,20 @@ public interface IPipelineRepository {
  Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken);
  Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken);
  Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken);
+ Task AddJobAsync(PipelineJob job, CancellationToken cancellationToken);
+ Task<PipelineJob?> GetJobAsync(Guid id, CancellationToken cancellationToken);
+ Task<IReadOnlyCollection<PipelineJob>> GetRecentJobsAsync(int take, CancellationToken cancellationToken);
+ Task<PipelineJob?> GetNextRunnableJobAsync(DateTimeOffset now, CancellationToken cancellationToken);
+ Task<bool> HasQueuedOrCompletedMainJobAsync(DateOnly runDate, ContentType contentType, CancellationToken cancellationToken);
  Task SaveChangesAsync(CancellationToken cancellationToken);
+}
+
+public interface IPipelineJobQueue
+{
+    Task<PipelineJob> EnqueueAsync(EnqueuePipelineJobRequest request, CancellationToken cancellationToken);
+}
+
+public interface IPipelineJobExecutor
+{
+    Task ExecuteAsync(PipelineJob job, CancellationToken cancellationToken);
 }
