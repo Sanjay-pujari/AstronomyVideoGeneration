@@ -20,24 +20,56 @@ public sealed class PipelineMonitoringService : IPipelineMonitoringService
     public async Task<PipelineOpsSummary> GetSummaryAsync(CancellationToken cancellationToken)
     {
         var from = DateTimeOffset.UtcNow.AddDays(-Math.Max(1, _options.RetainDays));
-        var runs = await _db.PipelineRuns.AsNoTracking().Where(x => x.CreatedUtc >= from).ToListAsync(cancellationToken);
-        var stages = await _db.PipelineStageExecutions.AsNoTracking().Where(x => x.CreatedUtc >= from).ToListAsync(cancellationToken);
-        var latestPublish = await _db.PublishedVideos.AsNoTracking().OrderByDescending(x => x.CreatedAt).Take(5)
-            .Select(x => new PublishedVideoStatusSnapshot(x.Title, x.Status, x.CreatedAt, x.YouTubeVideoId)).ToListAsync(cancellationToken);
 
-        var failedByStage = stages.Where(x => x.Status.StartsWith("Failed")).GroupBy(x => x.StageName)
-            .OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
-        var avgDuration = runs.Where(x => x.StartedUtc.HasValue && x.FinishedUtc.HasValue)
-            .Select(x => (x.FinishedUtc!.Value - x.StartedUtc!.Value).TotalMilliseconds).DefaultIfEmpty(0).Average();
-        var slow = stages.Where(x => x.DurationMs.HasValue && x.DurationMs.Value >= _options.SlowStageThresholdMs)
+        var runsQuery = _db.PipelineRuns.AsNoTracking().Where(x => x.CreatedUtc >= from);
+        var stagesQuery = _db.PipelineStageExecutions.AsNoTracking().Where(x => x.CreatedUtc >= from);
+        var jobsQuery = _db.PipelineJobs.AsNoTracking().Where(x => x.CreatedUtc >= from);
+
+        var latestPublish = await _db.PublishedVideos.AsNoTracking()
+            .OrderByDescending(x => x.CreatedAt)
+            .Take(5)
+            .Select(x => new PublishedVideoStatusSnapshot(x.Title, x.Status, x.CreatedAt, x.YouTubeVideoId))
+            .ToListAsync(cancellationToken);
+
+        var runs = await runsQuery.ToListAsync(cancellationToken);
+        var stages = await stagesQuery.ToListAsync(cancellationToken);
+        var jobs = await jobsQuery.ToListAsync(cancellationToken);
+
+        var failedByStage = stages
+            .Where(x => PipelineStageStatuses.IsFailed(x.Status))
+            .GroupBy(x => x.StageName)
+            .OrderByDescending(g => g.Count())
+            .Select(g => g.Key)
+            .FirstOrDefault();
+
+        var avgDuration = runs
+            .Where(x => x.StartedUtc.HasValue && x.FinishedUtc.HasValue)
+            .Select(x => (x.FinishedUtc!.Value - x.StartedUtc!.Value).TotalMilliseconds)
+            .DefaultIfEmpty(0)
+            .Average();
+
+        var slow = stages
+            .Where(x => x.DurationMs.HasValue && x.DurationMs.Value >= _options.SlowStageThresholdMs)
             .OrderByDescending(x => x.DurationMs)
             .Take(20)
             .Select(x => new SlowStageSnapshot(x.PipelineRunId, x.StageName, x.DurationMs!.Value, x.StartedAt, x.FinishedAt))
             .ToList();
 
-        var jobs = await _db.PipelineJobs.AsNoTracking().Where(x => x.CreatedUtc >= from).ToListAsync(cancellationToken);
-        var queue = new QueueHealthSnapshot(jobs.Count(x => x.Status == PipelineJobStatus.Pending), jobs.Count(x => x.Status == PipelineJobStatus.Running), jobs.Count(x => x.Status == PipelineJobStatus.Retrying), jobs.Count(x => x.Status == PipelineJobStatus.Failed));
-        return new PipelineOpsSummary(runs.Count, runs.Count(x => x.Status == PipelineRunStatus.Succeeded), runs.Count(x => x.Status == PipelineRunStatus.Failed), avgDuration, failedByStage, latestPublish, queue, slow);
+        var queue = new QueueHealthSnapshot(
+            jobs.Count(x => x.Status == PipelineJobStatus.Pending),
+            jobs.Count(x => x.Status == PipelineJobStatus.Running),
+            jobs.Count(x => x.Status == PipelineJobStatus.Retrying),
+            jobs.Count(x => x.Status == PipelineJobStatus.Failed));
+
+        return new PipelineOpsSummary(
+            runs.Count,
+            runs.Count(x => x.Status == PipelineRunStatus.Succeeded),
+            runs.Count(x => x.Status == PipelineRunStatus.Failed),
+            avgDuration,
+            failedByStage,
+            latestPublish,
+            queue,
+            slow);
     }
 
     public async Task<IReadOnlyCollection<PipelineRun>> GetRecentPipelinesAsync(int take, CancellationToken cancellationToken)
@@ -50,7 +82,7 @@ public sealed class PipelineMonitoringService : IPipelineMonitoringService
     {
         var failedRuns = await _db.PipelineRuns.AsNoTracking().Where(x => x.Status == PipelineRunStatus.Failed).OrderByDescending(x => x.FinishedUtc).Take(take).ToListAsync(cancellationToken);
         var failedJobs = await _db.PipelineJobs.AsNoTracking().Where(x => x.Status == PipelineJobStatus.Failed).OrderByDescending(x => x.FinishedAt).Take(take).ToListAsync(cancellationToken);
-        var failedStages = await _db.PipelineStageExecutions.AsNoTracking().Where(x => x.Status.StartsWith("Failed")).OrderByDescending(x => x.FinishedAt).Take(take).ToListAsync(cancellationToken);
+        var failedStages = await _db.PipelineStageExecutions.AsNoTracking().Where(x => PipelineStageStatuses.IsFailed(x.Status)).OrderByDescending(x => x.FinishedAt).Take(take).ToListAsync(cancellationToken);
         var latestByStage = failedStages
             .GroupBy(x => x.StageName)
             .Select(g => g.OrderByDescending(x => x.FinishedAt).First())

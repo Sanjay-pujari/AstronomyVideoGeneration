@@ -26,6 +26,7 @@ public sealed class PipelineOrchestrator
     private readonly ITopicSelectionService? _topicSelectionService;
     private readonly IPromptFeedbackService? _promptFeedbackService;
     private readonly IPipelineStageRecorder? _pipelineStageRecorder;
+    private readonly IStageAlertPublisher _stageAlertPublisher;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -47,6 +48,7 @@ public sealed class PipelineOrchestrator
         ITopicSelectionService? topicSelectionService = null,
         IPromptFeedbackService? promptFeedbackService = null,
         IPipelineStageRecorder? pipelineStageRecorder = null,
+        IStageAlertPublisher? stageAlertPublisher = null,
         IOptions<OperationsOptions>? operationsOptions = null)
     {
         _contextProvider = contextProvider;
@@ -69,6 +71,7 @@ public sealed class PipelineOrchestrator
         _topicSelectionService = topicSelectionService;
         _promptFeedbackService = promptFeedbackService;
         _pipelineStageRecorder = pipelineStageRecorder;
+        _stageAlertPublisher = stageAlertPublisher ?? new NullStageAlertPublisher();
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -93,6 +96,21 @@ public sealed class PipelineOrchestrator
             var outputDir = Path.Combine("media-output", request.ContentType.ToString(), request.Date.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
             Directory.CreateDirectory(outputDir);
 
+            static StageAlertContext BuildAlertContext(PipelineRun pipelineRun, PipelineStageExecution stage)
+                => new(pipelineRun.Id, stage.StageName, stage.Status, stage.DurationMs, stage.ErrorMessage, stage.MetadataJson, stage.StartedAt, stage.FinishedAt);
+
+            async Task PublishSlowStageAlertAsync(PipelineStageExecution stage)
+            {
+                if (stage.DurationMs.HasValue && stage.DurationMs.Value >= _operationsOptions.SlowStageThresholdMs)
+                {
+                    _logger.LogWarning("Slow stage detected: {StageName} took {DurationMs}ms for run {PipelineRunId}", stage.StageName, stage.DurationMs.Value, run.Id);
+                    await _stageAlertPublisher.PublishSlowStageAsync(BuildAlertContext(run, stage), cancellationToken);
+                }
+            }
+
+            async Task PublishFailureAlertAsync(PipelineStageExecution stage)
+                => await _stageAlertPublisher.PublishStageFailureAsync(BuildAlertContext(run, stage), cancellationToken);
+
             async Task<T> RunStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null)
             {
                 PipelineStageExecution? stage = null;
@@ -108,10 +126,7 @@ public sealed class PipelineOrchestrator
                     if (stage is not null)
                     {
                         await _pipelineStageRecorder!.CompleteStageAsync(stage, null, cancellationToken);
-                        if (stage.DurationMs.HasValue && stage.DurationMs.Value >= _operationsOptions.SlowStageThresholdMs)
-                        {
-                            _logger.LogWarning("Slow stage detected: {StageName} took {DurationMs}ms for run {PipelineRunId}", stageName, stage.DurationMs.Value, run.Id);
-                        }
+                        await PublishSlowStageAlertAsync(stage);
                     }
 
                     _logger.LogInformation("Stage {StageName} completed for pipeline run {PipelineRunId}", stageName, run.Id);
@@ -122,6 +137,7 @@ public sealed class PipelineOrchestrator
                     if (stage is not null)
                     {
                         await _pipelineStageRecorder!.FailStageAsync(stage, ex.Message, continueWithFallback && fallback is not null, null, cancellationToken);
+                        await PublishFailureAlertAsync(stage);
                     }
 
                     _logger.LogError(ex, "Stage {StageName} failed for pipeline run {PipelineRunId}", stageName, run.Id);

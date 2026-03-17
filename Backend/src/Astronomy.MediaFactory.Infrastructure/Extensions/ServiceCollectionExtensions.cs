@@ -85,6 +85,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPipelineJobExecutor, PipelineJobExecutor>();
         services.AddScoped<PipelineJobProcessor>();
         services.AddScoped<IPipelineStageRecorder, PipelineStageRecorder>();
+        services.AddScoped<IStageAlertPublisher, NullStageAlertPublisher>();
         services.AddScoped<IPipelineMonitoringService, PipelineMonitoringService>();
         services.AddHealthChecks()
             .AddCheck<DatabaseConnectivityHealthCheck>("database", tags: ["ready"])

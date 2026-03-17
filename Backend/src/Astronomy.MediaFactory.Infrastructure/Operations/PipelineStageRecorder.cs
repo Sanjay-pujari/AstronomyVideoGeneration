@@ -18,7 +18,7 @@ public sealed class PipelineStageRecorder : IPipelineStageRecorder
         {
             PipelineRunId = pipelineRunId,
             StageName = stageName,
-            Status = "Running",
+            Status = PipelineStageStatuses.Running,
             StartedAt = DateTimeOffset.UtcNow,
             MetadataJson = metadataJson
         };
@@ -30,22 +30,24 @@ public sealed class PipelineStageRecorder : IPipelineStageRecorder
 
     public async Task CompleteStageAsync(PipelineStageExecution stageExecution, string? metadataJson, CancellationToken cancellationToken)
     {
-        stageExecution.FinishedAt = DateTimeOffset.UtcNow;
-        stageExecution.DurationMs = (long)Math.Max(0, (stageExecution.FinishedAt.Value - stageExecution.StartedAt).TotalMilliseconds);
-        stageExecution.Status = "Succeeded";
-        stageExecution.MetadataJson = metadataJson;
-        stageExecution.Touch();
+        ApplyCompletion(stageExecution, PipelineStageStatuses.Succeeded, metadataJson);
         await _db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task FailStageAsync(PipelineStageExecution stageExecution, string errorMessage, bool continuedWithFallback, string? metadataJson, CancellationToken cancellationToken)
     {
+        var failureStatus = continuedWithFallback ? PipelineStageStatuses.FailedWithFallback : PipelineStageStatuses.Failed;
+        ApplyCompletion(stageExecution, failureStatus, metadataJson, errorMessage);
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static void ApplyCompletion(PipelineStageExecution stageExecution, string status, string? metadataJson, string? errorMessage = null)
+    {
         stageExecution.FinishedAt = DateTimeOffset.UtcNow;
         stageExecution.DurationMs = (long)Math.Max(0, (stageExecution.FinishedAt.Value - stageExecution.StartedAt).TotalMilliseconds);
-        stageExecution.Status = continuedWithFallback ? "FailedWithFallback" : "Failed";
+        stageExecution.Status = status;
         stageExecution.ErrorMessage = errorMessage;
         stageExecution.MetadataJson = metadataJson;
         stageExecution.Touch();
-        await _db.SaveChangesAsync(cancellationToken);
     }
 }
