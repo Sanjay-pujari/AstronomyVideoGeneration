@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Publishing;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
