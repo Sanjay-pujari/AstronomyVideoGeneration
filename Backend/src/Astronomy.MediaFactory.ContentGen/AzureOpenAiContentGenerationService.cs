@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.ContentGen;
 
-public sealed class AzureOpenAiContentGenerationService : IScriptGenerationService
+public sealed class AzureOpenAiContentGenerationService : IScriptGenerationService, IShortsScriptGenerationService
 {
     private const string ApiVersion = "2024-10-21";
     private const int MaxGenerationAttempts = 3;
@@ -80,6 +80,47 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
         _logger.LogError("Azure OpenAI content generation failed after {MaxAttempts} attempts. Falling back to template content.", MaxGenerationAttempts);
         return BuildFallback(contentType, context, prompt);
+    }
+
+
+
+    public async Task<ShortScriptResult> GenerateShortAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
+    {
+        var prompt = BuildShortPrompt(contentType, context);
+
+        for (var attempt = 1; attempt <= MaxGenerationAttempts; attempt++)
+        {
+            try
+            {
+                var completion = await RequestCompletionAsync(prompt, cancellationToken);
+                if (TryParseShortContent(completion, out var parsed, out var failureReason))
+                {
+                    return parsed;
+                }
+
+                _logger.LogWarning(
+                    "Azure OpenAI shorts response failed strict JSON validation on attempt {Attempt}/{MaxAttempts}: {FailureReason}",
+                    attempt,
+                    MaxGenerationAttempts,
+                    failureReason);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Azure OpenAI shorts generation attempt {Attempt}/{MaxAttempts} failed.", attempt, MaxGenerationAttempts);
+            }
+
+            if (attempt < MaxGenerationAttempts)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(250 * attempt), cancellationToken);
+            }
+        }
+
+        _logger.LogError("Azure OpenAI shorts generation failed after {MaxAttempts} attempts. Falling back to template content.", MaxGenerationAttempts);
+        return BuildShortFallback(contentType, context);
     }
 
     private async Task<string> RequestCompletionAsync(string prompt, CancellationToken cancellationToken)
@@ -266,6 +307,121 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             Tags = ["astronomy", "night sky", contentType.ToString()],
             EstimatedDurationSeconds = 900,
             ScriptBody = $"Welcome to your astronomy update for {context.Date:MMMM dd, yyyy}. {string.Join(" ", eventLines)}"
+        };
+    }
+
+
+
+    private static string BuildShortPrompt(ContentType contentType, AstronomyContext context)
+    {
+        var topEvents = context.Events
+            .OrderByDescending(e => e.Score)
+            .Take(3)
+            .Select(e => $"{e.ObjectName}: {e.VisibilityWindow}, {e.Direction}, {e.Details}")
+            .ToArray();
+
+        return $"You are creating a YouTube Shorts script for astronomy audiences.\n" +
+               "Return ONLY valid JSON. No markdown, no code fences.\n" +
+               "The short must be 30-60 seconds, include a strong hook in first 3 seconds, and punchy narration with simple structure.\n\n" +
+               "Output format:\n" +
+               "{{\n" +
+               "  \"hook\": \"string\",\n" +
+               "  \"shortScript\": \"string\",\n" +
+               "  \"title\": \"string\",\n" +
+               "  \"tags\": [\"shorts\", \"astronomy\"]\n" +
+               "}}\n\n" +
+               $"Context:\n- date: {context.Date:yyyy-MM-dd}\n- location: {context.LocationName}\n- contentType: {contentType}\n- topEvents: {string.Join(" | ", topEvents)}";
+    }
+
+    private static bool TryParseShortContent(string rawContent, out ShortScriptResult parsed, out string failureReason)
+    {
+        parsed = new ShortScriptResult();
+        failureReason = string.Empty;
+
+        try
+        {
+            using var document = JsonDocument.Parse(rawContent);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                failureReason = "Payload root is not a JSON object.";
+                return false;
+            }
+
+            string? hook = null;
+            string? shortScript = null;
+            string? title = null;
+            List<string>? tags = null;
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                switch (property.Name)
+                {
+                    case "hook": hook = property.Value.GetString()?.Trim(); break;
+                    case "shortScript": shortScript = property.Value.GetString()?.Trim(); break;
+                    case "title": title = property.Value.GetString()?.Trim(); break;
+                    case "tags":
+                        if (property.Value.ValueKind != JsonValueKind.Array)
+                        {
+                            failureReason = "Property 'tags' must be an array of strings.";
+                            return false;
+                        }
+                        tags = property.Value.EnumerateArray().Select(x => x.GetString()?.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        break;
+                    default:
+                        failureReason = $"Unexpected property '{property.Name}' detected in JSON payload.";
+                        return false;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(hook) || string.IsNullOrWhiteSpace(shortScript) || string.IsNullOrWhiteSpace(title))
+            {
+                failureReason = "Payload must include non-empty hook, shortScript, and title.";
+                return false;
+            }
+
+            tags ??= ["shorts", "astronomy"];
+            if (!tags.Any(static t => t.Equals("shorts", StringComparison.OrdinalIgnoreCase)))
+            {
+                tags.Insert(0, "shorts");
+            }
+
+            var estimatedDuration = Math.Clamp((int)Math.Ceiling(shortScript.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length / 2.6), 30, 60);
+            parsed = new ShortScriptResult
+            {
+                Hook = hook,
+                ShortScript = shortScript,
+                Title = title,
+                Tags = tags.ToArray(),
+                EstimatedDurationSeconds = estimatedDuration
+            };
+
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            failureReason = $"Invalid JSON: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static ShortScriptResult BuildShortFallback(ContentType contentType, AstronomyContext context)
+    {
+        var topEvent = context.Events.OrderByDescending(x => x.Score).FirstOrDefault();
+        var hook = topEvent is null
+            ? "Stop scrolling — tonight's sky has a quick surprise for you."
+            : $"Stop scrolling — {topEvent.ObjectName} is putting on a show tonight.";
+
+        var body = topEvent is null
+            ? "Step outside after sunset, let your eyes adapt for five minutes, and scan the brightest region overhead."
+            : $"In the next minute: look {topEvent.Direction} {topEvent.VisibilityWindow}. You can spot {topEvent.ObjectName} with {topEvent.ObservationTool}. {topEvent.Details}";
+
+        return new ShortScriptResult
+        {
+            Hook = hook,
+            ShortScript = body,
+            Title = $"{contentType} in 60 Seconds",
+            Tags = ["shorts", "astronomy", contentType.ToString()],
+            EstimatedDurationSeconds = 45
         };
     }
 

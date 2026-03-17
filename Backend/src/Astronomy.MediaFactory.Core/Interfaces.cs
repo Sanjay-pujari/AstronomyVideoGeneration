@@ -5,8 +5,10 @@ public interface IAstronomyContextProvider { Task<AstronomyContext> BuildContext
 public interface ITopicRankingService { Task<IReadOnlyCollection<RankedTopic>> RankAsync(AstronomyContext context, ContentType contentType, CancellationToken cancellationToken); }
 public interface IVisualAssetProvider { Task<IReadOnlyCollection<string>> PrepareVisualsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken); }
 public interface IScriptGenerationService { Task<ScriptResult> GenerateAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken); }
+public interface IShortsScriptGenerationService { Task<ShortScriptResult> GenerateShortAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken); }
 public interface ISpeechSynthesisService { Task<string> SynthesizeAsync(string script, string outputDirectory, CancellationToken cancellationToken); }
 public interface IVideoRenderService { Task<string> RenderAsync(RenderManifest manifest, CancellationToken cancellationToken); }
+public interface IShortsVideoRenderService { Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken); }
 public interface IAzureBlobStorageService { Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken); }
 public interface IYouTubePublishingService { Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken); }
 public interface IPipelineRepository {
@@ -16,5 +18,6 @@ public interface IPipelineRepository {
  Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken);
  Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken);
  Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken);
+ Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken);
  Task SaveChangesAsync(CancellationToken cancellationToken);
 }

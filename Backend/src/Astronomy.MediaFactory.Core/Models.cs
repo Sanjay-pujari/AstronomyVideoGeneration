@@ -43,6 +43,16 @@ public sealed class ScriptResult
     public string[] Tags { get; init; } = Array.Empty<string>();
     public int EstimatedDurationSeconds { get; init; }
 }
+
+public sealed class ShortScriptResult
+{
+    public string Hook { get; init; } = "";
+    public string ShortScript { get; init; } = "";
+    public string Title { get; init; } = "";
+    public string[] Tags { get; init; } = ["shorts", "astronomy"];
+    public int EstimatedDurationSeconds { get; init; }
+}
+
 public sealed class RenderManifest
 {
     public string Title { get; set; } = "";
@@ -50,6 +60,9 @@ public sealed class RenderManifest
     public string OutputPath { get; set; } = "";
     public string? IntroVisualPath { get; set; }
     public string? OutroVisualPath { get; set; }
+    public int? OutputWidth { get; set; }
+    public int? OutputHeight { get; set; }
+    public bool EnableVerticalCrop { get; set; }
     public List<RenderScene> Scenes { get; set; } = new();
 }
 public sealed class RenderScene
@@ -79,4 +92,14 @@ public sealed class BlobUploadResult
     public string? VideoUrl { get; init; }
     public string? AudioUrl { get; init; }
     public string? ThumbnailUrl { get; init; }
+}
+
+public sealed class ShortVideoRenderResult
+{
+    public required ShortScriptResult Script { get; init; }
+    public required string AudioPath { get; init; }
+    public required string VideoPath { get; init; }
+    public string? BlobUrl { get; init; }
+    public string? YouTubeVideoId { get; init; }
+    public string PublishStatus { get; init; } = "Draft";
 }

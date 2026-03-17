@@ -48,7 +48,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITopicRankingService, TopicRankingService>();
         services.AddScoped<IVisualAssetProvider, StellariumVisualGenerationService>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
-        services.AddHttpClient<IScriptGenerationService, AzureOpenAiContentGenerationService>();
+        services.AddHttpClient<AzureOpenAiContentGenerationService>();
+        services.AddScoped<IScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
+        services.AddScoped<IShortsScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IAzureSpeechClient, AzureSpeechClient>();
         services.AddScoped<IFileSystem, PhysicalFileSystem>();
         services.AddScoped<IProcessRunner, ProcessRunner>();
@@ -58,6 +60,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
+        services.AddScoped<IShortsVideoRenderService, ShortsVideoRenderService>();
         services.AddScoped<StellariumScriptBuilder>(sp =>
             new StellariumScriptBuilder(sp.GetRequiredService<IOptions<StellariumOptions>>().Value));
         services.AddScoped<PipelineOrchestrator>();

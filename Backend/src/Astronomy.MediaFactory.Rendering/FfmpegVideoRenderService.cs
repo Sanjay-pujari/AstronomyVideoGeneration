@@ -59,7 +59,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             return outputPath;
         }
 
-        var arguments = _argumentBuilder.Build(_options, concatPath, manifest.AudioPath, outputPath);
+        var arguments = _argumentBuilder.Build(_options, manifest, concatPath, manifest.AudioPath, outputPath);
         await _fileSystem.WriteAllTextAsync(commandPath, $"{_options.FfmpegPath} {arguments}", cancellationToken);
 
         try

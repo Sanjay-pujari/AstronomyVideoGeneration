@@ -60,3 +60,12 @@ public sealed class PublishedVideo : EntityBase
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public string Status { get; set; } = "Published";
 }
+
+
+public sealed class ShortVideo : EntityBase
+{
+    public Guid ParentVideoId { get; set; }
+    public string? YouTubeVideoId { get; set; }
+    public int Duration { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}

@@ -67,6 +67,35 @@ public sealed class AzureOpenAiContentGenerationServiceTests
         Assert.Contains(ContentType.DailySkyGuide.ToString(), result.Tags);
     }
 
+
+
+    [Fact]
+    public async Task GenerateShortAsync_ReturnsShortPayload_WhenJsonIsValid()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {
+                      "choices": [
+                        {
+                          "message": {
+                            "content": "{\"hook\":\"Watch this nebula rise tonight!\",\"shortScript\":\"Step outside right after sunset and look west for a glowing patch.\",\"title\":\"Nebula in 60 Seconds\",\"tags\":[\"shorts\",\"astronomy\"]}"
+                          }
+                        }
+                      ]
+                    }
+                    """, Encoding.UTF8, "application/json")
+            });
+
+        var sut = CreateService(handler);
+        var result = await sut.GenerateShortAsync(ContentType.DailySkyGuide, BuildContext(), CancellationToken.None);
+
+        Assert.Equal("Nebula in 60 Seconds", result.Title);
+        Assert.Contains("shorts", result.Tags);
+        Assert.InRange(result.EstimatedDurationSeconds, 30, 60);
+    }
+
     private static AzureOpenAiContentGenerationService CreateService(HttpMessageHandler handler)
     {
         var client = new HttpClient(handler);
