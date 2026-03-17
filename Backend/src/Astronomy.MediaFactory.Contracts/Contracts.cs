@@ -30,6 +30,13 @@ public sealed class SchedulingOptions
     public int QueuePollIntervalSeconds { get; set; } = 10;
 }
 
+public sealed class AnalyticsOptions
+{
+    public const string SectionName = "Analytics";
+    public int FetchIntervalMinutes { get; set; } = 1440;
+    public int TopN { get; set; } = 10;
+}
+
 public sealed class RenderingOptions
 {
     public const string SectionName = "Rendering";

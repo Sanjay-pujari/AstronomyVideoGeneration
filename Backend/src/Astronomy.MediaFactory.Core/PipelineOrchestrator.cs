@@ -19,6 +19,7 @@ public sealed class PipelineOrchestrator
     private readonly IPipelineRepository _repository;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<PipelineOrchestrator> _logger;
+    private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -33,7 +34,8 @@ public sealed class PipelineOrchestrator
         IMetadataOptimizationService metadataOptimizationService,
         IPipelineRepository repository,
         IOptions<YouTubeOptions> youTubeOptions,
-        ILogger<PipelineOrchestrator> logger)
+        ILogger<PipelineOrchestrator> logger,
+        IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -48,6 +50,7 @@ public sealed class PipelineOrchestrator
         _repository = repository;
         _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
+        _analyticsFeedbackProvider = analyticsFeedbackProvider;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -73,6 +76,9 @@ public sealed class PipelineOrchestrator
             Directory.CreateDirectory(outputDir);
 
             var context = await _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken);
+            var feedbackSignals = _analyticsFeedbackProvider is null
+                ? new FeedbackSignals()
+                : await _analyticsFeedbackProvider.GetSignalsAsync(10, cancellationToken);
             _ = await _topicRankingService.RankAsync(context, request.ContentType, cancellationToken);
             var script = await _scriptGenerationService.GenerateAsync(request.ContentType, context, cancellationToken);
             var optimizedMetadata = await _metadataOptimizationService.OptimizeForVideoAsync(new MetadataOptimizationInput
@@ -82,7 +88,8 @@ public sealed class PipelineOrchestrator
                 SourceTitle = script.Title,
                 SourceDescription = script.Description,
                 SourceTags = script.Tags,
-                SourceScript = script.ScriptBody
+                SourceScript = script.ScriptBody,
+                FeedbackKeywords = feedbackSignals.TopKeywords
             }, cancellationToken);
             script = new ScriptResult
             {

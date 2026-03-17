@@ -97,3 +97,20 @@ public sealed class PipelineJob : EntityBase
     public bool PublishToYouTube { get; set; }
     public DateTimeOffset? NextAttemptAt { get; set; }
 }
+
+public sealed class VideoAnalytics : EntityBase
+{
+    public string VideoId { get; set; } = "";
+    public long Views { get; set; }
+    public long Likes { get; set; }
+    public long Comments { get; set; }
+    public int DurationSeconds { get; set; }
+    public double? AverageViewDurationSeconds { get; set; }
+    public double? CtrPercent { get; set; }
+    public DateTimeOffset RetrievedAt { get; set; } = DateTimeOffset.UtcNow;
+    public ContentType ContentType { get; set; }
+    public bool IsShort { get; set; }
+    public string? ParentVideoId { get; set; }
+    public string? Title { get; set; }
+    public string? HookLine { get; set; }
+}
