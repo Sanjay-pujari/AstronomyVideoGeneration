@@ -20,10 +20,15 @@ public static class ServiceCollectionExtensions
         services.Configure<AzureSpeechOptions>(configuration.GetSection(AzureSpeechOptions.SectionName));
         services.Configure<AzureStorageOptions>(configuration.GetSection(AzureStorageOptions.SectionName));
         services.Configure<YouTubeOptions>(configuration.GetSection(YouTubeOptions.SectionName));
+        services.Configure<SkyfieldSidecarOptions>(configuration.GetSection(SkyfieldSidecarOptions.SectionName));
         services.AddHttpClient<NasaApodClient>();
         services.AddHttpClient<NasaNeoWsClient>();
         services.AddHttpClient<MinorPlanetCenterClient>();
-        services.AddHttpClient<SkyfieldSidecarClient>();
+        services.AddHttpClient<ISkyfieldSidecarClient, SkyfieldSidecarClient>((sp, client) =>
+        {
+            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SkyfieldSidecarOptions>>().Value;
+            client.BaseAddress = new Uri(options.BaseUrl);
+        });
         var cs = configuration.GetConnectionString("Postgres") ?? configuration["ConnectionStrings:Postgres"] ?? "Host=localhost;Port=5432;Database=astronomy_media_factory;Username=postgres;Password=postgres";
         services.AddDbContext<MediaFactoryDbContext>(o => o.UseNpgsql(cs));
         services.AddScoped<IPipelineRepository, EfPipelineRepository>();
