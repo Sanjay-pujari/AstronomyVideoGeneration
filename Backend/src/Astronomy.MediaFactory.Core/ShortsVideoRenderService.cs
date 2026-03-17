@@ -16,6 +16,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<ShortsVideoRenderService> _logger;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
+    private readonly IPromptFeedbackService? _promptFeedbackService;
 
     public ShortsVideoRenderService(
         IShortsScriptGenerationService shortsScriptGenerationService,
@@ -27,7 +28,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         IMetadataOptimizationService metadataOptimizationService,
         IOptions<YouTubeOptions> youTubeOptions,
         ILogger<ShortsVideoRenderService> logger,
-        IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null)
+        IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
+        IPromptFeedbackService? promptFeedbackService = null)
     {
         _shortsScriptGenerationService = shortsScriptGenerationService;
         _speechSynthesisService = speechSynthesisService;
@@ -39,10 +41,21 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
+        _promptFeedbackService = promptFeedbackService;
     }
 
     public async Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken)
     {
+        if (_promptFeedbackService is not null)
+        {
+            context.PromptFeedbackContext = await _promptFeedbackService.BuildContextAsync(new PromptFeedbackRequest
+            {
+                ContentType = contentType,
+                IsShortForm = true,
+                TopicSelectionPlan = context.TopicSelectionPlan
+            }, cancellationToken);
+        }
+
         var shortScript = await _shortsScriptGenerationService.GenerateShortAsync(contentType, context, cancellationToken);
         var feedbackSignals = _analyticsFeedbackProvider is null
             ? new FeedbackSignals()
@@ -57,7 +70,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             SourceTags = shortScript.Tags,
             SourceScript = shortScript.ShortScript,
             SourceHookLine = sourceHook,
-            FeedbackKeywords = feedbackSignals.TopKeywords
+            FeedbackKeywords = feedbackSignals.TopKeywords,
+            FeedbackContext = context.PromptFeedbackContext
         }, cancellationToken);
         shortScript = new ShortScriptResult
         {
