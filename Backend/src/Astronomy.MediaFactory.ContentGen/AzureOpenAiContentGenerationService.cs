@@ -1,7 +1,7 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -12,6 +12,7 @@ namespace Astronomy.MediaFactory.ContentGen;
 public sealed class AzureOpenAiContentGenerationService : IScriptGenerationService
 {
     private const string ApiVersion = "2024-10-21";
+    private const int MaxGenerationAttempts = 3;
 
     private readonly HttpClient _httpClient;
     private readonly AzureOpenAiOptions _options;
@@ -34,32 +35,51 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
     {
         var prompt = _promptBuilder.Build(contentType, context);
 
-        try
+        for (var attempt = 1; attempt <= MaxGenerationAttempts; attempt++)
         {
-            var completion = await RequestCompletionAsync(prompt, cancellationToken);
-            var parsed = ParseContent(completion);
-
-            if (parsed is null)
+            try
             {
-                _logger.LogError("Unable to parse Azure OpenAI JSON output. Falling back to template content.");
-                return BuildFallback(contentType, context, prompt);
+                var completion = await RequestCompletionAsync(prompt, cancellationToken);
+                if (TryParseContent(completion, out var parsed, out var failureReason))
+                {
+                    return new ScriptResult
+                    {
+                        Prompt = prompt,
+                        Title = parsed.Title,
+                        Description = parsed.Description,
+                        Tags = parsed.Tags,
+                        EstimatedDurationSeconds = parsed.EstimatedDurationSeconds,
+                        ScriptBody = parsed.ScriptBody
+                    };
+                }
+
+                _logger.LogWarning(
+                    "Azure OpenAI response failed strict JSON validation on attempt {Attempt}/{MaxAttempts}: {FailureReason}",
+                    attempt,
+                    MaxGenerationAttempts,
+                    failureReason);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Azure OpenAI generation attempt {Attempt}/{MaxAttempts} failed.",
+                    attempt,
+                    MaxGenerationAttempts);
             }
 
-            return new ScriptResult
+            if (attempt < MaxGenerationAttempts)
             {
-                Prompt = prompt,
-                Title = parsed.Title,
-                Description = parsed.Description,
-                Tags = parsed.Tags,
-                EstimatedDurationSeconds = parsed.EstimatedDurationSeconds,
-                ScriptBody = parsed.ScriptBody
-            };
+                await Task.Delay(TimeSpan.FromMilliseconds(250 * attempt), cancellationToken);
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Azure OpenAI content generation failed. Falling back to template content.");
-            return BuildFallback(contentType, context, prompt);
-        }
+
+        _logger.LogError("Azure OpenAI content generation failed after {MaxAttempts} attempts. Falling back to template content.", MaxGenerationAttempts);
+        return BuildFallback(contentType, context, prompt);
     }
 
     private async Task<string> RequestCompletionAsync(string prompt, CancellationToken cancellationToken)
@@ -78,10 +98,10 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             {
                 messages = new object[]
                 {
-                    new { role = "system", content = "You are a precise assistant that always returns valid JSON." },
+                    new { role = "system", content = "You are a precise assistant that always returns valid JSON. Do not include markdown code fences." },
                     new { role = "user", content = prompt }
                 },
-                temperature = 0.4,
+                temperature = 0.2,
                 response_format = new { type = "json_object" }
             })
         };
@@ -90,7 +110,14 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         using var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException(
+                $"Azure OpenAI request failed with status {(int)response.StatusCode} ({response.StatusCode}). Body: {errorPayload}",
+                null,
+                response.StatusCode);
+        }
 
         var payload = await response.Content.ReadAsStringAsync(cancellationToken);
         var chatResponse = JsonSerializer.Deserialize<AzureChatResponse>(payload);
@@ -98,29 +125,127 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             ?? throw new InvalidOperationException("Azure OpenAI response did not include message content.");
     }
 
-    private GeneratedContent? ParseContent(string rawContent)
+    private static bool TryParseContent(string rawContent, out GeneratedContent parsed, out string failureReason)
     {
+        parsed = new GeneratedContent();
+        failureReason = string.Empty;
+
         try
         {
-            var parsed = JsonSerializer.Deserialize<GeneratedContent>(rawContent, JsonSerializerOptions.Web);
-            if (parsed is null || string.IsNullOrWhiteSpace(parsed.ScriptBody) || string.IsNullOrWhiteSpace(parsed.Title))
+            using var document = JsonDocument.Parse(rawContent, new JsonDocumentOptions
             {
-                return null;
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow
+            });
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                failureReason = "Payload root is not a JSON object.";
+                return false;
             }
 
-            parsed.Tags = parsed.Tags.Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            if (parsed.Tags.Length == 0)
+            var seenProperties = new HashSet<string>(StringComparer.Ordinal);
+            string? title = null;
+            string? description = null;
+            string? scriptBody = null;
+            List<string>? tags = null;
+            int? estimatedDurationSeconds = null;
+
+            foreach (var property in document.RootElement.EnumerateObject())
             {
-                parsed.Tags = ["astronomy", "night sky"];
+                if (!seenProperties.Add(property.Name))
+                {
+                    failureReason = $"Duplicate property '{property.Name}' is not allowed.";
+                    return false;
+                }
+
+                switch (property.Name)
+                {
+                    case "title":
+                        if (property.Value.ValueKind != JsonValueKind.String)
+                        {
+                            failureReason = "Property 'title' must be a string.";
+                            return false;
+                        }
+
+                        title = property.Value.GetString()?.Trim();
+                        break;
+                    case "description":
+                        if (property.Value.ValueKind != JsonValueKind.String)
+                        {
+                            failureReason = "Property 'description' must be a string.";
+                            return false;
+                        }
+
+                        description = property.Value.GetString()?.Trim();
+                        break;
+                    case "tags":
+                        if (property.Value.ValueKind != JsonValueKind.Array)
+                        {
+                            failureReason = "Property 'tags' must be an array of strings.";
+                            return false;
+                        }
+
+                        tags = property.Value
+                            .EnumerateArray()
+                            .Select(item => item.ValueKind == JsonValueKind.String ? item.GetString()?.Trim() : null)
+                            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                            .Cast<string>()
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        if (tags.Count == 0)
+                        {
+                            failureReason = "Property 'tags' must contain at least one non-empty string value.";
+                            return false;
+                        }
+
+                        break;
+                    case "estimatedDurationSeconds":
+                        if (property.Value.ValueKind != JsonValueKind.Number || !property.Value.TryGetInt32(out var duration) || duration <= 0)
+                        {
+                            failureReason = "Property 'estimatedDurationSeconds' must be a positive integer.";
+                            return false;
+                        }
+
+                        estimatedDurationSeconds = duration;
+                        break;
+                    case "scriptBody":
+                        if (property.Value.ValueKind != JsonValueKind.String)
+                        {
+                            failureReason = "Property 'scriptBody' must be a string.";
+                            return false;
+                        }
+
+                        scriptBody = property.Value.GetString()?.Trim();
+                        break;
+                    default:
+                        failureReason = $"Unexpected property '{property.Name}' detected in JSON payload.";
+                        return false;
+                }
             }
 
-            parsed.EstimatedDurationSeconds = parsed.EstimatedDurationSeconds <= 0 ? 900 : parsed.EstimatedDurationSeconds;
-            return parsed;
+            if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(description) || string.IsNullOrWhiteSpace(scriptBody) || tags is null || estimatedDurationSeconds is null)
+            {
+                failureReason = "Payload must include non-empty title, description, scriptBody, tags, and estimatedDurationSeconds.";
+                return false;
+            }
+
+            parsed = new GeneratedContent
+            {
+                Title = title,
+                Description = description,
+                Tags = tags.ToArray(),
+                EstimatedDurationSeconds = estimatedDurationSeconds.Value,
+                ScriptBody = scriptBody
+            };
+
+            return true;
         }
         catch (JsonException ex)
         {
-            _logger.LogError(ex, "JSON parsing failed for Azure OpenAI content payload: {Payload}", rawContent);
-            return null;
+            failureReason = $"Invalid JSON: {ex.Message}";
+            return false;
         }
     }
 
@@ -161,19 +286,10 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
     private sealed class GeneratedContent
     {
-        [JsonPropertyName("title")]
         public string Title { get; init; } = string.Empty;
-
-        [JsonPropertyName("description")]
         public string Description { get; init; } = string.Empty;
-
-        [JsonPropertyName("tags")]
-        public string[] Tags { get; set; } = Array.Empty<string>();
-
-        [JsonPropertyName("estimatedDurationSeconds")]
-        public int EstimatedDurationSeconds { get; set; }
-
-        [JsonPropertyName("scriptBody")]
+        public string[] Tags { get; init; } = Array.Empty<string>();
+        public int EstimatedDurationSeconds { get; init; }
         public string ScriptBody { get; init; } = string.Empty;
     }
 }
