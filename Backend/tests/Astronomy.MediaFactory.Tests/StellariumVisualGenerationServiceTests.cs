@@ -59,8 +59,8 @@ public sealed class StellariumVisualGenerationServiceTests
         Assert.Equal(5, visuals.Count);
         Assert.All(visuals, v => Assert.True(File.Exists(v)));
         Assert.True(File.Exists(Path.Combine(outputDir, "visuals", "capture-manifest.json")));
-        Assert.True(File.Exists(Path.Combine(outputDir, "visuals", "001-sky-overview.ssc")));
-        Assert.True(File.Exists(Path.Combine(outputDir, "visuals", "002-moon.json")));
+        Assert.True(File.Exists(Path.Combine(outputDir, "visuals", "scripts", "001-sky-overview.ssc")));
+        Assert.True(File.Exists(Path.Combine(outputDir, "visuals", "scripts", "002-moon.json")));
     }
 
     [Fact]
@@ -81,7 +81,10 @@ public sealed class StellariumVisualGenerationServiceTests
         Assert.All(visuals, path =>
         {
             Assert.True(File.Exists(path));
-            Assert.True(new FileInfo(path).Length > 0);
+            Assert.True(new FileInfo(path).Length > 1000);
+            var placeholderInfoPath = Path.ChangeExtension(path, ".placeholder.txt");
+            Assert.True(File.Exists(placeholderInfoPath));
+            Assert.Contains("Placeholder generated for scene", File.ReadAllText(placeholderInfoPath));
         });
     }
 }
