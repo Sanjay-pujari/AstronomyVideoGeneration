@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Worker;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
+using Astronomy.MediaFactory.Infrastructure.Alerting;
 using Microsoft.Extensions.Options;
 using Quartz;
 using Serilog;
@@ -13,6 +14,7 @@ Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateLogger();
 builder.Services.AddSerilog();
 builder.Services.AddMediaFactory(builder.Configuration);
 builder.Services.AddHostedService<PipelineQueueWorker>();
+builder.Services.AddHostedService<AlertingMonitorService>();
 
 builder.Services.AddQuartz(q =>
 {

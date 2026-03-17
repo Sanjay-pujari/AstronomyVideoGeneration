@@ -27,6 +27,7 @@ public sealed class PipelineOrchestrator
     private readonly IPromptFeedbackService? _promptFeedbackService;
     private readonly IPipelineStageRecorder? _pipelineStageRecorder;
     private readonly IStageAlertPublisher _stageAlertPublisher;
+    private readonly IOperationalAlertNotifier? _operationalAlertNotifier;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -49,6 +50,7 @@ public sealed class PipelineOrchestrator
         IPromptFeedbackService? promptFeedbackService = null,
         IPipelineStageRecorder? pipelineStageRecorder = null,
         IStageAlertPublisher? stageAlertPublisher = null,
+        IOperationalAlertNotifier? operationalAlertNotifier = null,
         IOptions<OperationsOptions>? operationsOptions = null)
     {
         _contextProvider = contextProvider;
@@ -72,6 +74,7 @@ public sealed class PipelineOrchestrator
         _promptFeedbackService = promptFeedbackService;
         _pipelineStageRecorder = pipelineStageRecorder;
         _stageAlertPublisher = stageAlertPublisher ?? new NullStageAlertPublisher();
+        _operationalAlertNotifier = operationalAlertNotifier;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -357,6 +360,19 @@ public sealed class PipelineOrchestrator
                     if (string.IsNullOrWhiteSpace(run.YouTubeVideoId))
                     {
                         publishStatus = "UploadFailed";
+                        if (_operationalAlertNotifier is not null)
+                        {
+                            await _operationalAlertNotifier.NotifyAsync(new OperationalAlert(
+                                AlertCategory.PublishFailed,
+                                string.Empty,
+                                run.Id,
+                                "YouTubeUpload",
+                                request.ContentType,
+                                request.Date,
+                                request.LocationName,
+                                ErrorSummary: "YouTube upload returned no video id",
+                                OccurredAt: DateTimeOffset.UtcNow), cancellationToken);
+                        }
                     }
                     else if (_youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
                     {
@@ -374,6 +390,19 @@ public sealed class PipelineOrchestrator
                 {
                     _logger.LogError(ex, "YouTube upload failed for pipeline run {PipelineRunId}.", run.Id);
                     publishStatus = "UploadFailed";
+                    if (_operationalAlertNotifier is not null)
+                    {
+                        await _operationalAlertNotifier.NotifyAsync(new OperationalAlert(
+                            AlertCategory.PublishFailed,
+                            string.Empty,
+                            run.Id,
+                            "YouTubeUpload",
+                            request.ContentType,
+                            request.Date,
+                            request.LocationName,
+                            ErrorSummary: ex.Message,
+                            OccurredAt: DateTimeOffset.UtcNow), cancellationToken);
+                    }
                 }
             }
 
@@ -424,6 +453,18 @@ public sealed class PipelineOrchestrator
             }
 
             run.Status = PipelineRunStatus.Succeeded;
+            if (_operationalAlertNotifier is not null && request.PublishToYouTube && publishStatus == "Published")
+            {
+                await _operationalAlertNotifier.NotifyAsync(new OperationalAlert(
+                    AlertCategory.PublishSucceeded,
+                    string.Empty,
+                    run.Id,
+                    "YouTubeUpload",
+                    request.ContentType,
+                    request.Date,
+                    request.LocationName,
+                    OccurredAt: DateTimeOffset.UtcNow), cancellationToken);
+            }
             run.FinishedUtc = DateTimeOffset.UtcNow;
             await _repository.SaveChangesAsync(cancellationToken);
             _logger.LogInformation("Pipeline run {PipelineRunId} completed with status {Status}", run.Id, run.Status);
@@ -432,6 +473,18 @@ public sealed class PipelineOrchestrator
         catch (Exception ex)
         {
             _logger.LogError(ex, "Pipeline run failed for {PipelineRunId}", run.Id);
+            if (_operationalAlertNotifier is not null)
+            {
+                await _operationalAlertNotifier.NotifyAsync(new OperationalAlert(
+                    AlertCategory.PipelineFailed,
+                    string.Empty,
+                    run.Id,
+                    ContentType: request.ContentType,
+                    RunDate: request.Date,
+                    LocationName: request.LocationName,
+                    ErrorSummary: ex.Message,
+                    OccurredAt: DateTimeOffset.UtcNow), cancellationToken);
+            }
             run.Status = PipelineRunStatus.Failed;
             run.FailureReason = ex.Message;
             run.FinishedUtc = DateTimeOffset.UtcNow;
