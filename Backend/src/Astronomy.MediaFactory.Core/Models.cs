@@ -9,6 +9,8 @@ public sealed class AstronomyContext
     public List<AstronomyEventModel> Events { get; init; } = new();
     public List<NewsItemModel> NewsItems { get; init; } = new();
     public List<VisualIdeaModel> VisualIdeas { get; init; } = new();
+    public TopicSelectionPlan? TopicSelectionPlan { get; set; }
+    public PromptFeedbackContext? PromptFeedbackContext { get; set; }
 }
 public sealed class AstronomyEventModel
 {
@@ -65,6 +67,33 @@ public sealed class MetadataOptimizationInput
     public string? SourceScript { get; init; }
     public string? SourceHookLine { get; init; }
     public IReadOnlyCollection<string>? FeedbackKeywords { get; init; }
+    public PromptFeedbackContext? FeedbackContext { get; init; }
+}
+
+public sealed class PromptFeedbackContext
+{
+    public ContentType ContentType { get; init; }
+    public IReadOnlyCollection<string> RecommendedKeywords { get; init; } = [];
+    public IReadOnlyCollection<string> AvoidKeywords { get; init; } = [];
+    public IReadOnlyCollection<string> RecommendedHookPatterns { get; init; } = [];
+    public IReadOnlyCollection<string> AvoidHookPatterns { get; init; } = [];
+    public IReadOnlyCollection<string> RecommendedTitlePatterns { get; init; } = [];
+    public IReadOnlyCollection<string> AvoidTitlePatterns { get; init; } = [];
+    public IReadOnlyCollection<string> RecommendedToneNotes { get; init; } = [];
+    public IReadOnlyCollection<string> RecentWinningTopics { get; init; } = [];
+    public IReadOnlyCollection<string> RecentOverusedTopics { get; init; } = [];
+    public IReadOnlyCollection<string> AvoidObjectEmphasis { get; init; } = [];
+    public IReadOnlyCollection<string> ShortsHookSuggestions { get; init; } = [];
+    public IReadOnlyCollection<string> MetadataOptimizationHints { get; init; } = [];
+    public string TopicSelectionRationale { get; init; } = "";
+    public bool UsedFallbackDefaults { get; init; }
+}
+
+public sealed class PromptFeedbackRequest
+{
+    public required ContentType ContentType { get; init; }
+    public TopicSelectionPlan? TopicSelectionPlan { get; init; }
+    public bool IsShortForm { get; init; }
 }
 
 public sealed class OptimizedVideoMetadata
