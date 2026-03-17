@@ -20,6 +20,7 @@ public sealed class TopicSelectionServiceTests
 
         Assert.Equal("Perseids", plan.PrimaryLongForm!.ObjectName);
         Assert.NotEmpty(plan.ShortsCandidates);
+        Assert.True(plan.PrimaryLongForm.SignificanceScore >= 0.85);
     }
 
     [Fact]
@@ -39,6 +40,8 @@ public sealed class TopicSelectionServiceTests
         var plan = await service.BuildPlanAsync(new TopicSelectionRequest { Date = DateOnly.FromDateTime(DateTime.UtcNow), LocationName = "Pune" }, CancellationToken.None);
 
         Assert.NotEqual("Jupiter", plan.PrimaryLongForm!.ObjectName);
+        var jupiterCandidate = plan.RankedOpportunities.Single(x => x.ObjectName == "Jupiter");
+        Assert.True(jupiterCandidate.DiversityScore <= 0.45);
     }
 
     [Fact]
@@ -49,6 +52,8 @@ public sealed class TopicSelectionServiceTests
 
         Assert.Single(plan.RankedOpportunities);
         Assert.Equal("fallback", plan.RankedOpportunities.First().EventType);
+        Assert.Equal(ContentType.DailySkyGuide, plan.SchedulingHints.ContentType);
+        Assert.Equal("0 0 18 * * ?", plan.SchedulingHints.PreferredCronExpression);
     }
 
     private static TopicSelectionService BuildService(IReadOnlyCollection<AstronomyEventModel> events, TopicRepo? repo = null)
