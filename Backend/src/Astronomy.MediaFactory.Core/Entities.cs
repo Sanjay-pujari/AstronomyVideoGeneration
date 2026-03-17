@@ -51,3 +51,12 @@ public sealed class MediaAsset : EntityBase
     public string? PublicUrl { get; set; }
     public long SizeBytes { get; set; }
 }
+
+public sealed class PublishedVideo : EntityBase
+{
+    public string Title { get; set; } = "";
+    public string? YouTubeVideoId { get; set; }
+    public string? BlobUrl { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public string Status { get; set; } = "Published";
+}

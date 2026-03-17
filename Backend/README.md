@@ -107,3 +107,46 @@ If `ExecutablePath` is empty or missing, the pipeline logs a warning and writes 
 2. Open generated `.ssc` files from the run's `visuals` directory.
 3. If Stellarium executable is configured, the service attempts optional startup-script invocation for each scene.
 4. `capture-manifest.json` lists expected screenshot paths and scene metadata for renderer consumption.
+
+## PASS 6: Publishing (Azure Blob + YouTube)
+
+### Configuration
+Update appsettings (API/Worker):
+
+```json
+"AzureBlob": {
+  "ConnectionString": "<azure-storage-connection-string>",
+  "ContainerName": "astronomy-videos"
+},
+"YouTube": {
+  "ClientId": "<google-oauth-client-id>",
+  "ClientSecret": "<google-oauth-client-secret>",
+  "ApplicationName": "AstronomyVideoGenerator",
+  "PrivacyStatus": "private",
+  "RefreshToken": "<oauth-refresh-token>",
+  "TokenFilePath": "./secrets/youtube-token.json"
+}
+```
+
+### Generate YouTube OAuth refresh token (manual)
+1. Create OAuth Desktop App credentials in Google Cloud.
+2. Enable YouTube Data API v3.
+3. Use OAuth playground or local OAuth helper to authorize `https://www.googleapis.com/auth/youtube.upload`.
+4. Save the refresh token in `YouTube:RefreshToken` or put this JSON in `YouTube:TokenFilePath`:
+
+```json
+{
+  "access_token": "<optional-access-token>",
+  "refresh_token": "<required-refresh-token>"
+}
+```
+
+### Pipeline behavior
+After FFmpeg render completes, pipeline now does:
+1. Upload `final-video.mp4`, `narration.mp3`, and optional thumbnail to Azure Blob.
+2. Upload video to YouTube (when `PublishToYouTube=true`).
+3. Persist publishing metadata in `published_videos` table.
+
+Fallbacks:
+- Blob upload failure logs error and continues YouTube upload from local file.
+- YouTube upload failure logs error, preserves blob artifact, and stores `Status=UploadFailed`.

@@ -6,6 +6,7 @@
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.ContentGen\Astronomy.MediaFactory.ContentGen.csproj" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Rendering\Astronomy.MediaFactory.Rendering.csproj" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.AstroData\Astronomy.MediaFactory.AstroData.csproj" />
+    <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Publishing\Astronomy.MediaFactory.Publishing.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

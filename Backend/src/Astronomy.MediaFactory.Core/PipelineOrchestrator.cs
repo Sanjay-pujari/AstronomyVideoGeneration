@@ -1,5 +1,7 @@
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
 namespace Astronomy.MediaFactory.Core;
 
 public sealed class PipelineOrchestrator
@@ -10,9 +12,10 @@ public sealed class PipelineOrchestrator
     private readonly IScriptGenerationService _scriptGenerationService;
     private readonly ISpeechSynthesisService _speechSynthesisService;
     private readonly IVideoRenderService _videoRenderService;
-    private readonly IArchivalService _archivalService;
+    private readonly IAzureBlobStorageService _azureBlobStorageService;
     private readonly IYouTubePublishingService _youTubePublishingService;
     private readonly IPipelineRepository _repository;
+    private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<PipelineOrchestrator> _logger;
 
     public PipelineOrchestrator(
@@ -22,9 +25,10 @@ public sealed class PipelineOrchestrator
         IScriptGenerationService scriptGenerationService,
         ISpeechSynthesisService speechSynthesisService,
         IVideoRenderService videoRenderService,
-        IArchivalService archivalService,
+        IAzureBlobStorageService azureBlobStorageService,
         IYouTubePublishingService youTubePublishingService,
         IPipelineRepository repository,
+        IOptions<YouTubeOptions> youTubeOptions,
         ILogger<PipelineOrchestrator> logger)
     {
         _contextProvider = contextProvider;
@@ -33,9 +37,10 @@ public sealed class PipelineOrchestrator
         _scriptGenerationService = scriptGenerationService;
         _speechSynthesisService = speechSynthesisService;
         _videoRenderService = videoRenderService;
-        _archivalService = archivalService;
+        _azureBlobStorageService = azureBlobStorageService;
         _youTubePublishingService = youTubePublishingService;
         _repository = repository;
+        _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
     }
 
@@ -119,6 +124,7 @@ public sealed class PipelineOrchestrator
             };
 
             var videoPath = await _videoRenderService.RenderAsync(manifest, cancellationToken);
+            var thumbnailPath = visuals.FirstOrDefault(File.Exists);
             await _repository.AddAssetAsync(new MediaAsset
             {
                 PipelineRunId = run.Id,
@@ -128,10 +134,53 @@ public sealed class PipelineOrchestrator
                 SizeBytes = File.Exists(videoPath) ? new FileInfo(videoPath).Length : 0
             }, cancellationToken);
 
-            var blobPath = $"{request.ContentType}/{request.Date:yyyy-MM-dd}/{run.Id:N}/{Path.GetFileName(videoPath)}";
-            _ = await _archivalService.ArchiveAsync(videoPath, blobPath, cancellationToken);
+            BlobUploadResult blobUploadResult = new();
+            try
+            {
+                blobUploadResult = await _azureBlobStorageService.UploadAsync(new BlobUploadRequest
+                {
+                    BasePath = $"{request.ContentType}/{request.Date:yyyy-MM-dd}/{run.Id:N}",
+                    VideoPath = videoPath,
+                    AudioPath = audioPath,
+                    ThumbnailPath = thumbnailPath
+                }, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Blob upload failed for pipeline run {PipelineRunId}. Continuing with local artifacts.", run.Id);
+            }
+
+            var publishStatus = "Published";
             if (request.PublishToYouTube)
-                run.YouTubeVideoId = await _youTubePublishingService.UploadAsync(videoPath, script.Title, script.Description, script.Tags, cancellationToken);
+            {
+                try
+                {
+                    run.YouTubeVideoId = await _youTubePublishingService.UploadAsync(
+                        videoPath,
+                        script.Title,
+                        script.Description,
+                        script.Tags,
+                        _youTubeOptions.PrivacyStatus,
+                        cancellationToken);
+
+                    if (string.IsNullOrWhiteSpace(run.YouTubeVideoId))
+                        publishStatus = "UploadFailed";
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "YouTube upload failed for pipeline run {PipelineRunId}.", run.Id);
+                    publishStatus = "UploadFailed";
+                }
+            }
+
+            await _repository.AddPublishedVideoAsync(new PublishedVideo
+            {
+                Title = script.Title,
+                YouTubeVideoId = run.YouTubeVideoId,
+                BlobUrl = blobUploadResult.VideoUrl,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Status = publishStatus
+            }, cancellationToken);
 
             run.Status = PipelineRunStatus.Succeeded;
             run.FinishedUtc = DateTimeOffset.UtcNow;
