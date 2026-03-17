@@ -32,7 +32,7 @@ public sealed class AzureOpenAiOptions
     public const string SectionName = "AzureOpenAI";
     public string Endpoint { get; set; } = "";
     public string ApiKey { get; set; } = "";
-    public string ChatDeployment { get; set; } = "gpt-4o-mini";
+    public string ChatDeployment { get; set; } = "";
 }
 
 public sealed class AzureSpeechOptions
