@@ -320,18 +320,19 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             .Select(e => $"{e.ObjectName}: {e.VisibilityWindow}, {e.Direction}, {e.Details}")
             .ToArray();
 
-        return $"You are creating a YouTube Shorts script for astronomy audiences.\n" +
+        return "You are creating a YouTube Shorts script for astronomy audiences.\n" +
+               PromptFeedbackComposer.BuildBoundaryRulesSection() + "\n" +
                "Return ONLY valid JSON. No markdown, no code fences.\n" +
                "The short must be 30-60 seconds, include a strong hook in first 3 seconds, and punchy narration with simple structure.\n\n" +
                "Output format:\n" +
-               "{{\n" +
+               "{\n" +
                "  \"hook\": \"string\",\n" +
                "  \"shortScript\": \"string\",\n" +
                "  \"title\": \"string\",\n" +
                "  \"tags\": [\"shorts\", \"astronomy\"]\n" +
-               "}}\n\n" +
+               "}\n\n" +
                $"Context:\n- date: {context.Date:yyyy-MM-dd}\n- location: {context.LocationName}\n- contentType: {contentType}\n- topEvents: {string.Join(" | ", topEvents)}\n" +
-               BuildFeedbackSection(feedbackContext, isShort: true);
+               PromptFeedbackComposer.BuildFeedbackSection(feedbackContext, isShortForm: true);
     }
 
     private static bool TryParseShortContent(string rawContent, out ShortScriptResult parsed, out string failureReason)
@@ -449,26 +450,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
                $"shortForm={isShort}. contentType={input.ContentType}. date={input.Context.Date:yyyy-MM-dd}. location={input.Context.LocationName}. " +
                $"sourceTitle={input.SourceTitle}. sourceDescription={input.SourceDescription}. sourceTags={string.Join(',', input.SourceTags)}. " +
                $"sourceHook={input.SourceHookLine}. " +
-               BuildFeedbackSection(input.FeedbackContext, isShort);
-    }
-
-    private static string BuildFeedbackSection(PromptFeedbackContext? feedbackContext, bool isShort)
-    {
-        if (feedbackContext is null)
-        {
-            return "feedbackContext: none";
-        }
-
-        return $"feedbackContext: keywords=[{string.Join(',', feedbackContext.RecommendedKeywords.Take(6))}], " +
-               $"avoidKeywords=[{string.Join(',', feedbackContext.AvoidKeywords.Take(4))}], " +
-               $"titlePatterns=[{string.Join(" | ", feedbackContext.RecommendedTitlePatterns.Take(3))}], " +
-               $"avoidTitlePatterns=[{string.Join(" | ", feedbackContext.AvoidTitlePatterns.Take(3))}], " +
-               $"hooks=[{string.Join(" | ", (isShort ? feedbackContext.ShortsHookSuggestions : feedbackContext.RecommendedHookPatterns).Take(3))}], " +
-               $"avoidHookPatterns=[{string.Join(" | ", feedbackContext.AvoidHookPatterns.Take(2))}], " +
-               $"tone=[{string.Join(" | ", feedbackContext.RecommendedToneNotes.Take(3))}], " +
-               $"overusedTopics=[{string.Join(',', feedbackContext.RecentOverusedTopics.Take(4))}], " +
-               $"avoidObjectEmphasis=[{string.Join(',', feedbackContext.AvoidObjectEmphasis.Take(4))}], " +
-               $"topicRationale={feedbackContext.TopicSelectionRationale};";
+               PromptFeedbackComposer.BuildFeedbackSection(input.FeedbackContext, isShortForm: isShort);
     }
 
     private static bool TryParseOptimizedMetadata(string rawContent, bool isShort, out OptimizedVideoMetadata metadata, out string failureReason)
