@@ -11,6 +11,8 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
 {
     private const int PlaceholderWidth = 1280;
     private const int PlaceholderHeight = 720;
+    private const uint CrcPolynomial = 0xEDB88320;
+    private static readonly uint[] CrcTable = BuildCrcTable();
     private static readonly byte[] PlaceholderPngBytes = CreatePlaceholderPngBytes(PlaceholderWidth, PlaceholderHeight);
 
     private readonly StellariumOptions _options;
@@ -211,10 +213,39 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         destination.Write(typeBytes);
         destination.Write(data);
 
-        var crc = new System.IO.Hashing.Crc32();
-        crc.Append(typeBytes);
-        crc.Append(data);
-        destination.Write(crc.GetCurrentHash());
+        WriteBigEndianInt(unchecked((int)ComputeCrc(typeBytes, data)), destination);
+    }
+
+    private static uint ComputeCrc(byte[] typeBytes, byte[] data)
+    {
+        var crc = 0xFFFFFFFFu;
+        crc = AppendCrc(crc, typeBytes);
+        crc = AppendCrc(crc, data);
+        return ~crc;
+    }
+
+    private static uint AppendCrc(uint seed, byte[] data)
+    {
+        var crc = seed;
+        foreach (var b in data)
+            crc = (crc >> 8) ^ CrcTable[(crc ^ b) & 0xFF];
+
+        return crc;
+    }
+
+    private static uint[] BuildCrcTable()
+    {
+        var table = new uint[256];
+        for (uint i = 0; i < table.Length; i++)
+        {
+            var c = i;
+            for (var bit = 0; bit < 8; bit++)
+                c = (c & 1) == 1 ? (c >> 1) ^ CrcPolynomial : c >> 1;
+
+            table[i] = c;
+        }
+
+        return table;
     }
 
     private static void WriteBigEndianInt(int value, Stream destination)
