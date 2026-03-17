@@ -52,12 +52,12 @@ public sealed class PipelineAlertEmissionTests
     private sealed class NoOpRenderService : IVideoRenderService { public Task<string> RenderAsync(RenderManifest manifest, CancellationToken cancellationToken) => Task.FromResult("x"); }
     private sealed class NoOpBlobService : IAzureBlobStorageService { public Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken) => Task.FromResult(new BlobUploadResult()); }
     private sealed class NoOpYouTubeService : IYouTubePublishingService { public Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken) => Task.FromResult<string?>(null); }
-    private sealed class NoOpShortsService : IShortsVideoRenderService { public Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken) => Task.FromResult(new ShortVideoRenderResult{ Script=new ShortScriptResult()}); }
+    private sealed class NoOpShortsService : IShortsVideoRenderService { public Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken) => Task.FromResult(new ShortVideoRenderResult{ Script=new ShortScriptResult(), AudioPath = "audio.mp3", VideoPath = "video.mp4"}); }
     private sealed class NoOpThumbnailService : IThumbnailGenerationService { public Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken) => Task.FromResult(new ThumbnailPlan()); }
 
     private sealed class InMemoryRepo : IPipelineRepository
     {
-        public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken) { run.Id = Guid.NewGuid(); return Task.FromResult(run); }
+        public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken) => Task.FromResult(run);
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineRun?>(null);
         public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
