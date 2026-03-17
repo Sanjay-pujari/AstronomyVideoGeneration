@@ -2,7 +2,9 @@ using Astronomy.MediaFactory.ContentGen;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Xunit;
+
 namespace Astronomy.MediaFactory.Tests;
+
 public sealed class PromptBuilderTests
 {
     [Fact]
@@ -16,7 +18,7 @@ public sealed class PromptBuilderTests
     }
 
     [Fact]
-    public void Build_IncludesStructuredFeedbackContext_WhenProvided()
+    public void Build_IncludesBoundedFeedbackContext_WhenProvided()
     {
         var builder = new PromptBuilder();
         var context = new AstronomyContext { Date = new DateOnly(2026, 3, 16), LocationName = "Udaipur, India", TimeZone = "Asia/Kolkata" };
@@ -32,8 +34,9 @@ public sealed class PromptBuilderTests
 
         var prompt = builder.Build(ContentType.DailySkyGuide, context, feedback);
 
-        Assert.Contains("Feedback context", prompt);
-        Assert.Contains("\"RecommendedKeywords\"", prompt);
+        Assert.Contains("Prompt-boundary rules", prompt);
+        Assert.Contains("<BEGIN_FEEDBACK_CONTEXT_JSON>", prompt);
+        Assert.Contains("<BEGIN_ASTRONOMY_INPUT_JSON>", prompt);
         Assert.Contains("Selected because score=0.92", prompt);
     }
 }
