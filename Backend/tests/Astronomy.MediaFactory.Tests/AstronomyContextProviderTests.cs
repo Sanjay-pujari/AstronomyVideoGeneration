@@ -37,7 +37,7 @@ public sealed class AstronomyContextProviderTests
 
         var result = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "Udaipur, India", "Asia/Kolkata", CancellationToken.None);
 
-        Assert.Contains(result.Events, e => e.ObjectName == "Jupiter" && e.Category == "Planet");
+        Assert.Contains(result.Events, e => e.ObjectName == "Jupiter" && e.Category == "Planet" && e.Score == 0.95);
         Assert.Contains(result.VisualIdeas, v => v.Title == "Jupiter in the southwest");
     }
 
@@ -58,6 +58,75 @@ public sealed class AstronomyContextProviderTests
         var httpClient = new HttpClient(new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("not-json", Encoding.UTF8, "application/json")
+        })) { BaseAddress = new Uri("http://localhost:8010") };
+
+        var sut = new SkyfieldSidecarClient(httpClient, NullLogger<SkyfieldSidecarClient>.Instance);
+
+        var result = await sut.GetDailySkyAsync(new SkyfieldDailySkyRequest
+        {
+            Date = "2026-03-17",
+            LocationName = "Udaipur, India",
+            Latitude = 24.5854,
+            Longitude = 73.7125,
+            Timezone = "Asia/Kolkata"
+        }, CancellationToken.None);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetDailySkyAsync_ReturnsNull_WhenRequestContractIsInvalid()
+    {
+        var wasCalled = false;
+        var httpClient = new HttpClient(new StubHttpMessageHandler(_ =>
+        {
+            wasCalled = true;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json")
+            };
+        })) { BaseAddress = new Uri("http://localhost:8010") };
+
+        var sut = new SkyfieldSidecarClient(httpClient, NullLogger<SkyfieldSidecarClient>.Instance);
+
+        var result = await sut.GetDailySkyAsync(new SkyfieldDailySkyRequest
+        {
+            Date = "17-03-2026",
+            LocationName = "Udaipur, India",
+            Latitude = 24.5854,
+            Longitude = 73.7125,
+            Timezone = "Asia/Kolkata"
+        }, CancellationToken.None);
+
+        Assert.Null(result);
+        Assert.False(wasCalled);
+    }
+
+    [Fact]
+    public async Task GetDailySkyAsync_ReturnsNull_WhenResponseContractIsInvalid()
+    {
+        var invalidPayload = """
+        {
+          "date": "2026-03-17",
+          "locationName": "Udaipur, India",
+          "timezone": "Asia/Kolkata",
+          "events": [
+            {
+              "category": "Planet",
+              "objectName": "",
+              "visibilityWindow": "19:10-23:30",
+              "direction": "SW",
+              "observationTool": "Binoculars / telescope",
+              "details": "Visible high in the southwest during early evening."
+            }
+          ],
+          "visualIdeas": []
+        }
+        """;
+
+        var httpClient = new HttpClient(new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(invalidPayload, Encoding.UTF8, "application/json")
         })) { BaseAddress = new Uri("http://localhost:8010") };
 
         var sut = new SkyfieldSidecarClient(httpClient, NullLogger<SkyfieldSidecarClient>.Instance);

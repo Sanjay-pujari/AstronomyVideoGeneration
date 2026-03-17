@@ -1,9 +1,9 @@
 from datetime import datetime
-from typing import List
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from skyfield import almanac
 from skyfield.api import load, wgs84
 
@@ -12,32 +12,58 @@ app = FastAPI(title="Astronomy Skyfield Sidecar")
 
 class DailySkyRequest(BaseModel):
     date: str
-    locationName: str
-    latitude: float
-    longitude: float
-    timezone: str
+    location_name: Annotated[str, Field(alias="locationName", min_length=2)]
+    latitude: Annotated[float, Field(ge=-90, le=90)]
+    longitude: Annotated[float, Field(ge=-180, le=180)]
+    timezone: Annotated[str, Field(min_length=1)]
+
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+    @field_validator("date")
+    @classmethod
+    def validate_date(cls, value: str) -> str:
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("date must use yyyy-MM-dd format") from exc
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except Exception as exc:
+            raise ValueError("timezone must be a valid IANA timezone") from exc
+        return value
 
 
 class DailySkyEvent(BaseModel):
     category: str
-    objectName: str
-    visibilityWindow: str
+    object_name: Annotated[str, Field(alias="objectName")]
+    visibility_window: Annotated[str, Field(alias="visibilityWindow")]
     direction: str
-    observationTool: str
+    observation_tool: Annotated[str, Field(alias="observationTool")]
     details: str
+
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
 
 class VisualIdea(BaseModel):
     title: str
     description: str
 
+    model_config = ConfigDict(str_strip_whitespace=True)
+
 
 class DailySkyResponse(BaseModel):
     date: str
-    locationName: str
+    location_name: Annotated[str, Field(alias="locationName")]
     timezone: str
-    events: List[DailySkyEvent]
-    visualIdeas: List[VisualIdea]
+    events: list[DailySkyEvent]
+    visual_ideas: Annotated[list[VisualIdea], Field(alias="visualIdeas")]
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 ts = load.timescale()
@@ -100,8 +126,8 @@ def health():
 
 @app.post("/ephemeris/daily-sky", response_model=DailySkyResponse)
 def daily_sky(req: DailySkyRequest):
-    event_items: List[DailySkyEvent] = []
-    ideas: List[VisualIdea] = []
+    event_items: list[DailySkyEvent] = []
+    ideas: list[VisualIdea] = []
 
     phase_degrees = almanac.moon_phase(eph, ts.utc(datetime.fromisoformat(f"{req.date}T00:00:00"))).degrees
     moon_phase = _moon_phase_name(phase_degrees)
@@ -152,14 +178,14 @@ def daily_sky(req: DailySkyRequest):
     for item in event_items:
         ideas.append(
             VisualIdea(
-                title=f"{item.objectName} in the {item.direction}",
-                description=f"Show {item.objectName} position toward the {item.direction} during {item.visibilityWindow}.",
+                title=f"{item.object_name} in the {item.direction}",
+                description=f"Show {item.object_name} position toward the {item.direction} during {item.visibility_window}.",
             )
         )
 
     return DailySkyResponse(
         date=req.date,
-        locationName=req.locationName,
+        locationName=req.location_name,
         timezone=req.timezone,
         events=event_items,
         visualIdeas=ideas,

@@ -9,6 +9,7 @@ using Astronomy.MediaFactory.Rendering;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 namespace Astronomy.MediaFactory.Infrastructure.Extensions;
 public static class ServiceCollectionExtensions
 {
@@ -20,7 +21,11 @@ public static class ServiceCollectionExtensions
         services.Configure<AzureSpeechOptions>(configuration.GetSection(AzureSpeechOptions.SectionName));
         services.Configure<AzureStorageOptions>(configuration.GetSection(AzureStorageOptions.SectionName));
         services.Configure<YouTubeOptions>(configuration.GetSection(YouTubeOptions.SectionName));
-        services.Configure<SkyfieldSidecarOptions>(configuration.GetSection(SkyfieldSidecarOptions.SectionName));
+        services.AddOptions<SkyfieldSidecarOptions>()
+            .Bind(configuration.GetSection(SkyfieldSidecarOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(options => Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _), "SkyfieldSidecar:BaseUrl must be an absolute URI.")
+            .ValidateOnStart();
         services.AddHttpClient<NasaApodClient>();
         services.AddHttpClient<NasaNeoWsClient>();
         services.AddHttpClient<MinorPlanetCenterClient>();

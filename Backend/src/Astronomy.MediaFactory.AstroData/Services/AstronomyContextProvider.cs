@@ -37,31 +37,12 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 Timezone = timeZone
             }, cancellationToken);
 
-            if (sidecarResponse is not null && sidecarResponse.Events.Count > 0)
+            if (TryApplySidecarResponse(context, sidecarResponse))
             {
-                foreach (var item in sidecarResponse.Events)
-                {
-                    context.Events.Add(new AstronomyEventModel
-                    {
-                        Category = item.Category,
-                        ObjectName = item.ObjectName,
-                        VisibilityWindow = item.VisibilityWindow,
-                        Direction = item.Direction,
-                        ObservationTool = item.ObservationTool,
-                        Details = item.Details,
-                        Score = item.Category.Equals("Planet", StringComparison.OrdinalIgnoreCase) ? 0.95 : 0.90
-                    });
-                }
-
-                foreach (var item in sidecarResponse.VisualIdeas)
-                {
-                    context.VisualIdeas.Add(new VisualIdeaModel { Title = item.Title, Description = item.Description });
-                }
-
                 return context;
             }
 
-            _logger.LogWarning("Skyfield sidecar returned no events for {Date} at {LocationName}. Falling back to demo astronomy context.", date, locationName);
+            _logger.LogWarning("Skyfield sidecar returned no usable events for {Date} at {LocationName}. Falling back to demo astronomy context.", date, locationName);
         }
 
         AddFallbackEvents(context);
@@ -79,6 +60,51 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
         _ = await _neoWsClient.GetFeedAsync(date, date.AddDays(2), cancellationToken);
     }
+
+    private static bool TryApplySidecarResponse(AstronomyContext context, SkyfieldDailySkyResponse? sidecarResponse)
+    {
+        if (sidecarResponse is null || sidecarResponse.Events.Count == 0)
+        {
+            return false;
+        }
+
+        context.Events.AddRange(sidecarResponse.Events.Select(MapEvent));
+
+        if (sidecarResponse.VisualIdeas.Count > 0)
+        {
+            context.VisualIdeas.AddRange(sidecarResponse.VisualIdeas.Select(MapVisualIdea));
+        }
+
+        return context.Events.Count > 0;
+    }
+
+    private static AstronomyEventModel MapEvent(SkyfieldDailySkyEvent sidecarEvent)
+        => new()
+        {
+            Category = sidecarEvent.Category,
+            ObjectName = sidecarEvent.ObjectName,
+            VisibilityWindow = sidecarEvent.VisibilityWindow,
+            Direction = sidecarEvent.Direction,
+            ObservationTool = sidecarEvent.ObservationTool,
+            Details = sidecarEvent.Details,
+            Score = ResolveEventScore(sidecarEvent.Category)
+        };
+
+    private static VisualIdeaModel MapVisualIdea(SkyfieldVisualIdea visualIdea)
+        => new()
+        {
+            Title = visualIdea.Title,
+            Description = visualIdea.Description
+        };
+
+    private static double ResolveEventScore(string category)
+        => category.Trim().ToLowerInvariant() switch
+        {
+            "planet" => 0.95,
+            "moon" => 0.92,
+            "deep sky" => 0.90,
+            _ => 0.88
+        };
 
     private static void AddFallbackEvents(AstronomyContext context)
     {
