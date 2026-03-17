@@ -4,6 +4,7 @@ using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.Extensions.Options;
 using Quartz;
 using Serilog;
+using SchedulingOptions = Astronomy.MediaFactory.Contracts.SchedulingOptions;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.json", optional: true).AddEnvironmentVariables();
