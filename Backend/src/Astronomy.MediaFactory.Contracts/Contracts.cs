@@ -27,6 +27,24 @@ public sealed class OperationsOptions
     public bool EnableDetailedStageMetadata { get; set; } = true;
 }
 
+public sealed class AlertingOptions
+{
+    public const string SectionName = "Alerting";
+    public bool Enabled { get; set; } = false;
+    public bool NotifyOnStageFailed { get; set; } = true;
+    public bool NotifyOnStageSlow { get; set; } = true;
+    public bool NotifyOnPublishFailed { get; set; } = true;
+    public bool NotifyOnPipelineFailed { get; set; } = true;
+    public bool NotifyOnQueueBacklogHigh { get; set; } = true;
+    public bool NotifyOnHealthDegraded { get; set; } = true;
+    public bool NotifyOnPublishSucceeded { get; set; } = false;
+    public int SlowStageThresholdMs { get; set; } = 10000;
+    public int QueueBacklogThreshold { get; set; } = 25;
+    public int DedupWindowSeconds { get; set; } = 120;
+    public string? SlackWebhookUrl { get; set; }
+}
+
+
 public sealed class TopicSelectionOptions
 {
     public const string SectionName = "TopicSelection";

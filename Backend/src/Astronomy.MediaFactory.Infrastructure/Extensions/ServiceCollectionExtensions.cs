@@ -7,6 +7,7 @@ using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Publishing;
 using Astronomy.MediaFactory.Rendering;
 using Astronomy.MediaFactory.Infrastructure.Operations;
+using Astronomy.MediaFactory.Infrastructure.Alerting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,6 +27,7 @@ public static class ServiceCollectionExtensions
         services.Configure<AnalyticsOptions>(configuration.GetSection(AnalyticsOptions.SectionName));
         services.Configure<TopicSelectionOptions>(configuration.GetSection(TopicSelectionOptions.SectionName));
         services.Configure<OperationsOptions>(configuration.GetSection(OperationsOptions.SectionName));
+        services.Configure<AlertingOptions>(configuration.GetSection(AlertingOptions.SectionName));
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
             .ValidateDataAnnotations()
@@ -85,7 +87,29 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPipelineJobExecutor, PipelineJobExecutor>();
         services.AddScoped<PipelineJobProcessor>();
         services.AddScoped<IPipelineStageRecorder, PipelineStageRecorder>();
-        services.AddScoped<IStageAlertPublisher, NullStageAlertPublisher>();
+        services.AddScoped<AlertingRouter>();
+        services.AddScoped<AlertMessageFormatter>();
+        services.AddSingleton<AlertNoiseSuppressor>();
+        services.AddHttpClient<SlackWebhookOperationalAlertPublisher>();
+        services.AddScoped<IOperationalAlertPublisher>(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<AlertingOptions>>().Value;
+            if (!options.Enabled)
+                return new NoOpOperationalAlertPublisher();
+
+            var publishers = new List<IOperationalAlertPublisher>();
+            if (!string.IsNullOrWhiteSpace(options.SlackWebhookUrl))
+                publishers.Add(sp.GetRequiredService<SlackWebhookOperationalAlertPublisher>());
+
+            return publishers.Count switch
+            {
+                0 => new NoOpOperationalAlertPublisher(),
+                1 => publishers[0],
+                _ => new CompositeOperationalAlertPublisher(publishers)
+            };
+        });
+        services.AddScoped<IOperationalAlertNotifier, SafeOperationalAlertNotifier>();
+        services.AddScoped<IStageAlertPublisher, RoutingStageAlertPublisher>();
         services.AddScoped<IPipelineMonitoringService, PipelineMonitoringService>();
         services.AddHealthChecks()
             .AddCheck<DatabaseConnectivityHealthCheck>("database", tags: ["ready"])
