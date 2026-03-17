@@ -22,8 +22,8 @@ public sealed class PipelineMonitoringServiceTests
         db.PipelineJobs.Add(new PipelineJob { Status = PipelineJobStatus.Pending });
         db.PublishedVideos.Add(new PublishedVideo { Title = "Latest", Status = "Published", CreatedAt = DateTimeOffset.UtcNow });
         db.PipelineStageExecutions.AddRange(
-            new PipelineStageExecution { PipelineRunId = failedRun.Id, StageName = "Rendering", Status = "Failed", StartedAt = DateTimeOffset.UtcNow.AddSeconds(-20), FinishedAt = DateTimeOffset.UtcNow.AddSeconds(-5), DurationMs = 15000, ErrorMessage = "render fail" },
-            new PipelineStageExecution { PipelineRunId = failedRun.Id, StageName = "BlobUpload", Status = "FailedWithFallback", StartedAt = DateTimeOffset.UtcNow.AddSeconds(-10), FinishedAt = DateTimeOffset.UtcNow.AddSeconds(-9), DurationMs = 1000, ErrorMessage = "blob fail" });
+            new PipelineStageExecution { PipelineRunId = failedRun.Id, StageName = "Rendering", Status = PipelineStageStatuses.Failed, StartedAt = DateTimeOffset.UtcNow.AddSeconds(-20), FinishedAt = DateTimeOffset.UtcNow.AddSeconds(-5), DurationMs = 15000, ErrorMessage = "render fail" },
+            new PipelineStageExecution { PipelineRunId = failedRun.Id, StageName = "BlobUpload", Status = PipelineStageStatuses.FailedWithFallback, StartedAt = DateTimeOffset.UtcNow.AddSeconds(-10), FinishedAt = DateTimeOffset.UtcNow.AddSeconds(-9), DurationMs = 1000, ErrorMessage = "blob fail" });
         await db.SaveChangesAsync();
 
         var svc = new PipelineMonitoringService(db, Options.Create(new OperationsOptions { SlowStageThresholdMs = 10000, RetainDays = 30 }));

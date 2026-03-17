@@ -22,3 +22,13 @@ public sealed record RecentFailuresSnapshot(
 
 public sealed record StageFailureDigest(string StageName, string ErrorMessage, DateTimeOffset OccurredAt, Guid PipelineRunId);
 public sealed record JobOpsSummary(int TotalJobs, int PendingJobs, int RunningJobs, int RetryingJobs, int FailedJobs, int SucceededJobs);
+
+public sealed record StageAlertContext(
+    Guid PipelineRunId,
+    string StageName,
+    string Status,
+    long? DurationMs,
+    string? ErrorMessage,
+    string? MetadataJson,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? FinishedAt);

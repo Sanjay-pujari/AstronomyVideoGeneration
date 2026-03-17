@@ -87,6 +87,13 @@ public interface IPipelineStageRecorder
     Task FailStageAsync(PipelineStageExecution stageExecution, string errorMessage, bool continuedWithFallback, string? metadataJson, CancellationToken cancellationToken);
 }
 
+
+public interface IStageAlertPublisher
+{
+    Task PublishSlowStageAsync(StageAlertContext context, CancellationToken cancellationToken);
+    Task PublishStageFailureAsync(StageAlertContext context, CancellationToken cancellationToken);
+}
+
 public interface IPipelineMonitoringService
 {
     Task<PipelineOpsSummary> GetSummaryAsync(CancellationToken cancellationToken);
