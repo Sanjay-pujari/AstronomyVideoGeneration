@@ -9,26 +9,29 @@ public sealed class AzureSpeechSynthesisService : ISpeechSynthesisService
 {
     private readonly AzureSpeechOptions _options;
     private readonly IAzureSpeechClient _speechClient;
+    private readonly IFileSystem _fileSystem;
     private readonly ILogger<AzureSpeechSynthesisService> _logger;
 
     public AzureSpeechSynthesisService(
         IOptions<AzureSpeechOptions> options,
         IAzureSpeechClient speechClient,
+        IFileSystem fileSystem,
         ILogger<AzureSpeechSynthesisService> logger)
     {
         _options = options.Value;
         _speechClient = speechClient;
+        _fileSystem = fileSystem;
         _logger = logger;
     }
 
     public async Task<string> SynthesizeAsync(string script, string outputDirectory, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(outputDirectory);
+        _fileSystem.CreateDirectory(outputDirectory);
 
         var textPath = Path.Combine(outputDirectory, "narration.txt");
         var audioPath = Path.Combine(outputDirectory, "narration.mp3");
 
-        await File.WriteAllTextAsync(textPath, script, cancellationToken);
+        await _fileSystem.WriteAllTextAsync(textPath, script, cancellationToken);
 
         try
         {
@@ -44,13 +47,13 @@ public sealed class AzureSpeechSynthesisService : ISpeechSynthesisService
                 _options.Voice,
                 cancellationToken);
 
-            await File.WriteAllBytesAsync(audioPath, audioBytes, cancellationToken);
+            await _fileSystem.WriteAllBytesAsync(audioPath, audioBytes, cancellationToken);
             return audioPath;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Azure Speech synthesis failed. Falling back to placeholder narration audio.");
-            await File.WriteAllBytesAsync(audioPath, Array.Empty<byte>(), cancellationToken);
+            await _fileSystem.WriteAllBytesAsync(audioPath, Array.Empty<byte>(), cancellationToken);
             return audioPath;
         }
     }
