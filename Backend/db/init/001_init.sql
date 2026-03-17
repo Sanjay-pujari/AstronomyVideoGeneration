@@ -56,3 +56,25 @@ create table if not exists media_assets
     public_url text null,
     size_bytes bigint not null
 );
+
+
+create table if not exists published_videos
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    title text not null,
+    youtube_video_id text null,
+    blob_url text null,
+    created_at timestamptz not null,
+    status text not null
+);
+
+create table if not exists short_videos
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    parent_video_id uuid not null references published_videos(id),
+    youtube_video_id text null,
+    duration integer not null,
+    created_at timestamptz not null
+);

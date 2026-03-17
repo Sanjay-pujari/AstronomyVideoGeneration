@@ -42,13 +42,33 @@ public sealed class FfmpegRenderingTests
         var sut = new FfmpegArgumentBuilder();
         var options = new RenderingOptions { VideoWidth = 1280, VideoHeight = 720, FrameRate = 30 };
 
-        var args = sut.Build(options, "/tmp/ffmpeg-input.txt", "/tmp/narration.mp3", "/tmp/final-video.mp4");
+        var args = sut.Build(options, new RenderManifest { AudioPath = "/tmp/narration.mp3", OutputPath = "/tmp/final-video.mp4" }, "/tmp/ffmpeg-input.txt", "/tmp/narration.mp3", "/tmp/final-video.mp4");
 
         Assert.Contains("-f concat", args);
         Assert.Contains("-i \"/tmp/ffmpeg-input.txt\"", args);
         Assert.Contains("-i \"/tmp/narration.mp3\"", args);
         Assert.Contains("scale=1280:720", args);
         Assert.Contains("\"/tmp/final-video.mp4\"", args);
+    }
+
+
+
+    [Fact]
+    public void FfmpegArgumentBuilder_UsesVerticalCrop_ForShortsManifest()
+    {
+        var sut = new FfmpegArgumentBuilder();
+        var options = new RenderingOptions { VideoWidth = 1280, VideoHeight = 720, FrameRate = 30 };
+
+        var args = sut.Build(options, new RenderManifest
+        {
+            OutputWidth = 1080,
+            OutputHeight = 1920,
+            EnableVerticalCrop = true,
+            AudioPath = "/tmp/narration.mp3",
+            OutputPath = "/tmp/short-video.mp4"
+        }, "/tmp/ffmpeg-input.txt", "/tmp/narration.mp3", "/tmp/short-video.mp4");
+
+        Assert.Contains("crop=1080:1920", args);
     }
 
     [Fact]

@@ -57,6 +57,7 @@ public sealed class PublishingFlowTests
             new FakeRenderService(),
             new ThrowingBlobService(),
             new ThrowingYouTubeService(),
+            new FakeShortsVideoRenderService(),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
             NullLogger<PipelineOrchestrator>.Instance);
@@ -87,6 +88,7 @@ public sealed class PublishingFlowTests
 
         public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineRun?>(null);
         public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
+        public Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
@@ -135,6 +137,26 @@ public sealed class PublishingFlowTests
         {
             await File.WriteAllTextAsync(manifest.OutputPath, "video", cancellationToken);
             return manifest.OutputPath;
+        }
+    }
+
+
+
+    private sealed class FakeShortsVideoRenderService : IShortsVideoRenderService
+    {
+        public async Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken)
+        {
+            Directory.CreateDirectory(outputDirectory);
+            var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
+            var shortAudioPath = Path.Combine(outputDirectory, "short-audio.mp3");
+            await File.WriteAllTextAsync(shortVideoPath, "video", cancellationToken);
+            await File.WriteAllTextAsync(shortAudioPath, "audio", cancellationToken);
+            return new ShortVideoRenderResult
+            {
+                Script = new ShortScriptResult { Hook = "Hook", ShortScript = "Script", Title = "Short", EstimatedDurationSeconds = 45, Tags = ["shorts", "astronomy"] },
+                AudioPath = shortAudioPath,
+                VideoPath = shortVideoPath
+            };
         }
     }
 

@@ -14,6 +14,7 @@ public sealed class PipelineOrchestrator
     private readonly IVideoRenderService _videoRenderService;
     private readonly IAzureBlobStorageService _azureBlobStorageService;
     private readonly IYouTubePublishingService _youTubePublishingService;
+    private readonly IShortsVideoRenderService _shortsVideoRenderService;
     private readonly IPipelineRepository _repository;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<PipelineOrchestrator> _logger;
@@ -27,6 +28,7 @@ public sealed class PipelineOrchestrator
         IVideoRenderService videoRenderService,
         IAzureBlobStorageService azureBlobStorageService,
         IYouTubePublishingService youTubePublishingService,
+        IShortsVideoRenderService shortsVideoRenderService,
         IPipelineRepository repository,
         IOptions<YouTubeOptions> youTubeOptions,
         ILogger<PipelineOrchestrator> logger)
@@ -39,6 +41,7 @@ public sealed class PipelineOrchestrator
         _videoRenderService = videoRenderService;
         _azureBlobStorageService = azureBlobStorageService;
         _youTubePublishingService = youTubePublishingService;
+        _shortsVideoRenderService = shortsVideoRenderService;
         _repository = repository;
         _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
@@ -173,14 +176,46 @@ public sealed class PipelineOrchestrator
                 }
             }
 
-            await _repository.AddPublishedVideoAsync(new PublishedVideo
+            var publishedVideo = new PublishedVideo
             {
                 Title = script.Title,
                 YouTubeVideoId = run.YouTubeVideoId,
                 BlobUrl = blobUploadResult.VideoUrl,
                 CreatedAt = DateTimeOffset.UtcNow,
                 Status = publishStatus
-            }, cancellationToken);
+            };
+
+            await _repository.AddPublishedVideoAsync(publishedVideo, cancellationToken);
+
+            try
+            {
+                var shortsOutputDir = Path.Combine(outputDir, "shorts");
+                Directory.CreateDirectory(shortsOutputDir);
+                var shortResult = await _shortsVideoRenderService.RenderAsync(request.ContentType, context, visuals, shortsOutputDir, request.PublishToYouTube, cancellationToken);
+
+                await _repository.AddAssetAsync(new MediaAsset
+                {
+                    PipelineRunId = run.Id,
+                    AssetType = "short-video",
+                    FileName = Path.GetFileName(shortResult.VideoPath),
+                    LocalPath = shortResult.VideoPath,
+                    PublicUrl = shortResult.BlobUrl,
+                    SizeBytes = File.Exists(shortResult.VideoPath) ? new FileInfo(shortResult.VideoPath).Length : 0
+                }, cancellationToken);
+
+                await _repository.AddShortVideoAsync(new ShortVideo
+                {
+                    ParentVideoId = publishedVideo.Id,
+                    YouTubeVideoId = shortResult.YouTubeVideoId,
+                    Duration = shortResult.Script.EstimatedDurationSeconds,
+                    CreatedAt = DateTimeOffset.UtcNow
+                }, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Shorts generation failed for pipeline run {PipelineRunId}. Main video remains unaffected.", run.Id);
+            }
+
 
             run.Status = PipelineRunStatus.Succeeded;
             run.FinishedUtc = DateTimeOffset.UtcNow;
