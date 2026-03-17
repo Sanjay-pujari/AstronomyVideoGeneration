@@ -82,7 +82,6 @@ public sealed class PublishingFlowTests
 
         public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken)
         {
-            run.Id = Guid.NewGuid();
             return Task.FromResult(run);
         }
 
