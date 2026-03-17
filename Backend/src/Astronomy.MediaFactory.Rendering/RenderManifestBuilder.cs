@@ -9,41 +9,7 @@ public sealed class RenderManifestBuilder
 {
     public RenderPlan Build(RenderManifest manifest)
     {
-        var scenes = new List<RenderPlanScene>();
-
-        if (!string.IsNullOrWhiteSpace(manifest.IntroVisualPath))
-        {
-            scenes.Add(new RenderPlanScene
-            {
-                Caption = "Intro",
-                VisualPath = manifest.IntroVisualPath,
-                DurationSeconds = 3,
-                Order = 0
-            });
-        }
-
-        for (var i = 0; i < manifest.Scenes.Count; i++)
-        {
-            var scene = manifest.Scenes[i];
-            scenes.Add(new RenderPlanScene
-            {
-                Caption = string.IsNullOrWhiteSpace(scene.Caption) ? $"Scene {i + 1}" : scene.Caption,
-                VisualPath = scene.VisualPath,
-                DurationSeconds = scene.DurationSeconds > 0 ? scene.DurationSeconds : 6,
-                Order = scenes.Count
-            });
-        }
-
-        if (!string.IsNullOrWhiteSpace(manifest.OutroVisualPath))
-        {
-            scenes.Add(new RenderPlanScene
-            {
-                Caption = "Outro",
-                VisualPath = manifest.OutroVisualPath,
-                DurationSeconds = 3,
-                Order = scenes.Count
-            });
-        }
+        var scenes = BuildScenes(manifest);
 
         var concatBuilder = new StringBuilder();
         foreach (var scene in scenes)
@@ -81,6 +47,54 @@ public sealed class RenderManifestBuilder
         return plan;
     }
 
+    private static List<RenderPlanScene> BuildScenes(RenderManifest manifest)
+    {
+        var candidates = new List<RenderSceneCandidate>();
+
+        if (!string.IsNullOrWhiteSpace(manifest.IntroVisualPath))
+        {
+            candidates.Add(new RenderSceneCandidate("Intro", manifest.IntroVisualPath, 3, "intro"));
+        }
+
+        for (var i = 0; i < manifest.Scenes.Count; i++)
+        {
+            var scene = manifest.Scenes[i];
+            candidates.Add(new RenderSceneCandidate(
+                string.IsNullOrWhiteSpace(scene.Caption) ? $"Scene {i + 1}" : scene.Caption,
+                scene.VisualPath,
+                scene.DurationSeconds > 0 ? scene.DurationSeconds : 6,
+                "scene"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(manifest.OutroVisualPath))
+        {
+            candidates.Add(new RenderSceneCandidate("Outro", manifest.OutroVisualPath, 3, "outro"));
+        }
+
+        var scenes = new List<RenderPlanScene>();
+        var order = 0;
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate.VisualPath))
+            {
+                continue;
+            }
+
+            scenes.Add(new RenderPlanScene
+            {
+                Order = order,
+                Caption = candidate.Caption,
+                VisualPath = candidate.VisualPath,
+                DurationSeconds = candidate.DurationSeconds,
+                Segment = candidate.Segment
+            });
+
+            order++;
+        }
+
+        return scenes;
+    }
+
     private static string BuildSubtitleScaffold(IReadOnlyCollection<RenderPlanScene> scenes)
     {
         var sb = new StringBuilder();
@@ -109,6 +123,8 @@ public sealed class RenderManifestBuilder
         => value.Replace("'", "'\\''", StringComparison.Ordinal);
 }
 
+file sealed record RenderSceneCandidate(string Caption, string VisualPath, int DurationSeconds, string Segment);
+
 public sealed class RenderPlan
 {
     public string Title { get; init; } = string.Empty;
@@ -127,4 +143,5 @@ public sealed class RenderPlanScene
     public string Caption { get; init; } = string.Empty;
     public string VisualPath { get; init; } = string.Empty;
     public int DurationSeconds { get; init; }
+    public string Segment { get; init; } = string.Empty;
 }

@@ -49,8 +49,10 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await _fileSystem.WriteAllTextAsync(captionMetadataPath, plan.CaptionMetadataJson, cancellationToken);
         await _fileSystem.WriteAllTextAsync(subtitleScaffoldPath, plan.SubtitleScaffold, cancellationToken);
 
-        if (!ValidateManifest(manifest, plan, out var validationError))
+        var missingAssets = FindMissingAssets(manifest, plan);
+        if (missingAssets.Count > 0)
         {
+            var validationError = BuildMissingAssetMessage(missingAssets);
             _logger.LogWarning("Skipping FFmpeg render because input validation failed: {Reason}", validationError);
             await _fileSystem.WriteAllTextAsync(ffmpegLogPath, validationError, cancellationToken);
             await CreatePlaceholderOutputAsync(outputPath, commandPath, "", cancellationToken);
@@ -63,7 +65,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         try
         {
             var result = await _processRunner.ExecuteAsync(_options.FfmpegPath, arguments, cancellationToken);
-            await _fileSystem.WriteAllTextAsync(ffmpegLogPath, result.StandardError + Environment.NewLine + result.StandardOutput, cancellationToken);
+            await _fileSystem.WriteAllTextAsync(ffmpegLogPath, BuildProcessDiagnostics(result), cancellationToken);
 
             if (result.ExitCode != 0 || !File.Exists(outputPath))
             {
@@ -81,29 +83,46 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return outputPath;
     }
 
-    private static bool ValidateManifest(RenderManifest manifest, RenderPlan plan, out string reason)
+    private static List<string> FindMissingAssets(RenderManifest manifest, RenderPlan plan)
     {
+        var missingAssets = new List<string>();
+
         if (string.IsNullOrWhiteSpace(manifest.AudioPath) || !File.Exists(manifest.AudioPath))
         {
-            reason = "Narration audio is missing.";
-            return false;
+            missingAssets.Add($"Narration audio missing: '{manifest.AudioPath}'");
         }
 
         if (plan.Scenes.Count == 0)
         {
-            reason = "No scene visuals were provided.";
-            return false;
+            missingAssets.Add("No scene visuals were provided.");
         }
 
-        var missingVisual = plan.Scenes.FirstOrDefault(scene => string.IsNullOrWhiteSpace(scene.VisualPath) || !File.Exists(scene.VisualPath));
-        if (missingVisual is not null)
+        foreach (var scene in plan.Scenes.Where(scene => string.IsNullOrWhiteSpace(scene.VisualPath) || !File.Exists(scene.VisualPath)))
         {
-            reason = $"Scene visual is missing: {missingVisual.VisualPath}";
-            return false;
+            missingAssets.Add($"{scene.Segment} visual missing: '{scene.VisualPath}' (caption: '{scene.Caption}')");
         }
 
-        reason = string.Empty;
-        return true;
+        return missingAssets;
+    }
+
+    private static string BuildMissingAssetMessage(IReadOnlyCollection<string> missingAssets)
+        => string.Join(Environment.NewLine, missingAssets);
+
+    private static string BuildProcessDiagnostics(ProcessExecutionResult result)
+    {
+        return string.Join(Environment.NewLine, new[]
+        {
+            $"Command: {result.FileName} {result.Arguments}".TrimEnd(),
+            $"ExitCode: {result.ExitCode}",
+            $"StartedUtc: {result.StartTimeUtc:O}",
+            $"EndedUtc: {result.EndTimeUtc:O}",
+            $"DurationMs: {result.Duration.TotalMilliseconds:F0}",
+            string.IsNullOrWhiteSpace(result.ExceptionText) ? string.Empty : $"Exception: {result.ExceptionText}",
+            "--- STDERR ---",
+            result.StandardError,
+            "--- STDOUT ---",
+            result.StandardOutput
+        }.Where(static line => !string.IsNullOrEmpty(line)));
     }
 
     private async Task CreatePlaceholderOutputAsync(string outputPath, string commandPath, string arguments, CancellationToken cancellationToken)

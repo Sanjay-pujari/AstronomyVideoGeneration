@@ -99,6 +99,36 @@ public sealed class FfmpegRenderingTests
         Assert.Empty(fileSystem.ByteWrites[outputPath]);
         var logPath = Path.Combine(tempDir.FullName, "ffmpeg.log");
         Assert.Contains("missing", fileSystem.TextWrites[logPath], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Narration audio missing", fileSystem.TextWrites[logPath], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("scene visual missing", fileSystem.TextWrites[logPath], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_WritesProcessDiagnosticsToLog()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-diagnostics");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var sut = CreateService(fileSystem, new FailingProcessRunner());
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }]
+        }, CancellationToken.None);
+
+        var logPath = Path.Combine(tempDir.FullName, "ffmpeg.log");
+        var diagnostics = fileSystem.TextWrites[logPath];
+        Assert.Contains("Command:", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("ExitCode: 1", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("--- STDERR ---", diagnostics, StringComparison.Ordinal);
     }
 
     private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner)
@@ -149,9 +179,31 @@ public sealed class FfmpegRenderingTests
             => throw new InvalidOperationException("ffmpeg missing");
     }
 
+    private sealed class FailingProcessRunner : IProcessRunner
+    {
+        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken)
+            => Task.FromResult(new ProcessExecutionResult(
+                ExitCode: 1,
+                StandardOutput: "",
+                StandardError: "ffmpeg failed",
+                StartTimeUtc: DateTimeOffset.UtcNow,
+                EndTimeUtc: DateTimeOffset.UtcNow.AddSeconds(1),
+                FileName: fileName,
+                Arguments: arguments,
+                ExceptionText: string.Empty));
+    }
+
     private sealed class NoopProcessRunner : IProcessRunner
     {
         public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken)
-            => Task.FromResult(new ProcessExecutionResult(0, string.Empty, string.Empty));
+            => Task.FromResult(new ProcessExecutionResult(
+                ExitCode: 0,
+                StandardOutput: string.Empty,
+                StandardError: string.Empty,
+                StartTimeUtc: DateTimeOffset.UtcNow,
+                EndTimeUtc: DateTimeOffset.UtcNow,
+                FileName: fileName,
+                Arguments: arguments,
+                ExceptionText: string.Empty));
     }
 }
