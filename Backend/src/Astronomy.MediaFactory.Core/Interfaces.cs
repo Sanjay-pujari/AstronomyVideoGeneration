@@ -6,6 +6,11 @@ public interface ITopicRankingService { Task<IReadOnlyCollection<RankedTopic>> R
 public interface IVisualAssetProvider { Task<IReadOnlyCollection<string>> PrepareVisualsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken); }
 public interface IScriptGenerationService { Task<ScriptResult> GenerateAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken); }
 public interface IShortsScriptGenerationService { Task<ShortScriptResult> GenerateShortAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken); }
+public interface IMetadataOptimizationService
+{
+    Task<OptimizedVideoMetadata> OptimizeForVideoAsync(MetadataOptimizationInput input, CancellationToken cancellationToken);
+    Task<OptimizedVideoMetadata> OptimizeForShortAsync(MetadataOptimizationInput input, CancellationToken cancellationToken);
+}
 public interface ISpeechSynthesisService { Task<string> SynthesizeAsync(string script, string outputDirectory, CancellationToken cancellationToken); }
 public interface IVideoRenderService { Task<string> RenderAsync(RenderManifest manifest, CancellationToken cancellationToken); }
 public interface IShortsVideoRenderService { Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken); }
@@ -16,6 +21,7 @@ public interface IPipelineRepository {
  Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken);
  Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken);
+ Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken);
  Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken);
  Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken);
  Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken);

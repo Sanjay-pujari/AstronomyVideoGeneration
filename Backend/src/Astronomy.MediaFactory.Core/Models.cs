@@ -42,6 +42,7 @@ public sealed class ScriptResult
     public string ScriptBody { get; init; } = "";
     public string[] Tags { get; init; } = Array.Empty<string>();
     public int EstimatedDurationSeconds { get; init; }
+    public OptimizedVideoMetadata? OptimizedMetadata { get; init; }
 }
 
 public sealed class ShortScriptResult
@@ -51,6 +52,29 @@ public sealed class ShortScriptResult
     public string Title { get; init; } = "";
     public string[] Tags { get; init; } = ["shorts", "astronomy"];
     public int EstimatedDurationSeconds { get; init; }
+    public OptimizedVideoMetadata? OptimizedMetadata { get; init; }
+}
+
+public sealed class MetadataOptimizationInput
+{
+    public required ContentType ContentType { get; init; }
+    public required AstronomyContext Context { get; init; }
+    public required string SourceTitle { get; init; }
+    public required string SourceDescription { get; init; }
+    public required IReadOnlyCollection<string> SourceTags { get; init; }
+    public string? SourceScript { get; init; }
+    public string? SourceHookLine { get; init; }
+}
+
+public sealed class OptimizedVideoMetadata
+{
+    public string PrimaryTitle { get; init; } = "";
+    public string[] AlternateTitles { get; init; } = [];
+    public string OptimizedDescription { get; init; } = "";
+    public string[] Tags { get; init; } = [];
+    public string[] Hashtags { get; init; } = [];
+    public string[] ThumbnailTextSuggestions { get; init; } = [];
+    public string? HookLine { get; init; }
 }
 
 public sealed class RenderManifest

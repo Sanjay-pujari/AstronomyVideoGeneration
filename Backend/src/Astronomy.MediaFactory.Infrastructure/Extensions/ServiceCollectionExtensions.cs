@@ -49,7 +49,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITopicRankingService, TopicRankingService>();
         services.AddScoped<IVisualAssetProvider, StellariumVisualGenerationService>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
+        services.AddScoped<IMetadataOptimizationService, MetadataOptimizationService>();
         services.AddHttpClient<AzureOpenAiContentGenerationService>();
+        services.AddScoped<IMetadataOptimizationModelClient>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IShortsScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IAzureSpeechClient, AzureSpeechClient>();

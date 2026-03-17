@@ -39,6 +39,13 @@ public sealed class GeneratedScript : EntityBase
     public string Description { get; set; } = "";
     public string TagsCsv { get; set; } = "";
     public int EstimatedDurationSeconds { get; set; }
+    public string? OptimizedTitle { get; set; }
+    public string? AlternateTitlesCsv { get; set; }
+    public string? OptimizedDescription { get; set; }
+    public string? OptimizedTagsCsv { get; set; }
+    public string? OptimizedHashtagsCsv { get; set; }
+    public string? ThumbnailTextSuggestionsCsv { get; set; }
+    public string? HookLine { get; set; }
 }
 
 public sealed class MediaAsset : EntityBase
@@ -59,6 +66,9 @@ public sealed class PublishedVideo : EntityBase
     public string? BlobUrl { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public string Status { get; set; } = "Published";
+    public string? OptimizedTitle { get; set; }
+    public string? OptimizedDescription { get; set; }
+    public string? OptimizedTagsCsv { get; set; }
 }
 
 

@@ -26,6 +26,9 @@ public sealed class EfPipelineRepository : IPipelineRepository
     public async Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken)
         => await _db.GeneratedScripts.AddAsync(script, cancellationToken);
 
+    public async Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken)
+        => await _db.GeneratedScripts.OrderByDescending(x => x.CreatedUtc).Take(take).ToListAsync(cancellationToken);
+
     public async Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken)
         => await _db.MediaAssets.AddAsync(asset, cancellationToken);
 

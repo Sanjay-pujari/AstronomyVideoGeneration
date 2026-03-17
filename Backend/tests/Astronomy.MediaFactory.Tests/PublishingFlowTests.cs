@@ -58,6 +58,7 @@ public sealed class PublishingFlowTests
             new ThrowingBlobService(),
             new ThrowingYouTubeService(),
             new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
             NullLogger<PipelineOrchestrator>.Instance);
@@ -75,6 +76,7 @@ public sealed class PublishingFlowTests
 
         public Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
         public Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken)
         {
             PublishedVideos.Add(publishedVideo);

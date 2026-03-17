@@ -13,6 +13,7 @@ var app = builder.Build();
 app.MapGet("/", () => Results.Ok(new { service = "Astronomy.MediaFactory.Api", status = "ok" }));
 app.MapGet("/api/pipelines/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentAsync(20, ct)));
 app.MapGet("/api/pipelines/{id:guid}", async (Guid id, IPipelineRepository repository, CancellationToken ct) => { var item = await repository.GetAsync(id, ct); return item is null ? Results.NotFound() : Results.Ok(item); });
+app.MapGet("/api/scripts/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentScriptsAsync(20, ct)));
 app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, CancellationToken ct) => { var result = await orchestrator.RunAsync(request, ct); return Results.Ok(new RunPipelineResponse(result.Id, result.Status, "Completed.")); });
 app.MapPost("/api/jobs/enqueue", async (EnqueuePipelineJobRequest request, IPipelineJobQueue queue, CancellationToken ct) =>
 {
