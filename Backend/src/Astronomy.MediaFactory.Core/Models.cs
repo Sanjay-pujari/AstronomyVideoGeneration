@@ -136,8 +136,10 @@ public sealed class ContentOpportunity
     public double PriorityScore { get; init; }
     public double ObservabilityScore { get; init; }
     public double TimelinessScore { get; init; }
+    public double SignificanceScore { get; init; }
     public double EducationalValueScore { get; init; }
     public double GrowthPotentialScore { get; init; }
+    public double DiversityScore { get; init; }
     public string Rationale { get; init; } = "";
     public bool IsShortCandidate { get; init; }
     public bool IsLongFormCandidate { get; init; }
@@ -158,6 +160,15 @@ public sealed class TopicSelectionPlan
     public IReadOnlyCollection<ContentOpportunity> ShortsCandidates { get; init; } = [];
     public IReadOnlyCollection<ContentOpportunity> AlternateCandidates { get; init; } = [];
     public IReadOnlyCollection<ContentOpportunity> RankedOpportunities { get; init; } = [];
+    public TopicSelectionSchedulingHints SchedulingHints { get; init; } = new();
+}
+
+public sealed class TopicSelectionSchedulingHints
+{
+    public ContentType ContentType { get; init; } = ContentType.DailySkyGuide;
+    public string PreferredCronExpression { get; init; } = "";
+    public DateTimeOffset SuggestedQueueTimeUtc { get; init; }
+    public string Notes { get; init; } = "";
 }
 
 public sealed class RankedTopic
