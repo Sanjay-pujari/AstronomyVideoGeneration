@@ -92,6 +92,7 @@ public sealed class ThumbnailPlan
     public string? SelectedVisualPath { get; init; }
     public string? ThumbnailPath { get; init; }
     public ThumbnailLayoutType LayoutType { get; init; } = ThumbnailLayoutType.CenteredTitleOverlay;
+    public IReadOnlyCollection<ThumbnailLayoutType> LayoutCandidates { get; init; } = [ThumbnailLayoutType.CenteredTitleOverlay];
 }
 
 public sealed class ThumbnailGenerationRequest
