@@ -19,6 +19,14 @@ public sealed record EnqueuePipelineJobRequest(
     DateTimeOffset? ScheduledAt = null,
     Guid? ParentPipelineRunId = null);
 
+public sealed class OperationsOptions
+{
+    public const string SectionName = "Operations";
+    public int RetainDays { get; set; } = 30;
+    public int SlowStageThresholdMs { get; set; } = 10000;
+    public bool EnableDetailedStageMetadata { get; set; } = true;
+}
+
 public sealed class TopicSelectionOptions
 {
     public const string SectionName = "TopicSelection";

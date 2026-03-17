@@ -16,6 +16,18 @@ public sealed class PipelineRun : EntityBase
     public DateTimeOffset? FinishedUtc { get; set; }
 }
 
+public sealed class PipelineStageExecution : EntityBase
+{
+    public Guid PipelineRunId { get; set; }
+    public string StageName { get; set; } = "";
+    public string Status { get; set; } = "Started";
+    public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? FinishedAt { get; set; }
+    public long? DurationMs { get; set; }
+    public string? ErrorMessage { get; set; }
+    public string? MetadataJson { get; set; }
+}
+
 public sealed class AstronomyEvent : EntityBase
 {
     public DateOnly EventDate { get; set; }

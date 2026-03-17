@@ -129,3 +129,22 @@ alter table if exists published_videos add column if not exists thumbnail_url te
 alter table if exists published_videos add column if not exists thumbnail_uploaded_to_youtube boolean not null default false;
 
 alter table if exists generated_scripts add column if not exists prompt_feedback_context_json text null;
+
+
+create table if not exists pipeline_stage_executions
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    updated_utc timestamptz null,
+    pipeline_run_id uuid not null,
+    stage_name text not null,
+    status text not null,
+    started_at timestamptz not null,
+    finished_at timestamptz null,
+    duration_ms bigint null,
+    error_message text null,
+    metadata_json text null
+);
+
+create index if not exists ix_pipeline_stage_executions_run on pipeline_stage_executions(pipeline_run_id, started_at);
+create index if not exists ix_pipeline_stage_executions_status on pipeline_stage_executions(status, started_at desc);

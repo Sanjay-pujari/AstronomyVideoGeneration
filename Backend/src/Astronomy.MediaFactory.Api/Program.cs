@@ -1,7 +1,9 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.json", optional: true).AddEnvironmentVariables();
 Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateLogger();
@@ -9,12 +11,48 @@ builder.Services.AddSerilog();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 builder.Services.AddMediaFactory(builder.Configuration);
+
 var app = builder.Build();
+
 app.MapGet("/", () => Results.Ok(new { service = "Astronomy.MediaFactory.Api", status = "ok" }));
+app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false,
+    ResponseWriter = async (ctx, _) => await ctx.Response.WriteAsJsonAsync(new { status = "live" })
+});
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = async (ctx, report) =>
+    {
+        var payload = new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(entry => new
+            {
+                name = entry.Key,
+                status = entry.Value.Status.ToString(),
+                description = entry.Value.Description
+            })
+        };
+
+        await ctx.Response.WriteAsJsonAsync(payload);
+    }
+});
+
 app.MapGet("/api/pipelines/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentAsync(20, ct)));
-app.MapGet("/api/pipelines/{id:guid}", async (Guid id, IPipelineRepository repository, CancellationToken ct) => { var item = await repository.GetAsync(id, ct); return item is null ? Results.NotFound() : Results.Ok(item); });
+app.MapGet("/api/pipelines/{id:guid}", async (Guid id, IPipelineRepository repository, CancellationToken ct) =>
+{
+    var item = await repository.GetAsync(id, ct);
+    return item is null ? Results.NotFound() : Results.Ok(item);
+});
 app.MapGet("/api/scripts/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentScriptsAsync(20, ct)));
-app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, CancellationToken ct) => { var result = await orchestrator.RunAsync(request, ct); return Results.Ok(new RunPipelineResponse(result.Id, result.Status, "Completed.")); });
+app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, CancellationToken ct) =>
+{
+    var result = await orchestrator.RunAsync(request, ct);
+    return Results.Ok(new RunPipelineResponse(result.Id, result.Status, "Completed."));
+});
 app.MapPost("/api/jobs/enqueue", async (EnqueuePipelineJobRequest request, IPipelineJobQueue queue, CancellationToken ct) =>
 {
     try
@@ -33,6 +71,12 @@ app.MapGet("/api/jobs/{id:guid}", async (Guid id, IPipelineRepository repository
     var item = await repository.GetJobAsync(id, ct);
     return item is null ? Results.NotFound() : Results.Ok(item);
 });
+
+app.MapGet("/api/ops/summary", async (IPipelineMonitoringService monitoringService, CancellationToken ct) => Results.Ok(await monitoringService.GetSummaryAsync(ct)));
+app.MapGet("/api/ops/pipelines/recent", async (int? take, IPipelineMonitoringService monitoringService, CancellationToken ct) => Results.Ok(await monitoringService.GetRecentPipelinesAsync(take ?? 20, ct)));
+app.MapGet("/api/ops/pipelines/{id:guid}/stages", async (Guid id, IPipelineMonitoringService monitoringService, CancellationToken ct) => Results.Ok(await monitoringService.GetPipelineStagesAsync(id, ct)));
+app.MapGet("/api/ops/failures/recent", async (int? take, IPipelineMonitoringService monitoringService, CancellationToken ct) => Results.Ok(await monitoringService.GetRecentFailuresAsync(take ?? 20, ct)));
+app.MapGet("/api/ops/jobs/summary", async (IPipelineMonitoringService monitoringService, CancellationToken ct) => Results.Ok(await monitoringService.GetJobSummaryAsync(ct)));
 
 app.MapGet("/api/topics/recommended", async (DateOnly? date, ContentType? contentType, string? locationName, string? timeZone, ITopicSelectionService topicSelectionService, CancellationToken ct) =>
 {
@@ -64,4 +108,5 @@ app.MapGet("/api/analytics/{videoId}", async (string videoId, IPipelineRepositor
     var items = await repository.GetAnalyticsByVideoIdAsync(videoId, ct);
     return items.Count == 0 ? Results.NotFound() : Results.Ok(items);
 });
+
 app.Run();

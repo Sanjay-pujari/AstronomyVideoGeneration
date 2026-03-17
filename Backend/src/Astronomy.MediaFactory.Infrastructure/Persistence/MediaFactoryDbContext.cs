@@ -15,6 +15,7 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<ShortVideo> ShortVideos => Set<ShortVideo>();
     public DbSet<PipelineJob> PipelineJobs => Set<PipelineJob>();
     public DbSet<VideoAnalytics> VideoAnalytics => Set<VideoAnalytics>();
+    public DbSet<PipelineStageExecution> PipelineStageExecutions => Set<PipelineStageExecution>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -26,5 +27,6 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ShortVideo>().ToTable("short_videos").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineJob>().ToTable("pipeline_jobs").HasKey(x => x.Id);
         modelBuilder.Entity<VideoAnalytics>().ToTable("video_analytics").HasKey(x => x.Id);
+        modelBuilder.Entity<PipelineStageExecution>().ToTable("pipeline_stage_executions").HasKey(x => x.Id);
     }
 }

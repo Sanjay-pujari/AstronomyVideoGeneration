@@ -6,6 +6,7 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Publishing;
 using Astronomy.MediaFactory.Rendering;
+using Astronomy.MediaFactory.Infrastructure.Operations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +25,7 @@ public static class ServiceCollectionExtensions
         services.Configure<SchedulingOptions>(configuration.GetSection(SchedulingOptions.SectionName));
         services.Configure<AnalyticsOptions>(configuration.GetSection(AnalyticsOptions.SectionName));
         services.Configure<TopicSelectionOptions>(configuration.GetSection(TopicSelectionOptions.SectionName));
+        services.Configure<OperationsOptions>(configuration.GetSection(OperationsOptions.SectionName));
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
             .ValidateDataAnnotations()
@@ -82,6 +84,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPipelineJobQueue, PipelineJobQueue>();
         services.AddScoped<IPipelineJobExecutor, PipelineJobExecutor>();
         services.AddScoped<PipelineJobProcessor>();
+        services.AddScoped<IPipelineStageRecorder, PipelineStageRecorder>();
+        services.AddScoped<IPipelineMonitoringService, PipelineMonitoringService>();
+        services.AddHealthChecks()
+            .AddCheck<DatabaseConnectivityHealthCheck>("database", tags: ["ready"])
+            .AddCheck<QueueProcessorReadinessHealthCheck>("queue", tags: ["ready"])
+            .AddCheck<OperationsConfigHealthCheck>("config", tags: ["ready"]);
         return services;
     }
 }
