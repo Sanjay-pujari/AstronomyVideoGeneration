@@ -25,6 +25,7 @@ public sealed class OperationsOptions
     public int RetainDays { get; set; } = 30;
     public int SlowStageThresholdMs { get; set; } = 10000;
     public bool EnableDetailedStageMetadata { get; set; } = true;
+    public bool EnforceProductionValidation { get; set; } = true;
 }
 
 public sealed class AlertingOptions
@@ -42,6 +43,13 @@ public sealed class AlertingOptions
     public int QueueBacklogThreshold { get; set; } = 25;
     public int DedupWindowSeconds { get; set; } = 120;
     public string? SlackWebhookUrl { get; set; }
+}
+
+public sealed class TelemetryOptions
+{
+    public const string SectionName = "Telemetry";
+    public string? ApplicationInsightsConnectionString { get; set; }
+    public bool EnableStructuredScopes { get; set; } = true;
 }
 
 
@@ -104,4 +112,5 @@ public sealed class AzureOpenAiOptions
     public string Endpoint { get; set; } = "";
     public string ApiKey { get; set; } = "";
     public string ChatDeployment { get; set; } = "";
+    public bool UseManagedIdentity { get; set; }
 }

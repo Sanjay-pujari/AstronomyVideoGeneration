@@ -1,17 +1,32 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
-using Astronomy.MediaFactory.Worker;
-using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Astronomy.MediaFactory.Infrastructure.Alerting;
+using Astronomy.MediaFactory.Infrastructure.Configuration;
+using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.Extensions.Options;
 using Quartz;
 using Serilog;
 using SchedulingOptions = Astronomy.MediaFactory.Contracts.SchedulingOptions;
 
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.json", optional: true).AddEnvironmentVariables();
-Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateLogger();
+builder.Configuration
+    .AddJsonFile("appsettings.json", optional: true)
+    .AddMediaFactorySecureConfiguration(builder.Environment);
+
+var telemetryOptions = new TelemetryOptions();
+builder.Configuration.GetSection(TelemetryOptions.SectionName).Bind(telemetryOptions);
+
+Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
+
 builder.Services.AddSerilog();
+if (!string.IsNullOrWhiteSpace(telemetryOptions.ApplicationInsightsConnectionString))
+{
+    builder.Services.AddApplicationInsightsTelemetryWorkerService();
+}
+
 builder.Services.AddMediaFactory(builder.Configuration);
 builder.Services.AddHostedService<PipelineQueueWorker>();
 builder.Services.AddHostedService<AlertingMonitorService>();
@@ -46,6 +61,8 @@ builder.Services.AddQuartz(q =>
 builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
 
 var host = builder.Build();
+var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+logger.LogInformation("Starting Astronomy.MediaFactory.Worker in {Environment}", builder.Environment.EnvironmentName);
 await host.RunAsync();
 
 public sealed class EnqueueScheduledContentJob : IJob
@@ -65,6 +82,7 @@ public sealed class EnqueueScheduledContentJob : IJob
         if (!Enum.TryParse<ContentType>(contentTypeValue, out var contentType))
             throw new InvalidOperationException("Missing content type for scheduled enqueue job.");
 
+        using var scope = _logger.BeginScope(new Dictionary<string, object> { ["jobType"] = "schedule", ["contentType"] = contentType.ToString() });
         await _queue.EnqueueAsync(new EnqueuePipelineJobRequest(
             PipelineJobType.GenerateMainVideo,
             DateOnly.FromDateTime(DateTime.UtcNow),
@@ -79,15 +97,18 @@ public sealed class PipelineQueueWorker : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly SchedulingOptions _options;
+    private readonly ILogger<PipelineQueueWorker> _logger;
 
-    public PipelineQueueWorker(IServiceProvider serviceProvider, IOptions<SchedulingOptions> options)
+    public PipelineQueueWorker(IServiceProvider serviceProvider, IOptions<SchedulingOptions> options, ILogger<PipelineQueueWorker> logger)
     {
         _serviceProvider = serviceProvider;
         _options = options.Value;
+        _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _logger.LogInformation("Pipeline queue worker started.");
         while (!stoppingToken.IsCancellationRequested)
         {
             using var scope = _serviceProvider.CreateScope();
@@ -96,5 +117,6 @@ public sealed class PipelineQueueWorker : BackgroundService
             if (!processed)
                 await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, _options.QueuePollIntervalSeconds)), stoppingToken);
         }
+        _logger.LogInformation("Pipeline queue worker stopping.");
     }
 }

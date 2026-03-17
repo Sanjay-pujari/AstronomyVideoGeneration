@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.AstroData.Clients;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.AstroData.Services;
 
@@ -11,13 +12,15 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
     private readonly NasaNeoWsClient _neoWsClient;
     private readonly ISkyfieldSidecarClient _skyfieldSidecarClient;
     private readonly ILogger<AstronomyContextProvider> _logger;
+    private readonly SkyfieldSidecarOptions _sidecarOptions;
 
-    public AstronomyContextProvider(NasaApodClient apodClient, NasaNeoWsClient neoWsClient, ISkyfieldSidecarClient skyfieldSidecarClient, ILogger<AstronomyContextProvider> logger)
+    public AstronomyContextProvider(NasaApodClient apodClient, NasaNeoWsClient neoWsClient, ISkyfieldSidecarClient skyfieldSidecarClient, ILogger<AstronomyContextProvider> logger, IOptions<SkyfieldSidecarOptions> sidecarOptions)
     {
         _apodClient = apodClient;
         _neoWsClient = neoWsClient;
         _skyfieldSidecarClient = skyfieldSidecarClient;
         _logger = logger;
+        _sidecarOptions = sidecarOptions.Value;
     }
 
     public async Task<AstronomyContext> BuildContextAsync(DateOnly date, ContentType contentType, string locationName, string timeZone, CancellationToken cancellationToken)
@@ -25,7 +28,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         var context = new AstronomyContext { Date = date, LocationName = locationName, TimeZone = timeZone };
         await AddNasaContextAsync(context, date, cancellationToken);
 
-        if (contentType == ContentType.DailySkyGuide)
+        if (contentType == ContentType.DailySkyGuide && _sidecarOptions.Enabled)
         {
             var (latitude, longitude) = ResolveCoordinates(locationName);
             var sidecarResponse = await _skyfieldSidecarClient.GetDailySkyAsync(new SkyfieldDailySkyRequest
@@ -43,6 +46,10 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
             }
 
             _logger.LogWarning("Skyfield sidecar returned no usable events for {Date} at {LocationName}. Falling back to demo astronomy context.", date, locationName);
+        }
+        else if (contentType == ContentType.DailySkyGuide)
+        {
+            _logger.LogInformation("Skyfield sidecar is disabled. Using fallback astronomy context for {Date} at {LocationName}.", date, locationName);
         }
 
         AddFallbackEvents(context);

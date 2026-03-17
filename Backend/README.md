@@ -150,3 +150,12 @@ After FFmpeg render completes, pipeline now does:
 Fallbacks:
 - Blob upload failure logs error and continues YouTube upload from local file.
 - YouTube upload failure logs error, preserves blob artifact, and stores `Status=UploadFailed`.
+
+## PASS 16: Azure deployment hardening
+
+- Production startup validation now fails fast for missing critical cloud settings.
+- Development profile keeps local fallback behavior available.
+- Managed identity-ready paths are supported for Blob and secure configuration loading.
+- Optional Azure Key Vault loading is enabled via `KeyVault__VaultUri`.
+- Application Insights hooks are wired for API and Worker when `Telemetry:ApplicationInsightsConnectionString` is set.
+- Use `docs/azure-deployment-guide.md` for first deployment runbook and Azure setup steps.

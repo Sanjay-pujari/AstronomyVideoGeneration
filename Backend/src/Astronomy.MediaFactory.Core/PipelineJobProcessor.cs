@@ -26,6 +26,12 @@ public sealed class PipelineJobProcessor
             return false;
 
         var started = DateTimeOffset.UtcNow;
+        using var logScope = _logger.BeginScope(new Dictionary<string, object>
+        {
+            ["jobId"] = job.Id,
+            ["jobType"] = job.JobType.ToString(),
+            ["attempt"] = job.AttemptCount + 1
+        });
         job.Status = PipelineJobStatus.Running;
         job.StartedAt = started;
         job.AttemptCount += 1;
@@ -39,7 +45,7 @@ public sealed class PipelineJobProcessor
             job.ErrorMessage = null;
             await _repository.SaveChangesAsync(cancellationToken);
 
-            _logger.LogInformation("Job {JobId} ({JobType}) finished in {ElapsedMs} ms.", job.Id, job.JobType, (DateTimeOffset.UtcNow - started).TotalMilliseconds);
+            _logger.LogInformation("Job {JobId} ({JobType}) finished in {ElapsedMs} ms with status {Status}.", job.Id, job.JobType, (DateTimeOffset.UtcNow - started).TotalMilliseconds, job.Status);
         }
         catch (Exception ex)
         {

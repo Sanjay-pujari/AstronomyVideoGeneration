@@ -1,18 +1,36 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.json", optional: true).AddEnvironmentVariables();
-Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateLogger();
+builder.Configuration
+    .AddJsonFile("appsettings.json", optional: true)
+    .AddMediaFactorySecureConfiguration(builder.Environment);
+
+var telemetryOptions = new TelemetryOptions();
+builder.Configuration.GetSection(TelemetryOptions.SectionName).Bind(telemetryOptions);
+
+Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
+
 builder.Services.AddSerilog();
+if (!string.IsNullOrWhiteSpace(telemetryOptions.ApplicationInsightsConnectionString))
+{
+    builder.Services.AddApplicationInsightsTelemetry();
+}
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 builder.Services.AddMediaFactory(builder.Configuration);
 
 var app = builder.Build();
+
+app.Logger.LogInformation("Starting Astronomy.MediaFactory.Api in {Environment}", app.Environment.EnvironmentName);
 
 app.MapGet("/", () => Results.Ok(new { service = "Astronomy.MediaFactory.Api", status = "ok" }));
 app.MapHealthChecks("/health");
@@ -48,8 +66,14 @@ app.MapGet("/api/pipelines/{id:guid}", async (Guid id, IPipelineRepository repos
     return item is null ? Results.NotFound() : Results.Ok(item);
 });
 app.MapGet("/api/scripts/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentScriptsAsync(20, ct)));
-app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, CancellationToken ct) =>
+app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, ILogger<Program> logger, CancellationToken ct) =>
 {
+    using var scope = logger.BeginScope(new Dictionary<string, object>
+    {
+        ["contentType"] = request.ContentType,
+        ["runDate"] = request.Date,
+        ["publishToYouTube"] = request.PublishToYouTube
+    });
     var result = await orchestrator.RunAsync(request, ct);
     return Results.Ok(new RunPipelineResponse(result.Id, result.Status, "Completed."));
 });

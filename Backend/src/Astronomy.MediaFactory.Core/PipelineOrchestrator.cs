@@ -90,6 +90,14 @@ public sealed class PipelineOrchestrator
         };
 
         await _repository.CreateAsync(run, cancellationToken);
+        using var logScope = _logger.BeginScope(new Dictionary<string, object>
+        {
+            ["pipelineRunId"] = run.Id,
+            ["contentType"] = run.ContentType.ToString(),
+            ["runDate"] = run.RunDate
+        });
+        _logger.LogInformation("Pipeline run {PipelineRunId} starting for {ContentType} ({RunDate})", run.Id, run.ContentType, run.RunDate);
+
         run.Status = PipelineRunStatus.Running;
         run.StartedUtc = DateTimeOffset.UtcNow;
         await _repository.SaveChangesAsync(cancellationToken);
@@ -489,6 +497,7 @@ public sealed class PipelineOrchestrator
             run.FailureReason = ex.Message;
             run.FinishedUtc = DateTimeOffset.UtcNow;
             await _repository.SaveChangesAsync(cancellationToken);
+            _logger.LogError(ex, "Pipeline run {PipelineRunId} failed with status {Status}", run.Id, run.Status);
             throw;
         }
     }
