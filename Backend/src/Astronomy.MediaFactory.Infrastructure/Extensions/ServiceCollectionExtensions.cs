@@ -32,6 +32,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IVisualAssetProvider, FileVisualAssetProvider>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
         services.AddHttpClient<IScriptGenerationService, AzureOpenAiContentGenerationService>();
+        services.AddScoped<IAzureSpeechClient, AzureSpeechClient>();
         services.AddScoped<ISpeechSynthesisService, AzureSpeechSynthesisService>();
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
         services.AddScoped<IArchivalService, AzureBlobArchivalService>();

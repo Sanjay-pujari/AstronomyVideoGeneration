@@ -4,6 +4,7 @@
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Contracts\Astronomy.MediaFactory.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Core\Astronomy.MediaFactory.Core.csproj" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.ContentGen\Astronomy.MediaFactory.ContentGen.csproj" />
+    <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Rendering\Astronomy.MediaFactory.Rendering.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
