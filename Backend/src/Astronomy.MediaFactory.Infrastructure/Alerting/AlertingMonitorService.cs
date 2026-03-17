@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Astronomy.MediaFactory.Contracts;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Astronomy.MediaFactory.Infrastructure.Alerting;
 
