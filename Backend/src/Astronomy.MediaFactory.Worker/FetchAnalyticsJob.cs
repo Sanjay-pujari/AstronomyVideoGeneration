@@ -34,7 +34,7 @@ public sealed class FetchAnalyticsJob : IJob
 
         foreach (var video in videos)
         {
-            await SaveSnapshotAsync(videoId: video.YouTubeVideoId!, title: video.Title, isShort: false, contentType: video.ContentType(), parentVideoId: null, hookLine: null, cancellationToken: context.CancellationToken);
+            await SaveSnapshotAsync(videoId: video.YouTubeVideoId!, title: video.Title, isShort: false, contentType: video.ResolveContentType(), parentVideoId: null, hookLine: null, cancellationToken: context.CancellationToken);
         }
 
         foreach (var shortVideo in shorts)
@@ -74,7 +74,7 @@ public sealed class FetchAnalyticsJob : IJob
 
 internal static class PublishedVideoContentTypeExtensions
 {
-    public static ContentType ContentType(this PublishedVideo video)
+    public static ContentType ResolveContentType(this PublishedVideo video)
     {
         if (Enum.TryParse<ContentType>(video.OptimizedTagsCsv?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? string.Empty, true, out var parsed))
             return parsed;
