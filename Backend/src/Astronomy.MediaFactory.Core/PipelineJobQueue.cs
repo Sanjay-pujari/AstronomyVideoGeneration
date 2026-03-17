@@ -30,7 +30,8 @@ public sealed class PipelineJobQueue : IPipelineJobQueue
             ContentType = request.ContentType,
             LocationName = request.LocationName,
             TimeZone = request.TimeZone,
-            PublishToYouTube = request.PublishToYouTube
+            PublishToYouTube = request.PublishToYouTube,
+            UseTopicPlanner = request.UseTopicPlanner
         };
 
         await _repository.AddJobAsync(job, cancellationToken);

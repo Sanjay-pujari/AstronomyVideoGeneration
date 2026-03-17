@@ -98,6 +98,7 @@ public sealed class PipelineJob : EntityBase
     public string LocationName { get; set; } = "";
     public string TimeZone { get; set; } = "Asia/Kolkata";
     public bool PublishToYouTube { get; set; }
+    public bool UseTopicPlanner { get; set; }
     public DateTimeOffset? NextAttemptAt { get; set; }
 }
 

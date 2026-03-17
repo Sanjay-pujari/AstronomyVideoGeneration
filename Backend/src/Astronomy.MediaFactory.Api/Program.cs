@@ -33,6 +33,23 @@ app.MapGet("/api/jobs/{id:guid}", async (Guid id, IPipelineRepository repository
     var item = await repository.GetJobAsync(id, ct);
     return item is null ? Results.NotFound() : Results.Ok(item);
 });
+
+app.MapGet("/api/topics/recommended", async (DateOnly? date, ContentType? contentType, string? locationName, string? timeZone, ITopicSelectionService topicSelectionService, CancellationToken ct) =>
+{
+    var request = new TopicSelectionRequest
+    {
+        Date = date ?? DateOnly.FromDateTime(DateTime.UtcNow),
+        ContentType = contentType,
+        LocationName = string.IsNullOrWhiteSpace(locationName) ? "Udaipur, India" : locationName,
+        TimeZone = string.IsNullOrWhiteSpace(timeZone) ? "Asia/Kolkata" : timeZone,
+        MaxCandidates = 8
+    };
+
+    var plan = await topicSelectionService.BuildPlanAsync(request, ct);
+    return Results.Ok(plan);
+});
+app.MapPost("/api/topics/plan", async (TopicSelectionRequest request, ITopicSelectionService topicSelectionService, CancellationToken ct) =>
+    Results.Ok(await topicSelectionService.BuildPlanAsync(request, ct)));
 app.MapGet("/api/analytics/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentAnalyticsAsync(50, ct)));
 app.MapGet("/api/analytics/top-performing", async (int? topN, IAnalyticsAggregationService aggregationService, CancellationToken ct) =>
 {
