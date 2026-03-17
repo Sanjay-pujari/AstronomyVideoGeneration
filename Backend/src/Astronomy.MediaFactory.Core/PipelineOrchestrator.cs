@@ -101,6 +101,8 @@ public sealed class PipelineOrchestrator
                 }, cancellationToken);
             }
 
+            var totalScenes = Math.Max(1, visuals.Count);
+            var durationPerScene = Math.Max(6, script.EstimatedDurationSeconds / totalScenes);
             var manifest = new RenderManifest
             {
                 Title = script.Title,
@@ -108,9 +110,11 @@ public sealed class PipelineOrchestrator
                 OutputPath = Path.Combine(outputDir, "final-video.mp4"),
                 Scenes = visuals.Select((v, i) => new RenderScene
                 {
-                    Caption = $"Scene {i + 1}",
+                    Caption = i < context.VisualIdeas.Count
+                        ? context.VisualIdeas[i].Title
+                        : $"Scene {i + 1}",
                     VisualPath = v,
-                    DurationSeconds = Math.Max(8, script.EstimatedDurationSeconds / Math.Max(1, visuals.Count))
+                    DurationSeconds = durationPerScene
                 }).ToList()
             };
 

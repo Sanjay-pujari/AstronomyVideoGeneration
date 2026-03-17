@@ -11,9 +11,10 @@ public sealed class RenderingOptions
     public const string SectionName = "Rendering";
     public string FfmpegPath { get; set; } = "ffmpeg";
     public string WorkingDirectory { get; set; } = "./media-output";
-    public int VideoWidth { get; set; } = 1920;
-    public int VideoHeight { get; set; } = 1080;
+    public int VideoWidth { get; set; } = 1280;
+    public int VideoHeight { get; set; } = 720;
     public int FrameRate { get; set; } = 30;
+    public double ImageTransitionSeconds { get; set; } = 1;
     public string? BackgroundMusicPath { get; set; }
 }
 

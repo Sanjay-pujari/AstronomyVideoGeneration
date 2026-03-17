@@ -48,6 +48,8 @@ public sealed class RenderManifest
     public string Title { get; set; } = "";
     public string AudioPath { get; set; } = "";
     public string OutputPath { get; set; } = "";
+    public string? IntroVisualPath { get; set; }
+    public string? OutroVisualPath { get; set; }
     public List<RenderScene> Scenes { get; set; } = new();
 }
 public sealed class RenderScene
