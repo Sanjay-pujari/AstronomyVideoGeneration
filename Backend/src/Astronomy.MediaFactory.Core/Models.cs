@@ -65,3 +65,18 @@ public sealed class RankedTopic
     public string Summary { get; init; } = "";
     public double Score { get; init; }
 }
+
+public sealed class BlobUploadRequest
+{
+    public required string BasePath { get; init; }
+    public required string VideoPath { get; init; }
+    public required string AudioPath { get; init; }
+    public string? ThumbnailPath { get; init; }
+}
+
+public sealed class BlobUploadResult
+{
+    public string? VideoUrl { get; init; }
+    public string? AudioUrl { get; init; }
+    public string? ThumbnailUrl { get; init; }
+}

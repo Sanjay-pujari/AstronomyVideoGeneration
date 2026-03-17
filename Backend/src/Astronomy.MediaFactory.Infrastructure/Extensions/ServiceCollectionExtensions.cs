@@ -19,7 +19,7 @@ public static class ServiceCollectionExtensions
         services.Configure<AstronomyApiOptions>(configuration.GetSection(AstronomyApiOptions.SectionName));
         services.Configure<AzureOpenAiOptions>(configuration.GetSection(AzureOpenAiOptions.SectionName));
         services.Configure<AzureSpeechOptions>(configuration.GetSection(AzureSpeechOptions.SectionName));
-        services.Configure<AzureStorageOptions>(configuration.GetSection(AzureStorageOptions.SectionName));
+        services.Configure<AzureBlobOptions>(configuration.GetSection(AzureBlobOptions.SectionName));
         services.Configure<YouTubeOptions>(configuration.GetSection(YouTubeOptions.SectionName));
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
@@ -56,7 +56,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<FfmpegArgumentBuilder>();
         services.AddScoped<ISpeechSynthesisService, AzureSpeechSynthesisService>();
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
-        services.AddScoped<IArchivalService, AzureBlobArchivalService>();
+        services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
         services.AddScoped<StellariumScriptBuilder>(sp =>
             new StellariumScriptBuilder(sp.GetRequiredService<IOptions<StellariumOptions>>().Value));
