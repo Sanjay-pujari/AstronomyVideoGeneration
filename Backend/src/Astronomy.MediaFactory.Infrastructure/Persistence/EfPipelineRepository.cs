@@ -113,6 +113,13 @@ public sealed class EfPipelineRepository : IPipelineRepository
         return await query.OrderByDescending(x => x.Views).Take(take).ToListAsync(cancellationToken);
     }
 
+
+    public async Task<IReadOnlyCollection<PublishedVideo>> GetRecentPublishedVideosAsync(DateTimeOffset from, CancellationToken cancellationToken)
+        => await _db.PublishedVideos.AsNoTracking().Where(x => x.CreatedAt >= from).OrderByDescending(x => x.CreatedAt).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyCollection<GeneratedScript>> GetRecentGeneratedScriptsAsync(DateTimeOffset from, CancellationToken cancellationToken)
+        => await _db.GeneratedScripts.AsNoTracking().Where(x => x.CreatedUtc >= from).OrderByDescending(x => x.CreatedUtc).ToListAsync(cancellationToken);
+
     public async Task<IReadOnlyCollection<PublishedVideo>> GetPublishedVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken)
         => await _db.PublishedVideos.Where(x => x.CreatedAt >= from && x.YouTubeVideoId != null).ToListAsync(cancellationToken);
 

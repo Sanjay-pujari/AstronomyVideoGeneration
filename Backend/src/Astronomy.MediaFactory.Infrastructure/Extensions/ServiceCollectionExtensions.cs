@@ -23,6 +23,7 @@ public static class ServiceCollectionExtensions
         services.Configure<YouTubeOptions>(configuration.GetSection(YouTubeOptions.SectionName));
         services.Configure<SchedulingOptions>(configuration.GetSection(SchedulingOptions.SectionName));
         services.Configure<AnalyticsOptions>(configuration.GetSection(AnalyticsOptions.SectionName));
+        services.Configure<TopicSelectionOptions>(configuration.GetSection(TopicSelectionOptions.SectionName));
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
             .ValidateDataAnnotations()
@@ -48,6 +49,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPipelineRepository, EfPipelineRepository>();
         services.AddScoped<IAstronomyContextProvider, AstronomyContextProvider>();
         services.AddScoped<ITopicRankingService, TopicRankingService>();
+        services.AddScoped<ITopicSelectionService, TopicSelectionService>();
         services.AddScoped<IVisualAssetProvider, StellariumVisualGenerationService>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
         services.AddScoped<IMetadataOptimizationService, MetadataOptimizationService>();
