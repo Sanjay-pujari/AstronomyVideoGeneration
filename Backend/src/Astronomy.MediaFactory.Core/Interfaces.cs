@@ -80,6 +80,22 @@ public interface IPipelineRepository {
  Task SaveChangesAsync(CancellationToken cancellationToken);
 }
 
+public interface IPipelineStageRecorder
+{
+    Task<PipelineStageExecution> StartStageAsync(Guid pipelineRunId, string stageName, string? metadataJson, CancellationToken cancellationToken);
+    Task CompleteStageAsync(PipelineStageExecution stageExecution, string? metadataJson, CancellationToken cancellationToken);
+    Task FailStageAsync(PipelineStageExecution stageExecution, string errorMessage, bool continuedWithFallback, string? metadataJson, CancellationToken cancellationToken);
+}
+
+public interface IPipelineMonitoringService
+{
+    Task<PipelineOpsSummary> GetSummaryAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<PipelineRun>> GetRecentPipelinesAsync(int take, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<PipelineStageExecution>> GetPipelineStagesAsync(Guid pipelineRunId, CancellationToken cancellationToken);
+    Task<RecentFailuresSnapshot> GetRecentFailuresAsync(int take, CancellationToken cancellationToken);
+    Task<JobOpsSummary> GetJobSummaryAsync(CancellationToken cancellationToken);
+}
+
 public interface IPipelineJobQueue
 {
     Task<PipelineJob> EnqueueAsync(EnqueuePipelineJobRequest request, CancellationToken cancellationToken);

@@ -19,11 +19,13 @@ public sealed class PipelineOrchestrator
     private readonly IThumbnailGenerationService _thumbnailGenerationService;
     private readonly IPipelineRepository _repository;
     private readonly YouTubeOptions _youTubeOptions;
+    private readonly OperationsOptions _operationsOptions;
     private readonly ILogger<PipelineOrchestrator> _logger;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
     private readonly IYouTubeThumbnailPublisher? _youTubeThumbnailPublisher;
     private readonly ITopicSelectionService? _topicSelectionService;
     private readonly IPromptFeedbackService? _promptFeedbackService;
+    private readonly IPipelineStageRecorder? _pipelineStageRecorder;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -43,7 +45,9 @@ public sealed class PipelineOrchestrator
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
         IYouTubeThumbnailPublisher? youTubeThumbnailPublisher = null,
         ITopicSelectionService? topicSelectionService = null,
-        IPromptFeedbackService? promptFeedbackService = null)
+        IPromptFeedbackService? promptFeedbackService = null,
+        IPipelineStageRecorder? pipelineStageRecorder = null,
+        IOptions<OperationsOptions>? operationsOptions = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -58,11 +62,13 @@ public sealed class PipelineOrchestrator
         _thumbnailGenerationService = thumbnailGenerationService;
         _repository = repository;
         _youTubeOptions = youTubeOptions.Value;
+        _operationsOptions = operationsOptions?.Value ?? new OperationsOptions();
         _logger = logger;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
         _youTubeThumbnailPublisher = youTubeThumbnailPublisher;
         _topicSelectionService = topicSelectionService;
         _promptFeedbackService = promptFeedbackService;
+        _pipelineStageRecorder = pipelineStageRecorder;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -87,18 +93,59 @@ public sealed class PipelineOrchestrator
             var outputDir = Path.Combine("media-output", request.ContentType.ToString(), request.Date.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
             Directory.CreateDirectory(outputDir);
 
-            var context = await _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken);
+            async Task<T> RunStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null)
+            {
+                PipelineStageExecution? stage = null;
+                if (_pipelineStageRecorder is not null)
+                {
+                    stage = await _pipelineStageRecorder.StartStageAsync(run.Id, stageName, null, cancellationToken);
+                }
+
+                _logger.LogInformation("Stage {StageName} started for pipeline run {PipelineRunId}", stageName, run.Id);
+                try
+                {
+                    var result = await action();
+                    if (stage is not null)
+                    {
+                        await _pipelineStageRecorder!.CompleteStageAsync(stage, null, cancellationToken);
+                        if (stage.DurationMs.HasValue && stage.DurationMs.Value >= _operationsOptions.SlowStageThresholdMs)
+                        {
+                            _logger.LogWarning("Slow stage detected: {StageName} took {DurationMs}ms for run {PipelineRunId}", stageName, stage.DurationMs.Value, run.Id);
+                        }
+                    }
+
+                    _logger.LogInformation("Stage {StageName} completed for pipeline run {PipelineRunId}", stageName, run.Id);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    if (stage is not null)
+                    {
+                        await _pipelineStageRecorder!.FailStageAsync(stage, ex.Message, continueWithFallback && fallback is not null, null, cancellationToken);
+                    }
+
+                    _logger.LogError(ex, "Stage {StageName} failed for pipeline run {PipelineRunId}", stageName, run.Id);
+                    if (continueWithFallback && fallback is not null)
+                    {
+                        return await fallback(ex);
+                    }
+
+                    throw;
+                }
+            }
+
+            var context = await RunStageAsync("AstronomyData", () => _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken));
             TopicSelectionPlan? topicSelectionPlan = null;
             if (request.UseTopicPlanner && _topicSelectionService is not null)
             {
-                topicSelectionPlan = await _topicSelectionService.BuildPlanAsync(new TopicSelectionRequest
+                topicSelectionPlan = await RunStageAsync("TopicSelection", () => _topicSelectionService.BuildPlanAsync(new TopicSelectionRequest
                 {
                     Date = request.Date,
                     ContentType = request.ContentType,
                     LocationName = request.LocationName,
                     TimeZone = request.TimeZone,
                     MaxCandidates = 5
-                }, cancellationToken);
+                }, cancellationToken));
 
                 var selected = topicSelectionPlan.PrimaryLongForm;
                 if (selected is not null)
@@ -134,8 +181,9 @@ public sealed class PipelineOrchestrator
             var feedbackSignals = _analyticsFeedbackProvider is null
                 ? new FeedbackSignals()
                 : await _analyticsFeedbackProvider.GetSignalsAsync(10, cancellationToken);
-            _ = await _topicRankingService.RankAsync(context, request.ContentType, cancellationToken);
-            var script = await _scriptGenerationService.GenerateAsync(request.ContentType, context, cancellationToken);
+
+            _ = await RunStageAsync("TopicSelection", () => _topicRankingService.RankAsync(context, request.ContentType, cancellationToken));
+            var script = await RunStageAsync("PromptGeneration", () => _scriptGenerationService.GenerateAsync(request.ContentType, context, cancellationToken));
             var optimizedMetadata = await _metadataOptimizationService.OptimizeForVideoAsync(new MetadataOptimizationInput
             {
                 ContentType = request.ContentType,
@@ -157,8 +205,9 @@ public sealed class PipelineOrchestrator
                 EstimatedDurationSeconds = script.EstimatedDurationSeconds,
                 OptimizedMetadata = optimizedMetadata
             };
-            var audioPath = await _speechSynthesisService.SynthesizeAsync(script.ScriptBody, outputDir, cancellationToken);
-            var visuals = await _visualAssetProvider.PrepareVisualsAsync(context, outputDir, cancellationToken);
+
+            var audioPath = await RunStageAsync("SpeechSynthesis", () => _speechSynthesisService.SynthesizeAsync(script.ScriptBody, outputDir, cancellationToken));
+            var visuals = await RunStageAsync("VisualGeneration", () => _visualAssetProvider.PrepareVisualsAsync(context, outputDir, cancellationToken));
 
             await _repository.AddScriptAsync(new GeneratedScript
             {
@@ -177,8 +226,8 @@ public sealed class PipelineOrchestrator
                 OptimizedTagsCsv = string.Join(",", script.OptimizedMetadata?.Tags ?? []),
                 OptimizedHashtagsCsv = string.Join(",", script.OptimizedMetadata?.Hashtags ?? []),
                 ThumbnailTextSuggestionsCsv = string.Join("|", script.OptimizedMetadata?.ThumbnailTextSuggestions ?? []),
-                HookLine = script.OptimizedMetadata?.HookLine
-                ,PromptFeedbackContextJson = System.Text.Json.JsonSerializer.Serialize(context.PromptFeedbackContext)
+                HookLine = script.OptimizedMetadata?.HookLine,
+                PromptFeedbackContextJson = System.Text.Json.JsonSerializer.Serialize(context.PromptFeedbackContext)
             }, cancellationToken);
 
             await _repository.AddAssetAsync(new MediaAsset
@@ -211,15 +260,13 @@ public sealed class PipelineOrchestrator
                 OutputPath = Path.Combine(outputDir, "final-video.mp4"),
                 Scenes = visuals.Select((v, i) => new RenderScene
                 {
-                    Caption = i < context.VisualIdeas.Count
-                        ? context.VisualIdeas[i].Title
-                        : $"Scene {i + 1}",
+                    Caption = i < context.VisualIdeas.Count ? context.VisualIdeas[i].Title : $"Scene {i + 1}",
                     VisualPath = v,
                     DurationSeconds = durationPerScene
                 }).ToList()
             };
 
-            var videoPath = await _videoRenderService.RenderAsync(manifest, cancellationToken);
+            var videoPath = await RunStageAsync("Rendering", () => _videoRenderService.RenderAsync(manifest, cancellationToken));
 
             ThumbnailPlan thumbnailPlan;
             try
@@ -269,21 +316,13 @@ public sealed class PipelineOrchestrator
                 }, cancellationToken);
             }
 
-            BlobUploadResult blobUploadResult = new();
-            try
+            var blobUploadResult = await RunStageAsync("BlobUpload", () => _azureBlobStorageService.UploadAsync(new BlobUploadRequest
             {
-                blobUploadResult = await _azureBlobStorageService.UploadAsync(new BlobUploadRequest
-                {
-                    BasePath = $"{request.ContentType}/{request.Date:yyyy-MM-dd}/{run.Id:N}",
-                    VideoPath = videoPath,
-                    AudioPath = audioPath,
-                    ThumbnailPath = thumbnailPath
-                }, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Blob upload failed for pipeline run {PipelineRunId}. Continuing with local artifacts.", run.Id);
-            }
+                BasePath = $"{request.ContentType}/{request.Date:yyyy-MM-dd}/{run.Id:N}",
+                VideoPath = videoPath,
+                AudioPath = audioPath,
+                ThumbnailPath = thumbnailPath
+            }, cancellationToken), continueWithFallback: true, fallback: _ => Task.FromResult(new BlobUploadResult()));
 
             var publishStatus = "Published";
             var youtubeThumbnailUploaded = false;
@@ -291,13 +330,13 @@ public sealed class PipelineOrchestrator
             {
                 try
                 {
-                    run.YouTubeVideoId = await _youTubePublishingService.UploadAsync(
+                    run.YouTubeVideoId = await RunStageAsync("YouTubeUpload", () => _youTubePublishingService.UploadAsync(
                         videoPath,
                         script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
                         script.OptimizedMetadata?.OptimizedDescription ?? script.Description,
                         script.OptimizedMetadata?.Tags ?? script.Tags,
                         _youTubeOptions.PrivacyStatus,
-                        cancellationToken);
+                        cancellationToken), continueWithFallback: true, fallback: _ => Task.FromResult<string?>(null));
 
                     if (string.IsNullOrWhiteSpace(run.YouTubeVideoId))
                     {
@@ -339,12 +378,16 @@ public sealed class PipelineOrchestrator
 
             await _repository.AddPublishedVideoAsync(publishedVideo, cancellationToken);
 
-            try
-            {
-                var shortsOutputDir = Path.Combine(outputDir, "shorts");
-                Directory.CreateDirectory(shortsOutputDir);
-                var shortResult = await _shortsVideoRenderService.RenderAsync(request.ContentType, context, visuals, shortsOutputDir, request.PublishToYouTube, cancellationToken);
+            var shortResult = await RunStageAsync("ShortsGeneration", () => _shortsVideoRenderService.RenderAsync(
+                request.ContentType,
+                context,
+                visuals,
+                Path.Combine(outputDir, "shorts"),
+                request.PublishToYouTube,
+                cancellationToken), continueWithFallback: true, fallback: _ => Task.FromResult<ShortVideoRenderResult?>(null));
 
+            if (shortResult is not null)
+            {
                 await _repository.AddAssetAsync(new MediaAsset
                 {
                     PipelineRunId = run.Id,
@@ -363,20 +406,16 @@ public sealed class PipelineOrchestrator
                     CreatedAt = DateTimeOffset.UtcNow
                 }, cancellationToken);
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Shorts generation failed for pipeline run {PipelineRunId}. Main video remains unaffected.", run.Id);
-            }
-
 
             run.Status = PipelineRunStatus.Succeeded;
             run.FinishedUtc = DateTimeOffset.UtcNow;
             await _repository.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation("Pipeline run {PipelineRunId} completed with status {Status}", run.Id, run.Status);
             return run;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Pipeline run failed.");
+            _logger.LogError(ex, "Pipeline run failed for {PipelineRunId}", run.Id);
             run.Status = PipelineRunStatus.Failed;
             run.FailureReason = ex.Message;
             run.FinishedUtc = DateTimeOffset.UtcNow;
