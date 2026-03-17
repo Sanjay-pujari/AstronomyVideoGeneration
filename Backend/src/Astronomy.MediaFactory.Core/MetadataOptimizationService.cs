@@ -18,32 +18,32 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
         new Dictionary<ContentType, ContentTypeMetadataStrategy>
         {
             [ContentType.DailySkyGuide] = new(
-                longFormTitle: (lead, _, datePart) => lead is null ? $"Tonight's Sky Guide ({datePart})" : $"Tonight's Sky: {lead} & More ({datePart})",
-                shortFormTitle: (lead, _, _) => lead is null ? "Tonight's Sky in 60 Seconds" : $"{lead} in 60 Seconds",
-                alternateCategoryLabel: "Night Sky",
-                contentTypeHashtag: "#tonightsky",
-                longThumbnailLabel: "EASY SKY GUIDE"),
+                LongFormTitle: (lead, _, datePart) => lead is null ? $"Tonight's Sky Guide ({datePart})" : $"Tonight's Sky: {lead} & More ({datePart})",
+                ShortFormTitle: (lead, _, _) => lead is null ? "Tonight's Sky in 60 Seconds" : $"{lead} in 60 Seconds",
+                AlternateCategoryLabel: "Night Sky",
+                ContentTypeHashtag: "#tonightsky",
+                LongThumbnailLabel: "EASY SKY GUIDE"),
 
             [ContentType.TelescopeTargets] = new(
-                longFormTitle: (lead, _, _) => lead is null ? "Best Telescope Targets for Beginners Tonight" : $"Beginner Telescope Target: {lead} Tonight",
-                shortFormTitle: (lead, _, _) => lead is null ? "Quick Telescope Target" : $"Find {lead} Fast",
-                alternateCategoryLabel: "Telescope",
-                contentTypeHashtag: "#telescope",
-                longThumbnailLabel: "BEGINNER TARGET"),
+                LongFormTitle: (lead, _, _) => lead is null ? "Best Telescope Targets for Beginners Tonight" : $"Beginner Telescope Target: {lead} Tonight",
+                ShortFormTitle: (lead, _, _) => lead is null ? "Quick Telescope Target" : $"Find {lead} Fast",
+                AlternateCategoryLabel: "Telescope",
+                ContentTypeHashtag: "#telescope",
+                LongThumbnailLabel: "BEGINNER TARGET"),
 
             [ContentType.SpaceNews] = new(
-                longFormTitle: (lead, sourceTitle, _) => lead is null ? CleanTitle(sourceTitle, isShort: false) : $"Space Update: {lead} Explained",
-                shortFormTitle: (lead, sourceTitle, _) => lead is null ? CleanTitle(sourceTitle, isShort: true) : $"Quick Space Fact: {lead}",
-                alternateCategoryLabel: "Space Update",
-                contentTypeHashtag: "#spacenews",
-                longThumbnailLabel: "NEW SPACE UPDATE"),
+                LongFormTitle: (lead, sourceTitle, _) => lead is null ? CleanTitle(sourceTitle, isShort: false) : $"Space Update: {lead} Explained",
+                ShortFormTitle: (lead, sourceTitle, _) => lead is null ? CleanTitle(sourceTitle, isShort: true) : $"Quick Space Fact: {lead}",
+                AlternateCategoryLabel: "Space Update",
+                ContentTypeHashtag: "#spacenews",
+                LongThumbnailLabel: "NEW SPACE UPDATE"),
 
             [ContentType.AstrophotographyTips] = new(
-                longFormTitle: (lead, _, _) => lead is null ? "Astrophotography Tips for Beginners Tonight" : $"Photograph {lead}: Beginner Camera Settings",
-                shortFormTitle: (lead, _, _) => lead is null ? "Fast Astrophotography Tip" : $"Shoot {lead} Better Tonight",
-                alternateCategoryLabel: "Astrophotography",
-                contentTypeHashtag: "#astrophotography",
-                longThumbnailLabel: "CAMERA SETTINGS")
+                LongFormTitle: (lead, _, _) => lead is null ? "Astrophotography Tips for Beginners Tonight" : $"Photograph {lead}: Beginner Camera Settings",
+                ShortFormTitle: (lead, _, _) => lead is null ? "Fast Astrophotography Tip" : $"Shoot {lead} Better Tonight",
+                AlternateCategoryLabel: "Astrophotography",
+                ContentTypeHashtag: "#astrophotography",
+                LongThumbnailLabel: "CAMERA SETTINGS")
         };
 
     private readonly IMetadataOptimizationModelClient? _modelClient;
@@ -269,7 +269,7 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
     {
         var strategy = ResolveStrategy(type);
         var fallbackHashtags = BuildHashtags(strategy, Array.Empty<string>(), isShort);
-        var fallbackTags = BuildTags(type, Array.Empty<string>(), Array.Empty<string>(), isShort);
+        var fallbackTags = BuildTags(type, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), isShort);
 
         return new OptimizedVideoMetadata
         {
