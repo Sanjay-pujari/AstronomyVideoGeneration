@@ -14,6 +14,38 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
     private const int MaxTags = 15;
     private const int MaxHashtags = 8;
 
+    private static readonly IReadOnlyDictionary<ContentType, ContentTypeMetadataStrategy> Strategies =
+        new Dictionary<ContentType, ContentTypeMetadataStrategy>
+        {
+            [ContentType.DailySkyGuide] = new(
+                longFormTitle: (lead, _, datePart) => lead is null ? $"Tonight's Sky Guide ({datePart})" : $"Tonight's Sky: {lead} & More ({datePart})",
+                shortFormTitle: (lead, _, _) => lead is null ? "Tonight's Sky in 60 Seconds" : $"{lead} in 60 Seconds",
+                alternateCategoryLabel: "Night Sky",
+                contentTypeHashtag: "#tonightsky",
+                longThumbnailLabel: "EASY SKY GUIDE"),
+
+            [ContentType.TelescopeTargets] = new(
+                longFormTitle: (lead, _, _) => lead is null ? "Best Telescope Targets for Beginners Tonight" : $"Beginner Telescope Target: {lead} Tonight",
+                shortFormTitle: (lead, _, _) => lead is null ? "Quick Telescope Target" : $"Find {lead} Fast",
+                alternateCategoryLabel: "Telescope",
+                contentTypeHashtag: "#telescope",
+                longThumbnailLabel: "BEGINNER TARGET"),
+
+            [ContentType.SpaceNews] = new(
+                longFormTitle: (lead, sourceTitle, _) => lead is null ? CleanTitle(sourceTitle, isShort: false) : $"Space Update: {lead} Explained",
+                shortFormTitle: (lead, sourceTitle, _) => lead is null ? CleanTitle(sourceTitle, isShort: true) : $"Quick Space Fact: {lead}",
+                alternateCategoryLabel: "Space Update",
+                contentTypeHashtag: "#spacenews",
+                longThumbnailLabel: "NEW SPACE UPDATE"),
+
+            [ContentType.AstrophotographyTips] = new(
+                longFormTitle: (lead, _, _) => lead is null ? "Astrophotography Tips for Beginners Tonight" : $"Photograph {lead}: Beginner Camera Settings",
+                shortFormTitle: (lead, _, _) => lead is null ? "Fast Astrophotography Tip" : $"Shoot {lead} Better Tonight",
+                alternateCategoryLabel: "Astrophotography",
+                contentTypeHashtag: "#astrophotography",
+                longThumbnailLabel: "CAMERA SETTINGS")
+        };
+
     private readonly IMetadataOptimizationModelClient? _modelClient;
     private readonly ILogger<MetadataOptimizationService> _logger;
 
@@ -23,95 +55,137 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
         _modelClient = modelClient;
     }
 
-    public async Task<OptimizedVideoMetadata> OptimizeForVideoAsync(MetadataOptimizationInput input, CancellationToken cancellationToken)
+    public Task<OptimizedVideoMetadata> OptimizeForVideoAsync(MetadataOptimizationInput input, CancellationToken cancellationToken)
+        => OptimizeAsync(input, isShort: false, cancellationToken);
+
+    public Task<OptimizedVideoMetadata> OptimizeForShortAsync(MetadataOptimizationInput input, CancellationToken cancellationToken)
+        => OptimizeAsync(input, isShort: true, cancellationToken);
+
+    private async Task<OptimizedVideoMetadata> OptimizeAsync(MetadataOptimizationInput input, bool isShort, CancellationToken cancellationToken)
     {
+        ValidateInput(input);
+
         if (_modelClient is not null)
         {
             try
             {
-                var aiResult = await _modelClient.TryOptimizeAsync(input, isShort: false, cancellationToken);
-                if (aiResult is not null)
+                var aiResult = await _modelClient.TryOptimizeAsync(input, isShort, cancellationToken);
+                if (TryNormalizeModelResult(aiResult, input.ContentType, isShort, out var normalized))
                 {
-                    return Normalize(aiResult, input.ContentType, isShort: false);
+                    return normalized;
                 }
+
+                _logger.LogWarning("AI metadata optimization returned empty/invalid payload for {ContentForm}. Falling back to deterministic strategy.", isShort ? "short" : "long-form video");
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "AI metadata optimization failed for long-form video. Falling back to deterministic strategy.");
+                _logger.LogWarning(ex, "AI metadata optimization failed for {ContentForm}. Falling back to deterministic strategy.", isShort ? "short" : "long-form video");
             }
         }
 
-        return BuildDeterministic(input, isShort: false);
+        return BuildDeterministic(input, isShort);
     }
 
-    public async Task<OptimizedVideoMetadata> OptimizeForShortAsync(MetadataOptimizationInput input, CancellationToken cancellationToken)
+    private static void ValidateInput(MetadataOptimizationInput input)
     {
-        if (_modelClient is not null)
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(input.Context);
+
+        if (string.IsNullOrWhiteSpace(input.SourceTitle))
         {
-            try
-            {
-                var aiResult = await _modelClient.TryOptimizeAsync(input, isShort: true, cancellationToken);
-                if (aiResult is not null)
-                {
-                    return Normalize(aiResult, input.ContentType, isShort: true);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "AI metadata optimization failed for short. Falling back to deterministic strategy.");
-            }
+            throw new ArgumentException("SourceTitle is required.", nameof(input));
         }
 
-        return BuildDeterministic(input, isShort: true);
+        if (string.IsNullOrWhiteSpace(input.SourceDescription))
+        {
+            throw new ArgumentException("SourceDescription is required.", nameof(input));
+        }
+
+        if (string.IsNullOrWhiteSpace(input.Context.LocationName))
+        {
+            throw new ArgumentException("Context.LocationName is required.", nameof(input));
+        }
+
+        if (input.SourceTags is null)
+        {
+            throw new ArgumentException("SourceTags cannot be null.", nameof(input));
+        }
     }
 
-    private OptimizedVideoMetadata BuildDeterministic(MetadataOptimizationInput input, bool isShort)
+    private static bool TryNormalizeModelResult(OptimizedVideoMetadata? modelResult, ContentType type, bool isShort, out OptimizedVideoMetadata normalized)
     {
-        var topObjects = input.Context.Events.OrderByDescending(e => e.Score).Take(3).Select(e => e.ObjectName).Where(static n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (modelResult is null)
+        {
+            normalized = null!;
+            return false;
+        }
+
+        normalized = Normalize(modelResult, type, isShort);
+        return IsUsable(normalized);
+    }
+
+    private static bool IsUsable(OptimizedVideoMetadata metadata)
+        => !string.IsNullOrWhiteSpace(metadata.PrimaryTitle)
+           && !string.IsNullOrWhiteSpace(metadata.OptimizedDescription)
+           && metadata.Tags.Length > 0
+           && metadata.Hashtags.Length > 0;
+
+    private static OptimizedVideoMetadata BuildDeterministic(MetadataOptimizationInput input, bool isShort)
+    {
+        var strategy = ResolveStrategy(input.ContentType);
+        var topObjects = input.Context.Events
+            .OrderByDescending(e => e.Score)
+            .Take(3)
+            .Select(e => e.ObjectName)
+            .Where(static n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         var datePart = input.Context.Date.ToString("MMM dd");
-
-        var primaryTitle = BuildTitle(input.ContentType, input.SourceTitle, topObjects, datePart, isShort);
-        var alternates = BuildAlternates(input.ContentType, topObjects, datePart, isShort);
-        var hashtags = BuildHashtags(input.ContentType, topObjects, isShort);
-        var tags = BuildTags(input.ContentType, input.SourceTags, topObjects, isShort);
-        var description = BuildDescription(input, hashtags, isShort);
-        var hook = isShort ? (string.IsNullOrWhiteSpace(input.SourceHookLine) ? $"Tonight's quick sky highlight: {topObjects.FirstOrDefault() ?? "look up after sunset"}." : input.SourceHookLine!.Trim()) : null;
+        var hashtags = BuildHashtags(strategy, topObjects, isShort);
 
         return new OptimizedVideoMetadata
         {
-            PrimaryTitle = primaryTitle,
-            AlternateTitles = alternates,
-            OptimizedDescription = description,
-            Tags = tags,
+            PrimaryTitle = BuildTitle(strategy, input.SourceTitle, topObjects, datePart, isShort),
+            AlternateTitles = BuildAlternates(strategy, topObjects, datePart, isShort),
+            OptimizedDescription = BuildDescription(input, hashtags, isShort),
+            Tags = BuildTags(input.ContentType, input.SourceTags, topObjects, isShort),
             Hashtags = hashtags,
-            ThumbnailTextSuggestions = BuildThumbnailSuggestions(input.ContentType, topObjects, isShort),
-            HookLine = hook
+            ThumbnailTextSuggestions = BuildThumbnailSuggestions(strategy, topObjects, isShort),
+            HookLine = isShort
+                ? (!string.IsNullOrWhiteSpace(input.SourceHookLine)
+                    ? input.SourceHookLine.Trim()
+                    : $"Tonight's quick sky highlight: {topObjects.FirstOrDefault() ?? "look up after sunset"}.")
+                : null
         };
     }
 
-    private static string BuildTitle(ContentType type, string sourceTitle, string[] topObjects, string datePart, bool isShort)
+    private static string BuildTitle(ContentTypeMetadataStrategy strategy, string sourceTitle, string[] topObjects, string datePart, bool isShort)
     {
-        var objectPart = topObjects.FirstOrDefault();
-        return type switch
-        {
-            ContentType.DailySkyGuide => objectPart is null ? $"Tonight's Sky Guide ({datePart})" : $"Tonight's Sky: {objectPart} & More ({datePart})",
-            ContentType.TelescopeTargets => objectPart is null ? "Best Telescope Targets for Beginners Tonight" : $"Beginner Telescope Target: {objectPart} Tonight",
-            ContentType.SpaceNews => objectPart is null ? CleanTitle(sourceTitle, isShort) : $"Space Update: {objectPart} Explained",
-            ContentType.AstrophotographyTips => objectPart is null ? "Astrophotography Tips for Beginners Tonight" : $"Photograph {objectPart}: Beginner Camera Settings",
-            _ => CleanTitle(sourceTitle, isShort)
-        };
+        var lead = topObjects.FirstOrDefault();
+        var raw = isShort
+            ? strategy.ShortFormTitle(lead, sourceTitle, datePart)
+            : strategy.LongFormTitle(lead, sourceTitle, datePart);
+
+        return CleanTitle(raw, isShort);
     }
 
-    private static string[] BuildAlternates(ContentType type, string[] topObjects, string datePart, bool isShort)
+    private static string[] BuildAlternates(ContentTypeMetadataStrategy strategy, string[] topObjects, string datePart, bool isShort)
     {
-        var lead = topObjects.FirstOrDefault() ?? "Night Sky";
+        var lead = topObjects.FirstOrDefault() ?? strategy.AlternateCategoryLabel;
         var items = new List<string>
         {
             isShort ? $"{lead} in 60 Seconds" : $"{lead} Sky Guide for {datePart}",
             isShort ? $"Quick Space Fact: {lead}" : $"What to Watch Tonight: {lead}",
-            isShort ? "Look Up Tonight #shorts" : $"Easy {type} Astronomy Guide"
+            isShort ? "Look Up Tonight #shorts" : $"Easy {strategy.AlternateCategoryLabel} Astronomy Guide"
         };
-        return items.Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToArray();
+
+        return items
+            .Select(x => CleanTitle(x, isShort))
+            .Where(static x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToArray();
     }
 
     private static string BuildDescription(MetadataOptimizationInput input, string[] hashtags, bool isShort)
@@ -120,6 +194,7 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
         var line1 = isShort
             ? $"Quick astronomy update for {input.Context.LocationName}."
             : $"Tonight's astronomy guide for {input.Context.LocationName} on {input.Context.Date:MMMM dd, yyyy}.";
+
         var line2 = top.Length > 0
             ? $"Top highlights: {string.Join(", ", top.Select(x => x.ObjectName))}."
             : "Top highlights picked for easy observing.";
@@ -139,6 +214,7 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
             "night sky",
             type.ToString()
         };
+
         baseTags.AddRange(topObjects);
         if (isShort)
         {
@@ -154,54 +230,85 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
             .ToArray();
     }
 
-    private static string[] BuildHashtags(ContentType type, string[] topObjects, bool isShort)
+    private static string[] BuildHashtags(ContentTypeMetadataStrategy strategy, string[] topObjects, bool isShort)
     {
         var hashtags = new List<string> { "#astronomy", "#nightsky" };
         hashtags.AddRange(topObjects.Select(ToHashtag));
-        hashtags.Add(type switch
-        {
-            ContentType.DailySkyGuide => "#tonightsky",
-            ContentType.TelescopeTargets => "#telescope",
-            ContentType.SpaceNews => "#spacenews",
-            ContentType.AstrophotographyTips => "#astrophotography",
-            _ => "#space"
-        });
+        hashtags.Add(strategy.ContentTypeHashtag);
 
         if (isShort)
         {
             hashtags.Add("#shorts");
         }
 
-        return hashtags.Where(static h => h.Length > 1).Distinct(StringComparer.OrdinalIgnoreCase).Take(MaxHashtags).ToArray();
+        return hashtags
+            .Select(NormalizeHashtag)
+            .Where(static h => h.Length > 1)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MaxHashtags)
+            .ToArray();
     }
 
-    private static string[] BuildThumbnailSuggestions(ContentType type, string[] topObjects, bool isShort)
+    private static string[] BuildThumbnailSuggestions(ContentTypeMetadataStrategy strategy, string[] topObjects, bool isShort)
     {
         var lead = topObjects.FirstOrDefault() ?? "Tonight";
         return
         [
             isShort ? $"{lead} NOW" : $"TONIGHT: {lead}",
-            type == ContentType.SpaceNews ? "NEW SPACE UPDATE" : "EASY SKY GUIDE",
-            isShort ? "60-SECOND SKY" : "BEGINNER FRIENDLY"
+            isShort ? "60-SECOND SKY" : strategy.LongThumbnailLabel,
+            isShort ? "LOOK UP FAST" : "BEGINNER FRIENDLY"
         ];
     }
 
     private static OptimizedVideoMetadata Normalize(OptimizedVideoMetadata metadata, ContentType type, bool isShort)
     {
+        var strategy = ResolveStrategy(type);
+        var fallbackHashtags = BuildHashtags(strategy, Array.Empty<string>(), isShort);
+        var fallbackTags = BuildTags(type, Array.Empty<string>(), Array.Empty<string>(), isShort);
+
         return new OptimizedVideoMetadata
         {
             PrimaryTitle = CleanTitle(metadata.PrimaryTitle, isShort),
-            AlternateTitles = metadata.AlternateTitles.Select(x => CleanTitle(x, isShort)).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToArray(),
+            AlternateTitles = metadata.AlternateTitles
+                .Select(x => CleanTitle(x, isShort))
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(3)
+                .ToArray(),
             OptimizedDescription = metadata.OptimizedDescription.Trim(),
-            Tags = metadata.Tags.Select(NormalizeTag).Where(static t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase).Take(MaxTags).ToArray(),
-            Hashtags = metadata.Hashtags.Select(NormalizeHashtag).Where(static h => !string.IsNullOrWhiteSpace(h)).Distinct(StringComparer.OrdinalIgnoreCase).Take(MaxHashtags).ToArray(),
-            ThumbnailTextSuggestions = metadata.ThumbnailTextSuggestions.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Take(4).ToArray(),
+            Tags = metadata.Tags
+                .Select(NormalizeTag)
+                .Where(static t => !string.IsNullOrWhiteSpace(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(MaxTags)
+                .DefaultIfEmpty(fallbackTags[0])
+                .ToArray(),
+            Hashtags = metadata.Hashtags
+                .Select(NormalizeHashtag)
+                .Where(static h => !string.IsNullOrWhiteSpace(h))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(MaxHashtags)
+                .DefaultIfEmpty(fallbackHashtags[0])
+                .ToArray(),
+            ThumbnailTextSuggestions = metadata.ThumbnailTextSuggestions
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(4)
+                .ToArray(),
             HookLine = isShort ? metadata.HookLine?.Trim() : null
         };
     }
 
+    private static ContentTypeMetadataStrategy ResolveStrategy(ContentType type)
+        => Strategies.TryGetValue(type, out var strategy)
+            ? strategy
+            : throw new ArgumentOutOfRangeException(nameof(type), type, "Unsupported content type.");
+
     private static string NormalizeTag(string tag) => Regex.Replace(tag.Trim(), "\\s+", " ").ToLowerInvariant();
-    private static string ToHashtag(string value) => NormalizeHashtag("#" + Regex.Replace(value.ToLowerInvariant(), "[^a-z0-9]+", ""));
+
+    private static string ToHashtag(string value)
+        => NormalizeHashtag("#" + Regex.Replace(value.ToLowerInvariant(), "[^a-z0-9]+", ""));
+
     private static string NormalizeHashtag(string value)
     {
         var cleaned = "#" + Regex.Replace(value.Trim().TrimStart('#').ToLowerInvariant(), "[^a-z0-9]+", "");
@@ -219,4 +326,11 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
 
         return cleaned;
     }
+
+    private sealed record ContentTypeMetadataStrategy(
+        Func<string?, string, string, string> LongFormTitle,
+        Func<string?, string, string, string> ShortFormTitle,
+        string AlternateCategoryLabel,
+        string ContentTypeHashtag,
+        string LongThumbnailLabel);
 }
