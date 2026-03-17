@@ -149,7 +149,7 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
             PrimaryTitle = BuildTitle(strategy, input.SourceTitle, topObjects, datePart, isShort),
             AlternateTitles = BuildAlternates(strategy, topObjects, datePart, isShort),
             OptimizedDescription = BuildDescription(input, hashtags, isShort),
-            Tags = BuildTags(input.ContentType, input.SourceTags, topObjects, isShort),
+            Tags = BuildTags(input.ContentType, input.SourceTags, input.FeedbackKeywords, topObjects, isShort),
             Hashtags = hashtags,
             ThumbnailTextSuggestions = BuildThumbnailSuggestions(strategy, topObjects, isShort),
             HookLine = isShort
@@ -206,7 +206,7 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
         return $"{line1}\n{line2}\n\n{tips}\n\n{input.SourceDescription.Trim()}\n\n{string.Join(" ", hashtags)}".Trim();
     }
 
-    private static string[] BuildTags(ContentType type, IReadOnlyCollection<string> sourceTags, string[] topObjects, bool isShort)
+    private static string[] BuildTags(ContentType type, IReadOnlyCollection<string> sourceTags, IReadOnlyCollection<string>? feedbackKeywords, string[] topObjects, bool isShort)
     {
         var baseTags = new List<string>(sourceTags)
         {
@@ -214,6 +214,11 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
             "night sky",
             type.ToString()
         };
+
+        if (feedbackKeywords is not null)
+        {
+            baseTags.AddRange(feedbackKeywords);
+        }
 
         baseTags.AddRange(topObjects);
         if (isShort)

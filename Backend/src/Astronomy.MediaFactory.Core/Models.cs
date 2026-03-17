@@ -64,6 +64,7 @@ public sealed class MetadataOptimizationInput
     public required IReadOnlyCollection<string> SourceTags { get; init; }
     public string? SourceScript { get; init; }
     public string? SourceHookLine { get; init; }
+    public IReadOnlyCollection<string>? FeedbackKeywords { get; init; }
 }
 
 public sealed class OptimizedVideoMetadata
@@ -126,4 +127,35 @@ public sealed class ShortVideoRenderResult
     public string? BlobUrl { get; init; }
     public string? YouTubeVideoId { get; init; }
     public string PublishStatus { get; init; } = "Draft";
+}
+
+public sealed class YouTubeVideoAnalyticsSnapshot
+{
+    public required string VideoId { get; init; }
+    public long Views { get; init; }
+    public long Likes { get; init; }
+    public long Comments { get; init; }
+    public int DurationSeconds { get; init; }
+    public double? AverageViewDurationSeconds { get; init; }
+    public double? CtrPercent { get; init; }
+}
+
+public sealed class AnalyticsAggregationSummary
+{
+    public IReadOnlyCollection<VideoAnalytics> TopVideosByViews { get; init; } = [];
+    public IReadOnlyCollection<VideoAnalytics> TopShortsByRetention { get; init; } = [];
+    public IReadOnlyCollection<string> BestPerformingTitles { get; init; } = [];
+    public IReadOnlyCollection<ContentTypePerformance> BestPerformingContentTypes { get; init; } = [];
+}
+
+public sealed class ContentTypePerformance
+{
+    public ContentType ContentType { get; init; }
+    public double AverageViews { get; init; }
+}
+
+public sealed class FeedbackSignals
+{
+    public IReadOnlyCollection<string> TopKeywords { get; init; } = [];
+    public IReadOnlyCollection<string> BestHooks { get; init; } = [];
 }

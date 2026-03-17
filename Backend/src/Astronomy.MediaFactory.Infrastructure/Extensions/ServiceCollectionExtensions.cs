@@ -22,6 +22,7 @@ public static class ServiceCollectionExtensions
         services.Configure<AzureBlobOptions>(configuration.GetSection(AzureBlobOptions.SectionName));
         services.Configure<YouTubeOptions>(configuration.GetSection(YouTubeOptions.SectionName));
         services.Configure<SchedulingOptions>(configuration.GetSection(SchedulingOptions.SectionName));
+        services.Configure<AnalyticsOptions>(configuration.GetSection(AnalyticsOptions.SectionName));
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
             .ValidateDataAnnotations()
@@ -63,7 +64,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
+        services.AddScoped<IYouTubeAnalyticsService, YouTubeAnalyticsService>();
         services.AddScoped<IShortsVideoRenderService, ShortsVideoRenderService>();
+        services.AddScoped<IAnalyticsAggregationService, AnalyticsAggregationService>();
+        services.AddScoped<IAnalyticsFeedbackProvider, AnalyticsFeedbackProvider>();
         services.AddScoped<StellariumScriptBuilder>(sp =>
             new StellariumScriptBuilder(sp.GetRequiredService<IOptions<StellariumOptions>>().Value));
         services.AddScoped<PipelineOrchestrator>();

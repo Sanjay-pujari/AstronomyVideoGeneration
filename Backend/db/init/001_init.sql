@@ -101,3 +101,25 @@ create table if not exists pipeline_jobs
 );
 
 create index if not exists ix_pipeline_jobs_sched_status on pipeline_jobs(status, scheduled_at, next_attempt_at);
+
+create table if not exists video_analytics
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    updated_utc timestamptz null,
+    video_id text not null,
+    views bigint not null,
+    likes bigint not null,
+    comments bigint not null,
+    duration_seconds integer not null,
+    average_view_duration_seconds double precision null,
+    ctr_percent double precision null,
+    retrieved_at timestamptz not null,
+    content_type integer not null,
+    is_short boolean not null,
+    parent_video_id text null,
+    title text null,
+    hook_line text null
+);
+
+create index if not exists ix_video_analytics_video_id on video_analytics(video_id, retrieved_at desc);

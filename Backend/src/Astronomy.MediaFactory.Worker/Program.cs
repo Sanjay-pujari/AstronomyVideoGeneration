@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Worker;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.Extensions.Options;
 using Quartz;
@@ -34,6 +35,10 @@ builder.Services.AddQuartz(q =>
     q.AddTrigger(t => t.ForJob("schedule-astrophotography-tips").WithIdentity("schedule-astrophotography-tips-trigger")
         .WithCronSchedule(builder.Configuration[$"{SchedulingOptions.SectionName}:AstrophotographyTipsCron"] ?? "0 0 21 * * ?")
         .UsingJobData("contentType", nameof(ContentType.AstrophotographyTips)));
+
+    q.AddJob<FetchAnalyticsJob>(o => o.WithIdentity("fetch-analytics"));
+    q.AddTrigger(t => t.ForJob("fetch-analytics").WithIdentity("fetch-analytics-trigger")
+        .WithSimpleSchedule(s => s.WithInterval(TimeSpan.FromMinutes(Math.Max(1, builder.Configuration.GetValue<int>($"{AnalyticsOptions.SectionName}:FetchIntervalMinutes", 1440)))).RepeatForever()));
 });
 
 builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);

@@ -33,4 +33,16 @@ app.MapGet("/api/jobs/{id:guid}", async (Guid id, IPipelineRepository repository
     var item = await repository.GetJobAsync(id, ct);
     return item is null ? Results.NotFound() : Results.Ok(item);
 });
+app.MapGet("/api/analytics/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentAnalyticsAsync(50, ct)));
+app.MapGet("/api/analytics/top-performing", async (int? topN, IAnalyticsAggregationService aggregationService, CancellationToken ct) =>
+{
+    var take = topN.GetValueOrDefault(10);
+    var summary = await aggregationService.BuildSummaryAsync(DateTimeOffset.UtcNow.AddDays(-30), DateTimeOffset.UtcNow, take, ct);
+    return Results.Ok(summary);
+});
+app.MapGet("/api/analytics/{videoId}", async (string videoId, IPipelineRepository repository, CancellationToken ct) =>
+{
+    var items = await repository.GetAnalyticsByVideoIdAsync(videoId, ct);
+    return items.Count == 0 ? Results.NotFound() : Results.Ok(items);
+});
 app.Run();

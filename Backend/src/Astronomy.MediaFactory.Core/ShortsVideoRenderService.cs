@@ -15,6 +15,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private readonly IMetadataOptimizationService _metadataOptimizationService;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<ShortsVideoRenderService> _logger;
+    private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
 
     public ShortsVideoRenderService(
         IShortsScriptGenerationService shortsScriptGenerationService,
@@ -25,7 +26,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         IYouTubePublishingService youTubePublishingService,
         IMetadataOptimizationService metadataOptimizationService,
         IOptions<YouTubeOptions> youTubeOptions,
-        ILogger<ShortsVideoRenderService> logger)
+        ILogger<ShortsVideoRenderService> logger,
+        IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null)
     {
         _shortsScriptGenerationService = shortsScriptGenerationService;
         _speechSynthesisService = speechSynthesisService;
@@ -36,11 +38,16 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         _metadataOptimizationService = metadataOptimizationService;
         _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
+        _analyticsFeedbackProvider = analyticsFeedbackProvider;
     }
 
     public async Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken)
     {
         var shortScript = await _shortsScriptGenerationService.GenerateShortAsync(contentType, context, cancellationToken);
+        var feedbackSignals = _analyticsFeedbackProvider is null
+            ? new FeedbackSignals()
+            : await _analyticsFeedbackProvider.GetSignalsAsync(10, cancellationToken);
+        var sourceHook = feedbackSignals.BestHooks.FirstOrDefault() ?? shortScript.Hook;
         var optimizedMetadata = await _metadataOptimizationService.OptimizeForShortAsync(new MetadataOptimizationInput
         {
             ContentType = contentType,
@@ -49,7 +56,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             SourceDescription = shortScript.ShortScript,
             SourceTags = shortScript.Tags,
             SourceScript = shortScript.ShortScript,
-            SourceHookLine = shortScript.Hook
+            SourceHookLine = sourceHook,
+            FeedbackKeywords = feedbackSignals.TopKeywords
         }, cancellationToken);
         shortScript = new ShortScriptResult
         {

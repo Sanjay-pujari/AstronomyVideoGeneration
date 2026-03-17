@@ -7,8 +7,13 @@
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Rendering\Astronomy.MediaFactory.Rendering.csproj" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.AstroData\Astronomy.MediaFactory.AstroData.csproj" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Publishing\Astronomy.MediaFactory.Publishing.csproj" />
+    <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Infrastructure\Astronomy.MediaFactory.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Api\Astronomy.MediaFactory.Api.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="System.Net.Http.Json" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">
