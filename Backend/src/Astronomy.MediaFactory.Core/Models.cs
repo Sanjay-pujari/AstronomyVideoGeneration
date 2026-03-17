@@ -124,6 +124,42 @@ public sealed class RenderScene
     public string VisualPath { get; set; } = "";
     public int DurationSeconds { get; set; }
 }
+
+public sealed class ContentOpportunity
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public string TitleCandidate { get; init; } = "";
+    public ContentType ContentType { get; init; }
+    public string EventType { get; init; } = "";
+    public string ObjectName { get; init; } = "";
+    public DateOnly Date { get; init; }
+    public double PriorityScore { get; init; }
+    public double ObservabilityScore { get; init; }
+    public double TimelinessScore { get; init; }
+    public double EducationalValueScore { get; init; }
+    public double GrowthPotentialScore { get; init; }
+    public string Rationale { get; init; } = "";
+    public bool IsShortCandidate { get; init; }
+    public bool IsLongFormCandidate { get; init; }
+}
+
+public sealed class TopicSelectionRequest
+{
+    public DateOnly Date { get; init; }
+    public string LocationName { get; init; } = "";
+    public string TimeZone { get; init; } = "Asia/Kolkata";
+    public ContentType? ContentType { get; init; }
+    public int MaxCandidates { get; init; } = 8;
+}
+
+public sealed class TopicSelectionPlan
+{
+    public ContentOpportunity? PrimaryLongForm { get; init; }
+    public IReadOnlyCollection<ContentOpportunity> ShortsCandidates { get; init; } = [];
+    public IReadOnlyCollection<ContentOpportunity> AlternateCandidates { get; init; } = [];
+    public IReadOnlyCollection<ContentOpportunity> RankedOpportunities { get; init; } = [];
+}
+
 public sealed class RankedTopic
 {
     public ContentType ContentType { get; init; }
