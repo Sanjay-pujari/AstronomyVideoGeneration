@@ -44,6 +44,7 @@ public sealed class AnalyticsRepositoryAndAggregationTests
 
         Assert.NotEmpty(summary.BestPerformingTitles);
         Assert.Single(summary.TopShortsByRetention);
+        Assert.All(summary.BestPerformingContentTypes, x => Assert.True(x.Samples > 0));
     }
 
     private sealed class InMemoryAnalyticsRepo : IPipelineRepository
@@ -64,6 +65,16 @@ public sealed class AnalyticsRepositoryAndAggregationTests
         public Task<bool> HasQueuedOrCompletedMainJobAsync(DateOnly runDate, ContentType contentType, CancellationToken cancellationToken) => Task.FromResult(false);
         public Task AddVideoAnalyticsAsync(VideoAnalytics analytics, CancellationToken cancellationToken) { Data.Add(analytics); return Task.CompletedTask; }
         public Task<IReadOnlyCollection<VideoAnalytics>> GetRecentAnalyticsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(Data.OrderByDescending(x => x.RetrievedAt).Take(take).ToArray());
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsWindowAsync(DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken)
+        {
+            var query = Data.AsEnumerable();
+            if (from.HasValue)
+                query = query.Where(x => x.RetrievedAt >= from.Value);
+            if (to.HasValue)
+                query = query.Where(x => x.RetrievedAt <= to.Value);
+
+            return Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(query.OrderByDescending(x => x.RetrievedAt).Take(take).ToArray());
+        }
         public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByVideoIdAsync(string videoId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(Data.Where(x => x.VideoId == videoId).ToArray());
         public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByContentTypeAsync(ContentType contentType, DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(Data.Where(x => x.ContentType == contentType).Take(take).ToArray());
         public Task<IReadOnlyCollection<VideoAnalytics>> GetTopPerformingAnalyticsAsync(DateTimeOffset? from, DateTimeOffset? to, int take, bool shortsOnly, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(Data.Where(x => x.IsShort == shortsOnly).OrderByDescending(x => x.Views).Take(take).ToArray());

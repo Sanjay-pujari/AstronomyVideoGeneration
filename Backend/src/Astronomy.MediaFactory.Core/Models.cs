@@ -152,6 +152,36 @@ public sealed class ContentTypePerformance
 {
     public ContentType ContentType { get; init; }
     public double AverageViews { get; init; }
+    public double AverageRetention { get; init; }
+    public int Samples { get; init; }
+}
+
+public sealed class FeedbackSignalCollector
+{
+    private readonly HashSet<string> _keywords = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _hooks = new(StringComparer.OrdinalIgnoreCase);
+
+    public void AddKeyword(string? keyword)
+    {
+        if (!string.IsNullOrWhiteSpace(keyword))
+            _keywords.Add(keyword.Trim());
+    }
+
+    public void AddHook(string? hook)
+    {
+        if (!string.IsNullOrWhiteSpace(hook))
+            _hooks.Add(hook.Trim());
+    }
+
+    public FeedbackSignals Build(int topN)
+    {
+        var boundedTopN = Math.Max(topN, 1);
+        return new FeedbackSignals
+        {
+            TopKeywords = _keywords.Take(boundedTopN).ToArray(),
+            BestHooks = _hooks.Take(boundedTopN).ToArray()
+        };
+    }
 }
 
 public sealed class FeedbackSignals

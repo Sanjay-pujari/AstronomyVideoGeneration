@@ -75,14 +75,25 @@ public sealed class EfPipelineRepository : IPipelineRepository
         => await _db.VideoAnalytics.AddAsync(analytics, cancellationToken);
 
     public async Task<IReadOnlyCollection<VideoAnalytics>> GetRecentAnalyticsAsync(int take, CancellationToken cancellationToken)
-        => await _db.VideoAnalytics.OrderByDescending(x => x.RetrievedAt).Take(take).ToListAsync(cancellationToken);
+        => await _db.VideoAnalytics.AsNoTracking().OrderByDescending(x => x.RetrievedAt).Take(take).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsWindowAsync(DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken)
+    {
+        var query = _db.VideoAnalytics.AsNoTracking();
+        if (from.HasValue)
+            query = query.Where(x => x.RetrievedAt >= from.Value);
+        if (to.HasValue)
+            query = query.Where(x => x.RetrievedAt <= to.Value);
+
+        return await query.OrderByDescending(x => x.RetrievedAt).Take(take).ToListAsync(cancellationToken);
+    }
 
     public async Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByVideoIdAsync(string videoId, CancellationToken cancellationToken)
-        => await _db.VideoAnalytics.Where(x => x.VideoId == videoId).OrderByDescending(x => x.RetrievedAt).ToListAsync(cancellationToken);
+        => await _db.VideoAnalytics.AsNoTracking().Where(x => x.VideoId == videoId).OrderByDescending(x => x.RetrievedAt).ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByContentTypeAsync(ContentType contentType, DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken)
     {
-        var query = _db.VideoAnalytics.Where(x => x.ContentType == contentType);
+        var query = _db.VideoAnalytics.AsNoTracking().Where(x => x.ContentType == contentType);
         if (from.HasValue)
             query = query.Where(x => x.RetrievedAt >= from.Value);
         if (to.HasValue)
@@ -93,7 +104,7 @@ public sealed class EfPipelineRepository : IPipelineRepository
 
     public async Task<IReadOnlyCollection<VideoAnalytics>> GetTopPerformingAnalyticsAsync(DateTimeOffset? from, DateTimeOffset? to, int take, bool shortsOnly, CancellationToken cancellationToken)
     {
-        var query = _db.VideoAnalytics.Where(x => x.IsShort == shortsOnly);
+        var query = _db.VideoAnalytics.AsNoTracking().Where(x => x.IsShort == shortsOnly);
         if (from.HasValue)
             query = query.Where(x => x.RetrievedAt >= from.Value);
         if (to.HasValue)

@@ -67,6 +67,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IYouTubeAnalyticsService, YouTubeAnalyticsService>();
         services.AddScoped<IShortsVideoRenderService, ShortsVideoRenderService>();
         services.AddScoped<IAnalyticsAggregationService, AnalyticsAggregationService>();
+        services.AddScoped<IFeedbackSignalExtractor, TopKeywordSignalExtractor>();
+        services.AddScoped<IFeedbackSignalExtractor, TopHookSignalExtractor>();
         services.AddScoped<IAnalyticsFeedbackProvider, AnalyticsFeedbackProvider>();
         services.AddScoped<StellariumScriptBuilder>(sp =>
             new StellariumScriptBuilder(sp.GetRequiredService<IOptions<StellariumOptions>>().Value));
