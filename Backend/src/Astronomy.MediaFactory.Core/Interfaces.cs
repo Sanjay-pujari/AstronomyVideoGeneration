@@ -25,6 +25,12 @@ public interface IAnalyticsFeedbackProvider
 {
     Task<FeedbackSignals> GetSignalsAsync(int topN, CancellationToken cancellationToken);
 }
+
+public interface IFeedbackSignalExtractor
+{
+    void Extract(AnalyticsAggregationSummary summary, int topN, FeedbackSignalCollector collector);
+}
+
 public interface IPipelineRepository {
  Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken);
  Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken);
@@ -41,6 +47,7 @@ public interface IPipelineRepository {
  Task<bool> HasQueuedOrCompletedMainJobAsync(DateOnly runDate, ContentType contentType, CancellationToken cancellationToken);
  Task AddVideoAnalyticsAsync(VideoAnalytics analytics, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<VideoAnalytics>> GetRecentAnalyticsAsync(int take, CancellationToken cancellationToken);
+ Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsWindowAsync(DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByVideoIdAsync(string videoId, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByContentTypeAsync(ContentType contentType, DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<VideoAnalytics>> GetTopPerformingAnalyticsAsync(DateTimeOffset? from, DateTimeOffset? to, int take, bool shortsOnly, CancellationToken cancellationToken);
