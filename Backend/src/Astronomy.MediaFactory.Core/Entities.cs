@@ -46,6 +46,7 @@ public sealed class GeneratedScript : EntityBase
     public string? OptimizedHashtagsCsv { get; set; }
     public string? ThumbnailTextSuggestionsCsv { get; set; }
     public string? HookLine { get; set; }
+    public string? PromptFeedbackContextJson { get; set; }
 }
 
 public sealed class MediaAsset : EntityBase

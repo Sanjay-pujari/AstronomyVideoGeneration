@@ -15,7 +15,7 @@ public sealed class AnalyticsFeedbackProvider : IAnalyticsFeedbackProvider
 
     public async Task<FeedbackSignals> GetSignalsAsync(int topN, CancellationToken cancellationToken)
     {
-        var summary = await _aggregationService.BuildSummaryAsync(DateTimeOffset.UtcNow.AddDays(-30), DateTimeOffset.UtcNow, topN, cancellationToken);
+        var summary = await GetSummaryAsync(topN, cancellationToken);
         var collector = new FeedbackSignalCollector();
 
         foreach (var extractor in _extractors)
@@ -23,4 +23,7 @@ public sealed class AnalyticsFeedbackProvider : IAnalyticsFeedbackProvider
 
         return collector.Build(topN);
     }
+
+    public Task<AnalyticsAggregationSummary> GetSummaryAsync(int topN, CancellationToken cancellationToken)
+        => _aggregationService.BuildSummaryAsync(DateTimeOffset.UtcNow.AddDays(-30), DateTimeOffset.UtcNow, topN, cancellationToken);
 }

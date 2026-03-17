@@ -29,6 +29,12 @@ public interface IAnalyticsAggregationService
 public interface IAnalyticsFeedbackProvider
 {
     Task<FeedbackSignals> GetSignalsAsync(int topN, CancellationToken cancellationToken);
+    Task<AnalyticsAggregationSummary> GetSummaryAsync(int topN, CancellationToken cancellationToken);
+}
+
+public interface IPromptFeedbackService
+{
+    Task<PromptFeedbackContext> BuildContextAsync(PromptFeedbackRequest request, CancellationToken cancellationToken);
 }
 
 public interface IFeedbackSignalExtractor
