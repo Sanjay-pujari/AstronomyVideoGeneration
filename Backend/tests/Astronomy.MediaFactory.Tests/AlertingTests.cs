@@ -20,6 +20,21 @@ public sealed class AlertingTests
         Assert.Contains("25", message);
     }
 
+
+    [Fact]
+    public void AlertingRouter_UsesRouteRules()
+    {
+        var router = new AlertingRouter(Options.Create(new AlertingOptions
+        {
+            Enabled = true,
+            NotifyOnStageFailed = false,
+            NotifyOnPipelineFailed = true
+        }));
+
+        Assert.False(router.ShouldNotify(AlertCategory.StageFailed));
+        Assert.True(router.ShouldNotify(AlertCategory.PipelineFailed));
+    }
+
     [Fact]
     public async Task SafeNotifier_Skips_WhenDisabled()
     {
@@ -59,6 +74,24 @@ public sealed class AlertingTests
         var alert = new OperationalAlert(AlertCategory.StageFailed, "same", PipelineRunId: Guid.NewGuid(), StageName: "BlobUpload");
         await notifier.NotifyAsync(alert, CancellationToken.None);
         await notifier.NotifyAsync(alert, CancellationToken.None);
+
+        Assert.Single(publisher.Alerts);
+    }
+
+
+    [Fact]
+    public async Task NoiseSuppressor_SuppressesRepeatedBacklogBreachesWithinWindow()
+    {
+        var publisher = new RecordingOperationalPublisher();
+        var notifier = new SafeOperationalAlertNotifier(
+            new AlertingRouter(Options.Create(new AlertingOptions { Enabled = true, NotifyOnQueueBacklogHigh = true, DedupWindowSeconds = 999 })),
+            new AlertMessageFormatter(),
+            new AlertNoiseSuppressor(Options.Create(new AlertingOptions { DedupWindowSeconds = 999 })),
+            publisher,
+            NullLogger<SafeOperationalAlertNotifier>.Instance);
+
+        await notifier.NotifyAsync(new OperationalAlert(AlertCategory.QueueBacklogHigh, string.Empty, QueueBacklog: 40, QueueThreshold: 25), CancellationToken.None);
+        await notifier.NotifyAsync(new OperationalAlert(AlertCategory.QueueBacklogHigh, string.Empty, QueueBacklog: 41, QueueThreshold: 25), CancellationToken.None);
 
         Assert.Single(publisher.Alerts);
     }

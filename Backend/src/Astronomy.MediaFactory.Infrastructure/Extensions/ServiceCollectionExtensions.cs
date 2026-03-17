@@ -91,22 +91,17 @@ public static class ServiceCollectionExtensions
         services.AddScoped<AlertMessageFormatter>();
         services.AddSingleton<AlertNoiseSuppressor>();
         services.AddHttpClient<SlackWebhookOperationalAlertPublisher>();
+        services.AddScoped<IOperationalAlertChannel>(sp => sp.GetRequiredService<SlackWebhookOperationalAlertPublisher>());
         services.AddScoped<IOperationalAlertPublisher>(sp =>
         {
             var options = sp.GetRequiredService<IOptions<AlertingOptions>>().Value;
             if (!options.Enabled)
                 return new NoOpOperationalAlertPublisher();
 
-            var publishers = new List<IOperationalAlertPublisher>();
-            if (!string.IsNullOrWhiteSpace(options.SlackWebhookUrl))
-                publishers.Add(sp.GetRequiredService<SlackWebhookOperationalAlertPublisher>());
-
-            return publishers.Count switch
-            {
-                0 => new NoOpOperationalAlertPublisher(),
-                1 => publishers[0],
-                _ => new CompositeOperationalAlertPublisher(publishers)
-            };
+            var channels = sp.GetServices<IOperationalAlertChannel>().ToArray();
+            return channels.Length == 0
+                ? new NoOpOperationalAlertPublisher()
+                : new ChannelFanOutOperationalAlertPublisher(channels);
         });
         services.AddScoped<IOperationalAlertNotifier, SafeOperationalAlertNotifier>();
         services.AddScoped<IStageAlertPublisher, RoutingStageAlertPublisher>();
