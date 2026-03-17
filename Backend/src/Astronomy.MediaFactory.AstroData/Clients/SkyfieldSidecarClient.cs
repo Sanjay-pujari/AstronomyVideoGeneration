@@ -1,18 +1,75 @@
 using System.Net.Http.Json;
-using Astronomy.MediaFactory.Contracts;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
+
 namespace Astronomy.MediaFactory.AstroData.Clients;
 
-public sealed class SkyfieldSidecarClient
+public interface ISkyfieldSidecarClient
 {
-    private readonly HttpClient _httpClient; private readonly AstronomyApiOptions _options;
-    public SkyfieldSidecarClient(HttpClient httpClient, IOptions<AstronomyApiOptions> options) { _httpClient = httpClient; _options = options.Value; }
-    public async Task<SkyfieldVisibilityResponse?> GetVisibilityAsync(SkyfieldVisibilityRequest request, CancellationToken cancellationToken)
+    Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken);
+}
+
+public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
+{
+    private readonly HttpClient _httpClient;
+    private readonly ILogger<SkyfieldSidecarClient> _logger;
+
+    public SkyfieldSidecarClient(HttpClient httpClient, ILogger<SkyfieldSidecarClient> logger)
     {
-        var response = await _httpClient.PostAsJsonAsync($"{_options.SkyfieldServiceUrl.TrimEnd('/')}/api/visibility", request, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<SkyfieldVisibilityResponse>(cancellationToken: cancellationToken);
+        _httpClient = httpClient;
+        _logger = logger;
+    }
+
+    public async Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _httpClient.PostAsJsonAsync("/ephemeris/daily-sky", request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Skyfield sidecar returned non-success status code {StatusCode} for {Date} at {LocationName}.", (int)response.StatusCode, request.Date, request.LocationName);
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync<SkyfieldDailySkyResponse>(cancellationToken: cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Skyfield sidecar call failed for {Date} at {LocationName}.", request.Date, request.LocationName);
+            return null;
+        }
     }
 }
-public sealed class SkyfieldVisibilityRequest { public string Date { get; set; } = ""; public double Latitude { get; set; } public double Longitude { get; set; } public double ElevationM { get; set; } public List<string> Targets { get; set; } = new(); }
-public sealed class SkyfieldVisibilityResponse { public string Date { get; set; } = ""; public List<SkyfieldVisibilityItem> Items { get; set; } = new(); }
-public sealed class SkyfieldVisibilityItem { public string Target { get; set; } = ""; public string BestTimeLocal { get; set; } = ""; public double AltitudeDegrees { get; set; } public double AzimuthDegrees { get; set; } public string Visibility { get; set; } = ""; public string Notes { get; set; } = ""; }
+
+public sealed class SkyfieldDailySkyRequest
+{
+    public string Date { get; set; } = "";
+    public string LocationName { get; set; } = "";
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public string Timezone { get; set; } = "UTC";
+}
+
+public sealed class SkyfieldDailySkyResponse
+{
+    public string Date { get; set; } = "";
+    public string LocationName { get; set; } = "";
+    public string Timezone { get; set; } = "UTC";
+    public List<SkyfieldDailySkyEvent> Events { get; set; } = new();
+    public List<SkyfieldVisualIdea> VisualIdeas { get; set; } = new();
+}
+
+public sealed class SkyfieldDailySkyEvent
+{
+    public string Category { get; set; } = "";
+    public string ObjectName { get; set; } = "";
+    public string VisibilityWindow { get; set; } = "";
+    public string Direction { get; set; } = "";
+    public string ObservationTool { get; set; } = "";
+    public string Details { get; set; } = "";
+}
+
+public sealed class SkyfieldVisualIdea
+{
+    public string Title { get; set; } = "";
+    public string Description { get; set; } = "";
+}
