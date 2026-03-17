@@ -24,34 +24,42 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
         var plan = _thumbnailStrategyService.BuildPlan(request);
         var outputPath = Path.Combine(request.OutputDirectory, request.IsShortForm ? "short-cover.png" : "thumbnail.png");
 
-        try
-        {
-            Directory.CreateDirectory(request.OutputDirectory);
-            using var canvas = await BuildBaseCanvasAsync(plan.SelectedVisualPath, cancellationToken);
-            ApplyLayout(canvas, plan.LayoutType, plan.PrimaryThumbnailText);
-            await canvas.SaveAsPngAsync(outputPath, cancellationToken);
+        Directory.CreateDirectory(request.OutputDirectory);
 
-            return new ThumbnailPlan
-            {
-                PrimaryThumbnailText = plan.PrimaryThumbnailText,
-                AlternateThumbnailTexts = plan.AlternateThumbnailTexts,
-                LayoutType = plan.LayoutType,
-                SelectedVisualPath = plan.SelectedVisualPath,
-                ThumbnailPath = outputPath
-            };
-        }
-        catch (Exception ex)
+        foreach (var layout in plan.LayoutCandidates.DefaultIfEmpty(plan.LayoutType))
         {
-            _logger.LogError(ex, "Thumbnail generation failed. Falling back to source visual when possible.");
-            return new ThumbnailPlan
+            try
             {
-                PrimaryThumbnailText = plan.PrimaryThumbnailText,
-                AlternateThumbnailTexts = plan.AlternateThumbnailTexts,
-                LayoutType = plan.LayoutType,
-                SelectedVisualPath = plan.SelectedVisualPath,
-                ThumbnailPath = plan.SelectedVisualPath
-            };
+                using var canvas = await BuildBaseCanvasAsync(plan.SelectedVisualPath, cancellationToken);
+                ApplyLayout(canvas, layout, plan.PrimaryThumbnailText);
+                await canvas.SaveAsPngAsync(outputPath, cancellationToken);
+
+                return new ThumbnailPlan
+                {
+                    PrimaryThumbnailText = plan.PrimaryThumbnailText,
+                    AlternateThumbnailTexts = plan.AlternateThumbnailTexts,
+                    LayoutType = layout,
+                    LayoutCandidates = plan.LayoutCandidates,
+                    SelectedVisualPath = plan.SelectedVisualPath,
+                    ThumbnailPath = outputPath
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Thumbnail generation failed for layout {LayoutType}. Trying fallback layout when available.", layout);
+            }
         }
+
+        _logger.LogError("Thumbnail generation failed for all layout candidates. Falling back to source visual when possible.");
+        return new ThumbnailPlan
+        {
+            PrimaryThumbnailText = plan.PrimaryThumbnailText,
+            AlternateThumbnailTexts = plan.AlternateThumbnailTexts,
+            LayoutType = plan.LayoutType,
+            LayoutCandidates = plan.LayoutCandidates,
+            SelectedVisualPath = plan.SelectedVisualPath,
+            ThumbnailPath = plan.SelectedVisualPath
+        };
     }
 
     private static async Task<Image<Rgba32>> BuildBaseCanvasAsync(string? selectedVisualPath, CancellationToken cancellationToken)

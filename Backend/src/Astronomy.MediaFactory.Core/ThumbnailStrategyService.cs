@@ -4,6 +4,13 @@ namespace Astronomy.MediaFactory.Core;
 
 public sealed class ThumbnailStrategyService : IThumbnailStrategyService
 {
+    private static readonly ThumbnailLayoutType[] ResilientFallbackOrder =
+    [
+        ThumbnailLayoutType.CenteredTitleOverlay,
+        ThumbnailLayoutType.TopBanner,
+        ThumbnailLayoutType.TextLeftVisualRight
+    ];
+
     public ThumbnailPlan BuildPlan(ThumbnailGenerationRequest request)
     {
         var objectName = request.Context.Events
@@ -11,6 +18,33 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
             .Select(x => x.ObjectName)
             .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
 
+        var primary = BuildPrimaryText(request, objectName);
+
+        var alternates = request.Metadata.ThumbnailTextSuggestions
+            .Concat(BuildAlternates(request.ContentType, objectName))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(Normalize)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(4)
+            .ToArray();
+
+        if (alternates.Length == 0)
+            alternates = [primary];
+
+        var layoutCandidates = BuildLayoutCandidates(request);
+
+        return new ThumbnailPlan
+        {
+            PrimaryThumbnailText = Normalize(primary),
+            AlternateThumbnailTexts = alternates,
+            SelectedVisualPath = request.AvailableVisuals.FirstOrDefault(File.Exists),
+            LayoutType = layoutCandidates[0],
+            LayoutCandidates = layoutCandidates
+        };
+    }
+
+    private static string BuildPrimaryText(ThumbnailGenerationRequest request, string? objectName)
+    {
         var primary = request.ContentType switch
         {
             ContentType.DailySkyGuide => !string.IsNullOrWhiteSpace(objectName)
@@ -27,22 +61,17 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
         };
 
         if (request.IsShortForm)
-        {
             primary = $"SHORT: {Truncate(primary, 32)}";
-        }
 
-        var alternates = request.Metadata.ThumbnailTextSuggestions
-            .Concat(BuildAlternates(request.ContentType, objectName))
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(Normalize)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(4)
-            .ToArray();
+        return primary;
+    }
 
-        if (alternates.Length == 0)
-            alternates = [primary];
+    private static ThumbnailLayoutType[] BuildLayoutCandidates(ThumbnailGenerationRequest request)
+    {
+        if (request.IsShortForm)
+            return [ThumbnailLayoutType.CenteredTitleOverlay, ThumbnailLayoutType.TopBanner, ThumbnailLayoutType.TextLeftVisualRight];
 
-        var layout = request.ContentType switch
+        var preferredByContentType = request.ContentType switch
         {
             ContentType.DailySkyGuide => ThumbnailLayoutType.TopBanner,
             ContentType.SpaceNews => ThumbnailLayoutType.CenteredTitleOverlay,
@@ -51,16 +80,39 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
             _ => ThumbnailLayoutType.CenteredTitleOverlay
         };
 
-        if (request.IsShortForm)
-            layout = ThumbnailLayoutType.CenteredTitleOverlay;
+        var scoredLayouts = ResilientFallbackOrder
+            .ToDictionary(layout => layout, _ => 0d);
 
-        return new ThumbnailPlan
+        scoredLayouts[preferredByContentType] += 1.0;
+
+        var topKeywords = request.FeedbackSignals?.TopKeywords ?? [];
+        foreach (var keyword in topKeywords)
         {
-            PrimaryThumbnailText = Normalize(primary),
-            AlternateThumbnailTexts = alternates,
-            SelectedVisualPath = request.AvailableVisuals.FirstOrDefault(File.Exists),
-            LayoutType = layout
-        };
+            if (keyword.Contains("tonight", StringComparison.OrdinalIgnoreCase)
+                || keyword.Contains("guide", StringComparison.OrdinalIgnoreCase))
+            {
+                scoredLayouts[ThumbnailLayoutType.TopBanner] += 0.25;
+            }
+
+            if (keyword.Contains("discover", StringComparison.OrdinalIgnoreCase)
+                || keyword.Contains("news", StringComparison.OrdinalIgnoreCase)
+                || keyword.Contains("update", StringComparison.OrdinalIgnoreCase))
+            {
+                scoredLayouts[ThumbnailLayoutType.CenteredTitleOverlay] += 0.25;
+            }
+
+            if (keyword.Contains("photo", StringComparison.OrdinalIgnoreCase)
+                || keyword.Contains("target", StringComparison.OrdinalIgnoreCase))
+            {
+                scoredLayouts[ThumbnailLayoutType.TextLeftVisualRight] += 0.25;
+            }
+        }
+
+        return scoredLayouts
+            .OrderByDescending(x => x.Value)
+            .ThenBy(x => Array.IndexOf(ResilientFallbackOrder, x.Key))
+            .Select(x => x.Key)
+            .ToArray();
     }
 
     private static string BuildSpaceNewsText(AstronomyContext context)

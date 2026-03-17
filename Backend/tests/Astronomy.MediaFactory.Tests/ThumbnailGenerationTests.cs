@@ -38,8 +38,32 @@ public sealed class ThumbnailGenerationTests
 
         Assert.Contains("TONIGHT'S SKY", dailyPlan.PrimaryThumbnailText);
         Assert.Equal(ThumbnailLayoutType.TopBanner, dailyPlan.LayoutType);
+        Assert.Equal(dailyPlan.LayoutType, dailyPlan.LayoutCandidates.First());
         Assert.Contains("DISCOVERY", newsPlan.PrimaryThumbnailText);
         Assert.Equal(ThumbnailLayoutType.CenteredTitleOverlay, newsPlan.LayoutType);
+        Assert.Equal(newsPlan.LayoutType, newsPlan.LayoutCandidates.First());
+    }
+
+    [Fact]
+    public void ThumbnailStrategy_UsesFeedbackSignalsToPromoteLayouts()
+    {
+        var service = new ThumbnailStrategyService();
+
+        var plan = service.BuildPlan(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.SpaceNews,
+            Context = new AstronomyContext(),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = ".",
+            FeedbackSignals = new FeedbackSignals
+            {
+                TopKeywords = ["tonight guide", "tonight viewing"]
+            }
+        });
+
+        Assert.Equal(ThumbnailLayoutType.TopBanner, plan.LayoutType);
+        Assert.Equal(3, plan.LayoutCandidates.Count);
     }
 
     [Fact]
