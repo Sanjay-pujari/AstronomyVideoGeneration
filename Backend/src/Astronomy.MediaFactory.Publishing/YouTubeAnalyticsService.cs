@@ -93,11 +93,19 @@ public static class YouTubeAnalyticsParser
         return new YouTubeVideoAnalyticsSnapshot
         {
             VideoId = video.Id ?? string.Empty,
-            Views = video.Statistics?.ViewCount ?? 0,
-            Likes = video.Statistics?.LikeCount ?? 0,
-            Comments = video.Statistics?.CommentCount ?? 0,
+            Views = ToInt64(video.Statistics?.ViewCount),
+            Likes = ToInt64(video.Statistics?.LikeCount),
+            Comments = ToInt64(video.Statistics?.CommentCount),
             DurationSeconds = ParseIsoDuration(video.ContentDetails?.Duration)
         };
+    }
+
+    private static long ToInt64(ulong? value)
+    {
+        if (!value.HasValue)
+            return 0;
+
+        return value.Value > long.MaxValue ? long.MaxValue : (long)value.Value;
     }
 
     internal static int ParseIsoDuration(string? duration)
