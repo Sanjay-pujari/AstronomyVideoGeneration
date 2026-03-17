@@ -9,22 +9,50 @@ namespace Astronomy.MediaFactory.Infrastructure.Alerting;
 
 public sealed class AlertingRouter
 {
-    private readonly AlertingOptions _options;
+    private readonly AlertRouteRules _rules;
 
-    public AlertingRouter(IOptions<AlertingOptions> options) => _options = options.Value;
+    public AlertingRouter(IOptions<AlertingOptions> options)
+        => _rules = AlertRouteRules.FromOptions(options.Value);
 
-    public bool ShouldNotify(AlertCategory category)
-        => _options.Enabled && category switch
-        {
-            AlertCategory.StageFailed => _options.NotifyOnStageFailed,
-            AlertCategory.StageSlow => _options.NotifyOnStageSlow,
-            AlertCategory.PipelineFailed => _options.NotifyOnPipelineFailed,
-            AlertCategory.PublishFailed => _options.NotifyOnPublishFailed,
-            AlertCategory.QueueBacklogHigh => _options.NotifyOnQueueBacklogHigh,
-            AlertCategory.HealthDegraded => _options.NotifyOnHealthDegraded,
-            AlertCategory.PublishSucceeded => _options.NotifyOnPublishSucceeded,
-            _ => false
-        };
+    public bool ShouldNotify(AlertCategory category) => _rules.ShouldNotify(category);
+}
+
+public sealed class AlertRouteRules
+{
+    private readonly HashSet<AlertCategory> _enabledCategories;
+
+    private AlertRouteRules(bool alertsEnabled, IEnumerable<AlertCategory> enabledCategories)
+    {
+        AlertsEnabled = alertsEnabled;
+        _enabledCategories = [.. enabledCategories];
+    }
+
+    public bool AlertsEnabled { get; }
+
+    public bool ShouldNotify(AlertCategory category) => AlertsEnabled && _enabledCategories.Contains(category);
+
+    public static AlertRouteRules FromOptions(AlertingOptions options)
+    {
+        if (!options.Enabled)
+            return new AlertRouteRules(alertsEnabled: false, []);
+
+        var enabledCategories = new List<AlertCategory>();
+        AddIfEnabled(enabledCategories, options.NotifyOnStageFailed, AlertCategory.StageFailed);
+        AddIfEnabled(enabledCategories, options.NotifyOnStageSlow, AlertCategory.StageSlow);
+        AddIfEnabled(enabledCategories, options.NotifyOnPipelineFailed, AlertCategory.PipelineFailed);
+        AddIfEnabled(enabledCategories, options.NotifyOnPublishFailed, AlertCategory.PublishFailed);
+        AddIfEnabled(enabledCategories, options.NotifyOnQueueBacklogHigh, AlertCategory.QueueBacklogHigh);
+        AddIfEnabled(enabledCategories, options.NotifyOnHealthDegraded, AlertCategory.HealthDegraded);
+        AddIfEnabled(enabledCategories, options.NotifyOnPublishSucceeded, AlertCategory.PublishSucceeded);
+
+        return new AlertRouteRules(alertsEnabled: true, enabledCategories);
+    }
+
+    private static void AddIfEnabled(List<AlertCategory> categories, bool enabled, AlertCategory category)
+    {
+        if (enabled)
+            categories.Add(category);
+    }
 }
 
 public sealed class AlertMessageFormatter
@@ -44,23 +72,56 @@ public sealed class AlertMessageFormatter
 
 public sealed class AlertNoiseSuppressor
 {
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSent = new();
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSentByFingerprint = new();
     private readonly AlertingOptions _options;
 
     public AlertNoiseSuppressor(IOptions<AlertingOptions> options) => _options = options.Value;
 
     public bool ShouldSuppress(OperationalAlert alert)
     {
-        var key = $"{alert.Category}:{alert.PipelineRunId}:{alert.StageName}:{alert.JobId}:{alert.Message}";
+        var window = TimeSpan.FromSeconds(Math.Max(1, _options.DedupWindowSeconds));
+        var fingerprint = BuildFingerprint(alert);
         var now = DateTimeOffset.UtcNow;
-        if (_lastSent.TryGetValue(key, out var previous) && now - previous < TimeSpan.FromSeconds(Math.Max(1, _options.DedupWindowSeconds)))
-        {
-            return true;
-        }
 
-        _lastSent[key] = now;
+        PruneExpiredEntries(now, window);
+
+        if (_lastSentByFingerprint.TryGetValue(fingerprint, out var previous) && now - previous < window)
+            return true;
+
+        _lastSentByFingerprint[fingerprint] = now;
         return false;
     }
+
+    private static string BuildFingerprint(OperationalAlert alert)
+    {
+        var root = alert.Category switch
+        {
+            AlertCategory.StageFailed or AlertCategory.StageSlow => $"{alert.Category}:{alert.PipelineRunId}:{alert.StageName}:{alert.ErrorSummary}",
+            AlertCategory.PipelineFailed or AlertCategory.PublishFailed or AlertCategory.PublishSucceeded => $"{alert.Category}:{alert.PipelineRunId}:{alert.ErrorSummary}",
+            AlertCategory.QueueBacklogHigh => $"{alert.Category}:{alert.QueueThreshold}",
+            AlertCategory.HealthDegraded => $"{alert.Category}:{alert.Message}",
+            _ => $"{alert.Category}:{alert.PipelineRunId}:{alert.StageName}:{alert.JobId}"
+        };
+
+        return root.Trim().ToLowerInvariant();
+    }
+
+    private void PruneExpiredEntries(DateTimeOffset now, TimeSpan window)
+    {
+        if (_lastSentByFingerprint.Count < 256)
+            return;
+
+        foreach (var entry in _lastSentByFingerprint)
+        {
+            if (now - entry.Value >= window)
+                _lastSentByFingerprint.TryRemove(entry.Key, out _);
+        }
+    }
+}
+
+public interface IOperationalAlertChannel
+{
+    Task SendAsync(OperationalAlert alert, CancellationToken cancellationToken);
 }
 
 public sealed class NoOpOperationalAlertPublisher : IOperationalAlertPublisher
@@ -68,23 +129,21 @@ public sealed class NoOpOperationalAlertPublisher : IOperationalAlertPublisher
     public Task PublishAsync(OperationalAlert alert, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-public sealed class CompositeOperationalAlertPublisher : IOperationalAlertPublisher
+public sealed class ChannelFanOutOperationalAlertPublisher : IOperationalAlertPublisher
 {
-    private readonly IReadOnlyCollection<IOperationalAlertPublisher> _publishers;
+    private readonly IReadOnlyCollection<IOperationalAlertChannel> _channels;
 
-    public CompositeOperationalAlertPublisher(IEnumerable<IOperationalAlertPublisher> publishers)
-        => _publishers = publishers.ToArray();
+    public ChannelFanOutOperationalAlertPublisher(IEnumerable<IOperationalAlertChannel> channels)
+        => _channels = channels.ToArray();
 
     public async Task PublishAsync(OperationalAlert alert, CancellationToken cancellationToken)
     {
-        foreach (var publisher in _publishers)
-        {
-            await publisher.PublishAsync(alert, cancellationToken);
-        }
+        foreach (var channel in _channels)
+            await channel.SendAsync(alert, cancellationToken);
     }
 }
 
-public sealed class SlackWebhookOperationalAlertPublisher : IOperationalAlertPublisher
+public sealed class SlackWebhookOperationalAlertPublisher : IOperationalAlertChannel
 {
     private readonly HttpClient _httpClient;
     private readonly AlertingOptions _options;
@@ -111,7 +170,7 @@ public sealed class SlackWebhookOperationalAlertPublisher : IOperationalAlertPub
             occurredAt = (alert.OccurredAt ?? DateTimeOffset.UtcNow).ToString("O")
         };
 
-    public async Task PublishAsync(OperationalAlert alert, CancellationToken cancellationToken)
+    public async Task SendAsync(OperationalAlert alert, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_options.SlackWebhookUrl))
             return;
