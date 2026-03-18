@@ -38,6 +38,9 @@ public sealed class EfPipelineRepository : IPipelineRepository
     public async Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken)
         => await _db.ShortVideos.AddAsync(shortVideo, cancellationToken);
 
+    public async Task AddMonetizationRecordAsync(MonetizationRecord monetizationRecord, CancellationToken cancellationToken)
+        => await _db.MonetizationRecords.AddAsync(monetizationRecord, cancellationToken);
+
     public async Task AddJobAsync(PipelineJob job, CancellationToken cancellationToken)
         => await _db.PipelineJobs.AddAsync(job, cancellationToken);
 

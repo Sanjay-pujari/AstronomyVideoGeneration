@@ -176,3 +176,19 @@ create table if not exists recovery_operations
 
 create index if not exists ix_recovery_operations_run_requested on recovery_operations(pipeline_run_id, requested_at desc);
 create index if not exists ix_recovery_operations_job_requested on recovery_operations(pipeline_job_id, requested_at desc);
+
+create table if not exists monetization_records
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    updated_utc timestamptz null,
+    video_id uuid null,
+    youtube_video_id text null,
+    content_type integer not null,
+    affiliate_links_json text not null,
+    link_types_csv text null,
+    pinned_comment_text text null,
+    created_at timestamptz not null
+);
+
+create index if not exists ix_monetization_records_video_created on monetization_records(video_id, created_at desc);

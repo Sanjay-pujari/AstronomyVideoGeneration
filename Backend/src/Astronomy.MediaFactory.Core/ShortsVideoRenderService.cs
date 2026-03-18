@@ -15,6 +15,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private readonly IMetadataOptimizationService _metadataOptimizationService;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<ShortsVideoRenderService> _logger;
+    private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
     private readonly IPromptFeedbackService? _promptFeedbackService;
 
@@ -28,6 +29,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         IMetadataOptimizationService metadataOptimizationService,
         IOptions<YouTubeOptions> youTubeOptions,
         ILogger<ShortsVideoRenderService> logger,
+        IContentMonetizationService? contentMonetizationService = null,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
         IPromptFeedbackService? promptFeedbackService = null)
     {
@@ -40,6 +42,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         _metadataOptimizationService = metadataOptimizationService;
         _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
+        _contentMonetizationService = contentMonetizationService;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
         _promptFeedbackService = promptFeedbackService;
     }
@@ -73,6 +76,37 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             FeedbackKeywords = feedbackSignals.TopKeywords,
             FeedbackContext = context.PromptFeedbackContext
         }, cancellationToken);
+
+        if (_contentMonetizationService is not null)
+        {
+            try
+            {
+                var monetizationPlan = await _contentMonetizationService.BuildPlanAsync(new MonetizationInput
+                {
+                    ContentType = contentType,
+                    Context = context,
+                    Metadata = optimizedMetadata,
+                    AnalyticsFeedback = feedbackSignals,
+                    IsShortForm = true
+                }, cancellationToken);
+
+                optimizedMetadata = new OptimizedVideoMetadata
+                {
+                    PrimaryTitle = optimizedMetadata.PrimaryTitle,
+                    AlternateTitles = optimizedMetadata.AlternateTitles,
+                    OptimizedDescription = string.IsNullOrWhiteSpace(monetizationPlan.FinalDescription) ? optimizedMetadata.OptimizedDescription : monetizationPlan.FinalDescription,
+                    Tags = optimizedMetadata.Tags,
+                    Hashtags = optimizedMetadata.Hashtags,
+                    ThumbnailTextSuggestions = optimizedMetadata.ThumbnailTextSuggestions,
+                    HookLine = optimizedMetadata.HookLine
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Short-form monetization generation failed. Continuing with optimized short metadata.");
+            }
+        }
+
         shortScript = new ShortScriptResult
         {
             Hook = shortScript.Hook,
