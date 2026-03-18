@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Alerting;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
+using Astronomy.MediaFactory.Worker;
 using Microsoft.Extensions.Options;
 using Quartz;
 using Serilog;

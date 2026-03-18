@@ -6,16 +6,16 @@
     <ProjectReference Include="..\Astronomy.MediaFactory.ContentGen\Astronomy.MediaFactory.ContentGen.csproj" />
     <ProjectReference Include="..\Astronomy.MediaFactory.Rendering\Astronomy.MediaFactory.Rendering.csproj" />
     <ProjectReference Include="..\Astronomy.MediaFactory.Publishing\Astronomy.MediaFactory.Publishing.csproj" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
-    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
-    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" />
-    <PackageReference Include="Microsoft.Extensions.Http" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
-    <PackageReference Include="Azure.Identity" />
-    <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" />
+	  <PackageReference Include="Microsoft.EntityFrameworkCore" />
+	  <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+	  <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+	  <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
+	  <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" />
+	  <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+	  <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+	  <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" />
+	  <PackageReference Include="Microsoft.Extensions.Http" />
+	  <PackageReference Include="Azure.Identity" />
+	  <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" />
   </ItemGroup>
 </Project>
