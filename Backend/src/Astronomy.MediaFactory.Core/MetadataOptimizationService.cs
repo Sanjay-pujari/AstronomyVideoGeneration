@@ -147,7 +147,7 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
         return new OptimizedVideoMetadata
         {
             PrimaryTitle = BuildTitle(strategy, input.SourceTitle, topObjects, datePart, isShort),
-            AlternateTitles = BuildAlternates(strategy, topObjects, datePart, isShort),
+            AlternateTitles = BuildAlternates(strategy, input, topObjects, datePart, isShort),
             OptimizedDescription = BuildDescription(input, hashtags, isShort),
             Tags = BuildTags(input.ContentType, input.SourceTags, input.FeedbackKeywords, topObjects, isShort),
             Hashtags = hashtags,
@@ -170,7 +170,7 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
         return CleanTitle(raw, isShort);
     }
 
-    private static string[] BuildAlternates(ContentTypeMetadataStrategy strategy, string[] topObjects, string datePart, bool isShort)
+    private static string[] BuildAlternates(ContentTypeMetadataStrategy strategy, MetadataOptimizationInput input, string[] topObjects, string datePart, bool isShort)
     {
         var lead = topObjects.FirstOrDefault() ?? strategy.AlternateCategoryLabel;
         var items = new List<string>
@@ -179,6 +179,11 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
             isShort ? $"Quick Space Fact: {lead}" : $"What to Watch Tonight: {lead}",
             isShort ? "Look Up Tonight #shorts" : $"Easy {strategy.AlternateCategoryLabel} Astronomy Guide"
         };
+
+        foreach (var pattern in input.FeedbackContext?.RecommendedTitlePatterns ?? [])
+        {
+            items.Add(ApplyFeedbackPattern(pattern, lead, datePart, isShort));
+        }
 
         return items
             .Select(x => CleanTitle(x, isShort))
@@ -203,7 +208,12 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
             ? "Observation tip: wait 5 minutes for your eyes to adapt before spotting targets."
             : string.Join(" ", top.Select(x => $"Tip: look {x.Direction} {x.VisibilityWindow} and use {x.ObservationTool}."));
 
-        return $"{line1}\n{line2}\n\n{tips}\n\n{input.SourceDescription.Trim()}\n\n{string.Join(" ", hashtags)}".Trim();
+        var experimentHint = input.FeedbackContext?.RecommendedHookPatterns.FirstOrDefault();
+        var introLine = string.IsNullOrWhiteSpace(experimentHint)
+            ? string.Empty
+            : $"Winning hook pattern to reuse: {experimentHint}.\n\n";
+
+        return $"{line1}\n{line2}\n\n{introLine}{tips}\n\n{input.SourceDescription.Trim()}\n\n{string.Join(" ", hashtags)}".Trim();
     }
 
     private static string[] BuildTags(ContentType type, IReadOnlyCollection<string> sourceTags, IReadOnlyCollection<string>? feedbackKeywords, string[] topObjects, bool isShort)
@@ -252,6 +262,20 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(MaxHashtags)
             .ToArray();
+    }
+
+    private static string ApplyFeedbackPattern(string pattern, string lead, string datePart, bool isShort)
+    {
+        if (string.IsNullOrWhiteSpace(pattern))
+            return string.Empty;
+
+        var normalized = pattern
+            .Replace("<Object/Event>", lead, StringComparison.OrdinalIgnoreCase)
+            .Replace("<N>", isShort ? "60" : datePart, StringComparison.OrdinalIgnoreCase);
+
+        return normalized.Contains(lead, StringComparison.OrdinalIgnoreCase)
+            ? normalized
+            : $"{lead}: {normalized}";
     }
 
     private static string[] BuildThumbnailSuggestions(ContentTypeMetadataStrategy strategy, string[] topObjects, bool isShort)

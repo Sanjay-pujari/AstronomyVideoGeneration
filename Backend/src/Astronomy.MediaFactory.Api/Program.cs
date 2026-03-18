@@ -137,6 +137,16 @@ app.MapPost("/api/topics/plan", async (TopicSelectionRequest request, ITopicSele
     Results.Ok(await topicSelectionService.BuildPlanAsync(request, ct)));
 app.MapPost("/api/prompts/feedback-preview", async (PromptFeedbackRequest request, IPromptFeedbackService promptFeedbackService, CancellationToken ct) =>
     Results.Ok(await promptFeedbackService.BuildContextAsync(request, ct)));
+app.MapGet("/api/experiments/recent", async (int? take, IContentExperimentService experimentService, CancellationToken ct) =>
+    Results.Ok(await experimentService.GetRecentExperimentsAsync(take ?? 20, ct)));
+app.MapGet("/api/experiments/{id:guid}", async (Guid id, IContentExperimentService experimentService, CancellationToken ct) =>
+{
+    var experiment = await experimentService.GetExperimentAsync(id, ct);
+    return experiment is null ? Results.NotFound() : Results.Ok(experiment);
+});
+app.MapGet("/api/experiments/top-performing", async (int? take, IContentExperimentService experimentService, CancellationToken ct) =>
+    Results.Ok(await experimentService.GetTopPerformingExperimentsAsync(take ?? 10, ct)));
+
 app.MapGet("/api/analytics/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentAnalyticsAsync(50, ct)));
 app.MapGet("/api/analytics/top-performing", async (int? topN, IAnalyticsAggregationService aggregationService, CancellationToken ct) =>
 {

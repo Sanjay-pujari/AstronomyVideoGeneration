@@ -21,6 +21,7 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
         var primary = BuildPrimaryText(request, objectName);
 
         var alternates = request.Metadata.ThumbnailTextSuggestions
+            .Concat(request.Context.PromptFeedbackContext?.ThumbnailStrategyHints ?? [])
             .Concat(BuildAlternates(request.ContentType, objectName))
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(Normalize)
@@ -32,6 +33,7 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
             alternates = [primary];
 
         var layoutCandidates = BuildLayoutCandidates(request);
+        var variantOptions = BuildVariants(primary, alternates, layoutCandidates);
 
         return new ThumbnailPlan
         {
@@ -39,8 +41,29 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
             AlternateThumbnailTexts = alternates,
             SelectedVisualPath = request.AvailableVisuals.FirstOrDefault(File.Exists),
             LayoutType = layoutCandidates[0],
-            LayoutCandidates = layoutCandidates
+            LayoutCandidates = layoutCandidates,
+            Variants = variantOptions
         };
+    }
+
+    private static IReadOnlyCollection<ThumbnailVariantOption> BuildVariants(string primary, IReadOnlyCollection<string> alternates, IReadOnlyCollection<ThumbnailLayoutType> layouts)
+    {
+        var texts = new[] { primary }
+            .Concat(alternates)
+            .Where(static x => !string.IsNullOrWhiteSpace(x))
+            .Select(Normalize)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(4)
+            .ToArray();
+
+        return layouts
+            .SelectMany(layout => texts.Select(text => new ThumbnailVariantOption
+            {
+                LayoutType = layout,
+                Text = text
+            }))
+            .Take(4)
+            .ToArray();
     }
 
     private static string BuildPrimaryText(ThumbnailGenerationRequest request, string? objectName)
@@ -105,6 +128,27 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
                 || keyword.Contains("target", StringComparison.OrdinalIgnoreCase))
             {
                 scoredLayouts[ThumbnailLayoutType.TextLeftVisualRight] += 0.25;
+            }
+        }
+
+        foreach (var hint in request.Context.PromptFeedbackContext?.ThumbnailStrategyHints ?? [])
+        {
+            if (hint.Contains(nameof(ThumbnailLayoutType.TopBanner), StringComparison.OrdinalIgnoreCase)
+                || hint.Contains("banner", StringComparison.OrdinalIgnoreCase))
+            {
+                scoredLayouts[ThumbnailLayoutType.TopBanner] += 0.4;
+            }
+
+            if (hint.Contains(nameof(ThumbnailLayoutType.CenteredTitleOverlay), StringComparison.OrdinalIgnoreCase)
+                || hint.Contains("overlay", StringComparison.OrdinalIgnoreCase))
+            {
+                scoredLayouts[ThumbnailLayoutType.CenteredTitleOverlay] += 0.4;
+            }
+
+            if (hint.Contains(nameof(ThumbnailLayoutType.TextLeftVisualRight), StringComparison.OrdinalIgnoreCase)
+                || hint.Contains("left", StringComparison.OrdinalIgnoreCase))
+            {
+                scoredLayouts[ThumbnailLayoutType.TextLeftVisualRight] += 0.4;
             }
         }
 

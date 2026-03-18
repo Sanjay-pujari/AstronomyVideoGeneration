@@ -87,6 +87,12 @@ public sealed class PublishedVideo : EntityBase
     public string? ThumbnailPath { get; set; }
     public string? ThumbnailUrl { get; set; }
     public bool ThumbnailUploadedToYouTube { get; set; }
+    public Guid? TitleExperimentId { get; set; }
+    public Guid? SelectedTitleVariantId { get; set; }
+    public Guid? ThumbnailExperimentId { get; set; }
+    public Guid? SelectedThumbnailVariantId { get; set; }
+    public Guid? CtaExperimentId { get; set; }
+    public Guid? SelectedCtaVariantId { get; set; }
 }
 
 public sealed class ShortVideo : EntityBase
@@ -145,6 +151,13 @@ public sealed class VideoAnalytics : EntityBase
     public string? ParentVideoId { get; set; }
     public string? Title { get; set; }
     public string? HookLine { get; set; }
+    public Guid? PublishedVideoId { get; set; }
+    public Guid? TitleExperimentId { get; set; }
+    public Guid? TitleVariantId { get; set; }
+    public Guid? ThumbnailExperimentId { get; set; }
+    public Guid? ThumbnailVariantId { get; set; }
+    public Guid? CtaExperimentId { get; set; }
+    public Guid? CtaVariantId { get; set; }
 }
 
 public sealed class RecoveryOperation : EntityBase
@@ -157,4 +170,27 @@ public sealed class RecoveryOperation : EntityBase
     public RecoveryOperationStatus Status { get; set; } = RecoveryOperationStatus.Requested;
     public string? Notes { get; set; }
     public string? ResultSummary { get; set; }
+}
+
+
+public sealed class ContentExperiment : EntityBase
+{
+    public Guid VideoId { get; set; }
+    public ContentExperimentType ExperimentType { get; set; }
+    public Guid? SelectedVariantId { get; set; }
+    public ContentExperimentStatus Status { get; set; } = ContentExperimentStatus.Running;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? CompletedAt { get; set; }
+    public List<ContentVariant> Variants { get; set; } = [];
+}
+
+public sealed class ContentVariant : EntityBase
+{
+    public Guid ContentExperimentId { get; set; }
+    public ContentVariantType VariantType { get; set; }
+    public string Value { get; set; } = "";
+    public long Views { get; set; }
+    public double? Ctr { get; set; }
+    public double EngagementScore { get; set; }
+    public bool IsWinner { get; set; }
 }

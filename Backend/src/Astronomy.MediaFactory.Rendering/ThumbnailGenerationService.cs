@@ -41,7 +41,8 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
                     LayoutType = layout,
                     LayoutCandidates = plan.LayoutCandidates,
                     SelectedVisualPath = plan.SelectedVisualPath,
-                    ThumbnailPath = outputPath
+                    ThumbnailPath = outputPath,
+                    Variants = plan.Variants
                 };
             }
             catch (Exception ex)
@@ -58,7 +59,8 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
             LayoutType = plan.LayoutType,
             LayoutCandidates = plan.LayoutCandidates,
             SelectedVisualPath = plan.SelectedVisualPath,
-            ThumbnailPath = plan.SelectedVisualPath
+            ThumbnailPath = plan.SelectedVisualPath,
+            Variants = plan.Variants
         };
     }
 

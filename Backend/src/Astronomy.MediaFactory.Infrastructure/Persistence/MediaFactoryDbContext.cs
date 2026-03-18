@@ -18,6 +18,8 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<VideoAnalytics> VideoAnalytics => Set<VideoAnalytics>();
     public DbSet<PipelineStageExecution> PipelineStageExecutions => Set<PipelineStageExecution>();
     public DbSet<RecoveryOperation> RecoveryOperations => Set<RecoveryOperation>();
+    public DbSet<ContentExperiment> ContentExperiments => Set<ContentExperiment>();
+    public DbSet<ContentVariant> ContentVariants => Set<ContentVariant>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -32,10 +34,21 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<VideoAnalytics>().ToTable("video_analytics").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineStageExecution>().ToTable("pipeline_stage_executions").HasKey(x => x.Id);
         modelBuilder.Entity<RecoveryOperation>().ToTable("recovery_operations").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentExperiment>().ToTable("content_experiments").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentVariant>().ToTable("content_variants").HasKey(x => x.Id);
+
+        modelBuilder.Entity<ContentExperiment>()
+            .HasMany(x => x.Variants)
+            .WithOne()
+            .HasForeignKey(x => x.ContentExperimentId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<PublishedVideo>().HasIndex(x => x.PipelineRunId);
         modelBuilder.Entity<MonetizationRecord>().HasIndex(x => new { x.VideoId, x.CreatedAt });
         modelBuilder.Entity<PipelineJob>().HasIndex(x => new { x.Status, x.IsStale, x.ScheduledAt });
         modelBuilder.Entity<RecoveryOperation>().HasIndex(x => new { x.PipelineRunId, x.RequestedAt });
+        modelBuilder.Entity<ContentExperiment>().HasIndex(x => new { x.VideoId, x.ExperimentType, x.Status });
+        modelBuilder.Entity<ContentVariant>().HasIndex(x => new { x.ContentExperimentId, x.IsWinner });
+        modelBuilder.Entity<VideoAnalytics>().HasIndex(x => new { x.PublishedVideoId, x.RetrievedAt });
     }
 }
