@@ -15,6 +15,10 @@ public interface IMetadataOptimizationService
     Task<OptimizedVideoMetadata> OptimizeForVideoAsync(MetadataOptimizationInput input, CancellationToken cancellationToken);
     Task<OptimizedVideoMetadata> OptimizeForShortAsync(MetadataOptimizationInput input, CancellationToken cancellationToken);
 }
+public interface IContentMonetizationService
+{
+    Task<MonetizationPlan> BuildPlanAsync(MonetizationInput input, CancellationToken cancellationToken);
+}
 public interface ISpeechSynthesisService { Task<string> SynthesizeAsync(string script, string outputDirectory, CancellationToken cancellationToken); }
 public interface IVideoRenderService { Task<string> RenderAsync(RenderManifest manifest, CancellationToken cancellationToken); }
 public interface IShortsVideoRenderService { Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken); }
@@ -61,6 +65,7 @@ public interface IPipelineRepository {
  Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken);
  Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken);
  Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken);
+ Task AddMonetizationRecordAsync(MonetizationRecord monetizationRecord, CancellationToken cancellationToken) => Task.CompletedTask;
  Task AddJobAsync(PipelineJob job, CancellationToken cancellationToken);
  Task<PipelineJob?> GetJobAsync(Guid id, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<PipelineJob>> GetRecentJobsAsync(int take, CancellationToken cancellationToken);

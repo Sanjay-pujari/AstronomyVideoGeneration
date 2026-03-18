@@ -54,6 +54,11 @@ public static class ServiceCollectionExtensions
             .Validate(options => string.IsNullOrWhiteSpace(options.PrivacyStatus) || options.PrivacyStatus is "private" or "public" or "unlisted", "YouTube:PrivacyStatus must be private, public, or unlisted.")
             .ValidateOnStart();
 
+        services.AddOptions<MonetizationOptions>()
+            .Bind(configuration.GetSection(MonetizationOptions.SectionName))
+            .Validate(options => string.IsNullOrWhiteSpace(options.AffiliateBaseUrl) || Uri.TryCreate(options.AffiliateBaseUrl, UriKind.Absolute, out _), "Monetization:AffiliateBaseUrl must be an absolute URI when provided.")
+            .ValidateOnStart();
+
         services.AddOptions<SchedulingOptions>()
             .Bind(configuration.GetSection(SchedulingOptions.SectionName))
             .Validate(opt => opt.MaxRetryAttempts > 0 && opt.RetryBackoffSeconds > 0 && opt.QueuePollIntervalSeconds > 0, "Scheduling values must be > 0.")
@@ -128,6 +133,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IVisualAssetProvider, StellariumVisualGenerationService>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
         services.AddScoped<IMetadataOptimizationService, MetadataOptimizationService>();
+        services.AddScoped<IContentMonetizationService, ContentMonetizationService>();
         services.AddHttpClient<AzureOpenAiContentGenerationService>();
         services.AddScoped<IMetadataOptimizationModelClient>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());

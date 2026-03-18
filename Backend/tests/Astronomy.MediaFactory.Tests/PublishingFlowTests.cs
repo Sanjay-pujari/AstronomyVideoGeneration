@@ -45,6 +45,73 @@ public sealed class PublishingFlowTests
     }
 
     [Fact]
+    public async Task PipelineOrchestrator_UsesMonetizedDescription_WhenMonetizationSucceeds()
+    {
+        var repository = new FakePipelineRepository();
+        var monetizationService = new ContentMonetizationService(
+            Options.Create(new MonetizationOptions
+            {
+                AffiliateBaseUrl = "https://partners.example.com/products",
+                DefaultAffiliateTag = "astro-42",
+                EnableAffiliateLinks = true,
+                EnablePinnedCommentText = true
+            }),
+            NullLogger<ContentMonetizationService>.Instance);
+        var orchestrator = new PipelineOrchestrator(
+            new FakeContextProvider(),
+            new FakeTopicRankingService(),
+            new FakeVisualProvider(),
+            new FakeScriptService(),
+            new FakeSpeechService(),
+            new FakeRenderService(),
+            new PassThroughBlobService(),
+            new SuccessfulYouTubeService(),
+            new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new FakeThumbnailGenerationService(),
+            repository,
+            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            NullLogger<PipelineOrchestrator>.Instance,
+            contentMonetizationService: monetizationService);
+
+        var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.TelescopeTargets, "Pune", PublishToYouTube: true), CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
+        Assert.Single(repository.PublishedVideos);
+        Assert.Contains("Recommended gear:", repository.PublishedVideos[0].OptimizedDescription);
+        Assert.Single(repository.MonetizationRecords);
+    }
+
+    [Fact]
+    public async Task PipelineOrchestrator_FallsBack_WhenMonetizationFails()
+    {
+        var repository = new FakePipelineRepository();
+        var orchestrator = new PipelineOrchestrator(
+            new FakeContextProvider(),
+            new FakeTopicRankingService(),
+            new FakeVisualProvider(),
+            new FakeScriptService(),
+            new FakeSpeechService(),
+            new FakeRenderService(),
+            new PassThroughBlobService(),
+            new SuccessfulYouTubeService(),
+            new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new FakeThumbnailGenerationService(),
+            repository,
+            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            NullLogger<PipelineOrchestrator>.Instance,
+            contentMonetizationService: new ThrowingMonetizationService());
+
+        var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: false), CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
+        Assert.Single(repository.PublishedVideos);
+        Assert.DoesNotContain("Recommended gear:", repository.PublishedVideos[0].OptimizedDescription ?? string.Empty);
+        Assert.Empty(repository.MonetizationRecords);
+    }
+
+    [Fact]
     public async Task PipelineOrchestrator_Continues_WhenBlobOrYouTubeUploadFails()
     {
         var repository = new FakePipelineRepository();
@@ -130,6 +197,7 @@ public sealed class PublishingFlowTests
     private sealed class FakePipelineRepository : IPipelineRepository
     {
         public List<PublishedVideo> PublishedVideos { get; } = [];
+        public List<MonetizationRecord> MonetizationRecords { get; } = [];
 
         public Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -137,6 +205,12 @@ public sealed class PublishingFlowTests
         public Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken)
         {
             PublishedVideos.Add(publishedVideo);
+            return Task.CompletedTask;
+        }
+
+        public Task AddMonetizationRecordAsync(MonetizationRecord monetizationRecord, CancellationToken cancellationToken)
+        {
+            MonetizationRecords.Add(monetizationRecord);
             return Task.CompletedTask;
         }
 
@@ -234,6 +308,12 @@ public sealed class PublishingFlowTests
                 VideoPath = shortVideoPath
             };
         }
+    }
+
+    private sealed class ThrowingMonetizationService : IContentMonetizationService
+    {
+        public Task<MonetizationPlan> BuildPlanAsync(MonetizationInput input, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("monetization failed");
     }
 
     private sealed class ThrowingBlobService : IAzureBlobStorageService

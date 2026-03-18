@@ -97,6 +97,17 @@ public sealed class ShortVideo : EntityBase
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class MonetizationRecord : EntityBase
+{
+    public Guid? VideoId { get; set; }
+    public string? YouTubeVideoId { get; set; }
+    public ContentType ContentType { get; set; }
+    public string AffiliateLinksJson { get; set; } = "[]";
+    public string? LinkTypesCsv { get; set; }
+    public string? PinnedCommentText { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public sealed class PipelineJob : EntityBase
 {
     public PipelineJobType JobType { get; set; }

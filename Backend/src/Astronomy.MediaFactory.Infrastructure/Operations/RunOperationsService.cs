@@ -17,6 +17,7 @@ public sealed class RunOperationsService : IRunOperationsService
     private readonly IAstronomyContextProvider _contextProvider;
     private readonly IMetadataOptimizationService _metadataOptimizationService;
     private readonly IShortsVideoRenderService _shortsVideoRenderService;
+    private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IOperationalAlertNotifier? _alertNotifier;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly MaintenanceOptions _maintenanceOptions;
@@ -34,7 +35,8 @@ public sealed class RunOperationsService : IRunOperationsService
         IOptions<YouTubeOptions> youTubeOptions,
         IOptions<MaintenanceOptions> maintenanceOptions,
         IYouTubeThumbnailPublisher? thumbnailPublisher = null,
-        IOperationalAlertNotifier? alertNotifier = null)
+        IOperationalAlertNotifier? alertNotifier = null,
+        IContentMonetizationService? contentMonetizationService = null)
     {
         _db = db;
         _queue = queue;
@@ -44,6 +46,7 @@ public sealed class RunOperationsService : IRunOperationsService
         _metadataOptimizationService = metadataOptimizationService;
         _shortsVideoRenderService = shortsVideoRenderService;
         _logger = logger;
+        _contentMonetizationService = contentMonetizationService;
         _youTubeOptions = youTubeOptions.Value;
         _maintenanceOptions = maintenanceOptions.Value;
         _thumbnailPublisher = thumbnailPublisher;
@@ -290,6 +293,34 @@ public sealed class RunOperationsService : IRunOperationsService
                 SourceScript = script.ScriptBody,
                 SourceHookLine = script.HookLine
             }, cancellationToken);
+
+            if (_contentMonetizationService is not null)
+            {
+                try
+                {
+                    var monetizationPlan = await _contentMonetizationService.BuildPlanAsync(new MonetizationInput
+                    {
+                        ContentType = run.ContentType,
+                        Context = context,
+                        Metadata = optimized
+                    }, cancellationToken);
+
+                    optimized = new OptimizedVideoMetadata
+                    {
+                        PrimaryTitle = optimized.PrimaryTitle,
+                        AlternateTitles = optimized.AlternateTitles,
+                        OptimizedDescription = string.IsNullOrWhiteSpace(monetizationPlan.FinalDescription) ? optimized.OptimizedDescription : monetizationPlan.FinalDescription,
+                        Tags = optimized.Tags,
+                        Hashtags = optimized.Hashtags,
+                        ThumbnailTextSuggestions = optimized.ThumbnailTextSuggestions,
+                        HookLine = optimized.HookLine
+                    };
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Monetization regeneration failed for run {PipelineRunId}. Keeping optimized metadata only.", run.Id);
+                }
+            }
 
             script.OptimizedTitle = optimized.PrimaryTitle;
             script.AlternateTitlesCsv = string.Join("|", optimized.AlternateTitles);

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -16,6 +17,7 @@ public sealed class PipelineOrchestrator
     private readonly IYouTubePublishingService _youTubePublishingService;
     private readonly IShortsVideoRenderService _shortsVideoRenderService;
     private readonly IMetadataOptimizationService _metadataOptimizationService;
+    private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IThumbnailGenerationService _thumbnailGenerationService;
     private readonly IPipelineRepository _repository;
     private readonly YouTubeOptions _youTubeOptions;
@@ -44,6 +46,7 @@ public sealed class PipelineOrchestrator
         IPipelineRepository repository,
         IOptions<YouTubeOptions> youTubeOptions,
         ILogger<PipelineOrchestrator> logger,
+        IContentMonetizationService? contentMonetizationService = null,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
         IYouTubeThumbnailPublisher? youTubeThumbnailPublisher = null,
         ITopicSelectionService? topicSelectionService = null,
@@ -66,6 +69,7 @@ public sealed class PipelineOrchestrator
         _thumbnailGenerationService = thumbnailGenerationService;
         _repository = repository;
         _youTubeOptions = youTubeOptions.Value;
+        _contentMonetizationService = contentMonetizationService;
         _operationsOptions = operationsOptions?.Value ?? new OperationsOptions();
         _logger = logger;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
@@ -222,6 +226,27 @@ public sealed class PipelineOrchestrator
                 FeedbackKeywords = feedbackSignals.TopKeywords,
                 FeedbackContext = context.PromptFeedbackContext
             }, cancellationToken);
+
+            MonetizationPlan? monetizationPlan = null;
+            if (_contentMonetizationService is not null)
+            {
+                try
+                {
+                    monetizationPlan = await _contentMonetizationService.BuildPlanAsync(new MonetizationInput
+                    {
+                        ContentType = request.ContentType,
+                        Context = context,
+                        Metadata = optimizedMetadata,
+                        AnalyticsFeedback = feedbackSignals
+                    }, cancellationToken);
+                    optimizedMetadata = ApplyMonetizationPlan(optimizedMetadata, monetizationPlan);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Monetization generation failed for pipeline run {PipelineRunId}. Continuing with optimized metadata.", run.Id);
+                }
+            }
+
             script = new ScriptResult
             {
                 Prompt = script.Prompt,
@@ -432,6 +457,20 @@ public sealed class PipelineOrchestrator
 
             await _repository.AddPublishedVideoAsync(publishedVideo, cancellationToken);
 
+            if (monetizationPlan?.AffiliateLinks.Count > 0)
+            {
+                await _repository.AddMonetizationRecordAsync(new MonetizationRecord
+                {
+                    VideoId = publishedVideo.Id,
+                    YouTubeVideoId = run.YouTubeVideoId,
+                    ContentType = request.ContentType,
+                    AffiliateLinksJson = JsonSerializer.Serialize(monetizationPlan.AffiliateLinks),
+                    LinkTypesCsv = string.Join(",", monetizationPlan.AffiliateLinks.Select(x => x.LinkType).Distinct(StringComparer.OrdinalIgnoreCase)),
+                    PinnedCommentText = monetizationPlan.PinnedCommentText,
+                    CreatedAt = DateTimeOffset.UtcNow
+                }, cancellationToken);
+            }
+
             var shortResult = await RunStageAsync("ShortsGeneration", () => _shortsVideoRenderService.RenderAsync(
                 request.ContentType,
                 context,
@@ -502,4 +541,17 @@ public sealed class PipelineOrchestrator
             throw;
         }
     }
+
+
+    private static OptimizedVideoMetadata ApplyMonetizationPlan(OptimizedVideoMetadata source, MonetizationPlan plan)
+        => new()
+        {
+            PrimaryTitle = source.PrimaryTitle,
+            AlternateTitles = source.AlternateTitles,
+            OptimizedDescription = string.IsNullOrWhiteSpace(plan.FinalDescription) ? source.OptimizedDescription : plan.FinalDescription,
+            Tags = source.Tags,
+            Hashtags = source.Hashtags,
+            ThumbnailTextSuggestions = source.ThumbnailTextSuggestions,
+            HookLine = source.HookLine
+        };
 }
