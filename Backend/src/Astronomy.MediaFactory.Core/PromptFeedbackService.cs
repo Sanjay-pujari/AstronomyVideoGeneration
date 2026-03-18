@@ -188,18 +188,31 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
             hints.Add($"Best-performing hook family: {experimentFeedback.WinningHooks.First()}.");
         }
 
-        return hints.ToArray();
+        var titleInsight = experimentFeedback.Insights.FirstOrDefault(x => x.ExperimentType == ContentExperimentType.Title);
+        if (titleInsight is not null)
+        {
+            hints.Add($"Latest title winner delivered CTR {titleInsight.Metrics.Ctr?.ToString("F2") ?? "n/a"} with pattern: {titleInsight.WinningPattern}.");
+        }
+
+        return hints
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string[] BuildThumbnailHints(ExperimentFeedbackSnapshot experimentFeedback)
     {
-        if (experimentFeedback.WinningThumbnailPatterns.Count == 0)
+        var hints = experimentFeedback.WinningThumbnailPatterns
+            .Select(x => $"Recent winning thumbnail pattern: {x}")
+            .ToList();
+
+        var thumbnailInsight = experimentFeedback.Insights.FirstOrDefault(x => x.ExperimentType == ContentExperimentType.Thumbnail);
+        if (thumbnailInsight is not null)
         {
-            return [];
+            hints.Add($"Most recent thumbnail winner reached {thumbnailInsight.Metrics.Views} views with pattern: {thumbnailInsight.WinningPattern}");
         }
 
-        return experimentFeedback.WinningThumbnailPatterns
-            .Select(x => $"Recent winning thumbnail pattern: {x}")
+        return hints
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(4)
             .ToArray();
     }

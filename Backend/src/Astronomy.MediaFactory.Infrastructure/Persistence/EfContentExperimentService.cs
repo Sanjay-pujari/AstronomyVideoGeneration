@@ -8,6 +8,8 @@ public sealed class EfContentExperimentService : IContentExperimentService
 {
     private static readonly TimeSpan RotationInterval = TimeSpan.FromHours(4);
     private static readonly TimeSpan CompletionWindow = TimeSpan.FromHours(24);
+    private const double CtrTieTolerance = 0.15d;
+    private const double EngagementTieTolerance = 0.5d;
     private static readonly Regex TokenSplitRegex = new("[^a-zA-Z0-9]+", RegexOptions.Compiled);
 
     private readonly MediaFactoryDbContext _db;
@@ -19,61 +21,64 @@ public sealed class EfContentExperimentService : IContentExperimentService
 
     public async Task InitializeExperimentsAsync(PublishedVideo publishedVideo, OptimizedVideoMetadata metadata, ThumbnailPlan thumbnailPlan, MonetizationPlan? monetizationPlan, CancellationToken cancellationToken)
     {
-        var titleValues = new[] { metadata.PrimaryTitle }
-            .Concat(metadata.AlternateTitles)
-            .Where(static x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(3)
-            .ToArray();
-
-        if (titleValues.Length > 0)
+        var definitions = new[]
         {
-            var experiment = BuildExperiment(
-                publishedVideo.Id,
+            CreateDefinition(
                 ContentExperimentType.Title,
                 ContentVariantType.TitleText,
-                titleValues);
-
-            publishedVideo.TitleExperimentId = experiment.Id;
-            publishedVideo.SelectedTitleVariantId = experiment.SelectedVariantId;
-            await _db.ContentExperiments.AddAsync(experiment, cancellationToken);
-        }
-
-        var thumbnailValues = thumbnailPlan.Variants
-            .Select(x => x.Value)
-            .Where(static x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(4)
-            .ToArray();
-
-        if (thumbnailValues.Length > 0)
-        {
-            var experiment = BuildExperiment(
-                publishedVideo.Id,
+                new[] { metadata.PrimaryTitle }
+                    .Concat(metadata.AlternateTitles)
+                    .Where(static x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(3)
+                    .ToArray(),
+                static (video, experiment) =>
+                {
+                    video.TitleExperimentId = experiment.Id;
+                    video.SelectedTitleVariantId = experiment.SelectedVariantId;
+                }),
+            CreateDefinition(
                 ContentExperimentType.Thumbnail,
                 ContentVariantType.ThumbnailTextAndLayout,
-                thumbnailValues);
-
-            publishedVideo.ThumbnailExperimentId = experiment.Id;
-            publishedVideo.SelectedThumbnailVariantId = experiment.SelectedVariantId;
-            await _db.ContentExperiments.AddAsync(experiment, cancellationToken);
-        }
-
-        var ctaValues = BuildCtaVariants(monetizationPlan)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(3)
-            .ToArray();
-
-        if (ctaValues.Length > 0)
-        {
-            var experiment = BuildExperiment(
-                publishedVideo.Id,
+                thumbnailPlan.Variants
+                    .Select(x => x.Value)
+                    .Where(static x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(4)
+                    .ToArray(),
+                static (video, experiment) =>
+                {
+                    video.ThumbnailExperimentId = experiment.Id;
+                    video.SelectedThumbnailVariantId = experiment.SelectedVariantId;
+                }),
+            CreateDefinition(
                 ContentExperimentType.CTA,
                 ContentVariantType.CallToActionText,
-                ctaValues);
+                BuildCtaVariants(monetizationPlan)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(3)
+                    .ToArray(),
+                static (video, experiment) =>
+                {
+                    video.CtaExperimentId = experiment.Id;
+                    video.SelectedCtaVariantId = experiment.SelectedVariantId;
+                })
+        };
 
-            publishedVideo.CtaExperimentId = experiment.Id;
-            publishedVideo.SelectedCtaVariantId = experiment.SelectedVariantId;
+        foreach (var definition in definitions)
+        {
+            if (definition.Values.Count == 0)
+            {
+                continue;
+            }
+
+            var experiment = BuildExperiment(
+                publishedVideo.Id,
+                definition.ExperimentType,
+                definition.VariantType,
+                definition.Values);
+
+            definition.ApplySelection(publishedVideo, experiment);
             await _db.ContentExperiments.AddAsync(experiment, cancellationToken);
         }
 
@@ -111,57 +116,33 @@ public sealed class EfContentExperimentService : IContentExperimentService
             .OrderBy(x => x.CreatedAt)
             .ToListAsync(cancellationToken);
 
+        if (experiments.Count == 0)
+        {
+            return;
+        }
+
+        var videoIds = experiments.Select(x => x.VideoId).Distinct().ToArray();
+        var earliestCreatedAt = experiments.Min(x => x.CreatedAt);
+
+        var videosById = await _db.PublishedVideos
+            .Where(x => videoIds.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, cancellationToken);
+
+        var analyticsByVideoId = (await _db.VideoAnalytics
+                .Where(x => videoIds.Contains(x.PublishedVideoId) && x.RetrievedAt >= earliestCreatedAt)
+                .OrderBy(x => x.RetrievedAt)
+                .ToListAsync(cancellationToken))
+            .GroupBy(x => x.PublishedVideoId)
+            .ToDictionary(x => x.Key, x => (IReadOnlyCollection<VideoAnalytics>)x.ToList());
+
         foreach (var experiment in experiments)
         {
-            var video = await _db.PublishedVideos.FirstOrDefaultAsync(x => x.Id == experiment.VideoId, cancellationToken);
-            if (video is null)
-            {
-                experiment.Status = ContentExperimentStatus.Cancelled;
-                experiment.CompletedAt = now;
-                experiment.Touch();
-                continue;
-            }
-
-            var snapshots = await _db.VideoAnalytics
-                .Where(x => x.PublishedVideoId == experiment.VideoId && x.RetrievedAt >= experiment.CreatedAt)
-                .OrderBy(x => x.RetrievedAt)
-                .ToListAsync(cancellationToken);
-
-            ApplyMetrics(experiment, snapshots);
-
-            if (snapshots.Count == 0)
-            {
-                if (now - experiment.CreatedAt >= CompletionWindow)
-                {
-                    CompleteWithWinner(experiment, video, SelectFallbackVariant(experiment), now);
-                    await ApplyWinningVariantAsync(experiment, video, cancellationToken);
-                }
-
-                continue;
-            }
-
-            var currentVariant = experiment.Variants.FirstOrDefault(x => x.Id == experiment.SelectedVariantId)
-                ?? experiment.Variants.OrderBy(x => x.CreatedUtc).First();
-            var currentHasData = GetRelevantSnapshots(experiment.ExperimentType, snapshots, currentVariant.Id).Count > 0;
-            var untestedVariant = experiment.Variants
-                .OrderBy(x => x.CreatedUtc)
-                .FirstOrDefault(x => GetRelevantSnapshots(experiment.ExperimentType, snapshots, x.Id).Count == 0);
-
-            var lastSwitchAt = experiment.UpdatedUtc ?? experiment.CreatedUtc;
-            if (untestedVariant is not null && currentHasData && now - lastSwitchAt >= RotationInterval)
-            {
-                experiment.SelectedVariantId = untestedVariant.Id;
-                experiment.Touch();
-                ApplySelectedVariant(experiment, video, untestedVariant.Value);
-                continue;
-            }
-
-            if (untestedVariant is null || now - experiment.CreatedAt >= CompletionWindow)
-            {
-                var winner = SelectWinner(experiment);
-                CompleteWithWinner(experiment, video, winner, now);
-                await ApplyWinningVariantAsync(experiment, video, cancellationToken);
-            }
+            await EvaluateExperimentLifecycleAsync(
+                experiment,
+                videosById.GetValueOrDefault(experiment.VideoId),
+                analyticsByVideoId.GetValueOrDefault(experiment.VideoId) ?? [],
+                now,
+                cancellationToken);
         }
 
         await _db.SaveChangesAsync(cancellationToken);
@@ -236,9 +217,90 @@ public sealed class EfContentExperimentService : IContentExperimentService
                 .Select(x => x.Value)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(5)
+                .ToArray(),
+            Insights = completed
+                .Select(BuildFeedbackInsight)
+                .Where(static x => x is not null)
+                .Cast<ExperimentFeedbackInsight>()
+                .Take(10)
                 .ToArray()
         };
     }
+
+    private async Task EvaluateExperimentLifecycleAsync(
+        ContentExperiment experiment,
+        PublishedVideo? video,
+        IReadOnlyCollection<VideoAnalytics> videoSnapshots,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (video is null)
+        {
+            experiment.Status = ContentExperimentStatus.Cancelled;
+            experiment.CompletedAt = now;
+            experiment.Touch();
+            return;
+        }
+
+        var lifecycle = BuildLifecycleState(experiment, videoSnapshots, now);
+        ApplyMetrics(experiment, lifecycle.Snapshots);
+
+        if (lifecycle.Snapshots.Count == 0)
+        {
+            if (lifecycle.ShouldCompleteWithoutData)
+            {
+                await FinalizeExperimentAsync(experiment, video, SelectFallbackVariant(experiment), now, cancellationToken);
+            }
+
+            return;
+        }
+
+        if (lifecycle.ShouldRotate)
+        {
+            RotateToVariant(experiment, video, lifecycle.NextVariant!);
+            return;
+        }
+
+        if (lifecycle.ShouldComplete)
+        {
+            await FinalizeExperimentAsync(experiment, video, SelectWinner(experiment), now, cancellationToken);
+        }
+    }
+
+    private ExperimentLifecycleState BuildLifecycleState(ContentExperiment experiment, IReadOnlyCollection<VideoAnalytics> videoSnapshots, DateTimeOffset now)
+    {
+        var snapshots = videoSnapshots
+            .Where(x => x.RetrievedAt >= experiment.CreatedAt)
+            .OrderBy(x => x.RetrievedAt)
+            .ToList();
+
+        var currentVariant = experiment.Variants.FirstOrDefault(x => x.Id == experiment.SelectedVariantId)
+            ?? experiment.Variants.OrderBy(x => x.CreatedUtc).First();
+
+        var lastSwitchAt = experiment.UpdatedUtc ?? experiment.CreatedUtc;
+        var currentHasData = GetRelevantSnapshots(experiment.ExperimentType, snapshots, currentVariant.Id).Count > 0;
+        var nextVariant = experiment.Variants
+            .OrderBy(x => x.CreatedUtc)
+            .FirstOrDefault(x => GetRelevantSnapshots(experiment.ExperimentType, snapshots, x.Id).Count == 0);
+
+        var hasExpired = now - experiment.CreatedAt >= CompletionWindow;
+        var canRotate = nextVariant is not null && currentHasData && now - lastSwitchAt >= RotationInterval;
+
+        return new ExperimentLifecycleState(
+            snapshots,
+            currentVariant,
+            nextVariant,
+            ShouldRotate: canRotate,
+            ShouldComplete: nextVariant is null || hasExpired,
+            ShouldCompleteWithoutData: hasExpired);
+    }
+
+    private static ContentExperimentDefinition CreateDefinition(
+        ContentExperimentType experimentType,
+        ContentVariantType variantType,
+        IReadOnlyCollection<string> values,
+        Action<PublishedVideo, ContentExperiment> applySelection)
+        => new(experimentType, variantType, values, applySelection);
 
     private static ContentExperiment BuildExperiment(Guid videoId, ContentExperimentType experimentType, ContentVariantType variantType, IReadOnlyCollection<string> values)
     {
@@ -320,30 +382,59 @@ public sealed class EfContentExperimentService : IContentExperimentService
     }
 
     private static ContentVariant SelectWinner(ContentExperiment experiment)
-    {
-        var variants = experiment.Variants.OrderBy(x => x.Value, StringComparer.OrdinalIgnoreCase);
-        if (experiment.Variants.Any(x => x.Ctr.HasValue))
-        {
-            return variants
-                .OrderByDescending(x => x.Ctr ?? 0d)
-                .ThenByDescending(x => x.Views)
-                .ThenByDescending(x => x.EngagementScore)
-                .First();
-        }
-
-        if (experiment.Variants.Any(x => x.Views > 0))
-        {
-            return variants
-                .OrderByDescending(x => x.Views)
-                .ThenByDescending(x => x.EngagementScore)
-                .ThenBy(x => x.Value, StringComparer.OrdinalIgnoreCase)
-                .First();
-        }
-
-        return variants
-            .OrderByDescending(x => x.EngagementScore)
+        => experiment.Variants
+            .OrderBy(x => x.CreatedUtc)
             .ThenBy(x => x.Value, StringComparer.OrdinalIgnoreCase)
-            .First();
+            .Aggregate((best, candidate) => CompareVariants(candidate, best) > 0 ? candidate : best);
+
+    private static int CompareVariants(ContentVariant candidate, ContentVariant incumbent)
+    {
+        var signalComparison = CompareSignalStrength(candidate, incumbent);
+        if (signalComparison != 0)
+        {
+            return signalComparison;
+        }
+
+        if (candidate.Ctr.HasValue || incumbent.Ctr.HasValue)
+        {
+            var ctrComparison = CompareMetric(candidate.Ctr ?? 0d, incumbent.Ctr ?? 0d, CtrTieTolerance);
+            if (ctrComparison != 0)
+            {
+                return ctrComparison;
+            }
+        }
+
+        var engagementComparison = CompareMetric(candidate.EngagementScore, incumbent.EngagementScore, EngagementTieTolerance);
+        if (engagementComparison != 0)
+        {
+            return engagementComparison;
+        }
+
+        var viewsComparison = candidate.Views.CompareTo(incumbent.Views);
+        if (viewsComparison != 0)
+        {
+            return viewsComparison;
+        }
+
+        return -StringComparer.OrdinalIgnoreCase.Compare(candidate.Value, incumbent.Value);
+    }
+
+    private static int CompareSignalStrength(ContentVariant candidate, ContentVariant incumbent)
+    {
+        var candidateSignals = (candidate.Ctr.HasValue ? 2 : 0) + (candidate.Views > 0 ? 1 : 0) + (candidate.EngagementScore > 0 ? 1 : 0);
+        var incumbentSignals = (incumbent.Ctr.HasValue ? 2 : 0) + (incumbent.Views > 0 ? 1 : 0) + (incumbent.EngagementScore > 0 ? 1 : 0);
+        return candidateSignals.CompareTo(incumbentSignals);
+    }
+
+    private static int CompareMetric(double candidate, double incumbent, double tolerance)
+    {
+        var delta = candidate - incumbent;
+        if (Math.Abs(delta) <= tolerance)
+        {
+            return 0;
+        }
+
+        return delta > 0 ? 1 : -1;
     }
 
     private static ContentVariant SelectFallbackVariant(ContentExperiment experiment)
@@ -351,6 +442,19 @@ public sealed class EfContentExperimentService : IContentExperimentService
             .OrderBy(x => x.CreatedUtc)
             .ThenBy(x => x.Value, StringComparer.OrdinalIgnoreCase)
             .First();
+
+    private static void RotateToVariant(ContentExperiment experiment, PublishedVideo video, ContentVariant nextVariant)
+    {
+        experiment.SelectedVariantId = nextVariant.Id;
+        experiment.Touch();
+        ApplySelectedVariant(experiment, video, nextVariant.Value);
+    }
+
+    private async Task FinalizeExperimentAsync(ContentExperiment experiment, PublishedVideo video, ContentVariant winner, DateTimeOffset completedAt, CancellationToken cancellationToken)
+    {
+        CompleteWithWinner(experiment, video, winner, completedAt);
+        await ApplyWinningVariantAsync(experiment, video, cancellationToken);
+    }
 
     private static void CompleteWithWinner(ContentExperiment experiment, PublishedVideo video, ContentVariant winner, DateTimeOffset completedAt)
     {
@@ -430,6 +534,29 @@ public sealed class EfContentExperimentService : IContentExperimentService
         video.Touch();
     }
 
+    private static ExperimentFeedbackInsight? BuildFeedbackInsight(ContentExperiment experiment)
+    {
+        var winner = experiment.Variants.FirstOrDefault(x => x.IsWinner);
+        if (winner is null)
+        {
+            return null;
+        }
+
+        return new ExperimentFeedbackInsight
+        {
+            ExperimentType = experiment.ExperimentType,
+            WinningValue = winner.Value,
+            WinningPattern = experiment.ExperimentType == ContentExperimentType.Title ? ExtractPattern(winner.Value) : winner.Value,
+            WinningHook = experiment.ExperimentType == ContentExperimentType.Title ? ExtractOpeningHook(winner.Value) : string.Empty,
+            Metrics = new VariantPerformanceMetrics
+            {
+                Views = winner.Views,
+                Ctr = winner.Ctr,
+                EngagementScore = winner.EngagementScore
+            }
+        };
+    }
+
     private static string ExtractPattern(string value)
     {
         var normalized = Regex.Replace(value, "\\d+", "<N>");
@@ -445,4 +572,18 @@ public sealed class EfContentExperimentService : IContentExperimentService
             .ToArray();
         return tokens.Length == 0 ? string.Empty : string.Join(' ', tokens);
     }
+
+    private sealed record ContentExperimentDefinition(
+        ContentExperimentType ExperimentType,
+        ContentVariantType VariantType,
+        IReadOnlyCollection<string> Values,
+        Action<PublishedVideo, ContentExperiment> ApplySelection);
+
+    private sealed record ExperimentLifecycleState(
+        IReadOnlyCollection<VideoAnalytics> Snapshots,
+        ContentVariant CurrentVariant,
+        ContentVariant? NextVariant,
+        bool ShouldRotate,
+        bool ShouldComplete,
+        bool ShouldCompleteWithoutData);
 }
