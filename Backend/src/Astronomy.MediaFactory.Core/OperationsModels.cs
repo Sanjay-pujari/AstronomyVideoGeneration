@@ -53,12 +53,19 @@ public enum RecoveryOperationStatus
     Failed = 4
 }
 
+public enum ReplayBehavior
+{
+    FailedOrIncompleteRunsOnly = 1,
+    AllowCompletedRuns = 2
+}
+
 public sealed record ReplayPipelineRequest(
     string RequestedBy,
     string? Notes = null,
     bool AllowReplayOfSucceededRun = false,
     bool PublishToYouTubeOverride = false,
-    bool UseTopicPlannerOverride = false);
+    bool UseTopicPlannerOverride = false,
+    ReplayBehavior ReplayBehavior = ReplayBehavior.FailedOrIncompleteRunsOnly);
 
 public sealed record RetryPublishRequest(
     string RequestedBy,
@@ -106,12 +113,38 @@ public sealed record OpsActionResult(Guid RecoveryOperationId, string Message, I
 public sealed record StaleJobRecoverySummary(Guid RecoveryOperationId, int MarkedStaleJobs, int RequeuedJobs, int IncompleteRunsRecovered, IReadOnlyCollection<Guid> AffectedJobIds, IReadOnlyCollection<Guid> AffectedRunIds);
 public sealed record MaintenanceCleanupSummary(Guid RecoveryOperationId, int DeletedStageRecords, int DeletedJobRecords, int DeletedAnalyticsRecords, int DeletedWorkingFiles, IReadOnlyCollection<string> DeletedPaths);
 
+public sealed record ReplayEligibility(bool CanReplay, string? RejectionReason)
+{
+    public static ReplayEligibility Allowed() => new(true, null);
+    public static ReplayEligibility Rejected(string reason) => new(false, reason);
+}
+
 public static class RecoveryRequestValidator
 {
     public static string? Validate(ReplayPipelineRequest request)
-        => string.IsNullOrWhiteSpace(request.RequestedBy)
-            ? "RequestedBy is required."
-            : null;
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestedBy))
+            return "RequestedBy is required.";
+
+        return null;
+    }
+
+    public static ReplayEligibility GetReplayEligibility(PipelineRun run, ReplayPipelineRequest request)
+    {
+        if (run.Status == PipelineRunStatus.Running)
+            return ReplayEligibility.Rejected("Cannot replay a run that is currently running.");
+
+        if (run.Status == PipelineRunStatus.Succeeded
+            && !AllowsCompletedRunReplay(request))
+        {
+            return ReplayEligibility.Rejected("Replay of a successful run requires ReplayBehavior=AllowCompletedRuns to avoid duplicate content.");
+        }
+
+        return ReplayEligibility.Allowed();
+    }
+
+    public static bool AllowsCompletedRunReplay(ReplayPipelineRequest request)
+        => request.AllowReplayOfSucceededRun || request.ReplayBehavior == ReplayBehavior.AllowCompletedRuns;
 
     public static string? Validate(RetryPublishRequest request)
     {

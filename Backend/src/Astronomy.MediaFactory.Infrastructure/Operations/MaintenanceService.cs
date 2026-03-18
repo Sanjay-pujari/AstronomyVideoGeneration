@@ -41,35 +41,40 @@ public sealed class MaintenanceService : IMaintenanceService
         var deletedPaths = new List<string>();
         try
         {
+            var now = DateTimeOffset.UtcNow;
+            var retentionPolicy = RetentionCleanupPolicy.From(_options, request, now);
             var stageDeleted = 0;
             var jobDeleted = 0;
             var analyticsDeleted = 0;
 
-            if (request.DeleteDbRecords)
+            if (retentionPolicy.StageCutoff is { } stageCutoff)
             {
-                var stageCutoff = DateTimeOffset.UtcNow.AddDays(-_options.StageRetentionDays);
                 var oldStages = await _db.PipelineStageExecutions.Where(x => x.StartedAt < stageCutoff).ToListAsync(cancellationToken);
                 stageDeleted = oldStages.Count;
                 _db.PipelineStageExecutions.RemoveRange(oldStages);
+            }
 
-                var jobCutoff = DateTimeOffset.UtcNow.AddDays(-_options.JobRetentionDays);
-                var oldJobs = await _db.PipelineJobs.Where(x => x.Status != PipelineJobStatus.Running && x.ScheduledAt < jobCutoff).ToListAsync(cancellationToken);
+            if (retentionPolicy.JobCutoff is { } jobCutoff)
+            {
+                var oldJobs = await _db.PipelineJobs
+                    .Where(x => x.Status != PipelineJobStatus.Running && x.Status != PipelineJobStatus.Pending && x.Status != PipelineJobStatus.Retrying)
+                    .Where(x => x.ScheduledAt < jobCutoff)
+                    .ToListAsync(cancellationToken);
                 jobDeleted = oldJobs.Count;
                 _db.PipelineJobs.RemoveRange(oldJobs);
             }
 
-            if (request.DeleteAnalytics)
+            if (retentionPolicy.AnalyticsCutoff is { } analyticsCutoff)
             {
-                var analyticsCutoff = DateTimeOffset.UtcNow.AddDays(-_options.AnalyticsRetentionDays);
                 var oldAnalytics = await _db.VideoAnalytics.Where(x => x.RetrievedAt < analyticsCutoff).ToListAsync(cancellationToken);
                 analyticsDeleted = oldAnalytics.Count;
                 _db.VideoAnalytics.RemoveRange(oldAnalytics);
             }
 
             var fileDeleted = 0;
-            if (request.DeleteWorkingFiles)
+            if (retentionPolicy.WorkingFilesCutoff is { } workingFilesCutoff)
             {
-                fileDeleted = CleanupWorkingFiles(_options.WorkingDirectory, DateTimeOffset.UtcNow.AddDays(-_options.WorkingFileRetentionDays), deletedPaths);
+                fileDeleted = CleanupWorkingFiles(_options.WorkingDirectory, workingFilesCutoff, deletedPaths);
             }
 
             operation.Status = RecoveryOperationStatus.Completed;
@@ -89,6 +94,20 @@ public sealed class MaintenanceService : IMaintenanceService
             _logger.LogError(ex, "Maintenance cleanup operation {RecoveryOperationId} failed.", operation.Id);
             throw;
         }
+    }
+
+    private sealed record RetentionCleanupPolicy(
+        DateTimeOffset? StageCutoff,
+        DateTimeOffset? JobCutoff,
+        DateTimeOffset? AnalyticsCutoff,
+        DateTimeOffset? WorkingFilesCutoff)
+    {
+        public static RetentionCleanupPolicy From(MaintenanceOptions options, CleanupMaintenanceRequest request, DateTimeOffset now)
+            => new(
+                request.DeleteDbRecords ? now.AddDays(-options.StageRetentionDays) : null,
+                request.DeleteDbRecords ? now.AddDays(-options.JobRetentionDays) : null,
+                request.DeleteAnalytics ? now.AddDays(-options.AnalyticsRetentionDays) : null,
+                request.DeleteWorkingFiles ? now.AddDays(-options.WorkingFileRetentionDays) : null);
     }
 
     private static int CleanupWorkingFiles(string workingDirectory, DateTimeOffset cutoff, ICollection<string> deletedPaths)
