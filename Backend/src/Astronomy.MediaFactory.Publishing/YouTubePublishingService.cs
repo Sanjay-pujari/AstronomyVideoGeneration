@@ -11,6 +11,7 @@ using Google.Apis.YouTube.v3.Data;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using Activity = System.Diagnostics.Activity;
 
 namespace Astronomy.MediaFactory.Publishing;
 
