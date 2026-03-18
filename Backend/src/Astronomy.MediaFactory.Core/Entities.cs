@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.Common;
+
 namespace Astronomy.MediaFactory.Core;
 
 public sealed class PipelineRun : EntityBase
@@ -74,6 +75,7 @@ public sealed class MediaAsset : EntityBase
 
 public sealed class PublishedVideo : EntityBase
 {
+    public Guid? PipelineRunId { get; set; }
     public string Title { get; set; } = "";
     public string? YouTubeVideoId { get; set; }
     public string? BlobUrl { get; set; }
@@ -86,7 +88,6 @@ public sealed class PublishedVideo : EntityBase
     public string? ThumbnailUrl { get; set; }
     public bool ThumbnailUploadedToYouTube { get; set; }
 }
-
 
 public sealed class ShortVideo : EntityBase
 {
@@ -113,6 +114,9 @@ public sealed class PipelineJob : EntityBase
     public bool PublishToYouTube { get; set; }
     public bool UseTopicPlanner { get; set; }
     public DateTimeOffset? NextAttemptAt { get; set; }
+    public bool IsStale { get; set; }
+    public DateTimeOffset? StaleDetectedAt { get; set; }
+    public string? RecoveryNotes { get; set; }
 }
 
 public sealed class VideoAnalytics : EntityBase
@@ -130,4 +134,16 @@ public sealed class VideoAnalytics : EntityBase
     public string? ParentVideoId { get; set; }
     public string? Title { get; set; }
     public string? HookLine { get; set; }
+}
+
+public sealed class RecoveryOperation : EntityBase
+{
+    public Guid? PipelineRunId { get; set; }
+    public Guid? PipelineJobId { get; set; }
+    public RecoveryOperationType OperationType { get; set; }
+    public DateTimeOffset RequestedAt { get; set; } = DateTimeOffset.UtcNow;
+    public string RequestedBy { get; set; } = "manual";
+    public RecoveryOperationStatus Status { get; set; } = RecoveryOperationStatus.Requested;
+    public string? Notes { get; set; }
+    public string? ResultSummary { get; set; }
 }

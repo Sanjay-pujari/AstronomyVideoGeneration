@@ -148,3 +148,31 @@ create table if not exists pipeline_stage_executions
 
 create index if not exists ix_pipeline_stage_executions_run on pipeline_stage_executions(pipeline_run_id, started_at);
 create index if not exists ix_pipeline_stage_executions_status on pipeline_stage_executions(status, started_at desc);
+
+
+alter table if exists published_videos add column if not exists pipeline_run_id uuid null;
+create index if not exists ix_published_videos_pipeline_run_id on published_videos(pipeline_run_id, created_at desc);
+
+alter table if exists pipeline_jobs add column if not exists use_topic_planner boolean not null default false;
+alter table if exists pipeline_jobs add column if not exists is_stale boolean not null default false;
+alter table if exists pipeline_jobs add column if not exists stale_detected_at timestamptz null;
+alter table if exists pipeline_jobs add column if not exists recovery_notes text null;
+create index if not exists ix_pipeline_jobs_stale on pipeline_jobs(status, is_stale, scheduled_at);
+
+create table if not exists recovery_operations
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    updated_utc timestamptz null,
+    pipeline_run_id uuid null,
+    pipeline_job_id uuid null,
+    operation_type integer not null,
+    requested_at timestamptz not null,
+    requested_by text not null,
+    status integer not null,
+    notes text null,
+    result_summary text null
+);
+
+create index if not exists ix_recovery_operations_run_requested on recovery_operations(pipeline_run_id, requested_at desc);
+create index if not exists ix_recovery_operations_job_requested on recovery_operations(pipeline_job_id, requested_at desc);

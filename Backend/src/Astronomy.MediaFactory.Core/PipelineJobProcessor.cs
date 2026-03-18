@@ -34,6 +34,8 @@ public sealed class PipelineJobProcessor
         });
         job.Status = PipelineJobStatus.Running;
         job.StartedAt = started;
+        job.IsStale = false;
+        job.StaleDetectedAt = null;
         job.AttemptCount += 1;
         await _repository.SaveChangesAsync(cancellationToken);
 
@@ -43,6 +45,7 @@ public sealed class PipelineJobProcessor
             job.Status = PipelineJobStatus.Succeeded;
             job.FinishedAt = DateTimeOffset.UtcNow;
             job.ErrorMessage = null;
+            job.NextAttemptAt = null;
             await _repository.SaveChangesAsync(cancellationToken);
 
             _logger.LogInformation("Job {JobId} ({JobType}) finished in {ElapsedMs} ms with status {Status}.", job.Id, job.JobType, (DateTimeOffset.UtcNow - started).TotalMilliseconds, job.Status);

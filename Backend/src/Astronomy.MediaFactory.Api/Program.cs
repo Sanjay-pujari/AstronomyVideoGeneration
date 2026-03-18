@@ -102,6 +102,23 @@ app.MapGet("/api/ops/pipelines/{id:guid}/stages", async (Guid id, IPipelineMonit
 app.MapGet("/api/ops/failures/recent", async (int? take, IPipelineMonitoringService monitoringService, CancellationToken ct) => Results.Ok(await monitoringService.GetRecentFailuresAsync(take ?? 20, ct)));
 app.MapGet("/api/ops/jobs/summary", async (IPipelineMonitoringService monitoringService, CancellationToken ct) => Results.Ok(await monitoringService.GetJobSummaryAsync(ct)));
 
+app.MapPost("/api/ops/runs/{id:guid}/replay", async (Guid id, ReplayPipelineRequest request, IRunOperationsService ops, CancellationToken ct) =>
+    await ExecuteOpsAsync(() => ops.ReplayRunAsync(id, request, ct)));
+app.MapPost("/api/ops/runs/{id:guid}/retry-publish", async (Guid id, RetryPublishRequest request, IRunOperationsService ops, CancellationToken ct) =>
+    await ExecuteOpsAsync(() => ops.RetryPublishAsync(id, request, ct)));
+app.MapPost("/api/ops/runs/{id:guid}/retry-archive", async (Guid id, RetryArchiveRequest request, IRunOperationsService ops, CancellationToken ct) =>
+    await ExecuteOpsAsync(() => ops.RetryArchiveAsync(id, request, ct)));
+app.MapPost("/api/ops/runs/{id:guid}/regenerate-shorts", async (Guid id, RegenerateShortsRequest request, IRunOperationsService ops, CancellationToken ct) =>
+    await ExecuteOpsAsync(() => ops.RegenerateShortsAsync(id, request, ct)));
+app.MapPost("/api/ops/runs/{id:guid}/rerun-metadata", async (Guid id, RerunMetadataOptimizationRequest request, IRunOperationsService ops, CancellationToken ct) =>
+    await ExecuteOpsAsync(() => ops.RerunMetadataOptimizationAsync(id, request, ct)));
+app.MapPost("/api/ops/jobs/{id:guid}/requeue", async (Guid id, RequeueJobRequest request, IRunOperationsService ops, CancellationToken ct) =>
+    await ExecuteOpsAsync(() => ops.RequeueJobAsync(id, request, ct)));
+app.MapPost("/api/ops/jobs/recover-stale", async (RecoverStaleJobsRequest request, IRunOperationsService ops, CancellationToken ct) =>
+    await ExecuteOpsAsync(() => ops.RecoverStaleJobsAsync(request, ct)));
+app.MapPost("/api/ops/maintenance/cleanup", async (CleanupMaintenanceRequest request, IMaintenanceService maintenanceService, CancellationToken ct) =>
+    await ExecuteOpsAsync(() => maintenanceService.CleanupAsync(request, ct)));
+
 app.MapGet("/api/topics/recommended", async (DateOnly? date, ContentType? contentType, string? locationName, string? timeZone, ITopicSelectionService topicSelectionService, CancellationToken ct) =>
 {
     var request = new TopicSelectionRequest
@@ -134,3 +151,15 @@ app.MapGet("/api/analytics/{videoId}", async (string videoId, IPipelineRepositor
 });
 
 app.Run();
+
+static async Task<IResult> ExecuteOpsAsync<T>(Func<Task<T>> action)
+{
+    try
+    {
+        return Results.Ok(await action());
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+}

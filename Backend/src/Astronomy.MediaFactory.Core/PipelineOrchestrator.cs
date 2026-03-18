@@ -416,6 +416,7 @@ public sealed class PipelineOrchestrator
 
             var publishedVideo = new PublishedVideo
             {
+                PipelineRunId = run.Id,
                 Title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
                 OptimizedTitle = script.OptimizedMetadata?.PrimaryTitle,
                 OptimizedDescription = script.OptimizedMetadata?.OptimizedDescription,

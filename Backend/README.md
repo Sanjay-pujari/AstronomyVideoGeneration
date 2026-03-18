@@ -159,3 +159,10 @@ Fallbacks:
 - Optional Azure Key Vault loading is enabled via `KeyVault:VaultUri` / `KeyVault__VaultUri`, including user-assigned identity selection with `KeyVault:ManagedIdentityClientId`.
 - Application Insights hooks are wired for API and Worker when `Telemetry:ApplicationInsightsConnectionString` is set.
 - Use `docs/azure-deployment-guide.md` for first deployment runbook and Azure setup steps.
+
+## PASS 17: Runbook, recovery, and maintenance operations
+
+- Recovery endpoints are available under `/api/ops/runs/*` and `/api/ops/jobs/*` for replay, publish retry, archive retry, shorts regeneration, metadata reruns, stale-job recovery, and job requeue.
+- Retention cleanup is available at `/api/ops/maintenance/cleanup` and is also scheduled daily in the worker.
+- Recovery operations are audited in `recovery_operations` and logged with a recovery operation id.
+- Use `docs/operations-runbook.md` for operator procedures and example requests.

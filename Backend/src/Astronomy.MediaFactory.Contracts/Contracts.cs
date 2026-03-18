@@ -3,7 +3,7 @@ namespace Astronomy.MediaFactory.Contracts;
 public enum ContentType { DailySkyGuide = 1, TelescopeTargets = 2, SpaceNews = 3, AstrophotographyTips = 4 }
 public enum PipelineRunStatus { Queued = 1, Running = 2, Succeeded = 3, Failed = 4 }
 public enum PipelineJobType { GenerateMainVideo = 1, GenerateShorts = 2, PublishVideo = 3, ArchiveAssets = 4 }
-public enum PipelineJobStatus { Pending = 1, Running = 2, Succeeded = 3, Failed = 4, Retrying = 5 }
+public enum PipelineJobStatus { Pending = 1, Running = 2, Succeeded = 3, Failed = 4, Retrying = 5, Stale = 6 }
 
 public sealed record RunPipelineRequest(DateOnly Date, ContentType ContentType, string LocationName, string TimeZone = "Asia/Kolkata", bool PublishToYouTube = false, bool UseTopicPlanner = false);
 public sealed record RunPipelineResponse(Guid PipelineRunId, PipelineRunStatus Status, string Message);
@@ -26,6 +26,17 @@ public sealed class OperationsOptions
     public int SlowStageThresholdMs { get; set; } = 10000;
     public bool EnableDetailedStageMetadata { get; set; } = true;
     public bool EnforceProductionValidation { get; set; } = true;
+}
+
+public sealed class MaintenanceOptions
+{
+    public const string SectionName = "Maintenance";
+    public int WorkingFileRetentionDays { get; set; } = 14;
+    public int JobRetentionDays { get; set; } = 30;
+    public int StageRetentionDays { get; set; } = 30;
+    public int AnalyticsRetentionDays { get; set; } = 90;
+    public int StaleJobThresholdMinutes { get; set; } = 60;
+    public string WorkingDirectory { get; set; } = "./media-output";
 }
 
 public sealed class AlertingOptions
