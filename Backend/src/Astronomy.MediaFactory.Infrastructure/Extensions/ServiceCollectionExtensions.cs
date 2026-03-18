@@ -54,6 +54,18 @@ public static class ServiceCollectionExtensions
             .Validate(options => string.IsNullOrWhiteSpace(options.PrivacyStatus) || options.PrivacyStatus is "private" or "public" or "unlisted", "YouTube:PrivacyStatus must be private, public, or unlisted.")
             .ValidateOnStart();
 
+        services.AddOptions<PlatformPublishingOptions>()
+            .Bind(configuration.GetSection(PlatformPublishingOptions.SectionName))
+            .ValidateOnStart();
+
+        services.AddOptions<InstagramPublishingOptions>()
+            .Bind(configuration.GetSection(InstagramPublishingOptions.SectionName))
+            .ValidateOnStart();
+
+        services.AddOptions<FacebookPublishingOptions>()
+            .Bind(configuration.GetSection(FacebookPublishingOptions.SectionName))
+            .ValidateOnStart();
+
         services.AddOptions<MonetizationOptions>()
             .Bind(configuration.GetSection(MonetizationOptions.SectionName))
             .Validate(options => string.IsNullOrWhiteSpace(options.AffiliateBaseUrl) || Uri.TryCreate(options.AffiliateBaseUrl, UriKind.Absolute, out _), "Monetization:AffiliateBaseUrl must be an absolute URI when provided.")
@@ -152,6 +164,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
         services.AddScoped<IYouTubeAnalyticsService, YouTubeAnalyticsService>();
         services.AddScoped<IShortsVideoRenderService, ShortsVideoRenderService>();
+        services.AddScoped<IShortFormPlatformMetadataFormatter, PlatformMetadataFormatter>();
+        services.AddScoped<IShortFormPlatformPublisher, YouTubeShortsPlatformPublisher>();
+        services.AddScoped<IShortFormPlatformPublisher, InstagramReelsPlatformPublisher>();
+        services.AddScoped<IShortFormPlatformPublisher, FacebookPlatformPublisher>();
+        services.AddScoped<IShortFormPublishingService, ShortFormPublishingService>();
         services.AddScoped<IAnalyticsAggregationService, AnalyticsAggregationService>();
         services.AddScoped<IContentExperimentService, EfContentExperimentService>();
         services.AddScoped<IFeedbackSignalExtractor, TopKeywordSignalExtractor>();

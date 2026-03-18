@@ -41,6 +41,9 @@ public sealed class EfPipelineRepository : IPipelineRepository
     public async Task AddMonetizationRecordAsync(MonetizationRecord monetizationRecord, CancellationToken cancellationToken)
         => await _db.MonetizationRecords.AddAsync(monetizationRecord, cancellationToken);
 
+    public async Task AddPlatformPublicationRecordAsync(PlatformPublicationRecord record, CancellationToken cancellationToken)
+        => await _db.PlatformPublicationRecords.AddAsync(record, cancellationToken);
+
     public async Task AddJobAsync(PipelineJob job, CancellationToken cancellationToken)
         => await _db.PipelineJobs.AddAsync(job, cancellationToken);
 
@@ -131,6 +134,15 @@ public sealed class EfPipelineRepository : IPipelineRepository
 
     public Task<GeneratedScript?> GetLatestScriptByTitleAsync(string title, CancellationToken cancellationToken)
         => _db.GeneratedScripts.Where(x => x.Title == title).OrderByDescending(x => x.CreatedUtc).FirstOrDefaultAsync(cancellationToken);
+
+    public Task<PlatformPublicationRecord?> GetPlatformPublicationRecordAsync(Guid id, CancellationToken cancellationToken)
+        => _db.PlatformPublicationRecords.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+    public async Task<IReadOnlyCollection<PlatformPublicationRecord>> GetRecentPlatformPublicationRecordsAsync(int take, CancellationToken cancellationToken)
+        => await _db.PlatformPublicationRecords.AsNoTracking().OrderByDescending(x => x.CreatedUtc).Take(take).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyCollection<PlatformPublicationRecord>> GetPlatformPublicationRecordsByShortIdAsync(Guid shortVideoId, CancellationToken cancellationToken)
+        => await _db.PlatformPublicationRecords.AsNoTracking().Where(x => x.ParentShortVideoId == shortVideoId).OrderByDescending(x => x.CreatedUtc).ToListAsync(cancellationToken);
 
     public Task SaveChangesAsync(CancellationToken cancellationToken)
         => _db.SaveChangesAsync(cancellationToken);

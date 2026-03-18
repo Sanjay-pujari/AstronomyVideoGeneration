@@ -18,6 +18,7 @@ public sealed class RunOperationsService : IRunOperationsService
     private readonly IMetadataOptimizationService _metadataOptimizationService;
     private readonly IShortsVideoRenderService _shortsVideoRenderService;
     private readonly IContentMonetizationService? _contentMonetizationService;
+    private readonly IShortFormPublishingService? _shortFormPublishingService;
     private readonly IOperationalAlertNotifier? _alertNotifier;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly MaintenanceOptions _maintenanceOptions;
@@ -36,7 +37,8 @@ public sealed class RunOperationsService : IRunOperationsService
         IOptions<MaintenanceOptions> maintenanceOptions,
         IYouTubeThumbnailPublisher? thumbnailPublisher = null,
         IOperationalAlertNotifier? alertNotifier = null,
-        IContentMonetizationService? contentMonetizationService = null)
+        IContentMonetizationService? contentMonetizationService = null,
+        IShortFormPublishingService? shortFormPublishingService = null)
     {
         _db = db;
         _queue = queue;
@@ -51,6 +53,7 @@ public sealed class RunOperationsService : IRunOperationsService
         _maintenanceOptions = maintenanceOptions.Value;
         _thumbnailPublisher = thumbnailPublisher;
         _alertNotifier = alertNotifier;
+        _shortFormPublishingService = shortFormPublishingService;
     }
 
     public async Task<OpsActionResult> ReplayRunAsync(Guid runId, ReplayPipelineRequest request, CancellationToken cancellationToken)
@@ -264,6 +267,43 @@ public sealed class RunOperationsService : IRunOperationsService
             };
             await _db.ShortVideos.AddAsync(shortVideo, cancellationToken);
             await _db.SaveChangesAsync(cancellationToken);
+
+            if (_shortFormPublishingService is not null)
+            {
+                var publicationResults = await _shortFormPublishingService.PublishAsync(new ShortFormPublicationRequest
+                {
+                    ParentShortVideoId = shortVideo.Id,
+                    ContentType = run.ContentType,
+                    PublishToYouTube = request.PublishToYouTube,
+                    Title = shortResult.Script.OptimizedMetadata?.PrimaryTitle ?? shortResult.Script.Title,
+                    Caption = shortResult.Script.OptimizedMetadata?.OptimizedDescription ?? shortResult.Script.ShortScript,
+                    HookLine = shortResult.Script.OptimizedMetadata?.HookLine ?? shortResult.Script.Hook,
+                    Tags = shortResult.Script.OptimizedMetadata?.Tags ?? shortResult.Script.Tags,
+                    Hashtags = shortResult.Script.OptimizedMetadata?.Hashtags ?? [],
+                    VideoPath = shortResult.VideoPath,
+                    ThumbnailPath = publishedVideo.ThumbnailPath
+                }, cancellationToken);
+
+                foreach (var publication in publicationResults)
+                {
+                    await _db.PlatformPublicationRecords.AddAsync(new PlatformPublicationRecord
+                    {
+                        ParentShortVideoId = shortVideo.Id,
+                        Platform = publication.Platform,
+                        ExternalPostId = publication.ExternalPostId,
+                        ExternalUrl = publication.ExternalUrl,
+                        Status = publication.Status,
+                        PublishedAt = publication.PublishedAt,
+                        ErrorMessage = publication.ErrorMessage
+                    }, cancellationToken);
+                }
+
+                shortVideo.YouTubeVideoId = publicationResults
+                    .FirstOrDefault(x => x.Platform == ShortFormPlatform.YouTubeShorts && x.Status == PlatformPublicationStatus.Published)
+                    ?.ExternalPostId;
+
+                await _db.SaveChangesAsync(cancellationToken);
+            }
 
             operation.ResultSummary = $"Regenerated shorts for run {run.Id}.";
             return new OpsActionResult(operation.Id, operation.ResultSummary, [shortVideo.Id]);

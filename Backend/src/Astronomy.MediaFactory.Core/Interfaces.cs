@@ -22,6 +22,9 @@ public interface IContentMonetizationService
 public interface ISpeechSynthesisService { Task<string> SynthesizeAsync(string script, string outputDirectory, CancellationToken cancellationToken); }
 public interface IVideoRenderService { Task<string> RenderAsync(RenderManifest manifest, CancellationToken cancellationToken); }
 public interface IShortsVideoRenderService { Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken); }
+public interface IShortFormPlatformMetadataFormatter { PlatformPublicationTarget FormatTarget(ShortFormPlatform platform, ShortFormPublicationRequest request); }
+public interface IShortFormPlatformPublisher { ShortFormPlatform Platform { get; } Task<PlatformPublicationTarget> PublishAsync(PlatformPublicationTarget target, CancellationToken cancellationToken); }
+public interface IShortFormPublishingService { Task<IReadOnlyCollection<PlatformPublicationTarget>> PublishAsync(ShortFormPublicationRequest request, CancellationToken cancellationToken); }
 public interface IAzureBlobStorageService { Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken); }
 public interface IYouTubePublishingService { Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken); }
 public interface IYouTubeThumbnailPublisher { Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken); }
@@ -76,6 +79,7 @@ public interface IPipelineRepository {
  Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken);
  Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken);
  Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken);
+ Task AddPlatformPublicationRecordAsync(PlatformPublicationRecord record, CancellationToken cancellationToken) => Task.CompletedTask;
  Task AddMonetizationRecordAsync(MonetizationRecord monetizationRecord, CancellationToken cancellationToken) => Task.CompletedTask;
  Task AddJobAsync(PipelineJob job, CancellationToken cancellationToken);
  Task<PipelineJob?> GetJobAsync(Guid id, CancellationToken cancellationToken);
@@ -92,6 +96,9 @@ public interface IPipelineRepository {
  Task<IReadOnlyCollection<VideoAnalytics>> GetTopPerformingAnalyticsAsync(DateTimeOffset? from, DateTimeOffset? to, int take, bool shortsOnly, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<PublishedVideo>> GetPublishedVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<ShortVideo>> GetShortVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken);
+ Task<PlatformPublicationRecord?> GetPlatformPublicationRecordAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PlatformPublicationRecord?>(null);
+ Task<IReadOnlyCollection<PlatformPublicationRecord>> GetRecentPlatformPublicationRecordsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PlatformPublicationRecord>>([]);
+ Task<IReadOnlyCollection<PlatformPublicationRecord>> GetPlatformPublicationRecordsByShortIdAsync(Guid shortVideoId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PlatformPublicationRecord>>([]);
  Task<GeneratedScript?> GetLatestScriptByTitleAsync(string title, CancellationToken cancellationToken);
  Task SaveChangesAsync(CancellationToken cancellationToken);
 }
