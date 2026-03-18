@@ -7,6 +7,7 @@ using Azure.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+using ContentType = Astronomy.MediaFactory.Contracts.ContentType;
 
 namespace Astronomy.MediaFactory.Tests;
 
