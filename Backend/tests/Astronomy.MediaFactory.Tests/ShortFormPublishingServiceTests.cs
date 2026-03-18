@@ -63,7 +63,7 @@ public sealed class ShortFormPublishingServiceTests
         PlatformPublishingOptions options)
         => new(
             [youtube, instagram, facebook],
-            new PlatformMetadataFormatter(),
+            new PlatformMetadataFormatter(options),
             Options.Create(options),
             NullLogger<ShortFormPublishingService>.Instance);
 
