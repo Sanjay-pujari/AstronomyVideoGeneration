@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -10,15 +11,18 @@ public sealed class ShortFormPublishingService : IShortFormPublishingService
     private readonly PlatformPublishingOptions _options;
     private readonly IShortFormPlatformMetadataFormatter _formatter;
     private readonly IReadOnlyDictionary<ShortFormPlatform, IShortFormPlatformPublisher> _publishers;
+    private readonly IPipelineRepository _repository;
     private readonly ILogger<ShortFormPublishingService> _logger;
 
     public ShortFormPublishingService(
         IEnumerable<IShortFormPlatformPublisher> publishers,
         IShortFormPlatformMetadataFormatter formatter,
+        IPipelineRepository repository,
         IOptions<PlatformPublishingOptions> options,
         ILogger<ShortFormPublishingService> logger)
     {
         _formatter = formatter;
+        _repository = repository;
         _options = options.Value;
         _logger = logger;
         _publishers = publishers.ToDictionary(x => x.Platform);
@@ -26,17 +30,42 @@ public sealed class ShortFormPublishingService : IShortFormPublishingService
 
     public async Task<IReadOnlyCollection<PlatformPublicationTarget>> PublishAsync(ShortFormPublicationRequest request, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(request);
+
         var results = new List<PlatformPublicationTarget>();
+        var correlationId = Activity.Current?.Id ?? Activity.Current?.TraceId.ToString() ?? "n/a";
+        var existingRecords = await _repository.GetPlatformPublicationRecordsByShortIdAsync(request.ParentShortVideoId, cancellationToken);
+
         foreach (var (platform, enabled, reason) in GetTargets(request))
         {
             var target = _formatter.FormatTarget(platform, request);
             target.Enabled = enabled;
+
+            using var scope = _logger.BeginScope(new Dictionary<string, object>
+            {
+                ["CorrelationId"] = correlationId,
+                ["ShortVideoId"] = request.ParentShortVideoId,
+                ["Platform"] = platform.ToString()
+            });
 
             if (!enabled)
             {
                 target.Status = PlatformPublicationStatus.Skipped;
                 target.ErrorMessage = reason;
                 results.Add(target);
+                continue;
+            }
+
+            var idempotentResult = TryBuildIdempotentResult(platform, request.ParentShortVideoId, target, existingRecords);
+            if (idempotentResult is not null)
+            {
+                results.Add(idempotentResult);
+                continue;
+            }
+
+            if (TryBuildCooldownResult(platform, request.ParentShortVideoId, target, existingRecords) is { } cooledDown)
+            {
+                results.Add(cooledDown);
                 continue;
             }
 
@@ -48,20 +77,95 @@ public sealed class ShortFormPublishingService : IShortFormPublishingService
                 continue;
             }
 
+            _logger.LogInformation("Starting short-form publish for {Platform} and short video {ShortVideoId}. CorrelationId: {CorrelationId}", platform, request.ParentShortVideoId, correlationId);
+
             try
             {
-                results.Add(await publisher.PublishAsync(target, cancellationToken));
+                var result = await TransientRetryHelper.ExecuteAsync(
+                    ct => publisher.PublishAsync(CloneTarget(target), ct),
+                    _options.PublishRetryAttempts,
+                    TimeSpan.FromSeconds(_options.RetryBaseDelaySeconds),
+                    TimeSpan.FromSeconds(_options.MaxRetryDelaySeconds),
+                    _logger,
+                    "short-form publish",
+                    platform.ToString(),
+                    cancellationToken);
+
+                _logger.LogInformation(
+                    "Completed short-form publish for {Platform} and short video {ShortVideoId} with status {Status}. CorrelationId: {CorrelationId}",
+                    platform,
+                    request.ParentShortVideoId,
+                    result.Status,
+                    correlationId);
+
+                results.Add(result);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Short-form publishing failed for {Platform} and short video {ShortVideoId}.", platform, request.ParentShortVideoId);
+                _logger.LogError(ex, "Short-form publishing failed for {Platform} and short video {ShortVideoId}. CorrelationId: {CorrelationId}", platform, request.ParentShortVideoId, correlationId);
                 target.Status = PlatformPublicationStatus.Failed;
-                target.ErrorMessage = ex.Message;
+                target.ErrorMessage = string.IsNullOrWhiteSpace(ex.Message)
+                    ? $"{platform} publish failed with an unknown error."
+                    : ex.Message;
                 results.Add(target);
             }
         }
 
         return results;
+    }
+
+    private PlatformPublicationTarget? TryBuildIdempotentResult(
+        ShortFormPlatform platform,
+        Guid shortVideoId,
+        PlatformPublicationTarget target,
+        IReadOnlyCollection<PlatformPublicationRecord> existingRecords)
+    {
+        var publishedRecord = existingRecords
+            .Where(x => x.Platform == platform && x.Status == PlatformPublicationStatus.Published)
+            .OrderByDescending(x => x.PublishedAt ?? x.CreatedUtc)
+            .FirstOrDefault();
+
+        if (publishedRecord is null)
+        {
+            return null;
+        }
+
+        _logger.LogInformation("Skipping {Platform} publish for short video {ShortVideoId} because a published record already exists.", platform, shortVideoId);
+        target.Status = PlatformPublicationStatus.Skipped;
+        target.PublishedAt = publishedRecord.PublishedAt;
+        target.ExternalPostId = publishedRecord.ExternalPostId;
+        target.ExternalUrl = publishedRecord.ExternalUrl;
+        target.ErrorMessage = $"Skipping duplicate publish because {platform} already succeeded for this short.";
+        return target;
+    }
+
+    private PlatformPublicationTarget? TryBuildCooldownResult(
+        ShortFormPlatform platform,
+        Guid shortVideoId,
+        PlatformPublicationTarget target,
+        IReadOnlyCollection<PlatformPublicationRecord> existingRecords)
+    {
+        var latestAttempt = existingRecords
+            .Where(x => x.Platform == platform)
+            .OrderByDescending(x => x.CreatedUtc)
+            .FirstOrDefault();
+
+        if (latestAttempt is null)
+        {
+            return null;
+        }
+
+        var cooldown = TimeSpan.FromSeconds(Math.Clamp(_options.PublishRetryCooldownSeconds, 1, 600));
+        var retryAt = latestAttempt.CreatedUtc.Add(cooldown);
+        if (retryAt <= DateTimeOffset.UtcNow)
+        {
+            return null;
+        }
+
+        target.Status = PlatformPublicationStatus.Skipped;
+        target.ErrorMessage = $"Skipping rapid retry for {platform}. Retry after {retryAt:O}.";
+        _logger.LogWarning("Skipping {Platform} publish for short video {ShortVideoId} until {RetryAt} to avoid retry storms.", platform, shortVideoId, retryAt);
+        return target;
     }
 
     private IEnumerable<(ShortFormPlatform Platform, bool Enabled, string Reason)> GetTargets(ShortFormPublicationRequest request)
@@ -70,6 +174,24 @@ public sealed class ShortFormPublishingService : IShortFormPublishingService
         yield return (ShortFormPlatform.InstagramReels, _options.InstagramReelsEnabled, "Instagram Reels publishing is disabled by configuration.");
         yield return (ShortFormPlatform.Facebook, _options.FacebookEnabled, "Facebook publishing is disabled by configuration.");
     }
+
+    private static PlatformPublicationTarget CloneTarget(PlatformPublicationTarget target)
+        => new()
+        {
+            Platform = target.Platform,
+            Enabled = target.Enabled,
+            Title = target.Title,
+            Caption = target.Caption,
+            Hashtags = target.Hashtags.ToArray(),
+            PreferredPublishLocalTime = target.PreferredPublishLocalTime,
+            VideoPath = target.VideoPath,
+            ThumbnailPath = target.ThumbnailPath,
+            Status = target.Status,
+            PublishedAt = target.PublishedAt,
+            ExternalPostId = target.ExternalPostId,
+            ExternalUrl = target.ExternalUrl,
+            ErrorMessage = target.ErrorMessage
+        };
 }
 
 public sealed class YouTubeShortsPlatformPublisher : IShortFormPlatformPublisher

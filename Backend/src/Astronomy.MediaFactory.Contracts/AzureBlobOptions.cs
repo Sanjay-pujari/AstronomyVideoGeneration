@@ -9,4 +9,7 @@ public sealed class AzureBlobOptions
     public bool UseManagedIdentity { get; set; }
     public string? ManagedIdentityClientId { get; set; }
     public string ContainerName { get; set; } = "astronomy-videos";
+    public int UploadRetryAttempts { get; set; } = 3;
+    public int RetryBaseDelaySeconds { get; set; } = 2;
+    public int MaxRetryDelaySeconds { get; set; } = 20;
 }

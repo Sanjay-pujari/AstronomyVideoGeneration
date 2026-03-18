@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Azure.Identity;
@@ -20,21 +21,40 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
 
     public async Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var correlationId = Activity.Current?.Id ?? Activity.Current?.TraceId.ToString() ?? "n/a";
         var container = BuildContainerClient();
         if (container is null)
         {
-            _logger.LogWarning("Azure blob storage is not configured. Skipping blob upload.");
+            _logger.LogWarning("Azure blob storage is not configured. Skipping blob upload for base path {BasePath}. CorrelationId: {CorrelationId}", request.BasePath, correlationId);
             return new BlobUploadResult();
         }
 
-        await container.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+        _logger.LogInformation("Starting blob upload for base path {BasePath}. CorrelationId: {CorrelationId}", request.BasePath, correlationId);
+        await TransientRetryHelper.ExecuteAsync(
+            async ct =>
+            {
+                await container.CreateIfNotExistsAsync(cancellationToken: ct);
+                return true;
+            },
+            _options.UploadRetryAttempts,
+            TimeSpan.FromSeconds(_options.RetryBaseDelaySeconds),
+            TimeSpan.FromSeconds(_options.MaxRetryDelaySeconds),
+            _logger,
+            "blob container initialization",
+            request.BasePath,
+            cancellationToken);
 
-        return new BlobUploadResult
+        var result = new BlobUploadResult
         {
             VideoUrl = await UploadIfExistsAsync(container, request.VideoPath, request.BasePath, cancellationToken),
             AudioUrl = await UploadIfExistsAsync(container, request.AudioPath, request.BasePath, cancellationToken),
             ThumbnailUrl = await UploadIfExistsAsync(container, request.ThumbnailPath, request.BasePath, cancellationToken)
         };
+
+        _logger.LogInformation("Completed blob upload for base path {BasePath}. VideoUploaded={HasVideo} AudioUploaded={HasAudio} ThumbnailUploaded={HasThumbnail}. CorrelationId: {CorrelationId}", request.BasePath, result.VideoUrl is not null, result.AudioUrl is not null, result.ThumbnailUrl is not null, correlationId);
+        return result;
     }
 
     private BlobContainerClient? BuildContainerClient()
@@ -65,14 +85,33 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
 
     private async Task<string?> UploadIfExistsAsync(BlobContainerClient container, string? localPath, string basePath, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(localPath) || !File.Exists(localPath))
+        if (string.IsNullOrWhiteSpace(localPath))
+        {
             return null;
+        }
+
+        if (!File.Exists(localPath))
+        {
+            _logger.LogWarning("Skipping blob upload because local file {LocalPath} was not found.", localPath);
+            return null;
+        }
 
         var blobName = $"{basePath.TrimEnd('/')}/{Path.GetFileName(localPath)}".Replace("\\", "/");
         var blobClient = container.GetBlobClient(blobName);
 
-        await using var stream = File.OpenRead(localPath);
-        await blobClient.UploadAsync(stream, overwrite: true, cancellationToken);
-        return blobClient.Uri.ToString();
+        return await TransientRetryHelper.ExecuteAsync(
+            async ct =>
+            {
+                await using var stream = File.OpenRead(localPath);
+                await blobClient.UploadAsync(stream, overwrite: true, cancellationToken: ct);
+                return blobClient.Uri.ToString();
+            },
+            _options.UploadRetryAttempts,
+            TimeSpan.FromSeconds(_options.RetryBaseDelaySeconds),
+            TimeSpan.FromSeconds(_options.MaxRetryDelaySeconds),
+            _logger,
+            "blob upload",
+            blobName,
+            cancellationToken);
     }
 }

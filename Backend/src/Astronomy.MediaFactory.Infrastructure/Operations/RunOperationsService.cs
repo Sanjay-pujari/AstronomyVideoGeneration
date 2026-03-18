@@ -102,10 +102,12 @@ public sealed class RunOperationsService : IRunOperationsService
             if (!File.Exists(videoAsset.LocalPath))
                 throw new InvalidOperationException($"Cannot retry publish because the rendered video file is missing at '{videoAsset.LocalPath}'.");
 
-            var title = script.OptimizedTitle ?? script.Title;
-            var description = script.OptimizedDescription ?? script.Description;
+            var title = string.IsNullOrWhiteSpace(script.OptimizedTitle) ? script.Title : script.OptimizedTitle;
+            var description = string.IsNullOrWhiteSpace(script.OptimizedDescription) ? script.Description : script.OptimizedDescription;
             var tags = SplitCsv(script.OptimizedTagsCsv ?? script.TagsCsv);
             var affectedIds = new List<Guid>();
+
+            _logger.LogInformation("Starting retry publish flow for run {PipelineRunId}. ThumbnailOnly={RetryThumbnailOnly} ForceRepublish={ForceRepublish}", run.Id, request.RetryThumbnailOnly, request.ForceRepublish);
 
             if (request.RetryThumbnailOnly)
             {
@@ -133,6 +135,7 @@ public sealed class RunOperationsService : IRunOperationsService
                 }
                 else
                 {
+                    await EnsurePublishCooldownElapsedAsync(run.Id, operation.Id, cancellationToken);
                     run.YouTubeVideoId = await _youTubePublishingService.UploadAsync(videoAsset.LocalPath, title, description, tags, _youTubeOptions.PrivacyStatus, cancellationToken);
                     if (string.IsNullOrWhiteSpace(run.YouTubeVideoId))
                         throw new InvalidOperationException("YouTube upload retry completed without returning a video id.");
@@ -169,6 +172,7 @@ public sealed class RunOperationsService : IRunOperationsService
             }
 
             await _db.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation("Completed retry publish flow for run {PipelineRunId}. Summary: {Summary}", run.Id, operation.ResultSummary);
             return new OpsActionResult(operation.Id, operation.ResultSummary!, affectedIds);
         }, cancellationToken);
     }
@@ -534,6 +538,28 @@ public sealed class RunOperationsService : IRunOperationsService
         job.Touch();
     }
 
+
+
+    private async Task EnsurePublishCooldownElapsedAsync(Guid runId, Guid currentOperationId, CancellationToken cancellationToken)
+    {
+        var cooldown = TimeSpan.FromSeconds(Math.Clamp(_youTubeOptions.PublishRetryCooldownSeconds, 1, 600));
+        var lastAttempt = await _db.RecoveryOperations
+            .AsNoTracking()
+            .Where(x => x.PipelineRunId == runId && x.Id != currentOperationId && x.OperationType == RecoveryOperationType.RetryPublish && x.Status != RecoveryOperationStatus.Rejected)
+            .OrderByDescending(x => x.RequestedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (lastAttempt is null)
+        {
+            return;
+        }
+
+        var retryAt = lastAttempt.RequestedAt.Add(cooldown);
+        if (retryAt > DateTimeOffset.UtcNow)
+        {
+            throw new InvalidOperationException($"Retry publish cooldown is active for run {runId}. Retry after {retryAt:O}.");
+        }
+    }
 
     private async Task<PipelineRun> RequireRunAsync(Guid runId, CancellationToken cancellationToken)
         => await _db.PipelineRuns.FirstOrDefaultAsync(x => x.Id == runId, cancellationToken)

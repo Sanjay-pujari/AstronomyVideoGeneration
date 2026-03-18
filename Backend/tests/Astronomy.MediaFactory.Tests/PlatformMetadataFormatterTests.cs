@@ -88,6 +88,19 @@ public sealed class PlatformMetadataFormatterTests
         Assert.Equal(result.Title, firstLine);
     }
 
+
+    [Fact]
+    public void FormatTarget_UsesSafeFallbacksForEmptyMetadata()
+    {
+        var request = Clone(BuildRequest(), title: "   ", caption: "   ", hookLine: "   ", tags: Array.Empty<string>(), hashtags: Array.Empty<string>());
+
+        var result = _formatter.FormatTarget(ShortFormPlatform.YouTubeShorts, request);
+
+        Assert.Equal("Astronomy update", result.Title);
+        Assert.False(string.IsNullOrWhiteSpace(result.Caption));
+        Assert.Contains("#shorts", result.Hashtags, StringComparer.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void FormatTarget_TrimsAtWordBoundaryWithoutAbruptCutoff()
     {

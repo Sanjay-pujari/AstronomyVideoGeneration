@@ -133,6 +133,35 @@ public sealed class RecoveryOperationsTests
         Assert.NotEqual(result.RecoveryOperationId, thumbnailOnly.RecoveryOperationId);
     }
 
+
+    [Fact]
+    public async Task RetryPublish_RejectsRapidRepeatedRepublishAttempts()
+    {
+        await using var db = CreateDb();
+        var run = new PipelineRun { RunDate = DateOnly.FromDateTime(DateTime.UtcNow), ContentType = ContentType.SpaceNews, LocationName = "Pune", Status = PipelineRunStatus.Succeeded, PublishToYouTube = true };
+        var videoPath = CreateTempFile("video");
+        db.PipelineRuns.Add(run);
+        db.GeneratedScripts.Add(new GeneratedScript { PipelineRunId = run.Id, ContentType = run.ContentType, ScriptDate = run.RunDate, Prompt = "p", ScriptBody = "body", Title = "Title", Description = "Desc", TagsCsv = "astronomy", EstimatedDurationSeconds = 42 });
+        db.MediaAssets.Add(new MediaAsset { PipelineRunId = run.Id, AssetType = "video", FileName = Path.GetFileName(videoPath), LocalPath = videoPath, SizeBytes = 5 });
+        db.RecoveryOperations.Add(new RecoveryOperation
+        {
+            PipelineRunId = run.Id,
+            OperationType = RecoveryOperationType.RetryPublish,
+            RequestedBy = "manual",
+            RequestedAt = DateTimeOffset.UtcNow.AddSeconds(-5),
+            Status = RecoveryOperationStatus.Completed
+        });
+        await db.SaveChangesAsync();
+
+        var youtube = new TrackingYouTubePublisher();
+        var service = CreateService(db, youTubeService: youtube, youTubeOptions: new YouTubeOptions { PrivacyStatus = "private", PublishRetryCooldownSeconds = 30 });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.RetryPublishAsync(run.Id, new RetryPublishRequest("manual", "retry publish", PublishToYouTube: true), CancellationToken.None));
+
+        Assert.Contains("Retry publish cooldown is active", ex.Message);
+        Assert.Equal(0, youtube.UploadCalls);
+    }
+
     [Fact]
     public async Task RetryArchive_UpdatesStoredBlobUrls()
     {
@@ -210,7 +239,8 @@ public sealed class RecoveryOperationsTests
         MediaFactoryDbContext db,
         IAzureBlobStorageService? blobService = null,
         TrackingYouTubePublisher? youTubeService = null,
-        IYouTubeThumbnailPublisher? youtubePublisher = null)
+        IYouTubeThumbnailPublisher? youtubePublisher = null,
+        YouTubeOptions? youTubeOptions = null)
     {
         return new RunOperationsService(
             db,
@@ -221,7 +251,7 @@ public sealed class RecoveryOperationsTests
             new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
             new FakeShortsVideoRenderService(),
             NullLogger<RunOperationsService>.Instance,
-            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(youTubeOptions ?? new YouTubeOptions { PrivacyStatus = "private", PublishRetryCooldownSeconds = 30 }),
             Options.Create(new MaintenanceOptions { WorkingDirectory = Path.Combine(Path.GetTempPath(), "media-output"), WorkingFileRetentionDays = 14, JobRetentionDays = 30, StageRetentionDays = 30, AnalyticsRetentionDays = 90, StaleJobThresholdMinutes = 60 }),
             youtubePublisher ?? youTubeService);
     }
