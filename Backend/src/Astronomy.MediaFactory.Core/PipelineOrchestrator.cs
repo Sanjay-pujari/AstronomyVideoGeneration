@@ -30,6 +30,7 @@ public sealed class PipelineOrchestrator
     private readonly IPipelineStageRecorder? _pipelineStageRecorder;
     private readonly IStageAlertPublisher _stageAlertPublisher;
     private readonly IOperationalAlertNotifier? _operationalAlertNotifier;
+    private readonly IContentExperimentService? _contentExperimentService;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -54,7 +55,8 @@ public sealed class PipelineOrchestrator
         IPipelineStageRecorder? pipelineStageRecorder = null,
         IStageAlertPublisher? stageAlertPublisher = null,
         IOperationalAlertNotifier? operationalAlertNotifier = null,
-        IOptions<OperationsOptions>? operationsOptions = null)
+        IOptions<OperationsOptions>? operationsOptions = null,
+        IContentExperimentService? contentExperimentService = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -79,6 +81,7 @@ public sealed class PipelineOrchestrator
         _pipelineStageRecorder = pipelineStageRecorder;
         _stageAlertPublisher = stageAlertPublisher ?? new NullStageAlertPublisher();
         _operationalAlertNotifier = operationalAlertNotifier;
+        _contentExperimentService = contentExperimentService;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -456,6 +459,19 @@ public sealed class PipelineOrchestrator
             };
 
             await _repository.AddPublishedVideoAsync(publishedVideo, cancellationToken);
+            await _repository.SaveChangesAsync(cancellationToken);
+
+            if (_contentExperimentService is not null)
+            {
+                try
+                {
+                    await _contentExperimentService.InitializeExperimentsAsync(publishedVideo, optimizedMetadata, thumbnailPlan, monetizationPlan, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Content experiments could not be initialized for pipeline run {PipelineRunId}. Publishing will continue without growth experiments.", run.Id);
+                }
+            }
 
             if (monetizationPlan?.AffiliateLinks.Count > 0)
             {

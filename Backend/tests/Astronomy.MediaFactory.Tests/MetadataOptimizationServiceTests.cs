@@ -96,6 +96,29 @@ public sealed class MetadataOptimizationServiceTests
         Assert.False(string.IsNullOrWhiteSpace(result.OptimizedDescription));
     }
 
+
+    [Fact]
+    public async Task OptimizeForVideoAsync_UsesExperimentTitlePatternsInAlternates()
+    {
+        var service = new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance);
+        var result = await service.OptimizeForVideoAsync(new MetadataOptimizationInput
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildContext(),
+            SourceTitle = "Sky Update",
+            SourceDescription = "Tonight we cover Jupiter and Orion.",
+            SourceTags = ["astronomy"],
+            FeedbackContext = new PromptFeedbackContext
+            {
+                RecommendedTitlePatterns = ["<Object/Event> Tonight: What You Can See"],
+                RecommendedHookPatterns = ["Lead with the best single sky promise"]
+            }
+        }, CancellationToken.None);
+
+        Assert.Contains(result.AlternateTitles, x => x.Contains("Jupiter", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("Winning hook pattern", result.OptimizedDescription);
+    }
+
     [Fact]
     public async Task OptimizeForVideoAsync_Throws_WhenSourceDescriptionMissing()
     {

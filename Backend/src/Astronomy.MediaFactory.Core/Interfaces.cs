@@ -56,6 +56,17 @@ public interface IThumbnailGenerationService
     Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken);
 }
 
+public interface IContentExperimentService
+{
+    Task InitializeExperimentsAsync(PublishedVideo publishedVideo, OptimizedVideoMetadata metadata, ThumbnailPlan thumbnailPlan, MonetizationPlan? monetizationPlan, CancellationToken cancellationToken);
+    Task<ExperimentVariantAssignment> ResolveAssignmentsAsync(Guid videoId, CancellationToken cancellationToken);
+    Task EvaluateRecentExperimentsAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<ContentExperiment>> GetRecentExperimentsAsync(int take, CancellationToken cancellationToken);
+    Task<ContentExperiment?> GetExperimentAsync(Guid id, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<ContentExperiment>> GetTopPerformingExperimentsAsync(int take, CancellationToken cancellationToken);
+    Task<ExperimentFeedbackSnapshot> GetFeedbackSnapshotAsync(CancellationToken cancellationToken);
+}
+
 public interface IPipelineRepository {
  Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken);
  Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken);

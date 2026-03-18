@@ -17,15 +17,18 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
     private readonly IAnalyticsFeedbackProvider _analyticsFeedbackProvider;
     private readonly IPipelineRepository _pipelineRepository;
     private readonly ILogger<PromptFeedbackService> _logger;
+    private readonly IContentExperimentService? _contentExperimentService;
 
     public PromptFeedbackService(
         IAnalyticsFeedbackProvider analyticsFeedbackProvider,
         IPipelineRepository pipelineRepository,
-        ILogger<PromptFeedbackService> logger)
+        ILogger<PromptFeedbackService> logger,
+        IContentExperimentService? contentExperimentService = null)
     {
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
         _pipelineRepository = pipelineRepository;
         _logger = logger;
+        _contentExperimentService = contentExperimentService;
     }
 
     public async Task<PromptFeedbackContext> BuildContextAsync(PromptFeedbackRequest request, CancellationToken cancellationToken)
@@ -35,6 +38,9 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
             var summary = await _analyticsFeedbackProvider.GetSummaryAsync(10, cancellationToken);
             var signals = await _analyticsFeedbackProvider.GetSignalsAsync(10, cancellationToken);
             var overusedTopics = await ResolveOverusedTopicsAsync(cancellationToken);
+            var experimentFeedback = _contentExperimentService is null
+                ? new ExperimentFeedbackSnapshot()
+                : await _contentExperimentService.GetFeedbackSnapshotAsync(cancellationToken);
 
             var winningTopics = summary.TopVideosByViews
                 .Concat(summary.TopShortsByRetention)
@@ -45,10 +51,11 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
                 .ToArray();
 
             var recommendedTitlePatterns = summary.BestPerformingTitles
+                .Concat(experimentFeedback.WinningTitlePatterns)
                 .Select(ExtractTitlePattern)
                 .Where(static x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(4)
+                .Take(5)
                 .ToArray();
 
             var avoidTitlePatterns = overusedTopics
@@ -57,6 +64,7 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
                 .ToArray();
 
             var recommendedHooks = signals.BestHooks
+                .Concat(experimentFeedback.WinningHooks)
                 .Select(x => ShortenPattern(x, 90))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(request.IsShortForm ? 5 : 3)
@@ -66,6 +74,9 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
                 .Where(static x => x.Length > 2)
                 .Take(4)
                 .ToArray();
+
+            var metadataHints = BuildMetadataHints(request.ContentType, signals.TopKeywords, experimentFeedback);
+            var thumbnailHints = BuildThumbnailHints(experimentFeedback);
 
             var context = new PromptFeedbackContext
             {
@@ -80,8 +91,9 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
                 RecentWinningTopics = winningTopics,
                 RecentOverusedTopics = overusedTopics.Take(6).ToArray(),
                 AvoidObjectEmphasis = avoidObjects,
-                ShortsHookSuggestions = BuildShortHookSuggestions(signals.BestHooks, request.TopicSelectionPlan),
-                MetadataOptimizationHints = BuildMetadataHints(request.ContentType, signals.TopKeywords),
+                ShortsHookSuggestions = BuildShortHookSuggestions(signals.BestHooks.Concat(experimentFeedback.WinningHooks).ToArray(), request.TopicSelectionPlan),
+                MetadataOptimizationHints = metadataHints,
+                ThumbnailStrategyHints = thumbnailHints,
                 TopicSelectionRationale = BuildTopicRationale(request.TopicSelectionPlan),
                 UsedFallbackDefaults = false
             };
@@ -119,7 +131,7 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
     {
         var notes = ToneByContentType.TryGetValue(type, out var mapped)
             ? mapped.ToList()
-            : new List<string> {"Keep the narrative clear, accurate, and beginner-friendly."};
+            : new List<string> { "Keep the narrative clear, accurate, and beginner-friendly." };
 
         if (isShortForm)
         {
@@ -153,7 +165,7 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
             .ToArray();
     }
 
-    private static string[] BuildMetadataHints(ContentType type, IReadOnlyCollection<string> keywords)
+    private static string[] BuildMetadataHints(ContentType type, IReadOnlyCollection<string> keywords, ExperimentFeedbackSnapshot experimentFeedback)
     {
         var hints = new List<string>
         {
@@ -166,7 +178,30 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
             hints.Add($"Prefer these proven keywords where natural: {string.Join(", ", keywords.Take(4))}.");
         }
 
+        if (experimentFeedback.WinningCallToActions.Any())
+        {
+            hints.Add($"Winning CTA phrasing to reuse selectively: {experimentFeedback.WinningCallToActions.First()}.");
+        }
+
+        if (experimentFeedback.WinningHooks.Any())
+        {
+            hints.Add($"Best-performing hook family: {experimentFeedback.WinningHooks.First()}.");
+        }
+
         return hints.ToArray();
+    }
+
+    private static string[] BuildThumbnailHints(ExperimentFeedbackSnapshot experimentFeedback)
+    {
+        if (experimentFeedback.WinningThumbnailPatterns.Count == 0)
+        {
+            return [];
+        }
+
+        return experimentFeedback.WinningThumbnailPatterns
+            .Select(x => $"Recent winning thumbnail pattern: {x}")
+            .Take(4)
+            .ToArray();
     }
 
     private static string BuildTopicRationale(TopicSelectionPlan? plan)
@@ -184,7 +219,8 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
         => context.RecommendedKeywords.Count == 0
            && context.RecommendedHookPatterns.Count == 0
            && context.RecommendedTitlePatterns.Count == 0
-           && context.RecentWinningTopics.Count == 0;
+           && context.RecentWinningTopics.Count == 0
+           && context.ThumbnailStrategyHints.Count == 0;
 
     private static PromptFeedbackContext BuildFallback(ContentType type, TopicSelectionPlan? plan)
         => new()
@@ -195,6 +231,7 @@ public sealed class PromptFeedbackService : IPromptFeedbackService
             RecommendedTitlePatterns = ["<Object/Event> Tonight: What You Can See"],
             RecommendedToneNotes = ResolveToneNotes(type, isShortForm: false),
             MetadataOptimizationHints = ["Keep title clear and non-clickbait.", "Keep tags compact and relevant."],
+            ThumbnailStrategyHints = ["Use TopBanner layout when a winning thumbnail pattern is unavailable."],
             ShortsHookSuggestions = ["Stop scrolling — here's tonight's fastest sky tip."],
             TopicSelectionRationale = BuildTopicRationale(plan),
             UsedFallbackDefaults = true

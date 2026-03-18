@@ -192,3 +192,61 @@ create table if not exists monetization_records
 );
 
 create index if not exists ix_monetization_records_video_created on monetization_records(video_id, created_at desc);
+
+alter table if exists generated_scripts add column if not exists optimized_title text null;
+alter table if exists generated_scripts add column if not exists alternate_titles_csv text null;
+alter table if exists generated_scripts add column if not exists optimized_description text null;
+alter table if exists generated_scripts add column if not exists optimized_tags_csv text null;
+alter table if exists generated_scripts add column if not exists optimized_hashtags_csv text null;
+alter table if exists generated_scripts add column if not exists thumbnail_text_suggestions_csv text null;
+alter table if exists generated_scripts add column if not exists hook_line text null;
+
+alter table if exists published_videos add column if not exists optimized_title text null;
+alter table if exists published_videos add column if not exists optimized_description text null;
+alter table if exists published_videos add column if not exists optimized_tags_csv text null;
+alter table if exists published_videos add column if not exists title_experiment_id uuid null;
+alter table if exists published_videos add column if not exists selected_title_variant_id uuid null;
+alter table if exists published_videos add column if not exists thumbnail_experiment_id uuid null;
+alter table if exists published_videos add column if not exists selected_thumbnail_variant_id uuid null;
+alter table if exists published_videos add column if not exists cta_experiment_id uuid null;
+alter table if exists published_videos add column if not exists selected_cta_variant_id uuid null;
+
+alter table if exists video_analytics add column if not exists published_video_id uuid null;
+alter table if exists video_analytics add column if not exists title_experiment_id uuid null;
+alter table if exists video_analytics add column if not exists title_variant_id uuid null;
+alter table if exists video_analytics add column if not exists thumbnail_experiment_id uuid null;
+alter table if exists video_analytics add column if not exists thumbnail_variant_id uuid null;
+alter table if exists video_analytics add column if not exists cta_experiment_id uuid null;
+alter table if exists video_analytics add column if not exists cta_variant_id uuid null;
+create index if not exists ix_video_analytics_published_video on video_analytics(published_video_id, retrieved_at desc);
+
+create table if not exists content_experiments
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    updated_utc timestamptz null,
+    video_id uuid not null references published_videos(id),
+    experiment_type integer not null,
+    selected_variant_id uuid null,
+    status integer not null,
+    created_at timestamptz not null,
+    completed_at timestamptz null
+);
+
+create index if not exists ix_content_experiments_video_type_status on content_experiments(video_id, experiment_type, status);
+
+create table if not exists content_variants
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    updated_utc timestamptz null,
+    content_experiment_id uuid not null references content_experiments(id) on delete cascade,
+    variant_type integer not null,
+    value text not null,
+    views bigint not null default 0,
+    ctr double precision null,
+    engagement_score double precision not null default 0,
+    is_winner boolean not null default false
+);
+
+create index if not exists ix_content_variants_experiment_winner on content_variants(content_experiment_id, is_winner);

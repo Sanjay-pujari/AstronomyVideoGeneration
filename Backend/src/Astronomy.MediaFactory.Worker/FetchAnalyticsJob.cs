@@ -10,17 +10,20 @@ public sealed class FetchAnalyticsJob : IJob
 {
     private readonly IPipelineRepository _repository;
     private readonly IYouTubeAnalyticsService _analyticsService;
+    private readonly IContentExperimentService _contentExperimentService;
     private readonly AnalyticsOptions _options;
     private readonly ILogger<FetchAnalyticsJob> _logger;
 
     public FetchAnalyticsJob(
         IPipelineRepository repository,
         IYouTubeAnalyticsService analyticsService,
+        IContentExperimentService contentExperimentService,
         IOptions<AnalyticsOptions> options,
         ILogger<FetchAnalyticsJob> logger)
     {
         _repository = repository;
         _analyticsService = analyticsService;
+        _contentExperimentService = contentExperimentService;
         _options = options.Value;
         _logger = logger;
     }
@@ -34,20 +37,40 @@ public sealed class FetchAnalyticsJob : IJob
 
         foreach (var video in videos)
         {
-            await SaveSnapshotAsync(videoId: video.YouTubeVideoId!, title: video.Title, isShort: false, contentType: video.ResolveContentType(), parentVideoId: null, hookLine: null, cancellationToken: context.CancellationToken);
+            var assignments = await _contentExperimentService.ResolveAssignmentsAsync(video.Id, context.CancellationToken);
+            await SaveSnapshotAsync(
+                videoId: video.YouTubeVideoId!,
+                title: video.Title,
+                isShort: false,
+                contentType: video.ResolveContentType(),
+                parentVideoId: null,
+                hookLine: null,
+                publishedVideoId: video.Id,
+                assignments: assignments,
+                cancellationToken: context.CancellationToken);
         }
 
         foreach (var shortVideo in shorts)
         {
             parentMap.TryGetValue(shortVideo.ParentVideoId, out var parentYouTubeId);
-            await SaveSnapshotAsync(videoId: shortVideo.YouTubeVideoId!, title: null, isShort: true, contentType: ContentType.DailySkyGuide, parentVideoId: parentYouTubeId, hookLine: null, cancellationToken: context.CancellationToken);
+            await SaveSnapshotAsync(
+                videoId: shortVideo.YouTubeVideoId!,
+                title: null,
+                isShort: true,
+                contentType: ContentType.DailySkyGuide,
+                parentVideoId: parentYouTubeId,
+                hookLine: null,
+                publishedVideoId: null,
+                assignments: new ExperimentVariantAssignment(),
+                cancellationToken: context.CancellationToken);
         }
 
         await _repository.SaveChangesAsync(context.CancellationToken);
+        await _contentExperimentService.EvaluateRecentExperimentsAsync(context.CancellationToken);
         _logger.LogInformation("Analytics fetch completed. TopN setting is {TopN}", _options.TopN);
     }
 
-    private async Task SaveSnapshotAsync(string videoId, string? title, bool isShort, ContentType contentType, string? parentVideoId, string? hookLine, CancellationToken cancellationToken)
+    private async Task SaveSnapshotAsync(string videoId, string? title, bool isShort, ContentType contentType, string? parentVideoId, string? hookLine, Guid? publishedVideoId, ExperimentVariantAssignment assignments, CancellationToken cancellationToken)
     {
         var snapshot = await _analyticsService.GetVideoAnalyticsAsync(videoId, cancellationToken);
         if (snapshot is null)
@@ -67,7 +90,14 @@ public sealed class FetchAnalyticsJob : IJob
             IsShort = isShort,
             ParentVideoId = parentVideoId,
             Title = title,
-            HookLine = hookLine
+            HookLine = hookLine,
+            PublishedVideoId = publishedVideoId,
+            TitleExperimentId = assignments.TitleExperimentId,
+            TitleVariantId = assignments.TitleVariantId,
+            ThumbnailExperimentId = assignments.ThumbnailExperimentId,
+            ThumbnailVariantId = assignments.ThumbnailVariantId,
+            CtaExperimentId = assignments.CtaExperimentId,
+            CtaVariantId = assignments.CtaVariantId
         }, cancellationToken);
     }
 }

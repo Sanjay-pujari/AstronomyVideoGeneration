@@ -39,6 +39,7 @@ public sealed class ThumbnailGenerationTests
         Assert.Contains("TONIGHT'S SKY", dailyPlan.PrimaryThumbnailText);
         Assert.Equal(ThumbnailLayoutType.TopBanner, dailyPlan.LayoutType);
         Assert.Equal(dailyPlan.LayoutType, dailyPlan.LayoutCandidates.First());
+        Assert.NotEmpty(dailyPlan.Variants);
         Assert.Contains("DISCOVERY", newsPlan.PrimaryThumbnailText);
         Assert.Equal(ThumbnailLayoutType.CenteredTitleOverlay, newsPlan.LayoutType);
         Assert.Equal(newsPlan.LayoutType, newsPlan.LayoutCandidates.First());
@@ -64,6 +65,31 @@ public sealed class ThumbnailGenerationTests
 
         Assert.Equal(ThumbnailLayoutType.TopBanner, plan.LayoutType);
         Assert.Equal(3, plan.LayoutCandidates.Count);
+    }
+
+
+    [Fact]
+    public void ThumbnailStrategy_UsesExperimentFeedbackHintsForVariants()
+    {
+        var service = new ThumbnailStrategyService();
+
+        var plan = service.BuildPlan(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = new AstronomyContext
+            {
+                PromptFeedbackContext = new PromptFeedbackContext
+                {
+                    ThumbnailStrategyHints = ["Recent winning thumbnail pattern: TopBanner: BIG MOON"]
+                }
+            },
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = "."
+        });
+
+        Assert.Contains(plan.AlternateThumbnailTexts, x => x.Contains("BIG MOON", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(ThumbnailLayoutType.TopBanner, plan.LayoutCandidates.First());
     }
 
     [Fact]

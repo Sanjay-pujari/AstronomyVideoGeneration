@@ -85,6 +85,7 @@ public sealed class PromptFeedbackContext
     public IReadOnlyCollection<string> AvoidObjectEmphasis { get; init; } = [];
     public IReadOnlyCollection<string> ShortsHookSuggestions { get; init; } = [];
     public IReadOnlyCollection<string> MetadataOptimizationHints { get; init; } = [];
+    public IReadOnlyCollection<string> ThumbnailStrategyHints { get; init; } = [];
     public string TopicSelectionRationale { get; init; } = "";
     public bool UsedFallbackDefaults { get; init; }
 }
@@ -122,6 +123,7 @@ public sealed class ThumbnailPlan
     public string? ThumbnailPath { get; init; }
     public ThumbnailLayoutType LayoutType { get; init; } = ThumbnailLayoutType.CenteredTitleOverlay;
     public IReadOnlyCollection<ThumbnailLayoutType> LayoutCandidates { get; init; } = [ThumbnailLayoutType.CenteredTitleOverlay];
+    public IReadOnlyCollection<ThumbnailVariantOption> Variants { get; init; } = [];
 }
 
 public sealed class ThumbnailGenerationRequest
@@ -292,4 +294,59 @@ public sealed class FeedbackSignals
 {
     public IReadOnlyCollection<string> TopKeywords { get; init; } = [];
     public IReadOnlyCollection<string> BestHooks { get; init; } = [];
+}
+
+
+public enum ContentExperimentType
+{
+    Title = 1,
+    Thumbnail = 2,
+    CTA = 3
+}
+
+public enum ContentVariantType
+{
+    TitleText = 1,
+    ThumbnailTextAndLayout = 2,
+    CallToActionText = 3
+}
+
+public enum ContentExperimentStatus
+{
+    Draft = 1,
+    Running = 2,
+    Completed = 3,
+    Cancelled = 4
+}
+
+public sealed class VariantPerformanceMetrics
+{
+    public long Views { get; init; }
+    public double? Ctr { get; init; }
+    public double EngagementScore { get; init; }
+}
+
+public sealed class ThumbnailVariantOption
+{
+    public string Text { get; init; } = "";
+    public ThumbnailLayoutType LayoutType { get; init; } = ThumbnailLayoutType.CenteredTitleOverlay;
+    public string Value => $"{LayoutType}: {Text}";
+}
+
+public sealed class ExperimentVariantAssignment
+{
+    public Guid? TitleExperimentId { get; init; }
+    public Guid? TitleVariantId { get; init; }
+    public Guid? ThumbnailExperimentId { get; init; }
+    public Guid? ThumbnailVariantId { get; init; }
+    public Guid? CtaExperimentId { get; init; }
+    public Guid? CtaVariantId { get; init; }
+}
+
+public sealed class ExperimentFeedbackSnapshot
+{
+    public IReadOnlyCollection<string> WinningTitlePatterns { get; init; } = [];
+    public IReadOnlyCollection<string> WinningHooks { get; init; } = [];
+    public IReadOnlyCollection<string> WinningThumbnailPatterns { get; init; } = [];
+    public IReadOnlyCollection<string> WinningCallToActions { get; init; } = [];
 }
