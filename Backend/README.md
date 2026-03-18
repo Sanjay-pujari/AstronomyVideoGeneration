@@ -155,7 +155,7 @@ Fallbacks:
 
 - Production startup validation now fails fast for missing critical cloud settings.
 - Development profile keeps local fallback behavior available.
-- Managed identity-ready paths are supported for Blob and secure configuration loading.
-- Optional Azure Key Vault loading is enabled via `KeyVault__VaultUri`.
+- Managed identity-ready paths are supported for Azure OpenAI, Azure Speech, Azure Blob, and secure configuration loading.
+- Optional Azure Key Vault loading is enabled via `KeyVault:VaultUri` / `KeyVault__VaultUri`, including user-assigned identity selection with `KeyVault:ManagedIdentityClientId`.
 - Application Insights hooks are wired for API and Worker when `Telemetry:ApplicationInsightsConnectionString` is set.
 - Use `docs/azure-deployment-guide.md` for first deployment runbook and Azure setup steps.

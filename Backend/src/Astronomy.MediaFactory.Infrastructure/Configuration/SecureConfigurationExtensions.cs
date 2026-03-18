@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Contracts;
 using Azure.Extensions.AspNetCore.Configuration.Secrets;
 using Azure.Identity;
 using Microsoft.Extensions.Configuration;
@@ -11,14 +12,24 @@ public static class SecureConfigurationExtensions
     {
         builder.AddEnvironmentVariables();
 
-        var keyVaultUri = Environment.GetEnvironmentVariable("KeyVault__VaultUri")
+        var bootstrapConfiguration = builder.Build();
+        var keyVault = bootstrapConfiguration.GetSection(KeyVaultOptions.SectionName).Get<KeyVaultOptions>() ?? new KeyVaultOptions();
+        var keyVaultUri = keyVault.VaultUri
+                          ?? Environment.GetEnvironmentVariable("KeyVault__VaultUri")
                           ?? Environment.GetEnvironmentVariable("KEYVAULT__VAULTURI");
 
         if (!string.IsNullOrWhiteSpace(keyVaultUri) && Uri.TryCreate(keyVaultUri, UriKind.Absolute, out var vaultUri))
         {
-            builder.AddAzureKeyVault(vaultUri, new DefaultAzureCredential());
+            var credential = CreateCredential(keyVault.ManagedIdentityClientId);
+            builder.AddAzureKeyVault(vaultUri, credential);
         }
 
         return builder;
     }
+
+    private static DefaultAzureCredential CreateCredential(string? managedIdentityClientId)
+        => new(new DefaultAzureCredentialOptions
+        {
+            ManagedIdentityClientId = string.IsNullOrWhiteSpace(managedIdentityClientId) ? null : managedIdentityClientId.Trim()
+        });
 }

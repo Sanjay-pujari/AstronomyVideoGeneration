@@ -21,18 +21,19 @@ Use `/health/live` for platform liveness probes and `/health/ready` for startup/
 - `appsettings.Development.json`: relaxed startup validation.
 - `appsettings.Production.json`: strict startup validation.
 - Environment variables override all appsettings.
-- Key Vault is automatically loaded when `KeyVault__VaultUri` is provided.
+- Key Vault is automatically loaded when `KeyVault:VaultUri` / `KeyVault__VaultUri` is provided, and can use a user-assigned identity via `KeyVault:ManagedIdentityClientId`.
 
 ## Secrets and managed identity
 - Never commit secrets in appsettings.
 - Preferred in Azure:
   - enable system-assigned managed identity on API/Worker
   - grant identity access to Key Vault secrets + Blob Data Contributor
-  - configure `KeyVault__VaultUri`
+  - configure `KeyVault__VaultUri` (and `KeyVault__ManagedIdentityClientId` for user-assigned identities)
 - Blob supports either:
   - `AzureBlob__ConnectionString`, or
-  - `AzureBlob__UseManagedIdentity=true` with `AzureBlob__AccountName` or `AzureBlob__ServiceUri`.
-- Azure OpenAI/Speech startup validation allows either API key or managed identity flag.
+  - `AzureBlob__UseManagedIdentity=true` with `AzureBlob__AccountName` or `AzureBlob__ServiceUri` (optional `AzureBlob__ManagedIdentityClientId` for user-assigned identities).
+- Azure OpenAI supports either `AzureOpenAI__ApiKey` or `AzureOpenAI__UseManagedIdentity=true` (optional `AzureOpenAI__ManagedIdentityClientId`).
+- Azure Speech supports either subscription key auth or managed identity; when using managed identity, set `AzureSpeech__UseManagedIdentity=true`, `AzureSpeech__Region`, and `AzureSpeech__ResourceId` (optional `AzureSpeech__ManagedIdentityClientId`).
 
 ## Azure Container Apps path
 1. Build/push images for API and Worker.
@@ -41,9 +42,9 @@ Use `/health/live` for platform liveness probes and `/health/ready` for startup/
 4. Deploy Worker app with ingress disabled.
 5. Set env vars/secrets:
    - `ConnectionStrings__Postgres`
-   - `AzureOpenAI__Endpoint`, `AzureOpenAI__ChatDeployment`, secret key or MI
-   - `AzureSpeech__Region` (or endpoint), secret key or MI
-   - `AzureBlob__ContainerName` + connection string or MI fields
+   - `AzureOpenAI__Endpoint`, `AzureOpenAI__ChatDeployment`, plus API key or managed identity settings
+   - `AzureSpeech__Region` (or endpoint for key auth), plus API key or managed identity settings (`AzureSpeech__ResourceId` required for MI)
+   - `AzureBlob__ContainerName` + connection string or managed identity fields
    - `SkyfieldSidecar__BaseUrl` (if enabled)
    - `Telemetry__ApplicationInsightsConnectionString`
 6. Configure probes:

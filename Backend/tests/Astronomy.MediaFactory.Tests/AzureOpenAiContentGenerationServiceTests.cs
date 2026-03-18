@@ -3,6 +3,7 @@ using System.Text;
 using Astronomy.MediaFactory.ContentGen;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Azure.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -17,17 +18,7 @@ public sealed class AzureOpenAiContentGenerationServiceTests
         var handler = new StubHttpMessageHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""
-                    {
-                      "choices": [
-                        {
-                          "message": {
-                            "content": "{\"title\":\"Sky Highlights\",\"description\":\"Tonight's best events\",\"tags\":[\"astronomy\",\"planets\"],\"estimatedDurationSeconds\":780,\"scriptBody\":\"Look to the southwest for Jupiter.\"}"
-                          }
-                        }
-                      ]
-                    }
-                    """, Encoding.UTF8, "application/json")
+                Content = BuildSuccessResponse("{\"title\":\"Sky Highlights\",\"description\":\"Tonight's best events\",\"tags\":[\"astronomy\",\"planets\"],\"estimatedDurationSeconds\":780,\"scriptBody\":\"Look to the southwest for Jupiter.\"}")
             });
 
         var sut = CreateService(handler);
@@ -46,17 +37,7 @@ public sealed class AzureOpenAiContentGenerationServiceTests
         var handler = new StubHttpMessageHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""
-                    {
-                      "choices": [
-                        {
-                          "message": {
-                            "content": "{\"title\":\"Sky Highlights\",\"description\":\"Tonight's best events\",\"tags\":[\"astronomy\"],\"estimatedDurationSeconds\":780,\"scriptBody\":\"Look to the southwest for Jupiter.\",\"extra\":true}"
-                          }
-                        }
-                      ]
-                    }
-                    """, Encoding.UTF8, "application/json")
+                Content = BuildSuccessResponse("{\"title\":\"Sky Highlights\",\"description\":\"Tonight's best events\",\"tags\":[\"astronomy\"],\"estimatedDurationSeconds\":780,\"scriptBody\":\"Look to the southwest for Jupiter.\",\"extra\":true}")
             });
 
         var sut = CreateService(handler);
@@ -67,7 +48,37 @@ public sealed class AzureOpenAiContentGenerationServiceTests
         Assert.Contains(ContentType.DailySkyGuide.ToString(), result.Tags);
     }
 
+    [Fact]
+    public async Task GenerateAsync_UsesManagedIdentityBearerToken_WhenConfigured()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new StubHttpMessageHandler(request =>
+        {
+            capturedRequest = request;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = BuildSuccessResponse("{\"title\":\"Sky Highlights\",\"description\":\"Tonight\",\"tags\":[\"astronomy\"],\"estimatedDurationSeconds\":60,\"scriptBody\":\"Observe Jupiter.\"}")
+            };
+        });
 
+        var sut = CreateService(
+            handler,
+            new AzureOpenAiOptions
+            {
+                Endpoint = "https://example.openai.azure.com",
+                ChatDeployment = "gpt-test",
+                UseManagedIdentity = true,
+                ManagedIdentityClientId = "client-id"
+            },
+            new StubTokenCredential("managed-token"));
+
+        await sut.GenerateAsync(ContentType.DailySkyGuide, BuildContext(), CancellationToken.None);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("Bearer", capturedRequest!.Headers.Authorization?.Scheme);
+        Assert.Equal("managed-token", capturedRequest.Headers.Authorization?.Parameter);
+        Assert.False(capturedRequest.Headers.Contains("api-key"));
+    }
 
     [Fact]
     public async Task GenerateShortAsync_ReturnsShortPayload_WhenJsonIsValid()
@@ -75,17 +86,7 @@ public sealed class AzureOpenAiContentGenerationServiceTests
         var handler = new StubHttpMessageHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""
-                    {
-                      "choices": [
-                        {
-                          "message": {
-                            "content": "{\"hook\":\"Watch this nebula rise tonight!\",\"shortScript\":\"Step outside right after sunset and look west for a glowing patch.\",\"title\":\"Nebula in 60 Seconds\",\"tags\":[\"shorts\",\"astronomy\"]}"
-                          }
-                        }
-                      ]
-                    }
-                    """, Encoding.UTF8, "application/json")
+                Content = BuildSuccessResponse("{\"hook\":\"Watch this nebula rise tonight!\",\"shortScript\":\"Step outside right after sunset and look west for a glowing patch.\",\"title\":\"Nebula in 60 Seconds\",\"tags\":[\"shorts\",\"astronomy\"]}")
             });
 
         var sut = CreateService(handler);
@@ -96,10 +97,13 @@ public sealed class AzureOpenAiContentGenerationServiceTests
         Assert.InRange(result.EstimatedDurationSeconds, 30, 60);
     }
 
-    private static AzureOpenAiContentGenerationService CreateService(HttpMessageHandler handler)
+    private static AzureOpenAiContentGenerationService CreateService(
+        HttpMessageHandler handler,
+        AzureOpenAiOptions? options = null,
+        TokenCredential? credential = null)
     {
         var client = new HttpClient(handler);
-        var options = Options.Create(new AzureOpenAiOptions
+        var resolvedOptions = Options.Create(options ?? new AzureOpenAiOptions
         {
             Endpoint = "https://example.openai.azure.com",
             ApiKey = "test-key",
@@ -108,10 +112,27 @@ public sealed class AzureOpenAiContentGenerationServiceTests
 
         return new AzureOpenAiContentGenerationService(
             client,
-            options,
+            resolvedOptions,
             new StubPromptBuilder(),
-            NullLogger<AzureOpenAiContentGenerationService>.Instance);
+            NullLogger<AzureOpenAiContentGenerationService>.Instance,
+            credential);
     }
+
+    private static StringContent BuildSuccessResponse(string content)
+        => new(
+            $$"""
+            {
+              "choices": [
+                {
+                  "message": {
+                    "content": "{{content}}"
+                  }
+                }
+              ]
+            }
+            """,
+            Encoding.UTF8,
+            "application/json");
 
     private static AstronomyContext BuildContext() => new()
     {
@@ -143,5 +164,16 @@ public sealed class AzureOpenAiContentGenerationServiceTests
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(_responder(request));
+    }
+
+    private sealed class StubTokenCredential(string token) : TokenCredential
+    {
+        private readonly AccessToken _accessToken = new(token, DateTimeOffset.UtcNow.AddMinutes(10));
+
+        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            => _accessToken;
+
+        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            => ValueTask.FromResult(_accessToken);
     }
 }

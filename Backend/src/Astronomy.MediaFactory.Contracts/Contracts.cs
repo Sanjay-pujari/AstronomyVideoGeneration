@@ -113,4 +113,5 @@ public sealed class AzureOpenAiOptions
     public string ApiKey { get; set; } = "";
     public string ChatDeployment { get; set; } = "";
     public bool UseManagedIdentity { get; set; }
+    public string? ManagedIdentityClientId { get; set; }
 }

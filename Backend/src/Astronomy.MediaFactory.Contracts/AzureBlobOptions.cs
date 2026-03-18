@@ -7,5 +7,6 @@ public sealed class AzureBlobOptions
     public string? AccountName { get; set; }
     public string? ServiceUri { get; set; }
     public bool UseManagedIdentity { get; set; }
+    public string? ManagedIdentityClientId { get; set; }
     public string ContainerName { get; set; } = "astronomy-videos";
 }

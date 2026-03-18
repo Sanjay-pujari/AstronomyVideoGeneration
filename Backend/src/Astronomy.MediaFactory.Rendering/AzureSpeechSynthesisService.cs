@@ -35,16 +35,11 @@ public sealed class AzureSpeechSynthesisService : ISpeechSynthesisService
 
         try
         {
-            if (string.IsNullOrWhiteSpace(_options.Key) || string.IsNullOrWhiteSpace(_options.Region))
-            {
-                throw new InvalidOperationException("Azure Speech configuration is missing Key and/or Region.");
-            }
+            EnsureSpeechConfigurationIsUsable();
 
             var audioBytes = await _speechClient.SynthesizeMp3Async(
                 script,
-                _options.Key,
-                _options.Region,
-                _options.Voice,
+                _options,
                 cancellationToken);
 
             await _fileSystem.WriteAllBytesAsync(audioPath, audioBytes, cancellationToken);
@@ -56,5 +51,22 @@ public sealed class AzureSpeechSynthesisService : ISpeechSynthesisService
             await _fileSystem.WriteAllBytesAsync(audioPath, Array.Empty<byte>(), cancellationToken);
             return audioPath;
         }
+    }
+
+    private void EnsureSpeechConfigurationIsUsable()
+    {
+        if (_options.UseManagedIdentity)
+        {
+            if (string.IsNullOrWhiteSpace(_options.Region) || string.IsNullOrWhiteSpace(_options.ResourceId))
+                throw new InvalidOperationException("Azure Speech managed identity requires Region and ResourceId.");
+
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_options.Key))
+            throw new InvalidOperationException("Azure Speech configuration is missing Key.");
+
+        if (string.IsNullOrWhiteSpace(_options.Region) && string.IsNullOrWhiteSpace(_options.Endpoint))
+            throw new InvalidOperationException("Azure Speech configuration is missing Region and/or Endpoint.");
     }
 }

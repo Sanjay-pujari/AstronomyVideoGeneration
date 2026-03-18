@@ -31,18 +31,22 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<AzureOpenAiOptions>()
             .Bind(configuration.GetSection(AzureOpenAiOptions.SectionName))
-            .Validate(options => string.IsNullOrWhiteSpace(options.Endpoint) || Uri.TryCreate(options.Endpoint, UriKind.Absolute, out _), "AzureOpenAI:Endpoint must be an absolute URI when provided.")
+            .Validate(options => !AzureConfigurationValidation.ValidateOpenAi(options, requireConfiguration: false).Any(), "AzureOpenAI settings are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<AzureSpeechOptions>()
             .Bind(configuration.GetSection(AzureSpeechOptions.SectionName))
-            .Validate(options => !string.IsNullOrWhiteSpace(options.Region) || !string.IsNullOrWhiteSpace(options.Endpoint), "AzureSpeech:Region or AzureSpeech:Endpoint is required.")
+            .Validate(options => !AzureConfigurationValidation.ValidateSpeech(options, requireConfiguration: false).Any(), "AzureSpeech settings are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<AzureBlobOptions>()
             .Bind(configuration.GetSection(AzureBlobOptions.SectionName))
-            .Validate(options => !string.IsNullOrWhiteSpace(options.ContainerName), "AzureBlob:ContainerName is required.")
-            .Validate(options => string.IsNullOrWhiteSpace(options.ServiceUri) || Uri.TryCreate(options.ServiceUri, UriKind.Absolute, out _), "AzureBlob:ServiceUri must be an absolute URI when provided.")
+            .Validate(options => !AzureConfigurationValidation.ValidateBlob(options, requireConfiguration: false).Any(), "AzureBlob settings are invalid.")
+            .ValidateOnStart();
+
+        services.AddOptions<KeyVaultOptions>()
+            .Bind(configuration.GetSection(KeyVaultOptions.SectionName))
+            .Validate(options => !AzureConfigurationValidation.ValidateKeyVault(options).Any(), "KeyVault settings are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<YouTubeOptions>()

@@ -15,7 +15,7 @@ public sealed class StartupValidationTests
         var validator = CreateValidator(
             environmentName: Environments.Production,
             openAi: new AzureOpenAiOptions(),
-            speech: new AzureSpeechOptions(),
+            speech: new AzureSpeechOptions { UseManagedIdentity = true, Region = "eastus" },
             blob: new AzureBlobOptions(),
             sidecar: new SkyfieldSidecarOptions { Enabled = true, BaseUrl = "not-a-uri" },
             youTube: new YouTubeOptions { PublishingEnabled = true });
@@ -25,6 +25,7 @@ public sealed class StartupValidationTests
         Assert.True(result.Failed);
         Assert.Contains(result.Failures!, x => x.Contains("AzureOpenAI:Endpoint"));
         Assert.Contains(result.Failures!, x => x.Contains("AzureBlob"));
+        Assert.Contains(result.Failures!, x => x.Contains("AzureSpeech:ResourceId"));
         Assert.Contains(result.Failures!, x => x.Contains("YouTube"));
     }
 
@@ -34,7 +35,7 @@ public sealed class StartupValidationTests
         var validator = CreateValidator(
             environmentName: Environments.Production,
             openAi: new AzureOpenAiOptions { Endpoint = "https://example.openai.azure.com", ChatDeployment = "gpt-4o", UseManagedIdentity = true },
-            speech: new AzureSpeechOptions { Region = "eastus", UseManagedIdentity = true },
+            speech: new AzureSpeechOptions { Region = "eastus", ResourceId = "/subscriptions/123/resourceGroups/rg/providers/Microsoft.CognitiveServices/accounts/speech", UseManagedIdentity = true },
             blob: new AzureBlobOptions { UseManagedIdentity = true, AccountName = "myaccount", ContainerName = "videos" },
             sidecar: new SkyfieldSidecarOptions { Enabled = true, BaseUrl = "https://sidecar.internal" },
             youTube: new YouTubeOptions { PublishingEnabled = false });

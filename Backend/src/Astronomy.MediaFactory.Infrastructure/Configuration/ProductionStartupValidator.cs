@@ -36,36 +36,14 @@ public sealed class ProductionStartupValidator : IValidateOptions<StartupValidat
 
         var errors = new List<string>();
 
-        var openAi = _openAi.Value;
         if (options.RequireAzureOpenAi)
-        {
-            if (!Uri.TryCreate(openAi.Endpoint, UriKind.Absolute, out _))
-                errors.Add("AzureOpenAI:Endpoint must be an absolute URI in non-development environments.");
-            if (string.IsNullOrWhiteSpace(openAi.ChatDeployment))
-                errors.Add("AzureOpenAI:ChatDeployment is required in non-development environments.");
-            if (!openAi.UseManagedIdentity && string.IsNullOrWhiteSpace(openAi.ApiKey))
-                errors.Add("AzureOpenAI:ApiKey is required unless AzureOpenAI:UseManagedIdentity=true.");
-        }
+            errors.AddRange(AzureConfigurationValidation.ValidateOpenAi(_openAi.Value, requireConfiguration: true));
 
-        var speech = _speech.Value;
         if (options.RequireAzureSpeech)
-        {
-            if (string.IsNullOrWhiteSpace(speech.Region) && string.IsNullOrWhiteSpace(speech.Endpoint))
-                errors.Add("AzureSpeech:Region or AzureSpeech:Endpoint must be configured in non-development environments.");
-            if (!speech.UseManagedIdentity && string.IsNullOrWhiteSpace(speech.Key))
-                errors.Add("AzureSpeech:Key is required unless AzureSpeech:UseManagedIdentity=true.");
-        }
+            errors.AddRange(AzureConfigurationValidation.ValidateSpeech(_speech.Value, requireConfiguration: true));
 
-        var blob = _blob.Value;
         if (options.RequireBlobStorage)
-        {
-            var hasConnection = !string.IsNullOrWhiteSpace(blob.ConnectionString);
-            var hasManagedIdentityPath = blob.UseManagedIdentity && (!string.IsNullOrWhiteSpace(blob.AccountName) || !string.IsNullOrWhiteSpace(blob.ServiceUri));
-            if (!hasConnection && !hasManagedIdentityPath)
-                errors.Add("AzureBlob requires either AzureBlob:ConnectionString or managed identity settings (AzureBlob:UseManagedIdentity=true with AzureBlob:AccountName or AzureBlob:ServiceUri).");
-            if (string.IsNullOrWhiteSpace(blob.ContainerName))
-                errors.Add("AzureBlob:ContainerName is required in non-development environments.");
-        }
+            errors.AddRange(AzureConfigurationValidation.ValidateBlob(_blob.Value, requireConfiguration: true));
 
         var sidecar = _sidecar.Value;
         if (options.RequireSkyfieldWhenEnabled && sidecar.Enabled && !Uri.TryCreate(sidecar.BaseUrl, UriKind.Absolute, out _))
