@@ -99,8 +99,8 @@ public sealed class PlatformMetadataFormatterTests
         var instagram = _formatter.FormatTarget(ShortFormPlatform.InstagramReels, request);
 
         Assert.True(youtube.Caption.Length <= 120);
-        Assert.DoesNotEndWith("-", youtube.Caption);
-        Assert.DoesNotEndWith(",", youtube.Caption);
+        Assert.False(youtube.Caption.EndsWith("-", StringComparison.Ordinal));
+        Assert.False(youtube.Caption.EndsWith(",", StringComparison.Ordinal));
         Assert.True(instagram.Caption.Length <= 280);
     }
 
