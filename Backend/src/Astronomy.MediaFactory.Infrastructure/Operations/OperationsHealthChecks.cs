@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -51,10 +52,8 @@ public sealed class OperationsConfigHealthCheck : IHealthCheck
         if (_sidecar.Enabled && !Uri.TryCreate(_sidecar.BaseUrl, UriKind.Absolute, out _))
             issues.Add("SkyfieldSidecar:BaseUrl invalid while enabled");
 
-        var blobConfigured = !string.IsNullOrWhiteSpace(_blob.ConnectionString)
-                             || (_blob.UseManagedIdentity && (!string.IsNullOrWhiteSpace(_blob.AccountName) || !string.IsNullOrWhiteSpace(_blob.ServiceUri)));
-        if (!blobConfigured)
-            issues.Add("AzureBlob has no connection string or managed identity settings");
+        issues.AddRange(AzureConfigurationValidation.ValidateBlob(_blob, requireConfiguration: true)
+            .Where(issue => issue.Contains("AzureBlob", StringComparison.Ordinal)));
 
         if (_youTube.PublishingEnabled && (string.IsNullOrWhiteSpace(_youTube.ClientId) || string.IsNullOrWhiteSpace(_youTube.ClientSecret)))
             issues.Add("YouTube credentials missing while publishing is enabled");

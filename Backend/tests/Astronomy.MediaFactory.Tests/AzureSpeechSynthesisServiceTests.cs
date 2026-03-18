@@ -38,15 +38,17 @@ public sealed class AzureSpeechSynthesisServiceTests
     }
 
     [Theory]
-    [InlineData(null, "eastus")]
-    [InlineData("fake-key", null)]
-    [InlineData("", "eastus")]
-    [InlineData("fake-key", "")]
-    public async Task SynthesizeAsync_WritesPlaceholderAudio_WhenConfigurationIsMissing(string? key, string? region)
+    [InlineData(null, "eastus", null, false)]
+    [InlineData("", "eastus", null, false)]
+    [InlineData("fake-key", null, null, false)]
+    [InlineData("fake-key", "", null, false)]
+    [InlineData(null, "eastus", null, true)]
+    [InlineData(null, "eastus", "", true)]
+    public async Task SynthesizeAsync_WritesPlaceholderAudio_WhenConfigurationIsMissing(string? key, string? region, string? resourceId, bool useManagedIdentity)
     {
         var fileSystem = new InMemoryFileSystem();
         var client = new StubAzureSpeechClient(_ => Task.FromResult(new byte[] { 9 }));
-        var sut = CreateService(client, fileSystem, key, region);
+        var sut = CreateService(client, fileSystem, key, region, resourceId, useManagedIdentity);
 
         var audioPath = await sut.SynthesizeAsync("Config fallback", "/tmp/missing-config", CancellationToken.None);
 
@@ -54,6 +56,33 @@ public sealed class AzureSpeechSynthesisServiceTests
         Assert.Equal("Config fallback", fileSystem.TextWrites[Path.Combine("/tmp/missing-config", "narration.txt")]);
         Assert.Empty(fileSystem.ByteWrites[Path.Combine("/tmp/missing-config", "narration.mp3")]);
         Assert.False(client.WasCalled);
+    }
+
+    [Fact]
+    public async Task SynthesizeAsync_UsesManagedIdentityConfiguration_WhenConfigured()
+    {
+        var fileSystem = new InMemoryFileSystem();
+        AzureSpeechOptions? capturedOptions = null;
+        var client = new StubAzureSpeechClient(options =>
+        {
+            capturedOptions = options;
+            return Task.FromResult(new byte[] { 7, 8 });
+        });
+        var sut = CreateService(
+            client,
+            fileSystem,
+            key: null,
+            region: "eastus",
+            resourceId: "/subscriptions/123/resourceGroups/rg/providers/Microsoft.CognitiveServices/accounts/speech",
+            useManagedIdentity: true);
+
+        var audioPath = await sut.SynthesizeAsync("MI script", "/tmp/managed-identity", CancellationToken.None);
+
+        Assert.Equal(Path.Combine("/tmp/managed-identity", "narration.mp3"), audioPath);
+        Assert.NotNull(capturedOptions);
+        Assert.True(capturedOptions!.UseManagedIdentity);
+        Assert.Equal("eastus", capturedOptions.Region);
+        Assert.Contains("Microsoft.CognitiveServices", capturedOptions.ResourceId);
     }
 
     [Fact]
@@ -75,28 +104,32 @@ public sealed class AzureSpeechSynthesisServiceTests
         IAzureSpeechClient speechClient,
         IFileSystem fileSystem,
         string? key = "fake-key",
-        string? region = "eastus")
+        string? region = "eastus",
+        string? resourceId = null,
+        bool useManagedIdentity = false)
     {
         var options = Options.Create(new AzureSpeechOptions
         {
             Key = key,
             Region = region,
+            ResourceId = resourceId,
+            UseManagedIdentity = useManagedIdentity,
             Voice = "en-US-FableMultilingualNeural"
         });
 
         return new AzureSpeechSynthesisService(options, speechClient, fileSystem, NullLogger<AzureSpeechSynthesisService>.Instance);
     }
 
-    private sealed class StubAzureSpeechClient(Func<string, Task<byte[]>> synthesizer) : IAzureSpeechClient
+    private sealed class StubAzureSpeechClient(Func<AzureSpeechOptions, Task<byte[]>> synthesizer) : IAzureSpeechClient
     {
-        private readonly Func<string, Task<byte[]>> _synthesizer = synthesizer;
+        private readonly Func<AzureSpeechOptions, Task<byte[]>> _synthesizer = synthesizer;
 
         public bool WasCalled { get; private set; }
 
-        public Task<byte[]> SynthesizeMp3Async(string text, string key, string region, string voice, CancellationToken cancellationToken)
+        public Task<byte[]> SynthesizeMp3Async(string text, AzureSpeechOptions options, CancellationToken cancellationToken)
         {
             WasCalled = true;
-            return _synthesizer(text);
+            return _synthesizer(options);
         }
     }
 

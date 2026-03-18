@@ -7,5 +7,7 @@ public sealed class AzureSpeechOptions
     public string Region { get; set; } = "";
     public string Endpoint { get; set; } = "";
     public bool UseManagedIdentity { get; set; }
+    public string? ResourceId { get; set; }
+    public string? ManagedIdentityClientId { get; set; }
     public string Voice { get; set; } = "en-US-FableMultilingualNeural";
 }

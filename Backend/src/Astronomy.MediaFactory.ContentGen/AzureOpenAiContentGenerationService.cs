@@ -4,6 +4,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Azure.Core;
+using Azure.Identity;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -16,19 +18,29 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
     private readonly HttpClient _httpClient;
     private readonly AzureOpenAiOptions _options;
+    private static readonly TokenRequestContext AzureCognitiveServicesScope = new(["https://cognitiveservices.azure.com/.default"]);
+
     private readonly IPromptBuilder _promptBuilder;
     private readonly ILogger<AzureOpenAiContentGenerationService> _logger;
+    private readonly TokenCredential? _credential;
 
     public AzureOpenAiContentGenerationService(
         HttpClient httpClient,
         IOptions<AzureOpenAiOptions> options,
         IPromptBuilder promptBuilder,
-        ILogger<AzureOpenAiContentGenerationService> logger)
+        ILogger<AzureOpenAiContentGenerationService> logger,
+        TokenCredential? credential = null)
     {
         _httpClient = httpClient;
         _options = options.Value;
         _promptBuilder = promptBuilder;
         _logger = logger;
+        _credential = _options.UseManagedIdentity
+            ? credential ?? new DefaultAzureCredential(new DefaultAzureCredentialOptions
+            {
+                ManagedIdentityClientId = string.IsNullOrWhiteSpace(_options.ManagedIdentityClientId) ? null : _options.ManagedIdentityClientId.Trim()
+            })
+            : credential;
     }
 
     public async Task<ScriptResult> GenerateAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
@@ -125,9 +137,14 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
     private async Task<string> RequestCompletionAsync(string prompt, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_options.Endpoint) || string.IsNullOrWhiteSpace(_options.ApiKey) || string.IsNullOrWhiteSpace(_options.ChatDeployment))
+        if (string.IsNullOrWhiteSpace(_options.Endpoint) || string.IsNullOrWhiteSpace(_options.ChatDeployment))
         {
-            throw new InvalidOperationException("Azure OpenAI configuration is missing Endpoint, ApiKey, or ChatDeployment.");
+            throw new InvalidOperationException("Azure OpenAI configuration is missing Endpoint and/or ChatDeployment.");
+        }
+
+        if (!_options.UseManagedIdentity && string.IsNullOrWhiteSpace(_options.ApiKey))
+        {
+            throw new InvalidOperationException("Azure OpenAI configuration is missing ApiKey while managed identity is disabled.");
         }
 
         var endpoint = _options.Endpoint.TrimEnd('/');
@@ -147,7 +164,17 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             })
         };
 
-        request.Headers.Add("api-key", _options.ApiKey);
+        if (_options.UseManagedIdentity)
+        {
+            var accessToken = await (_credential ?? throw new InvalidOperationException("Azure OpenAI managed identity credential is not available."))
+                .GetTokenAsync(AzureCognitiveServicesScope, cancellationToken);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken.Token);
+        }
+        else
+        {
+            request.Headers.Add("api-key", _options.ApiKey);
+        }
+
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         using var response = await _httpClient.SendAsync(request, cancellationToken);

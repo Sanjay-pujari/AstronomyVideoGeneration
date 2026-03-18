@@ -52,7 +52,10 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
 
             if (!string.IsNullOrWhiteSpace(serviceUri) && Uri.TryCreate(serviceUri, UriKind.Absolute, out var uri))
             {
-                var serviceClient = new BlobServiceClient(uri, new DefaultAzureCredential());
+                var serviceClient = new BlobServiceClient(uri, new DefaultAzureCredential(new DefaultAzureCredentialOptions
+                {
+                    ManagedIdentityClientId = string.IsNullOrWhiteSpace(_options.ManagedIdentityClientId) ? null : _options.ManagedIdentityClientId.Trim()
+                }));
                 return serviceClient.GetBlobContainerClient(_options.ContainerName);
             }
         }
