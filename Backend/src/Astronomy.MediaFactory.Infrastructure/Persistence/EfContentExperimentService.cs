@@ -129,10 +129,10 @@ public sealed class EfContentExperimentService : IContentExperimentService
             .ToDictionaryAsync(x => x.Id, cancellationToken);
 
         var analyticsByVideoId = (await _db.VideoAnalytics
-                .Where(x => videoIds.Contains(x.PublishedVideoId) && x.RetrievedAt >= earliestCreatedAt)
+                .Where(x => x.PublishedVideoId.HasValue && videoIds.Contains(x.PublishedVideoId.Value) && x.RetrievedAt >= earliestCreatedAt)
                 .OrderBy(x => x.RetrievedAt)
                 .ToListAsync(cancellationToken))
-            .GroupBy(x => x.PublishedVideoId)
+            .GroupBy(x => x.PublishedVideoId!.Value)
             .ToDictionary(x => x.Key, x => (IReadOnlyCollection<VideoAnalytics>)x.ToList());
 
         foreach (var experiment in experiments)
