@@ -349,4 +349,14 @@ public sealed class ExperimentFeedbackSnapshot
     public IReadOnlyCollection<string> WinningHooks { get; init; } = [];
     public IReadOnlyCollection<string> WinningThumbnailPatterns { get; init; } = [];
     public IReadOnlyCollection<string> WinningCallToActions { get; init; } = [];
+    public IReadOnlyCollection<ExperimentFeedbackInsight> Insights { get; init; } = [];
+}
+
+public sealed class ExperimentFeedbackInsight
+{
+    public ContentExperimentType ExperimentType { get; init; }
+    public string WinningValue { get; init; } = "";
+    public string WinningPattern { get; init; } = "";
+    public string WinningHook { get; init; } = "";
+    public VariantPerformanceMetrics Metrics { get; init; } = new();
 }

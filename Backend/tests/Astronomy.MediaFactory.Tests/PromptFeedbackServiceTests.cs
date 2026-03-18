@@ -63,6 +63,24 @@ public sealed class PromptFeedbackServiceTests
         Assert.NotEmpty(context.ShortsHookSuggestions);
     }
 
+
+    [Fact]
+    public async Task BuildContext_UsesStructuredExperimentInsightsInHints()
+    {
+        var service = BuildService(
+            new StubAnalyticsFeedbackProvider(),
+            new StubRepository(),
+            new StubExperimentService());
+
+        var context = await service.BuildContextAsync(new PromptFeedbackRequest
+        {
+            ContentType = ContentType.DailySkyGuide
+        }, CancellationToken.None);
+
+        Assert.Contains(context.MetadataOptimizationHints, x => x.Contains("Latest title winner delivered CTR", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(context.ThumbnailStrategyHints, x => x.Contains("Most recent thumbnail winner reached", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task BuildContext_FallsBack_WhenAnalyticsUnavailable()
     {
@@ -79,8 +97,8 @@ public sealed class PromptFeedbackServiceTests
         Assert.NotEmpty(context.RecommendedTitlePatterns);
     }
 
-    private static PromptFeedbackService BuildService(IAnalyticsFeedbackProvider analyticsFeedbackProvider, StubRepository repository)
-        => new(analyticsFeedbackProvider, repository, NullLogger<PromptFeedbackService>.Instance);
+    private static PromptFeedbackService BuildService(IAnalyticsFeedbackProvider analyticsFeedbackProvider, StubRepository repository, IContentExperimentService? contentExperimentService = null)
+        => new(analyticsFeedbackProvider, repository, NullLogger<PromptFeedbackService>.Instance, contentExperimentService);
 
     private sealed class StubAnalyticsFeedbackProvider : IAnalyticsFeedbackProvider
     {
@@ -137,4 +155,40 @@ public sealed class PromptFeedbackServiceTests
         public Task<GeneratedScript?> GetLatestScriptByTitleAsync(string title, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task SaveChangesAsync(CancellationToken cancellationToken) => throw new NotImplementedException();
     }
+
+    private sealed class StubExperimentService : IContentExperimentService
+    {
+        public Task InitializeExperimentsAsync(PublishedVideo publishedVideo, OptimizedVideoMetadata metadata, ThumbnailPlan thumbnailPlan, MonetizationPlan? monetizationPlan, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<ExperimentVariantAssignment> ResolveAssignmentsAsync(Guid videoId, CancellationToken cancellationToken) => Task.FromResult(new ExperimentVariantAssignment());
+        public Task EvaluateRecentExperimentsAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<ContentExperiment>> GetRecentExperimentsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<ContentExperiment>>([]);
+        public Task<ContentExperiment?> GetExperimentAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<ContentExperiment?>(null);
+        public Task<IReadOnlyCollection<ContentExperiment>> GetTopPerformingExperimentsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<ContentExperiment>>([]);
+        public Task<ExperimentFeedbackSnapshot> GetFeedbackSnapshotAsync(CancellationToken cancellationToken)
+            => Task.FromResult(new ExperimentFeedbackSnapshot
+            {
+                WinningTitlePatterns = ["Meteor Tonight: <N> Tips"],
+                WinningHooks = ["Meteor peak tonight"],
+                WinningThumbnailPatterns = ["TopBanner: METEOR PEAK"],
+                Insights =
+                [
+                    new ExperimentFeedbackInsight
+                    {
+                        ExperimentType = ContentExperimentType.Title,
+                        WinningValue = "Meteor Tonight: 3 Tips",
+                        WinningPattern = "Meteor Tonight: <N> Tips",
+                        WinningHook = "Meteor peak tonight",
+                        Metrics = new VariantPerformanceMetrics { Views = 420, Ctr = 6.3, EngagementScore = 58.2 }
+                    },
+                    new ExperimentFeedbackInsight
+                    {
+                        ExperimentType = ContentExperimentType.Thumbnail,
+                        WinningValue = "TopBanner: METEOR PEAK",
+                        WinningPattern = "TopBanner: METEOR PEAK",
+                        Metrics = new VariantPerformanceMetrics { Views = 510, Ctr = 4.9, EngagementScore = 55.4 }
+                    }
+                ]
+            });
+    }
+
 }
