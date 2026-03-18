@@ -19,6 +19,68 @@ public sealed class RecoveryOperationsTests
     }
 
     [Fact]
+    public void ReplayEligibility_RequiresExplicitCompletedRunOptIn()
+    {
+        var run = new PipelineRun
+        {
+            RunDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            ContentType = ContentType.DailySkyGuide,
+            LocationName = "Pune",
+            Status = PipelineRunStatus.Succeeded
+        };
+
+        var rejected = RecoveryRequestValidator.GetReplayEligibility(run, new ReplayPipelineRequest("manual"));
+        var allowed = RecoveryRequestValidator.GetReplayEligibility(run, new ReplayPipelineRequest("manual", ReplayBehavior: ReplayBehavior.AllowCompletedRuns));
+        var legacyAllowed = RecoveryRequestValidator.GetReplayEligibility(run, new ReplayPipelineRequest("manual", AllowReplayOfSucceededRun: true));
+
+        Assert.False(rejected.CanReplay);
+        Assert.Equal("Replay of a successful run requires ReplayBehavior=AllowCompletedRuns to avoid duplicate content.", rejected.RejectionReason);
+        Assert.True(allowed.CanReplay);
+        Assert.True(legacyAllowed.CanReplay);
+    }
+
+    [Fact]
+    public async Task RecoverStaleJobs_UsesNextAttemptForRetryingJobs()
+    {
+        await using var db = CreateDb();
+        var run = new PipelineRun { RunDate = DateOnly.FromDateTime(DateTime.UtcNow), ContentType = ContentType.DailySkyGuide, LocationName = "Pune", Status = PipelineRunStatus.Failed };
+        var staleRetrying = new PipelineJob
+        {
+            ParentPipelineRunId = run.Id,
+            JobType = PipelineJobType.PublishVideo,
+            RunDate = run.RunDate,
+            ContentType = run.ContentType,
+            LocationName = run.LocationName,
+            Status = PipelineJobStatus.Retrying,
+            ScheduledAt = DateTimeOffset.UtcNow.AddDays(-3),
+            NextAttemptAt = DateTimeOffset.UtcNow.AddHours(-2)
+        };
+        var waitingRetrying = new PipelineJob
+        {
+            ParentPipelineRunId = run.Id,
+            JobType = PipelineJobType.ArchiveAssets,
+            RunDate = run.RunDate,
+            ContentType = run.ContentType,
+            LocationName = run.LocationName,
+            Status = PipelineJobStatus.Retrying,
+            ScheduledAt = DateTimeOffset.UtcNow.AddDays(-3),
+            NextAttemptAt = DateTimeOffset.UtcNow.AddMinutes(30)
+        };
+
+        db.PipelineRuns.Add(run);
+        db.PipelineJobs.AddRange(staleRetrying, waitingRetrying);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        var summary = await service.RecoverStaleJobsAsync(new RecoverStaleJobsRequest("manual", "recover", ThresholdMinutes: 60, RecoverIncompleteRuns: false), CancellationToken.None);
+
+        Assert.Equal(1, summary.MarkedStaleJobs);
+        Assert.Contains(staleRetrying.Id, summary.AffectedJobIds);
+        Assert.DoesNotContain(waitingRetrying.Id, summary.AffectedJobIds);
+        Assert.False(await db.PipelineJobs.Where(x => x.Id == waitingRetrying.Id).Select(x => x.IsStale).SingleAsync());
+    }
+
+    [Fact]
     public async Task RecoverStaleJobs_MarksAndRequeuesCandidates_WithoutTouchingSuccessfulJobs()
     {
         await using var db = CreateDb();
@@ -100,8 +162,10 @@ public sealed class RecoveryOperationsTests
         var newStage = new PipelineStageExecution { PipelineRunId = Guid.NewGuid(), StageName = "Render", StartedAt = DateTimeOffset.UtcNow.AddDays(-2) };
         var oldJob = new PipelineJob { JobType = PipelineJobType.ArchiveAssets, RunDate = DateOnly.FromDateTime(DateTime.UtcNow), ContentType = ContentType.SpaceNews, LocationName = "Pune", Status = PipelineJobStatus.Failed, ScheduledAt = DateTimeOffset.UtcNow.AddDays(-45) };
         var runningJob = new PipelineJob { JobType = PipelineJobType.PublishVideo, RunDate = DateOnly.FromDateTime(DateTime.UtcNow), ContentType = ContentType.SpaceNews, LocationName = "Pune", Status = PipelineJobStatus.Running, ScheduledAt = DateTimeOffset.UtcNow.AddDays(-45) };
+        var pendingJob = new PipelineJob { JobType = PipelineJobType.GenerateShorts, RunDate = DateOnly.FromDateTime(DateTime.UtcNow), ContentType = ContentType.SpaceNews, LocationName = "Pune", Status = PipelineJobStatus.Pending, ScheduledAt = DateTimeOffset.UtcNow.AddDays(-45) };
+        var retryingJob = new PipelineJob { JobType = PipelineJobType.GenerateMainVideo, RunDate = DateOnly.FromDateTime(DateTime.UtcNow), ContentType = ContentType.SpaceNews, LocationName = "Pune", Status = PipelineJobStatus.Retrying, ScheduledAt = DateTimeOffset.UtcNow.AddDays(-45), NextAttemptAt = DateTimeOffset.UtcNow.AddDays(-1) };
         var oldAnalytics = new VideoAnalytics { VideoId = "v1", RetrievedAt = DateTimeOffset.UtcNow.AddDays(-120), ContentType = ContentType.SpaceNews };
-        db.AddRange(oldStage, newStage, oldJob, runningJob, oldAnalytics);
+        db.AddRange(oldStage, newStage, oldJob, runningJob, pendingJob, retryingJob, oldAnalytics);
         await db.SaveChangesAsync();
 
         var workingDir = Directory.CreateTempSubdirectory("maintenance").FullName;
@@ -130,6 +194,8 @@ public sealed class RecoveryOperationsTests
         Assert.False(File.Exists(oldFile));
         Assert.True(File.Exists(freshFile));
         Assert.True(await db.PipelineJobs.AnyAsync(x => x.Id == runningJob.Id));
+        Assert.True(await db.PipelineJobs.AnyAsync(x => x.Id == pendingJob.Id));
+        Assert.True(await db.PipelineJobs.AnyAsync(x => x.Id == retryingJob.Id));
     }
 
     private static MediaFactoryDbContext CreateDb()

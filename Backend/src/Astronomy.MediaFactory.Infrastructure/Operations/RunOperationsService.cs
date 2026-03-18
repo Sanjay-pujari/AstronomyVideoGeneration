@@ -59,11 +59,9 @@ public sealed class RunOperationsService : IRunOperationsService
         var run = await RequireRunAsync(runId, cancellationToken);
         return await TrackOperationAsync(RecoveryOperationType.ReplayPipeline, runId, null, request.RequestedBy, request.Notes, async operation =>
         {
-            if (run.Status == PipelineRunStatus.Succeeded && !request.AllowReplayOfSucceededRun)
-                throw new InvalidOperationException("Replay of a successful run requires AllowReplayOfSucceededRun=true to avoid duplicate content.");
-
-            if (run.Status == PipelineRunStatus.Running)
-                throw new InvalidOperationException("Cannot replay a run that is currently running.");
+            var eligibility = RecoveryRequestValidator.GetReplayEligibility(run, request);
+            if (!eligibility.CanReplay)
+                throw new InvalidOperationException(eligibility.RejectionReason!);
 
             var queuedJob = await _queue.EnqueueAsync(new EnqueuePipelineJobRequest(
                 PipelineJobType.GenerateMainVideo,
@@ -364,30 +362,20 @@ public sealed class RunOperationsService : IRunOperationsService
         return await TrackOperationAsync(RecoveryOperationType.RecoverStaleJobs, null, null, request.RequestedBy, request.Notes, async operation =>
         {
             var thresholdMinutes = request.ThresholdMinutes ?? _maintenanceOptions.StaleJobThresholdMinutes;
-            var staleBefore = DateTimeOffset.UtcNow.AddMinutes(-thresholdMinutes);
-            var candidates = await _db.PipelineJobs
-                .Where(x => (x.Status == PipelineJobStatus.Running && x.StartedAt <= staleBefore)
-                    || ((x.Status == PipelineJobStatus.Retrying || x.Status == PipelineJobStatus.Pending) && x.ScheduledAt <= staleBefore))
-                .ToListAsync(cancellationToken);
+            var now = DateTimeOffset.UtcNow;
+            var staleBefore = now.AddMinutes(-thresholdMinutes);
+            var candidates = await GetStaleJobCandidatesAsync(staleBefore, cancellationToken);
 
             var markedIds = new List<Guid>();
             var requeuedIds = new List<Guid>();
             foreach (var job in candidates)
             {
-                job.IsStale = true;
-                job.StaleDetectedAt = DateTimeOffset.UtcNow;
-                job.RecoveryNotes = AppendNote(job.RecoveryNotes, $"Marked stale by {request.RequestedBy} after {thresholdMinutes} minutes. {request.Notes}");
-                job.Status = PipelineJobStatus.Stale;
+                MarkJobAsStale(job, request, thresholdMinutes, now);
                 markedIds.Add(job.Id);
 
                 if (request.RequeueRecoveredJobs)
                 {
-                    job.Status = PipelineJobStatus.Pending;
-                    job.ScheduledAt = DateTimeOffset.UtcNow;
-                    job.StartedAt = null;
-                    job.FinishedAt = null;
-                    job.NextAttemptAt = null;
-                    job.ErrorMessage = null;
+                    RequeueRecoveredJob(job, now);
                     requeuedIds.Add(job.Id);
                 }
             }
@@ -444,6 +432,37 @@ public sealed class RunOperationsService : IRunOperationsService
             PublishToYouTube = run.PublishToYouTube
         }, cancellationToken);
     }
+
+    private Task<List<PipelineJob>> GetStaleJobCandidatesAsync(DateTimeOffset staleBefore, CancellationToken cancellationToken)
+        => _db.PipelineJobs
+            .Where(x => !x.IsStale)
+            .Where(x => (x.Status == PipelineJobStatus.Running && x.StartedAt.HasValue && x.StartedAt <= staleBefore)
+                || (x.Status == PipelineJobStatus.Pending && x.ScheduledAt <= staleBefore)
+                || (x.Status == PipelineJobStatus.Retrying && x.NextAttemptAt.HasValue && x.NextAttemptAt <= staleBefore))
+            .ToListAsync(cancellationToken);
+
+    private static void MarkJobAsStale(PipelineJob job, RecoverStaleJobsRequest request, int thresholdMinutes, DateTimeOffset detectedAt)
+    {
+        job.IsStale = true;
+        job.StaleDetectedAt = detectedAt;
+        job.RecoveryNotes = AppendNote(job.RecoveryNotes, $"Marked stale by {request.RequestedBy} after {thresholdMinutes} minutes. {request.Notes}");
+        job.Status = PipelineJobStatus.Stale;
+        job.Touch();
+    }
+
+    private static void RequeueRecoveredJob(PipelineJob job, DateTimeOffset scheduledAt)
+    {
+        job.Status = PipelineJobStatus.Pending;
+        job.ScheduledAt = scheduledAt;
+        job.StartedAt = null;
+        job.FinishedAt = null;
+        job.NextAttemptAt = null;
+        job.ErrorMessage = null;
+        job.IsStale = false;
+        job.StaleDetectedAt = null;
+        job.Touch();
+    }
+
 
     private async Task<PipelineRun> RequireRunAsync(Guid runId, CancellationToken cancellationToken)
         => await _db.PipelineRuns.FirstOrDefaultAsync(x => x.Id == runId, cancellationToken)
