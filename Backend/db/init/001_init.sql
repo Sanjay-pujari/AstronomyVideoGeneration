@@ -250,3 +250,20 @@ create table if not exists content_variants
 );
 
 create index if not exists ix_content_variants_experiment_winner on content_variants(content_experiment_id, is_winner);
+
+
+create table if not exists platform_publication_records
+(
+    id uuid primary key,
+    created_utc timestamptz not null,
+    updated_utc timestamptz null,
+    parent_short_video_id uuid not null references short_videos(id),
+    platform integer not null,
+    external_post_id text null,
+    external_url text null,
+    status integer not null,
+    published_at timestamptz null,
+    error_message text null
+);
+
+create index if not exists ix_platform_publication_records_short_platform on platform_publication_records(parent_short_video_id, platform, published_at desc);

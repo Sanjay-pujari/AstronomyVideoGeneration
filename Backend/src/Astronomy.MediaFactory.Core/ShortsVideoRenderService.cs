@@ -11,9 +11,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private readonly IVisualAssetProvider _visualAssetProvider;
     private readonly IVideoRenderService _videoRenderService;
     private readonly IAzureBlobStorageService _blobStorageService;
-    private readonly IYouTubePublishingService _youTubePublishingService;
     private readonly IMetadataOptimizationService _metadataOptimizationService;
-    private readonly YouTubeOptions _youTubeOptions;
     private readonly ILogger<ShortsVideoRenderService> _logger;
     private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
@@ -38,9 +36,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         _visualAssetProvider = visualAssetProvider;
         _videoRenderService = videoRenderService;
         _blobStorageService = blobStorageService;
-        _youTubePublishingService = youTubePublishingService;
         _metadataOptimizationService = metadataOptimizationService;
-        _youTubeOptions = youTubeOptions.Value;
         _logger = logger;
         _contentMonetizationService = contentMonetizationService;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
@@ -164,37 +160,13 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             _logger.LogError(ex, "Shorts blob upload failed. Continuing with local artifacts.");
         }
 
-        string? youtubeVideoId = null;
-        var publishStatus = publishToYouTube ? "Published" : "Skipped";
-        if (publishToYouTube)
-        {
-            try
-            {
-                var chosenTitle = shortScript.OptimizedMetadata?.PrimaryTitle ?? shortScript.Title;
-                var title = chosenTitle.Length > 90 ? chosenTitle[..90] : chosenTitle;
-                var tags = (shortScript.OptimizedMetadata?.Tags ?? shortScript.Tags).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                if (!tags.Contains("shorts", StringComparer.OrdinalIgnoreCase)) tags.Add("shorts");
-                youtubeVideoId = await _youTubePublishingService.UploadAsync(videoPath, title, shortScript.OptimizedMetadata?.OptimizedDescription ?? shortScript.ShortScript, tags.ToArray(), _youTubeOptions.PrivacyStatus, cancellationToken);
-                if (string.IsNullOrWhiteSpace(youtubeVideoId))
-                {
-                    publishStatus = "UploadFailed";
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Shorts YouTube upload failed.");
-                publishStatus = "UploadFailed";
-            }
-        }
-
         return new ShortVideoRenderResult
         {
             Script = shortScript,
             AudioPath = shortAudioPath,
             VideoPath = videoPath,
             BlobUrl = blobUrl,
-            YouTubeVideoId = youtubeVideoId,
-            PublishStatus = publishStatus
+            PublishStatus = publishToYouTube ? "ReadyToPublish" : "Skipped"
         };
     }
 }

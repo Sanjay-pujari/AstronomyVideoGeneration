@@ -31,6 +31,7 @@ public sealed class PipelineOrchestrator
     private readonly IStageAlertPublisher _stageAlertPublisher;
     private readonly IOperationalAlertNotifier? _operationalAlertNotifier;
     private readonly IContentExperimentService? _contentExperimentService;
+    private readonly IShortFormPublishingService? _shortFormPublishingService;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -56,7 +57,8 @@ public sealed class PipelineOrchestrator
         IStageAlertPublisher? stageAlertPublisher = null,
         IOperationalAlertNotifier? operationalAlertNotifier = null,
         IOptions<OperationsOptions>? operationsOptions = null,
-        IContentExperimentService? contentExperimentService = null)
+        IContentExperimentService? contentExperimentService = null,
+        IShortFormPublishingService? shortFormPublishingService = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -82,6 +84,7 @@ public sealed class PipelineOrchestrator
         _stageAlertPublisher = stageAlertPublisher ?? new NullStageAlertPublisher();
         _operationalAlertNotifier = operationalAlertNotifier;
         _contentExperimentService = contentExperimentService;
+        _shortFormPublishingService = shortFormPublishingService;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -507,13 +510,50 @@ public sealed class PipelineOrchestrator
                     SizeBytes = File.Exists(shortResult.VideoPath) ? new FileInfo(shortResult.VideoPath).Length : 0
                 }, cancellationToken);
 
-                await _repository.AddShortVideoAsync(new ShortVideo
+                var shortVideo = new ShortVideo
                 {
                     ParentVideoId = publishedVideo.Id,
                     YouTubeVideoId = shortResult.YouTubeVideoId,
                     Duration = shortResult.Script.EstimatedDurationSeconds,
                     CreatedAt = DateTimeOffset.UtcNow
-                }, cancellationToken);
+                };
+                await _repository.AddShortVideoAsync(shortVideo, cancellationToken);
+                await _repository.SaveChangesAsync(cancellationToken);
+
+                if (_shortFormPublishingService is not null)
+                {
+                    var publicationResults = await _shortFormPublishingService.PublishAsync(new ShortFormPublicationRequest
+                    {
+                        ParentShortVideoId = shortVideo.Id,
+                        ContentType = request.ContentType,
+                        PublishToYouTube = request.PublishToYouTube,
+                        Title = shortResult.Script.OptimizedMetadata?.PrimaryTitle ?? shortResult.Script.Title,
+                        Caption = shortResult.Script.OptimizedMetadata?.OptimizedDescription ?? shortResult.Script.ShortScript,
+                        HookLine = shortResult.Script.OptimizedMetadata?.HookLine ?? shortResult.Script.Hook,
+                        Tags = shortResult.Script.OptimizedMetadata?.Tags ?? shortResult.Script.Tags,
+                        Hashtags = shortResult.Script.OptimizedMetadata?.Hashtags ?? [],
+                        VideoPath = shortResult.VideoPath,
+                        ThumbnailPath = thumbnailPath
+                    }, cancellationToken);
+
+                    foreach (var publication in publicationResults)
+                    {
+                        await _repository.AddPlatformPublicationRecordAsync(new PlatformPublicationRecord
+                        {
+                            ParentShortVideoId = shortVideo.Id,
+                            Platform = publication.Platform,
+                            ExternalPostId = publication.ExternalPostId,
+                            ExternalUrl = publication.ExternalUrl,
+                            Status = publication.Status,
+                            PublishedAt = publication.PublishedAt,
+                            ErrorMessage = publication.ErrorMessage
+                        }, cancellationToken);
+                    }
+
+                    shortVideo.YouTubeVideoId = publicationResults
+                        .FirstOrDefault(x => x.Platform == ShortFormPlatform.YouTubeShorts && x.Status == PlatformPublicationStatus.Published)
+                        ?.ExternalPostId;
+                }
             }
 
             run.Status = PipelineRunStatus.Succeeded;

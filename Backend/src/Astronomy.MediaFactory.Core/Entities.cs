@@ -103,6 +103,17 @@ public sealed class ShortVideo : EntityBase
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class PlatformPublicationRecord : EntityBase
+{
+    public Guid ParentShortVideoId { get; set; }
+    public ShortFormPlatform Platform { get; set; }
+    public string? ExternalPostId { get; set; }
+    public string? ExternalUrl { get; set; }
+    public PlatformPublicationStatus Status { get; set; }
+    public DateTimeOffset? PublishedAt { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
 public sealed class MonetizationRecord : EntityBase
 {
     public Guid? VideoId { get; set; }
