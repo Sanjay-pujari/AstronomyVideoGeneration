@@ -1,24 +1,39 @@
-# Astronomy Media Factory v6
+# Astronomy Media Factory Backend
 
-v6 upgrades the solution toward a real automated astronomy video pipeline.
+## Overview
+Astronomy Media Factory is the backend for an AI-assisted astronomy video generation pipeline. The backend is feature-complete and focuses on long-form generation, short-form derivatives, operational recovery, publishing, analytics, monetization metadata, and deployment hardening.
 
-## New in v6
-- service separation for AstroData, ContentGen, Rendering, Publishing
-- scaffolds for NASA APOD, NASA NeoWs, MPC, Skyfield sidecar, Stellarium scripts
-- Azure OpenAI, Azure Speech, Azure Blob, and YouTube integration points
-- detailed architecture docs and updated project structure
+## Documentation index
+- `docs/architecture.md`: system overview, pipeline flow, and component responsibilities.
+- `docs/azure-deployment-guide.md`: local and production deployment steps, required services, and secure configuration guidance.
+- `docs/configuration-guide.md`: configuration sections, required fields, optional fields, and safe defaults.
+- `docs/api-overview.md`: health, pipeline, jobs, analytics, ops, and platform publication endpoints.
+- `docs/operations-runbook.md`: operator recovery procedures and incident handling.
+- `docs/production-checklist.md`: pre-go-live and verification checklist.
+- `docs/developer-onboarding.md`: project structure, local run steps, tests, debugging, and future-safe extension guidance.
+- `docs/project-structure.md`: repository layout and extension points.
 
-## Skyfield sidecar (daily sky)
-The Skyfield sidecar now enforces a stricter request/response contract:
-- `date` must be `yyyy-MM-dd`
-- `locationName` is required
-- `latitude` must be between `-90` and `90`
-- `longitude` must be between `-180` and `180`
-- `timezone` must be a valid IANA timezone (for example `Asia/Kolkata`)
+## High-level flow
+1. Collect astronomy context from source services.
+2. Generate scripts and metadata with Azure OpenAI.
+3. Synthesize narration with Azure Speech.
+4. Build visuals through Stellarium-oriented artifacts and render final video with FFmpeg.
+5. Archive assets to Azure Blob.
+6. Publish long-form and supported short-form outputs.
+7. Collect analytics and feed them back into optimization.
+8. Recover, replay, or maintain runs through ops endpoints and worker jobs.
 
-### Local developer setup
+## Core runtime components
+- **API**: health checks, inspection, manual run triggers, analytics, and operational endpoints.
+- **Worker**: scheduled queues, retries, analytics fetch, and maintenance jobs.
+- **PostgreSQL**: durable pipeline state.
+- **Azure OpenAI / Azure Speech / Azure Blob**: generation, narration, and storage services.
+- **YouTube**: active publishing target.
+- **Skyfield sidecar / Stellarium / FFmpeg**: astronomy calculations and rendering support.
 
-#### 1) Start the sidecar directly (recommended for local development)
+## Local developer setup
+
+### Start the Skyfield sidecar
 ```bash
 cd python/skyfield_sidecar
 python -m venv .venv
@@ -27,142 +42,31 @@ pip install -r requirements.txt
 uvicorn app:app --host 0.0.0.0 --port 8010 --reload
 ```
 
-#### 2) Verify sidecar is healthy
+### Verify sidecar health
 ```bash
 curl http://localhost:8010/health
 ```
 
-#### 3) Exercise the daily-sky endpoint
-```bash
-curl -X POST http://localhost:8010/ephemeris/daily-sky \
-  -H "Content-Type: application/json" \
-  -d '{
-    "date": "2026-03-17",
-    "locationName": "Udaipur, India",
-    "latitude": 24.5854,
-    "longitude": 73.7125,
-    "timezone": "Asia/Kolkata"
-  }'
-```
-
-### Run infrastructure with Docker Compose
+### Run infrastructure helpers with Docker Compose
 ```bash
 docker compose up --build postgres skyfield-sidecar
 ```
 
-### Wiring sidecar into .NET services
-`SkyfieldSidecar:BaseUrl` defaults to `http://localhost:8010`.
-
-Set it in `src/Astronomy.MediaFactory.Worker/appsettings.json` or by environment variable:
+### Run the API
 ```bash
-export SkyfieldSidecar__BaseUrl=http://localhost:8010
+dotnet run --project src/Astronomy.MediaFactory.Api
 ```
 
-## Important note
-This environment did not include the .NET SDK, so the package is not build-verified here.
-Use it as the next implementation scaffold on top of your local working solution.
-
-## Stellarium local visual generation (PASS 4)
-The daily sky guide pipeline now generates Stellarium scene scripts and screenshot manifests under the run output directory:
-
-```text
-media-output/<ContentType>/<yyyy-MM-dd>/<run-id>/visuals/
-  001-sky-overview.ssc
-  001-sky-overview.json
-  002-moon.ssc
-  002-moon.json
-  003-jupiter.ssc
-  003-jupiter.json
-  004-orion-nebula.ssc
-  004-orion-nebula.json
-  005-wide-sky-close.ssc
-  005-wide-sky-close.json
-  capture-manifest.json
-  screenshots/
-    001-sky-overview.png
-    ...
+### Run the Worker
+```bash
+dotnet run --project src/Astronomy.MediaFactory.Worker
 ```
 
-### Configure Stellarium
-Set the `Stellarium` section in `appsettings.json` (API/Worker) or environment variables:
+## Configuration notes
+- `SkyfieldSidecar:BaseUrl` defaults to `http://localhost:8010`.
+- Development settings relax startup validation for cloud dependencies.
+- Production should keep strict startup validation enabled and prefer Key Vault plus managed identity.
+- Leave YouTube and non-YouTube short-form platforms disabled until credentials and publish paths are verified.
 
-```json
-"Stellarium": {
-  "ExecutablePath": "",
-  "ScriptsDirectory": "",
-  "CaptureDirectory": "",
-  "DefaultLandscape": "guereins",
-  "DefaultProjection": "ProjectionPerspective"
-}
-```
-
-- `ExecutablePath`: optional full path to Stellarium executable.
-- `ScriptsDirectory`: optional override directory for generated `.ssc` and scene metadata `.json`.
-- `CaptureDirectory`: optional override for screenshot output folder.
-
-If `ExecutablePath` is empty or missing, the pipeline logs a warning and writes placeholder PNGs so FFmpeg rendering still proceeds.
-
-### Local execution workflow
-1. Run the daily pipeline as usual.
-2. Open generated `.ssc` files from the run's `visuals` directory.
-3. If Stellarium executable is configured, the service attempts optional startup-script invocation for each scene.
-4. `capture-manifest.json` lists expected screenshot paths and scene metadata for renderer consumption.
-
-## PASS 6: Publishing (Azure Blob + YouTube)
-
-### Configuration
-Update appsettings (API/Worker):
-
-```json
-"AzureBlob": {
-  "ConnectionString": "<azure-storage-connection-string>",
-  "ContainerName": "astronomy-videos"
-},
-"YouTube": {
-  "ClientId": "<google-oauth-client-id>",
-  "ClientSecret": "<google-oauth-client-secret>",
-  "ApplicationName": "AstronomyVideoGenerator",
-  "PrivacyStatus": "private",
-  "RefreshToken": "<oauth-refresh-token>",
-  "TokenFilePath": "./secrets/youtube-token.json"
-}
-```
-
-### Generate YouTube OAuth refresh token (manual)
-1. Create OAuth Desktop App credentials in Google Cloud.
-2. Enable YouTube Data API v3.
-3. Use OAuth playground or local OAuth helper to authorize `https://www.googleapis.com/auth/youtube.upload`.
-4. Save the refresh token in `YouTube:RefreshToken` or put this JSON in `YouTube:TokenFilePath`:
-
-```json
-{
-  "access_token": "<optional-access-token>",
-  "refresh_token": "<required-refresh-token>"
-}
-```
-
-### Pipeline behavior
-After FFmpeg render completes, pipeline now does:
-1. Upload `final-video.mp4`, `narration.mp3`, and optional thumbnail to Azure Blob.
-2. Upload video to YouTube (when `PublishToYouTube=true`).
-3. Persist publishing metadata in `published_videos` table.
-
-Fallbacks:
-- Blob upload failure logs error and continues YouTube upload from local file.
-- YouTube upload failure logs error, preserves blob artifact, and stores `Status=UploadFailed`.
-
-## PASS 16: Azure deployment hardening
-
-- Production startup validation now fails fast for missing critical cloud settings.
-- Development profile keeps local fallback behavior available.
-- Managed identity-ready paths are supported for Azure OpenAI, Azure Speech, Azure Blob, and secure configuration loading.
-- Optional Azure Key Vault loading is enabled via `KeyVault:VaultUri` / `KeyVault__VaultUri`, including user-assigned identity selection with `KeyVault:ManagedIdentityClientId`.
-- Application Insights hooks are wired for API and Worker when `Telemetry:ApplicationInsightsConnectionString` is set.
-- Use `docs/azure-deployment-guide.md` for first deployment runbook and Azure setup steps.
-
-## PASS 17: Runbook, recovery, and maintenance operations
-
-- Recovery endpoints are available under `/api/ops/runs/*` and `/api/ops/jobs/*` for replay, publish retry, archive retry, shorts regeneration, metadata reruns, stale-job recovery, and job requeue.
-- Retention cleanup is available at `/api/ops/maintenance/cleanup` and is also scheduled daily in the worker.
-- Recovery operations are audited in `recovery_operations` and logged with a recovery operation id.
-- Use `docs/operations-runbook.md` for operator procedures and example requests.
+## Important delivery note
+The backend is production-polished from a documentation and operational perspective. In this execution environment the .NET SDK was not installed, so build and test verification must still be performed in a standard .NET 10 toolchain before release.
