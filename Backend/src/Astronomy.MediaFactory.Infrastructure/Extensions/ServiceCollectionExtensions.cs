@@ -42,6 +42,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<AzureBlobOptions>()
             .Bind(configuration.GetSection(AzureBlobOptions.SectionName))
             .Validate(options => !AzureConfigurationValidation.ValidateBlob(options, requireConfiguration: false).Any(), "AzureBlob settings are invalid.")
+            .Validate(options => options.UploadRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds, "AzureBlob retry settings are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<KeyVaultOptions>()
@@ -52,10 +53,12 @@ public static class ServiceCollectionExtensions
         services.AddOptions<YouTubeOptions>()
             .Bind(configuration.GetSection(YouTubeOptions.SectionName))
             .Validate(options => string.IsNullOrWhiteSpace(options.PrivacyStatus) || options.PrivacyStatus is "private" or "public" or "unlisted", "YouTube:PrivacyStatus must be private, public, or unlisted.")
+            .Validate(options => options.UploadRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds && options.PublishRetryCooldownSeconds > 0, "YouTube retry settings are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<PlatformPublishingOptions>()
             .Bind(configuration.GetSection(PlatformPublishingOptions.SectionName))
+            .Validate(options => options.PublishRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds && options.PublishRetryCooldownSeconds > 0, "Platform publishing retry settings are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<InstagramPublishingOptions>()

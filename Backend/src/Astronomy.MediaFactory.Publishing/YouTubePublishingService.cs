@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Google.Apis.Auth.OAuth2;
@@ -28,25 +29,90 @@ public sealed class YouTubePublishingService : IYouTubePublishingService, IYouTu
 
     public async Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken)
     {
+        var correlationId = Activity.Current?.Id ?? Activity.Current?.TraceId.ToString() ?? "n/a";
         if (!File.Exists(videoPath))
         {
-            _logger.LogWarning("Video file {VideoPath} not found. Skipping YouTube upload.", videoPath);
+            _logger.LogWarning("Video file {VideoPath} not found. Skipping YouTube upload. CorrelationId: {CorrelationId}", videoPath, correlationId);
             return null;
         }
 
         if (string.IsNullOrWhiteSpace(_options.ClientId) || string.IsNullOrWhiteSpace(_options.ClientSecret))
         {
-            _logger.LogWarning("YouTube client credentials are missing. Skipping upload.");
+            _logger.LogWarning("YouTube client credentials are missing. Skipping upload. CorrelationId: {CorrelationId}", correlationId);
             return null;
         }
 
         var credential = await BuildCredentialAsync(cancellationToken);
         if (credential is null)
         {
-            _logger.LogWarning("YouTube token details are missing. Configure YouTube:RefreshToken or YouTube:TokenFilePath.");
+            _logger.LogWarning("YouTube token details are missing. Configure YouTube:RefreshToken or YouTube:TokenFilePath. CorrelationId: {CorrelationId}", correlationId);
             return null;
         }
 
+        var normalizedTitle = string.IsNullOrWhiteSpace(title) ? "Astronomy update" : title.Trim();
+        var normalizedDescription = string.IsNullOrWhiteSpace(description) ? normalizedTitle : description.Trim();
+        var normalizedTags = (tags ?? Array.Empty<string>())
+            .Where(static x => !string.IsNullOrWhiteSpace(x))
+            .Select(static x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(15)
+            .ToList();
+
+        _logger.LogInformation("Starting YouTube upload for {VideoPath}. CorrelationId: {CorrelationId}", videoPath, correlationId);
+        var videoId = await TransientRetryHelper.ExecuteAsync(
+            ct => UploadCoreAsync(videoPath, normalizedTitle, normalizedDescription, normalizedTags, visibility, credential, ct),
+            _options.UploadRetryAttempts,
+            TimeSpan.FromSeconds(_options.RetryBaseDelaySeconds),
+            TimeSpan.FromSeconds(_options.MaxRetryDelaySeconds),
+            _logger,
+            "YouTube upload",
+            Path.GetFileName(videoPath),
+            cancellationToken);
+
+        _logger.LogInformation("Finished YouTube upload for {VideoPath} with video id {VideoId}. CorrelationId: {CorrelationId}", videoPath, videoId, correlationId);
+        return videoId;
+    }
+
+    public async Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken)
+    {
+        var correlationId = Activity.Current?.Id ?? Activity.Current?.TraceId.ToString() ?? "n/a";
+        if (string.IsNullOrWhiteSpace(videoId) || !File.Exists(thumbnailPath))
+        {
+            _logger.LogWarning("Skipping YouTube thumbnail upload because the video id or thumbnail file is missing. CorrelationId: {CorrelationId}", correlationId);
+            return false;
+        }
+
+        var credential = await BuildCredentialAsync(cancellationToken);
+        if (credential is null)
+        {
+            _logger.LogWarning("Skipping YouTube thumbnail upload because OAuth credentials are unavailable. CorrelationId: {CorrelationId}", correlationId);
+            return false;
+        }
+
+        _logger.LogInformation("Starting YouTube thumbnail upload for {VideoId}. CorrelationId: {CorrelationId}", videoId, correlationId);
+        var uploaded = await TransientRetryHelper.ExecuteAsync(
+            ct => UploadThumbnailCoreAsync(videoId, thumbnailPath, credential, ct),
+            _options.UploadRetryAttempts,
+            TimeSpan.FromSeconds(_options.RetryBaseDelaySeconds),
+            TimeSpan.FromSeconds(_options.MaxRetryDelaySeconds),
+            _logger,
+            "YouTube thumbnail upload",
+            videoId,
+            cancellationToken);
+
+        _logger.LogInformation("Finished YouTube thumbnail upload for {VideoId} with result {Result}. CorrelationId: {CorrelationId}", videoId, uploaded, correlationId);
+        return uploaded;
+    }
+
+    private async Task<string> UploadCoreAsync(
+        string videoPath,
+        string title,
+        string description,
+        IReadOnlyCollection<string> tags,
+        string visibility,
+        UserCredential credential,
+        CancellationToken cancellationToken)
+    {
         var youtube = new YouTubeService(new BaseClientService.Initializer
         {
             HttpClientInitializer = credential,
@@ -71,24 +137,16 @@ public sealed class YouTubePublishingService : IYouTubePublishingService, IYouTu
         var insertRequest = youtube.Videos.Insert(video, "snippet,status", stream, "video/*");
         await insertRequest.UploadAsync(cancellationToken);
 
-        if (insertRequest.GetProgress().Status != UploadStatus.Completed || insertRequest.ResponseBody?.Id is null)
+        if (insertRequest.GetProgress().Status != UploadStatus.Completed || string.IsNullOrWhiteSpace(insertRequest.ResponseBody?.Id))
         {
-            _logger.LogError("YouTube upload did not complete successfully. Status: {Status}", insertRequest.GetProgress().Status);
-            return null;
+            throw new InvalidOperationException($"YouTube upload did not complete successfully. Status: {insertRequest.GetProgress().Status}");
         }
 
         return insertRequest.ResponseBody.Id;
     }
 
-    public async Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken)
+    private async Task<bool> UploadThumbnailCoreAsync(string videoId, string thumbnailPath, UserCredential credential, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(videoId) || !File.Exists(thumbnailPath))
-            return false;
-
-        var credential = await BuildCredentialAsync(cancellationToken);
-        if (credential is null)
-            return false;
-
         var youtube = new YouTubeService(new BaseClientService.Initializer
         {
             HttpClientInitializer = credential,
@@ -102,7 +160,12 @@ public sealed class YouTubePublishingService : IYouTubePublishingService, IYouTu
             : "image/png";
         var setRequest = youtube.Thumbnails.Set(videoId, stream, mimeType);
         await setRequest.UploadAsync(cancellationToken);
-        return setRequest.GetProgress().Status == UploadStatus.Completed;
+        if (setRequest.GetProgress().Status != UploadStatus.Completed)
+        {
+            throw new InvalidOperationException($"YouTube thumbnail upload did not complete successfully. Status: {setRequest.GetProgress().Status}");
+        }
+
+        return true;
     }
 
     private async Task<UserCredential?> BuildCredentialAsync(CancellationToken cancellationToken)
@@ -139,7 +202,24 @@ public sealed class YouTubePublishingService : IYouTubePublishingService, IYouTu
         };
 
         var credential = new UserCredential(flow, "astronomy-media-factory", tokenResponse);
-        await credential.RefreshTokenAsync(cancellationToken);
+        await TransientRetryHelper.ExecuteAsync(
+            async ct =>
+            {
+                var refreshed = await credential.RefreshTokenAsync(ct);
+                if (!refreshed)
+                {
+                    throw new InvalidOperationException("YouTube OAuth token refresh returned false.");
+                }
+
+                return true;
+            },
+            _options.UploadRetryAttempts,
+            TimeSpan.FromSeconds(_options.RetryBaseDelaySeconds),
+            TimeSpan.FromSeconds(_options.MaxRetryDelaySeconds),
+            _logger,
+            "YouTube token refresh",
+            _options.ApplicationName,
+            cancellationToken);
         return credential;
     }
 

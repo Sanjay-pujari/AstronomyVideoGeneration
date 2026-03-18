@@ -122,6 +122,12 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             visualCandidates.AddRange(generatedVisuals.Where(File.Exists));
         }
 
+        if (visualCandidates.Count == 0)
+        {
+            _logger.LogError("Short-form render failed because no visuals were available for {ContentType} on {Date}.", contentType, context.Date);
+            throw new InvalidOperationException("Short-form rendering requires at least one visual asset, but none were available from the source list or fallback generator.");
+        }
+
         var totalScenes = Math.Max(1, visualCandidates.Count);
         var perScene = Math.Max(3, shortScript.EstimatedDurationSeconds / totalScenes);
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");

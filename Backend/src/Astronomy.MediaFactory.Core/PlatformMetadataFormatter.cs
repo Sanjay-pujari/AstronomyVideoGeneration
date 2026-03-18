@@ -27,10 +27,10 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var normalizedTitle = NormalizeInline(request.Title);
-        var normalizedHook = NormalizeInline(string.IsNullOrWhiteSpace(request.HookLine) ? normalizedTitle : request.HookLine);
-        var normalizedCaptionBody = NormalizeInline(string.IsNullOrWhiteSpace(request.Caption) ? normalizedTitle : request.Caption);
-        var hashtags = NormalizeHashtags(request.Hashtags, request.Tags);
+        var normalizedTitle = FirstNonEmpty(NormalizeInline(request.Title), "Astronomy update");
+        var normalizedHook = FirstNonEmpty(NormalizeInline(request.HookLine), normalizedTitle);
+        var normalizedCaptionBody = FirstNonEmpty(NormalizeInline(request.Caption), normalizedHook, normalizedTitle);
+        var hashtags = NormalizeHashtags(request.Hashtags ?? Array.Empty<string>(), request.Tags ?? Array.Empty<string>());
 
         return platform switch
         {
@@ -109,7 +109,7 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
         string normalizedCaptionBody,
         IReadOnlyCollection<string> hashtags)
     {
-        var platformHashtags = request.Hashtags.Count == 0 && request.Tags.Count == 0
+        var platformHashtags = (request.Hashtags?.Count ?? 0) == 0 && (request.Tags?.Count ?? 0) == 0
             ? Array.Empty<string>()
             : SelectHashtags(hashtags, minCount: 0, maxCount: 3, allowFallback: false);
         var openingLine = FirstNonEmpty(LimitAtWordBoundary(normalizedHook, 120), LimitAtWordBoundary(normalizedTitle, FacebookTitleLimit));
