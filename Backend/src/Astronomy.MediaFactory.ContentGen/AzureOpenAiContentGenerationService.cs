@@ -4,10 +4,11 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
-using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using AzureTokenRequestContext = Azure.Core.TokenRequestContext;
+using ContractsContentType = Astronomy.MediaFactory.Contracts.ContentType;
 
 namespace Astronomy.MediaFactory.ContentGen;
 
@@ -18,7 +19,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
     private readonly HttpClient _httpClient;
     private readonly AzureOpenAiOptions _options;
-    private static readonly TokenRequestContext AzureCognitiveServicesScope = new(["https://cognitiveservices.azure.com/.default"]);
+    private static readonly AzureTokenRequestContext AzureCognitiveServicesScope = new(["https://cognitiveservices.azure.com/.default"]);
 
     private readonly IPromptBuilder _promptBuilder;
     private readonly ILogger<AzureOpenAiContentGenerationService> _logger;
@@ -43,7 +44,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             : credential;
     }
 
-    public async Task<ScriptResult> GenerateAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
+    public async Task<ScriptResult> GenerateAsync(ContractsContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
     {
         var prompt = _promptBuilder.Build(contentType, context, context.PromptFeedbackContext);
 
@@ -96,7 +97,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
 
 
-    public async Task<ShortScriptResult> GenerateShortAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
+    public async Task<ShortScriptResult> GenerateShortAsync(ContractsContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
     {
         var prompt = BuildShortPrompt(contentType, context, context.PromptFeedbackContext);
 
@@ -317,7 +318,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         }
     }
 
-    private static ScriptResult BuildFallback(ContentType contentType, AstronomyContext context, string prompt)
+    private static ScriptResult BuildFallback(ContractsContentType contentType, AstronomyContext context, string prompt)
     {
         var title = $"What to See in the Sky - {context.Date:MMMM dd, yyyy}";
         var description = $"Astronomy guide for {context.Date:MMMM dd, yyyy} in {context.LocationName}.";
@@ -339,7 +340,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
 
 
-    private static string BuildShortPrompt(ContentType contentType, AstronomyContext context, PromptFeedbackContext? feedbackContext)
+    private static string BuildShortPrompt(ContractsContentType contentType, AstronomyContext context, PromptFeedbackContext? feedbackContext)
     {
         var topEvents = context.Events
             .OrderByDescending(e => e.Score)
@@ -433,7 +434,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         }
     }
 
-    private static ShortScriptResult BuildShortFallback(ContentType contentType, AstronomyContext context)
+    private static ShortScriptResult BuildShortFallback(ContractsContentType contentType, AstronomyContext context)
     {
         var topEvent = context.Events.OrderByDescending(x => x.Score).FirstOrDefault();
         var hook = topEvent is null
