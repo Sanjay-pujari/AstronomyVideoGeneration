@@ -17,6 +17,47 @@ public sealed class ContentMonetizationService : IContentMonetizationService
         ["sturdy-tripod"] = new("sturdy-tripod", "Sturdy Tripod", "tripod", "Keeps wide-field night-sky shots stable and beginner friendly.")
     };
 
+    private static readonly IReadOnlyDictionary<ContentType, RecommendationRule[]> RecommendationRules =
+        new Dictionary<ContentType, RecommendationRule[]>
+        {
+            [ContentType.TelescopeTargets] =
+            [
+                new("beginner-telescope", 10, (_, _) => true),
+                new("planetary-eyepiece", 20, (_, _) => true),
+                new("astronomy-binoculars", 30, (signal, _) => signal.IsWideField)
+            ],
+            [ContentType.AstrophotographyTips] =
+            [
+                new("mirrorless-camera", 10, (_, _) => true),
+                new("sturdy-tripod", 20, (_, _) => true),
+                new("star-tracker", 30, (_, _) => true)
+            ],
+            [ContentType.DailySkyGuide] =
+            [
+                new("astronomy-binoculars", 10, (signal, _) => signal.IsWideField),
+                new("beginner-telescope", 10, (signal, _) => !signal.IsWideField),
+                new("sturdy-tripod", 20, (signal, _) => signal.IsWideField),
+                new("planetary-eyepiece", 20, (signal, _) => !signal.IsWideField),
+                new("mirrorless-camera", 30, (signal, _) => signal.IsAstrophotography)
+            ],
+            [ContentType.SpaceNews] =
+            [
+                new("mirrorless-camera", 10, (signal, _) => signal.IsAstrophotography),
+                new("astronomy-binoculars", 10, (signal, _) => !signal.IsAstrophotography),
+                new("sturdy-tripod", 20, (signal, _) => signal.IsAstrophotography),
+                new("beginner-telescope", 20, (signal, _) => !signal.IsAstrophotography)
+            ]
+        };
+
+    private static readonly RecommendationRule[] SignalBoosters =
+    [
+        new("mirrorless-camera", 110, (signal, input) => signal.IsAstrophotography || HasAnalyticsKeyword(input, "astrophotography")),
+        new("sturdy-tripod", 120, (signal, input) => signal.IsAstrophotography || HasAnalyticsKeyword(input, "astrophotography")),
+        new("star-tracker", 130, (signal, _) => signal.IsAstrophotography && signal.ObservationDifficulty == ObservationDifficulty.Advanced),
+        new("astronomy-binoculars", 140, (signal, _) => signal.IsWideField),
+        new("beginner-telescope", 150, (signal, _) => signal.ObservationDifficulty is ObservationDifficulty.Moderate or ObservationDifficulty.Advanced)
+    ];
+
     private readonly MonetizationOptions _options;
     private readonly ILogger<ContentMonetizationService> _logger;
 
@@ -33,21 +74,12 @@ public sealed class ContentMonetizationService : IContentMonetizationService
         ArgumentNullException.ThrowIfNull(input.Metadata);
 
         var primarySignal = ResolvePrimarySignal(input);
-        var ctaBlocks = BuildCtaBlocks(input.ContentType, input.IsShortForm, primarySignal);
+        var ctaSections = BuildCtaSections(input.ContentType, input.IsShortForm, primarySignal);
         var sponsorBlock = BuildSponsorBlock(input.IsShortForm);
         var recommendations = BuildRecommendations(input, primarySignal);
-        var affiliateLinks = recommendations
-            .Where(x => !string.IsNullOrWhiteSpace(x.AffiliateUrl))
-            .Select(x => new AffiliateLink
-            {
-                LinkType = x.Category,
-                Label = x.DisplayName,
-                Url = x.AffiliateUrl!
-            })
-            .ToArray();
-
-        var finalDescription = ComposeDescription(input, ctaBlocks, sponsorBlock, recommendations, affiliateLinks);
-        var pinnedCommentText = BuildPinnedCommentText(input, ctaBlocks, affiliateLinks);
+        var affiliateLinks = BuildAffiliateLinks(recommendations);
+        var finalDescription = ComposeDescription(input, ctaSections, sponsorBlock, recommendations, affiliateLinks);
+        var pinnedCommentText = BuildPinnedCommentText(input, ctaSections, affiliateLinks);
 
         _logger.LogInformation(
             "Generated monetization plan for {ContentType}. RecommendedProducts={RecommendedCount}, AffiliateLinks={AffiliateCount}, IsShort={IsShort}",
@@ -61,7 +93,8 @@ public sealed class ContentMonetizationService : IContentMonetizationService
             FinalDescription = finalDescription,
             PinnedCommentText = pinnedCommentText,
             SponsorBlock = sponsorBlock,
-            CtaBlocks = ctaBlocks,
+            CtaSections = ctaSections,
+            CtaBlocks = ctaSections.Select(x => x.Text).ToArray(),
             RecommendedProducts = recommendations,
             AffiliateLinks = affiliateLinks
         });
@@ -69,88 +102,96 @@ public sealed class ContentMonetizationService : IContentMonetizationService
 
     private List<ProductRecommendation> BuildRecommendations(MonetizationInput input, ObservingSignal signal)
     {
-        var recommendationKeys = new List<string>();
-
-        switch (input.ContentType)
-        {
-            case ContentType.TelescopeTargets:
-                recommendationKeys.Add("beginner-telescope");
-                recommendationKeys.Add("planetary-eyepiece");
-                break;
-            case ContentType.AstrophotographyTips:
-                recommendationKeys.Add("mirrorless-camera");
-                recommendationKeys.Add("sturdy-tripod");
-                recommendationKeys.Add("star-tracker");
-                break;
-            case ContentType.DailySkyGuide:
-                recommendationKeys.Add(signal.IsWideField ? "astronomy-binoculars" : "beginner-telescope");
-                recommendationKeys.Add(signal.IsWideField ? "sturdy-tripod" : "planetary-eyepiece");
-                break;
-            case ContentType.SpaceNews:
-                recommendationKeys.Add(signal.IsAstrophotography ? "mirrorless-camera" : "astronomy-binoculars");
-                recommendationKeys.Add(signal.IsAstrophotography ? "sturdy-tripod" : "beginner-telescope");
-                break;
-        }
-
-        if (signal.IsAstrophotography)
-        {
-            recommendationKeys.Add("mirrorless-camera");
-            recommendationKeys.Add("sturdy-tripod");
-        }
-        else if (signal.IsWideField)
-        {
-            recommendationKeys.Add("astronomy-binoculars");
-        }
-        else if (signal.ObservationDifficulty is ObservationDifficulty.Moderate or ObservationDifficulty.Advanced)
-        {
-            recommendationKeys.Add("beginner-telescope");
-        }
-
-        if (input.AnalyticsFeedback?.TopKeywords.Any(keyword => keyword.Contains("astrophotography", StringComparison.OrdinalIgnoreCase)) == true)
-        {
-            recommendationKeys.Insert(0, "mirrorless-camera");
-            recommendationKeys.Insert(1, "sturdy-tripod");
-        }
+        var catalog = RecommendationRules.TryGetValue(input.ContentType, out var mappedRules)
+            ? mappedRules.Concat(SignalBoosters)
+            : SignalBoosters;
 
         var maxRecommendations = input.IsShortForm ? 1 : 3;
-        return recommendationKeys
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        return catalog
+            .Where(rule => rule.Applies(signal, input))
+            .OrderBy(rule => rule.Priority)
+            .Select(rule => CreateRecommendation(ProductCatalog[rule.Key], signal, input.ContentType))
+            .DistinctBy(recommendation => recommendation.Key, StringComparer.OrdinalIgnoreCase)
             .Take(maxRecommendations)
-            .Select(key => CreateRecommendation(ProductCatalog[key], signal, input.ContentType))
             .ToList();
     }
 
     private ProductRecommendation CreateRecommendation(ProductCatalogEntry entry, ObservingSignal signal, ContentType contentType)
     {
         var topicSlug = Slugify(string.IsNullOrWhiteSpace(signal.ObjectName) ? contentType.ToString() : signal.ObjectName);
+        var affiliateContext = BuildAffiliateContext(entry, contentType, topicSlug);
+
         return new ProductRecommendation
         {
             Key = entry.Key,
             DisplayName = entry.DisplayName,
             Category = entry.Category,
             Reason = entry.DefaultReason,
-            AffiliateUrl = BuildAffiliateUrl(entry.Key, contentType, topicSlug)
+            AffiliateUrl = affiliateContext?.Url,
+            AffiliateProductKey = affiliateContext?.ProductKey ?? entry.Key,
+            AffiliateMerchant = affiliateContext?.Merchant,
+            AffiliateTrackingTag = affiliateContext?.TrackingTag
         };
     }
 
-    private IReadOnlyCollection<string> BuildCtaBlocks(ContentType contentType, bool isShortForm, ObservingSignal signal)
+    private static AffiliateLink[] BuildAffiliateLinks(IReadOnlyCollection<ProductRecommendation> recommendations)
+        => recommendations
+            .Where(x => !string.IsNullOrWhiteSpace(x.AffiliateUrl))
+            .Select(BuildAffiliateLink)
+            .ToArray();
+
+    private static AffiliateLink BuildAffiliateLink(ProductRecommendation recommendation)
+        => new()
+        {
+            LinkType = recommendation.Category,
+            Label = recommendation.DisplayName,
+            Url = recommendation.AffiliateUrl!,
+            ProductKey = recommendation.AffiliateProductKey,
+            Merchant = recommendation.AffiliateMerchant,
+            TrackingTag = recommendation.AffiliateTrackingTag
+        };
+
+    private IReadOnlyCollection<CtaSection> BuildCtaSections(ContentType contentType, bool isShortForm, ObservingSignal signal)
     {
         if (isShortForm)
         {
             return
             [
-                signal.IsAstrophotography
-                    ? "Want the gear from this short? Links are below."
-                    : "Quick gear picks for this target are below."
+                new(
+                    CtaPlacement.DescriptionLead,
+                    signal.IsAstrophotography
+                        ? "Want the gear from this short? Links are below."
+                        : "Quick gear picks for this target are below."),
+                new(CtaPlacement.PinnedCommentLead, "Gear mentioned in this short:")
             ];
         }
 
         return contentType switch
         {
-            ContentType.TelescopeTargets => ["Check out beginner telescopes below.", "Use the recommended eyepiece setup to get a closer look at this target."],
-            ContentType.AstrophotographyTips => ["Learn astrophotography with this setup.", "Build a simple night-sky kit with the recommended gear below."],
-            ContentType.SpaceNews => ["Explore the gear that makes these discoveries easier to follow from home.", "If you want to observe related objects yourself, start with the picks below."],
-            _ => ["Best gear for tonight's sky is listed below.", signal.IsWideField ? "Binocular-friendly gear is included for wide sky views." : "Starter telescope picks are included for deeper views."]
+            ContentType.TelescopeTargets =>
+            [
+                new(CtaPlacement.DescriptionBody, "Check out beginner telescopes below."),
+                new(CtaPlacement.DescriptionBody, "Use the recommended eyepiece setup to get a closer look at this target."),
+                new(CtaPlacement.PinnedCommentLead, "Gear mentioned in this telescope guide:")
+            ],
+            ContentType.AstrophotographyTips =>
+            [
+                new(CtaPlacement.DescriptionBody, "Learn astrophotography with this setup."),
+                new(CtaPlacement.DescriptionBody, "Build a simple night-sky kit with the recommended gear below."),
+                new(CtaPlacement.PinnedCommentLead, "Astrophotography starter gear from this video:")
+            ],
+            ContentType.SpaceNews =>
+            [
+                new(CtaPlacement.DescriptionBody, "Explore the gear that makes these discoveries easier to follow from home."),
+                new(CtaPlacement.DescriptionBody, "If you want to observe related objects yourself, start with the picks below."),
+                new(CtaPlacement.PinnedCommentLead, "Observation gear related to this story:")
+            ],
+            _ =>
+            [
+                new(CtaPlacement.DescriptionBody, "Best gear for tonight's sky is listed below."),
+                new(CtaPlacement.DescriptionBody, signal.IsWideField ? "Binocular-friendly gear is included for wide sky views." : "Starter telescope picks are included for deeper views."),
+                new(CtaPlacement.PinnedCommentLead, "Tonight's observing gear picks:")
+            ]
         };
     }
 
@@ -170,7 +211,7 @@ public sealed class ContentMonetizationService : IContentMonetizationService
 
     private string ComposeDescription(
         MonetizationInput input,
-        IReadOnlyCollection<string> ctaBlocks,
+        IReadOnlyCollection<CtaSection> ctaSections,
         string? sponsorBlock,
         IReadOnlyCollection<ProductRecommendation> recommendations,
         IReadOnlyCollection<AffiliateLink> affiliateLinks)
@@ -182,9 +223,10 @@ public sealed class ContentMonetizationService : IContentMonetizationService
             sections.Add(baseDescription);
         }
 
-        if (input.IsShortForm && ctaBlocks.Count > 0)
+        var leadCta = ctaSections.Where(x => x.Placement == CtaPlacement.DescriptionLead).Select(x => x.Text).ToArray();
+        if (leadCta.Length > 0)
         {
-            sections.Add(ctaBlocks.First());
+            sections.Add(string.Join(Environment.NewLine, leadCta));
         }
 
         if (input.Metadata.Hashtags.Length > 0)
@@ -197,23 +239,15 @@ public sealed class ContentMonetizationService : IContentMonetizationService
             sections.Add(sponsorBlock);
         }
 
-        if (!input.IsShortForm && ctaBlocks.Count > 0)
+        var bodyCta = ctaSections.Where(x => x.Placement == CtaPlacement.DescriptionBody).Select(x => x.Text).ToArray();
+        if (bodyCta.Length > 0)
         {
-            sections.Add(string.Join(Environment.NewLine, ctaBlocks));
+            sections.Add(string.Join(Environment.NewLine, bodyCta));
         }
 
         if (affiliateLinks.Count > 0)
         {
-            var builder = new StringBuilder();
-            builder.AppendLine("Recommended gear:");
-            foreach (var link in affiliateLinks)
-            {
-                builder.Append("- ").Append(link.Label).Append(": ").AppendLine(link.Url);
-            }
-
-            builder.AppendLine();
-            builder.Append("Disclosure: Some links may be affiliate links.");
-            sections.Add(builder.ToString().Trim());
+            sections.Add(FormatAffiliateSection(affiliateLinks));
         }
         else if (!input.IsShortForm && recommendations.Count > 0)
         {
@@ -223,7 +257,21 @@ public sealed class ContentMonetizationService : IContentMonetizationService
         return string.Join(Environment.NewLine + Environment.NewLine, sections.Where(x => !string.IsNullOrWhiteSpace(x)));
     }
 
-    private string? BuildPinnedCommentText(MonetizationInput input, IReadOnlyCollection<string> ctaBlocks, IReadOnlyCollection<AffiliateLink> affiliateLinks)
+    private static string FormatAffiliateSection(IReadOnlyCollection<AffiliateLink> affiliateLinks)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("Recommended gear:");
+        foreach (var link in affiliateLinks)
+        {
+            builder.Append("- ").Append(link.Label).Append(": ").AppendLine(link.Url);
+        }
+
+        builder.AppendLine();
+        builder.Append("Disclosure: Some links may be affiliate links.");
+        return builder.ToString().Trim();
+    }
+
+    private string? BuildPinnedCommentText(MonetizationInput input, IReadOnlyCollection<CtaSection> ctaSections, IReadOnlyCollection<AffiliateLink> affiliateLinks)
     {
         if (!_options.EnablePinnedCommentText || affiliateLinks.Count == 0)
         {
@@ -231,7 +279,8 @@ public sealed class ContentMonetizationService : IContentMonetizationService
         }
 
         var builder = new StringBuilder();
-        builder.AppendLine(ctaBlocks.FirstOrDefault() ?? "Gear mentioned in this video:");
+        var pinnedLead = ctaSections.FirstOrDefault(x => x.Placement == CtaPlacement.PinnedCommentLead)?.Text;
+        builder.AppendLine(pinnedLead ?? "Gear mentioned in this video:");
         foreach (var link in affiliateLinks.Take(input.IsShortForm ? 1 : 2))
         {
             builder.Append("- ").Append(link.Label).Append(": ").AppendLine(link.Url);
@@ -240,14 +289,13 @@ public sealed class ContentMonetizationService : IContentMonetizationService
         return builder.ToString().Trim();
     }
 
-    private string? BuildAffiliateUrl(string key, ContentType contentType, string topicSlug)
+    private AffiliateContext? BuildAffiliateContext(ProductCatalogEntry entry, ContentType contentType, string topicSlug)
     {
         if (!_options.EnableAffiliateLinks || string.IsNullOrWhiteSpace(_options.AffiliateBaseUrl))
         {
             return null;
         }
 
-        var baseUrl = _options.AffiliateBaseUrl.TrimEnd('/');
         var query = new List<string>
         {
             $"contentType={Uri.EscapeDataString(contentType.ToString())}",
@@ -259,7 +307,22 @@ public sealed class ContentMonetizationService : IContentMonetizationService
             query.Insert(0, $"tag={Uri.EscapeDataString(_options.DefaultAffiliateTag)}");
         }
 
-        return $"{baseUrl}/{key}?{string.Join("&", query)}";
+        return new AffiliateContext(
+            Url: $"{_options.AffiliateBaseUrl.TrimEnd('/')}/{entry.Key}?{string.Join("&", query)}",
+            ProductKey: entry.Key,
+            Merchant: ResolveAffiliateMerchant(_options.AffiliateBaseUrl),
+            TrackingTag: string.IsNullOrWhiteSpace(_options.DefaultAffiliateTag) ? null : _options.DefaultAffiliateTag);
+    }
+
+    private static string ResolveAffiliateMerchant(string affiliateBaseUrl)
+    {
+        if (!Uri.TryCreate(affiliateBaseUrl, UriKind.Absolute, out var uri) || string.IsNullOrWhiteSpace(uri.Host))
+        {
+            return "custom-network";
+        }
+
+        var hostParts = uri.Host.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        return hostParts.Length >= 2 ? hostParts[^2] : uri.Host;
     }
 
     private static ObservingSignal ResolvePrimarySignal(MonetizationInput input)
@@ -321,6 +384,9 @@ public sealed class ContentMonetizationService : IContentMonetizationService
             || text.Contains("long exposure", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool HasAnalyticsKeyword(MonetizationInput input, string keyword)
+        => input.AnalyticsFeedback?.TopKeywords.Any(value => value.Contains(keyword, StringComparison.OrdinalIgnoreCase)) == true;
+
     private static string Slugify(string value)
     {
         var chars = value.ToLowerInvariant()
@@ -330,7 +396,9 @@ public sealed class ContentMonetizationService : IContentMonetizationService
     }
 
     private sealed record ProductCatalogEntry(string Key, string DisplayName, string Category, string DefaultReason);
+    private sealed record RecommendationRule(string Key, int Priority, Func<ObservingSignal, MonetizationInput, bool> Applies);
     private sealed record ObservingSignal(string ObjectName, string ObservationTool, ObservationDifficulty ObservationDifficulty, bool IsWideField, bool IsAstrophotography);
+    private sealed record AffiliateContext(string Url, string ProductKey, string Merchant, string? TrackingTag);
     private enum ObservationDifficulty
     {
         Beginner = 1,

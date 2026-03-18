@@ -29,6 +29,9 @@ public sealed class ContentMonetizationServiceTests
         Assert.NotEmpty(result.AffiliateLinks);
         Assert.Contains("tag=astro-42", result.AffiliateLinks.First().Url);
         Assert.Contains("https://partners.example.com/products", result.AffiliateLinks.First().Url);
+        Assert.Equal("beginner-telescope", result.AffiliateLinks.First().ProductKey);
+        Assert.Equal("example", result.AffiliateLinks.First().Merchant);
+        Assert.Equal("astro-42", result.AffiliateLinks.First().TrackingTag);
         Assert.Contains("Beginner Telescope", result.PinnedCommentText);
     }
 
@@ -52,6 +55,7 @@ public sealed class ContentMonetizationServiceTests
         Assert.Contains("Best gear for tonight's sky is listed below.", result.FinalDescription);
         Assert.Contains("Recommended gear:", result.FinalDescription);
         Assert.Contains("Disclosure: Some links may be affiliate links.", result.FinalDescription);
+        Assert.Contains(result.CtaSections, x => x.Placement == CtaPlacement.DescriptionBody && x.Text == "Best gear for tonight's sky is listed below.");
     }
 
     [Fact]
@@ -73,6 +77,7 @@ public sealed class ContentMonetizationServiceTests
 
         Assert.Contains(result.RecommendedProducts, x => x.DisplayName == "Mirrorless Camera");
         Assert.Contains(result.RecommendedProducts, x => x.DisplayName == "Sturdy Tripod");
+        Assert.Equal(["mirrorless-camera", "sturdy-tripod", "star-tracker"], result.RecommendedProducts.Select(x => x.Key).ToArray());
     }
 
     [Fact]
@@ -98,6 +103,7 @@ public sealed class ContentMonetizationServiceTests
         Assert.Single(result.AffiliateLinks);
         Assert.Contains("Quick gear picks for this target are below.", result.FinalDescription);
         Assert.Contains("Sponsored: SkyMaps Pro", result.FinalDescription);
+        Assert.Contains(result.CtaSections, x => x.Placement == CtaPlacement.PinnedCommentLead);
     }
 
     private static ContentMonetizationService BuildService(MonetizationOptions options)
