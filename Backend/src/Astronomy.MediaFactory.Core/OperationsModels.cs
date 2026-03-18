@@ -1,3 +1,5 @@
+using Astronomy.MediaFactory.Contracts;
+
 namespace Astronomy.MediaFactory.Core;
 
 public sealed record PipelineOpsSummary(
