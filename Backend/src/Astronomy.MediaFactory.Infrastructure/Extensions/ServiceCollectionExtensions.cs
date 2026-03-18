@@ -74,6 +74,11 @@ public static class ServiceCollectionExtensions
             .Validate(opt => opt.RetainDays > 0 && opt.SlowStageThresholdMs > 0, "Operations values must be > 0.")
             .ValidateOnStart();
 
+        services.AddOptions<MaintenanceOptions>()
+            .Bind(configuration.GetSection(MaintenanceOptions.SectionName))
+            .Validate(opt => opt.WorkingFileRetentionDays > 0 && opt.JobRetentionDays > 0 && opt.StageRetentionDays > 0 && opt.AnalyticsRetentionDays > 0 && opt.StaleJobThresholdMinutes > 0, "Maintenance values must be > 0.")
+            .ValidateOnStart();
+
         services.AddOptions<AlertingOptions>()
             .Bind(configuration.GetSection(AlertingOptions.SectionName))
             .Validate(opt => !opt.Enabled || string.IsNullOrWhiteSpace(opt.SlackWebhookUrl) || Uri.TryCreate(opt.SlackWebhookUrl, UriKind.Absolute, out _), "Alerting:SlackWebhookUrl must be an absolute URI when provided.")
@@ -172,6 +177,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOperationalAlertNotifier, SafeOperationalAlertNotifier>();
         services.AddScoped<IStageAlertPublisher, RoutingStageAlertPublisher>();
         services.AddScoped<IPipelineMonitoringService, PipelineMonitoringService>();
+        services.AddScoped<IRunOperationsService, RunOperationsService>();
+        services.AddScoped<IMaintenanceService, MaintenanceService>();
 
         services.AddHealthChecks()
             .AddCheck<DatabaseConnectivityHealthCheck>("database", tags: ["ready"])

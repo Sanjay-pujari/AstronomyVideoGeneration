@@ -32,3 +32,140 @@ public sealed record StageAlertContext(
     string? MetadataJson,
     DateTimeOffset StartedAt,
     DateTimeOffset? FinishedAt);
+
+public enum RecoveryOperationType
+{
+    ReplayPipeline = 1,
+    RetryPublish = 2,
+    RetryArchive = 3,
+    RegenerateShorts = 4,
+    RerunMetadataOptimization = 5,
+    RequeueJob = 6,
+    RecoverStaleJobs = 7,
+    CleanupRetention = 8
+}
+
+public enum RecoveryOperationStatus
+{
+    Requested = 1,
+    Completed = 2,
+    Rejected = 3,
+    Failed = 4
+}
+
+public sealed record ReplayPipelineRequest(
+    string RequestedBy,
+    string? Notes = null,
+    bool AllowReplayOfSucceededRun = false,
+    bool PublishToYouTubeOverride = false,
+    bool UseTopicPlannerOverride = false);
+
+public sealed record RetryPublishRequest(
+    string RequestedBy,
+    string? Notes = null,
+    bool RetryThumbnailOnly = false,
+    bool ForceRepublish = false,
+    bool PublishToYouTube = true);
+
+public sealed record RetryArchiveRequest(
+    string RequestedBy,
+    string? Notes = null,
+    bool Force = false);
+
+public sealed record RegenerateShortsRequest(
+    string RequestedBy,
+    string? Notes = null,
+    bool PublishToYouTube = false,
+    bool Force = false);
+
+public sealed record RerunMetadataOptimizationRequest(
+    string RequestedBy,
+    string? Notes = null,
+    bool ApplyToPublishedVideo = true);
+
+public sealed record RequeueJobRequest(
+    string RequestedBy,
+    string? Notes = null,
+    bool Force = false);
+
+public sealed record RecoverStaleJobsRequest(
+    string RequestedBy,
+    string? Notes = null,
+    int? ThresholdMinutes = null,
+    bool RequeueRecoveredJobs = true,
+    bool RecoverIncompleteRuns = true);
+
+public sealed record CleanupMaintenanceRequest(
+    string RequestedBy,
+    string? Notes = null,
+    bool DeleteWorkingFiles = true,
+    bool DeleteDbRecords = true,
+    bool DeleteAnalytics = false);
+
+public sealed record OpsActionResult(Guid RecoveryOperationId, string Message, IReadOnlyCollection<Guid>? AffectedIds = null);
+public sealed record StaleJobRecoverySummary(Guid RecoveryOperationId, int MarkedStaleJobs, int RequeuedJobs, int IncompleteRunsRecovered, IReadOnlyCollection<Guid> AffectedJobIds, IReadOnlyCollection<Guid> AffectedRunIds);
+public sealed record MaintenanceCleanupSummary(Guid RecoveryOperationId, int DeletedStageRecords, int DeletedJobRecords, int DeletedAnalyticsRecords, int DeletedWorkingFiles, IReadOnlyCollection<string> DeletedPaths);
+
+public static class RecoveryRequestValidator
+{
+    public static string? Validate(ReplayPipelineRequest request)
+        => string.IsNullOrWhiteSpace(request.RequestedBy)
+            ? "RequestedBy is required."
+            : null;
+
+    public static string? Validate(RetryPublishRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestedBy))
+            return "RequestedBy is required.";
+
+        if (request.RetryThumbnailOnly && request.ForceRepublish)
+            return "RetryThumbnailOnly cannot be combined with ForceRepublish.";
+
+        if (!request.PublishToYouTube)
+            return "Retry publish operations must target YouTube publishing explicitly.";
+
+        return null;
+    }
+
+    public static string? Validate(RetryArchiveRequest request)
+        => string.IsNullOrWhiteSpace(request.RequestedBy)
+            ? "RequestedBy is required."
+            : null;
+
+    public static string? Validate(RegenerateShortsRequest request)
+        => string.IsNullOrWhiteSpace(request.RequestedBy)
+            ? "RequestedBy is required."
+            : null;
+
+    public static string? Validate(RerunMetadataOptimizationRequest request)
+        => string.IsNullOrWhiteSpace(request.RequestedBy)
+            ? "RequestedBy is required."
+            : null;
+
+    public static string? Validate(RequeueJobRequest request)
+        => string.IsNullOrWhiteSpace(request.RequestedBy)
+            ? "RequestedBy is required."
+            : null;
+
+    public static string? Validate(RecoverStaleJobsRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestedBy))
+            return "RequestedBy is required.";
+
+        if (request.ThresholdMinutes.HasValue && request.ThresholdMinutes.Value <= 0)
+            return "ThresholdMinutes must be greater than zero when specified.";
+
+        return null;
+    }
+
+    public static string? Validate(CleanupMaintenanceRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestedBy))
+            return "RequestedBy is required.";
+
+        if (!request.DeleteWorkingFiles && !request.DeleteDbRecords && !request.DeleteAnalytics)
+            return "At least one cleanup target must be enabled.";
+
+        return null;
+    }
+}

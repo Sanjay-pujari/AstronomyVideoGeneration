@@ -57,6 +57,10 @@ builder.Services.AddQuartz(q =>
     q.AddJob<FetchAnalyticsJob>(o => o.WithIdentity("fetch-analytics"));
     q.AddTrigger(t => t.ForJob("fetch-analytics").WithIdentity("fetch-analytics-trigger")
         .WithSimpleSchedule(s => s.WithInterval(TimeSpan.FromMinutes(Math.Max(1, builder.Configuration.GetValue<int>($"{AnalyticsOptions.SectionName}:FetchIntervalMinutes", 1440)))).RepeatForever()));
+
+    q.AddJob<RetentionCleanupJob>(o => o.WithIdentity("retention-cleanup"));
+    q.AddTrigger(t => t.ForJob("retention-cleanup").WithIdentity("retention-cleanup-trigger")
+        .WithCronSchedule("0 0 3 * * ?"));
 });
 
 builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
@@ -91,6 +95,24 @@ public sealed class EnqueueScheduledContentJob : IJob
             "Udaipur, India"), context.CancellationToken);
 
         _logger.LogInformation("Scheduled job queued for {ContentType}", contentType);
+    }
+}
+
+public sealed class RetentionCleanupJob : IJob
+{
+    private readonly IMaintenanceService _maintenanceService;
+    private readonly ILogger<RetentionCleanupJob> _logger;
+
+    public RetentionCleanupJob(IMaintenanceService maintenanceService, ILogger<RetentionCleanupJob> logger)
+    {
+        _maintenanceService = maintenanceService;
+        _logger = logger;
+    }
+
+    public async Task Execute(IJobExecutionContext context)
+    {
+        var summary = await _maintenanceService.CleanupAsync(new CleanupMaintenanceRequest("system", "Scheduled daily retention cleanup.", DeleteWorkingFiles: true, DeleteDbRecords: true, DeleteAnalytics: true), context.CancellationToken);
+        _logger.LogInformation("Retention cleanup job completed. Deleted {DeletedWorkingFiles} files.", summary.DeletedWorkingFiles);
     }
 }
 
