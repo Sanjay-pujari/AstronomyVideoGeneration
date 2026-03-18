@@ -164,7 +164,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
         services.AddScoped<IYouTubeAnalyticsService, YouTubeAnalyticsService>();
         services.AddScoped<IShortsVideoRenderService, ShortsVideoRenderService>();
-        services.AddScoped<IShortFormPlatformMetadataFormatter, PlatformMetadataFormatter>();
+        services.AddScoped<IShortFormPlatformMetadataFormatter>(sp => new PlatformMetadataFormatter(sp.GetRequiredService<IOptions<PlatformPublishingOptions>>().Value));
         services.AddScoped<IShortFormPlatformPublisher, YouTubeShortsPlatformPublisher>();
         services.AddScoped<IShortFormPlatformPublisher, InstagramReelsPlatformPublisher>();
         services.AddScoped<IShortFormPlatformPublisher, FacebookPlatformPublisher>();

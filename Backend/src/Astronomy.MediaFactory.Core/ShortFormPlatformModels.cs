@@ -24,6 +24,7 @@ public sealed class PlatformPublicationTarget
     public string Title { get; set; } = "";
     public string Caption { get; set; } = "";
     public IReadOnlyCollection<string> Hashtags { get; set; } = [];
+    public string PreferredPublishLocalTime { get; set; } = "";
     public string VideoPath { get; set; } = "";
     public string? ThumbnailPath { get; set; }
     public PlatformPublicationStatus Status { get; set; } = PlatformPublicationStatus.Pending;
