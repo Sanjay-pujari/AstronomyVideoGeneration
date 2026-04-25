@@ -1,0 +1,125 @@
+name: Deploy API + Worker to VM (IIS + NSSM)
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-vm
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, windows]
+
+    env:
+      # Projects
+      API_PROJECT: Backend/src/Astronomy.MediaFactory.Api/Astronomy.MediaFactory.Api.csproj
+      WORKER_PROJECT: Backend/src/Astronomy.MediaFactory.Worker/Astronomy.MediaFactory.Worker.csproj
+
+      # Staging publish folders (local on the VM)
+      API_PUBLISH_DIR: C:\Deploy\Astronomy\publish\api
+      WORKER_PUBLISH_DIR: C:\Deploy\Astronomy\publish\worker
+
+      # Final install folders (your chosen structure)
+      API_IIS_DIR: C:\inetpub\sites\Astronomy.MediaFactory.Api
+      WORKER_DIR: C:\Astronomy\worker
+
+      # IIS + Services
+      IIS_APP_POOL: Astronomy.MediaFactory.Api
+      WORKER_SERVICE: AstronomyMediaFactory.Worker
+      SKYFIELD_SERVICE: AstronomySkyfieldSidecar
+
+      # Health endpoint (your IIS site on port 8081)
+      HEALTH_URL: http://localhost:8081/health/ready
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build (Release)
+        run: dotnet build -c Release --no-restore
+
+      - name: Publish API
+        run: >
+          dotnet publish "${{ env.API_PROJECT }}" -c Release --no-build
+          -o "${{ env.API_PUBLISH_DIR }}"
+
+      - name: Publish Worker
+        run: >
+          dotnet publish "${{ env.WORKER_PROJECT }}" -c Release --no-build
+          -o "${{ env.WORKER_PUBLISH_DIR }}"
+
+      - name: Stop IIS app pool + services
+        shell: pwsh
+        run: |
+          Import-Module WebAdministration
+
+          if (Test-Path "IIS:\AppPools\${env:IIS_APP_POOL}") {
+            Stop-WebAppPool -Name $env:IIS_APP_POOL -ErrorAction SilentlyContinue
+          }
+
+          if (Get-Service -Name $env:WORKER_SERVICE -ErrorAction SilentlyContinue) {
+            Stop-Service -Name $env:WORKER_SERVICE -Force -ErrorAction SilentlyContinue
+          }
+
+          if (Get-Service -Name $env:SKYFIELD_SERVICE -ErrorAction SilentlyContinue) {
+            Stop-Service -Name $env:SKYFIELD_SERVICE -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Deploy API to IIS folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${env:API_IIS_DIR}" | Out-Null
+          robocopy "${env:API_PUBLISH_DIR}" "${env:API_IIS_DIR}" /MIR /R:2 /W:2 /NFL /NDL /NP
+          if ($LASTEXITCODE -ge 8) { exit $LASTEXITCODE }
+
+      - name: Deploy Worker to install folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${env:WORKER_DIR}" | Out-Null
+          robocopy "${env:WORKER_PUBLISH_DIR}" "${env:WORKER_DIR}" /MIR /R:2 /W:2 /NFL /NDL /NP
+          if ($LASTEXITCODE -ge 8) { exit $LASTEXITCODE }
+
+      - name: Start IIS app pool + services
+        shell: pwsh
+        run: |
+          Import-Module WebAdministration
+
+          if (Test-Path "IIS:\AppPools\${env:IIS_APP_POOL}") {
+            Start-WebAppPool -Name $env:IIS_APP_POOL -ErrorAction Stop
+          }
+
+          if (Get-Service -Name $env:SKYFIELD_SERVICE -ErrorAction SilentlyContinue) {
+            Start-Service -Name $env:SKYFIELD_SERVICE -ErrorAction SilentlyContinue
+          }
+
+          if (Get-Service -Name $env:WORKER_SERVICE -ErrorAction SilentlyContinue) {
+            Start-Service -Name $env:WORKER_SERVICE -ErrorAction SilentlyContinue
+          }
+
+      - name: Health check
+        shell: pwsh
+        run: |
+          $url = "${env:HEALTH_URL}"
+          $maxAttempts = 12
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10
+              if ($r.StatusCode -eq 200) {
+                Write-Host "Healthy: $url"
+                exit 0
+              }
+            } catch { }
+            Start-Sleep -Seconds 5
+          }
+          throw "Health check failed: $url"
