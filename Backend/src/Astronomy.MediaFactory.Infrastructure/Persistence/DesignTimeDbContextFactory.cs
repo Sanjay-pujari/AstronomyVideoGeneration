@@ -23,15 +23,19 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Med
                 "Set env var ConnectionStrings__Postgres to your Azure Postgres connection string, then re-run dotnet ef.");
         }
 
-        // Match the runtime safety guard: never allow localhost.
-        var csb = new NpgsqlConnectionStringBuilder(cs);
-        var host = (csb.Host ?? "").Trim();
-        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-            || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
-            || host.Equals("::1", StringComparison.OrdinalIgnoreCase))
+        // Match the runtime safety guard: block localhost unless explicitly allowed.
+        var allowLocalhost = string.Equals(Environment.GetEnvironmentVariable("ALLOW_LOCALHOST_POSTGRES"), "true", StringComparison.OrdinalIgnoreCase);
+        if (!allowLocalhost)
         {
-            throw new InvalidOperationException(
-                $"Refusing to use a localhost Postgres connection for EF design-time. Current Host='{host}'.");
+            var csb = new NpgsqlConnectionStringBuilder(cs);
+            var host = (csb.Host ?? "").Trim();
+            if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("::1", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Refusing to use a localhost Postgres connection for EF design-time. Set ALLOW_LOCALHOST_POSTGRES=true to override. Current Host='{host}'.");
+            }
         }
 
         var optionsBuilder = new DbContextOptionsBuilder<MediaFactoryDbContext>();

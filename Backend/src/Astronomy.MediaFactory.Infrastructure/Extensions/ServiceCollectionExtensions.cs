@@ -143,15 +143,25 @@ public static class ServiceCollectionExtensions
         if (string.IsNullOrWhiteSpace(cs))
             throw new InvalidOperationException("Missing Postgres connection string. Set ConnectionStrings:Postgres to your Azure Postgres connection string.");
 
-        // Safety guard: never allow localhost Postgres.
-        // This prevents accidental local migrations when running `dotnet ef ...`.
-        var csb = new NpgsqlConnectionStringBuilder(cs);
-        var host = (csb.Host ?? "").Trim();
-        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-            || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
-            || host.Equals("::1", StringComparison.OrdinalIgnoreCase))
+        // Safety guard: block localhost unless explicitly allowed.
+        // Set one of the following to true to allow localhost:
+        // - Env var: ALLOW_LOCALHOST_POSTGRES=true
+        // - Config: DatabaseSafety:AllowLocalhostPostgres=true
+        var allowLocalhost = configuration.GetValue<bool>("DatabaseSafety:AllowLocalhostPostgres")
+                             || string.Equals(Environment.GetEnvironmentVariable("ALLOW_LOCALHOST_POSTGRES"), "true", StringComparison.OrdinalIgnoreCase);
+
+        if (!allowLocalhost)
         {
-            throw new InvalidOperationException($"Refusing to use a localhost Postgres connection. Update ConnectionStrings:Postgres to your Azure Postgres host. Current Host='{host}'.");
+            var csb = new NpgsqlConnectionStringBuilder(cs);
+            var host = (csb.Host ?? "").Trim();
+            if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("::1", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Refusing to use a localhost Postgres connection. Either set DatabaseSafety:AllowLocalhostPostgres=true (or env ALLOW_LOCALHOST_POSTGRES=true), " +
+                    $"or update ConnectionStrings:Postgres to your Azure Postgres host. Current Host='{host}'.");
+            }
         }
 
         services.AddDbContext<MediaFactoryDbContext>(o => o.UseNpgsql(cs));
