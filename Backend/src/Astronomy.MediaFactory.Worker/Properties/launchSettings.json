@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "Astronomy.MediaFactory.Worker": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
+
