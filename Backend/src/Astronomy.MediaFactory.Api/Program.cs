@@ -26,11 +26,18 @@ if (!string.IsNullOrWhiteSpace(telemetryOptions.ApplicationInsightsConnectionStr
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
+builder.Services.AddSwaggerGen();
 builder.Services.AddMediaFactory(builder.Configuration);
 
 var app = builder.Build();
 
 app.Logger.LogInformation("Starting Astronomy.MediaFactory.Api in {Environment}", app.Environment.EnvironmentName);
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
 app.MapGet("/", () => Results.Ok(new { service = "Astronomy.MediaFactory.Api", status = "ok" }));
 app.MapHealthChecks("/health");

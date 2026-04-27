@@ -4,6 +4,7 @@
     <ProjectReference Include="..\Astronomy.MediaFactory.Core\Astronomy.MediaFactory.Core.csproj" />
     <ProjectReference Include="..\Astronomy.MediaFactory.Infrastructure\Astronomy.MediaFactory.Infrastructure.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Swashbuckle.AspNetCore" />
     <PackageReference Include="Serilog.AspNetCore" />
     <PackageReference Include="Serilog.Sinks.Console" />
     <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" />
