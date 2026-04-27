@@ -13,6 +13,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace Astronomy.MediaFactory.Infrastructure.Extensions;
 
@@ -137,8 +138,21 @@ public static class ServiceCollectionExtensions
         });
 
         var cs = configuration.GetConnectionString("Postgres")
-                 ?? configuration["ConnectionStrings:Postgres"]
-                 ?? "Host=localhost;Port=5432;Database=astronomy_media_factory;Username=postgres;Password=postgres";
+                 ?? configuration["ConnectionStrings:Postgres"];
+
+        if (string.IsNullOrWhiteSpace(cs))
+            throw new InvalidOperationException("Missing Postgres connection string. Set ConnectionStrings:Postgres to your Azure Postgres connection string.");
+
+        // Safety guard: never allow localhost Postgres.
+        // This prevents accidental local migrations when running `dotnet ef ...`.
+        var csb = new NpgsqlConnectionStringBuilder(cs);
+        var host = (csb.Host ?? "").Trim();
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("::1", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Refusing to use a localhost Postgres connection. Update ConnectionStrings:Postgres to your Azure Postgres host. Current Host='{host}'.");
+        }
 
         services.AddDbContext<MediaFactoryDbContext>(o => o.UseNpgsql(cs));
         services.AddScoped<IPipelineRepository, EfPipelineRepository>();
