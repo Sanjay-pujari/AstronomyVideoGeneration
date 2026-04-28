@@ -32,12 +32,19 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
     public async Task<IReadOnlyCollection<string>> PrepareVisualsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
     {
         var visualsDirectory = Path.Combine(outputDirectory, "visuals");
-        var scriptsDirectory = string.IsNullOrWhiteSpace(_options.ScriptsDirectory)
+        var scriptsBaseDirectory = string.IsNullOrWhiteSpace(_options.ScriptsDirectory)
             ? Path.Combine(visualsDirectory, "scripts")
             : _options.ScriptsDirectory;
-        var capturesDirectory = string.IsNullOrWhiteSpace(_options.CaptureDirectory)
+        var capturesBaseDirectory = string.IsNullOrWhiteSpace(_options.CaptureDirectory)
             ? Path.Combine(visualsDirectory, "screenshots")
             : _options.CaptureDirectory;
+
+        // Always isolate scripts/captures per pipeline run. Stellarium may not overwrite existing files reliably,
+        // and reusing the same folder across runs makes troubleshooting hard.
+        var runIdSegment = TryExtractRunIdSegment(outputDirectory) ?? Guid.NewGuid().ToString("N");
+        var runSegment = Path.Combine(context.Date.ToString("yyyy-MM-dd"), runIdSegment);
+        var scriptsDirectory = Path.Combine(scriptsBaseDirectory, runSegment);
+        var capturesDirectory = Path.Combine(capturesBaseDirectory, runSegment);
 
         Directory.CreateDirectory(visualsDirectory);
         Directory.CreateDirectory(scriptsDirectory);
@@ -94,6 +101,23 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         return scenes.Select(s => s.OutputImagePath).ToList();
     }
 
+    private static string? TryExtractRunIdSegment(string outputDirectory)
+    {
+        // PipelineOrchestrator creates: <WorkingDirectory>/<ContentType>/<yyyy-MM-dd>/<runIdN>
+        // We want to reuse that <runIdN> to name Stellarium run folders for easy correlation.
+        var last = Path.GetFileName(outputDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrWhiteSpace(last))
+            return null;
+
+        // run.Id is formatted as "N" (32 hex chars). Accept that and standard GUID string formats.
+        if (Guid.TryParseExact(last, "N", out _))
+            return last;
+        if (Guid.TryParse(last, out var parsed))
+            return parsed.ToString("N");
+
+        return null;
+    }
+
     private async Task TryInvokeStellariumAsync(IReadOnlyCollection<StellariumScene> scenes, CancellationToken cancellationToken)
     {
         foreach (var scene in scenes)
@@ -105,17 +129,17 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 {
                     FileName = _options.ExecutablePath,
                     Arguments = $"--startup-script \"{scene.ScriptPath}\"",
-                    RedirectStandardError = true,
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
+                    // Stellarium is a GUI/OpenGL app. Redirecting stdout/stderr and using CreateNoWindow can
+                    // result in black/empty screenshots on some Windows setups.
+                    UseShellExecute = true,
+                    CreateNoWindow = false
                 });
 
                 if (process is null)
                     continue;
 
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(75));
                 await process.WaitForExitAsync(timeoutCts.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -156,7 +180,9 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
 
     private static List<StellariumScene> ComposeScenes(AstronomyContext context, string scriptsDirectory, string capturesDirectory)
     {
-        var sceneTime = new DateTimeOffset(context.Date.ToDateTime(new TimeOnly(20, 0), DateTimeKind.Utc));
+        // Interpret the scene time as "local evening time" at the user's configured timezone, then convert to UTC.
+        // This avoids accidentally treating local time as UTC (which can shift the scene by many hours).
+        var baseSceneTimeUtc = BuildLocalSceneTimeUtc(context.Date, new TimeOnly(20, 10), context.TimeZone);
         var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase));
         var brightPlanet = context.Events.FirstOrDefault(e => e.Category.Contains("planet", StringComparison.OrdinalIgnoreCase));
         var deepSky = context.Events.FirstOrDefault(e =>
@@ -166,7 +192,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         var sceneDefinitions = new[]
         {
             new SceneDefinition("sky-overview", "Sky overview", $"Tonight's sky overview for {context.LocationName}.", "Polaris"),
-            new SceneDefinition("moon", "Moon focus", moonEvent is null ? "Moon scene generated from fallback ephemeris." : moonEvent.Details, moonEvent?.ObjectName ?? "Moon"),
+            new SceneDefinition("moon", "Moon focus", moonEvent is null ? "Moon scene generated from fallback ephemeris." : moonEvent.Details, NormalizeStellariumObjectName(moonEvent?.ObjectName ?? "Moon")),
             new SceneDefinition(NormalizeSlug(brightPlanet?.ObjectName ?? "jupiter"), "Bright planet", brightPlanet?.Details ?? "A bright planet visible this evening.", brightPlanet?.ObjectName ?? "Jupiter"),
             new SceneDefinition(NormalizeSlug(deepSky?.ObjectName ?? "orion"), "Deep sky target", deepSky?.Details ?? "A deep-sky object or constellation to observe.", deepSky?.ObjectName ?? "Orion"),
             new SceneDefinition("wide-sky-close", "Closing wide sky", "Final wide view of the visible night sky.", "Polaris")
@@ -181,15 +207,57 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 SceneId = prefix,
                 Title = def.Title,
                 Caption = def.Caption,
+                LocationName = context.LocationName,
                 TargetObject = def.TargetObject,
                 Latitude = context.Latitude,
                 Longitude = context.Longitude,
-                SceneTimeUtc = sceneTime.AddMinutes(order * 10),
+                SceneTimeUtc = baseSceneTimeUtc.AddMinutes(order * 10),
                 ScriptPath = Path.Combine(scriptsDirectory, $"{prefix}.ssc"),
                 MetadataPath = Path.Combine(scriptsDirectory, $"{prefix}.json"),
                 OutputImagePath = Path.Combine(capturesDirectory, $"{prefix}.png")
             };
         }).ToList();
+    }
+
+    private static string NormalizeStellariumObjectName(string name)
+    {
+        // Stellarium object IDs are typically simple names ("Moon", "Jupiter", etc.).
+        // Ephemeris/event providers may return descriptive strings ("Waxing Gibbous Moon") that Stellarium won't resolve.
+        if (name.Contains("moon", StringComparison.OrdinalIgnoreCase))
+            return "Moon";
+        return name;
+    }
+
+    private static DateTimeOffset BuildLocalSceneTimeUtc(DateOnly date, TimeOnly localTime, string timeZone)
+    {
+        // Prefer OS timezones when possible. If an IANA timezone is provided on Windows, it may not resolve.
+        // We special-case Asia/Kolkata because it's a common default in this project.
+        var localUnspecified = DateTime.SpecifyKind(date.ToDateTime(localTime), DateTimeKind.Unspecified);
+
+        TimeZoneInfo? tz = null;
+        try
+        {
+            tz = TimeZoneInfo.FindSystemTimeZoneById(timeZone);
+        }
+        catch
+        {
+            // ignore
+        }
+
+        if (tz is null && timeZone.Equals("Asia/Kolkata", StringComparison.OrdinalIgnoreCase))
+        {
+            // IST (no DST): UTC+05:30
+            return new DateTimeOffset(localUnspecified, TimeSpan.FromHours(5.5)).ToUniversalTime();
+        }
+
+        if (tz is not null)
+        {
+            var offset = tz.GetUtcOffset(localUnspecified);
+            return new DateTimeOffset(localUnspecified, offset).ToUniversalTime();
+        }
+
+        // Last resort: treat provided time as UTC to avoid exceptions (still better than failing the pipeline).
+        return new DateTimeOffset(DateTime.SpecifyKind(localUnspecified, DateTimeKind.Utc));
     }
 
     private static byte[] CreatePlaceholderPngBytes(int width, int height)

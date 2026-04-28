@@ -5,6 +5,7 @@ public sealed class StellariumScene
     public string SceneId { get; init; } = "";
     public string Title { get; init; } = "";
     public string Caption { get; init; } = "";
+    public string LocationName { get; init; } = "";
     public string TargetObject { get; init; } = "";
     public double Latitude { get; init; }
     public double Longitude { get; init; }
