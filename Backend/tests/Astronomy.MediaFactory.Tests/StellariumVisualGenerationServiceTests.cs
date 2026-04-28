@@ -87,4 +87,30 @@ public sealed class StellariumVisualGenerationServiceTests
             Assert.Contains("Placeholder generated for scene", File.ReadAllText(placeholderInfoPath));
         });
     }
+
+    [Fact]
+    public async Task PrepareVisualsAsync_UsesDiscoveredStellariumCapture_WithVariableSuffix()
+    {
+        var outputDir = Path.Combine(Path.GetTempPath(), "stellarium-discovery-" + Guid.NewGuid().ToString("N"));
+        var captureDir = Path.Combine(outputDir, "visuals", "screenshots");
+        Directory.CreateDirectory(captureDir);
+
+        var discoveredPath = Path.Combine(captureDir, "001-sky-overview-0001.png");
+        await File.WriteAllBytesAsync(discoveredPath, [1, 2, 3, 4]);
+
+        var options = Options.Create(new StellariumOptions());
+        var builder = new StellariumScriptBuilder(options.Value);
+        var sut = new StellariumVisualGenerationService(options, builder, NullLogger<StellariumVisualGenerationService>.Instance);
+
+        var visuals = await sut.PrepareVisualsAsync(new AstronomyContext
+        {
+            Date = new DateOnly(2026, 3, 17),
+            LocationName = "Udaipur, India"
+        }, outputDir, CancellationToken.None);
+
+        var firstScenePath = visuals.First();
+        Assert.True(File.Exists(firstScenePath));
+        Assert.Equal(4, new FileInfo(firstScenePath).Length);
+        Assert.False(File.Exists(Path.ChangeExtension(firstScenePath, ".placeholder.txt")));
+    }
 }
