@@ -6,6 +6,8 @@ public sealed class AstronomyContext
     public DateOnly Date { get; init; }
     public string LocationName { get; init; } = "";
     public string TimeZone { get; init; } = "Asia/Kolkata";
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
     public List<AstronomyEventModel> Events { get; init; } = new();
     public List<NewsItemModel> NewsItems { get; init; } = new();
     public List<VisualIdeaModel> VisualIdeas { get; init; } = new();

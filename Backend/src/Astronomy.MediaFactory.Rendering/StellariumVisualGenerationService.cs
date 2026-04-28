@@ -98,9 +98,10 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
     {
         foreach (var scene in scenes)
         {
+            Process? process = null;
             try
             {
-                using var process = Process.Start(new ProcessStartInfo
+                process = Process.Start(new ProcessStartInfo
                 {
                     FileName = _options.ExecutablePath,
                     Arguments = $"--startup-script \"{scene.ScriptPath}\"",
@@ -117,9 +118,38 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
                 await process.WaitForExitAsync(timeoutCts.Token);
             }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Timeout waiting for Stellarium to exit. We'll forcefully terminate it below.
+                _logger.LogWarning("Stellarium did not exit within the timeout for scene {SceneId}. Terminating the process.", scene.SceneId);
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Stellarium invocation failed for scene {SceneId}. Falling back to placeholders.", scene.SceneId);
+            }
+            finally
+            {
+                if (process is not null)
+                {
+                    try
+                    {
+                        if (!process.HasExited)
+                        {
+                            // Stellarium is a GUI app; CreateNoWindow doesn't guarantee it will close.
+                            // Ensure we never leak multiple instances when running many scenes.
+                            process.Kill(entireProcessTree: true);
+                            await process.WaitForExitAsync(CancellationToken.None);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to terminate Stellarium process for scene {SceneId}.", scene.SceneId);
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                }
             }
         }
     }
@@ -135,7 +165,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
 
         var sceneDefinitions = new[]
         {
-            new SceneDefinition("sky-overview", "Sky overview", $"Tonight's sky overview for {context.LocationName}.", "Sun"),
+            new SceneDefinition("sky-overview", "Sky overview", $"Tonight's sky overview for {context.LocationName}.", "Polaris"),
             new SceneDefinition("moon", "Moon focus", moonEvent is null ? "Moon scene generated from fallback ephemeris." : moonEvent.Details, moonEvent?.ObjectName ?? "Moon"),
             new SceneDefinition(NormalizeSlug(brightPlanet?.ObjectName ?? "jupiter"), "Bright planet", brightPlanet?.Details ?? "A bright planet visible this evening.", brightPlanet?.ObjectName ?? "Jupiter"),
             new SceneDefinition(NormalizeSlug(deepSky?.ObjectName ?? "orion"), "Deep sky target", deepSky?.Details ?? "A deep-sky object or constellation to observe.", deepSky?.ObjectName ?? "Orion"),
@@ -152,6 +182,8 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 Title = def.Title,
                 Caption = def.Caption,
                 TargetObject = def.TargetObject,
+                Latitude = context.Latitude,
+                Longitude = context.Longitude,
                 SceneTimeUtc = sceneTime.AddMinutes(order * 10),
                 ScriptPath = Path.Combine(scriptsDirectory, $"{prefix}.ssc"),
                 MetadataPath = Path.Combine(scriptsDirectory, $"{prefix}.json"),

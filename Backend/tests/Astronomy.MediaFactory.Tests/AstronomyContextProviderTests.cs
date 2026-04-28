@@ -163,8 +163,8 @@ public sealed class AstronomyContextProviderTests
         }));
 
         return new AstronomyContextProvider(
-            new NasaApodClient(nasaClient, options),
-            new NasaNeoWsClient(nasaClient, options),
+            new NasaApodClient(nasaClient, options, NullLogger<NasaApodClient>.Instance),
+            new NasaNeoWsClient(nasaClient, options, NullLogger<NasaNeoWsClient>.Instance),
             skyfieldSidecarClient,
             NullLogger<AstronomyContextProvider>.Instance,
             Options.Create(new SkyfieldSidecarOptions { Enabled = true, BaseUrl = "http://localhost:8010" }));

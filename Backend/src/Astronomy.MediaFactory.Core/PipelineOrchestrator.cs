@@ -22,6 +22,7 @@ public sealed class PipelineOrchestrator
     private readonly IPipelineRepository _repository;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly OperationsOptions _operationsOptions;
+    private readonly MaintenanceOptions _maintenanceOptions;
     private readonly ILogger<PipelineOrchestrator> _logger;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
     private readonly IYouTubeThumbnailPublisher? _youTubeThumbnailPublisher;
@@ -57,6 +58,7 @@ public sealed class PipelineOrchestrator
         IStageAlertPublisher? stageAlertPublisher = null,
         IOperationalAlertNotifier? operationalAlertNotifier = null,
         IOptions<OperationsOptions>? operationsOptions = null,
+        IOptions<MaintenanceOptions>? maintenanceOptions = null,
         IContentExperimentService? contentExperimentService = null,
         IShortFormPublishingService? shortFormPublishingService = null)
     {
@@ -75,6 +77,7 @@ public sealed class PipelineOrchestrator
         _youTubeOptions = youTubeOptions.Value;
         _contentMonetizationService = contentMonetizationService;
         _operationsOptions = operationsOptions?.Value ?? new OperationsOptions();
+        _maintenanceOptions = maintenanceOptions?.Value ?? new MaintenanceOptions();
         _logger = logger;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
         _youTubeThumbnailPublisher = youTubeThumbnailPublisher;
@@ -114,7 +117,7 @@ public sealed class PipelineOrchestrator
 
         try
         {
-            var outputDir = Path.Combine("media-output", request.ContentType.ToString(), request.Date.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
+            var outputDir = Path.Combine(_maintenanceOptions.WorkingDirectory, request.ContentType.ToString(), request.Date.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
             Directory.CreateDirectory(outputDir);
 
             static StageAlertContext BuildAlertContext(PipelineRun pipelineRun, PipelineStageExecution stage)

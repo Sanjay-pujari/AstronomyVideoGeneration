@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Astronomy.MediaFactory.Core;
 
@@ -7,29 +8,32 @@ public sealed class AnalyticsAggregationService : IAnalyticsAggregationService
     private static readonly Regex TokenSplitRegex = new("[^a-zA-Z0-9]+", RegexOptions.Compiled);
     private const int AggregationWindowSize = 1_500;
 
-    private readonly IPipelineRepository _repository;
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public AnalyticsAggregationService(IPipelineRepository repository)
+    public AnalyticsAggregationService(IServiceScopeFactory scopeFactory)
     {
-        _repository = repository;
+        _scopeFactory = scopeFactory;
     }
 
     public async Task<AnalyticsAggregationSummary> BuildSummaryAsync(DateTimeOffset? from, DateTimeOffset? to, int topN, CancellationToken cancellationToken)
     {
         var boundedTopN = Math.Max(topN, 1);
 
-        var topVideosTask = _repository.GetTopPerformingAnalyticsAsync(from, to, boundedTopN, shortsOnly: false, cancellationToken);
-        var topShortsTask = _repository.GetTopPerformingAnalyticsAsync(from, to, boundedTopN * 3, shortsOnly: true, cancellationToken);
-        var analyticsWindowTask = _repository.GetAnalyticsWindowAsync(from, to, AggregationWindowSize, cancellationToken);
+        // IMPORTANT:
+        // - EF Core DbContext is not thread-safe.
+        // - Several callers in the pipeline share a scoped repository/DbContext for writes.
+        // To avoid any accidental cross-call concurrency on the same DbContext, we query analytics
+        // using a dedicated scope (fresh repository + fresh DbContext).
+        using var scope = _scopeFactory.CreateScope();
+        var repository = scope.ServiceProvider.GetRequiredService<IPipelineRepository>();
 
-        await Task.WhenAll(topVideosTask, topShortsTask, analyticsWindowTask);
-
-        var analyticsWindow = analyticsWindowTask.Result;
-        var topShorts = topShortsTask.Result;
+        var topVideos = await repository.GetTopPerformingAnalyticsAsync(from, to, boundedTopN, shortsOnly: false, cancellationToken);
+        var topShorts = await repository.GetTopPerformingAnalyticsAsync(from, to, boundedTopN * 3, shortsOnly: true, cancellationToken);
+        var analyticsWindow = await repository.GetAnalyticsWindowAsync(from, to, AggregationWindowSize, cancellationToken);
 
         return new AnalyticsAggregationSummary
         {
-            TopVideosByViews = topVideosTask.Result,
+            TopVideosByViews = topVideos,
             TopShortsByRetention = topShorts
                 .OrderByDescending(ComputeRetention)
                 .Take(boundedTopN)

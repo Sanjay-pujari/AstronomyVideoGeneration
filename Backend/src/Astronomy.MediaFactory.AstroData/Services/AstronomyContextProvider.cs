@@ -31,6 +31,8 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         if (contentType == ContentType.DailySkyGuide && _sidecarOptions.Enabled)
         {
             var (latitude, longitude) = ResolveCoordinates(locationName);
+            context.Latitude = latitude;
+            context.Longitude = longitude;
             var sidecarResponse = await _skyfieldSidecarClient.GetDailySkyAsync(new SkyfieldDailySkyRequest
             {
                 Date = date.ToString("yyyy-MM-dd"),
@@ -58,14 +60,21 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
     private async Task AddNasaContextAsync(AstronomyContext context, DateOnly date, CancellationToken cancellationToken)
     {
-        var apod = await _apodClient.GetAsync(date, cancellationToken);
-        if (apod is not null)
+        try
         {
-            context.NewsItems.Add(new NewsItemModel { Headline = apod.Title ?? "NASA APOD", Summary = apod.Explanation ?? "No summary available.", SourceName = "NASA APOD", PublishedDate = date, SourceUrl = apod.Hdurl ?? apod.Url });
-            context.VisualIdeas.Add(new VisualIdeaModel { Title = apod.Title ?? "APOD visual", Description = "NASA APOD visual anchor for the video.", SourcePathOrUrl = apod.Hdurl ?? apod.Url });
-        }
+            var apod = await _apodClient.GetAsync(date, cancellationToken);
+            if (apod is not null)
+            {
+                context.NewsItems.Add(new NewsItemModel { Headline = apod.Title ?? "NASA APOD", Summary = apod.Explanation ?? "No summary available.", SourceName = "NASA APOD", PublishedDate = date, SourceUrl = apod.Hdurl ?? apod.Url });
+                context.VisualIdeas.Add(new VisualIdeaModel { Title = apod.Title ?? "APOD visual", Description = "NASA APOD visual anchor for the video.", SourcePathOrUrl = apod.Hdurl ?? apod.Url });
+            }
 
-        _ = await _neoWsClient.GetFeedAsync(date, date.AddDays(2), cancellationToken);
+            _ = await _neoWsClient.GetFeedAsync(date, date.AddDays(2), cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "NASA context enrichment failed for {Date}. Continuing without NASA data.", date);
+        }
     }
 
     private static bool TryApplySidecarResponse(AstronomyContext context, SkyfieldDailySkyResponse? sidecarResponse)

@@ -35,7 +35,8 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
 
         try
         {
-            var response = await _httpClient.PostAsJsonAsync("/ephemeris/daily-sky", request, cancellationToken);
+            // Use Web defaults (camelCase) to match the Python FastAPI sidecar contract.
+            var response = await _httpClient.PostAsJsonAsync("/ephemeris/daily-sky", request, JsonOptions, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Skyfield sidecar returned non-success status code {StatusCode} for {Date} at {LocationName}.", (int)response.StatusCode, request.Date, request.LocationName);

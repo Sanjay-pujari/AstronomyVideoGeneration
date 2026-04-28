@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -39,7 +40,11 @@ public sealed class AnalyticsRepositoryAndAggregationTests
             ]
         };
 
-        var service = new AnalyticsAggregationService(repo);
+        var services = new ServiceCollection();
+        services.AddScoped<IPipelineRepository>(_ => repo);
+        using var provider = services.BuildServiceProvider();
+
+        var service = new AnalyticsAggregationService(provider.GetRequiredService<IServiceScopeFactory>());
         var summary = await service.BuildSummaryAsync(null, null, 5, CancellationToken.None);
 
         Assert.NotEmpty(summary.BestPerformingTitles);
