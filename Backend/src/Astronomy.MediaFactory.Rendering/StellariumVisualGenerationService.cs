@@ -82,6 +82,11 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         {
             if (!File.Exists(scene.OutputImagePath))
             {
+                TryResolveCapturedImage(scene);
+            }
+
+            if (!File.Exists(scene.OutputImagePath))
+            {
                 var placeholderInfoPath = Path.ChangeExtension(scene.OutputImagePath, ".placeholder.txt");
                 await File.WriteAllBytesAsync(scene.OutputImagePath, PlaceholderPngBytes, cancellationToken);
                 await File.WriteAllTextAsync(
@@ -92,6 +97,41 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         }
 
         return scenes.Select(s => s.OutputImagePath).ToList();
+    }
+
+    private void TryResolveCapturedImage(StellariumScene scene)
+    {
+        var captureDirectory = Path.GetDirectoryName(scene.OutputImagePath);
+        if (string.IsNullOrWhiteSpace(captureDirectory) || !Directory.Exists(captureDirectory))
+            return;
+
+        var scenePrefix = Path.GetFileNameWithoutExtension(scene.OutputImagePath);
+        var discoveredCapture = Directory
+            .EnumerateFiles(captureDirectory, $"{scenePrefix}*.png", SearchOption.TopDirectoryOnly)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+
+        if (string.IsNullOrWhiteSpace(discoveredCapture))
+            return;
+
+        try
+        {
+            File.Move(discoveredCapture, scene.OutputImagePath, overwrite: true);
+            _logger.LogInformation(
+                "Mapped Stellarium screenshot '{DiscoveredCapture}' to expected output '{ExpectedCapture}' for scene {SceneId}.",
+                discoveredCapture,
+                scene.OutputImagePath,
+                scene.SceneId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Unable to map Stellarium screenshot '{DiscoveredCapture}' to expected output '{ExpectedCapture}' for scene {SceneId}.",
+                discoveredCapture,
+                scene.OutputImagePath,
+                scene.SceneId);
+        }
     }
 
     private async Task TryInvokeStellariumAsync(IReadOnlyCollection<StellariumScene> scenes, CancellationToken cancellationToken)
