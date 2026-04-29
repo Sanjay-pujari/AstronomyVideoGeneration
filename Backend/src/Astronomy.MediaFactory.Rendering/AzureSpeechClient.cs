@@ -1,4 +1,5 @@
 using System.Security;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Azure.Core;
 using Azure.Identity;
@@ -63,7 +64,7 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzur
 
         using var synthesizer = new SpeechSynthesizer(speechConfig, audioConfig: null);
         var ssml = BuildSsml(text, voice);
-        var result = await synthesizer.SpeakSsmlAsync(ssml).WaitAsync(cancellationToken);
+        var result = await SpeakWithSsmlFallbackAsync(synthesizer, ssml, text, cancellationToken);
 
         if (result.Reason == ResultReason.SynthesizingAudioCompleted)
         {
@@ -73,6 +74,21 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzur
         var cancellationDetails = SpeechSynthesisCancellationDetails.FromResult(result);
         throw new InvalidOperationException(
             $"Speech synthesis failed. Reason={result.Reason}, ErrorCode={cancellationDetails.ErrorCode}, Details={cancellationDetails.ErrorDetails}");
+    }
+
+    private static async Task<SpeechSynthesisResult> SpeakWithSsmlFallbackAsync(
+        SpeechSynthesizer synthesizer,
+        string ssml,
+        string text,
+        CancellationToken cancellationToken)
+    {
+        var ssmlResult = await synthesizer.SpeakSsmlAsync(ssml).WaitAsync(cancellationToken);
+        if (ssmlResult.Reason == ResultReason.SynthesizingAudioCompleted)
+        {
+            return ssmlResult;
+        }
+
+        return await synthesizer.SpeakTextAsync(text).WaitAsync(cancellationToken);
     }
 
     private static bool IsUnsupportedVoice(Exception ex)
@@ -120,11 +136,33 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzur
 
     private static string BuildSsml(string text, string voice)
     {
-        var escapedText = SecurityElement.Escape(text) ?? string.Empty;
+        var processedText = ProcessNarrationText(text);
         return $"""
-                <speak version='1.0' xml:lang='en-US'>
-                  <voice name='{voice}'>{escapedText}</voice>
+                <speak version="1.0" xml:lang="en-US">
+                  <voice name="{voice}">
+                    <prosody rate="0.92" pitch="+2%">
+                      {processedText}
+                    </prosody>
+                  </voice>
                 </speak>
                 """;
+    }
+
+    private static string ProcessNarrationText(string text)
+    {
+        var escapedText = SecurityElement.Escape(text) ?? string.Empty;
+
+        escapedText = Regex.Replace(
+            escapedText,
+            @"\b(Moon|Jupiter|Saturn|Mars|Venus)\b",
+            """<emphasis level="moderate">$1</emphasis>""",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        escapedText = Regex.Replace(escapedText, @"(\r\n|\r|\n){2,}", """<break time="1000ms"/>""");
+        escapedText = Regex.Replace(escapedText, @",\s*", """, <break time="400ms"/> """);
+        escapedText = Regex.Replace(escapedText, @"\.\s*", """. <break time="700ms"/> """);
+        escapedText = Regex.Replace(escapedText, @"(\r\n|\r|\n)+", " ");
+
+        return escapedText.Trim();
     }
 }
