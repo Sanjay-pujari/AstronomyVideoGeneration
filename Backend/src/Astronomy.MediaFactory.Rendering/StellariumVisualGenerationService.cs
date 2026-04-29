@@ -209,7 +209,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
 
     private static List<StellariumScene> ComposeScenes(AstronomyContext context, string scriptsDirectory, string capturesDirectory)
     {
-        var sceneTime = new DateTimeOffset(context.Date.ToDateTime(new TimeOnly(20, 0), DateTimeKind.Utc));
+        var sceneTime = BuildInitialSceneTimeUtc(context);
         var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase));
         var brightPlanet = context.Events.FirstOrDefault(e => e.Category.Contains("planet", StringComparison.OrdinalIgnoreCase));
         var deepSky = context.Events.FirstOrDefault(e =>
@@ -243,6 +243,25 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 OutputImagePath = Path.Combine(capturesDirectory, $"{prefix}.png")
             };
         }).ToList();
+    }
+
+    private static DateTimeOffset BuildInitialSceneTimeUtc(AstronomyContext context)
+    {
+        var localEvening = DateTime.SpecifyKind(context.Date.ToDateTime(new TimeOnly(20, 0)), DateTimeKind.Unspecified);
+
+        try
+        {
+            var timezone = TimeZoneInfo.FindSystemTimeZoneById(context.TimeZone);
+            return TimeZoneInfo.ConvertTimeToUtc(localEvening, timezone);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return new DateTimeOffset(localEvening, TimeSpan.Zero);
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return new DateTimeOffset(localEvening, TimeSpan.Zero);
+        }
     }
 
     private static byte[] CreatePlaceholderPngBytes(int width, int height)
