@@ -35,6 +35,25 @@ public sealed class StellariumVisualGenerationServiceTests
         Assert.Contains("core.screenshot(\"001-sky-overview.png\"", script);
     }
 
+
+    [Fact]
+    public void BuildSceneScript_UsesGenericObjectName_WhenTargetContainsVariantLabel()
+    {
+        var builder = new StellariumScriptBuilder(new StellariumOptions());
+        var scene = new StellariumScene
+        {
+            SceneId = "002-moon",
+            TargetObject = "Waxing Gibbous Moon",
+            SceneTimeUtc = new DateTimeOffset(2026, 3, 17, 20, 0, 0, TimeSpan.Zero),
+            OutputImagePath = Path.Combine("/tmp", "002-moon.png")
+        };
+
+        var script = builder.BuildSceneScript(scene);
+
+        Assert.Contains("core.selectObjectByName(\"Moon\"", script);
+        Assert.DoesNotContain("core.selectObjectByName(\"Waxing Gibbous Moon\"", script);
+    }
+
     [Fact]
     public async Task PrepareVisualsAsync_GeneratesDailySkyGuideScenesAndManifest()
     {
