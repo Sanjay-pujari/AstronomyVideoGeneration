@@ -79,6 +79,15 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             }
             catch (Exception ex)
             {
+                if (IsUnsupportedOperation(ex))
+                {
+                    _logger.LogError(
+                        ex,
+                        "Azure OpenAI request used unsupported operation for deployment '{Deployment}'. Check AzureOpenAI:ChatDeployment and ensure it targets a chat-capable model deployment (not embeddings).",
+                        _options.ChatDeployment);
+                    break;
+                }
+
                 _logger.LogWarning(
                     ex,
                     "Azure OpenAI generation attempt {Attempt}/{MaxAttempts} failed.",
@@ -124,6 +133,15 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             }
             catch (Exception ex)
             {
+                if (IsUnsupportedOperation(ex))
+                {
+                    _logger.LogError(
+                        ex,
+                        "Azure OpenAI shorts request used unsupported operation for deployment '{Deployment}'. Check AzureOpenAI:ChatDeployment and ensure it targets a chat-capable model deployment (not embeddings).",
+                        _options.ChatDeployment);
+                    break;
+                }
+
                 _logger.LogWarning(ex, "Azure OpenAI shorts generation attempt {Attempt}/{MaxAttempts} failed.", attempt, MaxGenerationAttempts);
             }
 
@@ -150,6 +168,12 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         }
 
         var endpoint = _options.Endpoint.TrimEnd('/');
+        if (LooksLikeEmbeddingDeployment(_options.ChatDeployment))
+        {
+            throw new InvalidOperationException(
+                $"AzureOpenAI:ChatDeployment is configured as '{_options.ChatDeployment}', which appears to be an embeddings deployment. Configure a chat-capable deployment for /chat/completions.");
+        }
+
         var requestUri = $"{endpoint}/openai/deployments/{_options.ChatDeployment}/chat/completions?api-version={ApiVersion}";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -194,6 +218,13 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         return chatResponse?.Choices.FirstOrDefault()?.Message.Content
             ?? throw new InvalidOperationException("Azure OpenAI response did not include message content.");
     }
+
+    private static bool IsUnsupportedOperation(Exception ex)
+        => ex is HttpRequestException { StatusCode: HttpStatusCode.BadRequest } httpEx
+           && httpEx.Message.Contains("unsupported", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LooksLikeEmbeddingDeployment(string deploymentName)
+        => deploymentName.Contains("embedding", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryParseContent(string rawContent, out GeneratedContent parsed, out string failureReason)
     {
