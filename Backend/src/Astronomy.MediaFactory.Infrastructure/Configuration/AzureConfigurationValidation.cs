@@ -21,6 +21,8 @@ internal static class AzureConfigurationValidation
 
         if (!HasValue(options.ChatDeployment))
             yield return "AzureOpenAI:ChatDeployment is required when Azure OpenAI is enabled.";
+        else if (LooksLikeEmbeddingDeployment(options.ChatDeployment))
+            yield return "AzureOpenAI:ChatDeployment appears to be an embeddings deployment. Configure a chat-capable deployment (for example, gpt-4.1/gpt-4o) for script generation.";
 
         if (!options.UseManagedIdentity && !HasValue(options.ApiKey))
             yield return "AzureOpenAI:ApiKey is required unless AzureOpenAI:UseManagedIdentity=true.";
@@ -97,4 +99,7 @@ internal static class AzureConfigurationValidation
 
     private static bool IsAbsoluteUri(string? value)
         => HasValue(value) && Uri.TryCreate(value, UriKind.Absolute, out _);
+
+    private static bool LooksLikeEmbeddingDeployment(string deploymentName)
+        => deploymentName.Contains("embedding", StringComparison.OrdinalIgnoreCase);
 }
