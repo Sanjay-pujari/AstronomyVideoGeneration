@@ -205,8 +205,9 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                     }
                 }
 
-            // Give the OS + GPU driver a short cooldown between GUI launches.
-            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                // Give the OS + GPU driver a short cooldown between GUI launches.
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
         }
     }
 
