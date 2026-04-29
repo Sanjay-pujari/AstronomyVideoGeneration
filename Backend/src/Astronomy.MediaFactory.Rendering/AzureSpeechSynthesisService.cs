@@ -47,9 +47,8 @@ public sealed class AzureSpeechSynthesisService : ISpeechSynthesisService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Azure Speech synthesis failed. Falling back to placeholder narration audio.");
-            await _fileSystem.WriteAllBytesAsync(audioPath, Array.Empty<byte>(), cancellationToken);
-            return audioPath;
+            _logger.LogError(ex, "Azure Speech synthesis failed. Narration audio was not created.");
+            throw new InvalidOperationException("Narration audio generation failed.", ex);
         }
     }
 

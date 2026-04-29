@@ -72,7 +72,7 @@ public sealed class FfmpegRenderingTests
     }
 
     [Fact]
-    public async Task FfmpegVideoRenderService_CreatesPlaceholder_WhenFfmpegFails()
+    public async Task FfmpegVideoRenderService_Throws_WhenFfmpegFails()
     {
         var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-tests");
         var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
@@ -84,23 +84,20 @@ public sealed class FfmpegRenderingTests
         var fileSystem = new InMemoryFileSystem();
         var sut = CreateService(fileSystem, new ThrowingProcessRunner());
 
-        var result = await sut.RenderAsync(new RenderManifest
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
         {
             Title = "Sky",
             AudioPath = audioPath,
             OutputPath = outputPath,
             Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }]
-        }, CancellationToken.None);
-
-        Assert.Equal(outputPath, result);
+        }, CancellationToken.None));
         Assert.Contains(Path.Combine(tempDir.FullName, "render-manifest.json"), fileSystem.TextWrites.Keys);
         Assert.Contains(Path.Combine(tempDir.FullName, "ffmpeg-input.txt"), fileSystem.TextWrites.Keys);
         Assert.Contains(Path.Combine(tempDir.FullName, "ffmpeg-command.txt"), fileSystem.TextWrites.Keys);
-        Assert.Empty(fileSystem.ByteWrites[outputPath]);
     }
 
     [Fact]
-    public async Task FfmpegVideoRenderService_CreatesPlaceholder_WhenAudioOrVisualMissing()
+    public async Task FfmpegVideoRenderService_Throws_WhenAudioOrVisualMissing()
     {
         var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-validation");
         var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
@@ -108,15 +105,14 @@ public sealed class FfmpegRenderingTests
         var fileSystem = new InMemoryFileSystem();
         var sut = CreateService(fileSystem, new NoopProcessRunner());
 
-        await sut.RenderAsync(new RenderManifest
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
         {
             Title = "Missing assets",
             AudioPath = Path.Combine(tempDir.FullName, "missing.mp3"),
             OutputPath = outputPath,
             Scenes = [new RenderScene { Caption = "Scene", VisualPath = Path.Combine(tempDir.FullName, "missing.png"), DurationSeconds = 6 }]
-        }, CancellationToken.None);
+        }, CancellationToken.None));
 
-        Assert.Empty(fileSystem.ByteWrites[outputPath]);
         var logPath = Path.Combine(tempDir.FullName, "ffmpeg.log");
         Assert.Contains("missing", fileSystem.TextWrites[logPath], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Narration audio missing", fileSystem.TextWrites[logPath], StringComparison.OrdinalIgnoreCase);
@@ -136,13 +132,13 @@ public sealed class FfmpegRenderingTests
         var fileSystem = new InMemoryFileSystem();
         var sut = CreateService(fileSystem, new FailingProcessRunner());
 
-        await sut.RenderAsync(new RenderManifest
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
         {
             Title = "Sky",
             AudioPath = audioPath,
             OutputPath = outputPath,
             Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }]
-        }, CancellationToken.None);
+        }, CancellationToken.None));
 
         var logPath = Path.Combine(tempDir.FullName, "ffmpeg.log");
         var diagnostics = fileSystem.TextWrites[logPath];

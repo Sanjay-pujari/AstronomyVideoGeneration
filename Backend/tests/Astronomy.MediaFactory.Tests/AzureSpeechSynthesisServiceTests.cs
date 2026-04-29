@@ -24,17 +24,15 @@ public sealed class AzureSpeechSynthesisServiceTests
     }
 
     [Fact]
-    public async Task SynthesizeAsync_WritesPlaceholderAudio_WhenAzureSpeechFails()
+    public async Task SynthesizeAsync_Throws_WhenAzureSpeechFails()
     {
         var fileSystem = new InMemoryFileSystem();
         var client = new StubAzureSpeechClient(_ => throw new InvalidOperationException("speech failed"));
         var sut = CreateService(client, fileSystem);
 
-        var audioPath = await sut.SynthesizeAsync("Fallback script", "/tmp/fallback", CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.SynthesizeAsync("Fallback script", "/tmp/fallback", CancellationToken.None));
 
-        Assert.Equal(Path.Combine("/tmp/fallback", "narration.mp3"), audioPath);
         Assert.Equal("Fallback script", fileSystem.TextWrites[Path.Combine("/tmp/fallback", "narration.txt")]);
-        Assert.Empty(fileSystem.ByteWrites[Path.Combine("/tmp/fallback", "narration.mp3")]);
     }
 
     [Theory]
@@ -44,17 +42,15 @@ public sealed class AzureSpeechSynthesisServiceTests
     [InlineData("fake-key", "", null, false)]
     [InlineData(null, "eastus", null, true)]
     [InlineData(null, "eastus", "", true)]
-    public async Task SynthesizeAsync_WritesPlaceholderAudio_WhenConfigurationIsMissing(string? key, string? region, string? resourceId, bool useManagedIdentity)
+    public async Task SynthesizeAsync_Throws_WhenConfigurationIsMissing(string? key, string? region, string? resourceId, bool useManagedIdentity)
     {
         var fileSystem = new InMemoryFileSystem();
         var client = new StubAzureSpeechClient(_ => Task.FromResult(new byte[] { 9 }));
         var sut = CreateService(client, fileSystem, key, region, resourceId, useManagedIdentity);
 
-        var audioPath = await sut.SynthesizeAsync("Config fallback", "/tmp/missing-config", CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.SynthesizeAsync("Config fallback", "/tmp/missing-config", CancellationToken.None));
 
-        Assert.Equal(Path.Combine("/tmp/missing-config", "narration.mp3"), audioPath);
         Assert.Equal("Config fallback", fileSystem.TextWrites[Path.Combine("/tmp/missing-config", "narration.txt")]);
-        Assert.Empty(fileSystem.ByteWrites[Path.Combine("/tmp/missing-config", "narration.mp3")]);
         Assert.False(client.WasCalled);
     }
 
@@ -86,18 +82,16 @@ public sealed class AzureSpeechSynthesisServiceTests
     }
 
     [Fact]
-    public async Task SynthesizeAsync_WritesPlaceholderAudio_WhenAudioWriteFailsAfterSuccessfulSynthesis()
+    public async Task SynthesizeAsync_Throws_WhenAudioWriteFailsAfterSuccessfulSynthesis()
     {
         var fileSystem = new InMemoryFileSystem { ThrowOnAudioWrite = true };
         var client = new StubAzureSpeechClient(_ => Task.FromResult(new byte[] { 5, 6 }));
         var sut = CreateService(client, fileSystem);
 
-        var audioPath = await sut.SynthesizeAsync("Write fallback", "/tmp/write-failure", CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.SynthesizeAsync("Write fallback", "/tmp/write-failure", CancellationToken.None));
 
-        Assert.Equal(Path.Combine("/tmp/write-failure", "narration.mp3"), audioPath);
         Assert.Equal("Write fallback", fileSystem.TextWrites[Path.Combine("/tmp/write-failure", "narration.txt")]);
-        Assert.Empty(fileSystem.ByteWrites[Path.Combine("/tmp/write-failure", "narration.mp3")]);
-        Assert.Equal(2, fileSystem.AudioWriteAttempts);
+        Assert.Equal(1, fileSystem.AudioWriteAttempts);
     }
 
     private static AzureSpeechSynthesisService CreateService(
