@@ -69,4 +69,4 @@ dotnet run --project src/Astronomy.MediaFactory.Worker
 - Leave YouTube and non-YouTube short-form platforms disabled until credentials and publish paths are verified.
 
 ## Important delivery note
-The backend is production-polished from a documentation and operational perspective. In this execution environment the .NET SDK was not installed, so build and test verification must still be performed in a standard .NET 10 toolchain before release.
+The backend is production-polished from a documentation and operational perspective. In this execution environment the .NET SDK was not installed, so build and test verification must still be performed in a standard .NET 8 toolchain before release.
