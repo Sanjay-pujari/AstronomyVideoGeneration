@@ -32,12 +32,13 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
     public async Task<IReadOnlyCollection<string>> PrepareVisualsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
     {
         var visualsDirectory = Path.Combine(outputDirectory, "visuals");
+        var runScopeDirectory = BuildRunScopeDirectory(outputDirectory, context.Date);
         var scriptsDirectory = string.IsNullOrWhiteSpace(_options.ScriptsDirectory)
             ? Path.Combine(visualsDirectory, "scripts")
-            : _options.ScriptsDirectory;
+            : Path.Combine(_options.ScriptsDirectory, runScopeDirectory);
         var capturesDirectory = string.IsNullOrWhiteSpace(_options.CaptureDirectory)
             ? Path.Combine(visualsDirectory, "screenshots")
-            : _options.CaptureDirectory;
+            : Path.Combine(_options.CaptureDirectory, runScopeDirectory);
 
         Directory.CreateDirectory(visualsDirectory);
         Directory.CreateDirectory(scriptsDirectory);
@@ -97,6 +98,15 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         }
 
         return scenes.Select(s => s.OutputImagePath).ToList();
+    }
+
+    private static string BuildRunScopeDirectory(string outputDirectory, DateOnly date)
+    {
+        var runFolder = Path.GetFileName(Path.GetFullPath(outputDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (Guid.TryParse(runFolder, out _))
+            return Path.Combine(date.ToString("yyyy-MM-dd"), runFolder);
+
+        return date.ToString("yyyy-MM-dd");
     }
 
     private void TryResolveCapturedImage(StellariumScene scene)
