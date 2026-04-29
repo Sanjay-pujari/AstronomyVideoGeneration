@@ -58,7 +58,7 @@ if (typeof StelFileMgr !== "undefined" && StelFileMgr && typeof StelFileMgr.setS
 core.wait(1.0);
 core.screenshot("{{screenshotPrefix}}", false, "{{normalizedScreenshotDir}}", true, "png");
 // Ensure the file is flushed before quitting.
-core.wait(5.0);
+core.wait(2.0);
 core.quitStellarium();
 """;
     }

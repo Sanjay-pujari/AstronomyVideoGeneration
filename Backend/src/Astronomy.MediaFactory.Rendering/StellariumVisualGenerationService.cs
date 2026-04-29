@@ -171,27 +171,27 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 var standardErrorTask = process.StandardError.ReadToEndAsync();
 
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(90));
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(60));
                 await process.WaitForExitAsync(timeoutCts.Token);
 
-                var standardOutput = await standardOutputTask;
-                var standardError = await standardErrorTask;
-                if (!string.IsNullOrWhiteSpace(standardOutput))
-                {
-                    _logger.LogDebug("Stellarium output for scene {SceneId}: {StandardOutput}", scene.SceneId, standardOutput);
-                }
+                //var standardOutput = await standardOutputTask;
+                //var standardError = await standardErrorTask;
+                //if (!string.IsNullOrWhiteSpace(standardOutput))
+                //{
+                //    _logger.LogDebug("Stellarium output for scene {SceneId}: {StandardOutput}", scene.SceneId, standardOutput);
+                //}
 
-                if (!string.IsNullOrWhiteSpace(standardError))
-                {
-                    _logger.LogWarning("Stellarium stderr for scene {SceneId}: {StandardError}", scene.SceneId, standardError);
-                }
+                //if (!string.IsNullOrWhiteSpace(standardError))
+                //{
+                //    _logger.LogWarning("Stellarium stderr for scene {SceneId}: {StandardError}", scene.SceneId, standardError);
+                //}
 
                 await WaitForCaptureWriteAsync(scene, cancellationToken);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
             {
                 // Timeout waiting for Stellarium to exit. We'll forcefully terminate it below.
-                _logger.LogWarning("Stellarium did not exit within the timeout for scene {SceneId}. Terminating the process.", scene.SceneId);
+                _logger.LogWarning(e,"Stellarium did not exit within the timeout for scene {SceneId}. Terminating the process.", scene.SceneId);
             }
             catch (Exception ex)
             {
