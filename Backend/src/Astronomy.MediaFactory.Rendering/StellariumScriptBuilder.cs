@@ -25,6 +25,7 @@ public sealed class StellariumScriptBuilder
             ? 10.0
             : 7.0;
         var escapedLocationName = (scene.LocationName ?? "").Replace("\"", "\\\"");
+        var genericTargetObject = ResolveGenericObjectName(scene.TargetObject);
 
         return $$"""
 core.clear("natural");
@@ -36,7 +37,7 @@ core.setDate("{{utcDate}}", "utc");
 core.setObserverLocation({{scene.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{scene.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
 // Give Stellarium time to apply location/time and render a few frames.
 core.wait(1.0);
-core.selectObjectByName("{{scene.TargetObject}}", true);
+core.selectObjectByName("{{genericTargetObject}}", true);
 core.wait(0.5);
 core.moveToSelectedObject(2.0);
 StelMovementMgr.setFlagTracking(true);
@@ -51,4 +52,29 @@ core.wait(5.0);
 core.quitStellarium();
 """;
     }
+
+    private static string ResolveGenericObjectName(string targetObject)
+    {
+        if (string.IsNullOrWhiteSpace(targetObject))
+        {
+            return "Moon";
+        }
+
+        var normalized = targetObject.Trim();
+        var knownObjects = new[]
+        {
+            "Sun", "Moon", "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto"
+        };
+
+        foreach (var objectName in knownObjects)
+        {
+            if (normalized.Contains(objectName, StringComparison.OrdinalIgnoreCase))
+            {
+                return objectName;
+            }
+        }
+
+        return normalized;
+    }
+
 }
