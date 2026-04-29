@@ -10,6 +10,10 @@ public sealed class AzureSpeechOptions
     public string? ResourceId { get; set; }
     public string? ManagedIdentityClientId { get; set; }
 
+    public bool UseSsml { get; set; } = true;
+    public string? SsmlRate { get; set; } = "0.92";
+    public string? SsmlPitch { get; set; } = "+2%";
+
     public string? PrimaryVoice { get; set; } = "en-US-AriaNeural";
     public string[] FallbackVoices { get; set; } = ["en-US-JennyNeural", "en-US-GuyNeural"];
 

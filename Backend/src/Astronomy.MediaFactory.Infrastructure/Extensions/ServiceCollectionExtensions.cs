@@ -178,6 +178,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IMetadataOptimizationModelClient>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IShortsScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
+        services.AddScoped<ISsmlBuilder, SsmlBuilder>();
         services.AddScoped<IAzureSpeechClient, AzureSpeechClient>();
         services.AddScoped<IFileSystem, PhysicalFileSystem>();
         services.AddScoped<IProcessRunner, ProcessRunner>();
