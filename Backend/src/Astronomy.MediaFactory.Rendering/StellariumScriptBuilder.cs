@@ -23,8 +23,9 @@ public sealed class StellariumScriptBuilder
         var renderSettleSeconds = scene.SceneId.Contains("sky-overview", StringComparison.OrdinalIgnoreCase)
             || scene.SceneId.Contains("wide-sky", StringComparison.OrdinalIgnoreCase)
             ? 10.0
-            : 7.0;
+            : 8.0;
         var escapedLocationName = (scene.LocationName ?? "").Replace("\"", "\\\"");
+        var normalizedScreenshotDir = screenshotDir.Replace("\\", "/").Replace("\"", "\\\"");
         var genericTargetObject = ResolveGenericObjectName(scene.TargetObject);
 
         return $$"""
@@ -32,7 +33,9 @@ core.clear("natural");
 LandscapeMgr.setCurrentLandscapeName("{{_options.DefaultLandscape}}");
 LandscapeMgr.setFlagLandscape(true);
 LandscapeMgr.setFlagAtmosphere(false);
-StelMovementMgr.setCurrentProjectionTypeKey("{{_options.DefaultProjection}}");
+if (typeof core.setProjectionMode === "function") {
+    core.setProjectionMode("{{_options.DefaultProjection}}");
+}
 core.setDate("{{utcDate}}", "utc");
 core.setObserverLocation({{scene.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{scene.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
 // Give Stellarium time to apply location/time and render a few frames.
@@ -43,10 +46,17 @@ core.moveToSelectedObject(2.0);
 StelMovementMgr.setFlagTracking(true);
 StelMovementMgr.zoomTo({{zoom}}, 2.0);
 core.wait({{renderSettleSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}});
-// Some Stellarium builds ignore the 'dir' argument of core.screenshot(); set it explicitly.
-StelFileMgr.setScreenshotDir("{{screenshotDir.Replace("\\", "\\\\")}}");
+if (typeof core.setGuiVisible === "function") {
+    core.setGuiVisible(false);
+}
+if (typeof core.setSelectedObjectMarkerVisible === "function") {
+    core.setSelectedObjectMarkerVisible(false);
+}
+if (typeof StelFileMgr !== "undefined" && StelFileMgr && typeof StelFileMgr.setScreenshotDir === "function") {
+    StelFileMgr.setScreenshotDir("{{normalizedScreenshotDir}}");
+}
 core.wait(1.0);
-core.screenshot("{{screenshotPrefix}}", false, "", true, "png");
+core.screenshot("{{screenshotPrefix}}", false, "{{normalizedScreenshotDir}}", true, "png");
 // Ensure the file is flushed before quitting.
 core.wait(5.0);
 core.quitStellarium();
