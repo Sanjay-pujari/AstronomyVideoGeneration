@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.Contracts;
 using Azure.Core;
 using Azure.Identity;
 using Microsoft.CognitiveServices.Speech;
+using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Rendering;
 
@@ -14,7 +15,7 @@ public interface IAzureSpeechClient
         CancellationToken cancellationToken);
 }
 
-public sealed class AzureSpeechClient : IAzureSpeechClient
+public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzureSpeechClient
 {
     private static readonly TokenRequestContext AzureCognitiveServicesScope = new(["https://cognitiveservices.azure.com/.default"]);
 
@@ -27,11 +28,37 @@ public sealed class AzureSpeechClient : IAzureSpeechClient
             ? await CreateManagedIdentityConfigAsync(options, cancellationToken)
             : CreateSubscriptionConfig(options);
 
-        speechConfig.SpeechSynthesisVoiceName = options.Voice;
         speechConfig.SetSpeechSynthesisOutputFormat(SpeechSynthesisOutputFormat.Audio24Khz160KBitRateMonoMp3);
 
+        Exception? lastUnsupportedVoiceException = null;
+        foreach (var voice in options.GetPreferredVoices())
+        {
+            logger.LogInformation("Trying voice: {Voice}", voice);
+
+            try
+            {
+                var audio = await SynthesizeWithVoiceAsync(text, speechConfig, voice, cancellationToken);
+                logger.LogInformation("Voice {Voice} succeeded", voice);
+                return audio;
+            }
+            catch (InvalidOperationException ex) when (IsUnsupportedVoice(ex))
+            {
+                lastUnsupportedVoiceException = ex;
+                logger.LogWarning(ex, "Voice {Voice} failed, trying next fallback.", voice);
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Speech synthesis failed for all configured voices.",
+            lastUnsupportedVoiceException);
+    }
+
+    private static async Task<byte[]> SynthesizeWithVoiceAsync(string text, SpeechConfig speechConfig, string voice, CancellationToken cancellationToken)
+    {
+        speechConfig.SpeechSynthesisVoiceName = voice;
+
         using var synthesizer = new SpeechSynthesizer(speechConfig, audioConfig: null);
-        var ssml = BuildSsml(text, options.Voice);
+        var ssml = BuildSsml(text, voice);
         var result = await synthesizer.SpeakSsmlAsync(ssml).WaitAsync(cancellationToken);
 
         if (result.Reason == ResultReason.SynthesizingAudioCompleted)
@@ -42,6 +69,12 @@ public sealed class AzureSpeechClient : IAzureSpeechClient
         var cancellationDetails = SpeechSynthesisCancellationDetails.FromResult(result);
         throw new InvalidOperationException(
             $"Speech synthesis failed. Reason={result.Reason}, ErrorCode={cancellationDetails.ErrorCode}, Details={cancellationDetails.ErrorDetails}");
+    }
+
+    private static bool IsUnsupportedVoice(Exception ex)
+    {
+        return ex.Message.Contains("Unsupported voice", StringComparison.OrdinalIgnoreCase)
+               || ex.Message.Contains("BadRequest", StringComparison.OrdinalIgnoreCase);
     }
 
     private static SpeechConfig CreateSubscriptionConfig(AzureSpeechOptions options)

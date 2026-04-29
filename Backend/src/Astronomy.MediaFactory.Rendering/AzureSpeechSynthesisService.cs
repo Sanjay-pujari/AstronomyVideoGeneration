@@ -51,46 +51,11 @@ public sealed class AzureSpeechSynthesisService : ISpeechSynthesisService
 
     private async Task<byte[]> SynthesizeWithFallbackAsync(string script, CancellationToken cancellationToken)
     {
-        try
-        {
-            return await _speechClient.SynthesizeMp3Async(script, _options, cancellationToken);
-        }
-        catch (InvalidOperationException ex) when (ShouldFallbackToAlternateVoice(ex))
-        {
-            var fallbackVoice = _options.FallbackVoice.Trim();
-            _logger.LogWarning(
-                ex,
-                "Azure Speech voice '{PrimaryVoice}' is unsupported. Retrying narration synthesis with fallback voice '{FallbackVoice}'.",
-                _options.Voice,
-                fallbackVoice);
+        var configuredVoices = string.Join(", ", _options.GetPreferredVoices());
+        _logger.LogInformation("Azure Speech synthesis will attempt voices in order: {Voices}", configuredVoices);
 
-            var fallbackOptions = CloneOptionsWithVoice(fallbackVoice);
-            return await _speechClient.SynthesizeMp3Async(script, fallbackOptions, cancellationToken);
-        }
+        return await _speechClient.SynthesizeMp3Async(script, _options, cancellationToken);
     }
-
-    private bool ShouldFallbackToAlternateVoice(InvalidOperationException ex)
-    {
-        if (string.IsNullOrWhiteSpace(_options.FallbackVoice)
-            || string.Equals(_options.Voice, _options.FallbackVoice, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return ex.Message.Contains("Unsupported voice", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private AzureSpeechOptions CloneOptionsWithVoice(string voice) => new()
-    {
-        Key = _options.Key,
-        Region = _options.Region,
-        Endpoint = _options.Endpoint,
-        UseManagedIdentity = _options.UseManagedIdentity,
-        ResourceId = _options.ResourceId,
-        ManagedIdentityClientId = _options.ManagedIdentityClientId,
-        Voice = voice,
-        FallbackVoice = _options.FallbackVoice
-    };
 
     private void EnsureSpeechConfigurationIsUsable()
     {
