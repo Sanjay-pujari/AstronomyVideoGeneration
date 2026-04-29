@@ -30,9 +30,11 @@ public sealed class StellariumVisualGenerationServiceTests
         var script = builder.BuildSceneScript(scene);
 
         Assert.Contains("LandscapeMgr.setCurrentLandscapeName(\"guereins\")", script);
-        Assert.Contains("StelMovementMgr.setCurrentProjectionTypeKey(\"ProjectionPerspective\")", script);
+        Assert.Contains("if (typeof core.setProjectionMode === \"function\")", script);
+        Assert.Contains("core.setProjectionMode(\"ProjectionPerspective\")", script);
         Assert.Contains("core.selectObjectByName(\"Moon\"", script);
-        Assert.Contains("core.screenshot(\"001-sky-overview.png\"", script);
+        Assert.Contains("if (typeof StelFileMgr !== \"undefined\"", script);
+        Assert.Contains("core.screenshot(\"001-sky-overview\"", script);
     }
 
 
