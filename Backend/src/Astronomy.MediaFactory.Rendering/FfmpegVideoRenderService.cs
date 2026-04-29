@@ -55,8 +55,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var validationError = BuildMissingAssetMessage(missingAssets);
             _logger.LogWarning("Skipping FFmpeg render because input validation failed: {Reason}", validationError);
             await _fileSystem.WriteAllTextAsync(ffmpegLogPath, validationError, cancellationToken);
-            await CreatePlaceholderOutputAsync(outputPath, commandPath, "", cancellationToken);
-            return outputPath;
+            throw new InvalidOperationException($"Video render input validation failed: {validationError}");
         }
 
         var arguments = _argumentBuilder.Build(_options, manifest, concatPath, manifest.AudioPath, outputPath);
@@ -69,15 +68,14 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
             if (result.ExitCode != 0 || !File.Exists(outputPath))
             {
-                _logger.LogWarning("FFmpeg exited with code {ExitCode}. Creating placeholder output.", result.ExitCode);
-                await CreatePlaceholderOutputAsync(outputPath, commandPath, arguments, cancellationToken);
+                throw new InvalidOperationException($"FFmpeg failed with exit code {result.ExitCode}. See {ffmpegLogPath} for details.");
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "FFmpeg execution failed. Creating placeholder output.");
+            _logger.LogWarning(ex, "FFmpeg execution failed.");
             await _fileSystem.WriteAllTextAsync(ffmpegLogPath, ex.ToString(), cancellationToken);
-            await CreatePlaceholderOutputAsync(outputPath, commandPath, arguments, cancellationToken);
+            throw new InvalidOperationException($"FFmpeg execution failed. See {ffmpegLogPath} for details.", ex);
         }
 
         return outputPath;
@@ -123,17 +121,5 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             "--- STDOUT ---",
             result.StandardOutput
         }.Where(static line => !string.IsNullOrEmpty(line)));
-    }
-
-    private async Task CreatePlaceholderOutputAsync(string outputPath, string commandPath, string arguments, CancellationToken cancellationToken)
-    {
-        var outputDirectory = Path.GetDirectoryName(outputPath) ?? _options.WorkingDirectory;
-        _fileSystem.CreateDirectory(outputDirectory);
-        if (!string.IsNullOrWhiteSpace(arguments))
-        {
-            await _fileSystem.WriteAllTextAsync(commandPath, $"{_options.FfmpegPath} {arguments}", cancellationToken);
-        }
-
-        await _fileSystem.WriteAllBytesAsync(outputPath, Array.Empty<byte>(), cancellationToken);
     }
 }
