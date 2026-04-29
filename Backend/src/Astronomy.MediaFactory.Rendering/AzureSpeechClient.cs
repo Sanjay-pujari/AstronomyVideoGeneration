@@ -1,5 +1,3 @@
-using System.Security;
-using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Azure.Core;
 using Azure.Identity;
@@ -16,14 +14,11 @@ public interface IAzureSpeechClient
         CancellationToken cancellationToken);
 }
 
-public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzureSpeechClient
+public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger, ISsmlBuilder ssmlBuilder) : IAzureSpeechClient
 {
     private static readonly TokenRequestContext AzureCognitiveServicesScope = new(["https://cognitiveservices.azure.com/.default"]);
 
-    public async Task<byte[]> SynthesizeMp3Async(
-        string text,
-        AzureSpeechOptions options,
-        CancellationToken cancellationToken)
+    public async Task<byte[]> SynthesizeMp3Async(string text, AzureSpeechOptions options, CancellationToken cancellationToken)
     {
         var speechConfig = options.UseManagedIdentity
             ? await CreateManagedIdentityConfigAsync(options, cancellationToken)
@@ -31,20 +26,18 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzur
 
         speechConfig.SetSpeechSynthesisOutputFormat(SpeechSynthesisOutputFormat.Audio24Khz160KBitRateMonoMp3);
 
-        options.PrimaryVoice ??= "en-US-AriaNeural";
+        var useSsml = options.UseSsml;
+        logger.LogInformation("Azure Speech SSML mode is {SsmlMode}", useSsml ? "enabled" : "disabled");
 
-        var voices = new List<string>();
-        voices.Add(options.PrimaryVoice);
-        voices.AddRange(options.FallbackVoices ?? []);
-
+        var voices = options.GetPreferredVoices();
         Exception? lastUnsupportedVoiceException = null;
-        foreach (var voice in voices.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).Distinct(StringComparer.OrdinalIgnoreCase))
+
+        foreach (var voice in voices)
         {
             logger.LogInformation("Trying voice: {Voice}", voice);
-
             try
             {
-                var audio = await SynthesizeWithVoiceAsync(text, speechConfig, voice, cancellationToken);
+                var audio = await SynthesizeWithVoiceAsync(text, speechConfig, voice, useSsml, options, cancellationToken);
                 logger.LogInformation("Voice succeeded: {Voice}", voice);
                 return audio;
             }
@@ -55,16 +48,30 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzur
             }
         }
 
+        logger.LogError("All configured Azure Speech voices failed");
         throw new InvalidOperationException("All Azure Speech voices failed", lastUnsupportedVoiceException);
     }
 
-    private static async Task<byte[]> SynthesizeWithVoiceAsync(string text, SpeechConfig speechConfig, string voice, CancellationToken cancellationToken)
+    private async Task<byte[]> SynthesizeWithVoiceAsync(string text, SpeechConfig speechConfig, string voice, bool useSsml, AzureSpeechOptions options, CancellationToken cancellationToken)
     {
         speechConfig.SpeechSynthesisVoiceName = voice;
-
         using var synthesizer = new SpeechSynthesizer(speechConfig, audioConfig: null);
-        var ssml = BuildSsml(text, voice);
-        var result = await SpeakWithSsmlFallbackAsync(synthesizer, ssml, text, cancellationToken);
+
+        SpeechSynthesisResult result;
+        if (useSsml)
+        {
+            var ssml = ssmlBuilder.BuildSsml(text, voice, rateOverride: options.SsmlRate, pitchOverride: options.SsmlPitch);
+            result = await synthesizer.SpeakSsmlAsync(ssml).WaitAsync(cancellationToken);
+            if (result.Reason != ResultReason.SynthesizingAudioCompleted)
+            {
+                logger.LogWarning("SSML synthesis failed for voice {Voice}. Falling back to plain text.", voice);
+                result = await synthesizer.SpeakTextAsync(text).WaitAsync(cancellationToken);
+            }
+        }
+        else
+        {
+            result = await synthesizer.SpeakTextAsync(text).WaitAsync(cancellationToken);
+        }
 
         if (result.Reason == ResultReason.SynthesizingAudioCompleted)
         {
@@ -76,27 +83,10 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzur
             $"Speech synthesis failed. Reason={result.Reason}, ErrorCode={cancellationDetails.ErrorCode}, Details={cancellationDetails.ErrorDetails}");
     }
 
-    private static async Task<SpeechSynthesisResult> SpeakWithSsmlFallbackAsync(
-        SpeechSynthesizer synthesizer,
-        string ssml,
-        string text,
-        CancellationToken cancellationToken)
-    {
-        var ssmlResult = await synthesizer.SpeakSsmlAsync(ssml).WaitAsync(cancellationToken);
-        if (ssmlResult.Reason == ResultReason.SynthesizingAudioCompleted)
-        {
-            return ssmlResult;
-        }
-
-        return await synthesizer.SpeakTextAsync(text).WaitAsync(cancellationToken);
-    }
-
     private static bool IsUnsupportedVoice(Exception ex)
-    {
-        return ex.Message.Contains("Unsupported voice", StringComparison.OrdinalIgnoreCase)
-               || ex.Message.Contains("BadRequest", StringComparison.OrdinalIgnoreCase)
-               || ex.Message.Contains("ErrorCode=BadRequest", StringComparison.OrdinalIgnoreCase);
-    }
+        => ex.Message.Contains("Unsupported voice", StringComparison.OrdinalIgnoreCase)
+           || ex.Message.Contains("BadRequest", StringComparison.OrdinalIgnoreCase)
+           || ex.Message.Contains("ErrorCode=BadRequest", StringComparison.OrdinalIgnoreCase);
 
     private static SpeechConfig CreateSubscriptionConfig(AzureSpeechOptions options)
     {
@@ -132,37 +122,5 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzur
         var accessToken = await credential.GetTokenAsync(AzureCognitiveServicesScope, cancellationToken);
         var authorizationToken = $"aad#{options.ResourceId.Trim()}#{accessToken.Token}";
         return SpeechConfig.FromAuthorizationToken(authorizationToken, options.Region);
-    }
-
-    private static string BuildSsml(string text, string voice)
-    {
-        var processedText = ProcessNarrationText(text);
-        return $"""
-                <speak version="1.0" xml:lang="en-US">
-                  <voice name="{voice}">
-                    <prosody rate="0.92" pitch="+2%">
-                      {processedText}
-                    </prosody>
-                  </voice>
-                </speak>
-                """;
-    }
-
-    private static string ProcessNarrationText(string text)
-    {
-        var escapedText = SecurityElement.Escape(text) ?? string.Empty;
-
-        escapedText = Regex.Replace(
-            escapedText,
-            @"\b(Moon|Jupiter|Saturn|Mars|Venus)\b",
-            """<emphasis level="moderate">$1</emphasis>""",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-        escapedText = Regex.Replace(escapedText, @"(\r\n|\r|\n){2,}", """<break time="1000ms"/>""");
-        escapedText = Regex.Replace(escapedText, @",\s*", """, <break time="400ms"/> """);
-        escapedText = Regex.Replace(escapedText, @"\.\s*", """. <break time="700ms"/> """);
-        escapedText = Regex.Replace(escapedText, @"(\r\n|\r|\n)+", " ");
-
-        return escapedText.Trim();
     }
 }
