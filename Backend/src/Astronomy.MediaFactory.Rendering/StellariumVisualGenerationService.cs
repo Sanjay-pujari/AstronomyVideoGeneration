@@ -148,7 +148,10 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                     RedirectStandardError = true,
                     RedirectStandardOutput = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    // Stellarium is an OpenGL GUI app. Running it with CreateNoWindow can lead to
+                    // a headless/invalid rendering surface and black screenshots on Windows.
+                    // Keep the windowed process so the framebuffer is actually rendered.
+                    CreateNoWindow = false
                 });
 
                 if (process is null)
