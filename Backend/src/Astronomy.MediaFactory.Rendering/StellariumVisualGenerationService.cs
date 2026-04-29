@@ -168,9 +168,9 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                     continue;
 
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(90));
                 await process.WaitForExitAsync(timeoutCts.Token);
-                await WaitForCaptureWriteAsync(scene.OutputImagePath, cancellationToken);
+                await WaitForCaptureWriteAsync(scene, cancellationToken);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -210,23 +210,34 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         }
     }
 
-    private static async Task WaitForCaptureWriteAsync(string expectedOutputPath, CancellationToken cancellationToken)
+    private static async Task WaitForCaptureWriteAsync(StellariumScene scene, CancellationToken cancellationToken)
     {
-        const int maxAttempts = 10;
+        var captureDirectory = Path.GetDirectoryName(scene.OutputImagePath);
+        if (string.IsNullOrWhiteSpace(captureDirectory) || !Directory.Exists(captureDirectory))
+            return;
+
+        var scenePrefix = Path.GetFileNameWithoutExtension(scene.OutputImagePath);
+        const int maxAttempts = 30;
+
         for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (File.Exists(expectedOutputPath))
+            var candidate = Directory
+                .EnumerateFiles(captureDirectory, $"{scenePrefix}*.png", SearchOption.TopDirectoryOnly)
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault();
+
+            if (!string.IsNullOrWhiteSpace(candidate))
             {
-                var fileInfo = new FileInfo(expectedOutputPath);
+                var fileInfo = new FileInfo(candidate);
                 if (fileInfo.Length > 0)
                 {
                     return;
                 }
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         }
     }
 
