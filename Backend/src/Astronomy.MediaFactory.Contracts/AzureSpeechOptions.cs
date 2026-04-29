@@ -10,4 +10,5 @@ public sealed class AzureSpeechOptions
     public string? ResourceId { get; set; }
     public string? ManagedIdentityClientId { get; set; }
     public string Voice { get; set; } = "en-US-FableMultilingualNeural";
+    public string FallbackVoice { get; set; } = "en-US-AriaNeural";
 }
