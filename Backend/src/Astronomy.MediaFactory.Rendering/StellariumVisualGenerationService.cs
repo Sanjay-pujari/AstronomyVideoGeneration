@@ -167,9 +167,25 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 if (process is null)
                     continue;
 
+                var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+                var standardErrorTask = process.StandardError.ReadToEndAsync();
+
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeoutCts.CancelAfter(TimeSpan.FromSeconds(90));
                 await process.WaitForExitAsync(timeoutCts.Token);
+
+                var standardOutput = await standardOutputTask;
+                var standardError = await standardErrorTask;
+                if (!string.IsNullOrWhiteSpace(standardOutput))
+                {
+                    _logger.LogDebug("Stellarium output for scene {SceneId}: {StandardOutput}", scene.SceneId, standardOutput);
+                }
+
+                if (!string.IsNullOrWhiteSpace(standardError))
+                {
+                    _logger.LogWarning("Stellarium stderr for scene {SceneId}: {StandardError}", scene.SceneId, standardError);
+                }
+
                 await WaitForCaptureWriteAsync(scene, cancellationToken);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
