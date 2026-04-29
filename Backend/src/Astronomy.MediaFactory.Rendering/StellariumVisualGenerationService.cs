@@ -170,6 +170,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
                 await process.WaitForExitAsync(timeoutCts.Token);
+                await WaitForCaptureWriteAsync(scene.OutputImagePath, cancellationToken);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -203,7 +204,29 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                         process.Dispose();
                     }
                 }
+
+            // Give the OS + GPU driver a short cooldown between GUI launches.
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+    }
+
+    private static async Task WaitForCaptureWriteAsync(string expectedOutputPath, CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 10;
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (File.Exists(expectedOutputPath))
+            {
+                var fileInfo = new FileInfo(expectedOutputPath);
+                if (fileInfo.Length > 0)
+                {
+                    return;
+                }
             }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
         }
     }
 
