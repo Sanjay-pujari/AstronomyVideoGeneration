@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Azure.Core;
@@ -214,9 +215,72 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         }
 
         var payload = await response.Content.ReadAsStringAsync(cancellationToken);
-        var chatResponse = JsonSerializer.Deserialize<AzureChatResponse>(payload);
-        return chatResponse?.Choices.FirstOrDefault()?.Message.Content
-            ?? throw new InvalidOperationException("Azure OpenAI response did not include message content.");
+        return ExtractAssistantContent(payload);
+    }
+
+    private static string ExtractAssistantContent(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            throw new InvalidOperationException("Azure OpenAI response payload was empty.");
+        }
+
+        using var document = JsonDocument.Parse(payload);
+        var root = document.RootElement;
+        if (!root.TryGetProperty("choices", out var choicesElement) || choicesElement.ValueKind != JsonValueKind.Array || choicesElement.GetArrayLength() == 0)
+        {
+            throw new InvalidOperationException("Azure OpenAI response did not include any choices.");
+        }
+
+        var firstChoice = choicesElement[0];
+        if (!firstChoice.TryGetProperty("message", out var messageElement) || messageElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException("Azure OpenAI response did not include a message object.");
+        }
+
+        if (messageElement.TryGetProperty("content", out var contentElement))
+        {
+            if (contentElement.ValueKind == JsonValueKind.String)
+            {
+                var directContent = contentElement.GetString();
+                if (!string.IsNullOrWhiteSpace(directContent))
+                {
+                    return directContent;
+                }
+            }
+            else if (contentElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var part in contentElement.EnumerateArray())
+                {
+                    if (part.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    if (!part.TryGetProperty("type", out var typeElement)
+                        || !string.Equals(typeElement.GetString(), "text", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (part.TryGetProperty("text", out var textElement))
+                    {
+                        var partText = textElement.GetString();
+                        if (!string.IsNullOrWhiteSpace(partText))
+                        {
+                            return partText;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (messageElement.TryGetProperty("refusal", out var refusalElement) && refusalElement.ValueKind == JsonValueKind.String)
+        {
+            throw new InvalidOperationException($"Azure OpenAI response was refused: {refusalElement.GetString()}");
+        }
+
+        throw new InvalidOperationException("Azure OpenAI response did not include message content.");
     }
 
     private static bool IsUnsupportedOperation(Exception ex)
@@ -586,21 +650,6 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             failureReason = $"Invalid JSON: {ex.Message}";
             return false;
         }
-    }
-
-    private sealed class AzureChatResponse
-    {
-        public AzureChoice[] Choices { get; init; } = Array.Empty<AzureChoice>();
-    }
-
-    private sealed class AzureChoice
-    {
-        public AzureMessage Message { get; init; } = new();
-    }
-
-    private sealed class AzureMessage
-    {
-        public string Content { get; init; } = string.Empty;
     }
 
     private sealed class GeneratedContent

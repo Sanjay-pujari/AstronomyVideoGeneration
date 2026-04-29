@@ -49,6 +49,14 @@ public sealed class AzureSpeechClient : IAzureSpeechClient
         if (string.IsNullOrWhiteSpace(options.Key))
             throw new InvalidOperationException("Azure Speech configuration is missing Key.");
 
+        if (!string.IsNullOrWhiteSpace(options.Region)
+            && options.Region.Contains('-', StringComparison.Ordinal)
+            && options.Region.Length == 5)
+        {
+            throw new InvalidOperationException(
+                $"Azure Speech Region appears to be a locale ('{options.Region}'). Use an Azure region name such as 'eastus'.");
+        }
+
         if (!string.IsNullOrWhiteSpace(options.Region))
             return SpeechConfig.FromSubscription(options.Key, options.Region);
 
