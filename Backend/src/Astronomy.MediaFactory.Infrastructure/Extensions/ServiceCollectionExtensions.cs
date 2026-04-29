@@ -32,8 +32,9 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<AzureOpenAiOptions>()
             .Bind(configuration.GetSection(AzureOpenAiOptions.SectionName))
-            .Validate(options => !AzureConfigurationValidation.ValidateOpenAi(options, requireConfiguration: false).Any(), "AzureOpenAI settings are invalid.")
             .ValidateOnStart();
+
+        services.AddSingleton<IValidateOptions<AzureOpenAiOptions>, AzureOpenAiOptionsValidator>();
 
         services.AddOptions<AzureSpeechOptions>()
             .Bind(configuration.GetSection(AzureSpeechOptions.SectionName))
