@@ -117,7 +117,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             throw new InvalidOperationException("Segmented narration flow was requested but no segment clips were produced.");
         }
 
-        var concatBody = string.Join(Environment.NewLine, segmentClipPaths.Select(path => $"file '{path.Replace(\"'\", \"'\\\\''\", StringComparison.Ordinal)}'"));
+        var concatBody = string.Join(Environment.NewLine, segmentClipPaths.Select(path => $"file '{path.Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
 
         var concatArguments = $"-y -f concat -safe 0 -i \"{segmentConcatPath}\" -c copy \"{manifest.OutputPath}\"";
