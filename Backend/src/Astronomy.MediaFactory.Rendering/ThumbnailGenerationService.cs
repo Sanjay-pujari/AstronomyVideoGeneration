@@ -10,6 +10,7 @@ namespace Astronomy.MediaFactory.Rendering;
 
 public sealed class ThumbnailGenerationService : IThumbnailGenerationService
 {
+    private static readonly Rgba32 WarmYellow = new(255, 215, 64);
     private readonly IThumbnailStrategyService _thumbnailStrategyService;
     private readonly ILogger<ThumbnailGenerationService> _logger;
 
@@ -83,43 +84,80 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
 
     private static void ApplyLayout(Image<Rgba32> canvas, ThumbnailLayoutType layoutType, string text)
     {
-        var font = SystemFonts.CreateFont("Arial", 74, FontStyle.Bold);
-        var white = Color.White;
+        var font = SystemFonts.CreateFont("Arial", 84, FontStyle.Bold);
+        var displayText = LimitToThreeWords(text);
+        var textColor = ShouldUseYellow(displayText) ? Color.FromPixel(WarmYellow) : Color.White;
+        var shadowColor = Color.Black.WithAlpha(0.85f);
 
         canvas.Mutate(ctx =>
         {
+            ApplyBottomReadabilityGradient(ctx);
+
             switch (layoutType)
             {
                 case ThumbnailLayoutType.TextLeftVisualRight:
-                    ctx.Fill(Color.Black.WithAlpha(0.55f), new RectangleF(0, 0, 620, 720));
-                    ctx.DrawText(new RichTextOptions(font)
+                    DrawTextWithShadow(ctx, new RichTextOptions(font)
                     {
-                        Origin = new PointF(40, 280),
-                        WrappingLength = 540,
-                        HorizontalAlignment = HorizontalAlignment.Left
-                    }, text, white);
+                        Origin = new PointF(1230, 560),
+                        WrappingLength = 440,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        VerticalAlignment = VerticalAlignment.Bottom
+                    }, displayText, textColor, shadowColor);
                     break;
                 case ThumbnailLayoutType.TopBanner:
-                    ctx.Fill(Color.Black.WithAlpha(0.65f), new RectangleF(0, 0, 1280, 180));
-                    ctx.DrawText(new RichTextOptions(font)
+                    DrawTextWithShadow(ctx, new RichTextOptions(font)
                     {
-                        Origin = new PointF(640, 96),
-                        WrappingLength = 1200,
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        VerticalAlignment = VerticalAlignment.Center
-                    }, text, white);
-                    break;
-                default:
-                    ctx.Fill(Color.Black.WithAlpha(0.45f), new RectangleF(0, 190, 1280, 340));
-                    ctx.DrawText(new RichTextOptions(font)
-                    {
-                        Origin = new PointF(640, 360),
+                        Origin = new PointF(640, 618),
                         WrappingLength = 1180,
                         HorizontalAlignment = HorizontalAlignment.Center,
-                        VerticalAlignment = VerticalAlignment.Center
-                    }, text, white);
+                        VerticalAlignment = VerticalAlignment.Bottom
+                    }, displayText, textColor, shadowColor);
+                    break;
+                default:
+                    DrawTextWithShadow(ctx, new RichTextOptions(font)
+                    {
+                        Origin = new PointF(1230, 630),
+                        WrappingLength = 1180,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        VerticalAlignment = VerticalAlignment.Bottom
+                    }, displayText, textColor, shadowColor);
                     break;
             }
         });
+    }
+
+    private static string LimitToThreeWords(string text)
+    {
+        var words = text
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Take(3)
+            .ToArray();
+        return words.Length == 0 ? "ASTRONOMY UPDATE" : string.Join(' ', words);
+    }
+
+    private static bool ShouldUseYellow(string text)
+        => text.Length % 2 == 0;
+
+    private static void DrawTextWithShadow(IImageProcessingContext ctx, RichTextOptions options, string text, Color textColor, Color shadowColor)
+    {
+        var shadowOptions = new RichTextOptions(options)
+        {
+            Origin = new PointF(options.Origin.X + 4, options.Origin.Y + 4)
+        };
+
+        ctx.DrawText(shadowOptions, text, shadowColor);
+        ctx.DrawText(options, text, textColor);
+    }
+
+    private static void ApplyBottomReadabilityGradient(IImageProcessingContext ctx)
+    {
+        var gradientBrush = new LinearGradientBrush(
+            new PointF(0, 420),
+            new PointF(0, 720),
+            GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Transparent),
+            new ColorStop(1f, Color.Black.WithAlpha(0.82f)));
+
+        ctx.Fill(gradientBrush, new RectangleF(0, 360, 1280, 360));
     }
 }
