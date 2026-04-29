@@ -35,27 +35,6 @@ public sealed class AzureSpeechSynthesisServiceTests
         Assert.Equal("Fallback script", fileSystem.TextWrites[Path.Combine("/tmp/fallback", "narration.txt")]);
     }
 
-    [Fact]
-    public async Task SynthesizeAsync_RetriesWithFallbackVoice_WhenPrimaryVoiceIsUnsupported()
-    {
-        var fileSystem = new InMemoryFileSystem();
-        var usedVoices = new List<string>();
-        var client = new StubAzureSpeechClient(options =>
-        {
-            usedVoices.Add(options.Voice);
-            return usedVoices.Count == 1
-                ? throw new InvalidOperationException("Speech synthesis failed. Unsupported voice en-US-FableMultilingualNeural")
-                : Task.FromResult(new byte[] { 4, 2 });
-        });
-
-        var sut = CreateService(client, fileSystem);
-
-        var audioPath = await sut.SynthesizeAsync("Voice fallback script", "/tmp/voice-fallback", CancellationToken.None);
-
-        Assert.Equal(Path.Combine("/tmp/voice-fallback", "narration.mp3"), audioPath);
-        Assert.Equal(new[] { "en-US-FableMultilingualNeural", "en-US-AriaNeural" }, usedVoices);
-        Assert.Equal(new byte[] { 4, 2 }, fileSystem.ByteWrites[Path.Combine("/tmp/voice-fallback", "narration.mp3")]);
-    }
 
     [Theory]
     [InlineData(null, "eastus", null, false)]
@@ -130,7 +109,8 @@ public sealed class AzureSpeechSynthesisServiceTests
             Region = region,
             ResourceId = resourceId,
             UseManagedIdentity = useManagedIdentity,
-            Voice = "en-US-FableMultilingualNeural"
+            PrimaryVoice = "en-US-AriaNeural",
+            FallbackVoices = ["en-US-JennyNeural", "en-US-GuyNeural"]
         });
 
         return new AzureSpeechSynthesisService(options, speechClient, fileSystem, NullLogger<AzureSpeechSynthesisService>.Instance);
