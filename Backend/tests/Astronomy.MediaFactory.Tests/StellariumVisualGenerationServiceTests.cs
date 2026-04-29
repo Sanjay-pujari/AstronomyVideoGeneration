@@ -113,4 +113,33 @@ public sealed class StellariumVisualGenerationServiceTests
         Assert.Equal(4, new FileInfo(firstScenePath).Length);
         Assert.False(File.Exists(Path.ChangeExtension(firstScenePath, ".placeholder.txt")));
     }
+
+    [Fact]
+    public async Task PrepareVisualsAsync_NestsConfiguredDirectories_ByDateAndPipelineRun()
+    {
+        var runId = Guid.NewGuid().ToString("N");
+        var outputDir = Path.Combine(Path.GetTempPath(), "media-output", "DailySkyGuide", "2026-03-17", runId);
+        var scriptsRoot = Path.Combine(Path.GetTempPath(), "stellarium-scripts-root-" + Guid.NewGuid().ToString("N"));
+        var capturesRoot = Path.Combine(Path.GetTempPath(), "stellarium-captures-root-" + Guid.NewGuid().ToString("N"));
+        var options = Options.Create(new StellariumOptions
+        {
+            ScriptsDirectory = scriptsRoot,
+            CaptureDirectory = capturesRoot
+        });
+
+        var builder = new StellariumScriptBuilder(options.Value);
+        var sut = new StellariumVisualGenerationService(options, builder, NullLogger<StellariumVisualGenerationService>.Instance);
+        var context = new AstronomyContext
+        {
+            Date = new DateOnly(2026, 3, 17),
+            LocationName = "Udaipur, India"
+        };
+
+        var visuals = await sut.PrepareVisualsAsync(context, outputDir, CancellationToken.None);
+
+        var expectedScope = Path.Combine("2026-03-17", runId);
+        var expectedScriptPath = Path.Combine(scriptsRoot, expectedScope, "001-sky-overview.ssc");
+        Assert.True(File.Exists(expectedScriptPath));
+        Assert.All(visuals, path => Assert.StartsWith(Path.Combine(capturesRoot, expectedScope), path, StringComparison.OrdinalIgnoreCase));
+    }
 }
