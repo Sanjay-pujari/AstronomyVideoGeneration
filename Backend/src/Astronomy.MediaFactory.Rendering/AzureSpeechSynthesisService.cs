@@ -51,7 +51,13 @@ public sealed class AzureSpeechSynthesisService : ISpeechSynthesisService
 
     private async Task<byte[]> SynthesizeWithFallbackAsync(string script, CancellationToken cancellationToken)
     {
-        var configuredVoices = string.Join(", ", _options.GetPreferredVoices());
+        _options.PrimaryVoice ??= "en-US-AriaNeural";
+
+        var voices = new List<string>();
+        voices.Add(_options.PrimaryVoice);
+        voices.AddRange(_options.FallbackVoices ?? []);
+
+        var configuredVoices = string.Join(", ", voices.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
         _logger.LogInformation("Azure Speech synthesis will attempt voices in order: {Voices}", configuredVoices);
 
         return await _speechClient.SynthesizeMp3Async(script, _options, cancellationToken);

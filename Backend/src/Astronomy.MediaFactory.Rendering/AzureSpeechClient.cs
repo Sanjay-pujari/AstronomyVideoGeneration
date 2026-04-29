@@ -30,27 +30,31 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzur
 
         speechConfig.SetSpeechSynthesisOutputFormat(SpeechSynthesisOutputFormat.Audio24Khz160KBitRateMonoMp3);
 
+        options.PrimaryVoice ??= "en-US-AriaNeural";
+
+        var voices = new List<string>();
+        voices.Add(options.PrimaryVoice);
+        voices.AddRange(options.FallbackVoices ?? []);
+
         Exception? lastUnsupportedVoiceException = null;
-        foreach (var voice in options.GetPreferredVoices())
+        foreach (var voice in voices.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             logger.LogInformation("Trying voice: {Voice}", voice);
 
             try
             {
                 var audio = await SynthesizeWithVoiceAsync(text, speechConfig, voice, cancellationToken);
-                logger.LogInformation("Voice {Voice} succeeded", voice);
+                logger.LogInformation("Voice succeeded: {Voice}", voice);
                 return audio;
             }
             catch (InvalidOperationException ex) when (IsUnsupportedVoice(ex))
             {
                 lastUnsupportedVoiceException = ex;
-                logger.LogWarning(ex, "Voice {Voice} failed, trying next fallback.", voice);
+                logger.LogWarning(ex, "Voice failed: {Voice}, trying fallback", voice);
             }
         }
 
-        throw new InvalidOperationException(
-            "Speech synthesis failed for all configured voices.",
-            lastUnsupportedVoiceException);
+        throw new InvalidOperationException("All Azure Speech voices failed", lastUnsupportedVoiceException);
     }
 
     private static async Task<byte[]> SynthesizeWithVoiceAsync(string text, SpeechConfig speechConfig, string voice, CancellationToken cancellationToken)
@@ -74,7 +78,8 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger) : IAzur
     private static bool IsUnsupportedVoice(Exception ex)
     {
         return ex.Message.Contains("Unsupported voice", StringComparison.OrdinalIgnoreCase)
-               || ex.Message.Contains("BadRequest", StringComparison.OrdinalIgnoreCase);
+               || ex.Message.Contains("BadRequest", StringComparison.OrdinalIgnoreCase)
+               || ex.Message.Contains("ErrorCode=BadRequest", StringComparison.OrdinalIgnoreCase);
     }
 
     private static SpeechConfig CreateSubscriptionConfig(AzureSpeechOptions options)

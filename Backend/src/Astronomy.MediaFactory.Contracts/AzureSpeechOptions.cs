@@ -10,7 +10,7 @@ public sealed class AzureSpeechOptions
     public string? ResourceId { get; set; }
     public string? ManagedIdentityClientId { get; set; }
 
-    public string PrimaryVoice { get; set; } = "en-US-AriaNeural";
+    public string? PrimaryVoice { get; set; } = "en-US-AriaNeural";
     public string[] FallbackVoices { get; set; } = ["en-US-JennyNeural", "en-US-GuyNeural"];
 
     // Backwards-compatible settings; used only when new fields are not configured.
@@ -19,6 +19,9 @@ public sealed class AzureSpeechOptions
 
     public IReadOnlyList<string> GetPreferredVoices()
     {
+        PrimaryVoice ??= "en-US-AriaNeural";
+        FallbackVoices ??= ["en-US-JennyNeural", "en-US-GuyNeural"];
+
         var voices = new List<string>();
 
         AddIfSet(voices, PrimaryVoice);
