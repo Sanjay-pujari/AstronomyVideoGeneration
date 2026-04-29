@@ -65,7 +65,7 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
         var emphasized = escapedText;
         foreach (var term in AstronomyTerms)
         {
-            var pattern = $@"(?<!<emphasis level=\"moderate\">)\\b({Regex.Escape(term)})\\b(?!</emphasis>)";
+            var pattern = $@"(?<!<emphasis level=""moderate"">)\b({Regex.Escape(term)})\b(?!</emphasis>)";
             emphasized = Regex.Replace(emphasized, pattern, "<emphasis level=\"moderate\">$1</emphasis>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
