@@ -142,6 +142,7 @@ public sealed class ThumbnailGenerationRequest
 public sealed class RenderManifest
 {
     public string Title { get; set; } = "";
+    public string ScriptBody { get; set; } = "";
     public string AudioPath { get; set; } = "";
     public string OutputPath { get; set; } = "";
     public string? IntroVisualPath { get; set; }
@@ -156,6 +157,7 @@ public sealed class RenderScene
     public string Caption { get; set; } = "";
     public string VisualPath { get; set; } = "";
     public int DurationSeconds { get; set; }
+    public string? AudioPath { get; set; }
 }
 
 public sealed class ContentOpportunity

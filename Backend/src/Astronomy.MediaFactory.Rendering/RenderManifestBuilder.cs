@@ -63,7 +63,8 @@ public sealed class RenderManifestBuilder
                 string.IsNullOrWhiteSpace(scene.Caption) ? $"Scene {i + 1}" : scene.Caption,
                 scene.VisualPath,
                 scene.DurationSeconds > 0 ? scene.DurationSeconds : 6,
-                "scene"));
+                "scene",
+                scene.AudioPath));
         }
 
         if (!string.IsNullOrWhiteSpace(manifest.OutroVisualPath))
@@ -86,7 +87,8 @@ public sealed class RenderManifestBuilder
                 Caption = candidate.Caption,
                 VisualPath = candidate.VisualPath,
                 DurationSeconds = candidate.DurationSeconds,
-                Segment = candidate.Segment
+                Segment = candidate.Segment,
+                AudioPath = candidate.AudioPath
             });
 
             order++;
@@ -123,7 +125,7 @@ public sealed class RenderManifestBuilder
         => value.Replace("'", "'\\''", StringComparison.Ordinal);
 }
 
-file sealed record RenderSceneCandidate(string Caption, string VisualPath, int DurationSeconds, string Segment);
+file sealed record RenderSceneCandidate(string Caption, string VisualPath, int DurationSeconds, string Segment, string? AudioPath = null);
 
 public sealed class RenderPlan
 {
@@ -144,4 +146,5 @@ public sealed class RenderPlanScene
     public string VisualPath { get; init; } = string.Empty;
     public int DurationSeconds { get; init; }
     public string Segment { get; init; } = string.Empty;
+    public string? AudioPath { get; init; }
 }

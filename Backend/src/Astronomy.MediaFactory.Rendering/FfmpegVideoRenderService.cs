@@ -39,6 +39,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var plan = _manifestBuilder.Build(manifest);
         var manifestPath = Path.Combine(outputDirectory, "render-manifest.json");
         var concatPath = Path.Combine(outputDirectory, "ffmpeg-input.txt");
+        var segmentConcatPath = Path.Combine(outputDirectory, "ffmpeg-segments.txt");
         var captionMetadataPath = Path.Combine(outputDirectory, "caption-metadata.json");
         var subtitleScaffoldPath = Path.Combine(outputDirectory, "subtitles.scaffold.srt");
         var commandPath = Path.Combine(outputDirectory, "ffmpeg-command.txt");
@@ -56,6 +57,13 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             _logger.LogWarning("Skipping FFmpeg render because input validation failed: {Reason}", validationError);
             await _fileSystem.WriteAllTextAsync(ffmpegLogPath, validationError, cancellationToken);
             throw new InvalidOperationException($"Video render input validation failed: {validationError}");
+        }
+
+        var hasSegmentedAudio = plan.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.AudioPath) && File.Exists(s.AudioPath));
+        if (hasSegmentedAudio)
+        {
+            await RenderFromSegmentsAsync(manifest, plan, outputDirectory, segmentConcatPath, cancellationToken);
+            return outputPath;
         }
 
         var arguments = _argumentBuilder.Build(_options, manifest, concatPath, manifest.AudioPath, outputPath);
@@ -79,6 +87,45 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         return outputPath;
+    }
+
+    private async Task RenderFromSegmentsAsync(RenderManifest manifest, RenderPlan plan, string outputDirectory, string segmentConcatPath, CancellationToken cancellationToken)
+    {
+        var segmentClipPaths = new List<string>();
+        for (var i = 0; i < plan.Scenes.Count; i++)
+        {
+            var scene = plan.Scenes[i];
+            var sceneAudioPath = scene.AudioPath;
+            if (string.IsNullOrWhiteSpace(sceneAudioPath) || !File.Exists(sceneAudioPath))
+            {
+                continue;
+            }
+
+            var segmentOutputPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
+            var segmentArguments = $"-y -loop 1 -t {scene.DurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{scene.VisualPath}\" -i \"{sceneAudioPath}\" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest \"{segmentOutputPath}\"";
+            var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
+            if (segmentResult.ExitCode != 0 || !File.Exists(segmentOutputPath))
+            {
+                throw new InvalidOperationException($"FFmpeg segmented clip generation failed for scene #{i + 1}.");
+            }
+
+            segmentClipPaths.Add(segmentOutputPath);
+        }
+
+        if (segmentClipPaths.Count == 0)
+        {
+            throw new InvalidOperationException("Segmented narration flow was requested but no segment clips were produced.");
+        }
+
+        var concatBody = string.Join(Environment.NewLine, segmentClipPaths.Select(path => $"file '{path.Replace(\"'\", \"'\\\\''\", StringComparison.Ordinal)}'"));
+        await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
+
+        var concatArguments = $"-y -f concat -safe 0 -i \"{segmentConcatPath}\" -c copy \"{manifest.OutputPath}\"";
+        var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
+        if (concatResult.ExitCode != 0 || !File.Exists(manifest.OutputPath))
+        {
+            throw new InvalidOperationException("FFmpeg concat of segmented clips failed.");
+        }
     }
 
     private static List<string> FindMissingAssets(RenderManifest manifest, RenderPlan plan)
