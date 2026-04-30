@@ -105,6 +105,8 @@ public sealed class RenderingOptions
     public int FrameRate { get; set; } = 30;
     public double ImageTransitionSeconds { get; set; } = 1;
     public string? BackgroundMusicPath { get; set; }
+    public bool UseSegmentedNarration { get; set; } = false;
+    public int FfmpegTimeoutSeconds { get; set; } = 120;
 }
 
 public sealed class AstronomyApiOptions

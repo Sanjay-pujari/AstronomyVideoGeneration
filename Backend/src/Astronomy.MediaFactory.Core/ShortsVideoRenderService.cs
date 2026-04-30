@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 
 namespace Astronomy.MediaFactory.Core;
 
@@ -113,7 +114,6 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             OptimizedMetadata = optimizedMetadata
         };
         var scriptBody = $"{shortScript.OptimizedMetadata?.HookLine ?? shortScript.Hook} {shortScript.ShortScript}";
-        var segments = await BuildNarrationSegmentsAsync(scriptBody, outputDirectory, cancellationToken);
         var shortAudioPath = await _speechSynthesisService.SynthesizeAsync(scriptBody, outputDirectory, cancellationToken);
 
         var visualCandidates = sourceVisuals.Where(File.Exists).ToList();
@@ -129,6 +129,10 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             throw new InvalidOperationException("Short-form rendering requires at least one visual asset, but none were available from the source list or fallback generator.");
         }
 
+        var narrationDurationSeconds = GetAudioDurationSeconds(shortAudioPath);
+        var sceneCount = Math.Max(1, visualCandidates.Count);
+        var durationPerScene = Math.Max(1, (int)Math.Ceiling(narrationDurationSeconds / sceneCount));
+
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
         var manifest = new RenderManifest
         {
@@ -138,12 +142,11 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             OutputWidth = 1080,
             OutputHeight = 1920,
             EnableVerticalCrop = true,
-            Scenes = segments.Select((segment, index) => new RenderScene
+            Scenes = visualCandidates.Select((visualPath, index) => new RenderScene
             {
-                Caption = segment.Text,
-                VisualPath = visualCandidates[index % visualCandidates.Count],
-                AudioPath = segment.AudioPath,
-                DurationSeconds = segment.DurationSeconds
+                Caption = $"Scene {index + 1}",
+                VisualPath = visualPath,
+                DurationSeconds = durationPerScene
             }).ToList()
         };
 
@@ -176,39 +179,38 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         };
     }
 
-    private async Task<List<NarrationSegment>> BuildNarrationSegmentsAsync(string scriptBody, string outputDirectory, CancellationToken cancellationToken)
+    private int GetAudioDurationSeconds(string audioPath)
     {
-        var sentences = scriptBody
-            .Split(['.', '!', '?'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Where(static sentence => !string.IsNullOrWhiteSpace(sentence))
-            .Select(static sentence => sentence.Trim())
-            .ToList();
-
-        if (sentences.Count == 0)
+        try
         {
-            sentences.Add(scriptBody.Trim());
-        }
-
-        var segments = new List<NarrationSegment>(sentences.Count);
-        for (var i = 0; i < sentences.Count; i++)
-        {
-            var segmentDirectory = Path.Combine(outputDirectory, "segments", $"{i + 1:000}");
-            var audioPath = await _speechSynthesisService.SynthesizeAsync(sentences[i], segmentDirectory, cancellationToken);
-            segments.Add(new NarrationSegment
+            var psi = new ProcessStartInfo
             {
-                Text = sentences[i],
-                AudioPath = audioPath,
-                DurationSeconds = EstimateDurationSeconds(sentences[i])
-            });
+                FileName = "ffprobe",
+                Arguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{audioPath}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var process = Process.Start(psi);
+            if (process is null)
+            {
+                return 30;
+            }
+
+            process.WaitForExit(10000);
+            var output = process.StandardOutput.ReadToEnd().Trim();
+            if (double.TryParse(output, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var duration))
+            {
+                return Math.Max(1, (int)Math.Ceiling(duration));
+            }
+
+            return 30;
         }
-
-        return segments;
-    }
-
-    private static int EstimateDurationSeconds(string text)
-    {
-        var wordCount = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
-        var estimatedSeconds = (int)Math.Ceiling(wordCount / 2.7d);
-        return Math.Max(1, estimatedSeconds);
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not determine narration audio duration from {AudioPath}. Falling back to 30 seconds.", audioPath);
+            return 30;
+        }
     }
 }
