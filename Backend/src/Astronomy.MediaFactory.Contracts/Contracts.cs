@@ -99,6 +99,7 @@ public sealed class RenderingOptions
 {
     public const string SectionName = "Rendering";
     public string FfmpegPath { get; set; } = "ffmpeg";
+    public string? FfprobePath { get; set; }
     public string WorkingDirectory { get; set; } = "./media-output";
     public int VideoWidth { get; set; } = 1280;
     public int VideoHeight { get; set; } = 720;
