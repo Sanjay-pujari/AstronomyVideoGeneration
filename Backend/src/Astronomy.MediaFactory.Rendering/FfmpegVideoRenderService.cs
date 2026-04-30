@@ -269,7 +269,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             return 0d;
         }
 
-        var probeArguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "{NormalizePath(mediaPath)}"";
+        var probeArguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{NormalizePath(mediaPath)}\"";
         var probeResult = await _processRunner.ExecuteAsync(ffprobePath, probeArguments, cancellationToken);
         if (probeResult.ExitCode != 0)
         {
