@@ -149,16 +149,26 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         for (var i = 0; i < plan.Scenes.Count; i++)
         {
             var scene = plan.Scenes[i];
-            var duration = scene.DurationSeconds > 0 ? scene.DurationSeconds : 3;
+            var duration = scene.DurationSeconds >= 3 ? scene.DurationSeconds : 5;
             var segmentPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
-            var segmentArguments =
-                $"-y -loop 1 -t {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{NormalizePath(scene.VisualPath)}\" -c:v libx264 -pix_fmt yuv420p \"{NormalizePath(segmentPath)}\"";
+            if (!File.Exists(scene.VisualPath))
+            {
+                throw new FileNotFoundException($"Scene image not found for segment {i + 1}.", scene.VisualPath);
+            }
 
-            _logger.LogInformation("Creating FFmpeg segment {SegmentIndex}/{SegmentCount}: {Command}", i + 1, plan.Scenes.Count, $"{_options.FfmpegPath} {segmentArguments}");
+            var segmentArguments =
+                $"-y -loop 1 -t {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{NormalizePath(scene.VisualPath)}\" -vf \"scale=1280:720\" -c:v libx264 -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
+
+            _logger.LogInformation("Creating segment {SegmentIndex}: {Command}", i + 1, $"{_options.FfmpegPath} {segmentArguments}");
             var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
             if (segmentResult.ExitCode != 0 || !File.Exists(segmentPath))
             {
-                throw new InvalidOperationException($"FFmpeg segment creation failed for scene #{i + 1}.");
+                _logger.LogError(
+                    "FFmpeg segment creation failed for scene #{SceneIndex}. Command: {Command}. stderr: {StandardError}",
+                    i + 1,
+                    $"{_options.FfmpegPath} {segmentArguments}",
+                    segmentResult.StandardError);
+                throw new InvalidOperationException($"FFmpeg segment creation failed for scene #{i + 1}. stderr: {segmentResult.StandardError}");
             }
 
             segmentPaths.Add(segmentPath);
