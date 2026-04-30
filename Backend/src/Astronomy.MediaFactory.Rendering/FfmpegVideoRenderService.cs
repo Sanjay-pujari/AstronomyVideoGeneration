@@ -147,6 +147,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         CancellationToken cancellationToken)
     {
         var segmentPaths = new List<string>();
+        var segmentDiagnostics = new List<string>();
         var narrationDurationSeconds = plan.Scenes.Count == 0 ? 0d : plan.Scenes.Max(scene => (double)scene.DurationSeconds);
         var durationPerScene = plan.Scenes.Count == 0 ? 1d : narrationDurationSeconds / plan.Scenes.Count;
         for (var i = 0; i < plan.Scenes.Count; i++)
@@ -163,10 +164,25 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                 $"-y -nostdin -loop 1 -t {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{NormalizePath(scene.VisualPath)}\" -vf \"scale=1280:720\" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
             var segmentCommand = $"{_options.FfmpegPath} {segmentArguments}";
             await _fileSystem.WriteAllTextAsync(commandPath, segmentCommand, cancellationToken);
-            await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt"), segmentCommand, cancellationToken);
+            var segmentCommandPath = Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt");
 
             var effectiveSegmentTimeoutSeconds = CalculateEffectiveSegmentTimeoutSeconds(_options.FfmpegSegmentTimeoutSeconds, duration);
-            _logger.LogInformation("Creating segment {SegmentIndex} with timeout {SegmentTimeoutSeconds}s: {Command}", i + 1, effectiveSegmentTimeoutSeconds, segmentCommand);
+            var segmentDurationSeconds = (int)Math.Ceiling(duration);
+            var segmentDiagnosticsEntry = string.Join(Environment.NewLine, new[]
+            {
+                $"Segment #{i + 1} duration: {segmentDurationSeconds} seconds",
+                $"Configured segment timeout: {_options.FfmpegSegmentTimeoutSeconds} seconds",
+                $"Effective segment timeout: {effectiveSegmentTimeoutSeconds} seconds",
+                $"Command: {segmentCommand}"
+            });
+            segmentDiagnostics.Add(segmentDiagnosticsEntry);
+            await _fileSystem.WriteAllTextAsync(segmentCommandPath, segmentDiagnosticsEntry, cancellationToken);
+            _logger.LogInformation(
+                "Segment #{SegmentIndex} duration: {SegmentDurationSeconds} seconds. Configured segment timeout: {ConfiguredTimeoutSeconds} seconds. Effective segment timeout: {EffectiveTimeoutSeconds} seconds",
+                i + 1,
+                segmentDurationSeconds,
+                _options.FfmpegSegmentTimeoutSeconds,
+                effectiveSegmentTimeoutSeconds);
 
             using var segmentTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(effectiveSegmentTimeoutSeconds));
             using var segmentLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, segmentTimeoutCts.Token);
@@ -177,8 +193,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             {
                 var timedOut = segmentResult.ExceptionText?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true
                     || (segmentTimeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested);
+                var timeoutFailureMessage = $"FFmpeg segment #{i + 1} timed out after {effectiveSegmentTimeoutSeconds} seconds";
                 throw new InvalidOperationException(
-                    $"FFmpeg segment creation failed for scene #{i + 1}.{Environment.NewLine}" +
+                    $"{(timedOut ? timeoutFailureMessage : $"FFmpeg segment creation failed for scene #{i + 1}.")}{Environment.NewLine}" +
                     $"Command: {segmentCommand}{Environment.NewLine}" +
                     $"ExitCode: {segmentResult.ExitCode}{Environment.NewLine}" +
                     $"TimedOut: {timedOut}{Environment.NewLine}" +
@@ -206,6 +223,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -shortest -c:v copy -c:a aac \"{NormalizePath(outputPath)}\"";
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
+        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics), cancellationToken);
         _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
 
         var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken);
@@ -219,9 +237,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     internal static int CalculateEffectiveSegmentTimeoutSeconds(int configuredSegmentTimeoutSeconds, double sceneDurationSeconds)
     {
-        var minimumConfiguredTimeout = Math.Max(180, configuredSegmentTimeoutSeconds);
-        var durationBasedTimeout = (int)Math.Ceiling(Math.Max(1d, sceneDurationSeconds) * 5d);
-        return Math.Max(minimumConfiguredTimeout, durationBasedTimeout);
+        var effectiveSegmentTimeoutSeconds = Math.Max(configuredSegmentTimeoutSeconds, (int)Math.Ceiling(sceneDurationSeconds * 5d));
+        effectiveSegmentTimeoutSeconds = Math.Max(effectiveSegmentTimeoutSeconds, 180);
+        return effectiveSegmentTimeoutSeconds;
     }
 
     private static string NormalizePath(string path)
