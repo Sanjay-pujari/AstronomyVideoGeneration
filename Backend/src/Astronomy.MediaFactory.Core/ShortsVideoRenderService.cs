@@ -131,7 +131,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
 
         var narrationDurationSeconds = GetAudioDurationSeconds(shortAudioPath);
         var sceneCount = Math.Max(1, visualCandidates.Count);
-        var durationPerScene = Math.Max(1, (int)Math.Ceiling(narrationDurationSeconds / sceneCount));
+        var durationPerScene = Math.Max(1, (int)Math.Ceiling((decimal)narrationDurationSeconds / sceneCount));
 
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
         var manifest = new RenderManifest
