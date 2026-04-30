@@ -278,6 +278,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             $"StartedUtc: {result.StartTimeUtc:O}",
             $"EndedUtc: {result.EndTimeUtc:O}",
             $"DurationMs: {result.Duration.TotalMilliseconds:F0}",
+            $"TimedOut: {result.TimedOut}",
             string.IsNullOrWhiteSpace(result.ExceptionText) ? string.Empty : $"Exception: {result.ExceptionText}",
             "--- STDERR ---",
             result.StandardError,
