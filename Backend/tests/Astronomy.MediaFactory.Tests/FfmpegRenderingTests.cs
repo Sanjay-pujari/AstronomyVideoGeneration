@@ -148,7 +148,7 @@ public sealed class FfmpegRenderingTests
     }
 
     [Fact]
-    public async Task FfmpegVideoRenderService_UsesNarrationAsDurationDriver_ForSegmentConcat()
+    public async Task FfmpegVideoRenderService_BypassesSegmentFlow_WhenUseSegmentedNarrationDisabled()
     {
         var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-segmented");
         var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
@@ -181,11 +181,35 @@ public sealed class FfmpegRenderingTests
         }, CancellationToken.None);
 
         var concatCommand = Assert.Single(processRunner.Commands.Where(command => command.Contains("-f concat", StringComparison.Ordinal)));
-        Assert.DoesNotContain($"-i \"{audioPath}\"", concatCommand, StringComparison.Ordinal);
-        Assert.DoesNotContain("-shortest", concatCommand, StringComparison.Ordinal);
+        Assert.Contains($"-i \"{audioPath}\"", concatCommand, StringComparison.Ordinal);
+        Assert.Contains("-shortest", concatCommand, StringComparison.Ordinal);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner)
+    [Fact]
+    public async Task FfmpegVideoRenderService_FailsCleanly_WhenFfmpegTimeoutExceeded()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-timeout");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var sut = CreateService(fileSystem, new HangingProcessRunner(), ffmpegTimeoutSeconds: 1);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }]
+        }, CancellationToken.None));
+
+        Assert.Contains("timed out", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120)
     {
         var options = Options.Create(new RenderingOptions
         {
@@ -194,7 +218,9 @@ public sealed class FfmpegRenderingTests
             VideoWidth = 1280,
             VideoHeight = 720,
             FrameRate = 30,
-            ImageTransitionSeconds = 1
+            ImageTransitionSeconds = 1,
+            UseSegmentedNarration = false,
+            FfmpegTimeoutSeconds = ffmpegTimeoutSeconds
         });
 
         return new FfmpegVideoRenderService(
@@ -204,6 +230,14 @@ public sealed class FfmpegRenderingTests
             processRunner,
             fileSystem,
             NullLogger<FfmpegVideoRenderService>.Instance);
+    }
+    private sealed class HangingProcessRunner : IProcessRunner
+    {
+        public async Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            return new ProcessExecutionResult(0, "", "", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, fileName, arguments, string.Empty);
+        }
     }
 
     private sealed class InMemoryFileSystem : IFileSystem

@@ -60,10 +60,15 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         var hasSegmentedAudio = plan.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.AudioPath) && File.Exists(s.AudioPath));
-        if (hasSegmentedAudio)
+        if (_options.UseSegmentedNarration && hasSegmentedAudio)
         {
             await RenderFromSegmentsAsync(manifest, plan, outputDirectory, segmentConcatPath, cancellationToken);
             return outputPath;
+        }
+
+        if (!_options.UseSegmentedNarration && hasSegmentedAudio)
+        {
+            _logger.LogInformation("Bypassing segmented narration render flow because {Option}=false.", nameof(_options.UseSegmentedNarration));
         }
 
         var arguments = _argumentBuilder.Build(_options, manifest, concatPath, manifest.AudioPath, outputPath);
@@ -71,13 +76,22 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
         try
         {
-            var result = await _processRunner.ExecuteAsync(_options.FfmpegPath, arguments, cancellationToken);
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(10, _options.FfmpegTimeoutSeconds)));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+            var result = await _processRunner.ExecuteAsync(_options.FfmpegPath, arguments, linkedCts.Token);
             await _fileSystem.WriteAllTextAsync(ffmpegLogPath, BuildProcessDiagnostics(result), cancellationToken);
 
             if (result.ExitCode != 0 || !File.Exists(outputPath))
             {
                 throw new InvalidOperationException($"FFmpeg failed with exit code {result.ExitCode}. See {ffmpegLogPath} for details.");
             }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            var timeoutMessage = $"FFmpeg timed out after {_options.FfmpegTimeoutSeconds} seconds. Command: {_options.FfmpegPath} {arguments}";
+            _logger.LogWarning(timeoutMessage);
+            await _fileSystem.WriteAllTextAsync(ffmpegLogPath, timeoutMessage, cancellationToken);
+            throw new InvalidOperationException(timeoutMessage);
         }
         catch (Exception ex)
         {
