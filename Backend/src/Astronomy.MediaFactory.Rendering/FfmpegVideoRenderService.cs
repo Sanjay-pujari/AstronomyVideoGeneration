@@ -146,10 +146,24 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         string commandPath,
         CancellationToken cancellationToken)
     {
+        var narrationDurationSeconds = await ProbeMediaDurationSecondsAsync(narrationAudioPath, cancellationToken);
+        if (narrationDurationSeconds <= 0)
+        {
+            throw new InvalidOperationException($"Could not determine narration duration from '{narrationAudioPath}'.");
+        }
+
         var segmentPaths = new List<string>();
         var segmentDiagnostics = new List<string>();
-        var narrationDurationSeconds = plan.Scenes.Count == 0 ? 0d : plan.Scenes.Max(scene => (double)scene.DurationSeconds);
-        var durationPerScene = plan.Scenes.Count == 0 ? 1d : narrationDurationSeconds / plan.Scenes.Count;
+        var sceneCount = plan.Scenes.Count;
+        var durationPerScene = sceneCount == 0 ? 1d : narrationDurationSeconds / sceneCount;
+        var expectedCombinedDurationSeconds = durationPerScene * sceneCount;
+        segmentDiagnostics.Add(string.Join(Environment.NewLine, new[]
+        {
+            $"narrationDurationSeconds: {narrationDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"sceneCount: {sceneCount}",
+            $"calculatedSceneDurationSeconds: {durationPerScene.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"expectedCombinedDurationSeconds: {expectedCombinedDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+        }));
         for (var i = 0; i < plan.Scenes.Count; i++)
         {
             var scene = plan.Scenes[i];
@@ -218,6 +232,14 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         {
             throw new InvalidOperationException("FFmpeg concat of scene segments failed.");
         }
+        var combinedDurationSeconds = await ProbeMediaDurationSecondsAsync(combinedPath, cancellationToken);
+        var combinedDurationDelta = Math.Abs(combinedDurationSeconds - narrationDurationSeconds);
+        if (combinedDurationDelta > 1d)
+        {
+            var warningMessage = $"Combined scene duration ({combinedDurationSeconds:F3}s) differs from narration duration ({narrationDurationSeconds:F3}s) by {combinedDurationDelta:F3}s.";
+            _logger.LogWarning("{Warning}", warningMessage);
+            throw new InvalidOperationException($"{warningMessage} Refusing final mux to avoid trimmed/missing scenes.");
+        }
 
         var finalArguments =
             $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -shortest -c:v copy -c:a aac \"{NormalizePath(outputPath)}\"";
@@ -233,6 +255,24 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         return (finalCommand, finalResult);
+    }
+
+    private async Task<double> ProbeMediaDurationSecondsAsync(string mediaPath, CancellationToken cancellationToken)
+    {
+        var probeArguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{NormalizePath(mediaPath)}\"";
+        var probeResult = await _processRunner.ExecuteAsync("ffprobe", probeArguments, cancellationToken);
+        if (probeResult.ExitCode != 0)
+        {
+            return 0d;
+        }
+
+        return double.TryParse(
+            probeResult.StandardOutput.Trim(),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var durationSeconds)
+            ? Math.Max(0d, durationSeconds)
+            : 0d;
     }
 
     public static int CalculateEffectiveSegmentTimeoutSeconds(int configuredSegmentTimeoutSeconds, double sceneDurationSeconds)

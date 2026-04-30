@@ -185,6 +185,76 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("-shortest", concatCommand, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task FfmpegVideoRenderService_UsesNarrationDuration_ForSceneSegments()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-duration");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+
+        var scenes = new List<RenderScene>();
+        for (var i = 0; i < 5; i++)
+        {
+            var scenePath = Path.Combine(tempDir.FullName, $"scene-{i + 1}.png");
+            await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+            scenes.Add(new RenderScene { Caption = $"Scene {i + 1}", VisualPath = scenePath, DurationSeconds = 36 });
+        }
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 115d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 115d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Sky", AudioPath = audioPath, OutputPath = outputPath, Scenes = scenes }, CancellationToken.None);
+
+        var segmentCommands = processRunner.Commands.Where(command => command.Contains("-loop 1 -t", StringComparison.Ordinal)).ToList();
+        Assert.Equal(5, segmentCommands.Count);
+        Assert.All(segmentCommands, command => Assert.Contains("-t 23", command, StringComparison.Ordinal));
+        var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
+        Assert.Contains("narrationDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("sceneCount: 5", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("calculatedSceneDurationSeconds: 23", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("expectedCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_Fails_WhenCombinedDurationDoesNotMatchNarration()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-duration-mismatch");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 115d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 180d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 180 }]
+        }, CancellationToken.None));
+        Assert.Contains("differs from narration duration", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
 
     [Theory]
     [InlineData(180, 36, 180)]
@@ -315,10 +385,26 @@ public sealed class FfmpegRenderingTests
     private sealed class SegmentAwareProcessRunner : IProcessRunner
     {
         public List<string> Commands { get; } = [];
+        public Dictionary<string, double> ProbeDurationsByPath { get; } = [];
 
         public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
         {
             Commands.Add(arguments);
+            if (string.Equals(fileName, "ffprobe", StringComparison.OrdinalIgnoreCase))
+            {
+                var probePath = ExtractLastQuotedPath(arguments);
+                var duration = probePath is not null && ProbeDurationsByPath.TryGetValue(probePath, out var value) ? value : 0d;
+                return Task.FromResult(new ProcessExecutionResult(
+                    ExitCode: duration > 0 ? 0 : 1,
+                    StandardOutput: duration > 0 ? duration.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty,
+                    StandardError: string.Empty,
+                    StartTimeUtc: DateTimeOffset.UtcNow,
+                    EndTimeUtc: DateTimeOffset.UtcNow,
+                    FileName: fileName,
+                    Arguments: arguments,
+                    ExceptionText: string.Empty,
+                    TimedOut: false));
+            }
 
             var outputPath = ExtractOutputPath(arguments);
             if (!string.IsNullOrWhiteSpace(outputPath))
@@ -342,6 +428,12 @@ public sealed class FfmpegRenderingTests
         {
             var parts = arguments.Split('"', StringSplitOptions.RemoveEmptyEntries);
             return parts.LastOrDefault(static value => value.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string? ExtractLastQuotedPath(string arguments)
+        {
+            var parts = arguments.Split('"', StringSplitOptions.RemoveEmptyEntries);
+            return parts.LastOrDefault(static value => value.Contains('/') || value.Contains('\\'));
         }
     }
 }
