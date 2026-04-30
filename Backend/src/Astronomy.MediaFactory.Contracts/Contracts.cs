@@ -106,7 +106,9 @@ public sealed class RenderingOptions
     public double ImageTransitionSeconds { get; set; } = 1;
     public string? BackgroundMusicPath { get; set; }
     public bool UseSegmentedNarration { get; set; } = false;
-    public int FfmpegTimeoutSeconds { get; set; } = 120;
+    public int FfmpegTimeoutSeconds { get; set; } = 600;
+    public int FfmpegSegmentTimeoutSeconds { get; set; } = 180;
+    public bool KeepIntermediateFiles { get; set; } = true;
 }
 
 public sealed class AstronomyApiOptions
