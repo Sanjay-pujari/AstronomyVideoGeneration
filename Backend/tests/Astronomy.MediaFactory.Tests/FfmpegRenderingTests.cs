@@ -248,10 +248,10 @@ public sealed class FfmpegRenderingTests
     }
     private sealed class HangingProcessRunner : IProcessRunner
     {
-        public async Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken)
+        public async Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
         {
             await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
-            return new ProcessExecutionResult(0, "", "", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, fileName, arguments, string.Empty);
+            return new ProcessExecutionResult(0, "", "", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, fileName, arguments, string.Empty, false);
         }
     }
 
@@ -278,13 +278,13 @@ public sealed class FfmpegRenderingTests
 
     private sealed class ThrowingProcessRunner : IProcessRunner
     {
-        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken)
+        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
             => throw new InvalidOperationException("ffmpeg missing");
     }
 
     private sealed class FailingProcessRunner : IProcessRunner
     {
-        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken)
+        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
             => Task.FromResult(new ProcessExecutionResult(
                 ExitCode: 1,
                 StandardOutput: "",
@@ -293,12 +293,13 @@ public sealed class FfmpegRenderingTests
                 EndTimeUtc: DateTimeOffset.UtcNow.AddSeconds(1),
                 FileName: fileName,
                 Arguments: arguments,
-                ExceptionText: string.Empty));
+                ExceptionText: string.Empty,
+                TimedOut: false));
     }
 
     private sealed class NoopProcessRunner : IProcessRunner
     {
-        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken)
+        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
             => Task.FromResult(new ProcessExecutionResult(
                 ExitCode: 0,
                 StandardOutput: string.Empty,
@@ -307,14 +308,15 @@ public sealed class FfmpegRenderingTests
                 EndTimeUtc: DateTimeOffset.UtcNow,
                 FileName: fileName,
                 Arguments: arguments,
-                ExceptionText: string.Empty));
+                ExceptionText: string.Empty,
+                TimedOut: false));
     }
 
     private sealed class SegmentAwareProcessRunner : IProcessRunner
     {
         public List<string> Commands { get; } = [];
 
-        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken)
+        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
         {
             Commands.Add(arguments);
 
@@ -332,7 +334,8 @@ public sealed class FfmpegRenderingTests
                 EndTimeUtc: DateTimeOffset.UtcNow,
                 FileName: fileName,
                 Arguments: arguments,
-                ExceptionText: string.Empty));
+                ExceptionText: string.Empty,
+                TimedOut: false));
         }
 
         private static string? ExtractOutputPath(string arguments)
