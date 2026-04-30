@@ -453,8 +453,19 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
                "  \"hook\": \"string\",\n" +
                "  \"shortScript\": \"string\",\n" +
                "  \"title\": \"string\",\n" +
-               "  \"tags\": [\"shorts\", \"astronomy\"]\n" +
+               "  \"tags\": [\"shorts\", \"astronomy\"],\n" +
+               "  \"sceneNarrationSegments\": [\n" +
+               "    {\n" +
+               "      \"sceneId\": \"sky-overview\",\n" +
+               "      \"sceneTitle\": \"Sky overview\",\n" +
+               "      \"visualTarget\": \"whole sky\",\n" +
+               "      \"narrationText\": \"string\"\n" +
+               "    }\n" +
+               "  ]\n" +
                "}\n\n" +
+               "Return exactly one sceneNarrationSegments item per visual scene in this order:\n" +
+               "1) sky-overview, 2) moon, 3) planet-primary, 4) planet-secondary, 5) constellation.\n" +
+               "Narration must semantically match each scene visual target.\n\n" +
                $"Context:\n- date: {context.Date:yyyy-MM-dd}\n- location: {context.LocationName}\n- contentType: {contentType}\n- topEvents: {string.Join(" | ", topEvents)}\n" +
                PromptFeedbackComposer.BuildFeedbackSection(feedbackContext, isShortForm: true);
     }
@@ -477,6 +488,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             string? shortScript = null;
             string? title = null;
             List<string>? tags = null;
+            var sceneNarrationSegments = new List<SceneNarrationSegment>();
 
             foreach (var property in document.RootElement.EnumerateObject())
             {
@@ -492,6 +504,40 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
                             return false;
                         }
                         tags = property.Value.EnumerateArray().Select(x => x.GetString()?.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        break;
+                    case "sceneNarrationSegments":
+                        if (property.Value.ValueKind != JsonValueKind.Array)
+                        {
+                            failureReason = "Property 'sceneNarrationSegments' must be an array.";
+                            return false;
+                        }
+
+                        foreach (var sceneSegment in property.Value.EnumerateArray())
+                        {
+                            if (sceneSegment.ValueKind != JsonValueKind.Object)
+                            {
+                                failureReason = "Each scene narration segment must be an object.";
+                                return false;
+                            }
+
+                            var sceneId = sceneSegment.TryGetProperty("sceneId", out var sceneIdNode) ? sceneIdNode.GetString()?.Trim() : null;
+                            var sceneTitle = sceneSegment.TryGetProperty("sceneTitle", out var sceneTitleNode) ? sceneTitleNode.GetString()?.Trim() : null;
+                            var visualTarget = sceneSegment.TryGetProperty("visualTarget", out var visualTargetNode) ? visualTargetNode.GetString()?.Trim() : null;
+                            var narrationText = sceneSegment.TryGetProperty("narrationText", out var narrationNode) ? narrationNode.GetString()?.Trim() : null;
+                            if (string.IsNullOrWhiteSpace(sceneId) || string.IsNullOrWhiteSpace(sceneTitle) || string.IsNullOrWhiteSpace(visualTarget) || string.IsNullOrWhiteSpace(narrationText))
+                            {
+                                failureReason = "Each scene narration segment must include non-empty sceneId, sceneTitle, visualTarget, and narrationText.";
+                                return false;
+                            }
+
+                            sceneNarrationSegments.Add(new SceneNarrationSegment
+                            {
+                                SceneId = sceneId,
+                                SceneTitle = sceneTitle,
+                                VisualTarget = visualTarget,
+                                NarrationText = narrationText
+                            });
+                        }
                         break;
                     default:
                         failureReason = $"Unexpected property '{property.Name}' detected in JSON payload.";
@@ -518,7 +564,8 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
                 ShortScript = shortScript,
                 Title = title,
                 Tags = tags.ToArray(),
-                EstimatedDurationSeconds = estimatedDuration
+                EstimatedDurationSeconds = estimatedDuration,
+                SceneNarrationSegments = sceneNarrationSegments
             };
 
             return true;

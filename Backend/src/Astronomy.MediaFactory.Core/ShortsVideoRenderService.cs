@@ -130,7 +130,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         }
 
         var sceneCount = Math.Max(1, visualCandidates.Count);
-        var segmentedNarration = await TryBuildSegmentedNarrationAsync(scriptBody, sceneCount, outputDirectory, cancellationToken);
+        var segmentedNarration = await TryBuildSegmentedNarrationAsync(shortScript.SceneNarrationSegments, scriptBody, sceneCount, outputDirectory, cancellationToken);
 
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
         var defaultDurationPerScene = 5;
@@ -185,7 +185,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         };
     }
 
-    private async Task<List<NarrationSegment>> TryBuildSegmentedNarrationAsync(string scriptBody, int sceneCount, string outputDirectory, CancellationToken cancellationToken)
+    private async Task<List<SceneNarrationSegment>> TryBuildSegmentedNarrationAsync(IReadOnlyCollection<SceneNarrationSegment> generatedSceneNarration, string scriptBody, int sceneCount, string outputDirectory, CancellationToken cancellationToken)
     {
         if (sceneCount <= 0 || string.IsNullOrWhiteSpace(scriptBody))
         {
@@ -194,16 +194,21 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
 
         try
         {
-            var scriptSegments = SplitScriptIntoSceneParts(scriptBody, sceneCount);
-            var results = new List<NarrationSegment>(scriptSegments.Count);
-            for (var i = 0; i < scriptSegments.Count; i++)
+            var sourceSegments = generatedSceneNarration.Count == sceneCount
+                ? generatedSceneNarration.ToList()
+                : BuildFallbackSceneNarrationSegments(scriptBody, sceneCount);
+            var results = new List<SceneNarrationSegment>(sourceSegments.Count);
+            for (var i = 0; i < sourceSegments.Count; i++)
             {
                 var segmentDirectory = Path.Combine(outputDirectory, $"scene-audio-{i + 1:000}");
-                var segmentAudioPath = await _speechSynthesisService.SynthesizeAsync(scriptSegments[i], segmentDirectory, cancellationToken);
+                var segmentAudioPath = await _speechSynthesisService.SynthesizeAsync(sourceSegments[i].NarrationText, segmentDirectory, cancellationToken);
                 var durationSeconds = GetAudioDurationSeconds(segmentAudioPath);
-                results.Add(new NarrationSegment
+                results.Add(new SceneNarrationSegment
                 {
-                    Text = scriptSegments[i],
+                    SceneId = sourceSegments[i].SceneId,
+                    SceneTitle = sourceSegments[i].SceneTitle,
+                    VisualTarget = sourceSegments[i].VisualTarget,
+                    NarrationText = sourceSegments[i].NarrationText,
                     AudioPath = segmentAudioPath,
                     DurationSeconds = durationSeconds
                 });
@@ -218,52 +223,28 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         }
     }
 
-    private static List<string> SplitScriptIntoSceneParts(string scriptBody, int sceneCount)
+    private static List<SceneNarrationSegment> BuildFallbackSceneNarrationSegments(string scriptBody, int sceneCount)
     {
-        var sentences = scriptBody
-            .Split('.', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Select(static sentence => sentence.Trim())
-            .Where(static sentence => !string.IsNullOrWhiteSpace(sentence))
-            .ToList();
-
-        if (sentences.Count >= sceneCount)
-        {
-            var perScene = new List<string>(sceneCount);
-            var baseSize = sentences.Count / sceneCount;
-            var remainder = sentences.Count % sceneCount;
-            var cursor = 0;
-            for (var i = 0; i < sceneCount; i++)
-            {
-                var take = baseSize + (i < remainder ? 1 : 0);
-                take = Math.Max(1, take);
-                var count = Math.Min(take, sentences.Count - cursor);
-                if (count <= 0)
-                {
-                    perScene.Add(sentences[^1] + ".");
-                    continue;
-                }
-
-                perScene.Add($"{string.Join(". ", sentences.Skip(cursor).Take(count))}.");
-                cursor += count;
-            }
-
-            return perScene;
-        }
-
         var words = scriptBody.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        var wordSegments = new List<string>(sceneCount);
+        var wordSegments = new List<SceneNarrationSegment>(sceneCount);
         var wordsPerScene = (int)Math.Ceiling((double)words.Length / sceneCount);
         for (var i = 0; i < sceneCount; i++)
         {
             var start = i * wordsPerScene;
             if (start >= words.Length)
             {
-                wordSegments.Add(words[^1]);
+                wordSegments.Add(new SceneNarrationSegment { SceneId = $"scene-{i + 1}", SceneTitle = $"Scene {i + 1}", VisualTarget = "fallback", NarrationText = words[^1] });
                 continue;
             }
 
             var take = Math.Min(wordsPerScene, words.Length - start);
-            wordSegments.Add(string.Join(' ', words.Skip(start).Take(take)));
+            wordSegments.Add(new SceneNarrationSegment
+            {
+                SceneId = $"scene-{i + 1}",
+                SceneTitle = $"Scene {i + 1}",
+                VisualTarget = "fallback",
+                NarrationText = string.Join(' ', words.Skip(start).Take(take))
+            });
         }
 
         return wordSegments;

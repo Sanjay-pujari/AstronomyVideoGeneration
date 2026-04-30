@@ -87,7 +87,7 @@ public sealed class AzureOpenAiContentGenerationServiceTests
         var handler = new StubHttpMessageHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = BuildSuccessResponse("{\"hook\":\"Watch this nebula rise tonight!\",\"shortScript\":\"Step outside right after sunset and look west for a glowing patch.\",\"title\":\"Nebula in 60 Seconds\",\"tags\":[\"shorts\",\"astronomy\"]}")
+                Content = BuildSuccessResponse("{\"hook\":\"Watch this nebula rise tonight!\",\"shortScript\":\"Step outside right after sunset and look west for a glowing patch.\",\"title\":\"Nebula in 60 Seconds\",\"tags\":[\"shorts\",\"astronomy\"],\"sceneNarrationSegments\":[{\"sceneId\":\"sky-overview\",\"sceneTitle\":\"Sky overview\",\"visualTarget\":\"whole sky\",\"narrationText\":\"overview\"},{\"sceneId\":\"moon\",\"sceneTitle\":\"Moon focus\",\"visualTarget\":\"moon\",\"narrationText\":\"moon narration\"},{\"sceneId\":\"jupiter\",\"sceneTitle\":\"Jupiter focus\",\"visualTarget\":\"jupiter\",\"narrationText\":\"jupiter narration\"},{\"sceneId\":\"planet-secondary\",\"sceneTitle\":\"Secondary planet\",\"visualTarget\":\"mars\",\"narrationText\":\"mars narration\"},{\"sceneId\":\"constellation\",\"sceneTitle\":\"Constellation\",\"visualTarget\":\"orion\",\"narrationText\":\"orion narration\"}]}")
             });
 
         var sut = CreateService(handler);
@@ -96,6 +96,9 @@ public sealed class AzureOpenAiContentGenerationServiceTests
         Assert.Equal("Nebula in 60 Seconds", result.Title);
         Assert.Contains("shorts", result.Tags);
         Assert.InRange(result.EstimatedDurationSeconds, 30, 60);
+        Assert.Equal(5, result.SceneNarrationSegments.Count);
+        Assert.Contains(result.SceneNarrationSegments, s => s.SceneId == "moon" && s.NarrationText.Contains("moon narration", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.SceneNarrationSegments, s => s.SceneId == "jupiter" && s.NarrationText.Contains("jupiter narration", StringComparison.OrdinalIgnoreCase));
     }
 
     private static AzureOpenAiContentGenerationService CreateService(
