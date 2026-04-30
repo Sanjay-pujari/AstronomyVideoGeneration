@@ -57,6 +57,7 @@ public sealed class ShortScriptResult
     public string[] Tags { get; init; } = ["shorts", "astronomy"];
     public int EstimatedDurationSeconds { get; init; }
     public OptimizedVideoMetadata? OptimizedMetadata { get; init; }
+    public IReadOnlyCollection<SceneNarrationSegment> SceneNarrationSegments { get; init; } = [];
 }
 
 public sealed class MetadataOptimizationInput
@@ -163,6 +164,16 @@ public sealed class RenderScene
 public sealed class NarrationSegment
 {
     public string Text { get; init; } = "";
+    public string AudioPath { get; init; } = "";
+    public int DurationSeconds { get; init; }
+}
+
+public sealed class SceneNarrationSegment
+{
+    public string SceneId { get; init; } = "";
+    public string SceneTitle { get; init; } = "";
+    public string VisualTarget { get; init; } = "";
+    public string NarrationText { get; init; } = "";
     public string AudioPath { get; init; } = "";
     public int DurationSeconds { get; init; }
 }

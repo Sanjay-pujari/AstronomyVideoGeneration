@@ -33,20 +33,38 @@ public sealed class ShortsVideoRenderServiceTests
         Assert.Equal(5, renderService.LastManifest.Scenes.Count);
         Assert.All(renderService.LastManifest.Scenes, scene => Assert.Equal(30, scene.DurationSeconds));
         Assert.Equal(result.AudioPath, renderService.LastManifest.AudioPath);
+        Assert.Contains("moon facts", speech.Scripts[2], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("jupiter storms", speech.Scripts[3], StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class FakeShortScriptService : IShortsScriptGenerationService
     {
         public Task<ShortScriptResult> GenerateShortAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
-            => Task.FromResult(new ShortScriptResult { Hook = "Hook", ShortScript = "Script", Title = "Title", EstimatedDurationSeconds = 45 });
+            => Task.FromResult(new ShortScriptResult
+            {
+                Hook = "Hook",
+                ShortScript = "Script",
+                Title = "Title",
+                EstimatedDurationSeconds = 45,
+                SceneNarrationSegments =
+                [
+                    new SceneNarrationSegment{ SceneId = "sky-overview", SceneTitle = "Sky overview", VisualTarget = "wide sky", NarrationText = "overview of tonight's sky."},
+                    new SceneNarrationSegment{ SceneId = "moon", SceneTitle = "Moon focus", VisualTarget = "moon", NarrationText = "moon facts and crater highlights."},
+                    new SceneNarrationSegment{ SceneId = "jupiter", SceneTitle = "Jupiter focus", VisualTarget = "jupiter", NarrationText = "jupiter storms and bright disk."},
+                    new SceneNarrationSegment{ SceneId = "planet-secondary", SceneTitle = "Secondary planet", VisualTarget = "mars", NarrationText = "mars color contrast tonight."},
+                    new SceneNarrationSegment{ SceneId = "constellation", SceneTitle = "Constellation", VisualTarget = "orion", NarrationText = "constellation orientation tips."}
+                ]
+            });
     }
 
     private sealed class TrackingSpeechService : ISpeechSynthesisService
     {
         public int Calls { get; private set; }
+        public List<string> Scripts { get; } = [];
         public Task<string> SynthesizeAsync(string script, string outputDirectory, CancellationToken cancellationToken)
         {
             Calls++;
+            Scripts.Add(script);
             Directory.CreateDirectory(outputDirectory);
             var path = Path.Combine(outputDirectory, "narration.mp3");
             File.WriteAllBytes(path, [1, 2, 3]);
