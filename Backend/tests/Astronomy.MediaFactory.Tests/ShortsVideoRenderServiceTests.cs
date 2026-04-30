@@ -9,7 +9,7 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class ShortsVideoRenderServiceTests
 {
     [Fact]
-    public async Task RenderAsync_UsesSingleNarrationAndDistributesSceneDurations()
+    public async Task RenderAsync_UsesSceneBasedNarrationSegments_WhenSegmentSynthesisSucceeds()
     {
         var renderService = new CapturingRenderService();
         var speech = new TrackingSpeechService();
@@ -27,12 +27,11 @@ public sealed class ShortsVideoRenderServiceTests
         var outputDir = Directory.CreateTempSubdirectory("shorts-single-audio").FullName;
         var result = await sut.RenderAsync(ContentType.SpaceNews, new AstronomyContext { Date = DateOnly.FromDateTime(DateTime.UtcNow) }, [], outputDir, false, CancellationToken.None);
 
-        Assert.Equal(1, speech.Calls);
+        Assert.Equal(6, speech.Calls);
         Assert.NotNull(renderService.LastManifest);
-        Assert.All(renderService.LastManifest!.Scenes, scene => Assert.True(string.IsNullOrWhiteSpace(scene.AudioPath)));
+        Assert.All(renderService.LastManifest!.Scenes, scene => Assert.False(string.IsNullOrWhiteSpace(scene.AudioPath)));
         Assert.Equal(5, renderService.LastManifest.Scenes.Count);
-        Assert.All(renderService.LastManifest.Scenes, scene => Assert.Equal(6, scene.DurationSeconds));
-        Assert.Equal(30, renderService.LastManifest.Scenes.Sum(scene => scene.DurationSeconds));
+        Assert.All(renderService.LastManifest.Scenes, scene => Assert.Equal(30, scene.DurationSeconds));
         Assert.Equal(result.AudioPath, renderService.LastManifest.AudioPath);
     }
 

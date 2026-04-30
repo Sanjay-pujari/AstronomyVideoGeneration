@@ -129,15 +129,12 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             throw new InvalidOperationException("Short-form rendering requires at least one visual asset, but none were available from the source list or fallback generator.");
         }
 
-        var narrationDurationSeconds = GetAudioDurationSeconds(shortAudioPath);
         var sceneCount = Math.Max(1, visualCandidates.Count);
-        var durationPerScene = (int)Math.Ceiling((decimal)narrationDurationSeconds / sceneCount);
-        if (durationPerScene < 3)
-        {
-            durationPerScene = 5;
-        }
+        var segmentedNarration = await TryBuildSegmentedNarrationAsync(scriptBody, sceneCount, outputDirectory, cancellationToken);
 
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
+        var defaultDurationPerScene = 5;
+        var hasSegmentedNarration = segmentedNarration.Count == sceneCount;
         var manifest = new RenderManifest
         {
             Title = shortScript.OptimizedMetadata?.PrimaryTitle ?? shortScript.Title,
@@ -150,7 +147,12 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             {
                 Caption = $"Scene {index + 1}",
                 VisualPath = visualPath,
-                DurationSeconds = durationPerScene
+                DurationSeconds = hasSegmentedNarration
+                    ? segmentedNarration[index].DurationSeconds
+                    : defaultDurationPerScene,
+                AudioPath = hasSegmentedNarration
+                    ? segmentedNarration[index].AudioPath
+                    : null
             }).ToList()
         };
 
@@ -181,6 +183,90 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             BlobUrl = blobUrl,
             PublishStatus = publishToYouTube ? "ReadyToPublish" : "Skipped"
         };
+    }
+
+    private async Task<List<NarrationSegment>> TryBuildSegmentedNarrationAsync(string scriptBody, int sceneCount, string outputDirectory, CancellationToken cancellationToken)
+    {
+        if (sceneCount <= 0 || string.IsNullOrWhiteSpace(scriptBody))
+        {
+            return [];
+        }
+
+        try
+        {
+            var scriptSegments = SplitScriptIntoSceneParts(scriptBody, sceneCount);
+            var results = new List<NarrationSegment>(scriptSegments.Count);
+            for (var i = 0; i < scriptSegments.Count; i++)
+            {
+                var segmentDirectory = Path.Combine(outputDirectory, $"scene-audio-{i + 1:000}");
+                var segmentAudioPath = await _speechSynthesisService.SynthesizeAsync(scriptSegments[i], segmentDirectory, cancellationToken);
+                var durationSeconds = GetAudioDurationSeconds(segmentAudioPath);
+                results.Add(new NarrationSegment
+                {
+                    Text = scriptSegments[i],
+                    AudioPath = segmentAudioPath,
+                    DurationSeconds = durationSeconds
+                });
+            }
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Segmented narration generation failed. Falling back to single narration audio.");
+            return [];
+        }
+    }
+
+    private static List<string> SplitScriptIntoSceneParts(string scriptBody, int sceneCount)
+    {
+        var sentences = scriptBody
+            .Split('.', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(static sentence => sentence.Trim())
+            .Where(static sentence => !string.IsNullOrWhiteSpace(sentence))
+            .ToList();
+
+        if (sentences.Count >= sceneCount)
+        {
+            var perScene = new List<string>(sceneCount);
+            var baseSize = sentences.Count / sceneCount;
+            var remainder = sentences.Count % sceneCount;
+            var cursor = 0;
+            for (var i = 0; i < sceneCount; i++)
+            {
+                var take = baseSize + (i < remainder ? 1 : 0);
+                take = Math.Max(1, take);
+                var count = Math.Min(take, sentences.Count - cursor);
+                if (count <= 0)
+                {
+                    perScene.Add(sentences[^1] + ".");
+                    continue;
+                }
+
+                perScene.Add($"{string.Join(". ", sentences.Skip(cursor).Take(count))}.");
+                cursor += count;
+            }
+
+            return perScene;
+        }
+
+        var words = scriptBody.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var wordSegments = new List<string>(sceneCount);
+        var wordsPerScene = (int)Math.Ceiling((double)words.Length / sceneCount);
+        for (var i = 0; i < sceneCount; i++)
+        {
+            var start = i * wordsPerScene;
+            if (start >= words.Length)
+            {
+                wordSegments.Add(words[^1]);
+                continue;
+            }
+
+            var take = Math.Min(wordsPerScene, words.Length - start);
+            wordSegments.Add(string.Join(' ', words.Skip(start).Take(take)));
+        }
+
+        return wordSegments;
     }
 
     private int GetAudioDurationSeconds(string audioPath)

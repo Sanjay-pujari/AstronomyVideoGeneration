@@ -110,7 +110,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             var segmentOutputPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
-            var segmentArguments = $"-y -loop 1 -t {scene.DurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{scene.VisualPath}\" -i \"{sceneAudioPath}\" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest \"{segmentOutputPath}\"";
+            var segmentArguments = $"-y -loop 1 -i \"{scene.VisualPath}\" -i \"{sceneAudioPath}\" -shortest -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac \"{segmentOutputPath}\"";
             var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
             if (segmentResult.ExitCode != 0 || !File.Exists(segmentOutputPath))
             {
@@ -248,7 +248,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     {
         var missingAssets = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(manifest.AudioPath) || !File.Exists(manifest.AudioPath))
+        var hasSceneAudio = plan.Scenes.Any(scene => !string.IsNullOrWhiteSpace(scene.AudioPath) && File.Exists(scene.AudioPath));
+        if (!hasSceneAudio && (string.IsNullOrWhiteSpace(manifest.AudioPath) || !File.Exists(manifest.AudioPath)))
         {
             missingAssets.Add($"Narration audio missing: '{manifest.AudioPath}'");
         }
