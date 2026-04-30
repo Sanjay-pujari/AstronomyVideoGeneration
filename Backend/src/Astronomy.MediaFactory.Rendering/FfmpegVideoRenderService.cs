@@ -235,7 +235,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return (finalCommand, finalResult);
     }
 
-    internal static int CalculateEffectiveSegmentTimeoutSeconds(int configuredSegmentTimeoutSeconds, double sceneDurationSeconds)
+    public static int CalculateEffectiveSegmentTimeoutSeconds(int configuredSegmentTimeoutSeconds, double sceneDurationSeconds)
     {
         var effectiveSegmentTimeoutSeconds = Math.Max(configuredSegmentTimeoutSeconds, (int)Math.Ceiling(sceneDurationSeconds * 5d));
         effectiveSegmentTimeoutSeconds = Math.Max(effectiveSegmentTimeoutSeconds, 180);
