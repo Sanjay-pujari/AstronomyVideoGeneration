@@ -71,8 +71,10 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             _logger.LogInformation("Bypassing segmented narration render flow because {Option}=false.", nameof(_options.UseSegmentedNarration));
         }
 
-        var arguments = _argumentBuilder.Build(_options, manifest, concatPath, manifest.AudioPath, outputPath);
-        await _fileSystem.WriteAllTextAsync(commandPath, $"{_options.FfmpegPath} {arguments}", cancellationToken);
+        var arguments = BuildSimpleArguments(plan, manifest.AudioPath, outputPath);
+        var command = $"{_options.FfmpegPath} {arguments}";
+        _logger.LogInformation("FFmpeg Command: {cmd}", command);
+        await _fileSystem.WriteAllTextAsync(commandPath, command, cancellationToken);
 
         try
         {
@@ -83,7 +85,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
             if (result.ExitCode != 0 || !File.Exists(outputPath))
             {
-                throw new InvalidOperationException($"FFmpeg failed with exit code {result.ExitCode}. See {ffmpegLogPath} for details.");
+                _logger.LogError("FFmpeg failed with exit code {ExitCode}. STDERR: {Stderr}", result.ExitCode, result.StandardError);
+                throw new InvalidOperationException($"FFmpeg failed with exit code {result.ExitCode}. STDERR: {result.StandardError}");
             }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -142,6 +145,35 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
     }
 
+
+    private string BuildSimpleArguments(RenderPlan plan, string narrationAudioPath, string outputPath)
+    {
+        var normalizedAudioPath = NormalizePath(narrationAudioPath);
+        var normalizedOutputPath = NormalizePath(outputPath);
+        var inputArgs = new List<string>();
+
+        for (var i = 0; i < plan.Scenes.Count; i++)
+        {
+            var scene = plan.Scenes[i];
+            var duration = scene.DurationSeconds > 0 ? scene.DurationSeconds : 3;
+            var normalizedVisualPath = NormalizePath(scene.VisualPath);
+            inputArgs.Add($"-loop 1 -t {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{normalizedVisualPath}\"");
+        }
+
+        return string.Join(' ',
+            "-y",
+            string.Join(' ', inputArgs),
+            $"-i \"{normalizedAudioPath}\"",
+            $"-r {_options.FrameRate}",
+            "-c:v libx264",
+            "-pix_fmt yuv420p",
+            "-c:a aac",
+            "-shortest",
+            $"\"{normalizedOutputPath}\"");
+    }
+
+    private static string NormalizePath(string path)
+        => path.Replace('\\', '/');
     private static List<string> FindMissingAssets(RenderManifest manifest, RenderPlan plan)
     {
         var missingAssets = new List<string>();
