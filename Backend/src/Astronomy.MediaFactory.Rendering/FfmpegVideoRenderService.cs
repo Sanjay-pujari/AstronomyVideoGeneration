@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.IO;
 
 namespace Astronomy.MediaFactory.Rendering;
 
@@ -259,8 +260,17 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     private async Task<double> ProbeMediaDurationSecondsAsync(string mediaPath, CancellationToken cancellationToken)
     {
-        var probeArguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{NormalizePath(mediaPath)}\"";
-        var probeResult = await _processRunner.ExecuteAsync("ffprobe", probeArguments, cancellationToken);
+        var ffprobePath = ResolveFfprobePath();
+        _logger.LogInformation("Using ffprobe path: {FfprobePath}", ffprobePath);
+
+        if (Path.IsPathRooted(ffprobePath) && !File.Exists(ffprobePath))
+        {
+            _logger.LogWarning("Configured ffprobe path does not exist: {FfprobePath}", ffprobePath);
+            return 0d;
+        }
+
+        var probeArguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "{NormalizePath(mediaPath)}"";
+        var probeResult = await _processRunner.ExecuteAsync(ffprobePath, probeArguments, cancellationToken);
         if (probeResult.ExitCode != 0)
         {
             return 0d;
@@ -273,6 +283,37 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             out var durationSeconds)
             ? Math.Max(0d, durationSeconds)
             : 0d;
+    }
+
+    private string ResolveFfprobePath()
+    {
+        if (!string.IsNullOrWhiteSpace(_options.FfprobePath))
+        {
+            return _options.FfprobePath;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_options.FfmpegPath))
+        {
+            try
+            {
+                var ffmpegFileName = Path.GetFileName(_options.FfmpegPath);
+                if (string.Equals(ffmpegFileName, "ffmpeg", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(ffmpegFileName, "ffmpeg.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ffmpegDirectory = Path.GetDirectoryName(_options.FfmpegPath);
+                    if (!string.IsNullOrWhiteSpace(ffmpegDirectory))
+                    {
+                        return Path.Combine(ffmpegDirectory, "ffprobe.exe");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Unable to derive ffprobe path from ffmpeg path '{FfmpegPath}'.", _options.FfmpegPath);
+            }
+        }
+
+        return "ffprobe";
     }
 
     public static int CalculateEffectiveSegmentTimeoutSeconds(int configuredSegmentTimeoutSeconds, double sceneDurationSeconds)

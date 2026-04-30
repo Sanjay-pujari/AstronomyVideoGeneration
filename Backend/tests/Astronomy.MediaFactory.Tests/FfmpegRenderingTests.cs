@@ -256,6 +256,108 @@ public sealed class FfmpegRenderingTests
     }
 
 
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_UsesExplicitFfprobePath_WhenConfigured()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffprobe-explicit");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        var ffprobePath = Path.Combine(tempDir.FullName, "ffprobe.exe");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(ffprobePath, [7, 8, 9]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 10d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 10d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner, useSegmentedNarration: true, ffprobePath: ffprobePath);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 10 }]
+        }, CancellationToken.None);
+
+        Assert.Contains(processRunner.FileNames, fileName => string.Equals(fileName, ffprobePath, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_DerivesFfprobePath_FromFfmpegPath()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffprobe-derived");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        var ffmpegPath = Path.Combine(tempDir.FullName, "ffmpeg.exe");
+        var ffprobePath = Path.Combine(tempDir.FullName, "ffprobe.exe");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(ffprobePath, [7, 8, 9]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 10d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 10d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner, useSegmentedNarration: true, ffmpegPath: ffmpegPath);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 10 }]
+        }, CancellationToken.None);
+
+        Assert.Contains(processRunner.FileNames, fileName => string.Equals(fileName, ffprobePath, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_FallsBackToBareFfprobe_WhenNoPathConfigured()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffprobe-fallback");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 10d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 10d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner, useSegmentedNarration: true, ffmpegPath: "");
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 10 }]
+        }, CancellationToken.None);
+
+        Assert.Contains(processRunner.FileNames, fileName => string.Equals(fileName, "ffprobe", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(180, 36, 180)]
     [InlineData(180, 100, 500)]
@@ -292,17 +394,18 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120)
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null)
     {
         var options = Options.Create(new RenderingOptions
         {
-            FfmpegPath = "ffmpeg",
+            FfmpegPath = ffmpegPath,
+            FfprobePath = ffprobePath,
             WorkingDirectory = "./media-output",
             VideoWidth = 1280,
             VideoHeight = 720,
             FrameRate = 30,
             ImageTransitionSeconds = 1,
-            UseSegmentedNarration = false,
+            UseSegmentedNarration = useSegmentedNarration,
             FfmpegTimeoutSeconds = ffmpegTimeoutSeconds,
             FfmpegSegmentTimeoutSeconds = 180,
             KeepIntermediateFiles = true
@@ -385,12 +488,14 @@ public sealed class FfmpegRenderingTests
     private sealed class SegmentAwareProcessRunner : IProcessRunner
     {
         public List<string> Commands { get; } = [];
+        public List<string> FileNames { get; } = [];
         public Dictionary<string, double> ProbeDurationsByPath { get; } = [];
 
         public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
         {
             Commands.Add(arguments);
-            if (string.Equals(fileName, "ffprobe", StringComparison.OrdinalIgnoreCase))
+            FileNames.Add(fileName);
+            if (string.Equals(Path.GetFileName(fileName), "ffprobe", StringComparison.OrdinalIgnoreCase) || string.Equals(Path.GetFileName(fileName), "ffprobe.exe", StringComparison.OrdinalIgnoreCase))
             {
                 var probePath = ExtractLastQuotedPath(arguments);
                 var duration = probePath is not null && ProbeDurationsByPath.TryGetValue(probePath, out var value) ? value : 0d;
