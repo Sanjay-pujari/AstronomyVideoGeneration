@@ -76,7 +76,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(10, _options.FfmpegTimeoutSeconds)));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-            var (command, finalResult) = await RenderFromImageSegmentsAsync(plan, manifest.AudioPath, outputPath, outputDirectory, segmentConcatPath, linkedCts.Token);
+            var (command, finalResult) = await RenderFromImageSegmentsAsync(plan, manifest.AudioPath, outputPath, outputDirectory, segmentConcatPath, commandPath, linkedCts.Token);
             await _fileSystem.WriteAllTextAsync(commandPath, command, cancellationToken);
             await _fileSystem.WriteAllTextAsync(ffmpegLogPath, BuildProcessDiagnostics(finalResult), cancellationToken);
         }
@@ -143,13 +143,16 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         string outputPath,
         string outputDirectory,
         string segmentConcatPath,
+        string commandPath,
         CancellationToken cancellationToken)
     {
         var segmentPaths = new List<string>();
+        var narrationDurationSeconds = plan.Scenes.Count == 0 ? 0d : plan.Scenes.Max(scene => (double)scene.DurationSeconds);
+        var durationPerScene = plan.Scenes.Count == 0 ? 1d : narrationDurationSeconds / plan.Scenes.Count;
         for (var i = 0; i < plan.Scenes.Count; i++)
         {
             var scene = plan.Scenes[i];
-            var duration = scene.DurationSeconds >= 3 ? scene.DurationSeconds : 5;
+            var duration = durationPerScene > 0 ? durationPerScene : 1d;
             var segmentPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
             if (!File.Exists(scene.VisualPath))
             {
@@ -157,18 +160,26 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             var segmentArguments =
-                $"-y -loop 1 -t {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{NormalizePath(scene.VisualPath)}\" -vf \"scale=1280:720\" -c:v libx264 -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
+                $"-y -nostdin -loop 1 -t {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{NormalizePath(scene.VisualPath)}\" -vf \"scale=1280:720\" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
+            var segmentCommand = $"{_options.FfmpegPath} {segmentArguments}";
+            await _fileSystem.WriteAllTextAsync(commandPath, segmentCommand, cancellationToken);
+            await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt"), segmentCommand, cancellationToken);
 
-            _logger.LogInformation("Creating segment {SegmentIndex}: {Command}", i + 1, $"{_options.FfmpegPath} {segmentArguments}");
+            _logger.LogInformation("Creating segment {SegmentIndex}: {Command}", i + 1, segmentCommand);
             var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
-            if (segmentResult.ExitCode != 0 || !File.Exists(segmentPath))
+            var segmentExists = File.Exists(segmentPath);
+            var segmentSize = segmentExists ? new FileInfo(segmentPath).Length : 0L;
+            if (segmentResult.ExitCode != 0 || !segmentExists || segmentSize <= 0)
             {
-                _logger.LogError(
-                    "FFmpeg segment creation failed for scene #{SceneIndex}. Command: {Command}. stderr: {StandardError}",
-                    i + 1,
-                    $"{_options.FfmpegPath} {segmentArguments}",
-                    segmentResult.StandardError);
-                throw new InvalidOperationException($"FFmpeg segment creation failed for scene #{i + 1}. stderr: {segmentResult.StandardError}");
+                var timedOut = segmentResult.ExceptionText?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true
+                    || cancellationToken.IsCancellationRequested;
+                throw new InvalidOperationException(
+                    $"FFmpeg segment creation failed for scene #{i + 1}.{Environment.NewLine}" +
+                    $"Command: {segmentCommand}{Environment.NewLine}" +
+                    $"ExitCode: {segmentResult.ExitCode}{Environment.NewLine}" +
+                    $"TimedOut: {timedOut}{Environment.NewLine}" +
+                    $"Stdout: {segmentResult.StandardOutput}{Environment.NewLine}" +
+                    $"Stderr: {segmentResult.StandardError}");
             }
 
             segmentPaths.Add(segmentPath);
@@ -179,6 +190,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
         var concatArguments = $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(combinedPath)}\"";
+        await _fileSystem.WriteAllTextAsync(commandPath, $"{_options.FfmpegPath} {concatArguments}", cancellationToken);
         _logger.LogInformation("Concatenating FFmpeg segments: {Command}", $"{_options.FfmpegPath} {concatArguments}");
         var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
         if (concatResult.ExitCode != 0 || !File.Exists(combinedPath))
@@ -189,25 +201,13 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var finalArguments =
             $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -shortest -c:v copy -c:a aac \"{NormalizePath(outputPath)}\"";
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
+        await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
         _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
 
         var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken);
         if (finalResult.ExitCode != 0 || !File.Exists(outputPath))
         {
             throw new InvalidOperationException("FFmpeg final render with narration failed.");
-        }
-
-        foreach (var segmentPath in segmentPaths)
-        {
-            if (File.Exists(segmentPath))
-            {
-                File.Delete(segmentPath);
-            }
-        }
-
-        if (File.Exists(combinedPath))
-        {
-            File.Delete(combinedPath);
         }
 
         return (finalCommand, finalResult);
