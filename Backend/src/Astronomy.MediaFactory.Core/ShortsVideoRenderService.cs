@@ -113,6 +113,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             OptimizedMetadata = optimizedMetadata
         };
         var scriptBody = $"{shortScript.OptimizedMetadata?.HookLine ?? shortScript.Hook} {shortScript.ShortScript}";
+        var segments = await BuildNarrationSegmentsAsync(scriptBody, outputDirectory, cancellationToken);
         var shortAudioPath = await _speechSynthesisService.SynthesizeAsync(scriptBody, outputDirectory, cancellationToken);
 
         var visualCandidates = sourceVisuals.Where(File.Exists).ToList();
@@ -128,8 +129,6 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             throw new InvalidOperationException("Short-form rendering requires at least one visual asset, but none were available from the source list or fallback generator.");
         }
 
-        var totalScenes = Math.Max(1, visualCandidates.Count);
-        var perScene = Math.Max(3, shortScript.EstimatedDurationSeconds / totalScenes);
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
         var manifest = new RenderManifest
         {
@@ -139,11 +138,12 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             OutputWidth = 1080,
             OutputHeight = 1920,
             EnableVerticalCrop = true,
-            Scenes = visualCandidates.Select((v, index) => new RenderScene
+            Scenes = segments.Select((segment, index) => new RenderScene
             {
-                Caption = index == 0 ? shortScript.Hook : $"Quick fact #{index + 1}",
-                VisualPath = v,
-                DurationSeconds = perScene
+                Caption = segment.Text,
+                VisualPath = visualCandidates[index % visualCandidates.Count],
+                AudioPath = segment.AudioPath,
+                DurationSeconds = segment.DurationSeconds
             }).ToList()
         };
 
@@ -174,5 +174,41 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             BlobUrl = blobUrl,
             PublishStatus = publishToYouTube ? "ReadyToPublish" : "Skipped"
         };
+    }
+
+    private async Task<List<NarrationSegment>> BuildNarrationSegmentsAsync(string scriptBody, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var sentences = scriptBody
+            .Split(['.', '!', '?'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(static sentence => !string.IsNullOrWhiteSpace(sentence))
+            .Select(static sentence => sentence.Trim())
+            .ToList();
+
+        if (sentences.Count == 0)
+        {
+            sentences.Add(scriptBody.Trim());
+        }
+
+        var segments = new List<NarrationSegment>(sentences.Count);
+        for (var i = 0; i < sentences.Count; i++)
+        {
+            var segmentDirectory = Path.Combine(outputDirectory, "segments", $"{i + 1:000}");
+            var audioPath = await _speechSynthesisService.SynthesizeAsync(sentences[i], segmentDirectory, cancellationToken);
+            segments.Add(new NarrationSegment
+            {
+                Text = sentences[i],
+                AudioPath = audioPath,
+                DurationSeconds = EstimateDurationSeconds(sentences[i])
+            });
+        }
+
+        return segments;
+    }
+
+    private static int EstimateDurationSeconds(string text)
+    {
+        var wordCount = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        var estimatedSeconds = (int)Math.Ceiling(wordCount / 2.7d);
+        return Math.Max(1, estimatedSeconds);
     }
 }

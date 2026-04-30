@@ -120,7 +120,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var concatBody = string.Join(Environment.NewLine, segmentClipPaths.Select(path => $"file '{path.Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
 
-        var concatArguments = $"-y -f concat -safe 0 -i \"{segmentConcatPath}\" -i \"{manifest.AudioPath}\" -c:v copy -c:a aac -shortest \"{manifest.OutputPath}\"";
+        var concatArguments = $"-y -f concat -safe 0 -i \"{segmentConcatPath}\" -c copy \"{manifest.OutputPath}\"";
         var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
         if (concatResult.ExitCode != 0 || !File.Exists(manifest.OutputPath))
         {

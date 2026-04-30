@@ -181,8 +181,8 @@ public sealed class FfmpegRenderingTests
         }, CancellationToken.None);
 
         var concatCommand = Assert.Single(processRunner.Commands.Where(command => command.Contains("-f concat", StringComparison.Ordinal)));
-        Assert.Contains($"-i \"{audioPath}\"", concatCommand, StringComparison.Ordinal);
-        Assert.Contains("-shortest", concatCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain($"-i \"{audioPath}\"", concatCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("-shortest", concatCommand, StringComparison.Ordinal);
     }
 
     private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner)

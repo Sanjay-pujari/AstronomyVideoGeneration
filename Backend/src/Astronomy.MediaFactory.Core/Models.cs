@@ -160,6 +160,13 @@ public sealed class RenderScene
     public string? AudioPath { get; set; }
 }
 
+public sealed class NarrationSegment
+{
+    public string Text { get; init; } = "";
+    public string AudioPath { get; init; } = "";
+    public int DurationSeconds { get; init; }
+}
+
 public sealed class ContentOpportunity
 {
     public Guid Id { get; init; } = Guid.NewGuid();
