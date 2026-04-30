@@ -165,14 +165,18 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             await _fileSystem.WriteAllTextAsync(commandPath, segmentCommand, cancellationToken);
             await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt"), segmentCommand, cancellationToken);
 
-            _logger.LogInformation("Creating segment {SegmentIndex}: {Command}", i + 1, segmentCommand);
-            var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
+            var effectiveSegmentTimeoutSeconds = CalculateEffectiveSegmentTimeoutSeconds(_options.FfmpegSegmentTimeoutSeconds, duration);
+            _logger.LogInformation("Creating segment {SegmentIndex} with timeout {SegmentTimeoutSeconds}s: {Command}", i + 1, effectiveSegmentTimeoutSeconds, segmentCommand);
+
+            using var segmentTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(effectiveSegmentTimeoutSeconds));
+            using var segmentLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, segmentTimeoutCts.Token);
+            var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, segmentLinkedCts.Token);
             var segmentExists = File.Exists(segmentPath);
             var segmentSize = segmentExists ? new FileInfo(segmentPath).Length : 0L;
             if (segmentResult.ExitCode != 0 || !segmentExists || segmentSize <= 0)
             {
                 var timedOut = segmentResult.ExceptionText?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true
-                    || cancellationToken.IsCancellationRequested;
+                    || (segmentTimeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested);
                 throw new InvalidOperationException(
                     $"FFmpeg segment creation failed for scene #{i + 1}.{Environment.NewLine}" +
                     $"Command: {segmentCommand}{Environment.NewLine}" +
@@ -211,6 +215,13 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         return (finalCommand, finalResult);
+    }
+
+    internal static int CalculateEffectiveSegmentTimeoutSeconds(int configuredSegmentTimeoutSeconds, double sceneDurationSeconds)
+    {
+        var minimumConfiguredTimeout = Math.Max(180, configuredSegmentTimeoutSeconds);
+        var durationBasedTimeout = (int)Math.Ceiling(Math.Max(1d, sceneDurationSeconds) * 5d);
+        return Math.Max(minimumConfiguredTimeout, durationBasedTimeout);
     }
 
     private static string NormalizePath(string path)

@@ -185,6 +185,19 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("-shortest", concatCommand, StringComparison.Ordinal);
     }
 
+
+    [Theory]
+    [InlineData(180, 36, 180)]
+    [InlineData(180, 40, 200)]
+    [InlineData(30, 10, 180)]
+    [InlineData(300, 20, 300)]
+    public void FfmpegVideoRenderService_CalculatesEffectiveSegmentTimeout(int configuredSeconds, double sceneDurationSeconds, int expectedSeconds)
+    {
+        var effective = FfmpegVideoRenderService.CalculateEffectiveSegmentTimeoutSeconds(configuredSeconds, sceneDurationSeconds);
+
+        Assert.Equal(expectedSeconds, effective);
+    }
+
     [Fact]
     public async Task FfmpegVideoRenderService_FailsCleanly_WhenFfmpegTimeoutExceeded()
     {
@@ -220,7 +233,9 @@ public sealed class FfmpegRenderingTests
             FrameRate = 30,
             ImageTransitionSeconds = 1,
             UseSegmentedNarration = false,
-            FfmpegTimeoutSeconds = ffmpegTimeoutSeconds
+            FfmpegTimeoutSeconds = ffmpegTimeoutSeconds,
+            FfmpegSegmentTimeoutSeconds = 180,
+            KeepIntermediateFiles = true
         });
 
         return new FfmpegVideoRenderService(
