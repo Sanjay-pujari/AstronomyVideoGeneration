@@ -147,6 +147,44 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("--- STDERR ---", diagnostics, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task FfmpegVideoRenderService_UsesNarrationAsDurationDriver_ForSegmentConcat()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-segmented");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        var sceneAudioPath = Path.Combine(tempDir.FullName, "scene-1.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(sceneAudioPath, [7, 8, 9]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner();
+        var sut = CreateService(fileSystem, processRunner);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Segmented narration",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes =
+            [
+                new RenderScene
+                {
+                    Caption = "Scene",
+                    VisualPath = scenePath,
+                    AudioPath = sceneAudioPath,
+                    DurationSeconds = 6
+                }
+            ]
+        }, CancellationToken.None);
+
+        var concatCommand = Assert.Single(processRunner.Commands.Where(command => command.Contains("-f concat", StringComparison.Ordinal)));
+        Assert.Contains($"-i \"{audioPath}\"", concatCommand, StringComparison.Ordinal);
+        Assert.Contains("-shortest", concatCommand, StringComparison.Ordinal);
+    }
+
     private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner)
     {
         var options = Options.Create(new RenderingOptions
@@ -221,5 +259,37 @@ public sealed class FfmpegRenderingTests
                 FileName: fileName,
                 Arguments: arguments,
                 ExceptionText: string.Empty));
+    }
+
+    private sealed class SegmentAwareProcessRunner : IProcessRunner
+    {
+        public List<string> Commands { get; } = [];
+
+        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken)
+        {
+            Commands.Add(arguments);
+
+            var outputPath = ExtractOutputPath(arguments);
+            if (!string.IsNullOrWhiteSpace(outputPath))
+            {
+                File.WriteAllBytes(outputPath, [1, 2, 3]);
+            }
+
+            return Task.FromResult(new ProcessExecutionResult(
+                ExitCode: 0,
+                StandardOutput: string.Empty,
+                StandardError: string.Empty,
+                StartTimeUtc: DateTimeOffset.UtcNow,
+                EndTimeUtc: DateTimeOffset.UtcNow,
+                FileName: fileName,
+                Arguments: arguments,
+                ExceptionText: string.Empty));
+        }
+
+        private static string? ExtractOutputPath(string arguments)
+        {
+            var parts = arguments.Split('"', StringSplitOptions.RemoveEmptyEntries);
+            return parts.LastOrDefault(static value => value.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase));
+        }
     }
 }
