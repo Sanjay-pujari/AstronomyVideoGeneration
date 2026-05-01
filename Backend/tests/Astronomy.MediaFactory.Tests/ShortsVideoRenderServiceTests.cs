@@ -33,6 +33,14 @@ public sealed class ShortsVideoRenderServiceTests
         Assert.Equal(5, renderService.LastManifest.Scenes.Count);
         Assert.All(renderService.LastManifest.Scenes, scene => Assert.Equal(30, scene.DurationSeconds));
         Assert.Equal(result.AudioPath, renderService.LastManifest.AudioPath);
+        Assert.Equal(Path.Combine(outputDir, "narration.mp3"), result.AudioPath);
+        Assert.All(Enumerable.Range(1, 5), i => Assert.True(File.Exists(Path.Combine(outputDir, $"scene-audio-{i:000}.mp3"))));
+        var concatListPath = Path.Combine(outputDir, "audio-concat-list.txt");
+        Assert.True(File.Exists(concatListPath));
+        var concatLines = await File.ReadAllLinesAsync(concatListPath);
+        Assert.Equal(5, concatLines.Length);
+        Assert.Contains("scene-audio-001.mp3", concatLines[0], StringComparison.Ordinal);
+        Assert.Contains("scene-audio-005.mp3", concatLines[4], StringComparison.Ordinal);
         Assert.Contains("moon facts", speech.Scripts[2], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("jupiter storms", speech.Scripts[3], StringComparison.OrdinalIgnoreCase);
     }

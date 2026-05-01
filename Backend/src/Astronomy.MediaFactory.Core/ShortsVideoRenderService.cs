@@ -131,6 +131,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
 
         var sceneCount = Math.Max(1, visualCandidates.Count);
         var segmentedNarration = await TryBuildSegmentedNarrationAsync(shortScript.SceneNarrationSegments, scriptBody, sceneCount, outputDirectory, cancellationToken);
+        var finalNarrationPath = await BuildFinalNarrationAudioAsync(segmentedNarration, shortAudioPath, outputDirectory, cancellationToken);
 
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
         var defaultDurationPerScene = 5;
@@ -138,7 +139,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         var manifest = new RenderManifest
         {
             Title = shortScript.OptimizedMetadata?.PrimaryTitle ?? shortScript.Title,
-            AudioPath = shortAudioPath,
+            AudioPath = finalNarrationPath,
             OutputPath = shortVideoPath,
             OutputWidth = 1080,
             OutputHeight = 1920,
@@ -178,7 +179,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         return new ShortVideoRenderResult
         {
             Script = shortScript,
-            AudioPath = shortAudioPath,
+            AudioPath = finalNarrationPath,
             VideoPath = videoPath,
             BlobUrl = blobUrl,
             PublishStatus = publishToYouTube ? "ReadyToPublish" : "Skipped"
@@ -201,8 +202,11 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             for (var i = 0; i < sourceSegments.Count; i++)
             {
                 var segmentDirectory = Path.Combine(outputDirectory, $"scene-audio-{i + 1:000}");
-                var segmentAudioPath = await _speechSynthesisService.SynthesizeAsync(sourceSegments[i].NarrationText, segmentDirectory, cancellationToken);
+                var segmentSourceAudioPath = await _speechSynthesisService.SynthesizeAsync(sourceSegments[i].NarrationText, segmentDirectory, cancellationToken);
+                var segmentAudioPath = Path.Combine(outputDirectory, $"scene-audio-{i + 1:000}.mp3");
+                File.Copy(segmentSourceAudioPath, segmentAudioPath, true);
                 var durationSeconds = GetAudioDurationSeconds(segmentAudioPath);
+                _logger.LogInformation("Scene narration segment #{Index}: {Path} ({DurationSeconds}s)", i + 1, segmentAudioPath, durationSeconds);
                 results.Add(new SceneNarrationSegment
                 {
                     SceneId = sourceSegments[i].SceneId,
@@ -221,6 +225,66 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             _logger.LogWarning(ex, "Segmented narration generation failed. Falling back to single narration audio.");
             return [];
         }
+    }
+
+    private async Task<string> BuildFinalNarrationAudioAsync(IReadOnlyList<SceneNarrationSegment> segmentedNarration, string fallbackNarrationPath, string outputDirectory, CancellationToken cancellationToken)
+    {
+        if (segmentedNarration.Count == 0)
+        {
+            return fallbackNarrationPath;
+        }
+
+        var narrationPath = Path.Combine(outputDirectory, "narration.mp3");
+        var concatListPath = Path.Combine(outputDirectory, "audio-concat-list.txt");
+        var segmentsPath = Path.Combine(outputDirectory, "audio-segments.txt");
+        var commandPath = Path.Combine(outputDirectory, "ffmpeg-audio-concat-command.txt");
+
+        var concatLines = segmentedNarration.Select(segment => $"file '{segment.AudioPath!.Replace("'", "'\\''")}'").ToArray();
+        await File.WriteAllLinesAsync(concatListPath, concatLines, cancellationToken);
+
+        var segmentLines = segmentedNarration.Select((segment, index) =>
+            $"{index + 1:000}|{segment.AudioPath}|{segment.DurationSeconds}").ToArray();
+        await File.WriteAllLinesAsync(segmentsPath, segmentLines, cancellationToken);
+
+        var copyArgs = $"-y -nostdin -f concat -safe 0 -i \"{concatListPath}\" -c copy \"{narrationPath}\"";
+        await File.WriteAllTextAsync(commandPath, $"ffmpeg {copyArgs}", cancellationToken);
+        var copyExitCode = await RunProcessAsync("ffmpeg", copyArgs, cancellationToken);
+        if (copyExitCode != 0 || !File.Exists(narrationPath) || new FileInfo(narrationPath).Length <= 0)
+        {
+            var reencodeArgs = $"-y -nostdin -f concat -safe 0 -i \"{concatListPath}\" -c:a libmp3lame -q:a 2 \"{narrationPath}\"";
+            await File.WriteAllTextAsync(commandPath, $"ffmpeg {reencodeArgs}", cancellationToken);
+            var reencodeExitCode = await RunProcessAsync("ffmpeg", reencodeArgs, cancellationToken);
+            if (reencodeExitCode != 0 || !File.Exists(narrationPath) || new FileInfo(narrationPath).Length <= 0)
+            {
+                _logger.LogWarning("Failed to concat segmented narration audio. Falling back to single narration audio.");
+                return fallbackNarrationPath;
+            }
+        }
+
+        var expectedDuration = segmentedNarration.Sum(segment => segment.DurationSeconds);
+        var actualDuration = GetAudioDurationSeconds(narrationPath);
+        _logger.LogInformation("Final narration generated at {Path}. Expected duration ~{Expected}s, actual duration {Actual}s.", narrationPath, expectedDuration, actualDuration);
+        return narrationPath;
+    }
+
+    private static async Task<int> RunProcessAsync(string fileName, string arguments, CancellationToken cancellationToken)
+    {
+        var psi = new ProcessStartInfo(fileName, arguments)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(psi);
+        if (process is null)
+        {
+            return -1;
+        }
+
+        await process.WaitForExitAsync(cancellationToken);
+        return process.ExitCode;
     }
 
     private static List<SceneNarrationSegment> BuildFallbackSceneNarrationSegments(string scriptBody, int sceneCount)
