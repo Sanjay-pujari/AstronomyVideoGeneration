@@ -62,7 +62,14 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("  \"description\": \"string\",");
         sb.AppendLine("  \"tags\": [\"string\", \"string\"],");
         sb.AppendLine("  \"estimatedDurationSeconds\": 900,");
-        sb.AppendLine("  \"scriptBody\": \"string\"");
+        sb.AppendLine("  \"scriptBody\": \"string\",");
+        sb.AppendLine("  \"sceneScript\": {");
+        sb.AppendLine("    \"overview\": \"string\",");
+        sb.AppendLine("    \"moon\": \"string\",");
+        sb.AppendLine("    \"jupiter\": \"string\",");
+        sb.AppendLine("    \"deepSky\": \"string\",");
+        sb.AppendLine("    \"closing\": \"string\"");
+        sb.AppendLine("  }");
         sb.AppendLine("}");
         sb.AppendLine();
         sb.AppendLine("Structured astronomy input (JSON data block):");

@@ -47,6 +47,23 @@ public sealed class ScriptResult
     public string[] Tags { get; init; } = Array.Empty<string>();
     public int EstimatedDurationSeconds { get; init; }
     public OptimizedVideoMetadata? OptimizedMetadata { get; init; }
+    public SceneScriptSections? SceneScriptSections { get; init; }
+}
+
+public sealed class SceneScriptSections
+{
+    public string Overview { get; init; } = "";
+    public string Moon { get; init; } = "";
+    public string Jupiter { get; init; } = "";
+    public string DeepSky { get; init; } = "";
+    public string Closing { get; init; } = "";
+
+    public bool HasAllSections()
+        => !string.IsNullOrWhiteSpace(Overview)
+           && !string.IsNullOrWhiteSpace(Moon)
+           && !string.IsNullOrWhiteSpace(Jupiter)
+           && !string.IsNullOrWhiteSpace(DeepSky)
+           && !string.IsNullOrWhiteSpace(Closing);
 }
 
 public sealed class ShortScriptResult
