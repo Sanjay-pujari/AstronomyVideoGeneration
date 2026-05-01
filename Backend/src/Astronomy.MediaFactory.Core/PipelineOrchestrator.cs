@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Logging;
@@ -316,21 +318,38 @@ public sealed class PipelineOrchestrator
             var sceneAudioSegments = new List<string>();
             if (script.SceneScriptSections?.HasAllSections() == true)
             {
-                var sceneNarrationTexts = new[]
+                var sceneSections = new[]
                 {
-                    script.SceneScriptSections.Overview,
-                    script.SceneScriptSections.Moon,
-                    script.SceneScriptSections.Jupiter,
-                    script.SceneScriptSections.DeepSky,
-                    script.SceneScriptSections.Closing
+                    ("Sky Overview", script.SceneScriptSections.Overview),
+                    ("Moon", script.SceneScriptSections.Moon),
+                    ("Jupiter", script.SceneScriptSections.Jupiter),
+                    ("Deep Sky", script.SceneScriptSections.DeepSky),
+                    ("Closing", script.SceneScriptSections.Closing)
                 };
 
-                for (var i = 0; i < Math.Min(sceneNarrationTexts.Length, visuals.Count); i++)
+                var sceneNarrationEntries = new List<(int Index, string Title, string TextPath, string AudioPath, string Text)>();
+                for (var i = 0; i < Math.Min(sceneSections.Length, visuals.Count); i++)
                 {
-                    var perSceneAudioPath = await RunStageAsync("SpeechSynthesis", () => _speechSynthesisService.SynthesizeAsync(sceneNarrationTexts[i], outputDir, cancellationToken));
-                    var sceneAudioPath = Path.Combine(outputDir, $"audio{i + 1}.mp3");
+                    var sceneOutputDirectory = Path.Combine(outputDir, $"scene-narration-{i + 1:000}");
+                    var perSceneAudioPath = await RunStageAsync("SpeechSynthesis", () => _speechSynthesisService.SynthesizeAsync(sceneSections[i].Item2, sceneOutputDirectory, cancellationToken));
+
+                    var sceneTextPath = Path.Combine(outputDir, $"scene-narration-{i + 1:000}.txt");
+                    var sceneAudioPath = Path.Combine(outputDir, $"scene-audio-{i + 1:000}.mp3");
+                    var sourceTextPath = Path.Combine(sceneOutputDirectory, "narration.txt");
+
+                    var sceneText = File.Exists(sourceTextPath)
+                        ? await File.ReadAllTextAsync(sourceTextPath, cancellationToken)
+                        : sceneSections[i].Item2;
+
+                    await File.WriteAllTextAsync(sceneTextPath, sceneText, cancellationToken);
                     File.Copy(perSceneAudioPath, sceneAudioPath, overwrite: true);
                     sceneAudioSegments.Add(sceneAudioPath);
+                    sceneNarrationEntries.Add((i + 1, sceneSections[i].Item1, sceneTextPath, sceneAudioPath, sceneText));
+                }
+
+                if (sceneNarrationEntries.Count > 0)
+                {
+                    await WriteSceneNarrationArtifactsAsync(sceneNarrationEntries, outputDir, audioPath, cancellationToken);
                 }
             }
 
@@ -624,6 +643,62 @@ public sealed class PipelineOrchestrator
         }
     }
 
+
+    private static async Task WriteSceneNarrationArtifactsAsync(
+        IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> sceneNarrationEntries,
+        string outputDirectory,
+        string narrationAudioPath,
+        CancellationToken cancellationToken)
+    {
+        var narrationTextPath = Path.Combine(outputDirectory, "narration.txt");
+        var combinedText = string.Join(Environment.NewLine + Environment.NewLine,
+            sceneNarrationEntries.Select(entry => $"[Scene {entry.Index}: {entry.Title}]" + Environment.NewLine + entry.Text));
+        await File.WriteAllTextAsync(narrationTextPath, combinedText, cancellationToken);
+
+        var segmentsDiagnosticsPath = Path.Combine(outputDirectory, "narration-segments.txt");
+        var segmentLines = sceneNarrationEntries.Select(entry => $"{entry.Index:000}|{entry.Title}|{entry.TextPath}|{entry.AudioPath}");
+        await File.WriteAllLinesAsync(segmentsDiagnosticsPath, segmentLines, cancellationToken);
+
+        var concatListPath = Path.Combine(outputDirectory, "audio-concat-list.txt");
+        var concatLines = sceneNarrationEntries.Select(entry => $"file '{entry.AudioPath.Replace("'", "'\\''")}'");
+        await File.WriteAllLinesAsync(concatListPath, concatLines, cancellationToken);
+
+        var commandPath = Path.Combine(outputDirectory, "ffmpeg-audio-concat-command.txt");
+        var copyArgs = $"-y -nostdin -f concat -safe 0 -i \"{concatListPath}\" -c copy \"{narrationAudioPath}\"";
+        await File.WriteAllTextAsync(commandPath, $"ffmpeg {copyArgs}", cancellationToken);
+
+        var copyExitCode = await RunProcessAsync("ffmpeg", copyArgs, cancellationToken);
+        if (copyExitCode != 0 || !File.Exists(narrationAudioPath) || new FileInfo(narrationAudioPath).Length <= 0)
+        {
+            var reencodeArgs = $"-y -nostdin -f concat -safe 0 -i \"{concatListPath}\" -c:a libmp3lame -q:a 2 \"{narrationAudioPath}\"";
+            await File.WriteAllTextAsync(commandPath, $"ffmpeg {reencodeArgs}", cancellationToken);
+            var reencodeExitCode = await RunProcessAsync("ffmpeg", reencodeArgs, cancellationToken);
+            if (reencodeExitCode != 0 || !File.Exists(narrationAudioPath) || new FileInfo(narrationAudioPath).Length <= 0)
+            {
+                throw new InvalidOperationException("Failed to produce final narration.mp3 from scene audio segments.");
+            }
+        }
+    }
+
+    private static async Task<int> RunProcessAsync(string fileName, string arguments, CancellationToken cancellationToken)
+    {
+        var psi = new ProcessStartInfo(fileName, arguments)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(psi);
+        if (process is null)
+        {
+            return -1;
+        }
+
+        await process.WaitForExitAsync(cancellationToken);
+        return process.ExitCode;
+    }
 
     private static OptimizedVideoMetadata ApplyMonetizationPlan(OptimizedVideoMetadata source, MonetizationPlan plan)
         => new()
