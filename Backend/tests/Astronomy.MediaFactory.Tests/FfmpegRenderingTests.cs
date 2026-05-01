@@ -216,14 +216,97 @@ public sealed class FfmpegRenderingTests
 
         var segmentCommands = processRunner.Commands.Where(command => command.Contains("-loop 1 -i", StringComparison.Ordinal)).ToList();
         Assert.Equal(5, segmentCommands.Count);
-        Assert.All(segmentCommands, command => Assert.Contains("-frames:v 690", command, StringComparison.Ordinal));
+        Assert.All(segmentCommands, command => Assert.Contains("-frames:v 714", command, StringComparison.Ordinal));
         Assert.All(segmentCommands, command => Assert.Contains("-r 30", command, StringComparison.Ordinal));
         Assert.All(segmentCommands, command => Assert.DoesNotContain(" -t ", command, StringComparison.Ordinal));
         var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
         Assert.Contains("narrationDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
         Assert.Contains("sceneCount: 5", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("calculatedSceneDurationSeconds: 23", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("transitionDurationSeconds: 1", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("transitionCount: 4", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("totalTransitionOverlapSeconds: 4", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("adjustedTotalSceneDuration: 119", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("calculatedSceneDurationSeconds: 23.8", diagnostics, StringComparison.Ordinal);
         Assert.Contains("expectedCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("actualCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_AdjustsSceneDuration_ForTransitionOverlap()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-transition-adjustment");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+
+        var scenes = new List<RenderScene>();
+        for (var i = 0; i < 5; i++)
+        {
+            var scenePath = Path.Combine(tempDir.FullName, $"scene-{i + 1}.png");
+            await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+            scenes.Add(new RenderScene { Caption = $"Scene {i + 1}", VisualPath = scenePath, DurationSeconds = 36 });
+        }
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 81.624d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 81.624d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner, useSegmentedNarration: true);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Sky", AudioPath = audioPath, OutputPath = outputPath, Scenes = scenes }, CancellationToken.None);
+
+        var segmentCommands = processRunner.Commands.Where(command => command.Contains("-loop 1 -i", StringComparison.Ordinal)).ToList();
+        Assert.Equal(5, segmentCommands.Count);
+        Assert.All(segmentCommands, command => Assert.Contains("-frames:v 514", command, StringComparison.Ordinal));
+
+        var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
+        Assert.Contains("narrationDurationSeconds: 81.624", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("transitionCount: 4", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("totalTransitionOverlapSeconds: 4", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("adjustedTotalSceneDuration: 85.624", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("calculatedSceneDurationSeconds: 17.1248", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("expectedCombinedDurationSeconds: 81.624", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_DoesNotAdjustSceneDuration_WhenTransitionsDisabled()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-transition-disabled");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+
+        var scenes = new List<RenderScene>();
+        for (var i = 0; i < 5; i++)
+        {
+            var scenePath = Path.Combine(tempDir.FullName, $"scene-{i + 1}.png");
+            await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+            scenes.Add(new RenderScene { Caption = $"Scene {i + 1}", VisualPath = scenePath, DurationSeconds = 36 });
+        }
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 81.624d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 81.624d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner, useSegmentedNarration: true, imageTransitionSeconds: 0d);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Sky", AudioPath = audioPath, OutputPath = outputPath, Scenes = scenes }, CancellationToken.None);
+
+        var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
+        Assert.Contains("transitionDurationSeconds: 0", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("totalTransitionOverlapSeconds: 0", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("adjustedTotalSceneDuration: 81.624", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("calculatedSceneDurationSeconds: 16.3248", diagnostics, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -396,7 +479,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null)
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, double imageTransitionSeconds = 1d)
     {
         var options = Options.Create(new RenderingOptions
         {
@@ -406,7 +489,7 @@ public sealed class FfmpegRenderingTests
             VideoWidth = 1280,
             VideoHeight = 720,
             FrameRate = 30,
-            ImageTransitionSeconds = 1,
+            ImageTransitionSeconds = imageTransitionSeconds,
             UseSegmentedNarration = useSegmentedNarration,
             FfmpegTimeoutSeconds = ffmpegTimeoutSeconds,
             FfmpegSegmentTimeoutSeconds = 180,
