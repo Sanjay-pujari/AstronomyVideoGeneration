@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Configuration;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
