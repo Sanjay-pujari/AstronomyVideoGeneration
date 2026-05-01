@@ -22,6 +22,7 @@ public sealed class ShortsVideoRenderServiceTests
             new NoopYouTubeService(),
             new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
             Options.Create(new YouTubeOptions()),
+            Options.Create(new RenderingOptions()),
             NullLogger<ShortsVideoRenderService>.Instance);
 
         var outputDir = Directory.CreateTempSubdirectory("shorts-single-audio").FullName;
