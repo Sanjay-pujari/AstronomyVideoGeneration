@@ -64,7 +64,8 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
                         Description = parsed.Description,
                         Tags = parsed.Tags,
                         EstimatedDurationSeconds = parsed.EstimatedDurationSeconds,
-                        ScriptBody = parsed.ScriptBody
+                        ScriptBody = parsed.ScriptBody,
+                        SceneScriptSections = parsed.SceneScriptSections
                     };
                 }
 
@@ -315,6 +316,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             string? scriptBody = null;
             List<string>? tags = null;
             int? estimatedDurationSeconds = null;
+            SceneScriptSections? sceneScriptSections = null;
 
             foreach (var property in document.RootElement.EnumerateObject())
             {
@@ -384,6 +386,19 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
                         scriptBody = property.Value.GetString()?.Trim();
                         break;
+                    case "sceneScript":
+                        if (property.Value.ValueKind != JsonValueKind.Object)
+                        {
+                            failureReason = "Property 'sceneScript' must be an object.";
+                            return false;
+                        }
+
+                        if (!TryParseSceneScript(property.Value, out sceneScriptSections, out failureReason))
+                        {
+                            return false;
+                        }
+
+                        break;
                     default:
                         failureReason = $"Unexpected property '{property.Name}' detected in JSON payload.";
                         return false;
@@ -402,7 +417,8 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
                 Description = description,
                 Tags = tags.ToArray(),
                 EstimatedDurationSeconds = estimatedDurationSeconds.Value,
-                ScriptBody = scriptBody
+                ScriptBody = scriptBody,
+                SceneScriptSections = sceneScriptSections
             };
 
             return true;
@@ -412,6 +428,57 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             failureReason = $"Invalid JSON: {ex.Message}";
             return false;
         }
+    }
+
+    private static bool TryParseSceneScript(JsonElement sceneScriptNode, out SceneScriptSections sections, out string failureReason)
+    {
+        sections = new SceneScriptSections();
+        failureReason = string.Empty;
+        string? overview = null;
+        string? moon = null;
+        string? jupiter = null;
+        string? deepSky = null;
+        string? closing = null;
+        var seenProperties = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var property in sceneScriptNode.EnumerateObject())
+        {
+            if (!seenProperties.Add(property.Name))
+            {
+                failureReason = $"Duplicate property '{property.Name}' is not allowed in sceneScript.";
+                return false;
+            }
+
+            if (property.Value.ValueKind != JsonValueKind.String)
+            {
+                failureReason = $"sceneScript property '{property.Name}' must be a string.";
+                return false;
+            }
+
+            var value = property.Value.GetString()?.Trim();
+            switch (property.Name)
+            {
+                case "overview": overview = value; break;
+                case "moon": moon = value; break;
+                case "jupiter": jupiter = value; break;
+                case "deepSky": deepSky = value; break;
+                case "closing": closing = value; break;
+                default:
+                    failureReason = $"Unexpected sceneScript property '{property.Name}'.";
+                    return false;
+            }
+        }
+
+        sections = new SceneScriptSections
+        {
+            Overview = overview ?? "",
+            Moon = moon ?? "",
+            Jupiter = jupiter ?? "",
+            DeepSky = deepSky ?? "",
+            Closing = closing ?? ""
+        };
+
+        return true;
     }
 
     private static ScriptResult BuildFallback(ContractsContentType contentType, AstronomyContext context, string prompt)
@@ -706,5 +773,6 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         public string[] Tags { get; init; } = Array.Empty<string>();
         public int EstimatedDurationSeconds { get; init; }
         public string ScriptBody { get; init; } = string.Empty;
+        public SceneScriptSections? SceneScriptSections { get; init; }
     }
 }

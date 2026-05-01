@@ -264,7 +264,8 @@ public sealed class PipelineOrchestrator
                 ScriptBody = script.ScriptBody,
                 Tags = script.Tags,
                 EstimatedDurationSeconds = script.EstimatedDurationSeconds,
-                OptimizedMetadata = optimizedMetadata
+                OptimizedMetadata = optimizedMetadata,
+                SceneScriptSections = script.SceneScriptSections
             };
 
             var audioPath = await RunStageAsync("SpeechSynthesis", () => _speechSynthesisService.SynthesizeAsync(script.ScriptBody, outputDir, cancellationToken));
@@ -312,6 +313,27 @@ public sealed class PipelineOrchestrator
                 }, cancellationToken);
             }
 
+            var sceneAudioSegments = new List<string>();
+            if (script.SceneScriptSections?.HasAllSections() == true)
+            {
+                var sceneNarrationTexts = new[]
+                {
+                    script.SceneScriptSections.Overview,
+                    script.SceneScriptSections.Moon,
+                    script.SceneScriptSections.Jupiter,
+                    script.SceneScriptSections.DeepSky,
+                    script.SceneScriptSections.Closing
+                };
+
+                for (var i = 0; i < Math.Min(sceneNarrationTexts.Length, visuals.Count); i++)
+                {
+                    var perSceneAudioPath = await RunStageAsync("SpeechSynthesis", () => _speechSynthesisService.SynthesizeAsync(sceneNarrationTexts[i], outputDir, cancellationToken));
+                    var sceneAudioPath = Path.Combine(outputDir, $"audio{i + 1}.mp3");
+                    File.Copy(perSceneAudioPath, sceneAudioPath, overwrite: true);
+                    sceneAudioSegments.Add(sceneAudioPath);
+                }
+            }
+
             var totalScenes = Math.Max(1, visuals.Count);
             var durationPerScene = Math.Max(6, script.EstimatedDurationSeconds / totalScenes);
             var manifest = new RenderManifest
@@ -323,7 +345,8 @@ public sealed class PipelineOrchestrator
                 {
                     Caption = i < context.VisualIdeas.Count ? context.VisualIdeas[i].Title : $"Scene {i + 1}",
                     VisualPath = v,
-                    DurationSeconds = durationPerScene
+                    DurationSeconds = durationPerScene,
+                    AudioPath = i < sceneAudioSegments.Count ? sceneAudioSegments[i] : null
                 }).ToList()
             };
 
