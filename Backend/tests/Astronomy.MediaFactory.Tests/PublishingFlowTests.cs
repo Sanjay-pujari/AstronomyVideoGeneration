@@ -71,6 +71,7 @@ public sealed class PublishingFlowTests
             new FakeThumbnailGenerationService(),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
             NullLogger<PipelineOrchestrator>.Instance,
             contentMonetizationService: monetizationService);
 
@@ -100,6 +101,7 @@ public sealed class PublishingFlowTests
             new FakeThumbnailGenerationService(),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
             NullLogger<PipelineOrchestrator>.Instance,
             contentMonetizationService: new ThrowingMonetizationService());
 
@@ -129,6 +131,7 @@ public sealed class PublishingFlowTests
             new FakeThumbnailGenerationService(),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
             NullLogger<PipelineOrchestrator>.Instance);
 
         var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: true), CancellationToken.None);
@@ -157,6 +160,7 @@ public sealed class PublishingFlowTests
             new FakeThumbnailGenerationService(),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
             NullLogger<PipelineOrchestrator>.Instance,
             youTubeThumbnailPublisher: thumbnailPublisher);
 
@@ -186,6 +190,7 @@ public sealed class PublishingFlowTests
             new ThrowingThumbnailGenerationService(),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
             NullLogger<PipelineOrchestrator>.Instance);
 
         var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: false), CancellationToken.None);

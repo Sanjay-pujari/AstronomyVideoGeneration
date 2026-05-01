@@ -27,6 +27,7 @@ public sealed class PipelineStageInstrumentationTests
             new FakeThumbnailGenerationService(),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
             NullLogger<PipelineOrchestrator>.Instance,
             pipelineStageRecorder: recorder);
 
@@ -59,6 +60,7 @@ public sealed class PipelineStageInstrumentationTests
             new FakeThumbnailGenerationService(),
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
             NullLogger<PipelineOrchestrator>.Instance,
             pipelineStageRecorder: recorder,
             stageAlertPublisher: alerts,
