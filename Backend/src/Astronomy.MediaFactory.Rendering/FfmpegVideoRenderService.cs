@@ -206,7 +206,13 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             var zoomPanFilter = BuildKenBurnsFilter(i, frameCount);
-            var segmentFilter = $"{zoomPanFilter},fade=t=in:st=0:d=0.5,fade=t=out:st=duration-0.5:d=0.5";
+            const double fadeDurationSeconds = 0.5d;
+            var fadeOutStartSeconds = Math.Max(0d, duration - fadeDurationSeconds);
+            var roundedFadeOutStartSeconds = Math.Round(fadeOutStartSeconds, 3, MidpointRounding.AwayFromZero);
+            var formattedFadeOutStartSeconds = roundedFadeOutStartSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            var formattedFadeDurationSeconds = fadeDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            var segmentFilter =
+                $"{zoomPanFilter},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}";
             var segmentArguments =
                 $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{segmentFilter}\" -frames:v {frameCount} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
             var segmentCommand = $"{_options.FfmpegPath} {segmentArguments}";
