@@ -31,27 +31,26 @@ public sealed class PipelineOrchestratorSceneNarrationTests
                 new StaticThumbnailGenerationService(),
                 repository,
                 Options.Create(new YouTubeOptions()),
+                Options.Create(new RenderingOptions { WorkingDirectory = tempRoot }),
                 NullLogger<PipelineOrchestrator>.Instance,
                 operationsOptions: Options.Create(new OperationsOptions()),
                 maintenanceOptions: Options.Create(new MaintenanceOptions { WorkingDirectory = tempRoot }));
 
-            await orchestrator.RunAsync(new RunPipelineRequest
-            {
-                Date = new DateOnly(2026, 4, 30),
-                ContentType = ContentType.Daily,
-                LocationName = "Seattle",
-                TimeZone = "America/Los_Angeles",
-                PublishToYouTube = false
-            }, CancellationToken.None);
+            await orchestrator.RunAsync(new RunPipelineRequest(
+                new DateOnly(2026, 4, 30),
+                ContentType.DailySkyGuide,
+                "Seattle",
+                "America/Los_Angeles",
+                false), CancellationToken.None);
 
-            var runDir = Directory.GetDirectories(Path.Combine(tempRoot, "Daily", "2026-04-30"), "*").Single();
+            var runDir = Directory.GetDirectories(Path.Combine(tempRoot, "DailySkyGuide", "2026-04-30"), "*").Single();
             var expectedTxt = Enumerable.Range(1, 3).Select(i => Path.Combine(runDir, $"scene-narration-{i:000}.txt")).ToArray();
             var expectedMp3 = Enumerable.Range(1, 3).Select(i => Path.Combine(runDir, $"scene-audio-{i:000}.mp3")).ToArray();
 
             Assert.Equal(expectedTxt.Length, expectedTxt.Distinct(StringComparer.Ordinal).Count());
             Assert.Equal(expectedMp3.Length, expectedMp3.Distinct(StringComparer.Ordinal).Count());
-            Assert.All(expectedTxt, File.Exists);
-            Assert.All(expectedMp3, File.Exists);
+            Assert.All(expectedTxt, p => Assert.True(File.Exists(p)));
+            Assert.All(expectedMp3, p => Assert.True(File.Exists(p)));
 
             var narrationTxt = await File.ReadAllTextAsync(Path.Combine(runDir, "narration.txt"));
             Assert.Contains("[Scene 1: Sky Overview]", narrationTxt, StringComparison.Ordinal);
@@ -135,5 +134,103 @@ public sealed class PipelineOrchestratorSceneNarrationTests
             await File.WriteAllTextAsync(manifest.OutputPath, "video", cancellationToken);
             return manifest.OutputPath;
         }
+    }
+
+    private sealed class FakeContextProvider : IAstronomyContextProvider
+    {
+        public Task<AstronomyContext> BuildContextAsync(DateOnly date, ContentType contentType, string locationName, string timeZone, CancellationToken cancellationToken)
+            => Task.FromResult(new AstronomyContext { Date = date, LocationName = locationName, TimeZone = timeZone });
+    }
+
+    private sealed class FakeTopicRankingService : ITopicRankingService
+    {
+        public Task<IReadOnlyCollection<RankedTopic>> RankAsync(AstronomyContext context, ContentType contentType, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyCollection<RankedTopic>>([]);
+    }
+
+    private sealed class NoOpBlobStorageService : IAzureBlobStorageService
+    {
+        public Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(new BlobUploadResult());
+    }
+
+    private sealed class NoOpYouTubeService : IYouTubePublishingService
+    {
+        public Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken)
+            => Task.FromResult<string?>(null);
+    }
+
+    private sealed class NoOpShortsService : IShortsVideoRenderService
+    {
+        public Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken)
+            => Task.FromResult(new ShortVideoRenderResult
+            {
+                Script = new ShortScriptResult(),
+                AudioPath = string.Empty,
+                VideoPath = string.Empty
+            });
+    }
+
+    private sealed class PassThroughMetadataOptimizationService : IMetadataOptimizationService
+    {
+        public Task<OptimizedVideoMetadata> OptimizeForVideoAsync(MetadataOptimizationInput input, CancellationToken cancellationToken)
+            => Task.FromResult(new OptimizedVideoMetadata
+            {
+                Title = input.Title,
+                Description = input.Description,
+                Tags = input.Tags.ToArray(),
+                Visibility = "private"
+            });
+
+        public Task<OptimizedVideoMetadata> OptimizeForShortAsync(MetadataOptimizationInput input, CancellationToken cancellationToken)
+            => Task.FromResult(new OptimizedVideoMetadata
+            {
+                Title = input.Title,
+                Description = input.Description,
+                Tags = input.Tags.ToArray(),
+                Visibility = "private"
+            });
+    }
+
+    private sealed class StaticThumbnailGenerationService : IThumbnailGenerationService
+    {
+        public Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(new ThumbnailPlan
+            {
+                PrimaryThumbnailText = "SKY",
+                AlternateThumbnailTexts = ["SKY"],
+                SelectedVisualPath = request.AvailableVisuals.FirstOrDefault(),
+                ThumbnailPath = request.AvailableVisuals.FirstOrDefault(),
+                LayoutType = ThumbnailLayoutType.CenteredTitleOverlay
+            });
+    }
+
+    private sealed class InMemoryPipelineRepository : IPipelineRepository
+    {
+        public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken) => Task.FromResult(run);
+        public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineRun?>(null);
+        public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
+        public Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
+        public Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task AddJobAsync(PipelineJob job, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<PipelineJob?> GetJobAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineJob?>(null);
+        public Task<IReadOnlyCollection<PipelineJob>> GetRecentJobsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineJob>>([]);
+        public Task<PipelineJob?> GetNextRunnableJobAsync(DateTimeOffset now, CancellationToken cancellationToken) => Task.FromResult<PipelineJob?>(null);
+        public Task<bool> HasQueuedOrCompletedMainJobAsync(DateOnly runDate, ContentType contentType, CancellationToken cancellationToken) => Task.FromResult(false);
+        public Task<IReadOnlyCollection<PublishedVideo>> GetRecentPublishedVideosAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PublishedVideo>>([]);
+        public Task<IReadOnlyCollection<GeneratedScript>> GetRecentGeneratedScriptsAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
+        public Task AddVideoAnalyticsAsync(VideoAnalytics analytics, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetRecentAnalyticsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsWindowAsync(DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByVideoIdAsync(string videoId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByContentTypeAsync(ContentType contentType, DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetTopPerformingAnalyticsAsync(DateTimeOffset? from, DateTimeOffset? to, int take, bool shortsOnly, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
+        public Task<IReadOnlyCollection<PublishedVideo>> GetPublishedVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PublishedVideo>>([]);
+        public Task<IReadOnlyCollection<ShortVideo>> GetShortVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<ShortVideo>>([]);
+        public Task<GeneratedScript?> GetLatestScriptByTitleAsync(string title, CancellationToken cancellationToken) => Task.FromResult<GeneratedScript?>(null);
+        public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }
