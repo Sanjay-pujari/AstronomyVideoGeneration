@@ -25,6 +25,7 @@ public sealed class StellariumScriptBuilder
         var escapedLocationName = (scene.LocationName ?? "").Replace("\"", "\\\"");
         var normalizedScreenshotDir = screenshotDir.Replace("\\", "/").Replace("\"", "\\\"");
         var genericTargetObject = ResolveGenericObjectName(scene.TargetObject);
+        var labelText = ResolveLabelText(scene.TargetObject, genericTargetObject);
         var profile = DetermineVisualProfile(scene);
 
         return $$"""
@@ -67,6 +68,13 @@ if ("{{profile}}" === "deep-sky") {
 }
 
 core.selectObjectByName("{{genericTargetObject}}", true);
+if (typeof StelObjectMgr.setFlagSelectedObjectPointer === "function") {
+    StelObjectMgr.setFlagSelectedObjectPointer(true);
+}
+if ("{{profile}}" !== "overview" && typeof LabelMgr !== "undefined" && typeof LabelMgr.labelObject === "function") {
+    LabelMgr.labelObject("{{labelText.Replace("\"", "\\\"")}}", "{{genericTargetObject}}", true, 22, "#ffff66", "NE", 20, "TextOnly");
+}
+core.wait(1.0);
 core.wait(0.5);
 core.moveToSelectedObject(2.0);
 StelMovementMgr.setFlagTracking(true);
@@ -75,7 +83,7 @@ core.wait({{renderSettleSeconds.ToString(System.Globalization.CultureInfo.Invari
 if (typeof core.setGuiVisible === "function") {
     core.setGuiVisible(false);
 }
-if (typeof core.setSelectedObjectMarkerVisible === "function") {
+if ("{{profile}}" === "overview" && typeof core.setSelectedObjectMarkerVisible === "function") {
     core.setSelectedObjectMarkerVisible(false);
 }
 if (typeof StelFileMgr !== "undefined" && StelFileMgr && typeof StelFileMgr.setScreenshotDir === "function") {
@@ -124,6 +132,26 @@ core.quitStellarium();
             "Sun", "Moon", "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto"
         };
 
+        foreach (var objectName in knownObjects)
+        {
+            if (normalized.Contains(objectName, StringComparison.OrdinalIgnoreCase))
+            {
+                return objectName;
+            }
+        }
+
+        return normalized;
+    }
+
+    private static string ResolveLabelText(string? targetObject, string genericTargetObject)
+    {
+        if (string.IsNullOrWhiteSpace(targetObject))
+        {
+            return genericTargetObject;
+        }
+
+        var normalized = targetObject.Trim();
+        var knownObjects = new[] { "Moon", "Jupiter", "Saturn", "Mars", "Venus" };
         foreach (var objectName in knownObjects)
         {
             if (normalized.Contains(objectName, StringComparison.OrdinalIgnoreCase))
