@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
@@ -37,7 +38,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
                     using var canvas = await BuildBaseCanvasAsync(plan.SelectedVisualPath, cancellationToken);
                     var variantText = ResolveVariantText(plan, i);
                     ApplyLayout(canvas, layout, variantText, i);
-                    var outputPath = Path.Combine(request.OutputDirectory, $"{outputPrefix}-{i + 1}.png");
+                    var outputPath = System.IO.Path.Combine(request.OutputDirectory, $"{outputPrefix}-{i + 1}.png");
                     await canvas.SaveAsPngAsync(outputPath, cancellationToken);
                     variantPaths.Add(outputPath);
                 }
