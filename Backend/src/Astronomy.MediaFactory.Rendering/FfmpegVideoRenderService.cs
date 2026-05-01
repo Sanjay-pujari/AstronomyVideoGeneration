@@ -157,12 +157,25 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var segmentDurationsSeconds = new List<double>();
         var segmentDiagnostics = new List<string>();
         var sceneCount = plan.Scenes.Count;
-        var durationPerScene = sceneCount == 0 ? 1d : narrationDurationSeconds / sceneCount;
-        var expectedCombinedDurationSeconds = durationPerScene * sceneCount;
+        var transitionDurationSeconds = GetTransitionDurationSeconds();
+        var transitionsEnabled = IsXfadeEnabled(sceneCount);
+        var transitionCount = Math.Max(sceneCount - 1, 0);
+        var totalTransitionOverlapSeconds = transitionsEnabled ? transitionDurationSeconds * transitionCount : 0d;
+        var adjustedTotalSceneDuration = transitionsEnabled
+            ? narrationDurationSeconds + totalTransitionOverlapSeconds
+            : narrationDurationSeconds;
+        var durationPerScene = sceneCount == 0 ? 1d : adjustedTotalSceneDuration / sceneCount;
+        var expectedCombinedDurationSeconds = transitionsEnabled
+            ? Math.Max(0d, adjustedTotalSceneDuration - totalTransitionOverlapSeconds)
+            : durationPerScene * sceneCount;
         segmentDiagnostics.Add(string.Join(Environment.NewLine, new[]
         {
             $"narrationDurationSeconds: {narrationDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             $"sceneCount: {sceneCount}",
+            $"transitionDurationSeconds: {transitionDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"transitionCount: {transitionCount}",
+            $"totalTransitionOverlapSeconds: {totalTransitionOverlapSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"adjustedTotalSceneDuration: {adjustedTotalSceneDuration.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             $"calculatedSceneDurationSeconds: {durationPerScene.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             $"expectedCombinedDurationSeconds: {expectedCombinedDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
         }));
@@ -239,7 +252,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
         var combinedDurationSeconds = await ProbeMediaDurationSecondsAsync(combinedPath, cancellationToken);
         var combinedDurationDelta = Math.Abs(combinedDurationSeconds - narrationDurationSeconds);
-        if (combinedDurationDelta > 1d)
+        segmentDiagnostics.Add($"actualCombinedDurationSeconds: {combinedDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        if (combinedDurationDelta > 1.5d)
         {
             var warningMessage = $"Combined scene duration ({combinedDurationSeconds:F3}s) differs from narration duration ({narrationDurationSeconds:F3}s) by {combinedDurationDelta:F3}s.";
             _logger.LogWarning("{Warning}", warningMessage);
@@ -345,8 +359,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     private string BuildSegmentTransitionArguments(IReadOnlyList<string> segmentPaths, IReadOnlyList<double> segmentDurationsSeconds, string segmentConcatPath, string combinedPath)
     {
-        var transitionDurationSeconds = Math.Clamp(_options.ImageTransitionSeconds, 0.5d, 1d);
-        if (segmentPaths.Count <= 1)
+        var transitionDurationSeconds = GetTransitionDurationSeconds();
+        if (!IsXfadeEnabled(segmentPaths.Count))
         {
             return $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(combinedPath)}\"";
         }
@@ -367,6 +381,14 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var filterComplex = string.Join(";", filterParts);
         return $"-y {inputArguments} -filter_complex \"{filterComplex}\" -map \"[vout]\" -pix_fmt yuv420p -c:v libx264 -preset ultrafast \"{NormalizePath(combinedPath)}\"";
     }
+
+    private bool IsXfadeEnabled(int sceneCount)
+        => sceneCount > 1 && _options.ImageTransitionSeconds > 0d;
+
+    private double GetTransitionDurationSeconds()
+        => _options.ImageTransitionSeconds > 0d
+            ? Math.Clamp(_options.ImageTransitionSeconds, 0.5d, 1d)
+            : 0d;
     private static List<string> FindMissingAssets(RenderManifest manifest, RenderPlan plan)
     {
         var missingAssets = new List<string>();
