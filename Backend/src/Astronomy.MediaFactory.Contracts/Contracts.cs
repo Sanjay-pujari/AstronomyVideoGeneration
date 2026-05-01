@@ -107,6 +107,9 @@ public sealed class RenderingOptions
     public double ImageTransitionSeconds { get; set; } = 1;
     public string? BackgroundMusicPath { get; set; }
     public bool UseSegmentedNarration { get; set; } = false;
+    public bool EnableTransitions { get; set; } = false;
+    public double TransitionDurationSeconds { get; set; } = 0.5;
+    public string TransitionType { get; set; } = "fade";
     public int FfmpegTimeoutSeconds { get; set; } = 600;
     public int FfmpegSegmentTimeoutSeconds { get; set; } = 180;
     public bool KeepIntermediateFiles { get; set; } = true;
