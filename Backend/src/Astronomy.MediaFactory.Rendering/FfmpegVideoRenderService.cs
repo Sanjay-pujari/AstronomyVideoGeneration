@@ -169,14 +169,16 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         {
             var scene = plan.Scenes[i];
             var duration = durationPerScene > 0 ? durationPerScene : 1d;
+            var frameCount = Math.Max(1, (int)Math.Round(duration * 30d, MidpointRounding.AwayFromZero));
             var segmentPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
             if (!File.Exists(scene.VisualPath))
             {
                 throw new FileNotFoundException($"Scene image not found for segment {i + 1}.", scene.VisualPath);
             }
 
+            var zoomPanFilter = BuildKenBurnsFilter(i, frameCount);
             var segmentArguments =
-                $"-y -nostdin -loop 1 -t {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{NormalizePath(scene.VisualPath)}\" -vf \"scale=1280:720\" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
+                $"-y -nostdin -loop 1 -t {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{zoomPanFilter}\" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
             var segmentCommand = $"{_options.FfmpegPath} {segmentArguments}";
             await _fileSystem.WriteAllTextAsync(commandPath, segmentCommand, cancellationToken);
             var segmentCommandPath = Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt");
@@ -186,6 +188,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var segmentDiagnosticsEntry = string.Join(Environment.NewLine, new[]
             {
                 $"Segment #{i + 1} duration: {segmentDurationSeconds} seconds",
+                $"Segment #{i + 1} frameCount: {frameCount}",
                 $"Configured segment timeout: {_options.FfmpegSegmentTimeoutSeconds} seconds",
                 $"Effective segment timeout: {effectiveSegmentTimeoutSeconds} seconds",
                 $"Command: {segmentCommand}"
@@ -256,6 +259,19 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         return (finalCommand, finalResult);
+    }
+
+    private static string BuildKenBurnsFilter(int sceneIndex, int frameCount)
+    {
+        var effect = sceneIndex % 5;
+        return effect switch
+        {
+            0 => $"zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30",
+            1 => $"zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)-iw*0.08':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30",
+            2 => $"zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)+iw*0.08':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30",
+            3 => $"zoompan=z='if(eq(on,1),1.3,max(zoom-0.0015,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30",
+            _ => $"zoompan=z='1.12':x='if(gte(x,iw-iw/zoom),0,x+1)':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30"
+        };
     }
 
     private async Task<double> ProbeMediaDurationSecondsAsync(string mediaPath, CancellationToken cancellationToken)
