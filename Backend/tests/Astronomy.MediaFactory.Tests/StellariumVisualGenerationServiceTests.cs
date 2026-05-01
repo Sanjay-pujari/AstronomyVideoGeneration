@@ -56,6 +56,43 @@ public sealed class StellariumVisualGenerationServiceTests
         Assert.DoesNotContain("core.selectObjectByName(\"Waxing Gibbous Moon\"", script);
     }
 
+
+    [Fact]
+    public void BuildSceneScript_EnablesObjectPointer_ForPlanetAndMoonScenes()
+    {
+        var builder = new StellariumScriptBuilder(new StellariumOptions());
+        var scene = new StellariumScene
+        {
+            SceneId = "003-planet",
+            TargetObject = "Jupiter",
+            SceneTimeUtc = new DateTimeOffset(2026, 3, 17, 20, 0, 0, TimeSpan.Zero),
+            OutputImagePath = Path.Combine("/tmp", "003-planet.png")
+        };
+
+        var script = builder.BuildSceneScript(scene);
+
+        Assert.Contains("safeCall(StelObjectMgr, \"setFlagSelectedObjectPointer\", [true]);", script);
+        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLines\", [false]);", script);
+    }
+
+    [Fact]
+    public void BuildSceneScript_UsesMinimalLabels_ForDeepSkyScenes()
+    {
+        var builder = new StellariumScriptBuilder(new StellariumOptions());
+        var scene = new StellariumScene
+        {
+            SceneId = "004-deep-sky",
+            TargetObject = "Orion Nebula",
+            SceneTimeUtc = new DateTimeOffset(2026, 3, 17, 20, 0, 0, TimeSpan.Zero),
+            OutputImagePath = Path.Combine("/tmp", "004-deep-sky.png")
+        };
+
+        var script = builder.BuildSceneScript(scene);
+
+        Assert.Contains("safeCall(StelSkyDrawer, \"setFlagStarName\", [false]);", script);
+        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLabels\", [false]);", script);
+    }
+
     [Fact]
     public async Task PrepareVisualsAsync_GeneratesDailySkyGuideScenesAndManifest()
     {
