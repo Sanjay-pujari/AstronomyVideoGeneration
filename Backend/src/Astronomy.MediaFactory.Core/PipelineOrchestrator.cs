@@ -648,7 +648,7 @@ public sealed class PipelineOrchestrator
     }
 
 
-    private static async Task WriteSceneNarrationArtifactsAsync(
+    private async Task WriteSceneNarrationArtifactsAsync(
         IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> sceneNarrationEntries,
         string outputDirectory,
         string narrationAudioPath,
@@ -685,7 +685,7 @@ public sealed class PipelineOrchestrator
         }
     }
 
-    private static async Task<int> RunProcessAsync(string fileName, string arguments, CancellationToken cancellationToken)
+    private async Task<int> RunProcessAsync(string fileName, string arguments, CancellationToken cancellationToken)
     {
         var executablePath = ResolveExecutablePath(fileName);
         var psi = new ProcessStartInfo(executablePath, arguments)
