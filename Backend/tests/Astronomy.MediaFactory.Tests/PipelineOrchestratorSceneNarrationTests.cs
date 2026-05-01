@@ -176,19 +176,19 @@ public sealed class PipelineOrchestratorSceneNarrationTests
         public Task<OptimizedVideoMetadata> OptimizeForVideoAsync(MetadataOptimizationInput input, CancellationToken cancellationToken)
             => Task.FromResult(new OptimizedVideoMetadata
             {
-                Title = input.Title,
-                Description = input.Description,
-                Tags = input.Tags.ToArray(),
-                Visibility = "private"
+                PrimaryTitle = input.SourceTitle,
+                OptimizedDescription = input.SourceDescription,
+                Tags = input.SourceTags.ToArray(),
+                Hashtags = []
             });
 
         public Task<OptimizedVideoMetadata> OptimizeForShortAsync(MetadataOptimizationInput input, CancellationToken cancellationToken)
             => Task.FromResult(new OptimizedVideoMetadata
             {
-                Title = input.Title,
-                Description = input.Description,
-                Tags = input.Tags.ToArray(),
-                Visibility = "private"
+                PrimaryTitle = input.SourceTitle,
+                OptimizedDescription = input.SourceDescription,
+                Tags = input.SourceTags.ToArray(),
+                Hashtags = []
             });
     }
 
