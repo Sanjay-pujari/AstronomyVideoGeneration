@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -682,7 +683,8 @@ public sealed class PipelineOrchestrator
 
     private static async Task<int> RunProcessAsync(string fileName, string arguments, CancellationToken cancellationToken)
     {
-        var psi = new ProcessStartInfo(fileName, arguments)
+        var executablePath = ResolveExecutablePath(fileName);
+        var psi = new ProcessStartInfo(executablePath, arguments)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -690,14 +692,60 @@ public sealed class PipelineOrchestrator
             CreateNoWindow = true
         };
 
-        using var process = Process.Start(psi);
-        if (process is null)
+        try
         {
-            return -1;
+            using var process = Process.Start(psi);
+            if (process is null)
+            {
+                return -1;
+            }
+
+            await process.WaitForExitAsync(cancellationToken);
+            return process.ExitCode;
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 2)
+        {
+            throw new InvalidOperationException(
+                $"Could not locate executable '{fileName}'. Install FFmpeg and ensure it is on PATH, or set the FFMPEG_PATH environment variable to the full ffmpeg executable path.",
+                ex);
+        }
+    }
+
+    private static string ResolveExecutablePath(string fileName)
+    {
+        var configuredPath = Environment.GetEnvironmentVariable("FFMPEG_PATH");
+        if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
+        {
+            return configuredPath;
         }
 
-        await process.WaitForExitAsync(cancellationToken);
-        return process.ExitCode;
+        if (Path.IsPathRooted(fileName) || fileName.Contains(Path.DirectorySeparatorChar) || fileName.Contains(Path.AltDirectorySeparatorChar))
+        {
+            return fileName;
+        }
+
+        var pathEntries = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var candidates = new List<string> { fileName };
+        if (OperatingSystem.IsWindows() && !fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            candidates.Add($"{fileName}.exe");
+        }
+
+        foreach (var entry in pathEntries)
+        {
+            foreach (var candidate in candidates)
+            {
+                var fullPath = Path.Combine(entry, candidate);
+                if (File.Exists(fullPath))
+                {
+                    return fullPath;
+                }
+            }
+        }
+
+        return fileName;
     }
 
     private static OptimizedVideoMetadata ApplyMonetizationPlan(OptimizedVideoMetadata source, MonetizationPlan plan)
