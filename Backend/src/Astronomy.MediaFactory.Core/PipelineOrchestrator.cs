@@ -704,7 +704,12 @@ public sealed class PipelineOrchestrator
                 return -1;
             }
 
+            var standardOutputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var standardErrorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
             await process.WaitForExitAsync(cancellationToken);
+            await Task.WhenAll(standardOutputTask, standardErrorTask);
+
             return process.ExitCode;
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 2)
