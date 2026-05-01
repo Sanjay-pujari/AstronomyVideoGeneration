@@ -26,6 +26,7 @@ public sealed class PipelineAlertEmissionTests
             new NoOpThumbnailService(),
             new InMemoryRepo(),
             Options.Create(new YouTubeOptions()),
+            Options.Create(new RenderingOptions()),
             NullLogger<PipelineOrchestrator>.Instance,
             operationalAlertNotifier: notifier);
 
