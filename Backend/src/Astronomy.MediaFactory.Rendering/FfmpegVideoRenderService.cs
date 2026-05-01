@@ -206,8 +206,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             var zoomPanFilter = BuildKenBurnsFilter(i, frameCount);
+            var segmentFilter = $"{zoomPanFilter},fade=t=in:st=0:d=0.5,fade=t=out:st=duration-0.5:d=0.5";
             var segmentArguments =
-                $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{zoomPanFilter}\" -frames:v {frameCount} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
+                $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{segmentFilter}\" -frames:v {frameCount} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
             var segmentCommand = $"{_options.FfmpegPath} {segmentArguments}";
             await _fileSystem.WriteAllTextAsync(commandPath, segmentCommand, cancellationToken);
             var segmentCommandPath = Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt");
