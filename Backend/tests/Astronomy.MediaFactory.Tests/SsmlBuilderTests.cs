@@ -31,16 +31,19 @@ public sealed class SsmlBuilderTests
     {
         var ssml = _sut.BuildSsml("Moon, bright.\n\nJupiter rises:", "en-US-AriaNeural");
         Assert.Contains("<break time=\"300ms\"/>", ssml);
-        Assert.Contains("<break time=\"650ms\"/>", ssml);
+        Assert.Contains("<break time=\"450ms\"/>", ssml);
         Assert.Contains("<break time=\"900ms\"/>", ssml);
     }
 
     [Fact]
     public void BuildSsml_AddsAstronomyEmphasis_WithoutDoubleWrapping()
     {
-        var ssml = _sut.BuildSsml("Jupiter and meteor tonight.", "en-US-AriaNeural");
+        var ssml = _sut.BuildSsml("Look up at the Moon tonight. Jupiter is next to a nebula.", "en-US-AriaNeural");
+        Assert.Contains("<emphasis level=\"strong\">Look up</emphasis>", ssml);
+        Assert.Contains("<emphasis level=\"strong\">Moon</emphasis>", ssml);
         Assert.Contains("<emphasis level=\"moderate\">Jupiter</emphasis>", ssml);
-        Assert.Contains("<emphasis level=\"moderate\">meteor</emphasis>", ssml);
+        Assert.Contains("<emphasis level=\"moderate\">tonight</emphasis>", ssml);
+        Assert.Contains("<emphasis level=\"moderate\">nebula</emphasis>", ssml);
         Assert.Equal(1, CountOccurrences(ssml, "<emphasis level=\"moderate\">Jupiter</emphasis>"));
     }
 
@@ -48,8 +51,8 @@ public sealed class SsmlBuilderTests
     public void BuildSsml_ShortsProfile_UsesShorterPauses()
     {
         var ssml = _sut.BuildSsml("Mars, visible.\n\nOrion!", "en-US-AriaNeural", SsmlNarrationProfile.Shorts);
-        Assert.Contains("prosody rate=\"0.98\" pitch=\"+3%\"", ssml);
-        Assert.Contains("<break time=\"200ms\"/>", ssml);
+        Assert.Contains("prosody rate=\"92%\" pitch=\"+3%\"", ssml);
+        Assert.Contains("<break time=\"300ms\"/>", ssml);
         Assert.Contains("<break time=\"450ms\"/>", ssml);
         Assert.Contains("<break time=\"600ms\"/>", ssml);
     }

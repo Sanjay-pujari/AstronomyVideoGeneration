@@ -20,9 +20,14 @@ public interface ISsmlBuilder
 
 public sealed partial class SsmlBuilder : ISsmlBuilder
 {
-    private static readonly string[] AstronomyTerms =
+    private static readonly (string Term, string Level)[] EmphasisTargets =
     [
-        "Moon", "Jupiter", "Saturn", "Mars", "Venus", "Mercury", "Orion", "Polaris", "Pleiades", "Andromeda", "comet", "meteor", "eclipse", "conjunction"
+        ("Moon", "strong"),
+        ("Jupiter", "moderate"),
+        ("Saturn", "moderate"),
+        ("Nebula", "moderate"),
+        ("look up", "strong"),
+        ("tonight", "moderate")
     ];
 
     private static readonly Regex SentencePauseRegex = SentencePauseRegexFactory();
@@ -63,10 +68,10 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
     private static string ApplyAstronomyEmphasis(string escapedText)
     {
         var emphasized = escapedText;
-        foreach (var term in AstronomyTerms)
+        foreach (var (term, level) in EmphasisTargets)
         {
-            var pattern = $@"(?<!<emphasis level=""moderate"">)\b({Regex.Escape(term)})\b(?!</emphasis>)";
-            emphasized = Regex.Replace(emphasized, pattern, "<emphasis level=\"moderate\">$1</emphasis>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            var pattern = $@"(?<!<emphasis level=""(?:moderate|strong)"">)\b({Regex.Escape(term)})\b(?!</emphasis>)";
+            emphasized = Regex.Replace(emphasized, pattern, $"<emphasis level=\"{level}\">$1</emphasis>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
         return emphasized;
@@ -76,11 +81,11 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
     {
         var baseTuning = profile switch
         {
-            SsmlNarrationProfile.TelescopeTargets => new NarrationTuning("0.90", "+1%", 650, 300, 900),
-            SsmlNarrationProfile.SpaceNews => new NarrationTuning("0.94", "+3%", 650, 300, 900),
-            SsmlNarrationProfile.AstrophotographyTips => new NarrationTuning("0.90", "+1%", 650, 300, 900),
-            SsmlNarrationProfile.Shorts => new NarrationTuning("0.98", "+3%", 450, 200, 600),
-            _ => new NarrationTuning("0.92", "+2%", 650, 300, 900)
+            SsmlNarrationProfile.TelescopeTargets => new NarrationTuning("92%", "+3%", 450, 300, 900),
+            SsmlNarrationProfile.SpaceNews => new NarrationTuning("92%", "+3%", 450, 300, 900),
+            SsmlNarrationProfile.AstrophotographyTips => new NarrationTuning("92%", "+3%", 450, 300, 900),
+            SsmlNarrationProfile.Shorts => new NarrationTuning("92%", "+3%", 450, 300, 600),
+            _ => new NarrationTuning("92%", "+3%", 450, 300, 900)
         };
 
         return baseTuning with
