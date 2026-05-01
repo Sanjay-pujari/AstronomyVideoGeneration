@@ -359,10 +359,10 @@ public sealed class FfmpegRenderingTests
     }
 
     [Theory]
-    [InlineData(180, 36, 180)]
-    [InlineData(180, 100, 500)]
-    [InlineData(30, 10, 180)]
-    [InlineData(300, 20, 300)]
+    [InlineData(180, 36, 360)]
+    [InlineData(180, 100, 1000)]
+    [InlineData(30, 10, 300)]
+    [InlineData(450, 20, 450)]
     public void FfmpegVideoRenderService_CalculatesEffectiveSegmentTimeout(int configuredSeconds, double sceneDurationSeconds, int expectedSeconds)
     {
         var effective = FfmpegVideoRenderService.CalculateEffectiveSegmentTimeoutSeconds(configuredSeconds, sceneDurationSeconds);

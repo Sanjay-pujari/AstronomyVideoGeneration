@@ -334,8 +334,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     public static int CalculateEffectiveSegmentTimeoutSeconds(int configuredSegmentTimeoutSeconds, double sceneDurationSeconds)
     {
-        var effectiveSegmentTimeoutSeconds = Math.Max(configuredSegmentTimeoutSeconds, (int)Math.Ceiling(sceneDurationSeconds * 5d));
-        effectiveSegmentTimeoutSeconds = Math.Max(effectiveSegmentTimeoutSeconds, 180);
+        var effectiveSegmentTimeoutSeconds = Math.Max(configuredSegmentTimeoutSeconds, (int)Math.Ceiling(sceneDurationSeconds * 10d));
+        effectiveSegmentTimeoutSeconds = Math.Max(effectiveSegmentTimeoutSeconds, 300);
         return effectiveSegmentTimeoutSeconds;
     }
 
