@@ -154,6 +154,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         var segmentPaths = new List<string>();
+        var segmentDurationsSeconds = new List<double>();
         var segmentDiagnostics = new List<string>();
         var sceneCount = plan.Scenes.Count;
         var durationPerScene = sceneCount == 0 ? 1d : narrationDurationSeconds / sceneCount;
@@ -222,13 +223,13 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             segmentPaths.Add(segmentPath);
+            segmentDurationsSeconds.Add(frameCount / 30d);
         }
 
+        var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
         var concatBody = string.Join(Environment.NewLine, segmentPaths.Select(path => $"file '{NormalizePath(path).Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
-
-        var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
-        var concatArguments = $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(combinedPath)}\"";
+        var concatArguments = BuildSegmentTransitionArguments(segmentPaths, segmentDurationsSeconds, segmentConcatPath, combinedPath);
         await _fileSystem.WriteAllTextAsync(commandPath, $"{_options.FfmpegPath} {concatArguments}", cancellationToken);
         _logger.LogInformation("Concatenating FFmpeg segments: {Command}", $"{_options.FfmpegPath} {concatArguments}");
         var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
@@ -341,6 +342,31 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     private static string NormalizePath(string path)
         => path.Replace('\\', '/');
+
+    private string BuildSegmentTransitionArguments(IReadOnlyList<string> segmentPaths, IReadOnlyList<double> segmentDurationsSeconds, string segmentConcatPath, string combinedPath)
+    {
+        var transitionDurationSeconds = Math.Clamp(_options.ImageTransitionSeconds, 0.5d, 1d);
+        if (segmentPaths.Count <= 1)
+        {
+            return $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(combinedPath)}\"";
+        }
+
+        var inputArguments = string.Join(" ", segmentPaths.Select(path => $"-i \"{NormalizePath(path)}\""));
+        var filterParts = new List<string>();
+        var cumulativeDurationSeconds = segmentDurationsSeconds[0];
+        var previousLabel = "[0:v]";
+        for (var i = 1; i < segmentPaths.Count; i++)
+        {
+            var outputLabel = i == segmentPaths.Count - 1 ? "[vout]" : $"[v{i}]";
+            var offset = Math.Max(0d, cumulativeDurationSeconds - transitionDurationSeconds);
+            filterParts.Add($"{previousLabel}[{i}:v]xfade=transition=fade:duration={transitionDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}:offset={offset.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}{outputLabel}");
+            previousLabel = outputLabel;
+            cumulativeDurationSeconds += segmentDurationsSeconds[i] - transitionDurationSeconds;
+        }
+
+        var filterComplex = string.Join(";", filterParts);
+        return $"-y {inputArguments} -filter_complex \"{filterComplex}\" -map \"[vout]\" -pix_fmt yuv420p -c:v libx264 -preset ultrafast \"{NormalizePath(combinedPath)}\"";
+    }
     private static List<string> FindMissingAssets(RenderManifest manifest, RenderPlan plan)
     {
         var missingAssets = new List<string>();
