@@ -222,7 +222,7 @@ public sealed class FfmpegRenderingTests
         var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
         Assert.Contains("narrationDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
         Assert.Contains("sceneCount: 5", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("transitionDurationSeconds: 1", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("transitionDurationSeconds: 0.5", diagnostics, StringComparison.Ordinal);
         Assert.Contains("transitionCount: 4", diagnostics, StringComparison.Ordinal);
         Assert.Contains("totalTransitionOverlapSeconds: 4", diagnostics, StringComparison.Ordinal);
         Assert.Contains("adjustedTotalSceneDuration: 119", diagnostics, StringComparison.Ordinal);
@@ -267,9 +267,9 @@ public sealed class FfmpegRenderingTests
         var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
         Assert.Contains("narrationDurationSeconds: 81.624", diagnostics, StringComparison.Ordinal);
         Assert.Contains("transitionCount: 4", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("totalTransitionOverlapSeconds: 4", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("adjustedTotalSceneDuration: 85.624", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("calculatedSceneDurationSeconds: 17.1248", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("totalTransitionOverlapSeconds: 2", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("adjustedTotalSceneDuration: 83.624", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("calculatedSceneDurationSeconds: 16.7248", diagnostics, StringComparison.Ordinal);
         Assert.Contains("expectedCombinedDurationSeconds: 81.624", diagnostics, StringComparison.Ordinal);
     }
 
@@ -298,15 +298,56 @@ public sealed class FfmpegRenderingTests
                 [Path.Combine(tempDir.FullName, "combined.mp4")] = 81.624d
             }
         };
-        var sut = CreateService(fileSystem, processRunner, useSegmentedNarration: true, imageTransitionSeconds: 0d);
+        var sut = CreateService(fileSystem, processRunner, useSegmentedNarration: true, enableTransitions: false);
 
         await sut.RenderAsync(new RenderManifest { Title = "Sky", AudioPath = audioPath, OutputPath = outputPath, Scenes = scenes }, CancellationToken.None);
 
         var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
-        Assert.Contains("transitionDurationSeconds: 0", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("transitionDurationSeconds: 0.5", diagnostics, StringComparison.Ordinal);
         Assert.Contains("totalTransitionOverlapSeconds: 0", diagnostics, StringComparison.Ordinal);
         Assert.Contains("adjustedTotalSceneDuration: 81.624", diagnostics, StringComparison.Ordinal);
         Assert.Contains("calculatedSceneDurationSeconds: 16.3248", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_AutoDisablesTransitions_WhenSceneDurationTooShort()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-transition-short");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        var scene1 = Path.Combine(tempDir.FullName, "scene-1.png");
+        var scene2 = Path.Combine(tempDir.FullName, "scene-2.png");
+        await File.WriteAllBytesAsync(scene1, [4, 5, 6]);
+        await File.WriteAllBytesAsync(scene2, [7, 8, 9]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 2d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 2d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner, useSegmentedNarration: true, enableTransitions: true, transitionDurationSeconds: 0.5d);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes =
+            [
+                new RenderScene { Caption = "Scene 1", VisualPath = scene1, DurationSeconds = 2 },
+                new RenderScene { Caption = "Scene 2", VisualPath = scene2, DurationSeconds = 2 }
+            ]
+        }, CancellationToken.None);
+
+        var concatCommand = processRunner.Commands.Single(command => command.Contains("combined.mp4", StringComparison.Ordinal));
+        Assert.Contains("-f concat", concatCommand, StringComparison.Ordinal);
+        var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
+        Assert.Contains("transitionsEnabled: False", diagnostics, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -479,7 +520,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, double imageTransitionSeconds = 1d)
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade")
     {
         var options = Options.Create(new RenderingOptions
         {
@@ -489,7 +530,9 @@ public sealed class FfmpegRenderingTests
             VideoWidth = 1280,
             VideoHeight = 720,
             FrameRate = 30,
-            ImageTransitionSeconds = imageTransitionSeconds,
+            EnableTransitions = enableTransitions,
+            TransitionDurationSeconds = transitionDurationSeconds,
+            TransitionType = transitionType,
             UseSegmentedNarration = useSegmentedNarration,
             FfmpegTimeoutSeconds = ffmpegTimeoutSeconds,
             FfmpegSegmentTimeoutSeconds = 180,

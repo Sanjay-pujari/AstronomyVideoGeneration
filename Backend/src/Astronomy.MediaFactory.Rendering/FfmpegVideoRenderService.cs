@@ -158,7 +158,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var segmentDiagnostics = new List<string>();
         var sceneCount = plan.Scenes.Count;
         var transitionDurationSeconds = GetTransitionDurationSeconds();
-        var transitionsEnabled = IsXfadeEnabled(sceneCount);
+        var transitionsEnabled = IsXfadeEnabled(sceneCount, transitionDurationSeconds);
         var transitionCount = Math.Max(sceneCount - 1, 0);
         var totalTransitionOverlapSeconds = transitionsEnabled ? transitionDurationSeconds * transitionCount : 0d;
         var adjustedTotalSceneDuration = transitionsEnabled
@@ -168,10 +168,25 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var expectedCombinedDurationSeconds = transitionsEnabled
             ? Math.Max(0d, adjustedTotalSceneDuration - totalTransitionOverlapSeconds)
             : durationPerScene * sceneCount;
+        if (transitionsEnabled && durationPerScene <= transitionDurationSeconds + 2d)
+        {
+            transitionsEnabled = false;
+            totalTransitionOverlapSeconds = 0d;
+            adjustedTotalSceneDuration = narrationDurationSeconds;
+            durationPerScene = sceneCount == 0 ? 1d : adjustedTotalSceneDuration / sceneCount;
+            expectedCombinedDurationSeconds = durationPerScene * sceneCount;
+            _logger.LogWarning(
+                "Transitions were enabled but auto-disabled because sceneDurationSeconds ({SceneDurationSeconds:F3}) must be greater than transitionDurationSeconds + 2 ({Threshold:F3}).",
+                durationPerScene,
+                transitionDurationSeconds + 2d);
+        }
         segmentDiagnostics.Add(string.Join(Environment.NewLine, new[]
         {
+            $"enableTransitions: {_options.EnableTransitions}",
+            $"transitionsEnabled: {transitionsEnabled}",
             $"narrationDurationSeconds: {narrationDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             $"sceneCount: {sceneCount}",
+            $"transitionType: {_options.TransitionType}",
             $"transitionDurationSeconds: {transitionDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             $"transitionCount: {transitionCount}",
             $"totalTransitionOverlapSeconds: {totalTransitionOverlapSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
@@ -242,8 +257,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
         var concatBody = string.Join(Environment.NewLine, segmentPaths.Select(path => $"file '{NormalizePath(path).Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
-        var concatArguments = BuildSegmentTransitionArguments(segmentPaths, segmentDurationsSeconds, segmentConcatPath, combinedPath);
+        var concatArguments = BuildSegmentTransitionArguments(segmentPaths, segmentDurationsSeconds, segmentConcatPath, combinedPath, transitionsEnabled, transitionDurationSeconds);
         await _fileSystem.WriteAllTextAsync(commandPath, $"{_options.FfmpegPath} {concatArguments}", cancellationToken);
+        segmentDiagnostics.Add($"xfadeCommand: {_options.FfmpegPath} {concatArguments}");
         _logger.LogInformation("Concatenating FFmpeg segments: {Command}", $"{_options.FfmpegPath} {concatArguments}");
         var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
         if (concatResult.ExitCode != 0 || !File.Exists(combinedPath))
@@ -357,10 +373,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private static string NormalizePath(string path)
         => path.Replace('\\', '/');
 
-    private string BuildSegmentTransitionArguments(IReadOnlyList<string> segmentPaths, IReadOnlyList<double> segmentDurationsSeconds, string segmentConcatPath, string combinedPath)
+    private string BuildSegmentTransitionArguments(IReadOnlyList<string> segmentPaths, IReadOnlyList<double> segmentDurationsSeconds, string segmentConcatPath, string combinedPath, bool transitionsEnabled, double transitionDurationSeconds)
     {
-        var transitionDurationSeconds = GetTransitionDurationSeconds();
-        if (!IsXfadeEnabled(segmentPaths.Count))
+        if (!transitionsEnabled)
         {
             return $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(combinedPath)}\"";
         }
@@ -369,11 +384,12 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var filterParts = new List<string>();
         var cumulativeDurationSeconds = segmentDurationsSeconds[0];
         var previousLabel = "[0:v]";
+        var transitionType = GetTransitionType();
         for (var i = 1; i < segmentPaths.Count; i++)
         {
             var outputLabel = i == segmentPaths.Count - 1 ? "[vout]" : $"[v{i}]";
             var offset = Math.Max(0d, cumulativeDurationSeconds - transitionDurationSeconds);
-            filterParts.Add($"{previousLabel}[{i}:v]xfade=transition=fade:duration={transitionDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}:offset={offset.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}{outputLabel}");
+            filterParts.Add($"{previousLabel}[{i}:v]xfade=transition={transitionType}:duration={transitionDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}:offset={offset.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}{outputLabel}");
             previousLabel = outputLabel;
             cumulativeDurationSeconds += segmentDurationsSeconds[i] - transitionDurationSeconds;
         }
@@ -382,13 +398,16 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return $"-y {inputArguments} -filter_complex \"{filterComplex}\" -map \"[vout]\" -pix_fmt yuv420p -c:v libx264 -preset ultrafast \"{NormalizePath(combinedPath)}\"";
     }
 
-    private bool IsXfadeEnabled(int sceneCount)
-        => sceneCount > 1 && _options.ImageTransitionSeconds > 0d;
+    private bool IsXfadeEnabled(int sceneCount, double transitionDurationSeconds)
+        => sceneCount > 1 && _options.EnableTransitions && transitionDurationSeconds > 0d;
 
     private double GetTransitionDurationSeconds()
-        => _options.ImageTransitionSeconds > 0d
-            ? Math.Clamp(_options.ImageTransitionSeconds, 0.5d, 1d)
+        => _options.TransitionDurationSeconds > 0d
+            ? _options.TransitionDurationSeconds
             : 0d;
+
+    private string GetTransitionType()
+        => string.IsNullOrWhiteSpace(_options.TransitionType) ? "fade" : _options.TransitionType.Trim();
     private static List<string> FindMissingAssets(RenderManifest manifest, RenderPlan plan)
     {
         var missingAssets = new List<string>();
