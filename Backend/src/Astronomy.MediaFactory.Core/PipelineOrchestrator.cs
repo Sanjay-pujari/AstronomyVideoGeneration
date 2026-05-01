@@ -36,6 +36,7 @@ public sealed class PipelineOrchestrator
     private readonly IOperationalAlertNotifier? _operationalAlertNotifier;
     private readonly IContentExperimentService? _contentExperimentService;
     private readonly IShortFormPublishingService? _shortFormPublishingService;
+    private readonly RenderingOptions _renderingOptions;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -51,6 +52,7 @@ public sealed class PipelineOrchestrator
         IThumbnailGenerationService thumbnailGenerationService,
         IPipelineRepository repository,
         IOptions<YouTubeOptions> youTubeOptions,
+        IOptions<RenderingOptions> renderingOptions,
         ILogger<PipelineOrchestrator> logger,
         IContentMonetizationService? contentMonetizationService = null,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
@@ -78,6 +80,7 @@ public sealed class PipelineOrchestrator
         _thumbnailGenerationService = thumbnailGenerationService;
         _repository = repository;
         _youTubeOptions = youTubeOptions.Value;
+        _renderingOptions = renderingOptions.Value;
         _contentMonetizationService = contentMonetizationService;
         _operationsOptions = operationsOptions?.Value ?? new OperationsOptions();
         _maintenanceOptions = maintenanceOptions?.Value ?? new MaintenanceOptions();
@@ -666,14 +669,15 @@ public sealed class PipelineOrchestrator
 
         var commandPath = Path.Combine(outputDirectory, "ffmpeg-audio-concat-command.txt");
         var copyArgs = $"-y -nostdin -f concat -safe 0 -i \"{concatListPath}\" -c copy \"{narrationAudioPath}\"";
-        await File.WriteAllTextAsync(commandPath, $"ffmpeg {copyArgs}", cancellationToken);
+        var ffmpegPath = ResolveExecutablePath("ffmpeg");
+        await File.WriteAllTextAsync(commandPath, $"{ffmpegPath} {copyArgs}", cancellationToken);
 
-        var copyExitCode = await RunProcessAsync("ffmpeg", copyArgs, cancellationToken);
+        var copyExitCode = await RunProcessAsync(ffmpegPath, copyArgs, cancellationToken);
         if (copyExitCode != 0 || !File.Exists(narrationAudioPath) || new FileInfo(narrationAudioPath).Length <= 0)
         {
             var reencodeArgs = $"-y -nostdin -f concat -safe 0 -i \"{concatListPath}\" -c:a libmp3lame -q:a 2 \"{narrationAudioPath}\"";
-            await File.WriteAllTextAsync(commandPath, $"ffmpeg {reencodeArgs}", cancellationToken);
-            var reencodeExitCode = await RunProcessAsync("ffmpeg", reencodeArgs, cancellationToken);
+            await File.WriteAllTextAsync(commandPath, $"{ffmpegPath} {reencodeArgs}", cancellationToken);
+            var reencodeExitCode = await RunProcessAsync(ffmpegPath, reencodeArgs, cancellationToken);
             if (reencodeExitCode != 0 || !File.Exists(narrationAudioPath) || new FileInfo(narrationAudioPath).Length <= 0)
             {
                 throw new InvalidOperationException("Failed to produce final narration.mp3 from scene audio segments.");
@@ -711,9 +715,12 @@ public sealed class PipelineOrchestrator
         }
     }
 
-    private static string ResolveExecutablePath(string fileName)
+    private string ResolveExecutablePath(string fileName)
     {
-        var configuredPath = Environment.GetEnvironmentVariable("FFMPEG_PATH");
+        var configuredPath = string.Equals(fileName, "ffmpeg", StringComparison.OrdinalIgnoreCase)
+            ? _renderingOptions.FfmpegPath
+            : null;
+        configuredPath ??= Environment.GetEnvironmentVariable("FFMPEG_PATH");
         if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
         {
             return configuredPath;

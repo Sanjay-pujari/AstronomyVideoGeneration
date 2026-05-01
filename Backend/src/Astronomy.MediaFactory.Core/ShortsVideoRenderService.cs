@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.ComponentModel;
 using System.Diagnostics;
 
 namespace Astronomy.MediaFactory.Core;
@@ -17,6 +18,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
     private readonly IPromptFeedbackService? _promptFeedbackService;
+    private readonly RenderingOptions _renderingOptions;
 
     public ShortsVideoRenderService(
         IShortsScriptGenerationService shortsScriptGenerationService,
@@ -27,6 +29,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         IYouTubePublishingService youTubePublishingService,
         IMetadataOptimizationService metadataOptimizationService,
         IOptions<YouTubeOptions> youTubeOptions,
+        IOptions<RenderingOptions> renderingOptions,
         ILogger<ShortsVideoRenderService> logger,
         IContentMonetizationService? contentMonetizationService = null,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
@@ -38,6 +41,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         _videoRenderService = videoRenderService;
         _blobStorageService = blobStorageService;
         _metadataOptimizationService = metadataOptimizationService;
+        _renderingOptions = renderingOptions.Value;
         _logger = logger;
         _contentMonetizationService = contentMonetizationService;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
@@ -247,13 +251,14 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         await File.WriteAllLinesAsync(segmentsPath, segmentLines, cancellationToken);
 
         var copyArgs = $"-y -nostdin -f concat -safe 0 -i \"{concatListPath}\" -c copy \"{narrationPath}\"";
-        await File.WriteAllTextAsync(commandPath, $"ffmpeg {copyArgs}", cancellationToken);
-        var copyExitCode = await RunProcessAsync("ffmpeg", copyArgs, cancellationToken);
+        var ffmpegPath = ResolveExecutablePath("ffmpeg");
+        await File.WriteAllTextAsync(commandPath, $"{ffmpegPath} {copyArgs}", cancellationToken);
+        var copyExitCode = await RunProcessAsync(ffmpegPath, copyArgs, cancellationToken);
         if (copyExitCode != 0 || !File.Exists(narrationPath) || new FileInfo(narrationPath).Length <= 0)
         {
             var reencodeArgs = $"-y -nostdin -f concat -safe 0 -i \"{concatListPath}\" -c:a libmp3lame -q:a 2 \"{narrationPath}\"";
-            await File.WriteAllTextAsync(commandPath, $"ffmpeg {reencodeArgs}", cancellationToken);
-            var reencodeExitCode = await RunProcessAsync("ffmpeg", reencodeArgs, cancellationToken);
+            await File.WriteAllTextAsync(commandPath, $"{ffmpegPath} {reencodeArgs}", cancellationToken);
+            var reencodeExitCode = await RunProcessAsync(ffmpegPath, reencodeArgs, cancellationToken);
             if (reencodeExitCode != 0 || !File.Exists(narrationPath) || new FileInfo(narrationPath).Length <= 0)
             {
                 _logger.LogWarning("Failed to concat segmented narration audio. Falling back to single narration audio.");
@@ -277,14 +282,37 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             CreateNoWindow = true
         };
 
-        using var process = Process.Start(psi);
-        if (process is null)
+        try
         {
-            return -1;
+            using var process = Process.Start(psi);
+            if (process is null)
+            {
+                return -1;
+            }
+
+            await process.WaitForExitAsync(cancellationToken);
+            return process.ExitCode;
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 2)
+        {
+            throw new InvalidOperationException(
+                $"Could not locate executable '{fileName}'. Install FFmpeg and ensure it is on PATH, or set Rendering:FfmpegPath or the FFMPEG_PATH environment variable to the full ffmpeg executable path.",
+                ex);
+        }
+    }
+
+    private string ResolveExecutablePath(string fileName)
+    {
+        var configuredPath = string.Equals(fileName, "ffmpeg", StringComparison.OrdinalIgnoreCase)
+            ? _renderingOptions.FfmpegPath
+            : null;
+        configuredPath ??= Environment.GetEnvironmentVariable("FFMPEG_PATH");
+        if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
+        {
+            return configuredPath;
         }
 
-        await process.WaitForExitAsync(cancellationToken);
-        return process.ExitCode;
+        return fileName;
     }
 
     private static List<SceneNarrationSegment> BuildFallbackSceneNarrationSegments(string scriptBody, int sceneCount)
