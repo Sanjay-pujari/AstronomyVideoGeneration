@@ -23,7 +23,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
     public async Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
     {
         var plan = _thumbnailStrategyService.BuildPlan(request);
-        var outputPath = Path.Combine(request.OutputDirectory, request.IsShortForm ? "short-cover.png" : "thumbnail.png");
+        var outputPrefix = request.IsShortForm ? "short-cover" : "thumbnail";
 
         Directory.CreateDirectory(request.OutputDirectory);
 
@@ -31,9 +31,16 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
         {
             try
             {
-                using var canvas = await BuildBaseCanvasAsync(plan.SelectedVisualPath, cancellationToken);
-                ApplyLayout(canvas, layout, plan.PrimaryThumbnailText);
-                await canvas.SaveAsPngAsync(outputPath, cancellationToken);
+                var variantPaths = new List<string>(capacity: 3);
+                for (var i = 0; i < 3; i++)
+                {
+                    using var canvas = await BuildBaseCanvasAsync(plan.SelectedVisualPath, cancellationToken);
+                    var variantText = ResolveVariantText(plan, i);
+                    ApplyLayout(canvas, layout, variantText, i);
+                    var outputPath = Path.Combine(request.OutputDirectory, $"{outputPrefix}-{i + 1}.png");
+                    await canvas.SaveAsPngAsync(outputPath, cancellationToken);
+                    variantPaths.Add(outputPath);
+                }
 
                 return new ThumbnailPlan
                 {
@@ -42,7 +49,8 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
                     LayoutType = layout,
                     LayoutCandidates = plan.LayoutCandidates,
                     SelectedVisualPath = plan.SelectedVisualPath,
-                    ThumbnailPath = outputPath,
+                    ThumbnailPath = variantPaths[0],
+                    ThumbnailVariantPaths = variantPaths,
                     Variants = plan.Variants
                 };
             }
@@ -61,6 +69,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
             LayoutCandidates = plan.LayoutCandidates,
             SelectedVisualPath = plan.SelectedVisualPath,
             ThumbnailPath = plan.SelectedVisualPath,
+            ThumbnailVariantPaths = plan.SelectedVisualPath is null ? [] : [plan.SelectedVisualPath],
             Variants = plan.Variants
         };
     }
@@ -82,7 +91,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
         return new Image<Rgba32>(1280, 720, Color.Black);
     }
 
-    private static void ApplyLayout(Image<Rgba32> canvas, ThumbnailLayoutType layoutType, string text)
+    private static void ApplyLayout(Image<Rgba32> canvas, ThumbnailLayoutType layoutType, string text, int variantIndex)
     {
         var font = SystemFonts.CreateFont("Arial", 84, FontStyle.Bold);
         var displayText = LimitToThreeWords(text);
@@ -91,21 +100,23 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
 
         canvas.Mutate(ctx =>
         {
+            ApplySubtleGradient(ctx, variantIndex);
+            ApplyVignette(ctx);
             ApplyBottomReadabilityGradient(ctx);
 
             switch (layoutType)
             {
                 case ThumbnailLayoutType.TextLeftVisualRight:
-                    DrawTextWithShadow(ctx, new RichTextOptions(font)
+                    DrawTextWithGlow(ctx, new RichTextOptions(font)
                     {
-                        Origin = new PointF(1230, 560),
-                        WrappingLength = 440,
-                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Origin = new PointF(640, 560),
+                        WrappingLength = 820,
+                        HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Bottom
                     }, displayText, textColor, shadowColor);
                     break;
                 case ThumbnailLayoutType.TopBanner:
-                    DrawTextWithShadow(ctx, new RichTextOptions(font)
+                    DrawTextWithGlow(ctx, new RichTextOptions(font)
                     {
                         Origin = new PointF(640, 618),
                         WrappingLength = 1180,
@@ -114,16 +125,26 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
                     }, displayText, textColor, shadowColor);
                     break;
                 default:
-                    DrawTextWithShadow(ctx, new RichTextOptions(font)
+                    DrawTextWithGlow(ctx, new RichTextOptions(font)
                     {
-                        Origin = new PointF(1230, 630),
+                        Origin = new PointF(640, 620),
                         WrappingLength = 1180,
-                        HorizontalAlignment = HorizontalAlignment.Right,
+                        HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Bottom
                     }, displayText, textColor, shadowColor);
                     break;
             }
         });
+    }
+
+    private static string ResolveVariantText(ThumbnailPlan plan, int index)
+    {
+        if (index == 0)
+        {
+            return plan.PrimaryThumbnailText;
+        }
+
+        return plan.AlternateThumbnailTexts.ElementAtOrDefault(index - 1) ?? plan.PrimaryThumbnailText;
     }
 
     private static string LimitToThreeWords(string text)
@@ -138,13 +159,18 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
     private static bool ShouldUseYellow(string text)
         => text.Length % 2 == 0;
 
-    private static void DrawTextWithShadow(IImageProcessingContext ctx, RichTextOptions options, string text, Color textColor, Color shadowColor)
+    private static void DrawTextWithGlow(IImageProcessingContext ctx, RichTextOptions options, string text, Color textColor, Color shadowColor)
     {
+        var glowOptions = new RichTextOptions(options)
+        {
+            Origin = new PointF(options.Origin.X + 2, options.Origin.Y + 2)
+        };
         var shadowOptions = new RichTextOptions(options)
         {
-            Origin = new PointF(options.Origin.X + 4, options.Origin.Y + 4)
+            Origin = new PointF(options.Origin.X + 5, options.Origin.Y + 5)
         };
 
+        ctx.DrawText(glowOptions, text, textColor.WithAlpha(0.35f));
         ctx.DrawText(shadowOptions, text, shadowColor);
         ctx.DrawText(options, text, textColor);
     }
@@ -159,5 +185,29 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
             new ColorStop(1f, Color.Black.WithAlpha(0.82f)));
 
         ctx.Fill(gradientBrush, new RectangleF(0, 360, 1280, 360));
+    }
+
+    private static void ApplySubtleGradient(IImageProcessingContext ctx, int variantIndex)
+    {
+        var accentColor = variantIndex switch
+        {
+            1 => new Rgba32(59, 130, 246, 120),
+            2 => new Rgba32(168, 85, 247, 110),
+            _ => new Rgba32(30, 64, 175, 90)
+        };
+
+        var gradientBrush = new LinearGradientBrush(
+            new PointF(0, 0),
+            new PointF(1280, 720),
+            GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Transparent),
+            new ColorStop(1f, Color.FromPixel(accentColor)));
+
+        ctx.Fill(gradientBrush, new RectangleF(0, 0, 1280, 720));
+    }
+
+    private static void ApplyVignette(IImageProcessingContext ctx)
+    {
+        ctx.Fill(Color.Black.WithAlpha(0.18f), new EllipsePolygon(640, 360, 900, 500));
     }
 }

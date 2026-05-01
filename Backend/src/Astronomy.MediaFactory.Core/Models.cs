@@ -141,6 +141,7 @@ public sealed class ThumbnailPlan
     public string[] AlternateThumbnailTexts { get; init; } = [];
     public string? SelectedVisualPath { get; init; }
     public string? ThumbnailPath { get; init; }
+    public IReadOnlyCollection<string> ThumbnailVariantPaths { get; init; } = [];
     public ThumbnailLayoutType LayoutType { get; init; } = ThumbnailLayoutType.CenteredTitleOverlay;
     public IReadOnlyCollection<ThumbnailLayoutType> LayoutCandidates { get; init; } = [ThumbnailLayoutType.CenteredTitleOverlay];
     public IReadOnlyCollection<ThumbnailVariantOption> Variants { get; init; } = [];

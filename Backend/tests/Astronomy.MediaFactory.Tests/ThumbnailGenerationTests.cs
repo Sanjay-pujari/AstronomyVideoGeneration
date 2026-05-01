@@ -110,6 +110,9 @@ public sealed class ThumbnailGenerationTests
 
         Assert.NotNull(plan.ThumbnailPath);
         Assert.True(File.Exists(plan.ThumbnailPath));
+        Assert.Equal(3, plan.ThumbnailVariantPaths.Count);
+        Assert.All(plan.ThumbnailVariantPaths, path => Assert.True(File.Exists(path)));
+        Assert.All(plan.ThumbnailVariantPaths, path => Assert.EndsWith(".png", path));
     }
 
     [Fact]
@@ -131,5 +134,6 @@ public sealed class ThumbnailGenerationTests
         }, CancellationToken.None);
 
         Assert.Equal(invalidVisual, plan.ThumbnailPath);
+        Assert.Single(plan.ThumbnailVariantPaths);
     }
 }
