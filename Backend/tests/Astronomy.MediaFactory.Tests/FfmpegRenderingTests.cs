@@ -214,9 +214,11 @@ public sealed class FfmpegRenderingTests
 
         await sut.RenderAsync(new RenderManifest { Title = "Sky", AudioPath = audioPath, OutputPath = outputPath, Scenes = scenes }, CancellationToken.None);
 
-        var segmentCommands = processRunner.Commands.Where(command => command.Contains("-loop 1 -t", StringComparison.Ordinal)).ToList();
+        var segmentCommands = processRunner.Commands.Where(command => command.Contains("-loop 1 -i", StringComparison.Ordinal)).ToList();
         Assert.Equal(5, segmentCommands.Count);
-        Assert.All(segmentCommands, command => Assert.Contains("-t 23", command, StringComparison.Ordinal));
+        Assert.All(segmentCommands, command => Assert.Contains("-frames:v 690", command, StringComparison.Ordinal));
+        Assert.All(segmentCommands, command => Assert.Contains("-r 30", command, StringComparison.Ordinal));
+        Assert.All(segmentCommands, command => Assert.DoesNotContain(" -t ", command, StringComparison.Ordinal));
         var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
         Assert.Contains("narrationDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
         Assert.Contains("sceneCount: 5", diagnostics, StringComparison.Ordinal);
