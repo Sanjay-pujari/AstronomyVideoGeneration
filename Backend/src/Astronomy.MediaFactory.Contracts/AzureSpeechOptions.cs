@@ -20,6 +20,8 @@ public sealed class AzureSpeechOptions
     // Backwards-compatible settings; used only when new fields are not configured.
     public string? Voice { get; set; }
     public string? FallbackVoice { get; set; }
+    public int TimeoutRetryAttempts { get; set; } = 2;
+    public int TimeoutRetryDelayMs { get; set; } = 750;
 
     public IReadOnlyList<string> GetPreferredVoices()
     {
