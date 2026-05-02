@@ -176,6 +176,7 @@ public sealed class AstronomyContextProviderTests
         private readonly SkyfieldDailySkyResponse? _response;
         public FakeSkyfieldSidecarClient(SkyfieldDailySkyResponse? response) => _response = response;
         public Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => Task.FromResult(_response);
+        public Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => Task.FromResult<SkyfieldNightPlanResponse?>(null);
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler
