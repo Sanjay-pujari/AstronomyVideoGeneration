@@ -17,7 +17,9 @@ public sealed class SceneObservationTime
 {
     public string SceneId { get; init; } = "";
     public string SceneTitle { get; init; } = "";
+    public string SceneType { get; init; } = "";
     public string ObjectName { get; init; } = "";
+    public string ObjectType { get; init; } = "";
     public DateTime LocalObservationTime { get; init; }
     public DateTimeOffset UtcObservationTime { get; init; }
     public string Timezone { get; init; } = "";
@@ -27,6 +29,11 @@ public sealed class SceneObservationTime
     public string DirectionLabel { get; init; } = "N";
     public bool IsVisible { get; init; }
     public string VisibilityReason { get; init; } = "";
+    public string RecommendedTool { get; init; } = "Naked eye";
+    public string NarrationFocus { get; init; } = "";
+    public double Latitude { get; init; }
+    public double Longitude { get; init; }
+    public string LocationName { get; init; } = "";
     public IReadOnlyList<VisibilitySample> VisibilitySearchSamples { get; init; } = [];
 }
 
@@ -47,7 +54,9 @@ public sealed class ObservationTimeService : IObservationTimeService
             {
                 SceneId = s.SceneId,
                 SceneTitle = s.SceneTitle,
+                SceneType = s.SceneType,
                 ObjectName = s.ObjectName,
+                ObjectType = s.ObjectType,
                 LocalObservationTime = s.LocalObservationTime,
                 UtcObservationTime = s.UtcObservationTime,
                 Timezone = s.Timezone,
@@ -57,6 +66,11 @@ public sealed class ObservationTimeService : IObservationTimeService
                 DirectionLabel = s.DirectionLabel,
                 IsVisible = s.IsVisible,
                 VisibilityReason = s.VisibilityReason,
+                RecommendedTool = s.RecommendedTool,
+                NarrationFocus = s.NarrationFocus,
+                Latitude = s.Latitude,
+                Longitude = s.Longitude,
+                LocationName = s.LocationName,
                 VisibilitySearchSamples = []
             }).ToList();
         }
@@ -76,13 +90,20 @@ public sealed class ObservationTimeService : IObservationTimeService
                 {
                     SceneId = sceneId,
                     SceneTitle = title,
+                    SceneType = "Object",
                     ObjectName = objectName,
+                    ObjectType = GetCategoryForObject(context, objectName),
                     LocalObservationTime = fallbackTime,
                     UtcObservationTime = new DateTimeOffset(fallbackTime, tz.GetUtcOffset(fallbackTime)).ToUniversalTime(),
                     Timezone = observationOptions.Timezone,
                     Reason = "no ephemeris samples available",
                     IsVisible = false,
                     VisibilityReason = "Ephemeris unavailable.",
+                    RecommendedTool = "Naked eye",
+                    NarrationFocus = "Object visibility and observing tips.",
+                    Latitude = observationOptions.Latitude,
+                    Longitude = observationOptions.Longitude,
+                    LocationName = observationOptions.LocationName,
                     VisibilitySearchSamples = []
                 };
             }
@@ -95,7 +116,9 @@ public sealed class ObservationTimeService : IObservationTimeService
             {
                 SceneId = sceneId,
                 SceneTitle = title,
+                SceneType = "Object",
                 ObjectName = objectName,
+                ObjectType = GetCategoryForObject(context, objectName),
                 LocalObservationTime = best.LocalObservationTime,
                 UtcObservationTime = best.UtcObservationTime,
                 Timezone = observationOptions.Timezone,
@@ -105,6 +128,11 @@ public sealed class ObservationTimeService : IObservationTimeService
                 DirectionLabel = best.DirectionLabel,
                 IsVisible = visible.Count > 0,
                 VisibilityReason = visible.Count == 0 ? $"Altitude stayed below {observationOptions.MinimumObjectAltitudeDegrees:F1}°." : $"Altitude reached {best.AltitudeDegrees:F1}°.",
+                RecommendedTool = "Naked eye",
+                NarrationFocus = "Object visibility and observing tips.",
+                Latitude = observationOptions.Latitude,
+                Longitude = observationOptions.Longitude,
+                LocationName = observationOptions.LocationName,
                 VisibilitySearchSamples = samples
             };
         }
