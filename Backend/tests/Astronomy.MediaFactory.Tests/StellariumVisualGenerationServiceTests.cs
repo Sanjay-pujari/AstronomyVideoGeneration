@@ -99,7 +99,12 @@ public sealed class StellariumVisualGenerationServiceTests
         var outputDir = Path.Combine(Path.GetTempPath(), "stellarium-scenes-" + Guid.NewGuid().ToString("N"));
         var options = Options.Create(new StellariumOptions());
         var builder = new StellariumScriptBuilder(options.Value);
-        var sut = new StellariumVisualGenerationService(options, builder, Options.Create(new ObservationOptions()), NullLogger<StellariumVisualGenerationService>.Instance);
+        var sut = new StellariumVisualGenerationService(
+            options,
+            builder,
+            Options.Create(new ObservationOptions()),
+            new ObservationTimeService(),
+            NullLogger<StellariumVisualGenerationService>.Instance);
 
         var context = new AstronomyContext
         {
@@ -127,7 +132,12 @@ public sealed class StellariumVisualGenerationServiceTests
         var outputDir = Path.Combine(Path.GetTempPath(), "stellarium-fallback-" + Guid.NewGuid().ToString("N"));
         var options = Options.Create(new StellariumOptions { ExecutablePath = Path.Combine(outputDir, "missing-stellarium") });
         var builder = new StellariumScriptBuilder(options.Value);
-        var sut = new StellariumVisualGenerationService(options, builder, Options.Create(new ObservationOptions()), NullLogger<StellariumVisualGenerationService>.Instance);
+        var sut = new StellariumVisualGenerationService(
+            options,
+            builder,
+            Options.Create(new ObservationOptions()),
+            new ObservationTimeService(),
+            NullLogger<StellariumVisualGenerationService>.Instance);
 
         var visuals = await sut.PrepareVisualsAsync(new AstronomyContext
         {
@@ -158,7 +168,12 @@ public sealed class StellariumVisualGenerationServiceTests
 
         var options = Options.Create(new StellariumOptions());
         var builder = new StellariumScriptBuilder(options.Value);
-        var sut = new StellariumVisualGenerationService(options, builder, Options.Create(new ObservationOptions()), NullLogger<StellariumVisualGenerationService>.Instance);
+        var sut = new StellariumVisualGenerationService(
+            options,
+            builder,
+            Options.Create(new ObservationOptions()),
+            new ObservationTimeService(),
+            NullLogger<StellariumVisualGenerationService>.Instance);
 
         var visuals = await sut.PrepareVisualsAsync(new AstronomyContext
         {
@@ -186,7 +201,12 @@ public sealed class StellariumVisualGenerationServiceTests
         });
 
         var builder = new StellariumScriptBuilder(options.Value);
-        var sut = new StellariumVisualGenerationService(options, builder, Options.Create(new ObservationOptions()), NullLogger<StellariumVisualGenerationService>.Instance);
+        var sut = new StellariumVisualGenerationService(
+            options,
+            builder,
+            Options.Create(new ObservationOptions()),
+            new ObservationTimeService(),
+            NullLogger<StellariumVisualGenerationService>.Instance);
         var context = new AstronomyContext
         {
             Date = new DateOnly(2026, 3, 17),
@@ -206,9 +226,14 @@ public sealed class StellariumVisualGenerationServiceTests
     {
         var outputDir = Path.Combine(Path.GetTempPath(), "stellarium-night-" + Guid.NewGuid().ToString("N"));
         var options = Options.Create(new StellariumOptions());
-        var obs = Options.Create(new ObservationOptions { SkyOverviewMinutesAfterSunset = 90, DeepSkyPreferredLocalTime = "23:30", Timezone = "Asia/Kolkata" });
+        var obs = Options.Create(new ObservationOptions { SkyOverviewMinutesAfterSunset = 90, DefaultObservationHour = 22, Timezone = "Asia/Kolkata" });
         var builder = new StellariumScriptBuilder(options.Value);
-        var sut = new StellariumVisualGenerationService(options, builder, obs, NullLogger<StellariumVisualGenerationService>.Instance);
+        var sut = new StellariumVisualGenerationService(
+            options,
+            builder,
+            obs,
+            new ObservationTimeService(),
+            NullLogger<StellariumVisualGenerationService>.Instance);
 
         var context = new AstronomyContext { Date = new DateOnly(2026, 6, 21), LocationName = "Udaipur, India", TimeZone = "Asia/Kolkata", Latitude = 24.5854, Longitude = 73.7125 };
         await sut.PrepareVisualsAsync(context, outputDir, CancellationToken.None);
