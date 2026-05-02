@@ -54,7 +54,6 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         context.Latitude = Math.Abs(context.Latitude) > 0.001 ? context.Latitude : _observationOptions.Latitude;
         context.Longitude = Math.Abs(context.Longitude) > 0.001 ? context.Longitude : _observationOptions.Longitude;
         var scenes = ComposeScenes(context, scriptsDirectory, capturesDirectory, _observationOptions, _observationTimeService);
-        context.SceneObservationContexts = scenes.Select(s => s.ObservationContext).ToList();
         context.VisualIdeas.Add(new VisualIdeaModel
         {
             Title = "visual-scene-context",
@@ -291,40 +290,15 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
     private static List<StellariumScene> ComposeScenes(AstronomyContext context, string scriptsDirectory, string capturesDirectory, ObservationOptions observationOptions, IObservationTimeService observationTimeService)
     {
         var selectedTimes = observationTimeService.SelectSceneTimes(context, context.Date, observationOptions);
-        var selectedTimesById = selectedTimes.ToDictionary(x => x.SceneId, StringComparer.OrdinalIgnoreCase);
-        var objectSceneTimes = selectedTimes.Where(x =>
-            !x.SceneId.Equals("sky-overview", StringComparison.OrdinalIgnoreCase) &&
-            !x.SceneId.Equals("closing", StringComparison.OrdinalIgnoreCase)).ToList();
-        var objectSceneQueue = new Queue<SceneObservationTime>(objectSceneTimes);
-
-        var sceneDefinitions = new List<SceneDefinition>
+        return selectedTimes.Select((selected, index) =>
         {
-            new("sky-overview", "Sky overview", $"Tonight's sky overview for {context.LocationName}.", "Sky", "overview")
-        };
-
-        while (objectSceneQueue.Count > 0 && sceneDefinitions.Count < 4)
-        {
-            var selected = objectSceneQueue.Dequeue();
-            var slug = NormalizeSlug(selected.ObjectName);
-            sceneDefinitions.Add(new SceneDefinition(slug, selected.ObjectName, selected.VisibilityReason, selected.ObjectName, "object"));
-        }
-
-        sceneDefinitions.Add(new SceneDefinition("wide-sky-close", "Closing wide sky", "Final wide view of the visible night sky.", "Sky", "closing"));
-
-        var renderSceneQueue = new Queue<SceneObservationTime>(objectSceneTimes);
-        var scenes = sceneDefinitions.Select((def, index) =>
-        {
-            var order = index + 1;
-            var prefix = $"{order:000}-{def.Slug}";
-            var selected = ResolveObservationTime(def, selectedTimesById, renderSceneQueue);
-            var sceneObjectName = def.Type is "overview" or "closing" ? selected.ObjectName : def.TargetObject;
-
+            var prefix = $"{index + 1:000}-{NormalizeSlug(selected.ObjectName)}";
             return new StellariumScene
             {
                 SceneId = prefix,
-                Title = def.Type is "overview" or "closing" ? def.Title : sceneObjectName,
-                Caption = selected.IsVisible ? def.Caption : $"{sceneObjectName} is below horizon tonight; showing visible sky instead.",
-                TargetObject = sceneObjectName,
+                Title = selected.SceneTitle,
+                Caption = selected.VisibilityReason,
+                TargetObject = selected.ObjectName,
                 Latitude = context.Latitude,
                 Longitude = context.Longitude,
                 SceneTimeUtc = selected.UtcObservationTime,
@@ -333,11 +307,11 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 OutputImagePath = Path.Combine(capturesDirectory, $"{prefix}.png"),
                 ObservationContext = new SceneObservationContext
                 {
-                    SceneId = prefix,
-                    SceneTitle = def.Type is "overview" or "closing" ? def.Title : sceneObjectName,
-                    SceneType = def.Type,
-                    ObjectName = sceneObjectName,
-                    ObjectType = "Object",
+                    SceneId = selected.SceneId,
+                    SceneTitle = selected.SceneTitle,
+                    SceneType = selected.SceneType,
+                    ObjectName = selected.ObjectName,
+                    ObjectType = selected.ObjectType,
                     LocalObservationTime = selected.LocalObservationTime,
                     UtcObservationTime = selected.UtcObservationTime,
                     Timezone = selected.Timezone,
@@ -346,16 +320,14 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                     DirectionLabel = selected.DirectionLabel,
                     IsVisible = selected.IsVisible,
                     VisibilityReason = selected.VisibilityReason,
-                    RecommendedTool = "Naked eye",
-                    NarrationFocus = selected.Reason,
-                    Latitude = observationOptions.Latitude,
-                    Longitude = observationOptions.Longitude,
-                    LocationName = observationOptions.LocationName
+                    RecommendedTool = selected.RecommendedTool,
+                    NarrationFocus = selected.NarrationFocus,
+                    Latitude = selected.Latitude,
+                    Longitude = selected.Longitude,
+                    LocationName = selected.LocationName
                 }
             };
         }).ToList();
-
-        return scenes;
     }
 
     private static SceneObservationTime ResolveObservationTime(

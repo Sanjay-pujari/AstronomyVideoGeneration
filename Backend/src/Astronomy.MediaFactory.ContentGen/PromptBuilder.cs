@@ -20,8 +20,7 @@ public sealed class PromptBuilder : IPromptBuilder
             location = context.LocationName,
             timeZone = context.TimeZone,
             contentType = contentType.ToString(),
-            astronomyEvents = context.Events
-                .OrderByDescending(e => e.Score)
+            astronomyEvents = SelectAstronomyEvents(context)
                 .Select(e => new
                 {
                     e.Category,
@@ -81,6 +80,29 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("<END_ASTRONOMY_INPUT_JSON>");
 
         return sb.ToString();
+    }
+
+
+    private static IEnumerable<AstronomyEventModel> SelectAstronomyEvents(AstronomyContext context)
+    {
+        if (context.SceneObservationContexts.Count == 0)
+        {
+            return context.Events.OrderByDescending(e => e.Score);
+        }
+
+        var selectedSceneObjects = context.SceneObservationContexts
+            .Select(scene => scene.ObjectName)
+            .Where(name => !string.IsNullOrWhiteSpace(name) && !name.Equals("Sky", StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (selectedSceneObjects.Count == 0)
+        {
+            return Enumerable.Empty<AstronomyEventModel>();
+        }
+
+        return context.Events
+            .Where(e => selectedSceneObjects.Contains(e.ObjectName))
+            .OrderByDescending(e => e.Score);
     }
 
     private static object BuildSceneObservationContext(AstronomyContext context)
