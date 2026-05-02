@@ -13,4 +13,5 @@ public sealed class StellariumScene
     public string OutputImagePath { get; init; } = "";
     public string ScriptPath { get; init; } = "";
     public string MetadataPath { get; init; } = "";
+    public SceneObservationContext ObservationContext { get; init; } = new();
 }

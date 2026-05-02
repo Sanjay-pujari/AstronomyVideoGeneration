@@ -81,7 +81,7 @@ public sealed class ObservationTimeService : IObservationTimeService
         ];
     }
 
-    private static List<VisibilitySample> BuildSamples(string objectName, DateTime sunset, DateTime sunrise, TimeSpan step, TimeZoneInfo tz, double minimumAltitude)
+    public static List<VisibilitySample> BuildSamples(string objectName, DateTime sunset, DateTime sunrise, TimeSpan step, TimeZoneInfo tz, double minimumAltitude)
     {
         var list = new List<VisibilitySample>();
         var seed = Math.Abs(objectName.GetHashCode());

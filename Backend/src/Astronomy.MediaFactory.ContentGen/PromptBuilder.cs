@@ -85,6 +85,26 @@ public sealed class PromptBuilder : IPromptBuilder
 
     private static object BuildSceneObservationContext(AstronomyContext context)
     {
+        if (context.SceneObservationContexts.Count > 0)
+        {
+            return context.SceneObservationContexts.Select(scene => new
+            {
+                sceneId = scene.SceneId,
+                sceneTitle = scene.SceneTitle,
+                sceneType = scene.SceneType,
+                objectName = scene.ObjectName,
+                objectType = scene.ObjectType,
+                bestViewingLocalTime = scene.LocalObservationTime.ToString("yyyy-MM-dd HH:mm"),
+                directionLabel = scene.DirectionLabel ?? "Not specified",
+                altitudeDegrees = scene.AltitudeDegrees,
+                azimuthDegrees = scene.AzimuthDegrees,
+                visibilityLevel = scene.IsVisible ? "Visible" : "NotVisible",
+                recommendedTool = scene.RecommendedTool,
+                observingTip = scene.NarrationFocus,
+                whyInteresting = scene.VisibilityReason
+            });
+        }
+
         var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase) || e.Category.Contains("moon", StringComparison.OrdinalIgnoreCase));
         var jupiterEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("jupiter", StringComparison.OrdinalIgnoreCase));
         var topEvent = context.Events.OrderByDescending(e => e.Score).FirstOrDefault();
