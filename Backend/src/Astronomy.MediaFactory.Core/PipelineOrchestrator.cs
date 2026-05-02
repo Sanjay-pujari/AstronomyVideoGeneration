@@ -654,10 +654,30 @@ public sealed class PipelineOrchestrator
         var selected = new ObservationTimeService().SelectSceneTimes(context, context.Date, observationOptions);
         var objectSearch = selected.Where(x => x.VisibilitySearchSamples.Count > 0).Select(x => new { x.SceneId, x.ObjectName, x.VisibilitySearchSamples });
         var selectedObservationTimes = selected.Select(x => new { x.SceneId, x.ObjectName, x.LocalObservationTime, x.UtcObservationTime, x.AltitudeDegrees, x.AzimuthDegrees, x.DirectionLabel, x.IsVisible, x.VisibilityReason });
+        var visibleCandidates = selected
+            .Where(x => x.SceneId.StartsWith("candidate-", StringComparison.OrdinalIgnoreCase) || x.SceneId.StartsWith("object-", StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.IsVisible)
+            .Select(x => new { x.SceneId, x.ObjectName, x.LocalObservationTime, x.AltitudeDegrees, x.VisibilityReason })
+            .ToList();
+        var selectedDistinctObjects = selected
+            .Where(x => x.SceneId.StartsWith("object-", StringComparison.OrdinalIgnoreCase))
+            .Select(x => new { x.SceneId, x.ObjectName, x.LocalObservationTime, x.AltitudeDegrees, x.VisibilityReason })
+            .ToList();
+        var fillerScenes = selected
+            .Where(x => x.SceneId.StartsWith("filler-", StringComparison.OrdinalIgnoreCase))
+            .Select(x => new { x.SceneId, x.SceneTitle, x.ObjectName, x.VisibilityReason })
+            .ToList();
+        var rejectedDuplicates = visibleCandidates
+            .GroupBy(x => x.ObjectName, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .SelectMany(g => g.Skip(1).Select(x => new { x.ObjectName, x.SceneId, RejectedReason = "duplicate object name" }))
+            .ToList();
+        var selectedVisibleDiagnostics = new { allVisibleCandidates = visibleCandidates, rejectedDuplicates, selectedDistinctObjects, fillerScenesAdded = fillerScenes };
 
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "object-visibility-search.json"), JsonSerializer.Serialize(objectSearch, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "selected-observation-times.json"), JsonSerializer.Serialize(selectedObservationTimes, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "scene-observation-context.json"), JsonSerializer.Serialize(selected, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "selected-visible-objects.json"), JsonSerializer.Serialize(selectedVisibleDiagnostics, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private static SceneObservationContextEntry BuildSceneObservationContextEntry(string sceneId, AstronomyEventModel? astronomyEvent) => new()

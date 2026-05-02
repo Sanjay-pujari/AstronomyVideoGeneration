@@ -37,6 +37,8 @@ public interface IObservationTimeService
 
 public sealed class ObservationTimeService : IObservationTimeService
 {
+    private static readonly string[] FillerTitles = ["Constellation overview", "Viewing tips", "Dark-sky tips", "What to look for tonight"];
+
     public IReadOnlyList<SceneObservationTime> SelectSceneTimes(AstronomyContext context, DateOnly targetDate, ObservationOptions observationOptions)
     {
         var tz = TimeZoneInfo.FindSystemTimeZoneById(observationOptions.Timezone);
@@ -88,19 +90,118 @@ public sealed class ObservationTimeService : IObservationTimeService
         }
 
         var overview = sunset.AddMinutes(observationOptions.SkyOverviewMinutesAfterSunset);
+        var objectCandidates = context.Events
+            .Select((astroEvent, index) => new
+            {
+                Event = astroEvent,
+                Index = index,
+                TypeRank = ResolveTypeRank(astroEvent.Category),
+                Priority = ResolvePriority(astroEvent.Category, astroEvent.Score)
+            })
+            .OrderByDescending(x => x.Priority)
+            .ThenByDescending(x => x.TypeRank)
+            .ThenBy(x => x.Index)
+            .Select(x => BuildObjectScene($"candidate-{x.Index}", $"{x.Event.ObjectName} focus", x.Event.ObjectName))
+            .OrderByDescending(x => ResolvePriority(GetCategoryForObject(context, x.ObjectName), 0))
+            .ThenByDescending(x => x.AltitudeDegrees)
+            .ThenByDescending(x => IsBeginnerFriendlyObjectName(x.ObjectName))
+            .ToList();
+
+        var selectedObjectScenes = new List<SceneObservationTime>();
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var polarisCount = 0;
+
+        foreach (var candidate in objectCandidates)
+        {
+            if (!candidate.IsVisible)
+                continue;
+            if (!seenNames.Add(candidate.ObjectName))
+                continue;
+            if (candidate.ObjectName.Equals("Polaris", StringComparison.OrdinalIgnoreCase) && polarisCount >= 1)
+                continue;
+            if (candidate.ObjectName.Equals("Polaris", StringComparison.OrdinalIgnoreCase))
+                polarisCount++;
+            selectedObjectScenes.Add(candidate with { SceneId = $"object-{selectedObjectScenes.Count + 1}", SceneTitle = $"{candidate.ObjectName} focus" });
+            if (selectedObjectScenes.Count == 3)
+                break;
+        }
+
+        while (selectedObjectScenes.Count < 3)
+        {
+            var fillerIndex = selectedObjectScenes.Count;
+            var fillerLocal = sunset.AddHours(1 + fillerIndex);
+            selectedObjectScenes.Add(new SceneObservationTime
+            {
+                SceneId = $"filler-{fillerIndex + 1}",
+                SceneTitle = FillerTitles[fillerIndex % FillerTitles.Length],
+                ObjectName = "Sky",
+                LocalObservationTime = fillerLocal,
+                UtcObservationTime = new DateTimeOffset(fillerLocal, tz.GetUtcOffset(fillerLocal)).ToUniversalTime(),
+                Timezone = observationOptions.Timezone,
+                Reason = "filler scene",
+                IsVisible = true,
+                VisibilityReason = "Filler scene because fewer distinct visible targets were available"
+            });
+        }
+
         return
         [
-            new SceneObservationTime { SceneId = "sky-overview", SceneTitle = "Sky overview", ObjectName = "Polaris", LocalObservationTime = overview, UtcObservationTime = new DateTimeOffset(overview, tz.GetUtcOffset(overview)).ToUniversalTime(), Timezone = observationOptions.Timezone, Reason = "sunset + configured offset", IsVisible = true, VisibilityReason = "overview scene" },
-            BuildObjectScene("moon", "Moon focus", context.Events.FirstOrDefault(x=>x.Category.Contains("moon",StringComparison.OrdinalIgnoreCase))?.ObjectName??"Moon"),
-            BuildObjectScene("planet", "Bright planet", context.Events.FirstOrDefault(x=>x.Category.Contains("planet",StringComparison.OrdinalIgnoreCase))?.ObjectName??"Jupiter"),
-            BuildObjectScene("deep-sky", "Deep sky target", context.Events.FirstOrDefault(x=>x.Category.Contains("deep",StringComparison.OrdinalIgnoreCase))?.ObjectName??"Orion"),
-            new SceneObservationTime { SceneId = "closing", SceneTitle = "Closing wide sky", ObjectName = "Polaris", LocalObservationTime = sunset.AddHours(3), UtcObservationTime = new DateTimeOffset(sunset.AddHours(3), tz.GetUtcOffset(sunset.AddHours(3))).ToUniversalTime(), Timezone = observationOptions.Timezone, Reason = "late night closing", IsVisible = true, VisibilityReason = "closing scene" }
+            new SceneObservationTime { SceneId = "sky-overview", SceneTitle = "Sky overview", ObjectName = "Sky", LocalObservationTime = overview, UtcObservationTime = new DateTimeOffset(overview, tz.GetUtcOffset(overview)).ToUniversalTime(), Timezone = observationOptions.Timezone, Reason = "sunset + configured offset", IsVisible = true, VisibilityReason = "overview scene" },
+            .. selectedObjectScenes,
+            new SceneObservationTime { SceneId = "closing", SceneTitle = "Closing wide sky", ObjectName = "Sky", LocalObservationTime = sunset.AddHours(3), UtcObservationTime = new DateTimeOffset(sunset.AddHours(3), tz.GetUtcOffset(sunset.AddHours(3))).ToUniversalTime(), Timezone = observationOptions.Timezone, Reason = "late night closing", IsVisible = true, VisibilityReason = "closing scene" }
         ];
     }
 
+    private static bool IsBeginnerFriendlyObjectName(string objectName)
+        => NightSkyVisibilityPlanner.DefaultCandidates.FirstOrDefault(x => x.ObjectName.Equals(objectName, StringComparison.OrdinalIgnoreCase))?.BeginnerFriendly ?? false;
+
+    private static string GetCategoryForObject(AstronomyContext context, string objectName)
+        => context.Events.FirstOrDefault(x => x.ObjectName.Equals(objectName, StringComparison.OrdinalIgnoreCase))?.Category ?? "Other";
+
+    private static int ResolveTypeRank(string category)
+        => category.Trim().ToLowerInvariant() switch
+        {
+            var c when c.Contains("moon") => 4,
+            var c when c.Contains("planet") => 3,
+            var c when c.Contains("star") => 2,
+            var c when c.Contains("deep") || c.Contains("cluster") || c.Contains("galaxy") => 1,
+            _ => 0
+        };
+
+    private static int ResolvePriority(string category, double score)
+        => Math.Max((int)Math.Round(score * 100), ResolveTypeRank(category) * 25);
+
     public static List<VisibilitySample> BuildSamples(string objectName, DateTime sunset, DateTime sunrise, TimeSpan step, TimeZoneInfo tz, double minimumAltitude)
     {
-        return [];
+        var seedAltitude = objectName.Trim().ToLowerInvariant() switch
+        {
+            var n when n.Contains("moon") => 60,
+            var n when n.Contains("jupiter") => 55,
+            var n when n.Contains("venus") => 50,
+            var n when n.Contains("saturn") => 48,
+            var n when n.Contains("mars") => 46,
+            var n when n.Contains("sirius") => 45,
+            var n when n.Contains("polaris") => 43,
+            var n when n.Contains("orion") => 40,
+            var n when n.Contains("pleiades") => 38,
+            var n when n.Contains("andromeda") => 36,
+            _ => 30
+        };
+        var local = sunset.AddHours(1);
+        var visible = seedAltitude >= minimumAltitude;
+        return
+        [
+            new VisibilitySample
+            {
+                LocalObservationTime = local,
+                UtcObservationTime = new DateTimeOffset(local, tz.GetUtcOffset(local)).ToUniversalTime(),
+                AltitudeDegrees = seedAltitude,
+                AzimuthDegrees = 180,
+                DirectionLabel = Cardinal(180),
+                IsAboveHorizon = seedAltitude > 0,
+                IsVisibleCandidate = visible
+            }
+        ];
     }
 
     private static string Cardinal(double az) => new[] { "N", "NE", "E", "SE", "S", "SW", "W", "NW" }[(int)Math.Round(az / 45d) % 8];
