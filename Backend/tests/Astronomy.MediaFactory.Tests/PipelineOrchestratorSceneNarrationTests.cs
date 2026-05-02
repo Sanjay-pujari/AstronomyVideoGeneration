@@ -69,6 +69,16 @@ public sealed class PipelineOrchestratorSceneNarrationTests
             Assert.Contains("scene-audio-001.mp3", concatList[0], StringComparison.Ordinal);
             Assert.Contains("scene-audio-003.mp3", concatList[2], StringComparison.Ordinal);
 
+            var observationContext = await File.ReadAllTextAsync(Path.Combine(runDir, "scene-observation-context.json"));
+            Assert.Contains("\"sceneId\": \"moon\"", observationContext, StringComparison.Ordinal);
+            Assert.Contains("Waxing Gibbous Moon", observationContext, StringComparison.Ordinal);
+            Assert.Contains("\"sceneId\": \"jupiter\"", observationContext, StringComparison.Ordinal);
+            Assert.Contains("\"objectName\": \"Jupiter\"", observationContext, StringComparison.Ordinal);
+
+            var selectedTimes = await File.ReadAllTextAsync(Path.Combine(runDir, "selected-observation-times.json"));
+            Assert.Contains("Around 8:45 PM", selectedTimes, StringComparison.Ordinal);
+            Assert.Contains("Around 9:00 PM", selectedTimes, StringComparison.Ordinal);
+
             Assert.DoesNotContain(render.Manifest.Scenes.Where(s => s.AudioPath is not null).Select(s => s.AudioPath), p => p!.EndsWith("narration.mp3", StringComparison.Ordinal));
         }
         finally
@@ -140,7 +150,17 @@ public sealed class PipelineOrchestratorSceneNarrationTests
     private sealed class FakeContextProvider : IAstronomyContextProvider
     {
         public Task<AstronomyContext> BuildContextAsync(DateOnly date, ContentType contentType, string locationName, string timeZone, CancellationToken cancellationToken)
-            => Task.FromResult(new AstronomyContext { Date = date, LocationName = locationName, TimeZone = timeZone });
+            => Task.FromResult(new AstronomyContext
+            {
+                Date = date,
+                LocationName = locationName,
+                TimeZone = timeZone,
+                Events =
+                [
+                    new AstronomyEventModel { Category = "Moon", ObjectName = "Waxing Gibbous Moon", VisibilityWindow = "Around 8:45 PM", Direction = "West", ObservationTool = "Naked eye", Details = "Craters are visible near the terminator.", Score = 0.9 },
+                    new AstronomyEventModel { Category = "Planet", ObjectName = "Jupiter", VisibilityWindow = "Around 9:00 PM", Direction = "South-west", ObservationTool = "Binoculars", Details = "Look for the four Galilean moons.", Score = 0.95 }
+                ]
+            });
     }
 
     private sealed class FakeTopicRankingService : ITopicRankingService
