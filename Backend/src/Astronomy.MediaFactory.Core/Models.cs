@@ -13,6 +13,7 @@ public sealed class AstronomyContext
     public List<VisualIdeaModel> VisualIdeas { get; init; } = new();
     public TopicSelectionPlan? TopicSelectionPlan { get; set; }
     public PromptFeedbackContext? PromptFeedbackContext { get; set; }
+    public List<SceneObservationContext> SceneObservationContexts { get; set; } = new();
 }
 public sealed class AstronomyEventModel
 {

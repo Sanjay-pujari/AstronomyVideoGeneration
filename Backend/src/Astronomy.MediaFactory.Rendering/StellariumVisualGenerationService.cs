@@ -54,6 +54,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         context.Latitude = Math.Abs(context.Latitude) > 0.001 ? context.Latitude : _observationOptions.Latitude;
         context.Longitude = Math.Abs(context.Longitude) > 0.001 ? context.Longitude : _observationOptions.Longitude;
         var scenes = ComposeScenes(context, scriptsDirectory, capturesDirectory, _observationOptions, _observationTimeService);
+        context.SceneObservationContexts = scenes.Select(s => s.ObservationContext).ToList();
 
         foreach (var scene in scenes)
         {
@@ -70,7 +71,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             LocationName = context.LocationName,
             ScriptsDirectory = scriptsDirectory,
             CaptureDirectory = capturesDirectory,
-            Scenes = scenes
+            Scenes = scenes.ToList()
         };
 
         var manifestPath = Path.Combine(visualsDirectory, "capture-manifest.json");
@@ -284,7 +285,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             new SceneDefinition("wide-sky-close", "Closing wide sky", "Final wide view of the visible night sky.", "Polaris", "closing")
         };
 
-        return sceneDefinitions.Select((def, index) =>
+        var scenes = sceneDefinitions.Select((def, index) =>
         {
             var order = index + 1;
             var prefix = $"{order:000}-{def.Slug}";
@@ -295,9 +296,11 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             return new StellariumScene
             {
                 SceneId = prefix, Title = def.Title, Caption = selected.IsVisible ? def.Caption : $"{selected.ObjectName} is below horizon tonight; showing visible sky instead.", TargetObject = targetObject, Latitude = context.Latitude, Longitude = context.Longitude,
-                SceneTimeUtc = sceneUtc, ScriptPath = Path.Combine(scriptsDirectory, $"{prefix}.ssc"), MetadataPath = Path.Combine(scriptsDirectory, $"{prefix}.json"), OutputImagePath = Path.Combine(capturesDirectory, $"{prefix}.png")
+                SceneTimeUtc = sceneUtc, ScriptPath = Path.Combine(scriptsDirectory, $"{prefix}.ssc"), MetadataPath = Path.Combine(scriptsDirectory, $"{prefix}.json"), OutputImagePath = Path.Combine(capturesDirectory, $"{prefix}.png"),
+                ObservationContext = new SceneObservationContext { SceneId = prefix, SceneTitle = def.Title, SceneType = def.Type, ObjectName = selected.ObjectName, ObjectType = "Object", LocalObservationTime = selected.LocalObservationTime, UtcObservationTime = selected.UtcObservationTime, Timezone = selected.Timezone, AltitudeDegrees = selected.AltitudeDegrees, AzimuthDegrees = selected.AzimuthDegrees, DirectionLabel = selected.DirectionLabel, IsVisible = selected.IsVisible, VisibilityReason = selected.VisibilityReason, RecommendedTool = "Naked eye", NarrationFocus = selected.Reason }
             };
         }).ToList();
+        return scenes;
     }
 
     private static TimeZoneInfo ResolveTimeZone(string contextTimeZone, string fallback)
