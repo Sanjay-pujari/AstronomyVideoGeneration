@@ -55,6 +55,13 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         context.Longitude = Math.Abs(context.Longitude) > 0.001 ? context.Longitude : _observationOptions.Longitude;
         var scenes = ComposeScenes(context, scriptsDirectory, capturesDirectory, _observationOptions, _observationTimeService);
         context.SceneObservationContexts = scenes.Select(s => s.ObservationContext).ToList();
+        context.VisualIdeas.Add(new VisualIdeaModel
+        {
+            Title = "visual-scene-context",
+            Description = JsonSerializer.Serialize(
+                context.SceneObservationContexts.Select(s => new { s.SceneId, s.ObjectName, s.LocalObservationTime, s.UtcObservationTime, s.DirectionLabel, s.AltitudeDegrees }),
+                new JsonSerializerOptions { WriteIndented = true })
+        });
 
         foreach (var scene in scenes)
         {

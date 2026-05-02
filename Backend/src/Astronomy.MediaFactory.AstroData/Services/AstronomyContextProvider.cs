@@ -57,7 +57,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
             var nightPlanResponse = await _skyfieldSidecarClient.GetNightVisibilityPlanAsync(nightPlanRequest, cancellationToken);
             context.VisualIdeas.Add(new VisualIdeaModel { Title = "skyfield-night-plan-response", Description = Serialize(nightPlanResponse) });
 
-            if (TryApplyNightPlanResponse(context, nightPlanResponse, effectiveTimezone))
+            if (TryApplyNightPlanResponse(context, nightPlanResponse, effectiveTimezone, _observationOptions))
             {
                 return context;
             }
@@ -92,7 +92,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         }
     }
 
-    private static bool TryApplyNightPlanResponse(AstronomyContext context, SkyfieldNightPlanResponse? response, string timezone)
+    private static bool TryApplyNightPlanResponse(AstronomyContext context, SkyfieldNightPlanResponse? response, string timezone, ObservationOptions observationOptions)
     {
         var visible = response?.VisibleObjects?.Where(x => x.IsVisible).ToList() ?? [];
         if (visible.Count == 0)
@@ -111,16 +111,30 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
             Score = 0.9
         }));
 
-        var selected = visible.Take(3).ToList();
+        var selected = visible
+            .Where(v => (v.AltitudeDegrees ?? 0) >= observationOptions.MinimumObjectAltitudeDegrees)
+            .OrderByDescending(v => (v.AltitudeDegrees ?? 0) >= observationOptions.PreferredObjectAltitudeDegrees)
+            .ThenByDescending(v => v.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(v => v.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(v => v.AltitudeDegrees ?? 0)
+            .Take(3)
+            .ToList();
+        if (selected.Count == 0)
+        {
+            return false;
+        }
+
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
+        var overviewLocal = ParseLocal(response!.NightWindowStartLocal) ?? DateTime.SpecifyKind(DateTime.Today.AddHours(19), DateTimeKind.Unspecified);
         var scenes = new List<SceneObservationContext>
         {
-            new() { SceneId = "sky-overview", SceneTitle = "Sky overview", SceneType = "Overview", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = ParseLocal(response!.NightWindowStartLocal) ?? DateTime.Now, UtcObservationTime = DateTimeOffset.UtcNow, Timezone = timezone, IsVisible = true, VisibilityReason = "Night overview", RecommendedTool = "Naked eye", NarrationFocus = "Night sky orientation.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName }
+            new() { SceneId = "sky-overview", SceneTitle = "Sky overview", SceneType = "Overview", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = overviewLocal, UtcObservationTime = ToUtc(overviewLocal, tz), Timezone = timezone, IsVisible = true, VisibilityReason = "Night overview", RecommendedTool = "Naked eye", NarrationFocus = "Night sky orientation.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName }
         };
 
         foreach (var (v, i) in selected.Select((v, i) => (v, i)))
         {
-            var utc = DateTimeOffset.TryParse(v.BestUtcTime, out var pUtc) ? pUtc : DateTimeOffset.UtcNow;
-            var local = DateTime.TryParse(v.BestLocalTime, out var pLocal) ? pLocal : utc.LocalDateTime;
+            var local = ParseLocal(v.BestLocalTime) ?? overviewLocal.AddMinutes(30 + (i * 30));
+            var utc = DateTimeOffset.TryParse(v.BestUtcTime, out var pUtc) ? pUtc.ToUniversalTime() : ToUtc(local, tz);
             scenes.Add(new SceneObservationContext
             {
                 SceneId = $"object-{i + 1}",
@@ -153,7 +167,11 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         return true;
     }
 
-    private static DateTime? ParseLocal(string? value) => DateTime.TryParse(value, out var parsed) ? parsed : null;
+    private static DateTime? ParseLocal(string? value)
+        => DateTime.TryParse(value, out var parsed) ? DateTime.SpecifyKind(parsed, DateTimeKind.Unspecified) : null;
+
+    private static DateTimeOffset ToUtc(DateTime local, TimeZoneInfo timezone)
+        => new(local, timezone.GetUtcOffset(local)).ToUniversalTime();
 
     private static void AddFallbackOverviewOnly(AstronomyContext context)
     {

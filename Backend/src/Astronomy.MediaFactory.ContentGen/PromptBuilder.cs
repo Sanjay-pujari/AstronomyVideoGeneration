@@ -52,7 +52,7 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("2) Include practical observation guidance (when to look, where to look, and what tool to use).");
         sb.AppendLine("3) Do not invent or hallucinate numeric values.");
         sb.AppendLine("4) Return ONLY valid JSON with no markdown, no code fences, and no commentary.");
-        sb.AppendLine("5) Each sceneScript section (overview, moon, jupiter, deepSky, closing) must include: object, local time, direction, approximate altitude, tool needed, and one beginner tip.");
+        sb.AppendLine("5) Each sceneScript section must map exactly to provided sceneObservationContext sceneId values and include: object, local time, direction, approximate altitude, tool needed, and one beginner tip.");
         sb.AppendLine("6) Keep narration practical and specific to structured observation context, not generic sky facts.");
 
         sb.AppendLine();
@@ -67,10 +67,10 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("  \"estimatedDurationSeconds\": 900,");
         sb.AppendLine("  \"scriptBody\": \"string\",");
         sb.AppendLine("  \"sceneScript\": {");
-        sb.AppendLine("    \"overview\": \"string\",");
-        sb.AppendLine("    \"moon\": \"string\",");
-        sb.AppendLine("    \"jupiter\": \"string\",");
-        sb.AppendLine("    \"deepSky\": \"string\",");
+        sb.AppendLine("    \"sky-overview\": \"string\",");
+        sb.AppendLine("    \"object-1\": \"string\",");
+        sb.AppendLine("    \"object-2\": \"string\",");
+        sb.AppendLine("    \"object-3\": \"string\",");
         sb.AppendLine("    \"closing\": \"string\"");
         sb.AppendLine("  }");
         sb.AppendLine("}");
@@ -105,31 +105,7 @@ public sealed class PromptBuilder : IPromptBuilder
             });
         }
 
-        var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase) || e.Category.Contains("moon", StringComparison.OrdinalIgnoreCase));
-        var jupiterEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("jupiter", StringComparison.OrdinalIgnoreCase));
-        var topEvent = context.Events.OrderByDescending(e => e.Score).FirstOrDefault();
-
-        return new[]
-        {
-            BuildSceneContext("overview", topEvent),
-            BuildSceneContext("moon", moonEvent),
-            BuildSceneContext("jupiter", jupiterEvent)
-        };
+        return Array.Empty<object>();
     }
 
-    private static object BuildSceneContext(string sceneId, AstronomyEventModel? astronomyEvent) => new
-    {
-        sceneId,
-        objectName = astronomyEvent?.ObjectName ?? "Unknown",
-        objectType = astronomyEvent?.Category ?? "Unknown",
-        bestViewingLocalTime = astronomyEvent?.VisibilityWindow ?? "Not specified",
-        directionLabel = astronomyEvent?.Direction ?? "Not specified",
-        altitudeDegrees = (double?)null,
-        azimuthDegrees = (double?)null,
-        magnitude = (double?)null,
-        visibilityLevel = "Unknown",
-        recommendedTool = astronomyEvent?.ObservationTool ?? "Naked eye",
-        observingTip = astronomyEvent?.Details ?? "Let your eyes adapt to darkness for 15-20 minutes.",
-        whyInteresting = astronomyEvent?.Details ?? "A beginner-friendly target to practice sky navigation."
-    };
 }

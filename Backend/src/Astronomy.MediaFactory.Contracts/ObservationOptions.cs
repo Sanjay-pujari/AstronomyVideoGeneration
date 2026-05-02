@@ -11,6 +11,7 @@ public sealed class ObservationOptions
     public int SkyOverviewMinutesAfterSunset { get; set; } = 90;
     public int DefaultObservationHour { get; set; } = 22;
     public double MinimumObjectAltitudeDegrees { get; set; } = 10;
+    public double PreferredObjectAltitudeDegrees { get; set; } = 20;
     public int VisibilitySearchStepMinutes { get; set; } = 15;
     public bool PreferHighestAltitude { get; set; } = true;
 }

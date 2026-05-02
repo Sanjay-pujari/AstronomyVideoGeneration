@@ -53,18 +53,10 @@ public sealed class ScriptResult
 
 public sealed class SceneScriptSections
 {
-    public string Overview { get; init; } = "";
-    public string Moon { get; init; } = "";
-    public string Jupiter { get; init; } = "";
-    public string DeepSky { get; init; } = "";
-    public string Closing { get; init; } = "";
+    public IReadOnlyDictionary<string, string> SectionsBySceneId { get; init; } = new Dictionary<string, string>();
 
     public bool HasAllSections()
-        => !string.IsNullOrWhiteSpace(Overview)
-           && !string.IsNullOrWhiteSpace(Moon)
-           && !string.IsNullOrWhiteSpace(Jupiter)
-           && !string.IsNullOrWhiteSpace(DeepSky)
-           && !string.IsNullOrWhiteSpace(Closing);
+        => SectionsBySceneId.Count > 0 && SectionsBySceneId.Values.All(v => !string.IsNullOrWhiteSpace(v));
 }
 
 public sealed class ShortScriptResult
