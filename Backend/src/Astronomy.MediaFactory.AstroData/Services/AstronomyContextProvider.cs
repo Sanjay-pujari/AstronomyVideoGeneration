@@ -184,7 +184,27 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         for (var i = 0; i < objectScenes.Count; i++)
         {
             var orderedScene = objectScenes[i];
-            scenes.Add(orderedScene with { SceneId = $"object-{i + 1}" });
+            scenes.Add(new SceneObservationContext
+            {
+                SceneId = $"object-{i + 1}",
+                SceneTitle = orderedScene.SceneTitle,
+                SceneType = orderedScene.SceneType,
+                ObjectName = orderedScene.ObjectName,
+                ObjectType = orderedScene.ObjectType,
+                LocalObservationTime = orderedScene.LocalObservationTime,
+                UtcObservationTime = orderedScene.UtcObservationTime,
+                Timezone = orderedScene.Timezone,
+                AltitudeDegrees = orderedScene.AltitudeDegrees,
+                AzimuthDegrees = orderedScene.AzimuthDegrees,
+                DirectionLabel = orderedScene.DirectionLabel,
+                IsVisible = orderedScene.IsVisible,
+                VisibilityReason = orderedScene.VisibilityReason,
+                RecommendedTool = orderedScene.RecommendedTool,
+                NarrationFocus = orderedScene.NarrationFocus,
+                Latitude = orderedScene.Latitude,
+                Longitude = orderedScene.Longitude,
+                LocationName = orderedScene.LocationName
+            });
         }
 
         var closingLocalTime = scenes.Last().LocalObservationTime.AddMinutes(30);
