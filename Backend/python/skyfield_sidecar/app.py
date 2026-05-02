@@ -18,7 +18,7 @@ STAR_CATALOG = {
     "pleiades": (3.79, 24.1167),
     "andromeda galaxy": (0.712, 41.269)
 }
-PLANET_KEYS = {"mercury":"mercury","venus":"venus","mars":"mars","jupiter":"jupiter barycenter","saturn":"saturn barycenter","uranus":"uranus barycenter","neptune":"neptune barycenter","moon":"moon"}
+PLANET_KEYS = {"mercury":"mercury","venus":"venus","mars":"mars","jupiter":"jupiter","saturn":"saturn","uranus":"uranus","neptune":"neptune","moon":"moon"}
 
 class VisibilityCandidate(BaseModel):
     object_name: Annotated[str, Field(alias="objectName")]
@@ -146,33 +146,52 @@ def night_plan(req: NightPlanRequest):
         if e == 0: sunset_local = local
         if e == 1 and local > sunset_local: sunrise_local = local
     visible, not_visible = [], []
-    current = sunset_local
-    while current <= sunrise_local: current += timedelta(minutes=req.step_minutes)
-    for c in req.candidates:
-        kind, target = _resolve_target(c.object_name, c.object_type)
-        samples=[]
-        if not target:
-            ov=ObjectVisibility(objectName=c.object_name, objectType=c.object_type, isVisible=False, visibilityReason='Object not in supported catalog/ephemeris.', samples=[])
-            not_visible.append(ov); continue
-        best=None
-        t=sunset_local
-        while t<=sunrise_local:
-            t_utc=t.astimezone(ZoneInfo('UTC'))
-            ts_t=ts.from_datetime(t_utc)
-            apparent=observer.at(ts_t).observe(eph[target] if kind=='planet' else target).apparent()
-            alt,az,_=apparent.altaz()
-            a=float(alt.degrees); z=float(az.degrees)
-            s=VisibilitySample(localTime=t.isoformat(), utcTime=t_utc.isoformat(), altitudeDegrees=round(a,2), azimuthDegrees=round(z,2), directionLabel=_cardinal(z), isVisibleCandidate=a>=req.minimum_altitude_degrees)
-            samples.append(s)
-            if s.is_visible_candidate and (best is None or s.altitude_degrees>best.altitude_degrees): best=s
-            t += timedelta(minutes=req.step_minutes)
-        if best:
-            ov=ObjectVisibility(objectName=c.object_name, objectType=c.object_type, isVisible=True, visibilityReason='Highest altitude above threshold during night window', samples=samples, bestLocalTime=best.local_time, bestUtcTime=best.utc_time, altitudeDegrees=best.altitude_degrees, azimuthDegrees=best.azimuth_degrees, directionLabel=best.direction_label)
-            visible.append(ov)
-        else:
-            ov=ObjectVisibility(objectName=c.object_name, objectType=c.object_type, isVisible=False, visibilityReason='Below minimum altitude during night window', samples=samples)
-            not_visible.append(ov)
-    return NightPlanResponse(locationName=req.location_name, timezone=req.timezone, targetDate=req.date, sunsetLocal=sunset_local.isoformat(), sunriseLocal=sunrise_local.isoformat(), nightWindowStartLocal=sunset_local.isoformat(), nightWindowEndLocal=sunrise_local.isoformat(), visibleObjects=visible, notVisibleObjects=not_visible)
+    if not req.candidates:
+        req.candidates = [
+            VisibilityCandidate(objectName="Moon", objectType="moon"),
+            VisibilityCandidate(objectName="Jupiter", objectType="planet"),
+            VisibilityCandidate(objectName="Venus", objectType="planet"),
+            VisibilityCandidate(objectName="Saturn", objectType="planet"),
+        ]
+
+    print(f"[Skyfield] Request: {req}")
+
+    try:
+        for c in req.candidates:
+            print(f"[Skyfield] Processing {c.object_name}")
+            kind, target = _resolve_target(c.object_name, c.object_type)
+            samples=[]
+            if not target:
+                ov=ObjectVisibility(objectName=c.object_name, objectType=c.object_type, isVisible=False, visibilityReason='Object not in supported catalog/ephemeris.', samples=[])
+                not_visible.append(ov); continue
+            best=None
+            t=sunset_local
+            while t<=sunrise_local:
+                t_utc=t.astimezone(ZoneInfo('UTC'))
+                ts_t=ts.from_datetime(t_utc)
+                if kind == "planet":
+                    body = eph[target]
+                else:
+                    body = target
+                apparent = observer.at(ts_t).observe(body).apparent()
+                alt,az,_=apparent.altaz()
+                a=float(alt.degrees); z=float(az.degrees)
+                s=VisibilitySample(localTime=t.isoformat(), utcTime=t_utc.isoformat(), altitudeDegrees=round(a,2), azimuthDegrees=round(z,2), directionLabel=_cardinal(z), isVisibleCandidate=a>=req.minimum_altitude_degrees)
+                samples.append(s)
+                if s.is_visible_candidate and (best is None or s.altitude_degrees>best.altitude_degrees): best=s
+                t += timedelta(minutes=req.step_minutes)
+            if best:
+                ov=ObjectVisibility(objectName=c.object_name, objectType=c.object_type, isVisible=True, visibilityReason='Highest altitude above threshold during night window', samples=samples, bestLocalTime=best.local_time, bestUtcTime=best.utc_time, altitudeDegrees=best.altitude_degrees, azimuthDegrees=best.azimuth_degrees, directionLabel=best.direction_label)
+                visible.append(ov)
+            else:
+                ov=ObjectVisibility(objectName=c.object_name, objectType=c.object_type, isVisible=False, visibilityReason='Below minimum altitude during night window', samples=samples)
+                not_visible.append(ov)
+    except Exception as ex:
+        print(f"[Skyfield ERROR] {str(ex)}")
+        raise
+
+    print(f"[Skyfield] Visible objects: {len(visible)}")
+    return NightPlanResponse(locationName=req.location_name, timezone=req.timezone, targetDate=req.date, sunsetLocal=sunset_local.isoformat(), sunriseLocal=sunrise_local.isoformat(), nightWindowStartLocal=sunset_local.isoformat(), nightWindowEndLocal=sunrise_local.isoformat(), visibleObjects=visible or [], notVisibleObjects=not_visible or [])
 
 
 @app.post('/ephemeris/daily-sky', response_model=DailySkyResponse)
