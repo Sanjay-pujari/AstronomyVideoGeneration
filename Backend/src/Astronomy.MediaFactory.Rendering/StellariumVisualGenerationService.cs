@@ -20,17 +20,20 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
     private readonly StellariumScriptBuilder _scriptBuilder;
     private readonly ObservationOptions _observationOptions;
     private readonly ILogger<StellariumVisualGenerationService> _logger;
+    private readonly IObservationTimeService _observationTimeService;
 
     public StellariumVisualGenerationService(
         IOptions<StellariumOptions> options,
         StellariumScriptBuilder scriptBuilder,
         IOptions<ObservationOptions> observationOptions,
+        IObservationTimeService observationTimeService,
         ILogger<StellariumVisualGenerationService> logger)
     {
         _options = options.Value;
         _scriptBuilder = scriptBuilder;
         _observationOptions = observationOptions.Value;
         _logger = logger;
+        _observationTimeService = observationTimeService;
     }
 
     public async Task<IReadOnlyCollection<string>> PrepareVisualsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
@@ -48,7 +51,9 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         Directory.CreateDirectory(scriptsDirectory);
         Directory.CreateDirectory(capturesDirectory);
 
-        var scenes = ComposeScenes(context, scriptsDirectory, capturesDirectory, _observationOptions);
+        context.Latitude = Math.Abs(context.Latitude) > 0.001 ? context.Latitude : _observationOptions.Latitude;
+        context.Longitude = Math.Abs(context.Longitude) > 0.001 ? context.Longitude : _observationOptions.Longitude;
+        var scenes = ComposeScenes(context, scriptsDirectory, capturesDirectory, _observationOptions, _observationTimeService);
 
         foreach (var scene in scenes)
         {
@@ -262,10 +267,10 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         }
     }
 
-    private static List<StellariumScene> ComposeScenes(AstronomyContext context, string scriptsDirectory, string capturesDirectory, ObservationOptions observationOptions)
+    private static List<StellariumScene> ComposeScenes(AstronomyContext context, string scriptsDirectory, string capturesDirectory, ObservationOptions observationOptions, IObservationTimeService observationTimeService)
     {
         var timezone = ResolveTimeZone(context.TimeZone, observationOptions.Timezone);
-        var observationPlan = BuildObservationPlan(context, timezone, observationOptions);
+        var selectedTimes = observationTimeService.SelectSceneTimes(context, context.Date, observationOptions).ToDictionary(x => x.SceneId, StringComparer.OrdinalIgnoreCase);
         var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase));
         var brightPlanet = context.Events.FirstOrDefault(e => e.Category.Contains("planet", StringComparison.OrdinalIgnoreCase));
         var deepSky = context.Events.FirstOrDefault(e => e.Category.Contains("deep", StringComparison.OrdinalIgnoreCase) || e.Category.Contains("constellation", StringComparison.OrdinalIgnoreCase));
@@ -283,8 +288,9 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         {
             var order = index + 1;
             var prefix = $"{order:000}-{def.Slug}";
-            var selectedLocal = SelectSceneLocalTime(def.Type, observationPlan, observationOptions);
-            var sceneUtc = new DateTimeOffset(selectedLocal, timezone.GetUtcOffset(selectedLocal)).ToUniversalTime();
+            var key = def.Type == "overview" ? "sky-overview" : def.Type == "deep-sky" ? "deep-sky" : def.Type == "closing" ? "closing" : (def.Title.Contains("Moon") ? "moon" : "planet");
+            var selected = selectedTimes[key];
+            var sceneUtc = selected.UtcObservationTime;
             return new StellariumScene
             {
                 SceneId = prefix, Title = def.Title, Caption = def.Caption, TargetObject = def.TargetObject, Latitude = context.Latitude, Longitude = context.Longitude,
@@ -293,53 +299,12 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         }).ToList();
     }
 
-    private static DateTime SelectSceneLocalTime(string type, ObservationPlan plan, ObservationOptions observationOptions)
+    private static TimeZoneInfo ResolveTimeZone(string contextTimeZone, string fallback)
     {
-        return type switch
-        {
-            "overview" => plan.SunsetLocal.AddMinutes(Math.Clamp(observationOptions.SkyOverviewMinutesAfterSunset, 60, 90)),
-            "moon-planet" => plan.LocalMidnight,
-            "deep-sky" => ParseLocalTime(plan.Date, observationOptions.DeepSkyPreferredLocalTime, plan.LocalMidnight),
-            _ => plan.LocalMidnight
-        };
+        try { return TimeZoneInfo.FindSystemTimeZoneById(string.IsNullOrWhiteSpace(contextTimeZone) ? fallback : contextTimeZone); }
+        catch { return TimeZoneInfo.Utc; }
     }
 
-    private static TimeZoneInfo ResolveTimeZone(string contextTimeZone, string fallback) { try { return TimeZoneInfo.FindSystemTimeZoneById(string.IsNullOrWhiteSpace(contextTimeZone) ? fallback : contextTimeZone); } catch { return TimeZoneInfo.Utc; } }
-    private static DateTime ParseLocalTime(DateOnly date, string value, DateTime fallback) => TimeOnly.TryParseExact(value, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var t) ? date.ToDateTime(t) : fallback;
-
-    private static ObservationPlan BuildObservationPlan(AstronomyContext context, TimeZoneInfo timezone, ObservationOptions observationOptions)
-    {
-        var latitude = Math.Abs(context.Latitude) > 0.001 ? context.Latitude : observationOptions.Latitude;
-        var longitude = Math.Abs(context.Longitude) > 0.001 ? context.Longitude : observationOptions.Longitude;
-        var offsetHours = timezone.GetUtcOffset(context.Date.ToDateTime(new TimeOnly(12, 0))).TotalHours;
-        var dayOfYear = context.Date.DayOfYear;
-
-        static double DegToRad(double d) => Math.PI * d / 180.0;
-        static double RadToDeg(double r) => 180.0 * r / Math.PI;
-
-        var gamma = 2.0 * Math.PI / 365.0 * (dayOfYear - 1);
-        var eqTime = 229.18 * (0.000075 + 0.001868 * Math.Cos(gamma) - 0.032077 * Math.Sin(gamma) - 0.014615 * Math.Cos(2 * gamma) - 0.040849 * Math.Sin(2 * gamma));
-        var decl = 0.006918 - 0.399912 * Math.Cos(gamma) + 0.070257 * Math.Sin(gamma) - 0.006758 * Math.Cos(2 * gamma) + 0.000907 * Math.Sin(2 * gamma) - 0.002697 * Math.Cos(3 * gamma) + 0.00148 * Math.Sin(3 * gamma);
-
-        var zenith = DegToRad(90.833);
-        var latRad = DegToRad(latitude);
-        var cosH = (Math.Cos(zenith) - Math.Sin(latRad) * Math.Sin(decl)) / (Math.Cos(latRad) * Math.Cos(decl));
-        cosH = Math.Clamp(cosH, -1, 1);
-        var h = RadToDeg(Math.Acos(cosH));
-
-        var solarNoonMinutes = 720 - (4 * longitude) - eqTime + (offsetHours * 60);
-        var sunriseMinutes = solarNoonMinutes - (h * 4);
-        var sunsetMinutes = solarNoonMinutes + (h * 4);
-
-        var date = context.Date;
-        var sunrise = date.ToDateTime(TimeOnly.MinValue).AddMinutes(sunriseMinutes);
-        var sunset = date.ToDateTime(TimeOnly.MinValue).AddMinutes(sunsetMinutes);
-        var localMidnight = ParseLocalTime(date, observationOptions.DeepSkyPreferredLocalTime, date.ToDateTime(new TimeOnly(23, 30)));
-        if (localMidnight <= sunset) localMidnight = sunset.AddHours(3);
-        return new ObservationPlan(date, sunrise, sunset, localMidnight);
-    }
-
-    private sealed record ObservationPlan(DateOnly Date, DateTime SunriseLocal, DateTime SunsetLocal, DateTime LocalMidnight);
     private static byte[] CreatePlaceholderPngBytes(int width, int height)
     {
         var raw = new byte[(width * 4 + 1) * height];
