@@ -67,6 +67,30 @@ public sealed class AstronomyContextProviderTests
     }
 
     [Fact]
+    public async Task BuildContextAsync_ShiftsDuplicateTimes_AndAddsNarrationSpecificTime()
+    {
+        var provider = CreateProvider(new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse
+        {
+            LocationName = "Udaipur, India",
+            Timezone = "Asia/Kolkata",
+            NightWindowStartLocal = "2026-03-17T19:00:00",
+            VisibleObjects =
+            [
+                CreateVisible("Venus", "Planet", "2026-03-17T21:10:00", 42, [Sample("2026-03-17T21:10:00", 42)]),
+                CreateVisible("Jupiter", "Planet", "2026-03-17T21:10:00", 41, [Sample("2026-03-17T21:10:00", 41)])
+            ]
+        }));
+
+        var result = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "Udaipur, India", "Asia/Kolkata", CancellationToken.None);
+        var venus = result.SceneObservationContexts.Single(s => s.ObjectName == "Venus");
+        var jupiter = result.SceneObservationContexts.Single(s => s.ObjectName == "Jupiter");
+
+        Assert.NotEqual(venus.LocalObservationTime, jupiter.LocalObservationTime);
+        Assert.Contains("Best around", venus.NarrationFocus);
+        Assert.Contains("Best around", jupiter.NarrationFocus);
+    }
+
+    [Fact]
     public async Task BuildContextAsync_UsesMidpointFallback_WhenNoSamplesProvided()
     {
         var provider = CreateProvider(new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse

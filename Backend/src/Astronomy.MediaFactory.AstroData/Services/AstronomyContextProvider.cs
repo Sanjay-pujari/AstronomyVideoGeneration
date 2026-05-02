@@ -127,25 +127,29 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         }
 
         var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
-        var overviewLocal = ParseLocal(response!.NightWindowStartLocal) ?? DateTime.SpecifyKind(DateTime.Today.AddHours(19), DateTimeKind.Unspecified);
+        var sunsetLocal = ParseLocal(response!.NightWindowStartLocal) ?? DateTime.SpecifyKind(DateTime.Today.AddHours(19), DateTimeKind.Unspecified);
+        var overviewLocal = sunsetLocal.AddMinutes(observationOptions.SkyOverviewMinutesAfterSunset);
         var scenes = new List<SceneObservationContext>
         {
             new() { SceneId = "sky-overview", SceneTitle = "Sky overview", SceneType = "Overview", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = overviewLocal, UtcObservationTime = ToUtc(overviewLocal, tz), Timezone = timezone, IsVisible = true, VisibilityReason = "Night overview", RecommendedTool = "Naked eye", NarrationFocus = "Night sky orientation.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName }
         };
 
+        var usedTimes = new HashSet<DateTime> { overviewLocal };
         foreach (var (v, i) in selected.Select((v, i) => (v, i)))
         {
-            var bestSample = SelectBestSample(v.Samples, observationOptions.MinimumObjectAltitudeDegrees);
-            var local = ParseLocal(bestSample?.LocalTime)
-                ?? ComputeMidpointFromSamples(v.Samples)
-                ?? ParseLocal(v.BestLocalTime)
-                ?? overviewLocal.AddMinutes(30 + (i * 30));
-            var utc = ParseUtc(bestSample?.UtcTime)
-                ?? ComputeMidpointUtcFromSamples(v.Samples, tz)
-                ?? (DateTimeOffset.TryParse(v.BestUtcTime, out var pUtc) ? pUtc.ToUniversalTime() : ToUtc(local, tz));
-            var altitude = bestSample?.AltitudeDegrees ?? v.AltitudeDegrees ?? 0;
-            var azimuth = bestSample?.AzimuthDegrees ?? v.AzimuthDegrees ?? 0;
-            var direction = bestSample?.DirectionLabel ?? v.DirectionLabel ?? "N/A";
+            var minimumAltitude = ResolveMinimumAltitudeForObject(v, observationOptions.MinimumObjectAltitudeDegrees);
+            var selection = SelectObservationForScene(v, minimumAltitude, sunsetLocal, tz, overviewLocal.AddMinutes(30 + (i * 30)));
+            while (usedTimes.Contains(selection.Local))
+            {
+                selection = selection with
+                {
+                    Local = selection.Local.AddMinutes(20),
+                    Utc = selection.Utc.AddMinutes(20),
+                    Reason = $"{selection.Reason} + anti-cluster shift"
+                };
+            }
+
+            usedTimes.Add(selection.Local);
 
             scenes.Add(new SceneObservationContext
             {
@@ -154,22 +158,22 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 SceneType = "Object",
                 ObjectName = v.ObjectName,
                 ObjectType = string.IsNullOrWhiteSpace(v.ObjectType) ? "Object" : v.ObjectType,
-                LocalObservationTime = local,
-                UtcObservationTime = utc,
+                LocalObservationTime = selection.Local,
+                UtcObservationTime = selection.Utc,
                 Timezone = timezone,
-                AltitudeDegrees = altitude,
-                AzimuthDegrees = azimuth,
-                DirectionLabel = direction,
+                AltitudeDegrees = selection.Altitude,
+                AzimuthDegrees = selection.Azimuth,
+                DirectionLabel = selection.Direction,
                 IsVisible = true,
                 VisibilityReason = v.VisibilityReason,
                 RecommendedTool = "Naked eye / binoculars",
-                NarrationFocus = v.VisibilityReason,
+                NarrationFocus = $"{v.VisibilityReason} Best around {selection.Local:h:mm tt}.",
                 Latitude = context.Latitude,
                 Longitude = context.Longitude,
                 LocationName = context.LocationName
             });
 
-            _loggerStatic?.LogInformation("Selected observation time for {ObjectName}: {SelectedTime} (alt: {Altitude:F1}°)", v.ObjectName, local, altitude);
+            _loggerStatic?.LogInformation("Selected observation scene {ObjectName} at {SelectedLocalTime} altitude {Altitude:F1}° reason: {Reason}", v.ObjectName, selection.Local, selection.Altitude, selection.Reason);
         }
 
         scenes.Add(new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing wide sky", SceneType = "Tips", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = scenes.Last().LocalObservationTime.AddMinutes(30), UtcObservationTime = scenes.Last().UtcObservationTime.AddMinutes(30), Timezone = timezone, IsVisible = true, VisibilityReason = "Wrap-up", RecommendedTool = "Naked eye", NarrationFocus = "Safe viewing tips.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName });
@@ -242,4 +246,64 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
     private static string Serialize(object? value)
         => System.Text.Json.JsonSerializer.Serialize(value, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+    private sealed record SelectedObservation(DateTime Local, DateTimeOffset Utc, double Altitude, double Azimuth, string Direction, string Reason);
+
+    private static double ResolveMinimumAltitudeForObject(SkyfieldObjectVisibility visibility, double globalMinimum)
+    {
+        if (visibility.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase))
+        {
+            return Math.Max(globalMinimum, 25d);
+        }
+
+        if (visibility.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase))
+        {
+            return Math.Max(globalMinimum, 20d);
+        }
+
+        return globalMinimum;
+    }
+
+    private static SelectedObservation SelectObservationForScene(SkyfieldObjectVisibility visibility, double minimumAltitude, DateTime sunsetLocal, TimeZoneInfo timezone, DateTime fallbackLocal)
+    {
+        var orderedSamples = (visibility.Samples ?? [])
+            .Where(s => ParseLocal(s.LocalTime).HasValue)
+            .OrderBy(s => ParseLocal(s.LocalTime))
+            .ToList();
+
+        var candidates = orderedSamples.Where(s => s.AltitudeDegrees >= minimumAltitude);
+        var isDeepSky = !visibility.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase)
+            && !visibility.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase)
+            && !visibility.ObjectType.Equals("Overview", StringComparison.OrdinalIgnoreCase);
+
+        if (isDeepSky)
+        {
+            candidates = candidates.Where(s => (ParseLocal(s.LocalTime) ?? sunsetLocal) >= sunsetLocal.AddHours(1.5));
+        }
+
+        var bestSample = candidates.OrderByDescending(s => s.AltitudeDegrees).FirstOrDefault();
+        if (bestSample is not null)
+        {
+            var local = ParseLocal(bestSample.LocalTime) ?? fallbackLocal;
+            var utc = ParseUtc(bestSample.UtcTime) ?? ToUtc(local, timezone);
+            return new SelectedObservation(local, utc, bestSample.AltitudeDegrees, bestSample.AzimuthDegrees, bestSample.DirectionLabel ?? visibility.DirectionLabel ?? "N/A", "peak altitude");
+        }
+
+        if (orderedSamples.Count > 0)
+        {
+            var first = orderedSamples.First();
+            var last = orderedSamples.Last();
+            var firstLocal = ParseLocal(first.LocalTime) ?? fallbackLocal;
+            var lastLocal = ParseLocal(last.LocalTime) ?? firstLocal;
+            var midpointLocal = firstLocal + TimeSpan.FromTicks((lastLocal - firstLocal).Ticks / 2);
+            var firstUtc = ParseUtc(first.UtcTime) ?? ToUtc(firstLocal, timezone);
+            var lastUtc = ParseUtc(last.UtcTime) ?? ToUtc(lastLocal, timezone);
+            var midpointUtc = firstUtc + TimeSpan.FromTicks((lastUtc - firstUtc).Ticks / 2);
+            return new SelectedObservation(midpointLocal, midpointUtc, visibility.AltitudeDegrees ?? 0, visibility.AzimuthDegrees ?? 0, visibility.DirectionLabel ?? "N/A", "midpoint fallback");
+        }
+
+        var localFallback = ParseLocal(visibility.BestLocalTime) ?? fallbackLocal;
+        var utcFallback = ParseUtc(visibility.BestUtcTime) ?? ToUtc(localFallback, timezone);
+        return new SelectedObservation(localFallback, utcFallback, visibility.AltitudeDegrees ?? 0, visibility.AzimuthDegrees ?? 0, visibility.DirectionLabel ?? "N/A", "response fallback");
+    }
 }
