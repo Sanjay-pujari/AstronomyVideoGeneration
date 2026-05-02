@@ -42,6 +42,62 @@ public sealed class AstronomyContextProviderTests
     }
 
     [Fact]
+    public async Task BuildContextAsync_UsesObjectSpecificPeakSampleTimes()
+    {
+        var provider = CreateProvider(new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse
+        {
+            LocationName = "Udaipur, India",
+            Timezone = "Asia/Kolkata",
+            NightWindowStartLocal = "2026-03-17T19:00:00",
+            VisibleObjects =
+            [
+                CreateVisible("Venus", "Planet", "2026-03-17T21:10:00", 42, [Sample("2026-03-17T20:10:00", 20), Sample("2026-03-17T21:10:00", 42)]),
+                CreateVisible("Mars", "Planet", "2026-03-17T22:10:00", 51, [Sample("2026-03-17T21:40:00", 35), Sample("2026-03-17T22:10:00", 51)]),
+                CreateVisible("Jupiter", "Planet", "2026-03-17T23:10:00", 60, [Sample("2026-03-17T22:30:00", 49), Sample("2026-03-17T23:10:00", 60)])
+            ]
+        }));
+
+        var result = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "Udaipur, India", "Asia/Kolkata", CancellationToken.None);
+        var objectScenes = result.SceneObservationContexts.Where(s => s.SceneType == "Object").ToList();
+
+        Assert.Equal(3, objectScenes.Select(s => s.LocalObservationTime).Distinct().Count());
+        Assert.Equal(new DateTime(2026, 3, 17, 21, 10, 0), objectScenes.Single(s => s.ObjectName == "Venus").LocalObservationTime);
+        Assert.Equal(new DateTime(2026, 3, 17, 22, 10, 0), objectScenes.Single(s => s.ObjectName == "Mars").LocalObservationTime);
+        Assert.Equal(new DateTime(2026, 3, 17, 23, 10, 0), objectScenes.Single(s => s.ObjectName == "Jupiter").LocalObservationTime);
+    }
+
+    [Fact]
+    public async Task BuildContextAsync_UsesMidpointFallback_WhenNoSamplesProvided()
+    {
+        var provider = CreateProvider(new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse
+        {
+            LocationName = "Udaipur, India",
+            Timezone = "Asia/Kolkata",
+            NightWindowStartLocal = "2026-03-17T19:00:00",
+            VisibleObjects =
+            [
+                new SkyfieldObjectVisibility
+                {
+                    ObjectName = "Moon",
+                    ObjectType = "Moon",
+                    IsVisible = true,
+                    AltitudeDegrees = 35,
+                    VisibilityReason = "Visible through most of the evening.",
+                    Samples =
+                    [
+                        Sample("2026-03-17T20:00:00", 20),
+                        Sample("2026-03-17T22:00:00", 25)
+                    ]
+                }
+            ]
+        }));
+
+        var result = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "Udaipur, India", "Asia/Kolkata", CancellationToken.None);
+        var moonScene = result.SceneObservationContexts.Single(s => s.ObjectName == "Moon");
+        Assert.Equal(new DateTime(2026, 3, 17, 21, 0, 0), moonScene.LocalObservationTime);
+    }
+
+    [Fact]
     public async Task BuildContextAsync_FallsBackToSafeOverview_WhenNightPlanUnavailable()
     {
         var provider = CreateProvider(new FakeSkyfieldSidecarClient(null));
@@ -193,6 +249,29 @@ public sealed class AstronomyContextProviderTests
             return Task.FromResult(_response);
         }
     }
+
+    private static SkyfieldObjectVisibility CreateVisible(string objectName, string objectType, string bestLocalTime, double altitudeDegrees, List<SkyfieldVisibilitySample> samples)
+        => new()
+        {
+            ObjectName = objectName,
+            ObjectType = objectType,
+            IsVisible = true,
+            BestLocalTime = bestLocalTime,
+            AltitudeDegrees = altitudeDegrees,
+            VisibilityReason = $"Best visibility for {objectName}.",
+            Samples = samples
+        };
+
+    private static SkyfieldVisibilitySample Sample(string localTime, double altitudeDegrees)
+        => new()
+        {
+            LocalTime = localTime,
+            UtcTime = $"{localTime}Z",
+            AltitudeDegrees = altitudeDegrees,
+            AzimuthDegrees = 180,
+            DirectionLabel = "S",
+            IsVisibleCandidate = altitudeDegrees >= 10
+        };
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
