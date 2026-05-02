@@ -64,6 +64,8 @@ public sealed class AstronomyContextProviderTests
         Assert.Equal(new DateTime(2026, 3, 17, 21, 10, 0), objectScenes.Single(s => s.ObjectName == "Venus").LocalObservationTime);
         Assert.Equal(new DateTime(2026, 3, 17, 22, 10, 0), objectScenes.Single(s => s.ObjectName == "Mars").LocalObservationTime);
         Assert.Equal(new DateTime(2026, 3, 17, 23, 10, 0), objectScenes.Single(s => s.ObjectName == "Jupiter").LocalObservationTime);
+        Assert.Equal(["object-1", "object-2", "object-3"], objectScenes.Select(s => s.SceneId).ToArray());
+        Assert.True(objectScenes.SequenceEqual(objectScenes.OrderBy(s => s.LocalObservationTime)));
     }
 
     [Fact]

@@ -53,6 +53,9 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("4) Return ONLY valid JSON with no markdown, no code fences, and no commentary.");
         sb.AppendLine("5) Each sceneScript section must map exactly to provided sceneObservationContext sceneId values and include: object, local time, direction, approximate altitude, tool needed, and one beginner tip.");
         sb.AppendLine("6) Keep narration practical and specific to structured observation context, not generic sky facts.");
+        sb.AppendLine("7) Keep object-scene narration chronological with explicit time progression language.");
+        sb.AppendLine("8) Use natural transitions such as 'Later in the night...', 'As midnight approaches...', and 'In the early morning hours...' when they fit the local times.");
+        sb.AppendLine("9) If the gap between consecutive object scenes exceeds 2 hours, include the phrase 'Later in the night...'.");
 
         sb.AppendLine();
         sb.AppendLine(PromptFeedbackComposer.BuildFeedbackSection(feedbackContext, isShortForm: false));

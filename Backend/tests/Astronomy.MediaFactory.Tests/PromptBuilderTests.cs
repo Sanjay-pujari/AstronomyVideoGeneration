@@ -48,6 +48,10 @@ public sealed class PromptBuilderTests
         Assert.DoesNotContain("\"objectName\": \"Mars\"", prompt);
         Assert.DoesNotContain("\"objectName\": \"Orion\"", prompt);
         Assert.Contains("not generic sky facts", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Later in the night...", prompt, StringComparison.Ordinal);
+        Assert.Contains("As midnight approaches...", prompt, StringComparison.Ordinal);
+        Assert.Contains("In the early morning hours...", prompt, StringComparison.Ordinal);
+        Assert.Contains("gap between consecutive object scenes exceeds 2 hours", prompt, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

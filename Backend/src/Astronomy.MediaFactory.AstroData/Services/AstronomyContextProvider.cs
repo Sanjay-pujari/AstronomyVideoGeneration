@@ -135,6 +135,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         };
 
         var usedTimes = new HashSet<DateTime> { overviewLocal };
+        var objectScenes = new List<SceneObservationContext>();
         foreach (var (v, i) in selected.Select((v, i) => (v, i)))
         {
             var minimumAltitude = ResolveMinimumAltitudeForObject(v, observationOptions.MinimumObjectAltitudeDegrees);
@@ -151,7 +152,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
             usedTimes.Add(selection.Local);
 
-            scenes.Add(new SceneObservationContext
+            objectScenes.Add(new SceneObservationContext
             {
                 SceneId = $"object-{i + 1}",
                 SceneTitle = $"{v.ObjectName} focus",
@@ -176,7 +177,24 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
             _loggerStatic?.LogInformation("Selected observation scene {ObjectName} at {SelectedLocalTime} altitude {Altitude:F1}° reason: {Reason}", v.ObjectName, selection.Local, selection.Altitude, selection.Reason);
         }
 
-        scenes.Add(new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing wide sky", SceneType = "Tips", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = scenes.Last().LocalObservationTime.AddMinutes(30), UtcObservationTime = scenes.Last().UtcObservationTime.AddMinutes(30), Timezone = timezone, IsVisible = true, VisibilityReason = "Wrap-up", RecommendedTool = "Naked eye", NarrationFocus = "Safe viewing tips.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName });
+        objectScenes = objectScenes
+            .OrderBy(s => s.LocalObservationTime)
+            .ToList();
+
+        for (var i = 0; i < objectScenes.Count; i++)
+        {
+            var orderedScene = objectScenes[i];
+            scenes.Add(orderedScene with { SceneId = $"object-{i + 1}" });
+        }
+
+        var closingLocalTime = scenes.Last().LocalObservationTime.AddMinutes(30);
+        scenes.Add(new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing wide sky", SceneType = "Tips", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = closingLocalTime, UtcObservationTime = ToUtc(closingLocalTime, tz), Timezone = timezone, IsVisible = true, VisibilityReason = "Wrap-up", RecommendedTool = "Naked eye", NarrationFocus = "Safe viewing tips.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName });
+
+        foreach (var (scene, index) in scenes.Select((scene, index) => (scene, index)))
+        {
+            _loggerStatic?.LogInformation("Scene timeline [{SceneIndex}] {ObjectName} at local {LocalTime}", index + 1, scene.ObjectName, scene.LocalObservationTime);
+        }
+
         context.SceneObservationContexts = scenes;
 
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "selected-visible-objects", Description = Serialize(selected.Select(v => new { v.ObjectName, v.BestLocalTime, v.BestUtcTime, v.DirectionLabel, v.AltitudeDegrees, v.IsVisible, v.VisibilityReason })) });
