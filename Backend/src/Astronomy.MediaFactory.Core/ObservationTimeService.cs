@@ -47,6 +47,23 @@ public sealed class ObservationTimeService : IObservationTimeService
         SceneObservationTime BuildObjectScene(string sceneId, string title, string objectName)
         {
             var samples = BuildSamples(objectName, sunset, sunrise, step, tz, observationOptions.MinimumObjectAltitudeDegrees);
+            if (samples.Count == 0)
+            {
+                var fallbackTime = sunset.AddHours(1);
+                return new SceneObservationTime
+                {
+                    SceneId = sceneId,
+                    SceneTitle = title,
+                    ObjectName = objectName,
+                    LocalObservationTime = fallbackTime,
+                    UtcObservationTime = new DateTimeOffset(fallbackTime, tz.GetUtcOffset(fallbackTime)).ToUniversalTime(),
+                    Timezone = observationOptions.Timezone,
+                    Reason = "no ephemeris samples available",
+                    IsVisible = false,
+                    VisibilityReason = "Ephemeris unavailable.",
+                    VisibilitySearchSamples = []
+                };
+            }
             var visible = samples.Where(s => s.IsVisibleCandidate).ToList();
             var best = visible.Count == 0
                 ? samples.OrderByDescending(x => x.AltitudeDegrees).First()
@@ -83,25 +100,7 @@ public sealed class ObservationTimeService : IObservationTimeService
 
     public static List<VisibilitySample> BuildSamples(string objectName, DateTime sunset, DateTime sunrise, TimeSpan step, TimeZoneInfo tz, double minimumAltitude)
     {
-        var list = new List<VisibilitySample>();
-        var seed = Math.Abs(objectName.GetHashCode());
-        for (var time = sunset; time <= sunrise; time = time.Add(step))
-        {
-            var hours = (time - sunset).TotalHours;
-            var altitude = -5 + 45 * Math.Sin((hours / 12d) * Math.PI + (seed % 90) * Math.PI / 180d);
-            var az = (seed % 360 + hours * 22) % 360;
-            list.Add(new VisibilitySample
-            {
-                LocalObservationTime = time,
-                UtcObservationTime = new DateTimeOffset(time, tz.GetUtcOffset(time)).ToUniversalTime(),
-                AltitudeDegrees = Math.Round(altitude, 2),
-                AzimuthDegrees = Math.Round(az, 2),
-                DirectionLabel = Cardinal(az),
-                IsAboveHorizon = altitude >= 0,
-                IsVisibleCandidate = altitude >= minimumAltitude
-            });
-        }
-        return list;
+        return [];
     }
 
     private static string Cardinal(double az) => new[] { "N", "NE", "E", "SE", "S", "SW", "W", "NW" }[(int)Math.Round(az / 45d) % 8];

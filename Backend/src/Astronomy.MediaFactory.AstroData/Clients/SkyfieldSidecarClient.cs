@@ -7,6 +7,7 @@ namespace Astronomy.MediaFactory.AstroData.Clients;
 public interface ISkyfieldSidecarClient
 {
     Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken);
+    Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken);
 }
 
 public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
@@ -64,6 +65,81 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
             return null;
         }
     }
+
+    public async Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _httpClient.PostAsJsonAsync("/visibility/night-plan", request, JsonOptions, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Skyfield night-plan returned non-success status code {StatusCode}.", (int)response.StatusCode);
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync<SkyfieldNightPlanResponse>(JsonOptions, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Skyfield sidecar night-plan call failed.");
+            return null;
+        }
+    }
+}
+
+public sealed class SkyfieldNightPlanRequest
+{
+    public string Date { get; set; } = "";
+    public string LocationName { get; set; } = "";
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public string Timezone { get; set; } = "UTC";
+    public double MinimumAltitudeDegrees { get; set; } = 10;
+    public int StepMinutes { get; set; } = 15;
+    public List<SkyfieldVisibilityCandidate> Candidates { get; set; } = new();
+}
+
+public sealed class SkyfieldVisibilityCandidate
+{
+    public string ObjectName { get; set; } = "";
+    public string ObjectType { get; set; } = "";
+}
+
+public sealed class SkyfieldVisibilitySample
+{
+    public string LocalTime { get; set; } = "";
+    public string UtcTime { get; set; } = "";
+    public double AltitudeDegrees { get; set; }
+    public double AzimuthDegrees { get; set; }
+    public string DirectionLabel { get; set; } = "N";
+    public bool IsVisibleCandidate { get; set; }
+}
+
+public sealed class SkyfieldObjectVisibility
+{
+    public string ObjectName { get; set; } = "";
+    public string ObjectType { get; set; } = "";
+    public bool IsVisible { get; set; }
+    public string VisibilityReason { get; set; } = "";
+    public string? BestLocalTime { get; set; }
+    public string? BestUtcTime { get; set; }
+    public double? AltitudeDegrees { get; set; }
+    public double? AzimuthDegrees { get; set; }
+    public string? DirectionLabel { get; set; }
+    public List<SkyfieldVisibilitySample> Samples { get; set; } = new();
+}
+
+public sealed class SkyfieldNightPlanResponse
+{
+    public string LocationName { get; set; } = "";
+    public string Timezone { get; set; } = "UTC";
+    public string TargetDate { get; set; } = "";
+    public string SunsetLocal { get; set; } = "";
+    public string SunriseLocal { get; set; } = "";
+    public string NightWindowStartLocal { get; set; } = "";
+    public string NightWindowEndLocal { get; set; } = "";
+    public List<SkyfieldObjectVisibility> VisibleObjects { get; set; } = new();
+    public List<SkyfieldObjectVisibility> NotVisibleObjects { get; set; } = new();
 }
 
 public sealed class SkyfieldDailySkyRequest
