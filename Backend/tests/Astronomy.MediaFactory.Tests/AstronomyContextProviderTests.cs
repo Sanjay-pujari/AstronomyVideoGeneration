@@ -167,7 +167,8 @@ public sealed class AstronomyContextProviderTests
             new NasaNeoWsClient(nasaClient, options, NullLogger<NasaNeoWsClient>.Instance),
             skyfieldSidecarClient,
             NullLogger<AstronomyContextProvider>.Instance,
-            Options.Create(new SkyfieldSidecarOptions { Enabled = true, BaseUrl = "http://localhost:8010" }));
+            Options.Create(new SkyfieldSidecarOptions { Enabled = true, BaseUrl = "http://localhost:8010" }),
+            Options.Create(new ObservationOptions()));
     }
 
     private sealed class FakeSkyfieldSidecarClient : ISkyfieldSidecarClient
