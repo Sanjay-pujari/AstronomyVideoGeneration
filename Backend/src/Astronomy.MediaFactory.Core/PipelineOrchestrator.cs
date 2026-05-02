@@ -669,21 +669,37 @@ public sealed class PipelineOrchestrator
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "selected-observation-times.json"), JsonSerializer.Serialize(selectedObservationTimes, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
-    private static object BuildSceneObservationContextEntry(string sceneId, AstronomyEventModel? astronomyEvent) => new
+    private static SceneObservationContextEntry BuildSceneObservationContextEntry(string sceneId, AstronomyEventModel? astronomyEvent) => new()
     {
-        sceneId,
+        sceneId = sceneId,
         objectName = astronomyEvent?.ObjectName ?? "Unknown",
         objectType = astronomyEvent?.Category ?? "Unknown",
         bestViewingLocalTime = astronomyEvent?.VisibilityWindow ?? "Not specified",
         directionLabel = astronomyEvent?.Direction ?? "Not specified",
-        altitudeDegrees = (double?)null,
-        azimuthDegrees = (double?)null,
-        magnitude = (double?)null,
+        altitudeDegrees = null,
+        azimuthDegrees = null,
+        magnitude = null,
         visibilityLevel = "Unknown",
         recommendedTool = astronomyEvent?.ObservationTool ?? "Naked eye",
         observingTip = astronomyEvent?.Details ?? "Let your eyes adapt to darkness for 15-20 minutes.",
         whyInteresting = astronomyEvent?.Details ?? "A useful beginner observing target."
     };
+
+    private sealed class SceneObservationContextEntry
+    {
+        public required string sceneId { get; init; }
+        public required string objectName { get; init; }
+        public required string objectType { get; init; }
+        public required string bestViewingLocalTime { get; init; }
+        public required string directionLabel { get; init; }
+        public double? altitudeDegrees { get; init; }
+        public double? azimuthDegrees { get; init; }
+        public double? magnitude { get; init; }
+        public required string visibilityLevel { get; init; }
+        public required string recommendedTool { get; init; }
+        public required string observingTip { get; init; }
+        public required string whyInteresting { get; init; }
+    }
 
 
     private async Task WriteSceneNarrationArtifactsAsync(
