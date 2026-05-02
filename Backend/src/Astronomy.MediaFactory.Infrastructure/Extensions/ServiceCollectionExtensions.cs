@@ -110,6 +110,12 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(TelemetryOptions.SectionName))
             .ValidateOnStart();
 
+
+        services.AddOptions<ObservationOptions>()
+            .Bind(configuration.GetSection(ObservationOptions.SectionName))
+            .Validate(options => options.SkyOverviewMinutesAfterSunset is >= 60 and <= 90, "Observation:SkyOverviewMinutesAfterSunset must be between 60 and 90.")
+            .ValidateOnStart();
+
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
             .ValidateDataAnnotations()
