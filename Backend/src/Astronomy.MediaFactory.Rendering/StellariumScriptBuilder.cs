@@ -33,6 +33,8 @@ public sealed class StellariumScriptBuilder
         var observerLongitude = scene.ObservationContext.Longitude;
         var observerLatitude = scene.ObservationContext.Latitude;
         var shouldSelectObject = !string.Equals(sceneObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
+        var escapedSceneObjectName = sceneObjectName.Replace("\"", "\\\"");
+        var escapedLabelText = labelText.Replace("\"", "\\\"");
 
         return $$"""
 core.clear("natural");
@@ -74,12 +76,12 @@ if ("{{profile}}" === "deep-sky") {
 }
 
 if ({{shouldSelectObject.ToString().ToLowerInvariant()}}) {
-    core.selectObjectByName("{{sceneObjectName.Replace(""", "\\"")}}", true);
+    core.selectObjectByName("{{escapedSceneObjectName}}", true);
     if (typeof StelObjectMgr.setFlagSelectedObjectPointer === "function") {
         StelObjectMgr.setFlagSelectedObjectPointer(true);
     }
     if ("{{profile}}" !== "overview" && typeof LabelMgr !== "undefined" && typeof LabelMgr.labelObject === "function") {
-        LabelMgr.labelObject("{{labelText.Replace("\"", "\\\"")}}", "{{sceneObjectName.Replace("\"", "\\\"")}}", true, 22, "#ffff66", "NE", 20, "TextOnly");
+        LabelMgr.labelObject("{{escapedLabelText}}", "{{escapedSceneObjectName}}", true, 22, "#ffff66", "NE", 20, "TextOnly");
     }
     core.wait(1.0);
     core.wait(0.5);
