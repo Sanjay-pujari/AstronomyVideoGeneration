@@ -99,7 +99,7 @@ public sealed class StellariumVisualGenerationServiceTests
         var outputDir = Path.Combine(Path.GetTempPath(), "stellarium-scenes-" + Guid.NewGuid().ToString("N"));
         var options = Options.Create(new StellariumOptions());
         var builder = new StellariumScriptBuilder(options.Value);
-        var sut = new StellariumVisualGenerationService(options, builder, NullLogger<StellariumVisualGenerationService>.Instance);
+        var sut = new StellariumVisualGenerationService(options, builder, Options.Create(new ObservationOptions()), NullLogger<StellariumVisualGenerationService>.Instance);
 
         var context = new AstronomyContext
         {
@@ -127,7 +127,7 @@ public sealed class StellariumVisualGenerationServiceTests
         var outputDir = Path.Combine(Path.GetTempPath(), "stellarium-fallback-" + Guid.NewGuid().ToString("N"));
         var options = Options.Create(new StellariumOptions { ExecutablePath = Path.Combine(outputDir, "missing-stellarium") });
         var builder = new StellariumScriptBuilder(options.Value);
-        var sut = new StellariumVisualGenerationService(options, builder, NullLogger<StellariumVisualGenerationService>.Instance);
+        var sut = new StellariumVisualGenerationService(options, builder, Options.Create(new ObservationOptions()), NullLogger<StellariumVisualGenerationService>.Instance);
 
         var visuals = await sut.PrepareVisualsAsync(new AstronomyContext
         {
@@ -158,7 +158,7 @@ public sealed class StellariumVisualGenerationServiceTests
 
         var options = Options.Create(new StellariumOptions());
         var builder = new StellariumScriptBuilder(options.Value);
-        var sut = new StellariumVisualGenerationService(options, builder, NullLogger<StellariumVisualGenerationService>.Instance);
+        var sut = new StellariumVisualGenerationService(options, builder, Options.Create(new ObservationOptions()), NullLogger<StellariumVisualGenerationService>.Instance);
 
         var visuals = await sut.PrepareVisualsAsync(new AstronomyContext
         {
@@ -186,7 +186,7 @@ public sealed class StellariumVisualGenerationServiceTests
         });
 
         var builder = new StellariumScriptBuilder(options.Value);
-        var sut = new StellariumVisualGenerationService(options, builder, NullLogger<StellariumVisualGenerationService>.Instance);
+        var sut = new StellariumVisualGenerationService(options, builder, Options.Create(new ObservationOptions()), NullLogger<StellariumVisualGenerationService>.Instance);
         var context = new AstronomyContext
         {
             Date = new DateOnly(2026, 3, 17),
@@ -199,5 +199,42 @@ public sealed class StellariumVisualGenerationServiceTests
         var expectedScriptPath = Path.Combine(scriptsRoot, expectedScope, "001-sky-overview.ssc");
         Assert.True(File.Exists(expectedScriptPath));
         Assert.All(visuals, path => Assert.StartsWith(Path.Combine(capturesRoot, expectedScope), path, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task PrepareVisualsAsync_UsesNightObservationTimes_AndUtcInScripts()
+    {
+        var outputDir = Path.Combine(Path.GetTempPath(), "stellarium-night-" + Guid.NewGuid().ToString("N"));
+        var options = Options.Create(new StellariumOptions());
+        var obs = Options.Create(new ObservationOptions { SkyOverviewMinutesAfterSunset = 90, DeepSkyPreferredLocalTime = "23:30", Timezone = "Asia/Kolkata" });
+        var builder = new StellariumScriptBuilder(options.Value);
+        var sut = new StellariumVisualGenerationService(options, builder, obs, NullLogger<StellariumVisualGenerationService>.Instance);
+
+        var context = new AstronomyContext { Date = new DateOnly(2026, 6, 21), LocationName = "Udaipur, India", TimeZone = "Asia/Kolkata", Latitude = 24.5854, Longitude = 73.7125 };
+        await sut.PrepareVisualsAsync(context, outputDir, CancellationToken.None);
+
+        var moonMetaPath = Path.Combine(outputDir, "visuals", "scripts", "002-moon.json");
+        var deepSkyMetaPath = Path.Combine(outputDir, "visuals", "scripts", "004-orion.json");
+        var scriptPath = Path.Combine(outputDir, "visuals", "scripts", "001-sky-overview.ssc");
+
+        var moonMeta = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(moonMetaPath));
+        var moonUtc = moonMeta.RootElement.GetProperty("SceneTimeUtc").GetDateTimeOffset();
+        var tz = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+        var local = TimeZoneInfo.ConvertTime(moonUtc, tz);
+        Assert.True(local.Hour >= 18 || local.Hour <= 6);
+
+        var overviewMeta = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "visuals", "scripts", "001-sky-overview.json")));
+        var overviewUtc = overviewMeta.RootElement.GetProperty("SceneTimeUtc").GetDateTimeOffset();
+        var overviewLocal = TimeZoneInfo.ConvertTime(overviewUtc, tz);
+        Assert.True(overviewLocal.Hour >= 19);
+
+        var deepMeta = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(deepSkyMetaPath));
+        var deepUtc = deepMeta.RootElement.GetProperty("SceneTimeUtc").GetDateTimeOffset();
+        var deepLocal = TimeZoneInfo.ConvertTime(deepUtc, tz);
+        Assert.True(deepLocal.Hour >= 21 || deepLocal.Hour <= 5);
+
+        var script = await File.ReadAllTextAsync(scriptPath);
+        Assert.Contains("core.setDate(\"", script);
+        Assert.Contains("\", \"utc\");", script);
     }
 }
