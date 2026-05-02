@@ -13,26 +13,27 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
     private readonly ISkyfieldSidecarClient _skyfieldSidecarClient;
     private readonly ILogger<AstronomyContextProvider> _logger;
     private readonly SkyfieldSidecarOptions _sidecarOptions;
+    private readonly ObservationOptions _observationOptions;
 
-    public AstronomyContextProvider(NasaApodClient apodClient, NasaNeoWsClient neoWsClient, ISkyfieldSidecarClient skyfieldSidecarClient, ILogger<AstronomyContextProvider> logger, IOptions<SkyfieldSidecarOptions> sidecarOptions)
+    public AstronomyContextProvider(NasaApodClient apodClient, NasaNeoWsClient neoWsClient, ISkyfieldSidecarClient skyfieldSidecarClient, ILogger<AstronomyContextProvider> logger, IOptions<SkyfieldSidecarOptions> sidecarOptions, IOptions<ObservationOptions> observationOptions)
     {
         _apodClient = apodClient;
         _neoWsClient = neoWsClient;
         _skyfieldSidecarClient = skyfieldSidecarClient;
         _logger = logger;
         _sidecarOptions = sidecarOptions.Value;
+        _observationOptions = observationOptions.Value;
     }
 
     public async Task<AstronomyContext> BuildContextAsync(DateOnly date, ContentType contentType, string locationName, string timeZone, CancellationToken cancellationToken)
     {
-        var context = new AstronomyContext { Date = date, LocationName = locationName, TimeZone = timeZone };
+        var context = new AstronomyContext { Date = date, LocationName = string.IsNullOrWhiteSpace(locationName) ? _observationOptions.LocationName : locationName, TimeZone = string.IsNullOrWhiteSpace(timeZone) ? _observationOptions.Timezone : timeZone, Latitude = _observationOptions.Latitude, Longitude = _observationOptions.Longitude };
         await AddNasaContextAsync(context, date, cancellationToken);
 
         if (contentType == ContentType.DailySkyGuide && _sidecarOptions.Enabled)
         {
-            var (latitude, longitude) = ResolveCoordinates(locationName);
-            context.Latitude = latitude;
-            context.Longitude = longitude;
+            var latitude = _observationOptions.Latitude;
+            var longitude = _observationOptions.Longitude;
             var sidecarResponse = await _skyfieldSidecarClient.GetDailySkyAsync(new SkyfieldDailySkyRequest
             {
                 Date = date.ToString("yyyy-MM-dd"),
@@ -132,12 +133,4 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         });
     }
 
-    private static (double Latitude, double Longitude) ResolveCoordinates(string locationName)
-    {
-        return locationName.Trim().ToLowerInvariant() switch
-        {
-            "udaipur, india" => (24.5854, 73.7125),
-            _ => (24.5854, 73.7125)
-        };
-    }
 }

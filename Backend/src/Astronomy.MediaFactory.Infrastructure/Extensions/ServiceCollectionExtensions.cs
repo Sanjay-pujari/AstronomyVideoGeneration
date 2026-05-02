@@ -113,7 +113,12 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<ObservationOptions>()
             .Bind(configuration.GetSection(ObservationOptions.SectionName))
-            .Validate(options => options.SkyOverviewMinutesAfterSunset is >= 60 and <= 90, "Observation:SkyOverviewMinutesAfterSunset must be between 60 and 90.")
+            .Validate(options => options.Latitude is >= -90 and <= 90, "Observation:Latitude must be between -90 and 90.")
+            .Validate(options => options.Longitude is >= -180 and <= 180, "Observation:Longitude must be between -180 and 180.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.Timezone), "Observation:Timezone is required.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.LocationName), "Observation:LocationName is required.")
+            .Validate(options => options.DefaultObservationHour is >= 0 and <= 23, "Observation:DefaultObservationHour must be between 0 and 23.")
+            .Validate(options => options.SkyOverviewMinutesAfterSunset >= 0, "Observation:SkyOverviewMinutesAfterSunset must be >= 0.")
             .ValidateOnStart();
 
         services.AddOptions<StellariumOptions>()
@@ -176,6 +181,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAstronomyContextProvider, AstronomyContextProvider>();
         services.AddScoped<ITopicRankingService, TopicRankingService>();
         services.AddScoped<ITopicSelectionService, TopicSelectionService>();
+        services.AddScoped<IObservationTimeService, ObservationTimeService>();
         services.AddScoped<IVisualAssetProvider, StellariumVisualGenerationService>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
         services.AddScoped<IMetadataOptimizationService, MetadataOptimizationService>();
