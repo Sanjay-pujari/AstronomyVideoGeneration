@@ -8,6 +8,7 @@ namespace Astronomy.MediaFactory.AstroData.Services;
 
 public sealed class AstronomyContextProvider : IAstronomyContextProvider
 {
+    private static ILogger<AstronomyContextProvider>? _loggerStatic;
     private readonly NasaApodClient _apodClient;
     private readonly NasaNeoWsClient _neoWsClient;
     private readonly ISkyfieldSidecarClient _skyfieldSidecarClient;
@@ -21,6 +22,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         _neoWsClient = neoWsClient;
         _skyfieldSidecarClient = skyfieldSidecarClient;
         _logger = logger;
+        _loggerStatic = logger;
         _sidecarOptions = sidecarOptions.Value;
         _observationOptions = observationOptions.Value;
     }
@@ -133,8 +135,18 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
         foreach (var (v, i) in selected.Select((v, i) => (v, i)))
         {
-            var local = ParseLocal(v.BestLocalTime) ?? overviewLocal.AddMinutes(30 + (i * 30));
-            var utc = DateTimeOffset.TryParse(v.BestUtcTime, out var pUtc) ? pUtc.ToUniversalTime() : ToUtc(local, tz);
+            var bestSample = SelectBestSample(v.Samples, observationOptions.MinimumObjectAltitudeDegrees);
+            var local = ParseLocal(bestSample?.LocalTime)
+                ?? ComputeMidpointFromSamples(v.Samples)
+                ?? ParseLocal(v.BestLocalTime)
+                ?? overviewLocal.AddMinutes(30 + (i * 30));
+            var utc = ParseUtc(bestSample?.UtcTime)
+                ?? ComputeMidpointUtcFromSamples(v.Samples, tz, local)
+                ?? (DateTimeOffset.TryParse(v.BestUtcTime, out var pUtc) ? pUtc.ToUniversalTime() : ToUtc(local, tz));
+            var altitude = bestSample?.AltitudeDegrees ?? v.AltitudeDegrees ?? 0;
+            var azimuth = bestSample?.AzimuthDegrees ?? v.AzimuthDegrees ?? 0;
+            var direction = bestSample?.DirectionLabel ?? v.DirectionLabel ?? "N/A";
+
             scenes.Add(new SceneObservationContext
             {
                 SceneId = $"object-{i + 1}",
@@ -145,9 +157,9 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 LocalObservationTime = local,
                 UtcObservationTime = utc,
                 Timezone = timezone,
-                AltitudeDegrees = v.AltitudeDegrees ?? 0,
-                AzimuthDegrees = v.AzimuthDegrees ?? 0,
-                DirectionLabel = v.DirectionLabel ?? "N/A",
+                AltitudeDegrees = altitude,
+                AzimuthDegrees = azimuth,
+                DirectionLabel = direction,
                 IsVisible = true,
                 VisibilityReason = v.VisibilityReason,
                 RecommendedTool = "Naked eye / binoculars",
@@ -156,6 +168,8 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 Longitude = context.Longitude,
                 LocationName = context.LocationName
             });
+
+            _loggerStatic?.LogInformation("Selected observation time for {ObjectName}: {SelectedTime} (alt: {Altitude:F1}°)", v.ObjectName, local, altitude);
         }
 
         scenes.Add(new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing wide sky", SceneType = "Tips", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = scenes.Last().LocalObservationTime.AddMinutes(30), UtcObservationTime = scenes.Last().UtcObservationTime.AddMinutes(30), Timezone = timezone, IsVisible = true, VisibilityReason = "Wrap-up", RecommendedTool = "Naked eye", NarrationFocus = "Safe viewing tips.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName });
@@ -167,8 +181,56 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         return true;
     }
 
+
+    private static SkyfieldVisibilitySample? SelectBestSample(IReadOnlyCollection<SkyfieldVisibilitySample>? samples, double minimumAltitudeDegrees)
+    {
+        if (samples is null || samples.Count == 0)
+        {
+            return null;
+        }
+
+        return samples
+            .Where(s => s.AltitudeDegrees >= minimumAltitudeDegrees)
+            .OrderByDescending(s => s.AltitudeDegrees)
+            .ThenBy(s => ParseLocal(s.LocalTime) ?? DateTime.MaxValue)
+            .FirstOrDefault();
+    }
+
+    private static DateTime? ComputeMidpointFromSamples(IReadOnlyCollection<SkyfieldVisibilitySample>? samples)
+    {
+        if (samples is null || samples.Count == 0)
+        {
+            return null;
+        }
+
+        var ordered = samples
+            .Select(s => ParseLocal(s.LocalTime))
+            .Where(t => t.HasValue)
+            .Select(t => t!.Value)
+            .OrderBy(t => t)
+            .ToList();
+
+        if (ordered.Count == 0)
+        {
+            return null;
+        }
+
+        var start = ordered.First();
+        var end = ordered.Last();
+        return start + TimeSpan.FromTicks((end - start).Ticks / 2);
+    }
+
+    private static DateTimeOffset ComputeMidpointUtcFromSamples(IReadOnlyCollection<SkyfieldVisibilitySample>? samples, TimeZoneInfo tz, DateTime fallbackLocal)
+    {
+        var midpoint = ComputeMidpointFromSamples(samples) ?? fallbackLocal;
+        return ToUtc(midpoint, tz);
+    }
+
     private static DateTime? ParseLocal(string? value)
         => DateTime.TryParse(value, out var parsed) ? DateTime.SpecifyKind(parsed, DateTimeKind.Unspecified) : null;
+
+    private static DateTimeOffset? ParseUtc(string? value)
+        => DateTimeOffset.TryParse(value, out var parsed) ? parsed.ToUniversalTime() : null;
 
     private static DateTimeOffset ToUtc(DateTime local, TimeZoneInfo timezone)
         => new DateTimeOffset(local, timezone.GetUtcOffset(local)).ToUniversalTime();
