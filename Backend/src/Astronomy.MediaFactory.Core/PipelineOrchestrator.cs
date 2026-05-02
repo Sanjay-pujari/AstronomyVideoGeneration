@@ -326,12 +326,19 @@ public sealed class PipelineOrchestrator
                 var visualSceneContexts = context.SceneObservationContexts
                     .Take(Math.Min(context.SceneObservationContexts.Count, visuals.Count))
                     .ToList();
-                var narrationSceneIds = script.SceneScriptSections.SectionsBySceneId.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var visualSceneIds = visualSceneContexts.Select(x => x.SceneId).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                if (!narrationSceneIds.SetEquals(visualSceneIds))
+                var expectedVisualObjects = NormalizeObjects(visualSceneContexts.Select(x => x.ObjectName));
+                var actualNarrationObjects = NormalizeObjects(script.SceneScriptSections.SectionsBySceneId.Keys
+                    .Where(sceneId => script.SceneScriptSections.SectionsBySceneId.TryGetValue(sceneId, out _))
+                    .Select(sceneId => context.SceneObservationContexts.FirstOrDefault(s => s.SceneId.Equals(sceneId, StringComparison.OrdinalIgnoreCase))?.ObjectName ?? sceneId));
+                var missingFromNarration = expectedVisualObjects.Except(actualNarrationObjects, StringComparer.OrdinalIgnoreCase).ToList();
+                var extraInNarration = actualNarrationObjects.Except(expectedVisualObjects, StringComparer.OrdinalIgnoreCase).ToList();
+                if (missingFromNarration.Count > 0 || extraInNarration.Count > 0)
                 {
+                    var diagnostics = new { expectedVisualObjects, actualNarrationObjects, missingFromNarration, extraInNarration };
+                    _logger.LogError("Narration/visual scene mismatch diagnostics: {Diagnostics}", JsonSerializer.Serialize(diagnostics));
                     throw new InvalidOperationException("Narration/visual scene mismatch");
                 }
+
                 var sceneSections = visualSceneContexts
                     .Select(s => (s.SceneTitle, script.SceneScriptSections.SectionsBySceneId[s.SceneId]))
                     .ToList();
@@ -699,6 +706,14 @@ public sealed class PipelineOrchestrator
             File.WriteAllText(Path.Combine(outputDirectory, $"{title}.json"), payload);
         }
     }
+
+
+    private static List<string> NormalizeObjects(IEnumerable<string> objects)
+        => objects
+            .Select(x => x?.Trim() ?? string.Empty)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Equals("Night sky", StringComparison.OrdinalIgnoreCase) ? "Sky" : x)
+            .ToList();
 
     private static SceneObservationContextEntry BuildSceneObservationContextEntry(string sceneId, AstronomyEventModel? astronomyEvent) => new()
     {

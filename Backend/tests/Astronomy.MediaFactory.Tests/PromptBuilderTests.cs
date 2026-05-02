@@ -21,18 +21,32 @@ public sealed class PromptBuilderTests
     }
 
     [Fact]
-    public void Build_ShouldIncludeMoonAndJupiterSceneObservationContext()
+    public void Build_ShouldUseProvidedSceneObservationContext_AsSingleSource()
     {
         var context = new AstronomyContext { Date = new DateOnly(2026, 3, 16), LocationName = "Seattle, USA", TimeZone = "America/Los_Angeles" };
-        context.Events.Add(new AstronomyEventModel { Category = "Moon", ObjectName = "Waxing Gibbous Moon", VisibilityWindow = "Around 8:45 PM", Direction = "West", ObservationTool = "Naked eye", Details = "Bright and easy to find.", Score = 0.91 });
+        context.Events.Add(new AstronomyEventModel { Category = "Moon", ObjectName = "Moon", VisibilityWindow = "Around 8:45 PM", Direction = "West", ObservationTool = "Naked eye", Details = "Bright and easy to find.", Score = 0.91 });
         context.Events.Add(new AstronomyEventModel { Category = "Planet", ObjectName = "Jupiter", VisibilityWindow = "Around 9:00 PM", Direction = "South-west", ObservationTool = "Binoculars", Details = "Look for Galilean moons.", Score = 0.95 });
+        context.Events.Add(new AstronomyEventModel { Category = "Planet", ObjectName = "Mars", VisibilityWindow = "Around 9:30 PM", Direction = "South", ObservationTool = "Binoculars", Details = "Not selected", Score = 0.90 });
+        context.Events.Add(new AstronomyEventModel { Category = "Constellation", ObjectName = "Orion", VisibilityWindow = "Around 10:00 PM", Direction = "East", ObservationTool = "Naked eye", Details = "Not selected", Score = 0.89 });
+
+        context.SceneObservationContexts =
+        [
+            new SceneObservationContext { SceneId = "sky-overview", SceneTitle = "Sky overview", SceneType = "Overview", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = new DateTime(2026,3,16,20,0,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "object-1", SceneTitle = "Moon focus", SceneType = "Object", ObjectName = "Moon", ObjectType = "Moon", LocalObservationTime = new DateTime(2026,3,16,20,45,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "object-2", SceneTitle = "Jupiter focus", SceneType = "Object", ObjectName = "Jupiter", ObjectType = "Planet", LocalObservationTime = new DateTime(2026,3,16,21,0,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "object-3", SceneTitle = "Venus focus", SceneType = "Object", ObjectName = "Venus", ObjectType = "Planet", LocalObservationTime = new DateTime(2026,3,16,21,15,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing sky", SceneType = "Tips", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = new DateTime(2026,3,16,21,45,0), UtcObservationTime = DateTimeOffset.UtcNow }
+        ];
 
         var prompt = new PromptBuilder().Build(ContentType.DailySkyGuide, context);
 
-        Assert.Contains("\"sceneId\": \"moon\"", prompt);
-        Assert.Contains("Waxing Gibbous Moon", prompt);
-        Assert.Contains("\"sceneId\": \"jupiter\"", prompt);
+        Assert.Contains("\"sceneId\": \"object-1\"", prompt);
+        Assert.Contains("\"objectName\": \"Moon\"", prompt);
+        Assert.Contains("\"sceneId\": \"object-2\"", prompt);
         Assert.Contains("\"objectName\": \"Jupiter\"", prompt);
+        Assert.Contains("\"objectName\": \"Venus\"", prompt);
+        Assert.DoesNotContain("\"objectName\": \"Mars\"", prompt);
+        Assert.DoesNotContain("\"objectName\": \"Orion\"", prompt);
         Assert.Contains("not generic sky facts", prompt, StringComparison.OrdinalIgnoreCase);
     }
 
