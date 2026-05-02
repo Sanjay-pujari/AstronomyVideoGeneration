@@ -25,6 +25,46 @@ class VisibilityCandidate(BaseModel):
     object_type: Annotated[str, Field(alias="objectType")]
     model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
+
+
+class DailySkyRequest(BaseModel):
+    date: str
+    location_name: Annotated[str, Field(alias="locationName", min_length=2)]
+    latitude: Annotated[float, Field(ge=-90, le=90)]
+    longitude: Annotated[float, Field(ge=-180, le=180)]
+    timezone: Annotated[str, Field(min_length=1)]
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+    @field_validator("date")
+    @classmethod
+    def validate_date(cls, v: str) -> str:
+        datetime.strptime(v, "%Y-%m-%d")
+        return v
+
+
+class DailySkyEvent(BaseModel):
+    category: str
+    object_name: Annotated[str, Field(alias="objectName")]
+    visibility_window: Annotated[str, Field(alias="visibilityWindow")]
+    direction: str
+    observation_tool: Annotated[str, Field(alias="observationTool")]
+    details: str
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class VisualIdea(BaseModel):
+    title: str
+    description: str
+
+
+class DailySkyResponse(BaseModel):
+    date: str
+    location_name: Annotated[str, Field(alias="locationName")]
+    timezone: str
+    events: list[DailySkyEvent]
+    visual_ideas: Annotated[list[VisualIdea], Field(alias="visualIdeas")]
+    model_config = ConfigDict(populate_by_name=True)
+
 class NightPlanRequest(BaseModel):
     date: str
     location_name: Annotated[str, Field(alias="locationName", min_length=2)]
@@ -133,3 +173,40 @@ def night_plan(req: NightPlanRequest):
             ov=ObjectVisibility(objectName=c.object_name, objectType=c.object_type, isVisible=False, visibilityReason='Below minimum altitude during night window', samples=samples)
             not_visible.append(ov)
     return NightPlanResponse(locationName=req.location_name, timezone=req.timezone, targetDate=req.date, sunsetLocal=sunset_local.isoformat(), sunriseLocal=sunrise_local.isoformat(), nightWindowStartLocal=sunset_local.isoformat(), nightWindowEndLocal=sunrise_local.isoformat(), visibleObjects=visible, notVisibleObjects=not_visible)
+
+
+@app.post('/ephemeris/daily-sky', response_model=DailySkyResponse)
+def daily_sky(req: DailySkyRequest):
+    return DailySkyResponse(
+        date=req.date,
+        locationName=req.location_name,
+        timezone=req.timezone,
+        events=[
+            DailySkyEvent(
+                category='planet',
+                objectName='Venus',
+                visibilityWindow='After sunset',
+                direction='W',
+                observationTool='Naked eye',
+                details='Bright evening target low in the western sky.'
+            ),
+            DailySkyEvent(
+                category='moon',
+                objectName='Moon',
+                visibilityWindow='Evening to early night',
+                direction='SE',
+                observationTool='Naked eye / binoculars',
+                details='Good for a foreground landscape composition.'
+            )
+        ],
+        visualIdeas=[
+            VisualIdea(
+                title='Golden-hour moonrise timelapse',
+                description='Frame terrestrial foreground elements and capture moonrise transitions into blue hour.'
+            ),
+            VisualIdea(
+                title='Venus over skyline',
+                description='Shoot short telephoto clips right after sunset while Venus is still bright against twilight.'
+            )
+        ]
+    )
