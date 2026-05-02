@@ -59,6 +59,12 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         foreach (var scene in scenes)
         {
             _logger.LogInformation(
+                "Scene mapping debug: SceneIndex={SceneIndex}, ObjectName={ObjectName}, GeneratedFileName={GeneratedFileName}",
+                scene.SceneId,
+                scene.ObservationContext.ObjectName,
+                Path.GetFileNameWithoutExtension(scene.OutputImagePath));
+
+            _logger.LogInformation(
                 "Preparing Stellarium scene {SceneId} for object {ObjectName} at local {LocalObservationTime} ({UtcObservationTime} UTC).",
                 scene.ObservationContext.SceneId,
                 scene.ObservationContext.ObjectName,
@@ -277,39 +283,71 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
 
     private static List<StellariumScene> ComposeScenes(AstronomyContext context, string scriptsDirectory, string capturesDirectory, ObservationOptions observationOptions, IObservationTimeService observationTimeService)
     {
-        var timezone = ResolveTimeZone(context.TimeZone, observationOptions.Timezone);
         var selectedTimes = observationTimeService.SelectSceneTimes(context, context.Date, observationOptions);
         var selectedTimesById = selectedTimes.ToDictionary(x => x.SceneId, StringComparer.OrdinalIgnoreCase);
-        var objectSceneQueue = new Queue<SceneObservationTime>(selectedTimes.Where(x =>
+        var objectSceneTimes = selectedTimes.Where(x =>
             !x.SceneId.Equals("sky-overview", StringComparison.OrdinalIgnoreCase) &&
-            !x.SceneId.Equals("closing", StringComparison.OrdinalIgnoreCase)));
-        var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase));
-        var brightPlanet = context.Events.FirstOrDefault(e => e.Category.Contains("planet", StringComparison.OrdinalIgnoreCase));
-        var deepSky = context.Events.FirstOrDefault(e => e.Category.Contains("deep", StringComparison.OrdinalIgnoreCase) || e.Category.Contains("constellation", StringComparison.OrdinalIgnoreCase));
+            !x.SceneId.Equals("closing", StringComparison.OrdinalIgnoreCase)).ToList();
+        var objectSceneQueue = new Queue<SceneObservationTime>(objectSceneTimes);
 
-        var sceneDefinitions = new[]
+        var sceneDefinitions = new List<SceneDefinition>
         {
-            new SceneDefinition("sky-overview", "Sky overview", $"Tonight's sky overview for {context.LocationName}.", "Polaris", "overview"),
-            new SceneDefinition("moon", "Moon focus", moonEvent is null ? "Moon scene generated from fallback ephemeris." : moonEvent.Details, moonEvent?.ObjectName ?? "Moon", "moon-planet"),
-            new SceneDefinition(NormalizeSlug(brightPlanet?.ObjectName ?? "jupiter"), "Bright planet", brightPlanet?.Details ?? "A bright planet visible this evening.", brightPlanet?.ObjectName ?? "Jupiter", "moon-planet"),
-            new SceneDefinition(NormalizeSlug(deepSky?.ObjectName ?? "orion"), "Deep sky target", deepSky?.Details ?? "A deep-sky object or constellation to observe.", deepSky?.ObjectName ?? "Orion", "deep-sky"),
-            new SceneDefinition("wide-sky-close", "Closing wide sky", "Final wide view of the visible night sky.", "Polaris", "closing")
+            new("sky-overview", "Sky overview", $"Tonight's sky overview for {context.LocationName}.", "Sky", "overview")
         };
 
+        while (objectSceneQueue.Count > 0 && sceneDefinitions.Count < 4)
+        {
+            var selected = objectSceneQueue.Dequeue();
+            var slug = NormalizeSlug(selected.ObjectName);
+            sceneDefinitions.Add(new SceneDefinition(slug, selected.ObjectName, selected.VisibilityReason, selected.ObjectName, "object"));
+        }
+
+        sceneDefinitions.Add(new SceneDefinition("wide-sky-close", "Closing wide sky", "Final wide view of the visible night sky.", "Sky", "closing"));
+
+        var renderSceneQueue = new Queue<SceneObservationTime>(objectSceneTimes);
         var scenes = sceneDefinitions.Select((def, index) =>
         {
             var order = index + 1;
             var prefix = $"{order:000}-{def.Slug}";
-            var selected = ResolveObservationTime(def, selectedTimesById, objectSceneQueue);
-            var sceneUtc = selected.UtcObservationTime;
-            var targetObject = selected.IsVisible ? def.TargetObject : "Polaris";
+            var selected = ResolveObservationTime(def, selectedTimesById, renderSceneQueue);
+            var sceneObjectName = def.Type is "overview" or "closing" ? selected.ObjectName : def.TargetObject;
+
             return new StellariumScene
             {
-                SceneId = prefix, Title = def.Title, Caption = selected.IsVisible ? def.Caption : $"{selected.ObjectName} is below horizon tonight; showing visible sky instead.", TargetObject = targetObject, Latitude = context.Latitude, Longitude = context.Longitude,
-                SceneTimeUtc = sceneUtc, ScriptPath = Path.Combine(scriptsDirectory, $"{prefix}.ssc"), MetadataPath = Path.Combine(scriptsDirectory, $"{prefix}.json"), OutputImagePath = Path.Combine(capturesDirectory, $"{prefix}.png"),
-                ObservationContext = new SceneObservationContext { SceneId = prefix, SceneTitle = def.Title, SceneType = def.Type, ObjectName = selected.ObjectName, ObjectType = "Object", LocalObservationTime = selected.LocalObservationTime, UtcObservationTime = selected.UtcObservationTime, Timezone = selected.Timezone, AltitudeDegrees = selected.AltitudeDegrees, AzimuthDegrees = selected.AzimuthDegrees, DirectionLabel = selected.DirectionLabel, IsVisible = selected.IsVisible, VisibilityReason = selected.VisibilityReason, RecommendedTool = "Naked eye", NarrationFocus = selected.Reason, Latitude = observationOptions.Latitude, Longitude = observationOptions.Longitude, LocationName = observationOptions.LocationName }
+                SceneId = prefix,
+                Title = def.Type is "overview" or "closing" ? def.Title : sceneObjectName,
+                Caption = selected.IsVisible ? def.Caption : $"{sceneObjectName} is below horizon tonight; showing visible sky instead.",
+                TargetObject = sceneObjectName,
+                Latitude = context.Latitude,
+                Longitude = context.Longitude,
+                SceneTimeUtc = selected.UtcObservationTime,
+                ScriptPath = Path.Combine(scriptsDirectory, $"{prefix}.ssc"),
+                MetadataPath = Path.Combine(scriptsDirectory, $"{prefix}.json"),
+                OutputImagePath = Path.Combine(capturesDirectory, $"{prefix}.png"),
+                ObservationContext = new SceneObservationContext
+                {
+                    SceneId = prefix,
+                    SceneTitle = def.Type is "overview" or "closing" ? def.Title : sceneObjectName,
+                    SceneType = def.Type,
+                    ObjectName = sceneObjectName,
+                    ObjectType = "Object",
+                    LocalObservationTime = selected.LocalObservationTime,
+                    UtcObservationTime = selected.UtcObservationTime,
+                    Timezone = selected.Timezone,
+                    AltitudeDegrees = selected.AltitudeDegrees,
+                    AzimuthDegrees = selected.AzimuthDegrees,
+                    DirectionLabel = selected.DirectionLabel,
+                    IsVisible = selected.IsVisible,
+                    VisibilityReason = selected.VisibilityReason,
+                    RecommendedTool = "Naked eye",
+                    NarrationFocus = selected.Reason,
+                    Latitude = observationOptions.Latitude,
+                    Longitude = observationOptions.Longitude,
+                    LocationName = observationOptions.LocationName
+                }
             };
         }).ToList();
+
         return scenes;
     }
 

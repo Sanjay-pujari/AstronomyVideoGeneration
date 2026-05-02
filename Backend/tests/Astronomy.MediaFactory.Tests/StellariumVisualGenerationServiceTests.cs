@@ -39,7 +39,7 @@ public sealed class StellariumVisualGenerationServiceTests
 
 
     [Fact]
-    public void BuildSceneScript_UsesGenericObjectName_WhenTargetContainsVariantLabel()
+    public void BuildSceneScript_UsesSceneObjectName_WhenSelectingTargets()
     {
         var builder = new StellariumScriptBuilder(new StellariumOptions());
         var scene = new StellariumScene
@@ -52,8 +52,7 @@ public sealed class StellariumVisualGenerationServiceTests
 
         var script = builder.BuildSceneScript(scene);
 
-        Assert.Contains("core.selectObjectByName(\"Moon\"", script);
-        Assert.DoesNotContain("core.selectObjectByName(\"Waxing Gibbous Moon\"", script);
+        Assert.Contains("core.selectObjectByName(\"Waxing Gibbous Moon\"", script);
     }
 
 
@@ -123,7 +122,7 @@ public sealed class StellariumVisualGenerationServiceTests
         Assert.All(visuals, v => Assert.True(File.Exists(v)));
         Assert.True(File.Exists(Path.Combine(outputDir, "visuals", "capture-manifest.json")));
         Assert.True(File.Exists(Path.Combine(outputDir, "visuals", "scripts", "001-sky-overview.ssc")));
-        Assert.True(File.Exists(Path.Combine(outputDir, "visuals", "scripts", "002-moon.json")));
+        Assert.True(Directory.EnumerateFiles(Path.Combine(outputDir, "visuals", "scripts"), "002-*.json").Any());
     }
 
     [Fact]
