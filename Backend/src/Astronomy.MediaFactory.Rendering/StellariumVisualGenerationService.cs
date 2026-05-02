@@ -291,9 +291,10 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             var key = def.Type == "overview" ? "sky-overview" : def.Type == "deep-sky" ? "deep-sky" : def.Type == "closing" ? "closing" : (def.Title.Contains("Moon") ? "moon" : "planet");
             var selected = selectedTimes[key];
             var sceneUtc = selected.UtcObservationTime;
+            var targetObject = selected.IsVisible ? def.TargetObject : "Polaris";
             return new StellariumScene
             {
-                SceneId = prefix, Title = def.Title, Caption = def.Caption, TargetObject = def.TargetObject, Latitude = context.Latitude, Longitude = context.Longitude,
+                SceneId = prefix, Title = def.Title, Caption = selected.IsVisible ? def.Caption : $"{selected.ObjectName} is below horizon tonight; showing visible sky instead.", TargetObject = targetObject, Latitude = context.Latitude, Longitude = context.Longitude,
                 SceneTimeUtc = sceneUtc, ScriptPath = Path.Combine(scriptsDirectory, $"{prefix}.ssc"), MetadataPath = Path.Combine(scriptsDirectory, $"{prefix}.json"), OutputImagePath = Path.Combine(capturesDirectory, $"{prefix}.png")
             };
         }).ToList();

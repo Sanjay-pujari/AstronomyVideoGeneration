@@ -650,23 +650,14 @@ public sealed class PipelineOrchestrator
 
     private static async Task WriteSceneObservationDiagnosticsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
     {
-        var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase) || e.Category.Contains("moon", StringComparison.OrdinalIgnoreCase));
-        var jupiterEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("jupiter", StringComparison.OrdinalIgnoreCase));
-        var sceneObservationContext = new[]
-        {
-            BuildSceneObservationContextEntry("moon", moonEvent),
-            BuildSceneObservationContextEntry("jupiter", jupiterEvent)
-        };
+        var observationOptions = new ObservationOptions();
+        var selected = new ObservationTimeService().SelectSceneTimes(context, context.Date, observationOptions);
+        var objectSearch = selected.Where(x => x.VisibilitySearchSamples.Count > 0).Select(x => new { x.SceneId, x.ObjectName, x.VisibilitySearchSamples });
+        var selectedObservationTimes = selected.Select(x => new { x.SceneId, x.ObjectName, x.LocalObservationTime, x.UtcObservationTime, x.AltitudeDegrees, x.AzimuthDegrees, x.DirectionLabel, x.IsVisible, x.VisibilityReason });
 
-        var selectedObservationTimes = sceneObservationContext.Select(entry => new
-        {
-            entry.sceneId,
-            entry.objectName,
-            entry.bestViewingLocalTime
-        });
-
-        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "scene-observation-context.json"), JsonSerializer.Serialize(sceneObservationContext, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "object-visibility-search.json"), JsonSerializer.Serialize(objectSearch, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "selected-observation-times.json"), JsonSerializer.Serialize(selectedObservationTimes, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "scene-observation-context.json"), JsonSerializer.Serialize(selected, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private static SceneObservationContextEntry BuildSceneObservationContextEntry(string sceneId, AstronomyEventModel? astronomyEvent) => new()
