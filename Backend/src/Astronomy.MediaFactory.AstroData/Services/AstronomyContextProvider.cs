@@ -171,7 +171,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         => DateTime.TryParse(value, out var parsed) ? DateTime.SpecifyKind(parsed, DateTimeKind.Unspecified) : null;
 
     private static DateTimeOffset ToUtc(DateTime local, TimeZoneInfo timezone)
-        => new(local, timezone.GetUtcOffset(local)).ToUniversalTime();
+        => new DateTimeOffset(local, timezone.GetUtcOffset(local)).ToUniversalTime();
 
     private static void AddFallbackOverviewOnly(AstronomyContext context)
     {
