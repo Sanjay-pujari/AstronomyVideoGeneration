@@ -41,6 +41,26 @@ public sealed class ObservationTimeService : IObservationTimeService
 
     public IReadOnlyList<SceneObservationTime> SelectSceneTimes(AstronomyContext context, DateOnly targetDate, ObservationOptions observationOptions)
     {
+        if (context.SceneObservationContexts.Count > 0)
+        {
+            return context.SceneObservationContexts.Select(s => new SceneObservationTime
+            {
+                SceneId = s.SceneId,
+                SceneTitle = s.SceneTitle,
+                ObjectName = s.ObjectName,
+                LocalObservationTime = s.LocalObservationTime,
+                UtcObservationTime = s.UtcObservationTime,
+                Timezone = s.Timezone,
+                Reason = s.NarrationFocus,
+                AltitudeDegrees = s.AltitudeDegrees,
+                AzimuthDegrees = s.AzimuthDegrees,
+                DirectionLabel = s.DirectionLabel,
+                IsVisible = s.IsVisible,
+                VisibilityReason = s.VisibilityReason,
+                VisibilitySearchSamples = []
+            }).ToList();
+        }
+
         var tz = TimeZoneInfo.FindSystemTimeZoneById(observationOptions.Timezone);
         var sunset = targetDate.ToDateTime(new TimeOnly(18, 30));
         var sunrise = targetDate.AddDays(1).ToDateTime(new TimeOnly(6, 0));
