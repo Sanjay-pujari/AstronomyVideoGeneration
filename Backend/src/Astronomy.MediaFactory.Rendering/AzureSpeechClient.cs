@@ -57,30 +57,68 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger, ISsmlBu
         speechConfig.SpeechSynthesisVoiceName = voice;
         using var synthesizer = new SpeechSynthesizer(speechConfig, audioConfig: null);
 
-        SpeechSynthesisResult result;
+        var maxAttempts = Math.Max(1, options.TimeoutRetryAttempts + 1);
+        var retryDelay = TimeSpan.FromMilliseconds(Math.Max(0, options.TimeoutRetryDelayMs));
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var result = await SynthesizeOnceAsync(synthesizer, text, voice, useSsml, options, cancellationToken);
+            if (result.Reason == ResultReason.SynthesizingAudioCompleted)
+            {
+                return result.AudioData;
+            }
+
+            var cancellationDetails = SpeechSynthesisCancellationDetails.FromResult(result);
+            var errorMessage = $"Speech synthesis failed. Reason={result.Reason}, ErrorCode={cancellationDetails.ErrorCode}, Details={cancellationDetails.ErrorDetails}";
+
+            if (IsRetryableTimeout(result, cancellationDetails) && attempt < maxAttempts)
+            {
+                logger.LogWarning(
+                    "Speech synthesis timeout for voice {Voice}. Retrying attempt {Attempt}/{MaxAttempts}. Error: {Error}",
+                    voice,
+                    attempt + 1,
+                    maxAttempts,
+                    errorMessage);
+
+                if (retryDelay > TimeSpan.Zero)
+                {
+                    await Task.Delay(retryDelay, cancellationToken);
+                }
+
+                continue;
+            }
+
+            throw new InvalidOperationException(errorMessage);
+        }
+
+        throw new InvalidOperationException("Speech synthesis failed after retry attempts.");
+    }
+
+    private static bool IsRetryableTimeout(SpeechSynthesisResult result, SpeechSynthesisCancellationDetails cancellationDetails)
+        => result.Reason == ResultReason.Canceled
+           && cancellationDetails.ErrorCode == CancellationErrorCode.ServiceTimeout;
+
+    private async Task<SpeechSynthesisResult> SynthesizeOnceAsync(
+        SpeechSynthesizer synthesizer,
+        string text,
+        string voice,
+        bool useSsml,
+        AzureSpeechOptions options,
+        CancellationToken cancellationToken)
+    {
         if (useSsml)
         {
             var ssml = ssmlBuilder.BuildSsml(text, voice, rateOverride: options.SsmlRate, pitchOverride: options.SsmlPitch);
-            result = await synthesizer.SpeakSsmlAsync(ssml).WaitAsync(cancellationToken);
-            if (result.Reason != ResultReason.SynthesizingAudioCompleted)
+            var ssmlResult = await synthesizer.SpeakSsmlAsync(ssml).WaitAsync(cancellationToken);
+            if (ssmlResult.Reason == ResultReason.SynthesizingAudioCompleted)
             {
-                logger.LogWarning("SSML synthesis failed for voice {Voice}. Falling back to plain text.", voice);
-                result = await synthesizer.SpeakTextAsync(text).WaitAsync(cancellationToken);
+                return ssmlResult;
             }
-        }
-        else
-        {
-            result = await synthesizer.SpeakTextAsync(text).WaitAsync(cancellationToken);
+
+            logger.LogWarning("SSML synthesis failed for voice {Voice}. Falling back to plain text.", voice);
         }
 
-        if (result.Reason == ResultReason.SynthesizingAudioCompleted)
-        {
-            return result.AudioData;
-        }
-
-        var cancellationDetails = SpeechSynthesisCancellationDetails.FromResult(result);
-        throw new InvalidOperationException(
-            $"Speech synthesis failed. Reason={result.Reason}, ErrorCode={cancellationDetails.ErrorCode}, Details={cancellationDetails.ErrorDetails}");
+        return await synthesizer.SpeakTextAsync(text).WaitAsync(cancellationToken);
     }
 
     private static bool IsUnsupportedVoice(Exception ex)
