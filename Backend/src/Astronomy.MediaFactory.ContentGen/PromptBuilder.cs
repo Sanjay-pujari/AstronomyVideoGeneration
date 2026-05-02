@@ -39,7 +39,8 @@ public sealed class PromptBuilder : IPromptBuilder
                 n.SourceName,
                 publishedDate = n.PublishedDate.ToString("yyyy-MM-dd"),
                 n.SourceUrl
-            })
+            }),
+            sceneObservationContext = BuildSceneObservationContext(context)
         };
 
         var sb = new StringBuilder();
@@ -51,6 +52,8 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("2) Include practical observation guidance (when to look, where to look, and what tool to use).");
         sb.AppendLine("3) Do not invent or hallucinate numeric values.");
         sb.AppendLine("4) Return ONLY valid JSON with no markdown, no code fences, and no commentary.");
+        sb.AppendLine("5) Each sceneScript section (overview, moon, jupiter, deepSky, closing) must include: object, local time, direction, approximate altitude, tool needed, and one beginner tip.");
+        sb.AppendLine("6) Keep narration practical and specific to structured observation context, not generic sky facts.");
 
         sb.AppendLine();
         sb.AppendLine(PromptFeedbackComposer.BuildFeedbackSection(feedbackContext, isShortForm: false));
@@ -79,4 +82,34 @@ public sealed class PromptBuilder : IPromptBuilder
 
         return sb.ToString();
     }
+
+    private static object BuildSceneObservationContext(AstronomyContext context)
+    {
+        var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase) || e.Category.Contains("moon", StringComparison.OrdinalIgnoreCase));
+        var jupiterEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("jupiter", StringComparison.OrdinalIgnoreCase));
+        var topEvent = context.Events.OrderByDescending(e => e.Score).FirstOrDefault();
+
+        return new[]
+        {
+            BuildSceneContext("overview", topEvent),
+            BuildSceneContext("moon", moonEvent),
+            BuildSceneContext("jupiter", jupiterEvent)
+        };
+    }
+
+    private static object BuildSceneContext(string sceneId, AstronomyEventModel? astronomyEvent) => new
+    {
+        sceneId,
+        objectName = astronomyEvent?.ObjectName ?? "Unknown",
+        objectType = astronomyEvent?.Category ?? "Unknown",
+        bestViewingLocalTime = astronomyEvent?.VisibilityWindow ?? "Not specified",
+        directionLabel = astronomyEvent?.Direction ?? "Not specified",
+        altitudeDegrees = (double?)null,
+        azimuthDegrees = (double?)null,
+        magnitude = (double?)null,
+        visibilityLevel = "Unknown",
+        recommendedTool = astronomyEvent?.ObservationTool ?? "Naked eye",
+        observingTip = astronomyEvent?.Details ?? "Let your eyes adapt to darkness for 15-20 minutes.",
+        whyInteresting = astronomyEvent?.Details ?? "A beginner-friendly target to practice sky navigation."
+    };
 }

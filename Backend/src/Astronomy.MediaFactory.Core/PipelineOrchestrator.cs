@@ -322,6 +322,7 @@ public sealed class PipelineOrchestrator
             var sceneAudioSegments = new List<string>();
             if (script.SceneScriptSections?.HasAllSections() == true)
             {
+                await WriteSceneObservationDiagnosticsAsync(context, outputDir, cancellationToken);
                 var sceneSections = new[]
                 {
                     ("Sky Overview", script.SceneScriptSections.Overview),
@@ -646,6 +647,43 @@ public sealed class PipelineOrchestrator
             throw;
         }
     }
+
+    private static async Task WriteSceneObservationDiagnosticsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase) || e.Category.Contains("moon", StringComparison.OrdinalIgnoreCase));
+        var jupiterEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("jupiter", StringComparison.OrdinalIgnoreCase));
+        var sceneObservationContext = new[]
+        {
+            BuildSceneObservationContextEntry("moon", moonEvent),
+            BuildSceneObservationContextEntry("jupiter", jupiterEvent)
+        };
+
+        var selectedObservationTimes = sceneObservationContext.Select(entry => new
+        {
+            entry.sceneId,
+            entry.objectName,
+            entry.bestViewingLocalTime
+        });
+
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "scene-observation-context.json"), JsonSerializer.Serialize(sceneObservationContext, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "selected-observation-times.json"), JsonSerializer.Serialize(selectedObservationTimes, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private static object BuildSceneObservationContextEntry(string sceneId, AstronomyEventModel? astronomyEvent) => new
+    {
+        sceneId,
+        objectName = astronomyEvent?.ObjectName ?? "Unknown",
+        objectType = astronomyEvent?.Category ?? "Unknown",
+        bestViewingLocalTime = astronomyEvent?.VisibilityWindow ?? "Not specified",
+        directionLabel = astronomyEvent?.Direction ?? "Not specified",
+        altitudeDegrees = (double?)null,
+        azimuthDegrees = (double?)null,
+        magnitude = (double?)null,
+        visibilityLevel = "Unknown",
+        recommendedTool = astronomyEvent?.ObservationTool ?? "Naked eye",
+        observingTip = astronomyEvent?.Details ?? "Let your eyes adapt to darkness for 15-20 minutes.",
+        whyInteresting = astronomyEvent?.Details ?? "A useful beginner observing target."
+    };
 
 
     private async Task WriteSceneNarrationArtifactsAsync(
