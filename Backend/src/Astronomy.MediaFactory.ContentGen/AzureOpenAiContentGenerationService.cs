@@ -434,11 +434,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
     {
         sections = new SceneScriptSections();
         failureReason = string.Empty;
-        string? overview = null;
-        string? moon = null;
-        string? jupiter = null;
-        string? deepSky = null;
-        string? closing = null;
+        var sectionMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var seenProperties = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var property in sceneScriptNode.EnumerateObject())
@@ -456,26 +452,18 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             }
 
             var value = property.Value.GetString()?.Trim();
-            switch (property.Name)
-            {
-                case "overview": overview = value; break;
-                case "moon": moon = value; break;
-                case "jupiter": jupiter = value; break;
-                case "deepSky": deepSky = value; break;
-                case "closing": closing = value; break;
-                default:
-                    failureReason = $"Unexpected sceneScript property '{property.Name}'.";
-                    return false;
-            }
+            sectionMap[property.Name] = value ?? string.Empty;
+        }
+
+        if (sectionMap.Count == 0)
+        {
+            failureReason = "sceneScript must include at least one scene entry.";
+            return false;
         }
 
         sections = new SceneScriptSections
         {
-            Overview = overview ?? "",
-            Moon = moon ?? "",
-            Jupiter = jupiter ?? "",
-            DeepSky = deepSky ?? "",
-            Closing = closing ?? ""
+            SectionsBySceneId = sectionMap
         };
 
         return true;

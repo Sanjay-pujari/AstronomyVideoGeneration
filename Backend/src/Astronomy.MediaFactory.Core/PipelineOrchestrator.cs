@@ -323,17 +323,21 @@ public sealed class PipelineOrchestrator
             if (script.SceneScriptSections?.HasAllSections() == true)
             {
                 await WriteSceneObservationDiagnosticsAsync(context, outputDir, cancellationToken);
-                var sceneSections = new[]
+                var visualSceneContexts = context.SceneObservationContexts
+                    .Take(Math.Min(context.SceneObservationContexts.Count, visuals.Count))
+                    .ToList();
+                var narrationSceneIds = script.SceneScriptSections.SectionsBySceneId.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var visualSceneIds = visualSceneContexts.Select(x => x.SceneId).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!narrationSceneIds.SetEquals(visualSceneIds))
                 {
-                    ("Sky Overview", script.SceneScriptSections.Overview),
-                    ("Moon", script.SceneScriptSections.Moon),
-                    ("Jupiter", script.SceneScriptSections.Jupiter),
-                    ("Deep Sky", script.SceneScriptSections.DeepSky),
-                    ("Closing", script.SceneScriptSections.Closing)
-                };
+                    throw new InvalidOperationException("Narration/visual scene mismatch");
+                }
+                var sceneSections = visualSceneContexts
+                    .Select(s => (s.SceneTitle, script.SceneScriptSections.SectionsBySceneId[s.SceneId]))
+                    .ToList();
 
                 var sceneNarrationEntries = new List<(int Index, string Title, string TextPath, string AudioPath, string Text)>();
-                for (var i = 0; i < Math.Min(sceneSections.Length, visuals.Count); i++)
+                for (var i = 0; i < sceneSections.Count; i++)
                 {
                     var sceneOutputDirectory = Path.Combine(outputDir, $"scene-narration-{i + 1:000}");
                     var perSceneAudioPath = await RunStageAsync("SpeechSynthesis", () => _speechSynthesisService.SynthesizeAsync(sceneSections[i].Item2, sceneOutputDirectory, cancellationToken));
@@ -684,6 +688,7 @@ public sealed class PipelineOrchestrator
         WriteDiagnosticFromVisualIdea(context, outputDirectory, "selected-visible-objects");
         WriteDiagnosticFromVisualIdea(context, outputDirectory, "scene-observation-context");
         WriteDiagnosticFromVisualIdea(context, outputDirectory, "narration-context");
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "visual-scene-context");
     }
 
     private static void WriteDiagnosticFromVisualIdea(AstronomyContext context, string outputDirectory, string title)
