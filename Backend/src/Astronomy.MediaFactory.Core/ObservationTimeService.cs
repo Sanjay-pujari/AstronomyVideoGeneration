@@ -121,7 +121,22 @@ public sealed class ObservationTimeService : IObservationTimeService
                 continue;
             if (candidate.ObjectName.Equals("Polaris", StringComparison.OrdinalIgnoreCase))
                 polarisCount++;
-            selectedObjectScenes.Add(candidate with { SceneId = $"object-{selectedObjectScenes.Count + 1}", SceneTitle = $"{candidate.ObjectName} focus" });
+            selectedObjectScenes.Add(new SceneObservationTime
+            {
+                SceneId = $"object-{selectedObjectScenes.Count + 1}",
+                SceneTitle = $"{candidate.ObjectName} focus",
+                ObjectName = candidate.ObjectName,
+                LocalObservationTime = candidate.LocalObservationTime,
+                UtcObservationTime = candidate.UtcObservationTime,
+                Timezone = candidate.Timezone,
+                Reason = candidate.Reason,
+                AltitudeDegrees = candidate.AltitudeDegrees,
+                AzimuthDegrees = candidate.AzimuthDegrees,
+                DirectionLabel = candidate.DirectionLabel,
+                IsVisible = candidate.IsVisible,
+                VisibilityReason = candidate.VisibilityReason,
+                VisibilitySearchSamples = candidate.VisibilitySearchSamples
+            });
             if (selectedObjectScenes.Count == 3)
                 break;
         }
