@@ -58,6 +58,13 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
 
         foreach (var scene in scenes)
         {
+            _logger.LogInformation(
+                "Preparing Stellarium scene {SceneId} for object {ObjectName} at local {LocalObservationTime} ({UtcObservationTime} UTC).",
+                scene.ObservationContext.SceneId,
+                scene.ObservationContext.ObjectName,
+                scene.ObservationContext.LocalObservationTime,
+                scene.ObservationContext.UtcObservationTime);
+
             var script = _scriptBuilder.BuildSceneScript(scene);
             await File.WriteAllTextAsync(scene.ScriptPath, script, cancellationToken);
 
@@ -300,7 +307,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             {
                 SceneId = prefix, Title = def.Title, Caption = selected.IsVisible ? def.Caption : $"{selected.ObjectName} is below horizon tonight; showing visible sky instead.", TargetObject = targetObject, Latitude = context.Latitude, Longitude = context.Longitude,
                 SceneTimeUtc = sceneUtc, ScriptPath = Path.Combine(scriptsDirectory, $"{prefix}.ssc"), MetadataPath = Path.Combine(scriptsDirectory, $"{prefix}.json"), OutputImagePath = Path.Combine(capturesDirectory, $"{prefix}.png"),
-                ObservationContext = new SceneObservationContext { SceneId = prefix, SceneTitle = def.Title, SceneType = def.Type, ObjectName = selected.ObjectName, ObjectType = "Object", LocalObservationTime = selected.LocalObservationTime, UtcObservationTime = selected.UtcObservationTime, Timezone = selected.Timezone, AltitudeDegrees = selected.AltitudeDegrees, AzimuthDegrees = selected.AzimuthDegrees, DirectionLabel = selected.DirectionLabel, IsVisible = selected.IsVisible, VisibilityReason = selected.VisibilityReason, RecommendedTool = "Naked eye", NarrationFocus = selected.Reason }
+                ObservationContext = new SceneObservationContext { SceneId = prefix, SceneTitle = def.Title, SceneType = def.Type, ObjectName = selected.ObjectName, ObjectType = "Object", LocalObservationTime = selected.LocalObservationTime, UtcObservationTime = selected.UtcObservationTime, Timezone = selected.Timezone, AltitudeDegrees = selected.AltitudeDegrees, AzimuthDegrees = selected.AzimuthDegrees, DirectionLabel = selected.DirectionLabel, IsVisible = selected.IsVisible, VisibilityReason = selected.VisibilityReason, RecommendedTool = "Naked eye", NarrationFocus = selected.Reason, Latitude = observationOptions.Latitude, Longitude = observationOptions.Longitude, LocationName = observationOptions.LocationName }
             };
         }).ToList();
         return scenes;

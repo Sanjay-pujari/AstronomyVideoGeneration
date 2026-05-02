@@ -29,6 +29,9 @@ public sealed class SceneObservationContext
     public string VisibilityReason { get; init; } = "";
     public string RecommendedTool { get; init; } = "Naked eye";
     public string NarrationFocus { get; init; } = "";
+    public double Latitude { get; init; }
+    public double Longitude { get; init; }
+    public string LocationName { get; init; } = "";
 }
 
 public sealed class NightSkyPlan

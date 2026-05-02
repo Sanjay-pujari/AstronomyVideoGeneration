@@ -11,7 +11,8 @@ public sealed class StellariumScriptBuilder
 
     public string BuildSceneScript(StellariumScene scene)
     {
-        var utcDate = scene.SceneTimeUtc.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var sceneObservationTimeUtc = scene.ObservationContext.UtcObservationTime.ToUniversalTime();
+        var utcDate = sceneObservationTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ");
         var screenshotPrefix = Path.GetFileNameWithoutExtension(scene.OutputImagePath);
         var screenshotDir = Path.GetDirectoryName(scene.OutputImagePath) ?? ".";
         var zoom = scene.SceneId.Contains("sky-overview", StringComparison.OrdinalIgnoreCase)
@@ -22,11 +23,15 @@ public sealed class StellariumScriptBuilder
             || scene.SceneId.Contains("wide-sky", StringComparison.OrdinalIgnoreCase)
             ? 10.0
             : 8.0;
-        var escapedLocationName = (scene.LocationName ?? "").Replace("\"", "\\\"");
+        var escapedLocationName = (scene.ObservationContext.LocationName ?? scene.LocationName ?? "").Replace("\"", "\\\"");
         var normalizedScreenshotDir = screenshotDir.Replace("\\", "/").Replace("\"", "\\\"");
-        var genericTargetObject = ResolveGenericObjectName(scene.TargetObject);
+        var sceneObjectName = scene.ObservationContext.ObjectName;
+        var genericTargetObject = ResolveGenericObjectName(sceneObjectName);
         var labelText = ResolveLabelText(scene.TargetObject, genericTargetObject);
         var profile = DetermineVisualProfile(scene);
+        var observerLongitude = scene.ObservationContext.Longitude;
+        var observerLatitude = scene.ObservationContext.Latitude;
+        var shouldSelectObject = !string.Equals(sceneObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
 
         return $$"""
 core.clear("natural");
@@ -44,7 +49,7 @@ if (typeof core.setProjectionMode === "function") {
     core.setProjectionMode("{{_options.DefaultProjection}}");
 }
 core.setDate("{{utcDate}}", "utc");
-core.setObserverLocation({{scene.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{scene.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
+core.setObserverLocation({{observerLongitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{observerLatitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
 core.wait(1.0);
 
 safeCall(StelSkyDrawer, "setFlagStarName", [false]);
@@ -67,17 +72,19 @@ if ("{{profile}}" === "deep-sky") {
     safeCall(StelSkyDrawer, "setFlagStarName", [false]);
 }
 
-core.selectObjectByName("{{genericTargetObject}}", true);
-if (typeof StelObjectMgr.setFlagSelectedObjectPointer === "function") {
-    StelObjectMgr.setFlagSelectedObjectPointer(true);
+if ({{shouldSelectObject.ToString().ToLowerInvariant()}}) {
+    core.selectObjectByName("{{genericTargetObject}}", true);
+    if (typeof StelObjectMgr.setFlagSelectedObjectPointer === "function") {
+        StelObjectMgr.setFlagSelectedObjectPointer(true);
+    }
+    if ("{{profile}}" !== "overview" && typeof LabelMgr !== "undefined" && typeof LabelMgr.labelObject === "function") {
+        LabelMgr.labelObject("{{labelText.Replace("\"", "\\\"")}}", "{{genericTargetObject}}", true, 22, "#ffff66", "NE", 20, "TextOnly");
+    }
+    core.wait(1.0);
+    core.wait(0.5);
+    core.moveToSelectedObject(2.0);
+    StelMovementMgr.setFlagTracking(true);
 }
-if ("{{profile}}" !== "overview" && typeof LabelMgr !== "undefined" && typeof LabelMgr.labelObject === "function") {
-    LabelMgr.labelObject("{{labelText.Replace("\"", "\\\"")}}", "{{genericTargetObject}}", true, 22, "#ffff66", "NE", 20, "TextOnly");
-}
-core.wait(1.0);
-core.wait(0.5);
-core.moveToSelectedObject(2.0);
-StelMovementMgr.setFlagTracking(true);
 StelMovementMgr.zoomTo({{zoom}}, 2.0);
 core.wait({{renderSettleSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}});
 if (typeof core.setGuiVisible === "function") {
