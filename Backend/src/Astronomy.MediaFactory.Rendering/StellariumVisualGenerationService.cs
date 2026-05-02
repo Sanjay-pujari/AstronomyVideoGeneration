@@ -271,7 +271,11 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
     private static List<StellariumScene> ComposeScenes(AstronomyContext context, string scriptsDirectory, string capturesDirectory, ObservationOptions observationOptions, IObservationTimeService observationTimeService)
     {
         var timezone = ResolveTimeZone(context.TimeZone, observationOptions.Timezone);
-        var selectedTimes = observationTimeService.SelectSceneTimes(context, context.Date, observationOptions).ToDictionary(x => x.SceneId, StringComparer.OrdinalIgnoreCase);
+        var selectedTimes = observationTimeService.SelectSceneTimes(context, context.Date, observationOptions);
+        var selectedTimesById = selectedTimes.ToDictionary(x => x.SceneId, StringComparer.OrdinalIgnoreCase);
+        var objectSceneQueue = new Queue<SceneObservationTime>(selectedTimes.Where(x =>
+            !x.SceneId.Equals("sky-overview", StringComparison.OrdinalIgnoreCase) &&
+            !x.SceneId.Equals("closing", StringComparison.OrdinalIgnoreCase)));
         var moonEvent = context.Events.FirstOrDefault(e => e.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase));
         var brightPlanet = context.Events.FirstOrDefault(e => e.Category.Contains("planet", StringComparison.OrdinalIgnoreCase));
         var deepSky = context.Events.FirstOrDefault(e => e.Category.Contains("deep", StringComparison.OrdinalIgnoreCase) || e.Category.Contains("constellation", StringComparison.OrdinalIgnoreCase));
@@ -289,8 +293,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         {
             var order = index + 1;
             var prefix = $"{order:000}-{def.Slug}";
-            var key = def.Type == "overview" ? "sky-overview" : def.Type == "deep-sky" ? "deep-sky" : def.Type == "closing" ? "closing" : (def.Title.Contains("Moon") ? "moon" : "planet");
-            var selected = selectedTimes[key];
+            var selected = ResolveObservationTime(def, selectedTimesById, objectSceneQueue);
             var sceneUtc = selected.UtcObservationTime;
             var targetObject = selected.IsVisible ? def.TargetObject : "Polaris";
             return new StellariumScene
@@ -301,6 +304,23 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             };
         }).ToList();
         return scenes;
+    }
+
+    private static SceneObservationTime ResolveObservationTime(
+        SceneDefinition definition,
+        IReadOnlyDictionary<string, SceneObservationTime> selectedTimesById,
+        Queue<SceneObservationTime> objectSceneQueue)
+    {
+        if (definition.Type == "overview" && selectedTimesById.TryGetValue("sky-overview", out var overview))
+            return overview;
+
+        if (definition.Type == "closing" && selectedTimesById.TryGetValue("closing", out var closing))
+            return closing;
+
+        if (objectSceneQueue.Count > 0)
+            return objectSceneQueue.Dequeue();
+
+        return selectedTimesById.Values.First();
     }
 
     private static TimeZoneInfo ResolveTimeZone(string contextTimeZone, string fallback)
