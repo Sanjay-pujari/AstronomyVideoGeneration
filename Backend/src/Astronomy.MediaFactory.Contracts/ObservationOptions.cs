@@ -10,4 +10,7 @@ public sealed class ObservationOptions
     public bool AutoCalculateSunTimes { get; set; } = true;
     public int SkyOverviewMinutesAfterSunset { get; set; } = 90;
     public int DefaultObservationHour { get; set; } = 22;
+    public double MinimumObjectAltitudeDegrees { get; set; } = 10;
+    public int VisibilitySearchStepMinutes { get; set; } = 15;
+    public bool PreferHighestAltitude { get; set; } = true;
 }
