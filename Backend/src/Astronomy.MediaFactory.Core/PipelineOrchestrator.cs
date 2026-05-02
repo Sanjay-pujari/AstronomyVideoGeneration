@@ -678,6 +678,21 @@ public sealed class PipelineOrchestrator
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "selected-observation-times.json"), JsonSerializer.Serialize(selectedObservationTimes, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "scene-observation-context.json"), JsonSerializer.Serialize(selected, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "selected-visible-objects.json"), JsonSerializer.Serialize(selectedVisibleDiagnostics, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "effective-observation-settings");
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "skyfield-night-plan-request");
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "skyfield-night-plan-response");
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "selected-visible-objects");
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "scene-observation-context");
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "narration-context");
+    }
+
+    private static void WriteDiagnosticFromVisualIdea(AstronomyContext context, string outputDirectory, string title)
+    {
+        var payload = context.VisualIdeas.FirstOrDefault(x => x.Title.Equals(title, StringComparison.OrdinalIgnoreCase))?.Description;
+        if (!string.IsNullOrWhiteSpace(payload))
+        {
+            File.WriteAllText(Path.Combine(outputDirectory, $"{title}.json"), payload);
+        }
     }
 
     private static SceneObservationContextEntry BuildSceneObservationContextEntry(string sceneId, AstronomyEventModel? astronomyEvent) => new()

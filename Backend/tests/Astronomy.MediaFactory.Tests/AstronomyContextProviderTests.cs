@@ -13,43 +13,53 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class AstronomyContextProviderTests
 {
     [Fact]
-    public async Task BuildContextAsync_UsesSidecarEvents_WhenAvailable()
+    public async Task BuildContextAsync_UsesNightPlanVisibleObjects_WhenAvailable()
     {
-        var provider = CreateProvider(new FakeSkyfieldSidecarClient(new SkyfieldDailySkyResponse
+        var provider = CreateProvider(new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse
         {
-            Date = "2026-03-17",
             LocationName = "Udaipur, India",
             Timezone = "Asia/Kolkata",
-            Events =
+            VisibleObjects =
             [
-                new SkyfieldDailySkyEvent
+                new SkyfieldObjectVisibility
                 {
-                    Category = "Planet",
                     ObjectName = "Jupiter",
-                    VisibilityWindow = "19:10-23:30",
-                    Direction = "SW",
-                    ObservationTool = "Binoculars / telescope",
-                    Details = "Visible high in the southwest during early evening."
+                    ObjectType = "Planet",
+                    IsVisible = true,
+                    BestLocalTime = "2026-03-17T20:30:00",
+                    BestUtcTime = "2026-03-17T15:00:00Z",
+                    DirectionLabel = "SW",
+                    AltitudeDegrees = 55,
+                    VisibilityReason = "Visible high in the southwest during early evening."
                 }
-            ],
-            VisualIdeas = [new SkyfieldVisualIdea { Title = "Jupiter in the southwest", Description = "Show Jupiter position in the southwest sky after dusk." }]
+            ]
         }));
 
         var result = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "Udaipur, India", "Asia/Kolkata", CancellationToken.None);
 
-        Assert.Contains(result.Events, e => e.ObjectName == "Jupiter" && e.Category == "Planet" && e.Score == 0.95);
-        Assert.Contains(result.VisualIdeas, v => v.Title == "Jupiter in the southwest");
+        Assert.Contains(result.Events, e => e.ObjectName == "Jupiter" && e.Category == "Planet");
+        Assert.Contains(result.SceneObservationContexts, s => s.ObjectName == "Jupiter" && s.IsVisible);
     }
 
     [Fact]
-    public async Task BuildContextAsync_FallsBackToDemoEvents_WhenSidecarUnavailable()
+    public async Task BuildContextAsync_FallsBackToSafeOverview_WhenNightPlanUnavailable()
     {
         var provider = CreateProvider(new FakeSkyfieldSidecarClient(null));
 
         var result = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "Udaipur, India", "Asia/Kolkata", CancellationToken.None);
 
-        Assert.Contains(result.Events, e => e.ObjectName == "Jupiter" && e.Category == "Planet");
-        Assert.Contains(result.Events, e => e.ObjectName == "Orion Nebula" && e.Category == "Deep Sky");
+        Assert.Single(result.Events);
+        Assert.DoesNotContain(result.Events, e => e.ObjectName.Contains("Jupiter", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task BuildContextAsync_UsesObservationOptions_WhenRequestLocationAndTimezoneAreEmpty()
+    {
+        var fake = new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse { VisibleObjects = [] });
+        var provider = CreateProvider(fake);
+        _ = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "", "", CancellationToken.None);
+        Assert.Equal("Pune, India", fake.LastNightPlanRequest!.LocationName);
+        Assert.Equal("Asia/Kolkata", fake.LastNightPlanRequest.Timezone);
     }
 
     [Fact]
@@ -168,15 +178,20 @@ public sealed class AstronomyContextProviderTests
             skyfieldSidecarClient,
             NullLogger<AstronomyContextProvider>.Instance,
             Options.Create(new SkyfieldSidecarOptions { Enabled = true, BaseUrl = "http://localhost:8010" }),
-            Options.Create(new ObservationOptions()));
+            Options.Create(new ObservationOptions { LocationName = "Pune, India", Timezone = "Asia/Kolkata", Latitude = 18.5204, Longitude = 73.8567 }));
     }
 
     private sealed class FakeSkyfieldSidecarClient : ISkyfieldSidecarClient
     {
-        private readonly SkyfieldDailySkyResponse? _response;
-        public FakeSkyfieldSidecarClient(SkyfieldDailySkyResponse? response) => _response = response;
-        public Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => Task.FromResult(_response);
-        public Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => Task.FromResult<SkyfieldNightPlanResponse?>(null);
+        private readonly SkyfieldNightPlanResponse? _response;
+        public SkyfieldNightPlanRequest? LastNightPlanRequest { get; private set; }
+        public FakeSkyfieldSidecarClient(SkyfieldNightPlanResponse? response) => _response = response;
+        public Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => Task.FromResult<SkyfieldDailySkyResponse?>(null);
+        public Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken)
+        {
+            LastNightPlanRequest = request;
+            return Task.FromResult(_response);
+        }
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler
