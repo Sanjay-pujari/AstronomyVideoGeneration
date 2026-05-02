@@ -141,7 +141,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 ?? ParseLocal(v.BestLocalTime)
                 ?? overviewLocal.AddMinutes(30 + (i * 30));
             var utc = ParseUtc(bestSample?.UtcTime)
-                ?? ComputeMidpointUtcFromSamples(v.Samples, tz, local)
+                ?? ComputeMidpointUtcFromSamples(v.Samples, tz)
                 ?? (DateTimeOffset.TryParse(v.BestUtcTime, out var pUtc) ? pUtc.ToUniversalTime() : ToUtc(local, tz));
             var altitude = bestSample?.AltitudeDegrees ?? v.AltitudeDegrees ?? 0;
             var azimuth = bestSample?.AzimuthDegrees ?? v.AzimuthDegrees ?? 0;
@@ -220,10 +220,10 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         return start + TimeSpan.FromTicks((end - start).Ticks / 2);
     }
 
-    private static DateTimeOffset ComputeMidpointUtcFromSamples(IReadOnlyCollection<SkyfieldVisibilitySample>? samples, TimeZoneInfo tz, DateTime fallbackLocal)
+    private static DateTimeOffset? ComputeMidpointUtcFromSamples(IReadOnlyCollection<SkyfieldVisibilitySample>? samples, TimeZoneInfo tz)
     {
-        var midpoint = ComputeMidpointFromSamples(samples) ?? fallbackLocal;
-        return ToUtc(midpoint, tz);
+        var midpoint = ComputeMidpointFromSamples(samples);
+        return midpoint.HasValue ? ToUtc(midpoint.Value, tz) : null;
     }
 
     private static DateTime? ParseLocal(string? value)
