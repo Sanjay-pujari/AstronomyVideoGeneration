@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Xunit;
 
