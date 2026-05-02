@@ -111,11 +111,14 @@ public sealed class PipelineOrchestratorSceneNarrationTests
                 EstimatedDurationSeconds = 45,
                 SceneScriptSections = new SceneScriptSections
                 {
-                    Overview = "Overview text",
-                    Moon = "Moon text",
-                    Jupiter = "Jupiter text",
-                    DeepSky = "DeepSky text",
-                    Closing = "Closing text"
+                    SectionsBySceneId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["overview"] = "Overview text",
+                        ["moon"] = "Moon text",
+                        ["jupiter"] = "Jupiter text",
+                        ["deepsky"] = "DeepSky text",
+                        ["closing"] = "Closing text"
+                    }
                 }
             });
     }
