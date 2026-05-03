@@ -6,11 +6,13 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class NightSkyVisibilityPlannerRankingTests
 {
-    private static readonly ObservationOptions Options = new()
+    private static readonly ObservationOptions Options = CreateOptions();
+
+    private static ObservationOptions CreateOptions(int minimumObjectAltitudeDegrees = 0) => new()
     {
         Timezone = "UTC",
         VisibilitySearchStepMinutes = 30,
-        MinimumObjectAltitudeDegrees = 0,
+        MinimumObjectAltitudeDegrees = minimumObjectAltitudeDegrees,
         LocationName = "Test"
     };
 
@@ -33,13 +35,7 @@ public sealed class NightSkyVisibilityPlannerRankingTests
     public void BuildPlan_IncludesMoonOnlyWhenVisible()
     {
         var planner = new NightSkyVisibilityPlanner();
-        var options = new ObservationOptions
-        {
-            Timezone = Options.Timezone,
-            VisibilitySearchStepMinutes = Options.VisibilitySearchStepMinutes,
-            MinimumObjectAltitudeDegrees = 65,
-            LocationName = Options.LocationName
-        };
+        var options = CreateOptions(minimumObjectAltitudeDegrees: 65);
 
         var plan = planner.BuildPlan(options, new DateOnly(2026, 3, 17),
         [
