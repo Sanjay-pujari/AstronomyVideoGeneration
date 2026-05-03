@@ -76,6 +76,14 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 scene.ObservationContext.ObjectName,
                 scene.ObservationContext.LocalObservationTime,
                 scene.ObservationContext.UtcObservationTime);
+            _logger.LogInformation(
+                "Stellarium object context: ObjectName={ObjectName}, BestLocalTime={BestLocalTime}, BestUtcTime={BestUtcTime}, AltitudeDegrees={AltitudeDegrees}, AzimuthDegrees={AzimuthDegrees}, DirectionLabel={DirectionLabel}",
+                scene.ObservationContext.ObjectName,
+                scene.ObservationContext.LocalObservationTime,
+                scene.ObservationContext.UtcObservationTime,
+                scene.ObservationContext.AltitudeDegrees,
+                scene.ObservationContext.AzimuthDegrees,
+                scene.ObservationContext.DirectionLabel);
 
             var script = _scriptBuilder.BuildSceneScript(scene);
             await File.WriteAllTextAsync(scene.ScriptPath, script, cancellationToken);
@@ -125,6 +133,8 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                     $"Placeholder generated for scene '{scene.SceneId}' ({scene.Title}) because Stellarium output was unavailable.",
                     cancellationToken);
             }
+
+            await WriteRenderWarningIfNeededAsync(scene, cancellationToken);
         }
 
         return scenes.Select(s => s.OutputImagePath).ToList();
@@ -137,8 +147,8 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         {
             scene.ObservationContext.SceneId,
             scene.ObservationContext.ObjectName,
-            scene.ObservationContext.LocalObservationTime,
-            scene.ObservationContext.UtcObservationTime,
+            BestLocalTime = scene.ObservationContext.LocalObservationTime,
+            BestUtcTime = scene.ObservationContext.UtcObservationTime,
             scene.ObservationContext.AltitudeDegrees,
             scene.ObservationContext.AzimuthDegrees,
             scene.ObservationContext.DirectionLabel,
@@ -146,6 +156,44 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             SscFilePath = scene.ScriptPath
         };
         await File.WriteAllTextAsync(contextPath, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private static async Task WriteRenderWarningIfNeededAsync(StellariumScene scene, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(scene.ObservationContext.SceneType, "Object", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var warningReasons = new List<string>();
+        if (!File.Exists(scene.OutputImagePath))
+        {
+            warningReasons.Add("Screenshot file missing.");
+        }
+        else
+        {
+            var fileInfo = new FileInfo(scene.OutputImagePath);
+            if (fileInfo.Length < 50_000)
+                warningReasons.Add($"Screenshot file is unusually small ({fileInfo.Length} bytes).");
+
+            var placeholderPath = Path.ChangeExtension(scene.OutputImagePath, ".placeholder.txt");
+            if (File.Exists(placeholderPath))
+                warningReasons.Add("Placeholder screenshot was generated.");
+        }
+
+        if (warningReasons.Count == 0)
+            return;
+
+        var warningPath = Path.Combine(Path.GetDirectoryName(scene.ScriptPath) ?? ".", "object-scene-render-warning.json");
+        var payload = new
+        {
+            scene.SceneId,
+            scene.ObservationContext.ObjectName,
+            scene.OutputImagePath,
+            scene.ObservationContext.AltitudeDegrees,
+            scene.ObservationContext.AzimuthDegrees,
+            scene.ObservationContext.DirectionLabel,
+            Reasons = warningReasons
+        };
+        await File.WriteAllTextAsync(warningPath, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private static string BuildRunScopeDirectory(string outputDirectory, DateOnly date)

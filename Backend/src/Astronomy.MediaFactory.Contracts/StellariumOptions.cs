@@ -24,4 +24,9 @@ public sealed class StellariumOptions
     [MinLength(1)]
     [MaxLength(128)]
     public string DefaultProjection { get; set; } = "ProjectionPerspective";
+
+    public bool DisableLandscapeForLowAltitudeObjects { get; set; } = true;
+
+    [Range(0, 90)]
+    public double LowAltitudeLandscapeCutoffDegrees { get; set; } = 25;
 }
