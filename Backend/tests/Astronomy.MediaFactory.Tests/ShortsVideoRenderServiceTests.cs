@@ -26,7 +26,19 @@ public sealed class ShortsVideoRenderServiceTests
             NullLogger<ShortsVideoRenderService>.Instance);
 
         var outputDir = Directory.CreateTempSubdirectory("shorts-single-audio").FullName;
-        var result = await sut.RenderAsync(ContentType.SpaceNews, new AstronomyContext { Date = DateOnly.FromDateTime(DateTime.UtcNow) }, [], outputDir, false, CancellationToken.None);
+        var context = new AstronomyContext
+        {
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            SceneObservationContexts =
+            [
+                new SceneObservationContext { SceneId = "sky-overview", ObjectName = "Sky", SceneTitle = "Sky overview" },
+                new SceneObservationContext { SceneId = "moon", ObjectName = "Moon", SceneTitle = "Moon focus" },
+                new SceneObservationContext { SceneId = "jupiter", ObjectName = "Jupiter", SceneTitle = "Jupiter focus" },
+                new SceneObservationContext { SceneId = "planet-secondary", ObjectName = "Mars", SceneTitle = "Secondary planet" },
+                new SceneObservationContext { SceneId = "constellation", ObjectName = "Orion", SceneTitle = "Constellation" }
+            ]
+        };
+        var result = await sut.RenderAsync(ContentType.SpaceNews, context, [], outputDir, false, CancellationToken.None);
 
         Assert.Equal(6, speech.Calls);
         Assert.NotNull(renderService.LastManifest);
@@ -44,6 +56,37 @@ public sealed class ShortsVideoRenderServiceTests
         Assert.Contains("scene-audio-005.mp3", concatLines[4], StringComparison.Ordinal);
         Assert.Contains("moon facts", speech.Scripts[2], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("jupiter storms", speech.Scripts[3], StringComparison.OrdinalIgnoreCase);
+        var sequenceMapPath = Path.Combine(outputDir, "short-sequence-map.json");
+        Assert.True(File.Exists(sequenceMapPath));
+    }
+
+    [Fact]
+    public async Task RenderAsync_Throws_WhenShortNarrationOrderDoesNotMatchVisualSceneOrder()
+    {
+        var sut = new ShortsVideoRenderService(
+            new MismatchedShortScriptService(),
+            new TrackingSpeechService(),
+            new FixedVisualProvider(),
+            new CapturingRenderService(),
+            new NoopBlobService(),
+            new NoopYouTubeService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            Options.Create(new YouTubeOptions()),
+            Options.Create(new RenderingOptions()),
+            NullLogger<ShortsVideoRenderService>.Instance);
+        var context = new AstronomyContext
+        {
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            SceneObservationContexts =
+            [
+                new SceneObservationContext { SceneId = "sky-overview", ObjectName = "Sky", SceneTitle = "Sky overview" },
+                new SceneObservationContext { SceneId = "moon", ObjectName = "Moon", SceneTitle = "Moon focus" }
+            ]
+        };
+        var outputDir = Directory.CreateTempSubdirectory("shorts-mismatch").FullName;
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(ContentType.SpaceNews, context, [], outputDir, false, CancellationToken.None));
+        Assert.Equal("Short video narration/visual sequence mismatch", ex.Message);
     }
 
     private sealed class FakeShortScriptService : IShortsScriptGenerationService
@@ -62,6 +105,22 @@ public sealed class ShortsVideoRenderServiceTests
                     new SceneNarrationSegment{ SceneId = "jupiter", SceneTitle = "Jupiter focus", VisualTarget = "jupiter", NarrationText = "jupiter storms and bright disk."},
                     new SceneNarrationSegment{ SceneId = "planet-secondary", SceneTitle = "Secondary planet", VisualTarget = "mars", NarrationText = "mars color contrast tonight."},
                     new SceneNarrationSegment{ SceneId = "constellation", SceneTitle = "Constellation", VisualTarget = "orion", NarrationText = "constellation orientation tips."}
+                ]
+            });
+    }
+    private sealed class MismatchedShortScriptService : IShortsScriptGenerationService
+    {
+        public Task<ShortScriptResult> GenerateShortAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
+            => Task.FromResult(new ShortScriptResult
+            {
+                Hook = "Hook",
+                ShortScript = "Script",
+                Title = "Title",
+                EstimatedDurationSeconds = 45,
+                SceneNarrationSegments =
+                [
+                    new SceneNarrationSegment{ SceneId = "moon", SceneTitle = "Moon focus", VisualTarget = "moon", NarrationText = "moon narration"},
+                    new SceneNarrationSegment{ SceneId = "sky-overview", SceneTitle = "Sky overview", VisualTarget = "wide sky", NarrationText = "overview narration"}
                 ]
             });
     }
