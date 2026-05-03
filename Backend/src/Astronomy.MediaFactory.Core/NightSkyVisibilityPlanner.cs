@@ -72,8 +72,11 @@ public sealed class NightSkyVisibilityPlanner : INightSkyVisibilityPlanner
         var sunrise = targetDate.AddDays(1).ToDateTime(new TimeOnly(6, 0));
         var step = TimeSpan.FromMinutes(options.VisibilitySearchStepMinutes);
         var evaluated = (candidates ?? DefaultCandidates).Select(c => Evaluate(c, sunset, sunrise, step, tz, options)).ToList();
-        var visible = evaluated.Where(x => x.IsVisible).OrderByDescending(x => x.Candidate.Priority).ThenByDescending(x => x.BestSample!.AltitudeDegrees).ThenByDescending(x => x.Candidate.BeginnerFriendly).ToList();
-        var notVisible = evaluated.Where(x => !x.IsVisible).ToList();
+
+        var scored = ScoreAndRank(evaluated, step);
+        var selectedVisible = SelectDiverseTopObjects(scored, 3).ToList();
+        var visible = selectedVisible.Select(x => x.Visibility).ToList();
+        var notVisible = evaluated.Where(x => !x.IsVisible || selectedVisible.All(s => !ReferenceEquals(s.Visibility, x))).ToList();
         var scenes = BuildScenes(visible, sunset, sunrise, tz, options);
 
         return new NightSkyPlan { LocationName = options.LocationName, Latitude = options.Latitude, Longitude = options.Longitude, Timezone = options.Timezone, TargetDate = targetDate, SunsetLocal = sunset, SunriseLocal = sunrise, NightWindowStartLocal = sunset, NightWindowEndLocal = sunrise, VisibleObjects = visible, NotVisibleObjects = notVisible, SelectedScenes = scenes };
@@ -85,6 +88,86 @@ public sealed class NightSkyVisibilityPlanner : INightSkyVisibilityPlanner
         var visible = samples.Where(x => x.IsVisibleCandidate).ToList();
         var best = visible.Count == 0 ? null : (options.PreferHighestAltitude ? visible.MaxBy(x => x.AltitudeDegrees) : visible.First());
         return new NightSkyObjectVisibility { Candidate = c, Samples = samples, BestSample = best, VisibilityReason = best is null ? $"Below {options.MinimumObjectAltitudeDegrees:F1}° all night." : $"Visible near {best.LocalObservationTime:t} at {best.AltitudeDegrees:F1}°." };
+    }
+
+    private static IEnumerable<(NightSkyObjectVisibility Visibility, double Score)> ScoreAndRank(IReadOnlyList<NightSkyObjectVisibility> evaluated, TimeSpan step)
+    {
+        var durations = evaluated.ToDictionary(x => x, x => x.Samples.Count(s => s.IsVisibleCandidate) * step.TotalMinutes);
+        var maxDuration = Math.Max(1, durations.Values.DefaultIfEmpty(0).Max());
+
+        foreach (var item in evaluated)
+        {
+            var altitude = item.BestSample?.AltitudeDegrees ?? 0;
+            var duration = durations[item];
+            if (altitude < 10 || duration < 20)
+            {
+                Console.WriteLine($"[DailySkyGuideRanking] {item.Candidate.ObjectName} | Score=0.000 | Altitude={altitude:F1} | Duration={duration:F0}m | Rejected");
+                continue;
+            }
+
+            var altitudeScore = altitude / 90d;
+            var brightnessScore = ResolveBrightnessScore(item.Candidate.ObjectName, item.Candidate.ObjectType);
+            var visibilityDurationScore = duration / maxDuration;
+            var typePriorityScore = ResolveTypePriorityScore(item.Candidate.ObjectType);
+            var score = (altitudeScore * 0.4) + (brightnessScore * 0.3) + (visibilityDurationScore * 0.2) + (typePriorityScore * 0.1);
+            Console.WriteLine($"[DailySkyGuideRanking] {item.Candidate.ObjectName} | Score={score:F3} | Altitude={altitude:F1} | Duration={duration:F0}m | Eligible");
+            yield return (item, score);
+        }
+    }
+
+    private static IEnumerable<(NightSkyObjectVisibility Visibility, double Score)> SelectDiverseTopObjects(IEnumerable<(NightSkyObjectVisibility Visibility, double Score)> ranked, int take)
+    {
+        var selected = new List<(NightSkyObjectVisibility Visibility, double Score)>();
+        var moonCount = 0;
+        var planetCount = 0;
+        var deepSkyCount = 0;
+
+        foreach (var item in ranked.OrderByDescending(x => x.Score))
+        {
+            var type = item.Visibility.Candidate.ObjectType.ToLowerInvariant();
+            var isMoon = type.Contains("moon");
+            var isPlanet = type.Contains("planet");
+            var isDeepSky = type.Contains("deep") || type.Contains("cluster") || type.Contains("galaxy");
+            if ((isMoon && moonCount >= 1) || (isPlanet && planetCount >= 2) || (isDeepSky && deepSkyCount >= 1))
+            {
+                Console.WriteLine($"[DailySkyGuideRanking] {item.Visibility.Candidate.ObjectName} | Score={item.Score:F3} | Altitude={item.Visibility.BestSample?.AltitudeDegrees ?? 0:F1} | Duration=n/a | Rejected");
+                continue;
+            }
+
+            selected.Add(item);
+            moonCount += isMoon ? 1 : 0;
+            planetCount += isPlanet ? 1 : 0;
+            deepSkyCount += isDeepSky ? 1 : 0;
+            Console.WriteLine($"[DailySkyGuideRanking] {item.Visibility.Candidate.ObjectName} | Score={item.Score:F3} | Altitude={item.Visibility.BestSample?.AltitudeDegrees ?? 0:F1} | Duration=n/a | Selected");
+            if (selected.Count == take)
+                break;
+        }
+
+        return selected;
+    }
+
+    private static double ResolveBrightnessScore(string objectName, string objectType)
+    {
+        var n = objectName.ToLowerInvariant();
+        if (n.Contains("moon")) return 1.0;
+        if (n.Contains("venus")) return 0.95;
+        if (n.Contains("jupiter")) return 0.9;
+        if (n.Contains("saturn")) return 0.8;
+        var t = objectType.ToLowerInvariant();
+        if (t.Contains("star")) return 0.7;
+        if (t.Contains("deep") || t.Contains("cluster") || t.Contains("galaxy")) return 0.5;
+        if (t.Contains("planet")) return 0.8;
+        return 0.6;
+    }
+
+    private static double ResolveTypePriorityScore(string objectType)
+    {
+        var t = objectType.ToLowerInvariant();
+        if (t.Contains("moon")) return 1.0;
+        if (t.Contains("planet")) return 0.9;
+        if (t.Contains("star")) return 0.7;
+        if (t.Contains("deep") || t.Contains("cluster") || t.Contains("galaxy")) return 0.6;
+        return 0.6;
     }
 
     private static IReadOnlyList<SceneObservationContext> BuildScenes(IReadOnlyList<NightSkyObjectVisibility> visible, DateTime sunset, DateTime sunrise, TimeZoneInfo tz, ObservationOptions options)
