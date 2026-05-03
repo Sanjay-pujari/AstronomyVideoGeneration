@@ -29,4 +29,15 @@ public sealed class StellariumOptions
 
     [Range(0, 90)]
     public double LowAltitudeLandscapeCutoffDegrees { get; set; } = 25;
+
+    public bool EnableCinematicMotion { get; set; } = false;
+
+    [Range(1, 360)]
+    public double CinematicZoomStart { get; set; } = 60;
+
+    [Range(1, 360)]
+    public double CinematicZoomEnd { get; set; } = 35;
+
+    [Range(0, 120)]
+    public double CinematicWaitBeforeScreenshotSeconds { get; set; } = 8;
 }
