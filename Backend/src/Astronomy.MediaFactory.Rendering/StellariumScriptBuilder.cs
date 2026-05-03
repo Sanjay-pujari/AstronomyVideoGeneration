@@ -11,142 +11,149 @@ public sealed class StellariumScriptBuilder
 
     public string BuildSceneScript(StellariumScene scene)
     {
-        var sceneObservationTimeUtc = scene.ObservationContext.UtcObservationTime;
-        var utcDate = sceneObservationTimeUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var utcDate = scene.ObservationContext.UtcObservationTime.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
         var screenshotPrefix = Path.GetFileNameWithoutExtension(scene.OutputImagePath);
-        var screenshotDir = Path.GetDirectoryName(scene.OutputImagePath) ?? ".";
-        var zoom = scene.SceneId.Contains("sky-overview", StringComparison.OrdinalIgnoreCase)
-            || scene.SceneId.Contains("wide-sky", StringComparison.OrdinalIgnoreCase)
-            ? 80
-            : 35;
-        var renderSettleSeconds = scene.SceneId.Contains("sky-overview", StringComparison.OrdinalIgnoreCase)
-            || scene.SceneId.Contains("wide-sky", StringComparison.OrdinalIgnoreCase)
-            ? 10.0
-            : 8.0;
+        var screenshotDir = (Path.GetDirectoryName(scene.OutputImagePath) ?? ".").Replace("\\", "/").Replace("\"", "\\\"");
         var escapedLocationName = (scene.ObservationContext.LocationName ?? scene.LocationName ?? "").Replace("\"", "\\\"");
-        var normalizedScreenshotDir = screenshotDir.Replace("\\", "/").Replace("\"", "\\\"");
-        var sceneObjectName = string.IsNullOrWhiteSpace(scene.ObservationContext.ObjectName)
-            ? scene.TargetObject
-            : scene.ObservationContext.ObjectName;
-        var labelText = ResolveLabelText(sceneObjectName);
-        var profile = DetermineVisualProfile(scene);
-        var observerLongitude = scene.ObservationContext.Longitude;
-        var observerLatitude = scene.ObservationContext.Latitude;
-        var shouldSelectObject = !string.Equals(sceneObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
-        var altitude = scene.ObservationContext.AltitudeDegrees;
-        var landscapeCutoff = _options.LowAltitudeLandscapeCutoffDegrees;
-        var shouldShowLandscape = !shouldSelectObject
-            || !_options.DisableLandscapeForLowAltitudeObjects
-            || altitude is null
-            || altitude >= landscapeCutoff;
-        zoom = shouldSelectObject && altitude < landscapeCutoff ? 45 : zoom;
-        // Altitude/azimuth are retained in scene metadata for validation and narration only.
-        var escapedSceneObjectName = sceneObjectName.Replace("\"", "\\\"");
-        var escapedLabelText = labelText.Replace("\"", "\\\"");
+        var objectName = string.IsNullOrWhiteSpace(scene.ObservationContext.ObjectName) ? scene.TargetObject : scene.ObservationContext.ObjectName;
+        var escapedObjectName = (objectName ?? "Sky").Replace("\"", "\\\"");
+        var isOverviewScene = IsOverviewScene(scene);
+        var zoomLevel = isOverviewScene ? 80d : GetZoomLevel(scene.ObservationContext);
+        var minimumObjectAltitudeDegrees = _options.LowAltitudeLandscapeCutoffDegrees;
 
+        if (!isOverviewScene && (!scene.ObservationContext.IsVisible || scene.ObservationContext.AltitudeDegrees < minimumObjectAltitudeDegrees))
+        {
+            return BuildSafeSkyFallbackScript(scene, utcDate, screenshotPrefix, screenshotDir, escapedLocationName);
+        }
+
+        return isOverviewScene
+            ? BuildOverviewScript(scene, utcDate, screenshotPrefix, screenshotDir, escapedLocationName, zoomLevel)
+            : BuildObjectScript(scene, utcDate, screenshotPrefix, screenshotDir, escapedLocationName, escapedObjectName, zoomLevel);
+    }
+
+    private string BuildObjectScript(StellariumScene scene, string utcDate, string screenshotPrefix, string screenshotDir, string escapedLocationName, string escapedObjectName, double zoomLevel)
+    {
         return $$"""
 core.clear("natural");
 
-function safeCall(target, methodName, args) {
-    if (typeof target !== "undefined" && target && typeof target[methodName] === "function") {
-        target[methodName].apply(target, args);
-    }
-}
-
-LandscapeMgr.setCurrentLandscapeName("{{_options.DefaultLandscape}}");
-LandscapeMgr.setFlagLandscape({{shouldShowLandscape.ToString().ToLowerInvariant()}});
+// Disable landscape for object scenes
+LandscapeMgr.setFlagLandscape(false);
 LandscapeMgr.setFlagAtmosphere(false);
-if (typeof core.setProjectionMode === "function") {
-    core.setProjectionMode("{{_options.DefaultProjection}}");
-}
+
+// Set date & location (MUST use SceneObservationContext)
 core.setDate("{{utcDate}}", "utc");
-core.setObserverLocation({{observerLongitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{observerLatitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
+core.setObserverLocation({{scene.ObservationContext.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{scene.ObservationContext.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
+
+// Wait for sky engine update
 core.wait(2.0);
 
-safeCall(StelSkyDrawer, "setFlagStarName", [false]);
-if (typeof ConstellationMgr !== "undefined") {
-    ConstellationMgr.setFlagLines(true);
-    ConstellationMgr.setFlagLabels(true);
-    ConstellationMgr.setFlagBoundaries(false);
-}
-if (typeof StelObjectMgr !== "undefined" && typeof StelObjectMgr.setFlagSelectedObjectPointer === "function") {
-    StelObjectMgr.setFlagSelectedObjectPointer(false);
-}
+// Enable constellation context
+ConstellationMgr.setFlagLines(true);
+ConstellationMgr.setFlagLabels(true);
+ConstellationMgr.setFlagBoundaries(false);
 
-if ("{{profile}}" === "planet-moon") {
-    safeCall(StelObjectMgr, "setFlagSelectedObjectPointer", [true]);
-}
+core.output("SceneId={{scene.SceneId}} | ObjectName={{scene.ObservationContext.ObjectName}} | UtcObservationTime={{scene.ObservationContext.UtcObservationTime:O}} | LocalObservationTime={{scene.ObservationContext.LocalObservationTime:O}} | AltitudeDegrees={{(scene.ObservationContext.AltitudeDegrees?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a")}} | ZoomLevel={{zoomLevel.ToString(System.Globalization.CultureInfo.InvariantCulture)}} | LandscapeEnabled=false");
 
-if ("{{profile}}" === "deep-sky") {
-    safeCall(StelSkyDrawer, "setFlagStarName", [false]);
-}
-
-if ({{shouldSelectObject.ToString().ToLowerInvariant()}}) {
-    core.selectObjectByName("{{escapedSceneObjectName}}", true);
-    core.wait(1.0);
-    if (typeof StelObjectMgr.setFlagSelectedObjectPointer === "function") {
-        StelObjectMgr.setFlagSelectedObjectPointer(true);
-    }
-    // Use the minimal LabelMgr overload for broad Stellarium compatibility across versions.
-    // Avoid extended overload arguments (e.g. color/side/distance/style) that can throw JS->C++ TypeError.
-    if ("{{profile}}" !== "overview" && typeof LabelMgr !== "undefined" && typeof LabelMgr.labelObject === "function") {
-        try {
-            LabelMgr.labelObject("{{escapedLabelText}}", "{{escapedSceneObjectName}}", true, 24);
-        } catch (e) {
-            core.output("Label creation failed: " + e);
-        }
-    }
-    core.moveToSelectedObject(2.0);
-    StelMovementMgr.setFlagTracking(true);
-    StelMovementMgr.zoomTo(35, 2.0);
-    core.wait(8.0);
-}
-if (!{{shouldSelectObject.ToString().ToLowerInvariant()}}) {
-    StelMovementMgr.zoomTo({{zoom}}, 2.0);
-    core.wait({{renderSettleSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}});
-}
-if (typeof core.setGuiVisible === "function") {
-    core.setGuiVisible(false);
-}
-if ("{{profile}}" === "overview" && typeof core.setSelectedObjectMarkerVisible === "function") {
-    core.setSelectedObjectMarkerVisible(false);
-}
-if (typeof StelFileMgr !== "undefined" && StelFileMgr && typeof StelFileMgr.setScreenshotDir === "function") {
-    StelFileMgr.setScreenshotDir("{{normalizedScreenshotDir}}");
-}
+// Select object
+core.selectObjectByName("{{escapedObjectName}}", true);
 core.wait(1.0);
-core.screenshot("{{screenshotPrefix}}", false, "{{normalizedScreenshotDir}}", true, "png");
+
+// Move camera to object
+core.moveToSelectedObject(2.0);
+core.wait(2.0);
+
+// Enable tracking
+StelMovementMgr.setFlagTracking(true);
+
+// Apply zoom (dynamic based on object type)
+StelMovementMgr.zoomTo({{zoomLevel.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 2.0);
+
+// Stabilize frame
+core.wait(6.0);
+
+// Screenshot
+core.screenshot("{{screenshotPrefix}}", false, "{{screenshotDir}}", true, "png");
+
 core.wait(2.0);
 core.quitStellarium();
 """;
     }
 
-    private static string DetermineVisualProfile(StellariumScene scene)
+    private string BuildOverviewScript(StellariumScene scene, string utcDate, string screenshotPrefix, string screenshotDir, string escapedLocationName, double zoomLevel)
     {
-        var sceneId = scene.SceneId ?? string.Empty;
-        var target = scene.TargetObject ?? string.Empty;
+        return $$"""
+core.clear("natural");
 
-        if (sceneId.Contains("overview", StringComparison.OrdinalIgnoreCase)
-            || sceneId.Contains("wide-sky", StringComparison.OrdinalIgnoreCase))
-        {
-            return "overview";
-        }
+LandscapeMgr.setCurrentLandscapeName("guereins");
+LandscapeMgr.setFlagLandscape(true);
+LandscapeMgr.setFlagAtmosphere(false);
 
-        if (sceneId.Contains("deep-sky", StringComparison.OrdinalIgnoreCase)
-            || sceneId.Contains("nebula", StringComparison.OrdinalIgnoreCase)
-            || target.Contains("nebula", StringComparison.OrdinalIgnoreCase)
-            || target.Contains("galaxy", StringComparison.OrdinalIgnoreCase)
-            || target.Contains("cluster", StringComparison.OrdinalIgnoreCase))
-        {
-            return "deep-sky";
-        }
+core.setDate("{{utcDate}}", "utc");
+core.setObserverLocation({{scene.ObservationContext.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{scene.ObservationContext.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
 
-        return "planet-moon";
+core.wait(2.0);
+
+ConstellationMgr.setFlagLines(true);
+ConstellationMgr.setFlagLabels(true);
+
+core.output("SceneId={{scene.SceneId}} | ObjectName={{scene.ObservationContext.ObjectName}} | UtcObservationTime={{scene.ObservationContext.UtcObservationTime:O}} | LocalObservationTime={{scene.ObservationContext.LocalObservationTime:O}} | AltitudeDegrees={{(scene.ObservationContext.AltitudeDegrees?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a")}} | ZoomLevel={{zoomLevel.ToString(System.Globalization.CultureInfo.InvariantCulture)}} | LandscapeEnabled=true");
+
+StelMovementMgr.zoomTo({{zoomLevel.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 2.0);
+
+core.wait(6.0);
+
+core.screenshot("{{screenshotPrefix}}", false, "{{screenshotDir}}", true, "png");
+
+core.wait(2.0);
+core.quitStellarium();
+""";
     }
 
-
-    private static string ResolveLabelText(string? targetObject)
+    private string BuildSafeSkyFallbackScript(StellariumScene scene, string utcDate, string screenshotPrefix, string screenshotDir, string escapedLocationName)
     {
-        return string.IsNullOrWhiteSpace(targetObject) ? "Sky" : targetObject.Trim();
+        return $$"""
+core.clear("natural");
+
+LandscapeMgr.setCurrentLandscapeName("guereins");
+LandscapeMgr.setFlagLandscape(true);
+LandscapeMgr.setFlagAtmosphere(false);
+
+core.setDate("{{utcDate}}", "utc");
+core.setObserverLocation({{scene.ObservationContext.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{scene.ObservationContext.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
+
+core.wait(2.0);
+
+ConstellationMgr.setFlagLines(true);
+ConstellationMgr.setFlagLabels(true);
+
+core.output("SceneId={{scene.SceneId}} fallback: object skipped due to visibility/altitude. IsVisible={{scene.ObservationContext.IsVisible}} AltitudeDegrees={{(scene.ObservationContext.AltitudeDegrees?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a")}} MinimumAltitudeDegrees={{_options.LowAltitudeLandscapeCutoffDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}}");
+
+StelMovementMgr.zoomTo(80, 2.0);
+
+core.wait(6.0);
+
+core.screenshot("{{screenshotPrefix}}", false, "{{screenshotDir}}", true, "png");
+
+core.wait(2.0);
+core.quitStellarium();
+""";
+    }
+
+    private static bool IsOverviewScene(StellariumScene scene)
+    {
+        return scene.SceneId.Contains("sky-overview", StringComparison.OrdinalIgnoreCase)
+            || scene.SceneId.Contains("wide-sky", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.ObservationContext.ObjectType, "Overview", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.ObservationContext.SceneType, "Overview", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static double GetZoomLevel(SceneObservationContext scene)
+    {
+        if (scene.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase)) return 30;
+        if (scene.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase)) return 35;
+        if (scene.ObjectType.Equals("Star", StringComparison.OrdinalIgnoreCase)) return 45;
+        if (scene.ObjectType.Equals("DeepSky", StringComparison.OrdinalIgnoreCase)) return 55;
+        if (scene.ObjectType.Equals("Cluster", StringComparison.OrdinalIgnoreCase) || scene.ObjectType.Equals("Galaxy", StringComparison.OrdinalIgnoreCase)) return 60;
+        return 40;
     }
 }
