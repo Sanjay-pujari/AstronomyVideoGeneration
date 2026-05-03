@@ -70,6 +70,7 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
     {
         try
         {
+            Console.WriteLine($"[Skyfield /visibility/night-plan] Request: {JsonSerializer.Serialize(request, JsonOptions)}");
             var response = await _httpClient.PostAsJsonAsync("/visibility/night-plan", request, JsonOptions, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
@@ -77,7 +78,9 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
                 return null;
             }
 
-            return await response.Content.ReadFromJsonAsync<SkyfieldNightPlanResponse>(JsonOptions, cancellationToken);
+            var payload = await response.Content.ReadFromJsonAsync<SkyfieldNightPlanResponse>(JsonOptions, cancellationToken);
+            Console.WriteLine($"[Skyfield /visibility/night-plan] Response: {JsonSerializer.Serialize(payload, JsonOptions)}");
+            return payload;
         }
         catch (Exception ex)
         {
