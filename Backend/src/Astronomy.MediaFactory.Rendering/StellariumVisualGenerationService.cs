@@ -79,6 +79,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
 
             var script = _scriptBuilder.BuildSceneScript(scene);
             await File.WriteAllTextAsync(scene.ScriptPath, script, cancellationToken);
+            await WriteSscContextAsync(scene, cancellationToken);
 
             var sceneMetadata = JsonSerializer.Serialize(scene, new JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(scene.MetadataPath, sceneMetadata, cancellationToken);
@@ -127,6 +128,24 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         }
 
         return scenes.Select(s => s.OutputImagePath).ToList();
+    }
+
+    private static async Task WriteSscContextAsync(StellariumScene scene, CancellationToken cancellationToken)
+    {
+        var contextPath = Path.ChangeExtension(scene.ScriptPath, ".generated-ssc-context.json");
+        var payload = new
+        {
+            scene.ObservationContext.SceneId,
+            scene.ObservationContext.ObjectName,
+            scene.ObservationContext.LocalObservationTime,
+            scene.ObservationContext.UtcObservationTime,
+            scene.ObservationContext.AltitudeDegrees,
+            scene.ObservationContext.AzimuthDegrees,
+            scene.ObservationContext.DirectionLabel,
+            scene.ObservationContext.IsVisible,
+            SscFilePath = scene.ScriptPath
+        };
+        await File.WriteAllTextAsync(contextPath, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private static string BuildRunScopeDirectory(string outputDirectory, DateOnly date)
@@ -290,7 +309,17 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
     private static List<StellariumScene> ComposeScenes(AstronomyContext context, string scriptsDirectory, string capturesDirectory, ObservationOptions observationOptions, IObservationTimeService observationTimeService)
     {
         var selectedTimes = observationTimeService.SelectSceneTimes(context, context.Date, observationOptions);
-        return selectedTimes.Select((selected, index) =>
+        var filteredScenes = selectedTimes
+            .Where(selected =>
+            {
+                if (string.Equals(selected.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                return selected.IsVisible && selected.AltitudeDegrees >= observationOptions.MinimumObjectAltitudeDegrees;
+            })
+            .ToList();
+
+        return filteredScenes.Select((selected, index) =>
         {
             var prefix = $"{index + 1:000}-{NormalizeSlug(selected.ObjectName)}";
             return new StellariumScene

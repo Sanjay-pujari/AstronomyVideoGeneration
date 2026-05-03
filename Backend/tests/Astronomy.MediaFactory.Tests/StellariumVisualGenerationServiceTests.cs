@@ -71,7 +71,9 @@ public sealed class StellariumVisualGenerationServiceTests
         var script = builder.BuildSceneScript(scene);
 
         Assert.Contains("safeCall(StelObjectMgr, \"setFlagSelectedObjectPointer\", [true]);", script);
-        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLines\", [false]);", script);
+        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLines\", [true]);", script);
+        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLabels\", [true]);", script);
+        Assert.Contains("safeCall(ConstellationMgr, \"setFlagBoundaries\", [false]);", script);
     }
 
     [Fact]
@@ -89,7 +91,7 @@ public sealed class StellariumVisualGenerationServiceTests
         var script = builder.BuildSceneScript(scene);
 
         Assert.Contains("safeCall(StelSkyDrawer, \"setFlagStarName\", [false]);", script);
-        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLabels\", [false]);", script);
+        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLabels\", [true]);", script);
     }
 
     [Fact]
@@ -260,5 +262,70 @@ public sealed class StellariumVisualGenerationServiceTests
         var script = await File.ReadAllTextAsync(scriptPath);
         Assert.Contains("core.setDate(\"", script);
         Assert.Contains("\", \"utc\");", script);
+    }
+
+    [Fact]
+    public void BuildSceneScript_UsesExactObservationContextUtcTime()
+    {
+        var builder = new StellariumScriptBuilder(new StellariumOptions());
+        var scene = new StellariumScene
+        {
+            SceneId = "002-moon",
+            TargetObject = "Moon",
+            OutputImagePath = Path.Combine("/tmp", "002-moon.png"),
+            ObservationContext = new SceneObservationContext
+            {
+                ObjectName = "Moon",
+                UtcObservationTime = new DateTimeOffset(2026, 5, 2, 19, 50, 0, TimeSpan.Zero)
+            }
+        };
+
+        var script = builder.BuildSceneScript(scene);
+        Assert.Contains("core.setDate(\"2026-05-02T19:50:00Z\", \"utc\");", script);
+    }
+
+    [Fact]
+    public async Task PrepareVisualsAsync_SkipsObjectScenes_BelowAltitudeThreshold()
+    {
+        var outputDir = Path.Combine(Path.GetTempPath(), "stellarium-threshold-" + Guid.NewGuid().ToString("N"));
+        var options = Options.Create(new StellariumOptions());
+        var observationOptions = Options.Create(new ObservationOptions { MinimumObjectAltitudeDegrees = 89 });
+        var sut = new StellariumVisualGenerationService(
+            options,
+            new StellariumScriptBuilder(options.Value),
+            observationOptions,
+            new ObservationTimeService(),
+            NullLogger<StellariumVisualGenerationService>.Instance);
+
+        var visuals = await sut.PrepareVisualsAsync(new AstronomyContext
+        {
+            Date = new DateOnly(2026, 3, 17),
+            LocationName = "Udaipur, India"
+        }, outputDir, CancellationToken.None);
+
+        Assert.Equal(2, visuals.Count);
+        Assert.DoesNotContain(visuals, v => Path.GetFileName(v).Contains("moon", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task PrepareVisualsAsync_WritesSceneGeneratedSscContext()
+    {
+        var outputDir = Path.Combine(Path.GetTempPath(), "stellarium-context-" + Guid.NewGuid().ToString("N"));
+        var options = Options.Create(new StellariumOptions());
+        var sut = new StellariumVisualGenerationService(
+            options,
+            new StellariumScriptBuilder(options.Value),
+            Options.Create(new ObservationOptions()),
+            new ObservationTimeService(),
+            NullLogger<StellariumVisualGenerationService>.Instance);
+
+        await sut.PrepareVisualsAsync(new AstronomyContext
+        {
+            Date = new DateOnly(2026, 3, 17),
+            LocationName = "Udaipur, India"
+        }, outputDir, CancellationToken.None);
+
+        var generatedContextFiles = Directory.EnumerateFiles(Path.Combine(outputDir, "visuals", "scripts"), "*.generated-ssc-context.json").ToList();
+        Assert.NotEmpty(generatedContextFiles);
     }
 }
