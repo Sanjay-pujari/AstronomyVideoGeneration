@@ -18,7 +18,16 @@ STAR_CATALOG = {
     "pleiades": (3.79, 24.1167),
     "andromeda galaxy": (0.712, 41.269)
 }
-PLANET_KEYS = {"mercury":"mercury","venus":"venus","mars":"mars","jupiter":"jupiter","saturn":"saturn","uranus":"uranus","neptune":"neptune","moon":"moon"}
+PLANET_KEYS = {
+    "mercury": "mercury",
+    "venus": "venus",
+    "mars": "mars",
+    "jupiter": "jupiter barycenter",
+    "saturn": "saturn barycenter",
+    "uranus": "uranus barycenter",
+    "neptune": "neptune barycenter",
+    "moon": "moon",
+}
 
 class VisibilityCandidate(BaseModel):
     object_name: Annotated[str, Field(alias="objectName")]
