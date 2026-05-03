@@ -53,6 +53,7 @@ public sealed class StellariumVisualGenerationServiceTests
         var script = builder.BuildSceneScript(scene);
 
         Assert.Contains("core.selectObjectByName(\"Waxing Gibbous Moon\"", script);
+        Assert.Contains("LabelMgr.labelObject(\"Waxing Gibbous Moon\", \"Waxing Gibbous Moon\", true, 24)", script);
     }
 
 
