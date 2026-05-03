@@ -60,10 +60,14 @@ core.setObserverLocation({{observerLongitude.ToString(System.Globalization.Cultu
 core.wait(1.5);
 
 safeCall(StelSkyDrawer, "setFlagStarName", [false]);
-safeCall(ConstellationMgr, "setFlagLines", [true]);
-safeCall(ConstellationMgr, "setFlagLabels", [true]);
-safeCall(ConstellationMgr, "setFlagBoundaries", [false]);
-safeCall(StelObjectMgr, "setFlagSelectedObjectPointer", [false]);
+if (typeof ConstellationMgr !== "undefined") {
+    ConstellationMgr.setFlagLines(true);
+    ConstellationMgr.setFlagLabels(true);
+    ConstellationMgr.setFlagBoundaries(false);
+}
+if (typeof StelObjectMgr !== "undefined" && typeof StelObjectMgr.setFlagSelectedObjectPointer === "function") {
+    StelObjectMgr.setFlagSelectedObjectPointer(false);
+}
 
 if ("{{profile}}" === "planet-moon") {
     safeCall(StelObjectMgr, "setFlagSelectedObjectPointer", [true]);
@@ -78,8 +82,14 @@ if ({{shouldSelectObject.ToString().ToLowerInvariant()}}) {
     if (typeof StelObjectMgr.setFlagSelectedObjectPointer === "function") {
         StelObjectMgr.setFlagSelectedObjectPointer(true);
     }
+    // Use the minimal LabelMgr overload for broad Stellarium compatibility across versions.
+    // Avoid extended overload arguments (e.g. color/side/distance/style) that can throw JS->C++ TypeError.
     if ("{{profile}}" !== "overview" && typeof LabelMgr !== "undefined" && typeof LabelMgr.labelObject === "function") {
-        LabelMgr.labelObject("{{escapedLabelText}}", "{{escapedSceneObjectName}}", true, 22, "#ffff66", "NE", 20, "TextOnly");
+        try {
+            LabelMgr.labelObject("{{escapedLabelText}}", "{{escapedSceneObjectName}}", true, 24);
+        } catch (e) {
+            core.output("Label creation failed: " + e);
+        }
     }
     if ({{azimuthDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}} >= 0 && {{altitudeDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}} >= 0 && typeof StelMovementMgr.moveToAltAzi === "function") {
         StelMovementMgr.moveToAltAzi({{azimuthDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{altitudeDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 1.5);
