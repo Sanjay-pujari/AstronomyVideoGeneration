@@ -33,7 +33,15 @@ public sealed class NightSkyVisibilityPlannerRankingTests
     public void BuildPlan_IncludesMoonOnlyWhenVisible()
     {
         var planner = new NightSkyVisibilityPlanner();
-        var plan = planner.BuildPlan(Options with { MinimumObjectAltitudeDegrees = 65 }, new DateOnly(2026, 3, 17),
+        var options = new ObservationOptions
+        {
+            Timezone = Options.Timezone,
+            VisibilitySearchStepMinutes = Options.VisibilitySearchStepMinutes,
+            MinimumObjectAltitudeDegrees = 65,
+            LocationName = Options.LocationName
+        };
+
+        var plan = planner.BuildPlan(options, new DateOnly(2026, 3, 17),
         [
             new NightSkyCandidateObject("Moon", "Moon", 1, "Naked eye", true),
             new NightSkyCandidateObject("Venus", "Planet", 1, "Naked eye", true),
