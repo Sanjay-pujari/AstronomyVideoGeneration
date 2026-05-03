@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Core;
 
@@ -133,13 +134,14 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             throw new InvalidOperationException("Short-form rendering requires at least one visual asset, but none were available from the source list or fallback generator.");
         }
 
-        var sceneCount = Math.Max(1, visualCandidates.Count);
-        var segmentedNarration = await TryBuildSegmentedNarrationAsync(shortScript.SceneNarrationSegments, scriptBody, sceneCount, outputDirectory, cancellationToken);
+        var shortScenesOrdered = BuildShortScenesOrdered(context, visualCandidates);
+        var sceneCount = shortScenesOrdered.Count;
+        var segmentedNarration = await TryBuildSegmentedNarrationAsync(shortScript.SceneNarrationSegments, scriptBody, shortScenesOrdered, outputDirectory, cancellationToken);
         var finalNarrationPath = await BuildFinalNarrationAudioAsync(segmentedNarration, shortAudioPath, outputDirectory, cancellationToken);
+        var orderedSequenceMap = BuildShortSequenceMap(shortScenesOrdered, segmentedNarration);
+        await ValidateAndWriteShortSequenceDiagnosticsAsync(orderedSequenceMap, outputDirectory, cancellationToken);
 
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
-        var defaultDurationPerScene = 5;
-        var hasSegmentedNarration = segmentedNarration.Count == sceneCount;
         var manifest = new RenderManifest
         {
             Title = shortScript.OptimizedMetadata?.PrimaryTitle ?? shortScript.Title,
@@ -148,16 +150,12 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             OutputWidth = 1080,
             OutputHeight = 1920,
             EnableVerticalCrop = true,
-            Scenes = visualCandidates.Select((visualPath, index) => new RenderScene
+            Scenes = orderedSequenceMap.Select(scene => new RenderScene
             {
-                Caption = $"Scene {index + 1}",
-                VisualPath = visualPath,
-                DurationSeconds = hasSegmentedNarration
-                    ? segmentedNarration[index].DurationSeconds
-                    : defaultDurationPerScene,
-                AudioPath = hasSegmentedNarration
-                    ? segmentedNarration[index].AudioPath
-                    : null
+                Caption = $"{scene.SceneIndex + 1}. {scene.ObjectName}",
+                VisualPath = scene.VisualPath,
+                DurationSeconds = scene.DurationSeconds,
+                AudioPath = scene.AudioPath
             }).ToList()
         };
 
@@ -190,8 +188,9 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         };
     }
 
-    private async Task<List<SceneNarrationSegment>> TryBuildSegmentedNarrationAsync(IReadOnlyCollection<SceneNarrationSegment> generatedSceneNarration, string scriptBody, int sceneCount, string outputDirectory, CancellationToken cancellationToken)
+    private async Task<List<SceneNarrationSegment>> TryBuildSegmentedNarrationAsync(IReadOnlyCollection<SceneNarrationSegment> generatedSceneNarration, string scriptBody, IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, string outputDirectory, CancellationToken cancellationToken)
     {
+        var sceneCount = shortScenesOrdered.Count;
         if (sceneCount <= 0 || string.IsNullOrWhiteSpace(scriptBody))
         {
             return [];
@@ -199,9 +198,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
 
         try
         {
-            var sourceSegments = generatedSceneNarration.Count == sceneCount
-                ? generatedSceneNarration.ToList()
-                : BuildFallbackSceneNarrationSegments(scriptBody, sceneCount);
+            var sourceSegments = BuildSourceNarrationSegments(generatedSceneNarration, scriptBody, shortScenesOrdered);
             var results = new List<SceneNarrationSegment>(sourceSegments.Count);
             for (var i = 0; i < sourceSegments.Count; i++)
             {
@@ -320,32 +317,123 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         return fileName;
     }
 
-    private static List<SceneNarrationSegment> BuildFallbackSceneNarrationSegments(string scriptBody, int sceneCount)
+    private static List<SceneNarrationSegment> BuildSourceNarrationSegments(IReadOnlyCollection<SceneNarrationSegment> generatedSceneNarration, string scriptBody, IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered)
     {
+        var sceneCount = shortScenesOrdered.Count;
+        var generatedBySceneId = generatedSceneNarration
+            .Where(segment => !string.IsNullOrWhiteSpace(segment.SceneId))
+            .ToDictionary(segment => segment.SceneId, StringComparer.OrdinalIgnoreCase);
+        var generatedFallbackQueue = generatedSceneNarration.Where(segment => string.IsNullOrWhiteSpace(segment.SceneId)).ToList();
+        var aligned = new List<SceneNarrationSegment>(sceneCount);
+
+        foreach (var scene in shortScenesOrdered)
+        {
+            if (generatedBySceneId.TryGetValue(scene.SceneId, out var matchingSegment))
+            {
+                aligned.Add(matchingSegment);
+                continue;
+            }
+
+            if (generatedFallbackQueue.Count > 0)
+            {
+                var next = generatedFallbackQueue[0];
+                generatedFallbackQueue.RemoveAt(0);
+                aligned.Add(new SceneNarrationSegment
+                {
+                    SceneId = scene.SceneId,
+                    SceneTitle = scene.SceneTitle,
+                    VisualTarget = scene.ObjectName,
+                    NarrationText = next.NarrationText
+                });
+                continue;
+            }
+
+            aligned.Add(new SceneNarrationSegment
+            {
+                SceneId = scene.SceneId,
+                SceneTitle = scene.SceneTitle,
+                VisualTarget = scene.ObjectName,
+                NarrationText = string.Empty
+            });
+        }
+
+        if (aligned.All(x => string.IsNullOrWhiteSpace(x.NarrationText)))
+        {
+            return BuildFallbackSceneNarrationSegments(scriptBody, shortScenesOrdered);
+        }
+
+        return aligned;
+    }
+
+    private static List<SceneNarrationSegment> BuildFallbackSceneNarrationSegments(string scriptBody, IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered)
+    {
+        var sceneCount = shortScenesOrdered.Count;
         var words = scriptBody.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         var wordSegments = new List<SceneNarrationSegment>(sceneCount);
         var wordsPerScene = (int)Math.Ceiling((double)words.Length / sceneCount);
         for (var i = 0; i < sceneCount; i++)
         {
+            var scene = shortScenesOrdered[i];
             var start = i * wordsPerScene;
             if (start >= words.Length)
             {
-                wordSegments.Add(new SceneNarrationSegment { SceneId = $"scene-{i + 1}", SceneTitle = $"Scene {i + 1}", VisualTarget = "fallback", NarrationText = words[^1] });
+                wordSegments.Add(new SceneNarrationSegment { SceneId = scene.SceneId, SceneTitle = scene.SceneTitle, VisualTarget = scene.ObjectName, NarrationText = words[^1] });
                 continue;
             }
 
             var take = Math.Min(wordsPerScene, words.Length - start);
             wordSegments.Add(new SceneNarrationSegment
             {
-                SceneId = $"scene-{i + 1}",
-                SceneTitle = $"Scene {i + 1}",
-                VisualTarget = "fallback",
+                SceneId = scene.SceneId,
+                SceneTitle = scene.SceneTitle,
+                VisualTarget = scene.ObjectName,
                 NarrationText = string.Join(' ', words.Skip(start).Take(take))
             });
         }
 
         return wordSegments;
     }
+
+    private static List<ShortSceneOrderEntry> BuildShortScenesOrdered(AstronomyContext context, IReadOnlyList<string> visualCandidates)
+    {
+        return visualCandidates.Select((visualPath, index) =>
+        {
+            var sceneContext = index < context.SceneObservationContexts.Count ? context.SceneObservationContexts[index] : null;
+            return new ShortSceneOrderEntry(
+                sceneContext?.SceneId ?? $"short-scene-{index + 1:000}",
+                sceneContext?.ObjectName ?? $"Scene {index + 1}",
+                sceneContext?.SceneTitle ?? $"Scene {index + 1}",
+                index,
+                visualPath);
+        }).ToList();
+    }
+
+    private static List<ShortSequenceMapEntry> BuildShortSequenceMap(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, IReadOnlyList<SceneNarrationSegment> shortNarrationSegments)
+        => shortScenesOrdered.Select((scene, index) =>
+        {
+            var narration = index < shortNarrationSegments.Count ? shortNarrationSegments[index] : new SceneNarrationSegment { SceneId = scene.SceneId };
+            return new ShortSequenceMapEntry(index + 1, scene.SceneId, scene.ObjectName, scene.SceneIndex, narration.NarrationText, narration.AudioPath, scene.VisualPath, Math.Max(1, narration.DurationSeconds), narration.SceneId);
+        }).ToList();
+
+    private async Task ValidateAndWriteShortSequenceDiagnosticsAsync(IReadOnlyList<ShortSequenceMapEntry> orderedSequenceMap, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var diagnosticsPath = Path.Combine(outputDirectory, "short-sequence-map.json");
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(orderedSequenceMap, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+
+        var mismatches = orderedSequenceMap
+            .Where(entry => !entry.SceneId.Equals(entry.NarrationSceneId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (mismatches.Count == 0)
+        {
+            return;
+        }
+
+        _logger.LogError("Short video narration/visual sequence mismatch detected. Diagnostics: {DiagnosticsPath}. MismatchCount={MismatchCount}.", diagnosticsPath, mismatches.Count);
+        throw new InvalidOperationException("Short video narration/visual sequence mismatch");
+    }
+
+    private sealed record ShortSceneOrderEntry(string SceneId, string ObjectName, string SceneTitle, int SceneIndex, string VisualPath);
+    private sealed record ShortSequenceMapEntry(int Index, string SceneId, string ObjectName, int SceneIndex, string NarrationText, string AudioPath, string VisualPath, int DurationSeconds, string NarrationSceneId);
 
     private int GetAudioDurationSeconds(string audioPath)
     {
