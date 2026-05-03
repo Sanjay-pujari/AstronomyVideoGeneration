@@ -179,6 +179,7 @@ public static class ServiceCollectionExtensions
         services.AddDbContext<MediaFactoryDbContext>(o => o.UseNpgsql(cs));
         services.AddScoped<IPipelineRepository, EfPipelineRepository>();
         services.AddScoped<IAstronomyContextProvider, AstronomyContextProvider>();
+        services.AddScoped<IObservationWindowService, ObservationWindowService>();
         services.AddScoped<ITopicRankingService, TopicRankingService>();
         services.AddScoped<ITopicSelectionService, TopicSelectionService>();
         services.AddScoped<IObservationTimeService, ObservationTimeService>();

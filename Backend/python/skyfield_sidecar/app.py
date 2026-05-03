@@ -71,6 +71,8 @@ class NightPlanRequest(BaseModel):
     latitude: Annotated[float, Field(ge=-90, le=90)]
     longitude: Annotated[float, Field(ge=-180, le=180)]
     timezone: Annotated[str, Field(min_length=1)]
+    night_window_start_utc: Annotated[str | None, Field(alias="nightWindowStartUtc")] = None
+    night_window_end_utc: Annotated[str | None, Field(alias="nightWindowEndUtc")] = None
     minimum_altitude_degrees: Annotated[float, Field(alias="minimumAltitudeDegrees", ge=-30, le=90)] = 10
     step_minutes: Annotated[int, Field(alias="stepMinutes", ge=5, le=120)] = 15
     candidates: list[VisibilityCandidate] = []
@@ -109,8 +111,8 @@ class NightPlanResponse(BaseModel):
     target_date: Annotated[str, Field(alias="targetDate")]
     sunset_local: Annotated[str, Field(alias="sunsetLocal")]
     sunrise_local: Annotated[str, Field(alias="sunriseLocal")]
-    night_window_start_local: Annotated[str, Field(alias="nightWindowStartLocal")]
-    night_window_end_local: Annotated[str, Field(alias="nightWindowEndLocal")]
+    night_window_start_utc: Annotated[str, Field(alias="nightWindowStartUtc")]
+    night_window_end_utc: Annotated[str, Field(alias="nightWindowEndUtc")]
     visible_objects: Annotated[list[ObjectVisibility], Field(alias="visibleObjects")]
     not_visible_objects: Annotated[list[ObjectVisibility], Field(alias="notVisibleObjects")]
     model_config = ConfigDict(populate_by_name=True)
@@ -146,6 +148,12 @@ def night_plan(req: NightPlanRequest):
         if e == 0: sunset_local = local
         if e == 1 and local > sunset_local: sunrise_local = local
     visible, not_visible = [], []
+    if req.night_window_start_utc and req.night_window_end_utc:
+        window_start_utc = datetime.fromisoformat(req.night_window_start_utc.replace("Z", "+00:00")).astimezone(ZoneInfo("UTC"))
+        window_end_utc = datetime.fromisoformat(req.night_window_end_utc.replace("Z", "+00:00")).astimezone(ZoneInfo("UTC"))
+    else:
+        window_start_utc = sunset_local.astimezone(ZoneInfo("UTC"))
+        window_end_utc = sunrise_local.astimezone(ZoneInfo("UTC"))
     if not req.candidates:
         req.candidates = [
             VisibilityCandidate(objectName="Moon", objectType="moon"),
@@ -165,9 +173,9 @@ def night_plan(req: NightPlanRequest):
                 ov=ObjectVisibility(objectName=c.object_name, objectType=c.object_type, isVisible=False, visibilityReason='Object not in supported catalog/ephemeris.', samples=[])
                 not_visible.append(ov); continue
             best=None
-            t=sunset_local
-            while t<=sunrise_local:
-                t_utc=t.astimezone(ZoneInfo('UTC'))
+            t_utc=window_start_utc
+            while t_utc<=window_end_utc:
+                t=t_utc.astimezone(tz)
                 ts_t=ts.from_datetime(t_utc)
                 if kind == "planet":
                     body = eph[target]
@@ -179,7 +187,7 @@ def night_plan(req: NightPlanRequest):
                 s=VisibilitySample(localTime=t.isoformat(), utcTime=t_utc.isoformat(), altitudeDegrees=round(a,2), azimuthDegrees=round(z,2), directionLabel=_cardinal(z), isVisibleCandidate=a>=req.minimum_altitude_degrees)
                 samples.append(s)
                 if s.is_visible_candidate and (best is None or s.altitude_degrees>best.altitude_degrees): best=s
-                t += timedelta(minutes=req.step_minutes)
+                t_utc += timedelta(minutes=req.step_minutes)
             if best:
                 ov=ObjectVisibility(objectName=c.object_name, objectType=c.object_type, isVisible=True, visibilityReason='Highest altitude above threshold during night window', samples=samples, bestLocalTime=best.local_time, bestUtcTime=best.utc_time, altitudeDegrees=best.altitude_degrees, azimuthDegrees=best.azimuth_degrees, directionLabel=best.direction_label)
                 visible.append(ov)
@@ -191,7 +199,7 @@ def night_plan(req: NightPlanRequest):
         raise
 
     print(f"[Skyfield] Visible objects: {len(visible)}")
-    return NightPlanResponse(locationName=req.location_name, timezone=req.timezone, targetDate=req.date, sunsetLocal=sunset_local.isoformat(), sunriseLocal=sunrise_local.isoformat(), nightWindowStartLocal=sunset_local.isoformat(), nightWindowEndLocal=sunrise_local.isoformat(), visibleObjects=visible or [], notVisibleObjects=not_visible or [])
+    return NightPlanResponse(locationName=req.location_name, timezone=req.timezone, targetDate=req.date, sunsetLocal=sunset_local.isoformat(), sunriseLocal=sunrise_local.isoformat(), nightWindowStartUtc=window_start_utc.isoformat().replace("+00:00","Z"), nightWindowEndUtc=window_end_utc.isoformat().replace("+00:00","Z"), visibleObjects=visible or [], notVisibleObjects=not_visible or [])
 
 
 @app.post('/ephemeris/daily-sky', response_model=DailySkyResponse)

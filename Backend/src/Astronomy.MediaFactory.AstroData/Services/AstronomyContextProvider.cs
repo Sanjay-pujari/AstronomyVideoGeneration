@@ -13,15 +13,17 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
     private readonly NasaNeoWsClient _neoWsClient;
     private readonly ISkyfieldSidecarClient _skyfieldSidecarClient;
     private readonly ILogger<AstronomyContextProvider> _logger;
+    private readonly IObservationWindowService _observationWindowService;
     private readonly SkyfieldSidecarOptions _sidecarOptions;
     private readonly ObservationOptions _observationOptions;
 
-    public AstronomyContextProvider(NasaApodClient apodClient, NasaNeoWsClient neoWsClient, ISkyfieldSidecarClient skyfieldSidecarClient, ILogger<AstronomyContextProvider> logger, IOptions<SkyfieldSidecarOptions> sidecarOptions, IOptions<ObservationOptions> observationOptions)
+    public AstronomyContextProvider(NasaApodClient apodClient, NasaNeoWsClient neoWsClient, ISkyfieldSidecarClient skyfieldSidecarClient, IObservationWindowService observationWindowService, ILogger<AstronomyContextProvider> logger, IOptions<SkyfieldSidecarOptions> sidecarOptions, IOptions<ObservationOptions> observationOptions)
     {
         _apodClient = apodClient;
         _neoWsClient = neoWsClient;
         _skyfieldSidecarClient = skyfieldSidecarClient;
         _logger = logger;
+        _observationWindowService = observationWindowService;
         _loggerStatic = logger;
         _sidecarOptions = sidecarOptions.Value;
         _observationOptions = observationOptions.Value;
@@ -39,6 +41,18 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
         if (contentType == ContentType.DailySkyGuide && _sidecarOptions.Enabled)
         {
+            var effectiveOptions = new ObservationOptions
+            {
+                LocationName = effectiveLocationName,
+                Timezone = effectiveTimezone,
+                Latitude = effectiveLatitude,
+                Longitude = effectiveLongitude,
+                MinimumObjectAltitudeDegrees = _observationOptions.MinimumObjectAltitudeDegrees,
+                PreferredObjectAltitudeDegrees = _observationOptions.PreferredObjectAltitudeDegrees,
+                VisibilitySearchStepMinutes = _observationOptions.VisibilitySearchStepMinutes,
+                SkyOverviewMinutesAfterSunset = _observationOptions.SkyOverviewMinutesAfterSunset
+            };
+            var observationWindow = await _observationWindowService.BuildNightWindowAsync(effectiveOptions, date, cancellationToken);
             var nightPlanRequest = new SkyfieldNightPlanRequest
             {
                 Date = date.ToString("yyyy-MM-dd"),
@@ -46,6 +60,8 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 Latitude = effectiveLatitude,
                 Longitude = effectiveLongitude,
                 Timezone = effectiveTimezone,
+                NightWindowStartUtc = observationWindow.NightWindowStartUtc.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                NightWindowEndUtc = observationWindow.NightWindowEndUtc.ToString("yyyy-MM-ddTHH:mm:ssZ"),
                 MinimumAltitudeDegrees = _observationOptions.MinimumObjectAltitudeDegrees,
                 StepMinutes = _observationOptions.VisibilitySearchStepMinutes,
                 Candidates = NightSkyVisibilityPlanner.DefaultCandidates
@@ -53,13 +69,14 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                     .ToList()
             };
 
+            context.VisualIdeas.Add(new VisualIdeaModel { Title = "observation-window", Description = Serialize(observationWindow) });
             context.VisualIdeas.Add(new VisualIdeaModel { Title = "effective-observation-settings", Description = Serialize(new { effectiveLocationName, effectiveTimezone, effectiveLatitude, effectiveLongitude }) });
             context.VisualIdeas.Add(new VisualIdeaModel { Title = "skyfield-night-plan-request", Description = Serialize(nightPlanRequest) });
 
             var nightPlanResponse = await _skyfieldSidecarClient.GetNightVisibilityPlanAsync(nightPlanRequest, cancellationToken);
             context.VisualIdeas.Add(new VisualIdeaModel { Title = "skyfield-night-plan-response", Description = Serialize(nightPlanResponse) });
 
-            if (TryApplyNightPlanResponse(context, nightPlanResponse, effectiveTimezone, _observationOptions))
+            if (TryApplyNightPlanResponse(context, nightPlanResponse, effectiveTimezone, _observationOptions, observationWindow))
             {
                 return context;
             }
@@ -94,7 +111,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         }
     }
 
-    private static bool TryApplyNightPlanResponse(AstronomyContext context, SkyfieldNightPlanResponse? response, string timezone, ObservationOptions observationOptions)
+    private static bool TryApplyNightPlanResponse(AstronomyContext context, SkyfieldNightPlanResponse? response, string timezone, ObservationOptions observationOptions, ObservationWindow observationWindow)
     {
         var visible = response?.VisibleObjects?.Where(x => x.IsVisible).ToList() ?? [];
         if (visible.Count == 0)
@@ -127,7 +144,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         }
 
         var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
-        var sunsetLocal = ParseLocal(response!.NightWindowStartLocal) ?? DateTime.SpecifyKind(DateTime.Today.AddHours(19), DateTimeKind.Unspecified);
+        var sunsetLocal = observationWindow.SunsetLocal.DateTime;
         var overviewLocal = sunsetLocal.AddMinutes(observationOptions.SkyOverviewMinutesAfterSunset);
         var scenes = new List<SceneObservationContext>
         {
@@ -207,7 +224,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
             });
         }
 
-        var closingLocalTime = scenes.Last().LocalObservationTime.AddMinutes(30);
+        var closingLocalTime = Clamp(scenes.Last().LocalObservationTime.AddMinutes(30), observationWindow.SunsetLocal.DateTime, observationWindow.SunriseLocal.DateTime);
         scenes.Add(new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing wide sky", SceneType = "Tips", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = closingLocalTime, UtcObservationTime = ToUtc(closingLocalTime, tz), Timezone = timezone, IsVisible = true, VisibilityReason = "Wrap-up", RecommendedTool = "Naked eye", NarrationFocus = "Safe viewing tips.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName });
 
         foreach (var (scene, index) in scenes.Select((scene, index) => (scene, index)))
@@ -344,4 +361,6 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         var utcFallback = ParseUtc(visibility.BestUtcTime) ?? ToUtc(localFallback, timezone);
         return new SelectedObservation(localFallback, utcFallback, visibility.AltitudeDegrees ?? 0, visibility.AzimuthDegrees ?? 0, visibility.DirectionLabel ?? "N/A", "response fallback");
     }
+
+    private static DateTime Clamp(DateTime value, DateTime min, DateTime max) => value < min ? min : value > max ? max : value;
 }

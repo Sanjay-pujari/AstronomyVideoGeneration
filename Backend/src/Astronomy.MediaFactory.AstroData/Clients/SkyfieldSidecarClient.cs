@@ -94,6 +94,8 @@ public sealed class SkyfieldNightPlanRequest
     public double Latitude { get; set; }
     public double Longitude { get; set; }
     public string Timezone { get; set; } = "UTC";
+    public string? NightWindowStartUtc { get; set; }
+    public string? NightWindowEndUtc { get; set; }
     public double MinimumAltitudeDegrees { get; set; } = 10;
     public int StepMinutes { get; set; } = 15;
     public List<SkyfieldVisibilityCandidate> Candidates { get; set; } = new();
@@ -136,8 +138,8 @@ public sealed class SkyfieldNightPlanResponse
     public string TargetDate { get; set; } = "";
     public string SunsetLocal { get; set; } = "";
     public string SunriseLocal { get; set; } = "";
-    public string NightWindowStartLocal { get; set; } = "";
-    public string NightWindowEndLocal { get; set; } = "";
+    public string NightWindowStartUtc { get; set; } = "";
+    public string NightWindowEndUtc { get; set; } = "";
     public List<SkyfieldObjectVisibility> VisibleObjects { get; set; } = new();
     public List<SkyfieldObjectVisibility> NotVisibleObjects { get; set; } = new();
 }
