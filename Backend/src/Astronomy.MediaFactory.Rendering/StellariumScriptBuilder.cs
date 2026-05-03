@@ -33,6 +33,9 @@ public sealed class StellariumScriptBuilder
 
     private string BuildObjectScript(StellariumScene scene, string utcDate, string screenshotPrefix, string screenshotDir, string escapedLocationName, string escapedObjectName, double zoomLevel)
     {
+        var cinematicZoomStart = GetCinematicZoomStart(scene.ObservationContext, _options.CinematicZoomStart);
+        var cinematicZoomEnd = GetCinematicZoomEnd(scene.ObservationContext, _options.CinematicZoomEnd, zoomLevel);
+
         return $$"""
 core.clear("natural");
 
@@ -53,6 +56,7 @@ ConstellationMgr.setFlagLabels(true);
 ConstellationMgr.setFlagBoundaries(false);
 
 core.output("SceneId={{scene.SceneId}} | ObjectName={{scene.ObservationContext.ObjectName}} | UtcObservationTime={{scene.ObservationContext.UtcObservationTime:O}} | LocalObservationTime={{scene.ObservationContext.LocalObservationTime:O}} | AltitudeDegrees={{(scene.ObservationContext.AltitudeDegrees?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a")}} | ZoomLevel={{zoomLevel.ToString(System.Globalization.CultureInfo.InvariantCulture)}} | LandscapeEnabled=false");
+core.output("SceneId={{scene.SceneId}} | ObjectName={{scene.ObservationContext.ObjectName}} | EnableCinematicMotion={{_options.EnableCinematicMotion}} | ZoomStart={{cinematicZoomStart.ToString(System.Globalization.CultureInfo.InvariantCulture)}} | ZoomEnd={{cinematicZoomEnd.ToString(System.Globalization.CultureInfo.InvariantCulture)}} | WaitBeforeScreenshot={{_options.CinematicWaitBeforeScreenshotSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}}");
 
 // Select object
 core.selectObjectByName("{{escapedObjectName}}", true);
@@ -75,17 +79,36 @@ core.wait(2.0);
 // Enable tracking
 StelMovementMgr.setFlagTracking(true);
 
-// Apply zoom (dynamic based on object type)
-StelMovementMgr.zoomTo({{zoomLevel.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 2.0);
-
-// Stabilize frame
-core.wait(6.0);
+{{BuildObjectZoomBlock(zoomLevel, cinematicZoomStart, cinematicZoomEnd)}}
 
 // Screenshot
 core.screenshot("{{screenshotPrefix}}", false, "{{screenshotDir}}", true, "png");
 
 core.wait(2.0);
 core.quitStellarium();
+""";
+    }
+
+    private string BuildObjectZoomBlock(double zoomLevel, double cinematicZoomStart, double cinematicZoomEnd)
+    {
+        if (!_options.EnableCinematicMotion)
+        {
+            return $$"""
+// Apply zoom (dynamic based on object type)
+StelMovementMgr.zoomTo({{zoomLevel.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 2.0);
+
+// Stabilize frame
+core.wait(6.0);
+""";
+        }
+
+        return $$"""
+// Cinematic zoom-in enabled.
+// Start wide, then smoothly zoom toward selected object.
+StelMovementMgr.zoomTo({{cinematicZoomStart.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0.0);
+core.wait(1.0);
+StelMovementMgr.zoomTo({{cinematicZoomEnd.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 6.0);
+core.wait({{_options.CinematicWaitBeforeScreenshotSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}});
 """;
     }
 
@@ -165,5 +188,22 @@ core.quitStellarium();
         if (scene.ObjectType.Equals("DeepSky", StringComparison.OrdinalIgnoreCase)) return 55;
         if (scene.ObjectType.Equals("Cluster", StringComparison.OrdinalIgnoreCase) || scene.ObjectType.Equals("Galaxy", StringComparison.OrdinalIgnoreCase)) return 60;
         return 40;
+    }
+
+    private static double GetCinematicZoomStart(SceneObservationContext scene, double fallbackZoomStart)
+    {
+        if (scene.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase)) return 55;
+        if (scene.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase)) return 60;
+        if (scene.ObjectType.Equals("Star", StringComparison.OrdinalIgnoreCase)) return 70;
+        if (scene.ObjectType.Equals("DeepSky", StringComparison.OrdinalIgnoreCase)
+            || scene.ObjectType.Equals("Cluster", StringComparison.OrdinalIgnoreCase)
+            || scene.ObjectType.Equals("Galaxy", StringComparison.OrdinalIgnoreCase)) return 75;
+        return fallbackZoomStart;
+    }
+
+    private static double GetCinematicZoomEnd(SceneObservationContext scene, double fallbackZoomEnd, double objectTypeZoomLevel)
+    {
+        if (!string.IsNullOrWhiteSpace(scene.ObjectType)) return objectTypeZoomLevel;
+        return fallbackZoomEnd;
     }
 }

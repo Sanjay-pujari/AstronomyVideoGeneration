@@ -347,4 +347,48 @@ public sealed class StellariumVisualGenerationServiceTests
         var generatedContextFiles = Directory.EnumerateFiles(Path.Combine(outputDir, "visuals", "scripts"), "*.generated-ssc-context.json").ToList();
         Assert.NotEmpty(generatedContextFiles);
     }
+
+    [Fact]
+    public void BuildSceneScript_WithCinematicMotionDisabled_UsesStableZoomBehavior()
+    {
+        var builder = new StellariumScriptBuilder(new StellariumOptions { EnableCinematicMotion = false });
+        var scene = new StellariumScene
+        {
+            SceneId = "002-moon",
+            TargetObject = "Moon",
+            OutputImagePath = Path.Combine("/tmp", "002-moon.png")
+        };
+
+        var script = builder.BuildSceneScript(scene);
+        Assert.Contains("StelMovementMgr.zoomTo(30, 2.0);", script);
+        Assert.Contains("core.wait(6.0);", script);
+        Assert.DoesNotContain("// Cinematic zoom-in enabled.", script);
+    }
+
+    [Fact]
+    public void BuildSceneScript_WithCinematicMotionEnabled_UsesTwoZoomCallsAndWaitsBeforeScreenshot()
+    {
+        var builder = new StellariumScriptBuilder(new StellariumOptions
+        {
+            EnableCinematicMotion = true,
+            CinematicWaitBeforeScreenshotSeconds = 8
+        });
+
+        var scene = new StellariumScene
+        {
+            SceneId = "003-planet",
+            TargetObject = "Jupiter",
+            OutputImagePath = Path.Combine("/tmp", "003-planet.png")
+        };
+
+        var script = builder.BuildSceneScript(scene);
+        Assert.Contains("// Cinematic zoom-in enabled.", script);
+        Assert.Contains("StelMovementMgr.zoomTo(60, 0.0);", script);
+        Assert.Contains("StelMovementMgr.zoomTo(35, 6.0);", script);
+        Assert.Contains("core.wait(8.0);", script);
+        Assert.Contains("LabelMgr.labelObject(\"Jupiter\", \"Jupiter\", true, 24)", script);
+        Assert.Contains("core.moveToSelectedObject(2.0);", script);
+        Assert.Contains("StelMovementMgr.setFlagTracking(true);", script);
+        Assert.Matches("core\\.wait\\(8\\.0\\);\\s*// Screenshot\\s*core\\.screenshot", script);
+    }
 }
