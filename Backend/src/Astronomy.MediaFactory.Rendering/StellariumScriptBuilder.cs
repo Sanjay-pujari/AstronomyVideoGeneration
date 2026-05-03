@@ -35,8 +35,7 @@ public sealed class StellariumScriptBuilder
         var shouldSelectObject = !string.Equals(sceneObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
         var shouldShowLandscape = !shouldSelectObject || scene.ObservationContext.AltitudeDegrees >= 20;
         zoom = shouldSelectObject && scene.ObservationContext.AltitudeDegrees < 20 ? 45 : zoom;
-        var azimuthDegrees = scene.ObservationContext.AzimuthDegrees ?? -1;
-        var altitudeDegrees = scene.ObservationContext.AltitudeDegrees ?? -1;
+        // Altitude/azimuth are retained in scene metadata for validation and narration only.
         var escapedSceneObjectName = sceneObjectName.Replace("\"", "\\\"");
         var escapedLabelText = labelText.Replace("\"", "\\\"");
 
@@ -91,10 +90,6 @@ if ({{shouldSelectObject.ToString().ToLowerInvariant()}}) {
             core.output("Label creation failed: " + e);
         }
     }
-    if ({{azimuthDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}} >= 0 && {{altitudeDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}} >= 0 && typeof StelMovementMgr.moveToAltAzi === "function") {
-        StelMovementMgr.moveToAltAzi({{azimuthDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{altitudeDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 1.5);
-    }
-    core.wait(0.5);
     core.wait(0.5);
     core.moveToSelectedObject(2.0);
     StelMovementMgr.setFlagTracking(true);

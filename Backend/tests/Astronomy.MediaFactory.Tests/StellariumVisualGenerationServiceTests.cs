@@ -71,9 +71,9 @@ public sealed class StellariumVisualGenerationServiceTests
         var script = builder.BuildSceneScript(scene);
 
         Assert.Contains("safeCall(StelObjectMgr, \"setFlagSelectedObjectPointer\", [true]);", script);
-        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLines\", [true]);", script);
-        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLabels\", [true]);", script);
-        Assert.Contains("safeCall(ConstellationMgr, \"setFlagBoundaries\", [false]);", script);
+        Assert.Contains("ConstellationMgr.setFlagLines(true);", script);
+        Assert.Contains("ConstellationMgr.setFlagLabels(true);", script);
+        Assert.Contains("ConstellationMgr.setFlagBoundaries(false);", script);
     }
 
     [Fact]
@@ -91,7 +91,25 @@ public sealed class StellariumVisualGenerationServiceTests
         var script = builder.BuildSceneScript(scene);
 
         Assert.Contains("safeCall(StelSkyDrawer, \"setFlagStarName\", [false]);", script);
-        Assert.Contains("safeCall(ConstellationMgr, \"setFlagLabels\", [true]);", script);
+        Assert.Contains("ConstellationMgr.setFlagLabels(true);", script);
+    }
+
+
+    [Fact]
+    public void BuildSceneScript_DoesNotUseMoveToAltAzi()
+    {
+        var builder = new StellariumScriptBuilder(new StellariumOptions());
+        var scene = new StellariumScene
+        {
+            SceneId = "005-object",
+            TargetObject = "Mars",
+            SceneTimeUtc = new DateTimeOffset(2026, 3, 17, 20, 0, 0, TimeSpan.Zero),
+            OutputImagePath = Path.Combine("/tmp", "005-object.png")
+        };
+
+        var script = builder.BuildSceneScript(scene);
+
+        Assert.DoesNotContain("moveToAltAzi", script);
     }
 
     [Fact]
