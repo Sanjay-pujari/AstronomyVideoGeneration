@@ -33,8 +33,13 @@ public sealed class StellariumScriptBuilder
         var observerLongitude = scene.ObservationContext.Longitude;
         var observerLatitude = scene.ObservationContext.Latitude;
         var shouldSelectObject = !string.Equals(sceneObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
-        var shouldShowLandscape = !shouldSelectObject || scene.ObservationContext.AltitudeDegrees >= 20;
-        zoom = shouldSelectObject && scene.ObservationContext.AltitudeDegrees < 20 ? 45 : zoom;
+        var altitude = scene.ObservationContext.AltitudeDegrees;
+        var landscapeCutoff = _options.LowAltitudeLandscapeCutoffDegrees;
+        var shouldShowLandscape = !shouldSelectObject
+            || !_options.DisableLandscapeForLowAltitudeObjects
+            || altitude is null
+            || altitude >= landscapeCutoff;
+        zoom = shouldSelectObject && altitude < landscapeCutoff ? 45 : zoom;
         // Altitude/azimuth are retained in scene metadata for validation and narration only.
         var escapedSceneObjectName = sceneObjectName.Replace("\"", "\\\"");
         var escapedLabelText = labelText.Replace("\"", "\\\"");
@@ -56,7 +61,7 @@ if (typeof core.setProjectionMode === "function") {
 }
 core.setDate("{{utcDate}}", "utc");
 core.setObserverLocation({{observerLongitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{observerLatitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
-core.wait(1.5);
+core.wait(2.0);
 
 safeCall(StelSkyDrawer, "setFlagStarName", [false]);
 if (typeof ConstellationMgr !== "undefined") {
@@ -78,6 +83,7 @@ if ("{{profile}}" === "deep-sky") {
 
 if ({{shouldSelectObject.ToString().ToLowerInvariant()}}) {
     core.selectObjectByName("{{escapedSceneObjectName}}", true);
+    core.wait(1.0);
     if (typeof StelObjectMgr.setFlagSelectedObjectPointer === "function") {
         StelObjectMgr.setFlagSelectedObjectPointer(true);
     }
@@ -90,12 +96,15 @@ if ({{shouldSelectObject.ToString().ToLowerInvariant()}}) {
             core.output("Label creation failed: " + e);
         }
     }
-    core.wait(0.5);
     core.moveToSelectedObject(2.0);
     StelMovementMgr.setFlagTracking(true);
+    StelMovementMgr.zoomTo(35, 2.0);
+    core.wait(8.0);
 }
-StelMovementMgr.zoomTo({{zoom}}, 2.0);
-core.wait({{renderSettleSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}});
+if (!{{shouldSelectObject.ToString().ToLowerInvariant()}}) {
+    StelMovementMgr.zoomTo({{zoom}}, 2.0);
+    core.wait({{renderSettleSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}});
+}
 if (typeof core.setGuiVisible === "function") {
     core.setGuiVisible(false);
 }
