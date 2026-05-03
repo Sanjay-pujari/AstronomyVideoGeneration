@@ -58,6 +58,16 @@ core.output("SceneId={{scene.SceneId}} | ObjectName={{scene.ObservationContext.O
 core.selectObjectByName("{{escapedObjectName}}", true);
 core.wait(1.0);
 
+// Keep object label visible for screenshot.
+try {
+    if (typeof LabelMgr !== "undefined" &&
+        typeof LabelMgr.labelObject === "function") {
+        LabelMgr.labelObject("{{escapedObjectName}}", "{{escapedObjectName}}", true, 24);
+    }
+} catch (e) {
+    core.output("Object label creation failed: " + e);
+}
+
 // Move camera to object
 core.moveToSelectedObject(2.0);
 core.wait(2.0);
