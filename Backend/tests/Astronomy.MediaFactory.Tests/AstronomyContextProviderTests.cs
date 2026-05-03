@@ -48,7 +48,7 @@ public sealed class AstronomyContextProviderTests
         {
             LocationName = "Udaipur, India",
             Timezone = "Asia/Kolkata",
-            NightWindowStartLocal = "2026-03-17T19:00:00",
+            NightWindowStartUtc = "2026-03-17T13:30:00Z",
             VisibleObjects =
             [
                 CreateVisible("Venus", "Planet", "2026-03-17T21:10:00", 42, [Sample("2026-03-17T20:10:00", 20), Sample("2026-03-17T21:10:00", 42)]),
@@ -75,7 +75,7 @@ public sealed class AstronomyContextProviderTests
         {
             LocationName = "Udaipur, India",
             Timezone = "Asia/Kolkata",
-            NightWindowStartLocal = "2026-03-17T19:00:00",
+            NightWindowStartUtc = "2026-03-17T13:30:00Z",
             VisibleObjects =
             [
                 CreateVisible("Venus", "Planet", "2026-03-17T21:10:00", 42, [Sample("2026-03-17T21:10:00", 42)]),
@@ -99,7 +99,7 @@ public sealed class AstronomyContextProviderTests
         {
             LocationName = "Udaipur, India",
             Timezone = "Asia/Kolkata",
-            NightWindowStartLocal = "2026-03-17T19:00:00",
+            NightWindowStartUtc = "2026-03-17T13:30:00Z",
             VisibleObjects =
             [
                 new SkyfieldObjectVisibility
@@ -258,6 +258,7 @@ public sealed class AstronomyContextProviderTests
             new NasaApodClient(nasaClient, options, NullLogger<NasaApodClient>.Instance),
             new NasaNeoWsClient(nasaClient, options, NullLogger<NasaNeoWsClient>.Instance),
             skyfieldSidecarClient,
+            new ObservationWindowService(skyfieldSidecarClient, NullLogger<ObservationWindowService>.Instance),
             NullLogger<AstronomyContextProvider>.Instance,
             Options.Create(new SkyfieldSidecarOptions { Enabled = true, BaseUrl = "http://localhost:8010" }),
             Options.Create(new ObservationOptions { LocationName = "Pune, India", Timezone = "Asia/Kolkata", Latitude = 18.5204, Longitude = 73.8567 }));
