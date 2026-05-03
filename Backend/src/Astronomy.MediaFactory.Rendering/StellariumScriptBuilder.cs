@@ -35,6 +35,8 @@ public sealed class StellariumScriptBuilder
         var shouldSelectObject = !string.Equals(sceneObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
         var shouldShowLandscape = !shouldSelectObject || scene.ObservationContext.AltitudeDegrees >= 20;
         zoom = shouldSelectObject && scene.ObservationContext.AltitudeDegrees < 20 ? 45 : zoom;
+        var azimuthDegrees = scene.ObservationContext.AzimuthDegrees ?? -1;
+        var altitudeDegrees = scene.ObservationContext.AltitudeDegrees ?? -1;
         var escapedSceneObjectName = sceneObjectName.Replace("\"", "\\\"");
         var escapedLabelText = labelText.Replace("\"", "\\\"");
 
@@ -79,8 +81,8 @@ if ({{shouldSelectObject.ToString().ToLowerInvariant()}}) {
     if ("{{profile}}" !== "overview" && typeof LabelMgr !== "undefined" && typeof LabelMgr.labelObject === "function") {
         LabelMgr.labelObject("{{escapedLabelText}}", "{{escapedSceneObjectName}}", true, 22, "#ffff66", "NE", 20, "TextOnly");
     }
-    if ({{scene.ObservationContext.AzimuthDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}} >= 0 && {{scene.ObservationContext.AltitudeDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}} >= 0 && typeof StelMovementMgr.moveToAltAzi === "function") {
-        StelMovementMgr.moveToAltAzi({{scene.ObservationContext.AzimuthDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{scene.ObservationContext.AltitudeDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 1.5);
+    if ({{azimuthDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}} >= 0 && {{altitudeDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}} >= 0 && typeof StelMovementMgr.moveToAltAzi === "function") {
+        StelMovementMgr.moveToAltAzi({{azimuthDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{altitudeDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 1.5);
     }
     core.wait(0.5);
     core.wait(0.5);
