@@ -99,6 +99,12 @@ public static class ServiceCollectionExtensions
         services.AddOptions<PublishingValidationOptions>()
             .Bind(configuration.GetSection(PublishingValidationOptions.SectionName));
 
+        services.AddOptions<PublishingOptions>()
+            .Bind(configuration.GetSection(PublishingOptions.SectionName))
+            .Validate(options => options.Mode is "Disabled" or "DryRun" or "Private" or "Scheduled" or "Public", "Publishing:Mode must be Disabled, DryRun, Private, Scheduled, or Public.")
+            .Validate(options => string.IsNullOrWhiteSpace(options.DefaultPrivacyStatus) || options.DefaultPrivacyStatus is "private" or "public" or "unlisted", "Publishing:DefaultPrivacyStatus must be private, public, or unlisted.")
+            .ValidateOnStart();
+
         services.AddOptions<MaintenanceOptions>()
             .Bind(configuration.GetSection(MaintenanceOptions.SectionName))
             .Validate(opt => opt.WorkingFileRetentionDays > 0 && opt.JobRetentionDays > 0 && opt.StageRetentionDays > 0 && opt.AnalyticsRetentionDays > 0 && opt.StaleJobThresholdMinutes > 0, "Maintenance values must be > 0.")
