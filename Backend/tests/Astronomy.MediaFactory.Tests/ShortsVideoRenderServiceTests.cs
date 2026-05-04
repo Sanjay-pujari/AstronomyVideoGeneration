@@ -21,6 +21,7 @@ public sealed class ShortsVideoRenderServiceTests
             new NoopBlobService(),
             new NoopYouTubeService(),
             new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new PassThroughSeoMetadataGeneratorService(),
             Options.Create(new YouTubeOptions()),
             Options.Create(new RenderingOptions()),
             NullLogger<ShortsVideoRenderService>.Instance);
@@ -71,6 +72,7 @@ public sealed class ShortsVideoRenderServiceTests
             new NoopBlobService(),
             new NoopYouTubeService(),
             new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new PassThroughSeoMetadataGeneratorService(),
             Options.Create(new YouTubeOptions()),
             Options.Create(new RenderingOptions()),
             NullLogger<ShortsVideoRenderService>.Instance);
