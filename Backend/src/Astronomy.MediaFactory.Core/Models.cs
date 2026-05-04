@@ -393,3 +393,28 @@ public sealed class ExperimentFeedbackInsight
     public string WinningHook { get; init; } = "";
     public VariantPerformanceMetrics Metrics { get; init; } = new();
 }
+
+
+public sealed class PrePublishValidationRequest
+{
+    public Guid PipelineRunId { get; init; }
+    public ContentType ContentType { get; init; }
+    public bool IsShort { get; init; }
+    public string OutputDirectory { get; init; } = string.Empty;
+    public string FinalVideoPath { get; init; } = string.Empty;
+    public IReadOnlyCollection<string> VisualPaths { get; init; } = [];
+    public AstronomyContext Context { get; init; } = new();
+    public ScriptResult Script { get; init; } = new();
+}
+
+public sealed class PrePublishValidationReport
+{
+    public Guid PipelineRunId { get; init; }
+    public ContentType ContentType { get; init; }
+    public bool IsShort { get; init; }
+    public string FinalVideoPath { get; init; } = string.Empty;
+    public bool Passed { get; set; }
+    public List<string> Errors { get; init; } = [];
+    public List<string> Warnings { get; init; } = [];
+    public DateTimeOffset CheckedAtUtc { get; init; }
+}
