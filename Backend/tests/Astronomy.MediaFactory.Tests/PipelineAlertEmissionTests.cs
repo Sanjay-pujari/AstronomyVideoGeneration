@@ -24,6 +24,7 @@ public sealed class PipelineAlertEmissionTests
             new NoOpShortsService(),
             new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
             new NoOpThumbnailService(),
+            new NoOpSeoMetadataGeneratorService(),
             new InMemoryRepo(),
             Options.Create(new YouTubeOptions()),
             Options.Create(new RenderingOptions()),
