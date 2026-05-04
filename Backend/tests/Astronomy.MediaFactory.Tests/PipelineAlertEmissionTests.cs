@@ -27,6 +27,7 @@ public sealed class PipelineAlertEmissionTests
             new InMemoryRepo(),
             Options.Create(new YouTubeOptions()),
             Options.Create(new RenderingOptions()),
+            Options.Create(new PublishingValidationOptions()),
             NullLogger<PipelineOrchestrator>.Instance,
             operationalAlertNotifier: notifier);
 

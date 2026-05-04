@@ -28,6 +28,7 @@ public sealed class PipelineStageInstrumentationTests
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
             Options.Create(new RenderingOptions()),
+            Options.Create(new PublishingValidationOptions()),
             NullLogger<PipelineOrchestrator>.Instance,
             pipelineStageRecorder: recorder);
 
@@ -61,6 +62,7 @@ public sealed class PipelineStageInstrumentationTests
             repository,
             Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
             Options.Create(new RenderingOptions()),
+            Options.Create(new PublishingValidationOptions()),
             NullLogger<PipelineOrchestrator>.Instance,
             pipelineStageRecorder: recorder,
             stageAlertPublisher: alerts,
