@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 

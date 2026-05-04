@@ -33,7 +33,7 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
         if (candidates.Count == 0)
             return [];
 
-        var thumbnailsDirectory = Path.Combine(outputDirectory, "thumbnails");
+        var thumbnailsDirectory = System.IO.Path.Combine(outputDirectory, "thumbnails");
         Directory.CreateDirectory(thumbnailsDirectory);
 
         var selection = SelectBaseScene(context.SceneObservationContexts);
@@ -43,12 +43,12 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
         var outputs = new List<string>(3);
         for (var i = 0; i < variants.Count; i++)
         {
-            var output = Path.Combine(thumbnailsDirectory, $"thumbnail-{i + 1}.png");
+            var output = System.IO.Path.Combine(thumbnailsDirectory, $"thumbnail-{i + 1}.png");
             await RenderAsync(selectedImage, output, variants[i], cancellationToken);
             outputs.Add(output);
         }
 
-        var diagnosticsPath = Path.Combine(thumbnailsDirectory, "thumbnail-selection.json");
+        var diagnosticsPath = System.IO.Path.Combine(thumbnailsDirectory, "thumbnail-selection.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(new
         {
             selectedImage,
