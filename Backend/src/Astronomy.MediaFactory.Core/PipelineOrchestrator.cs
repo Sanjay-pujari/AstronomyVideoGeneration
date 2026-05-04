@@ -22,6 +22,7 @@ public sealed class PipelineOrchestrator
     private readonly IMetadataOptimizationService _metadataOptimizationService;
     private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IThumbnailGenerationService _thumbnailGenerationService;
+    private readonly IThumbnailGeneratorService? _thumbnailGeneratorService;
     private readonly IPipelineRepository _repository;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly OperationsOptions _operationsOptions;
@@ -52,6 +53,7 @@ public sealed class PipelineOrchestrator
         IShortsVideoRenderService shortsVideoRenderService,
         IMetadataOptimizationService metadataOptimizationService,
         IThumbnailGenerationService thumbnailGenerationService,
+        IThumbnailGeneratorService? thumbnailGeneratorService = null,
         IPipelineRepository repository,
         IOptions<YouTubeOptions> youTubeOptions,
         IOptions<RenderingOptions> renderingOptions,
@@ -82,6 +84,7 @@ public sealed class PipelineOrchestrator
         _shortsVideoRenderService = shortsVideoRenderService;
         _metadataOptimizationService = metadataOptimizationService;
         _thumbnailGenerationService = thumbnailGenerationService;
+        _thumbnailGeneratorService = thumbnailGeneratorService;
         _repository = repository;
         _youTubeOptions = youTubeOptions.Value;
         _renderingOptions = renderingOptions.Value;
@@ -282,6 +285,11 @@ public sealed class PipelineOrchestrator
 
             var audioPath = await RunStageAsync("SpeechSynthesis", () => _speechSynthesisService.SynthesizeAsync(script.ScriptBody, outputDir, cancellationToken));
             var visuals = await RunStageAsync("VisualGeneration", () => _visualAssetProvider.PrepareVisualsAsync(context, outputDir, cancellationToken));
+
+            if (_thumbnailGeneratorService is not null)
+            {
+                _ = await RunStageAsync("ThumbnailVariants", () => _thumbnailGeneratorService.GenerateAsync(context, visuals, outputDir, script.ScriptBody, cancellationToken), continueWithFallback: true, fallback: _ => Task.FromResult<IReadOnlyCollection<string>>([]));
+            }
 
             await _repository.AddScriptAsync(new GeneratedScript
             {

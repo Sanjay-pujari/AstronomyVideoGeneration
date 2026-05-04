@@ -59,6 +59,11 @@ public interface IThumbnailGenerationService
     Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken);
 }
 
+public interface IThumbnailGeneratorService
+{
+    Task<IReadOnlyCollection<string>> GenerateAsync(AstronomyContext context, IReadOnlyCollection<string> screenshots, string outputDirectory, string narrationContext, CancellationToken cancellationToken);
+}
+
 public interface IPrePublishValidationService
 {
     Task<PrePublishValidationReport> ValidateAsync(PrePublishValidationRequest request, CancellationToken cancellationToken);
