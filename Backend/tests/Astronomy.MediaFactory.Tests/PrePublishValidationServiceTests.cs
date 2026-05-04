@@ -33,6 +33,6 @@ public sealed class PrePublishValidationServiceTests
         var visual = placeholder ? Path.Combine(dir,"scene-001.placeholder.txt") : Path.Combine(dir,"scene-001.png");
         File.WriteAllText(visual, "x");
         if (isShort && createShortMap) File.WriteAllText(Path.Combine(dir, "short-sequence-map.json"), "{\"sceneId\":\"scene-1\"}");
-        return new PrePublishValidationRequest{ PipelineRunId = Guid.NewGuid(), ContentType = ContentType.DailySkyGuide, IsShort=isShort, OutputDirectory=dir, FinalVideoPath=video, VisualPaths=[visual], Context=new AstronomyContext{SunsetTimeUtc=DateTime.UtcNow.AddHours(-2),SunriseTimeUtc=DateTime.UtcNow.AddHours(2),SceneObservationContexts=[new SceneObservationContext{SceneId="scene-1",ObjectName="Moon",UtcObservationTime=DateTime.UtcNow}]}, Script=new ScriptResult{SceneScriptSections=new SceneScriptSections{SectionsBySceneId=new Dictionary<string,string>{{"scene-1","text"}}}}};
+        return new PrePublishValidationRequest{ PipelineRunId = Guid.NewGuid(), ContentType = ContentType.DailySkyGuide, IsShort=isShort, OutputDirectory=dir, FinalVideoPath=video, VisualPaths=[visual], Context=new AstronomyContext{SceneObservationContexts=[new SceneObservationContext{SceneId="scene-1",ObjectName="Moon",UtcObservationTime=DateTime.UtcNow}]}, Script=new ScriptResult{SceneScriptSections=new SceneScriptSections{SectionsBySceneId=new Dictionary<string,string>{{"scene-1","text"}}}}};
     }
 }

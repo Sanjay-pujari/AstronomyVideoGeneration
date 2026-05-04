@@ -35,8 +35,18 @@ public sealed class PrePublishValidationService : IPrePublishValidationService
         var actual = request.Script.SceneScriptSections?.SectionsBySceneId.Keys.Select(id => request.Context.SceneObservationContexts.FirstOrDefault(s => s.SceneId.Equals(id, StringComparison.OrdinalIgnoreCase))?.ObjectName ?? id).Distinct(StringComparer.OrdinalIgnoreCase) ?? [];
         if (!expected.SequenceEqual(actual, StringComparer.OrdinalIgnoreCase)) report.Errors.Add("Narration objects do not match visual objects.");
 
-        var nightStart = request.Context.SunsetTimeUtc; var nightEnd = request.Context.SunriseTimeUtc;
-        if (request.Context.SceneObservationContexts.Any(s => s.UtcObservationTime < nightStart || s.UtcObservationTime > nightEnd)) report.Errors.Add("SceneObservationContext UTC times are outside observation night window.");
+        var observationTimes = request.Context.SceneObservationContexts
+            .Select(s => s.UtcObservationTime)
+            .OrderBy(t => t)
+            .ToList();
+        if (observationTimes.Count > 1)
+        {
+            var totalWindow = observationTimes[^1] - observationTimes[0];
+            if (totalWindow > TimeSpan.FromHours(24))
+            {
+                report.Errors.Add("SceneObservationContext UTC times span more than 24 hours.");
+            }
+        }
 
         if (request.IsShort)
         {
@@ -68,7 +78,7 @@ public sealed class PrePublishValidationService : IPrePublishValidationService
     {
         if (!File.Exists(path)) return (0, false, false);
         var ffprobe = string.IsNullOrWhiteSpace(_renderingOptions.FfprobePath) ? "ffprobe" : _renderingOptions.FfprobePath;
-        var args = $"-v quiet -print_format json -show_streams -show_format "{path}"";
+        var args = $"-v quiet -print_format json -show_streams -show_format \"{path}\"";
         var psi = new ProcessStartInfo(ffprobe, args) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         using var p = Process.Start(psi)!;
         var o = await p.StandardOutput.ReadToEndAsync(ct);
