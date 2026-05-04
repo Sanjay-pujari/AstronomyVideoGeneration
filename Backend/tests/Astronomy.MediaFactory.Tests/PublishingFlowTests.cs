@@ -225,9 +225,10 @@ public sealed class PublishingFlowTests
         var yt = new TrackingYouTubeService();
         var repository = new FakePipelineRepository();
         var orchestrator = CreateOrchestrator(repository, yt, Options.Create(new PublishingOptions { Enabled = true, Mode = "DryRun" }));
-        var run = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: true), CancellationToken.None);
+        _ = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: true), CancellationToken.None);
         Assert.False(yt.WasUploadCalled);
-        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(run.VideoPath)!, "youtube-publish-payload.json")));
+        var renderedVideo = Assert.Single(repository.Assets.Where(a => a.AssetType == "Video"));
+        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(renderedVideo.LocalPath)!, "youtube-publish-payload.json")));
     }
 
     [Fact]
@@ -262,10 +263,15 @@ public sealed class PublishingFlowTests
 
     private sealed class FakePipelineRepository : IPipelineRepository
     {
+        public List<MediaAsset> Assets { get; } = [];
         public List<PublishedVideo> PublishedVideos { get; } = [];
         public List<MonetizationRecord> MonetizationRecords { get; } = [];
 
-        public Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken)
+        {
+            Assets.Add(asset);
+            return Task.CompletedTask;
+        }
         public Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
         public Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken)
