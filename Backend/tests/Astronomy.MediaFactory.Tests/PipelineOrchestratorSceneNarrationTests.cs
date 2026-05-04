@@ -33,6 +33,7 @@ public sealed class PipelineOrchestratorSceneNarrationTests
                 repository,
                 Options.Create(new YouTubeOptions()),
                 Options.Create(new RenderingOptions { WorkingDirectory = tempRoot }),
+                Options.Create(new PublishingValidationOptions()),
                 NullLogger<PipelineOrchestrator>.Instance,
                 operationsOptions: Options.Create(new OperationsOptions()),
                 maintenanceOptions: Options.Create(new MaintenanceOptions { WorkingDirectory = tempRoot }));
