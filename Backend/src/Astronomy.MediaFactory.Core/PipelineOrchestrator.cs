@@ -41,6 +41,7 @@ public sealed class PipelineOrchestrator
     private readonly RenderingOptions _renderingOptions;
     private readonly IPrePublishValidationService _prePublishValidationService;
     private readonly PublishingValidationOptions _publishingValidationOptions;
+    private readonly PublishingOptions _publishingOptions;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -60,6 +61,7 @@ public sealed class PipelineOrchestrator
         IOptions<RenderingOptions> renderingOptions,
         IOptions<PublishingValidationOptions> publishingValidationOptions,
         ILogger<PipelineOrchestrator> logger,
+        IOptions<PublishingOptions>? publishingOptions = null,
         IThumbnailGeneratorService? thumbnailGeneratorService = null,
         IContentMonetizationService? contentMonetizationService = null,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
@@ -106,6 +108,7 @@ public sealed class PipelineOrchestrator
         _shortFormPublishingService = shortFormPublishingService;
         _prePublishValidationService = prePublishValidationService ?? new PrePublishValidationService(Options.Create(_renderingOptions), Options.Create(new PublishingValidationOptions()), Microsoft.Extensions.Logging.Abstractions.NullLogger<PrePublishValidationService>.Instance);
         _publishingValidationOptions = publishingValidationOptions.Value;
+        _publishingOptions = publishingOptions?.Value ?? new PublishingOptions();
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -478,6 +481,7 @@ public sealed class PipelineOrchestrator
 
             var publishStatus = "Published";
             var youtubeThumbnailUploaded = false;
+            var validationPassed = true;
             if (_publishingValidationOptions.Enabled)
             {
                 var validationReport = await RunStageAsync("PrePublishValidation", () => _prePublishValidationService.ValidateAsync(new PrePublishValidationRequest
@@ -498,6 +502,7 @@ public sealed class PipelineOrchestrator
                         ? $"Pre-publish validation failed: {string.Join("; ", validationReport.Errors)}"
                         : $"Pre-publish validation warnings blocked publishing: {string.Join("; ", validationReport.Warnings)}";
                     publishStatus = "ValidationFailed";
+                    validationPassed = false;
                     if (request.PublishToYouTube)
                     {
                         _logger.LogWarning("Skipping publish for run {PipelineRunId}: {Reason}", run.Id, reason);
@@ -505,7 +510,48 @@ public sealed class PipelineOrchestrator
                     }
                 }
             }
-            if (request.PublishToYouTube)
+
+            var mode = (_publishingOptions.Mode ?? "DryRun").Trim();
+            var explicitPublicMode = string.Equals(mode, "Public", StringComparison.OrdinalIgnoreCase);
+            var publishingEnabled = _publishingOptions.Enabled && !string.Equals(mode, "Disabled", StringComparison.OrdinalIgnoreCase);
+            var shouldAttemptPublishing = request.PublishToYouTube && validationPassed && publishingEnabled;
+            var selectedPrivacyStatus = string.Equals(mode, "Private", StringComparison.OrdinalIgnoreCase)
+                ? "private"
+                : string.Equals(mode, "Scheduled", StringComparison.OrdinalIgnoreCase)
+                    ? "private"
+                    : explicitPublicMode
+                        ? "public"
+                        : string.Equals(_publishingOptions.DefaultPrivacyStatus, "public", StringComparison.OrdinalIgnoreCase)
+                            ? "private"
+                            : _publishingOptions.DefaultPrivacyStatus;
+            if (string.IsNullOrWhiteSpace(selectedPrivacyStatus))
+            {
+                selectedPrivacyStatus = "private";
+            }
+
+            _logger.LogInformation("PublishingMode={PublishingMode} ValidationPassed={ValidationPassed}", mode, validationPassed);
+
+            if (!shouldAttemptPublishing)
+            {
+                _logger.LogInformation("Uploaded/Skipped=Skipped");
+            }
+            else if (string.Equals(mode, "DryRun", StringComparison.OrdinalIgnoreCase))
+            {
+                var payload = new
+                {
+                    videoPath,
+                    title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
+                    description = script.OptimizedMetadata?.OptimizedDescription ?? script.Description,
+                    tags = script.OptimizedMetadata?.Tags ?? script.Tags,
+                    hashtags = seoMetadata.Hashtags,
+                    thumbnailPath,
+                    privacyStatus = selectedPrivacyStatus
+                };
+
+                await File.WriteAllTextAsync(Path.Combine(outputDir, "youtube-publish-payload.json"), JsonSerializer.Serialize(payload, JsonSerializerOptions), cancellationToken);
+                _logger.LogInformation("Uploaded/Skipped=Skipped");
+            }
+            else if (shouldAttemptPublishing)
             {
                 try
                 {
@@ -514,7 +560,7 @@ public sealed class PipelineOrchestrator
                         script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
                         script.OptimizedMetadata?.OptimizedDescription ?? script.Description,
                         script.OptimizedMetadata?.Tags ?? script.Tags,
-                        _youTubeOptions.PrivacyStatus,
+                        selectedPrivacyStatus,
                         cancellationToken), continueWithFallback: true, fallback: _ => Task.FromResult<string?>(null));
 
                     if (string.IsNullOrWhiteSpace(run.YouTubeVideoId))
@@ -534,7 +580,7 @@ public sealed class PipelineOrchestrator
                                 OccurredAt: DateTimeOffset.UtcNow), cancellationToken);
                         }
                     }
-                    else if (_youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+                    else if (_publishingOptions.UploadThumbnail && _youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
                     {
                         try
                         {
@@ -545,6 +591,8 @@ public sealed class PipelineOrchestrator
                             _logger.LogWarning(ex, "YouTube thumbnail upload failed for pipeline run {PipelineRunId}.", run.Id);
                         }
                     }
+
+                    _logger.LogInformation("Uploaded/Skipped=Uploaded");
                 }
                 catch (Exception ex)
                 {
