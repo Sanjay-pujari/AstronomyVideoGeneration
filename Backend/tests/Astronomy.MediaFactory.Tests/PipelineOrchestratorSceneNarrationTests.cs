@@ -30,6 +30,7 @@ public sealed class PipelineOrchestratorSceneNarrationTests
                 new NoOpShortsService(),
                 new PassThroughMetadataOptimizationService(),
                 new StaticThumbnailGenerationService(),
+                new PassThroughSeoMetadataGeneratorService(),
                 repository,
                 Options.Create(new YouTubeOptions()),
                 Options.Create(new RenderingOptions { WorkingDirectory = tempRoot }),
