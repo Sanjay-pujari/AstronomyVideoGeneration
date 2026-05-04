@@ -210,6 +210,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IThumbnailStrategyService, ThumbnailStrategyService>();
         services.AddScoped<IThumbnailGenerationService, ThumbnailGenerationService>();
         services.AddScoped<IThumbnailGeneratorService, ThumbnailGeneratorService>();
+        services.AddScoped<ISeoMetadataGeneratorService, SeoMetadataGeneratorService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
