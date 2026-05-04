@@ -115,6 +115,16 @@ public sealed class RenderingOptions
     public bool KeepIntermediateFiles { get; set; } = true;
 }
 
+
+public sealed class PublishingValidationOptions
+{
+    public const string SectionName = "PublishingValidation";
+    public bool Enabled { get; set; } = true;
+    public int MinimumLongVideoDurationSeconds { get; set; } = 60;
+    public int MinimumShortVideoDurationSeconds { get; set; } = 15;
+    public bool BlockPublishOnWarning { get; set; } = false;
+}
+
 public sealed class AstronomyApiOptions
 {
     public const string SectionName = "AstronomyApis";

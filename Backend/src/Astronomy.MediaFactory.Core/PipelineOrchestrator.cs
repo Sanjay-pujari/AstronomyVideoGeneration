@@ -37,6 +37,8 @@ public sealed class PipelineOrchestrator
     private readonly IContentExperimentService? _contentExperimentService;
     private readonly IShortFormPublishingService? _shortFormPublishingService;
     private readonly RenderingOptions _renderingOptions;
+    private readonly IPrePublishValidationService _prePublishValidationService;
+    private readonly PublishingValidationOptions _publishingValidationOptions;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -53,6 +55,7 @@ public sealed class PipelineOrchestrator
         IPipelineRepository repository,
         IOptions<YouTubeOptions> youTubeOptions,
         IOptions<RenderingOptions> renderingOptions,
+        IOptions<PublishingValidationOptions> publishingValidationOptions,
         ILogger<PipelineOrchestrator> logger,
         IContentMonetizationService? contentMonetizationService = null,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
@@ -65,7 +68,8 @@ public sealed class PipelineOrchestrator
         IOptions<OperationsOptions>? operationsOptions = null,
         IOptions<MaintenanceOptions>? maintenanceOptions = null,
         IContentExperimentService? contentExperimentService = null,
-        IShortFormPublishingService? shortFormPublishingService = null)
+        IShortFormPublishingService? shortFormPublishingService = null,
+        IPrePublishValidationService? prePublishValidationService = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -94,6 +98,8 @@ public sealed class PipelineOrchestrator
         _operationalAlertNotifier = operationalAlertNotifier;
         _contentExperimentService = contentExperimentService;
         _shortFormPublishingService = shortFormPublishingService;
+        _prePublishValidationService = prePublishValidationService ?? new PrePublishValidationService(Options.Create(_renderingOptions), Options.Create(new PublishingValidationOptions()), Microsoft.Extensions.Logging.Abstractions.NullLogger<PrePublishValidationService>.Instance);
+        _publishingValidationOptions = publishingValidationOptions.Value;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -445,6 +451,33 @@ public sealed class PipelineOrchestrator
 
             var publishStatus = "Published";
             var youtubeThumbnailUploaded = false;
+            if (_publishingValidationOptions.Enabled)
+            {
+                var validationReport = await RunStageAsync("PrePublishValidation", () => _prePublishValidationService.ValidateAsync(new PrePublishValidationRequest
+                {
+                    PipelineRunId = run.Id,
+                    ContentType = request.ContentType,
+                    IsShort = false,
+                    OutputDirectory = outputDir,
+                    FinalVideoPath = videoPath,
+                    VisualPaths = visuals.ToList(),
+                    Context = context,
+                    Script = script
+                }, cancellationToken));
+
+                if (validationReport.Errors.Count > 0 || (_publishingValidationOptions.BlockPublishOnWarning && validationReport.Warnings.Count > 0))
+                {
+                    var reason = validationReport.Errors.Count > 0
+                        ? $"Pre-publish validation failed: {string.Join("; ", validationReport.Errors)}"
+                        : $"Pre-publish validation warnings blocked publishing: {string.Join("; ", validationReport.Warnings)}";
+                    publishStatus = "ValidationFailed";
+                    if (request.PublishToYouTube)
+                    {
+                        _logger.LogWarning("Skipping publish for run {PipelineRunId}: {Reason}", run.Id, reason);
+                        request = request with { PublishToYouTube = false };
+                    }
+                }
+            }
             if (request.PublishToYouTube)
             {
                 try

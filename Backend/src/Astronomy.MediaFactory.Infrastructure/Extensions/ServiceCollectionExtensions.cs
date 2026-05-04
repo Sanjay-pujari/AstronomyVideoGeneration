@@ -96,6 +96,9 @@ public static class ServiceCollectionExtensions
             .Validate(opt => opt.RetainDays > 0 && opt.SlowStageThresholdMs > 0, "Operations values must be > 0.")
             .ValidateOnStart();
 
+        services.AddOptions<PublishingValidationOptions>()
+            .Bind(configuration.GetSection(PublishingValidationOptions.SectionName));
+
         services.AddOptions<MaintenanceOptions>()
             .Bind(configuration.GetSection(MaintenanceOptions.SectionName))
             .Validate(opt => opt.WorkingFileRetentionDays > 0 && opt.JobRetentionDays > 0 && opt.StageRetentionDays > 0 && opt.AnalyticsRetentionDays > 0 && opt.StaleJobThresholdMinutes > 0, "Maintenance values must be > 0.")
@@ -219,6 +222,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPromptFeedbackService, PromptFeedbackService>();
         services.AddScoped<StellariumScriptBuilder>(sp =>
             new StellariumScriptBuilder(sp.GetRequiredService<IOptions<StellariumOptions>>().Value));
+        services.AddScoped<IPrePublishValidationService, PrePublishValidationService>();
         services.AddScoped<PipelineOrchestrator>();
         services.AddScoped<IPipelineJobQueue, PipelineJobQueue>();
         services.AddScoped<IPipelineJobExecutor, PipelineJobExecutor>();
