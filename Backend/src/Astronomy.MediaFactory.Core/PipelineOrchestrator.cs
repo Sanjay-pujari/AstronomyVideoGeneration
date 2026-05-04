@@ -543,12 +543,16 @@ public sealed class PipelineOrchestrator
                     title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
                     description = script.OptimizedMetadata?.OptimizedDescription ?? script.Description,
                     tags = script.OptimizedMetadata?.Tags ?? script.Tags,
-                    hashtags = seoMetadata.Hashtags,
+                    hashtags = seoMetadata.HashtagsCsv
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
                     thumbnailPath,
                     privacyStatus = selectedPrivacyStatus
                 };
 
-                await File.WriteAllTextAsync(Path.Combine(outputDir, "youtube-publish-payload.json"), JsonSerializer.Serialize(payload, JsonSerializerOptions), cancellationToken);
+                await File.WriteAllTextAsync(
+                    Path.Combine(outputDir, "youtube-publish-payload.json"),
+                    JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
+                    cancellationToken);
                 _logger.LogInformation("Uploaded/Skipped=Skipped");
             }
             else if (shouldAttemptPublishing)
