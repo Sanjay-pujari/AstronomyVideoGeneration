@@ -138,7 +138,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         var sceneCount = shortScenesOrdered.Count;
         var segmentedNarration = await TryBuildSegmentedNarrationAsync(shortScript.SceneNarrationSegments, scriptBody, shortScenesOrdered, outputDirectory, cancellationToken);
         var finalNarrationPath = await BuildFinalNarrationAudioAsync(segmentedNarration, shortAudioPath, outputDirectory, cancellationToken);
-        var orderedSequenceMap = BuildShortSequenceMap(shortScenesOrdered, segmentedNarration);
+        var orderedSequenceMap = BuildShortSequenceMap(shortScenesOrdered, segmentedNarration, outputDirectory);
         await ValidateAndWriteShortSequenceDiagnosticsAsync(orderedSequenceMap, outputDirectory, cancellationToken);
 
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
@@ -408,11 +408,13 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         }).ToList();
     }
 
-    private static List<ShortSequenceMapEntry> BuildShortSequenceMap(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, IReadOnlyList<SceneNarrationSegment> shortNarrationSegments)
+    private static List<ShortSequenceMapEntry> BuildShortSequenceMap(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, IReadOnlyList<SceneNarrationSegment> shortNarrationSegments, string outputDirectory)
         => shortScenesOrdered.Select((scene, index) =>
         {
             var narration = index < shortNarrationSegments.Count ? shortNarrationSegments[index] : new SceneNarrationSegment { SceneId = scene.SceneId };
-            return new ShortSequenceMapEntry(index + 1, scene.SceneId, scene.ObjectName, scene.SceneIndex, narration.NarrationText, narration.AudioPath, scene.VisualPath, Math.Max(1, narration.DurationSeconds), narration.SceneId);
+            var narrationTextPath = Path.Combine(outputDirectory, $"scene-narration-{index + 1:000}.txt");
+            File.WriteAllText(narrationTextPath, narration.NarrationText ?? string.Empty);
+            return new ShortSequenceMapEntry(index + 1, scene.SceneId, scene.ObjectName, scene.SceneIndex, narrationTextPath, narration.AudioPath, scene.VisualPath, Math.Max(1, narration.DurationSeconds), narration.SceneId, index);
         }).ToList();
 
     private async Task ValidateAndWriteShortSequenceDiagnosticsAsync(IReadOnlyList<ShortSequenceMapEntry> orderedSequenceMap, string outputDirectory, CancellationToken cancellationToken)
@@ -421,7 +423,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(orderedSequenceMap, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 
         var mismatches = orderedSequenceMap
-            .Where(entry => !entry.SceneId.Equals(entry.NarrationSceneId, StringComparison.OrdinalIgnoreCase))
+            .Where(entry => !entry.SceneId.Equals(entry.NarrationSceneId, StringComparison.OrdinalIgnoreCase) || entry.SceneIndex != entry.NarrationSceneIndex)
             .ToList();
         if (mismatches.Count == 0)
         {
@@ -433,7 +435,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     }
 
     private sealed record ShortSceneOrderEntry(string SceneId, string ObjectName, string SceneTitle, int SceneIndex, string VisualPath);
-    private sealed record ShortSequenceMapEntry(int Index, string SceneId, string ObjectName, int SceneIndex, string NarrationText, string AudioPath, string VisualPath, int DurationSeconds, string NarrationSceneId);
+    private sealed record ShortSequenceMapEntry(int Index, string SceneId, string ObjectName, int SceneIndex, string NarrationTextPath, string AudioPath, string VisualPath, int DurationSeconds, string NarrationSceneId, int NarrationSceneIndex);
 
     private int GetAudioDurationSeconds(string audioPath)
     {
