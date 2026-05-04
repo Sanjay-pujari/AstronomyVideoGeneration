@@ -15,6 +15,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private readonly IVideoRenderService _videoRenderService;
     private readonly IAzureBlobStorageService _blobStorageService;
     private readonly IMetadataOptimizationService _metadataOptimizationService;
+    private readonly ISeoMetadataGeneratorService _seoMetadataGeneratorService;
     private readonly ILogger<ShortsVideoRenderService> _logger;
     private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
@@ -29,6 +30,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         IAzureBlobStorageService blobStorageService,
         IYouTubePublishingService youTubePublishingService,
         IMetadataOptimizationService metadataOptimizationService,
+        ISeoMetadataGeneratorService seoMetadataGeneratorService,
         IOptions<YouTubeOptions> youTubeOptions,
         IOptions<RenderingOptions> renderingOptions,
         ILogger<ShortsVideoRenderService> logger,
@@ -42,6 +44,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         _videoRenderService = videoRenderService;
         _blobStorageService = blobStorageService;
         _metadataOptimizationService = metadataOptimizationService;
+        _seoMetadataGeneratorService = seoMetadataGeneratorService;
         _renderingOptions = renderingOptions.Value;
         _logger = logger;
         _contentMonetizationService = contentMonetizationService;
@@ -142,6 +145,22 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         await ValidateAndWriteShortSequenceDiagnosticsAsync(orderedSequenceMap, outputDirectory, cancellationToken);
 
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
+        var selectedObjects = context.SceneObservationContexts
+            .Where(s => !string.IsNullOrWhiteSpace(s.ObjectName) && !s.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase))
+            .Select(s => s.ObjectName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var seoMetadata = await _seoMetadataGeneratorService.GenerateAsync(new SeoMetadataRequest
+        {
+            SceneObservationContext = context.SceneObservationContexts,
+            SelectedVisibleObjects = selectedObjects,
+            LocationName = context.LocationName,
+            TargetDate = context.Date,
+            IsShortForm = true,
+            ThumbnailVariants = visualCandidates.ToArray()
+        }, cancellationToken);
+        await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDirectory, cancellationToken);
+
         var manifest = new RenderManifest
         {
             Title = shortScript.OptimizedMetadata?.PrimaryTitle ?? shortScript.Title,

@@ -151,6 +151,25 @@ public sealed class ThumbnailGenerationRequest
     public FeedbackSignals? FeedbackSignals { get; init; }
 }
 
+public sealed class SeoMetadataRequest
+{
+    public required IReadOnlyCollection<SceneObservationContext> SceneObservationContext { get; init; }
+    public required IReadOnlyCollection<string> SelectedVisibleObjects { get; init; }
+    public required string LocationName { get; init; }
+    public required DateOnly TargetDate { get; init; }
+    public required bool IsShortForm { get; init; }
+    public IReadOnlyCollection<string> ThumbnailVariants { get; init; } = [];
+}
+
+public sealed class SeoMetadataResult
+{
+    public string Title { get; init; } = "";
+    public string Description { get; init; } = "";
+    public string TagsCsv { get; init; } = "";
+    public string HashtagsCsv { get; init; } = "";
+    public string PinnedComment { get; init; } = "";
+}
+
 public sealed class RenderManifest
 {
     public string Title { get; set; } = "";

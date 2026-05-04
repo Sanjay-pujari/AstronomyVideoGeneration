@@ -22,6 +22,7 @@ public sealed class PipelineOrchestrator
     private readonly IMetadataOptimizationService _metadataOptimizationService;
     private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IThumbnailGenerationService _thumbnailGenerationService;
+    private readonly ISeoMetadataGeneratorService _seoMetadataGeneratorService;
     private readonly IThumbnailGeneratorService? _thumbnailGeneratorService;
     private readonly IPipelineRepository _repository;
     private readonly YouTubeOptions _youTubeOptions;
@@ -53,6 +54,7 @@ public sealed class PipelineOrchestrator
         IShortsVideoRenderService shortsVideoRenderService,
         IMetadataOptimizationService metadataOptimizationService,
         IThumbnailGenerationService thumbnailGenerationService,
+        ISeoMetadataGeneratorService seoMetadataGeneratorService,
         IPipelineRepository repository,
         IOptions<YouTubeOptions> youTubeOptions,
         IOptions<RenderingOptions> renderingOptions,
@@ -84,6 +86,7 @@ public sealed class PipelineOrchestrator
         _shortsVideoRenderService = shortsVideoRenderService;
         _metadataOptimizationService = metadataOptimizationService;
         _thumbnailGenerationService = thumbnailGenerationService;
+        _seoMetadataGeneratorService = seoMetadataGeneratorService;
         _thumbnailGeneratorService = thumbnailGeneratorService;
         _repository = repository;
         _youTubeOptions = youTubeOptions.Value;
@@ -428,6 +431,22 @@ public sealed class PipelineOrchestrator
             }
 
             var thumbnailPath = thumbnailPlan.ThumbnailPath;
+            var selectedObjects = context.SceneObservationContexts
+                .Where(s => !string.IsNullOrWhiteSpace(s.ObjectName) && !s.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase))
+                .Select(s => s.ObjectName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var seoMetadata = await _seoMetadataGeneratorService.GenerateAsync(new SeoMetadataRequest
+            {
+                SceneObservationContext = context.SceneObservationContexts,
+                SelectedVisibleObjects = selectedObjects,
+                LocationName = context.LocationName,
+                TargetDate = context.Date,
+                IsShortForm = false,
+                ThumbnailVariants = thumbnailPlan.ThumbnailVariantPaths.ToArray()
+            }, cancellationToken);
+            await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDir, cancellationToken);
+
             await _repository.AddAssetAsync(new MediaAsset
             {
                 PipelineRunId = run.Id,
