@@ -124,6 +124,11 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.SkyOverviewMinutesAfterSunset >= 0, "Observation:SkyOverviewMinutesAfterSunset must be >= 0.")
             .ValidateOnStart();
 
+        services.AddOptions<ThumbnailOptions>()
+            .Bind(configuration.GetSection(ThumbnailOptions.SectionName))
+            .Validate(opt => opt.Width > 0 && opt.Height > 0, "Thumbnail dimensions must be > 0.")
+            .ValidateOnStart();
+
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
             .ValidateDataAnnotations()
@@ -204,6 +209,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
         services.AddScoped<IThumbnailStrategyService, ThumbnailStrategyService>();
         services.AddScoped<IThumbnailGenerationService, ThumbnailGenerationService>();
+        services.AddScoped<IThumbnailGeneratorService, ThumbnailGeneratorService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
