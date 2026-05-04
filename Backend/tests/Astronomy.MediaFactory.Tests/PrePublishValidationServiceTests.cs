@@ -1,3 +1,4 @@
+using Xunit;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging.Abstractions;
