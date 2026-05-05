@@ -14,4 +14,14 @@ public sealed class ObservationOptions
     public double PreferredObjectAltitudeDegrees { get; set; } = 20;
     public int VisibilitySearchStepMinutes { get; set; } = 15;
     public bool PreferHighestAltitude { get; set; } = true;
+    public OverviewOptions Overview { get; set; } = new();
+}
+
+public sealed class OverviewOptions
+{
+    public string Mode { get; set; } = "Hybrid";
+    public string DefaultHookStrategy { get; set; } = "AttractiveObject";
+    public bool EnablePolarisOrientation { get; set; } = true;
+    public int PolarisOrientationDurationSeconds { get; set; } = 5;
+    public int AttractiveOverviewDurationSeconds { get; set; } = 6;
 }

@@ -128,6 +128,7 @@ public static class ServiceCollectionExtensions
             .Validate(options => !string.IsNullOrWhiteSpace(options.LocationName), "Observation:LocationName is required.")
             .Validate(options => options.DefaultObservationHour is >= 0 and <= 23, "Observation:DefaultObservationHour must be between 0 and 23.")
             .Validate(options => options.SkyOverviewMinutesAfterSunset >= 0, "Observation:SkyOverviewMinutesAfterSunset must be >= 0.")
+            .Validate(options => options.Overview.Mode is "AttractiveOnly" or "PolarisOnly" or "Hybrid", "Observation:Overview:Mode must be AttractiveOnly, PolarisOnly, or Hybrid.")
             .ValidateOnStart();
 
         services.AddOptions<ThumbnailOptions>()
