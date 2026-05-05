@@ -218,6 +218,7 @@ public sealed class FfmpegRenderingTests
         Assert.Equal(5, segmentCommands.Count);
         Assert.All(segmentCommands, command => Assert.Contains("-frames:v 714", command, StringComparison.Ordinal));
         Assert.All(segmentCommands, command => Assert.Contains("-r 30", command, StringComparison.Ordinal));
+        Assert.All(segmentCommands, command => Assert.Contains("zoompan=", command, StringComparison.Ordinal));
         Assert.All(segmentCommands, command => Assert.DoesNotContain(" -t ", command, StringComparison.Ordinal));
         var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
         Assert.Contains("narrationDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
@@ -229,6 +230,68 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("calculatedSceneDurationSeconds: 23.8", diagnostics, StringComparison.Ordinal);
         Assert.Contains("expectedCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
         Assert.Contains("actualCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_DisablesKenBurns_WhenConfigured()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-kenburns-disabled");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath = { [audioPath] = 10d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 10d }
+        };
+        var sut = CreateService(fileSystem, processRunner, enableKenBurns: false);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Sky", AudioPath = audioPath, OutputPath = outputPath, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 10 }] }, CancellationToken.None);
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
+        Assert.DoesNotContain("zoompan=", segmentCommand, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_UsesExpectedOutputSize_ForShortsAndLong()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-output-size");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 10d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 10d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner);
+        await sut.RenderAsync(new RenderManifest { Title = "Long", AudioPath = audioPath, OutputPath = Path.Combine(tempDir.FullName, "final-video.mp4"), Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 10 }] }, CancellationToken.None);
+        Assert.Contains(processRunner.Commands, command => command.Contains("s=1920x1080", StringComparison.Ordinal));
+
+        var shortDir = Directory.CreateTempSubdirectory("ffmpeg-render-output-size-short");
+        var shortAudio = Path.Combine(shortDir.FullName, "narration.mp3");
+        var shortScene = Path.Combine(shortDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(shortAudio, [1, 2, 3]);
+        await File.WriteAllBytesAsync(shortScene, [4, 5, 6]);
+        var shortRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [shortAudio] = 10d,
+                [Path.Combine(shortDir.FullName, "combined.mp4")] = 10d
+            }
+        };
+        var shortSvc = CreateService(new InMemoryFileSystem(), shortRunner);
+        await shortSvc.RenderAsync(new RenderManifest { Title = "Short", AudioPath = shortAudio, OutputPath = Path.Combine(shortDir.FullName, "short-video.mp4"), OutputWidth = 1080, OutputHeight = 1920, Scenes = [new RenderScene { Caption = "Scene", VisualPath = shortScene, DurationSeconds = 10 }] }, CancellationToken.None);
+        Assert.Contains(shortRunner.Commands, command => command.Contains("s=1080x1920", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -520,7 +583,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade")
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true)
     {
         var options = Options.Create(new RenderingOptions
         {
@@ -536,7 +599,8 @@ public sealed class FfmpegRenderingTests
             UseSegmentedNarration = useSegmentedNarration,
             FfmpegTimeoutSeconds = ffmpegTimeoutSeconds,
             FfmpegSegmentTimeoutSeconds = 180,
-            KeepIntermediateFiles = true
+            KeepIntermediateFiles = true,
+            EnableKenBurns = enableKenBurns
         });
 
         return new FfmpegVideoRenderService(
