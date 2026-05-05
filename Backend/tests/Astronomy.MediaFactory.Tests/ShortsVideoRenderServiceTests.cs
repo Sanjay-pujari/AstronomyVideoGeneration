@@ -88,7 +88,45 @@ public sealed class ShortsVideoRenderServiceTests
         var outputDir = Directory.CreateTempSubdirectory("shorts-mismatch").FullName;
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(ContentType.SpaceNews, context, [], outputDir, false, CancellationToken.None));
-        Assert.Equal("Short video narration/visual sequence mismatch", ex.Message);
+        Assert.Equal("Short narration/object mismatch at index 2: visual=Moon narration=Sky", ex.Message);
+    }
+
+
+
+    [Fact]
+    public async Task RenderAsync_BindsNarrationToMatchingSceneId_NotByIndex()
+    {
+        var sut = new ShortsVideoRenderService(
+            new JupiterVenusSwapScriptService(),
+            new TrackingSpeechService(),
+            new JupiterVenusVisualProvider(),
+            new CapturingRenderService(),
+            new NoopBlobService(),
+            new NoopYouTubeService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new PassThroughSeoMetadataGeneratorService(),
+            Options.Create(new YouTubeOptions()),
+            Options.Create(new RenderingOptions()),
+            NullLogger<ShortsVideoRenderService>.Instance);
+
+        var context = new AstronomyContext
+        {
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            SceneObservationContexts =
+            [
+                new SceneObservationContext { SceneId = "venus", ObjectName = "Venus", SceneTitle = "Venus focus" },
+                new SceneObservationContext { SceneId = "jupiter", ObjectName = "Jupiter", SceneTitle = "Jupiter focus" }
+            ]
+        };
+
+        var outputDir = Directory.CreateTempSubdirectory("shorts-bind").FullName;
+        await sut.RenderAsync(ContentType.SpaceNews, context, [], outputDir, false, CancellationToken.None);
+
+        var mapText = await File.ReadAllTextAsync(Path.Combine(outputDir, "short-sequence-map.json"));
+        Assert.Contains("\"sceneId\": \"jupiter\"", mapText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("jupiter narration", mapText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"sceneId\": \"venus\"", mapText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("venus narration", mapText, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class FakeShortScriptService : IShortsScriptGenerationService
@@ -125,6 +163,35 @@ public sealed class ShortsVideoRenderServiceTests
                     new SceneNarrationSegment{ SceneId = "sky-overview", SceneTitle = "Sky overview", VisualTarget = "wide sky", NarrationText = "overview narration"}
                 ]
             });
+    }
+
+
+    private sealed class JupiterVenusSwapScriptService : IShortsScriptGenerationService
+    {
+        public Task<ShortScriptResult> GenerateShortAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
+            => Task.FromResult(new ShortScriptResult
+            {
+                Hook = "Hook",
+                ShortScript = "Script",
+                Title = "Title",
+                EstimatedDurationSeconds = 45,
+                SceneNarrationSegments =
+                [
+                    new SceneNarrationSegment{ SceneId = "jupiter", SceneTitle = "Jupiter focus", VisualTarget = "jupiter", NarrationText = "jupiter narration"},
+                    new SceneNarrationSegment{ SceneId = "venus", SceneTitle = "Venus focus", VisualTarget = "venus", NarrationText = "venus narration"}
+                ]
+            });
+    }
+
+    private sealed class JupiterVenusVisualProvider : IVisualAssetProvider
+    {
+        public Task<IReadOnlyCollection<string>> PrepareVisualsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
+        {
+            Directory.CreateDirectory(outputDirectory);
+            var visuals = new[] { Path.Combine(outputDirectory, "venus.png"), Path.Combine(outputDirectory, "jupiter.png") };
+            foreach (var scene in visuals) File.WriteAllBytes(scene, [1, 2, 3]);
+            return Task.FromResult<IReadOnlyCollection<string>>(visuals);
+        }
     }
 
     private sealed class TrackingSpeechService : ISpeechSynthesisService

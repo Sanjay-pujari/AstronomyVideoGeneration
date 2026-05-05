@@ -449,20 +449,31 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
                 sceneContext?.ObjectName ?? $"Scene {index + 1}",
                 sceneContext?.SceneTitle ?? $"Scene {index + 1}",
                 index + 1,
-                visualPath);
+                visualPath,
+                ResolveSceneType(sceneContext));
         }).ToList();
     }
 
-    private static List<ShortSequenceMapEntry> BuildShortSequenceMap(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, IReadOnlyList<SceneNarrationSegment> shortNarrationSegments, string outputDirectory)
+
+    private static string ResolveSceneType(SceneObservationContext? sceneContext)
+    {
+        if (sceneContext is null) return "unknown";
+        if (sceneContext.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase)) return "overview";
+        return "object";
+    }
+    private static List<ShortSequenceItem> BuildShortSequenceMap(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, IReadOnlyList<SceneNarrationSegment> shortNarrationSegments, string outputDirectory)
         => shortScenesOrdered.Select((scene, index) =>
         {
-            var narration = index < shortNarrationSegments.Count ? shortNarrationSegments[index] : new SceneNarrationSegment { SceneId = scene.SceneId };
+            var narration = shortNarrationSegments.FirstOrDefault(x => x.SceneId.Equals(scene.SceneId, StringComparison.OrdinalIgnoreCase))
+                ?? new SceneNarrationSegment { SceneId = scene.SceneId };
+            var narrationText = narration.NarrationText ?? string.Empty;
             var narrationTextPath = Path.Combine(outputDirectory, $"scene-narration-{index + 1:000}.txt");
-            File.WriteAllText(narrationTextPath, narration.NarrationText ?? string.Empty);
-            return new ShortSequenceMapEntry(index + 1, scene.SceneId, scene.ObjectName, scene.SceneIndex, narrationTextPath, narration.AudioPath, scene.VisualPath, Math.Max(1, narration.DurationSeconds), narration.SceneId, index);
+            File.WriteAllText(narrationTextPath, narrationText);
+            var audioPath = Path.Combine(outputDirectory, $"scene-audio-{index + 1:000}.mp3");
+            return new ShortSequenceItem(index + 1, scene.SceneId, scene.ObjectName, scene.SceneType, scene.VisualPath, narrationText, narrationTextPath, audioPath, Math.Max(1, narration.DurationSeconds), Path.Combine(outputDirectory, $"segment-{index + 1:000}.mp4"));
         }).ToList();
 
-    private async Task ValidateAndWriteShortSequenceDiagnosticsAsync(IReadOnlyList<ShortSequenceMapEntry> orderedSequenceMap, IReadOnlyList<ShortSceneOrderEntry> expectedVisualScenes, string outputDirectory, CancellationToken cancellationToken)
+    private async Task ValidateAndWriteShortSequenceDiagnosticsAsync(IReadOnlyList<ShortSequenceItem> orderedSequenceMap, IReadOnlyList<ShortSceneOrderEntry> expectedVisualScenes, string outputDirectory, CancellationToken cancellationToken)
     {
         var diagnosticsPath = Path.Combine(outputDirectory, "short-sequence-map.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(orderedSequenceMap, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
@@ -478,13 +489,30 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             {
                 throw new InvalidOperationException($"Short mismatch at index {i}: {orderedSequenceMap[i].SceneId}");
             }
+
+            var narrationText = orderedSequenceMap[i].NarrationText;
+            if (!IsGenericSkyScene(orderedSequenceMap[i].ObjectName, orderedSequenceMap[i].SceneType)
+                && !string.IsNullOrWhiteSpace(orderedSequenceMap[i].ObjectName)
+                && !narrationText.Contains(orderedSequenceMap[i].ObjectName, StringComparison.OrdinalIgnoreCase))
+            {
+                var narrationObject = ExtractMentionedObjectName(narrationText, expectedVisualScenes.Select(s => s.ObjectName));
+                throw new InvalidOperationException($"Short narration/object mismatch at index {orderedSequenceMap[i].Index}: visual={orderedSequenceMap[i].ObjectName} narration={narrationObject}");
+            }
         }
 
         _logger.LogInformation("Short sequence map written: {DiagnosticsPath}", diagnosticsPath);
     }
 
-    private sealed record ShortSceneOrderEntry(string SceneId, string ObjectName, string SceneTitle, int SceneIndex, string VisualPath);
-    private sealed record ShortSequenceMapEntry(int Index, string SceneId, string ObjectName, int SceneIndex, string NarrationTextPath, string AudioPath, string VisualPath, int DurationSeconds, string NarrationSceneId, int NarrationSceneIndex);
+    private static bool IsGenericSkyScene(string objectName, string sceneType)
+        => objectName.Equals("Sky", StringComparison.OrdinalIgnoreCase)
+           || sceneType.Equals("overview", StringComparison.OrdinalIgnoreCase)
+           || sceneType.Equals("sky", StringComparison.OrdinalIgnoreCase);
+
+    private static string ExtractMentionedObjectName(string narrationText, IEnumerable<string> candidateObjectNames)
+        => candidateObjectNames.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name) && narrationText.Contains(name, StringComparison.OrdinalIgnoreCase)) ?? "unknown";
+
+    private sealed record ShortSceneOrderEntry(string SceneId, string ObjectName, string SceneTitle, int SceneIndex, string VisualPath, string SceneType);
+    private sealed record ShortSequenceItem(int Index, string SceneId, string ObjectName, string SceneType, string VisualPath, string NarrationText, string NarrationTextPath, string AudioPath, int DurationSeconds, string SegmentPath);
 
     private int GetAudioDurationSeconds(string audioPath)
     {
