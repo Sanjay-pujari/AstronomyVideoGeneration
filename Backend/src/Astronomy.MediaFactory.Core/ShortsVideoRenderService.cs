@@ -177,7 +177,11 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
                 Caption = $"{scene.Index}. {scene.ObjectName}",
                 VisualPath = scene.VisualPath,
                 DurationSeconds = scene.DurationSeconds,
-                AudioPath = scene.AudioPath
+                AudioPath = scene.AudioPath,
+                ObjectName = scene.ObjectName,
+                ObjectType = string.Equals(scene.SceneType, "Overview", StringComparison.OrdinalIgnoreCase) ? "Overview" : "Object",
+                SceneType = scene.SceneType,
+                DirectionLabel = shortScenesOrdered.FirstOrDefault(s => s.SceneId.Equals(scene.SceneId, StringComparison.OrdinalIgnoreCase))?.DirectionLabel
             }).ToList()
         };
 

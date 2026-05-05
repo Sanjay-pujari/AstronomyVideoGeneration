@@ -255,6 +255,43 @@ public sealed class FfmpegRenderingTests
     }
 
     [Fact]
+    public async Task FfmpegVideoRenderService_KeepsStableZoomCentered_WhenDirectionalMotionDisabled()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-direction-disabled");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 10d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 10d } };
+        var sut = CreateService(fileSystem, processRunner, enableDirectionalMotion: false);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Sky", AudioPath = audioPath, OutputPath = outputPath, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 10, DirectionLabel = "West" }] }, CancellationToken.None);
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
+        Assert.Contains("x='iw/2-(iw/zoom/2)+(0*", segmentCommand, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_AddsDirectionalPan_WhenDirectionalMotionEnabled()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-direction-enabled");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 10d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 10d } };
+        var sut = CreateService(fileSystem, processRunner, enableDirectionalMotion: true, directionalPanStrength: 0.04d);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Sky", AudioPath = audioPath, OutputPath = outputPath, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 10, DirectionLabel = "West", ObjectName = "Moon", ObjectType = "Planet" }] }, CancellationToken.None);
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
+        Assert.Contains("+(1*0.04*iw*", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("directional-motion-settings.json", string.Join('\n', fileSystem.TextWrites.Keys), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task FfmpegVideoRenderService_UsesExpectedOutputSize_ForShortsAndLong()
     {
         var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-output-size");
@@ -583,7 +620,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true)
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true, bool enableDirectionalMotion = false, double directionalPanStrength = 0.04d)
     {
         var options = Options.Create(new RenderingOptions
         {
@@ -600,7 +637,9 @@ public sealed class FfmpegRenderingTests
             FfmpegTimeoutSeconds = ffmpegTimeoutSeconds,
             FfmpegSegmentTimeoutSeconds = 180,
             KeepIntermediateFiles = true,
-            EnableKenBurns = enableKenBurns
+            EnableKenBurns = enableKenBurns,
+            EnableDirectionalMotion = enableDirectionalMotion,
+            DirectionalPanStrength = directionalPanStrength
         });
 
         return new FfmpegVideoRenderService(

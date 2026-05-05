@@ -189,6 +189,11 @@ public sealed class RenderScene
     public string VisualPath { get; set; } = "";
     public int DurationSeconds { get; set; }
     public string? AudioPath { get; set; }
+    public string? ObjectName { get; set; }
+    public string? ObjectType { get; set; }
+    public string? SceneType { get; set; }
+    public string? DirectionLabel { get; set; }
+    public double? AzimuthDegrees { get; set; }
 }
 
 public sealed class NarrationSegment

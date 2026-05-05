@@ -213,7 +213,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             var (outputWidth, outputHeight) = GetOutputSize(manifest);
-            var zoomPanFilter = BuildKenBurnsFilter(duration, fps, outputWidth, outputHeight);
+            var motionProfile = ResolveMotionProfile(scene);
+            var zoomPanFilter = BuildKenBurnsFilter(duration, fps, outputWidth, outputHeight, motionProfile);
             const double fadeDurationSeconds = 0.5d;
             var fadeOutStartSeconds = Math.Max(0d, duration - fadeDurationSeconds);
             var roundedFadeOutStartSeconds = Math.Round(fadeOutStartSeconds, 3, MidpointRounding.AwayFromZero);
@@ -250,6 +251,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                 $"  \"totalFrames\": {frameCount},",
                 $"  \"zoomStart\": {_options.KenBurnsZoomStart.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
                 $"  \"zoomEnd\": {_options.KenBurnsZoomEnd.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
+                $"  \"enableDirectionalMotion\": {(_options.EnableDirectionalMotion ? "true" : "false")},",
+                $"  \"panStrength\": {motionProfile.PanStrength.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
+                $"  \"panDirection\": \"{motionProfile.PanDirection}\",",
                 $"  \"outputResolution\": \"{outputWidth}x{outputHeight}\",",
                 $"  \"isShort\": {(outputHeight > outputWidth ? "true" : "false")}",
                 "}"
@@ -313,6 +317,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics), cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "video-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
+        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "directional-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
 
         var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken);
@@ -324,10 +329,10 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return (finalCommand, finalResult);
     }
 
-    private string BuildKenBurnsFilter(double durationSeconds, int fps, int outputWidth, int outputHeight)
+    private string BuildKenBurnsFilter(double durationSeconds, int fps, int outputWidth, int outputHeight, MotionProfile motionProfile)
     {
-        var zoomStart = Math.Max(1d, _options.KenBurnsZoomStart);
-        var zoomEnd = Math.Max(zoomStart, _options.KenBurnsZoomEnd);
+        var zoomStart = Math.Max(1d, motionProfile.ZoomStart);
+        var zoomEnd = Math.Max(zoomStart, motionProfile.ZoomEnd);
         var totalFrames = Math.Max(1, (int)Math.Round(durationSeconds * fps, MidpointRounding.AwayFromZero));
         var zoomStartText = zoomStart.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         var zoomEndText = zoomEnd.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
@@ -335,8 +340,43 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var zoomExpression = _options.KenBurnsUseEasing
             ? $"{zoomStartText} + ({zoomDeltaText})*pow(on/{totalFrames}.0,1.2)"
             : $"{zoomStartText} + ({zoomDeltaText})*(on/{totalFrames}.0)";
-        return $"zoompan=z='{zoomExpression}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={totalFrames}:s={outputWidth}x{outputHeight}";
+        var panOffsetExpression = $"{motionProfile.PanDirectionSign.ToString(System.Globalization.CultureInfo.InvariantCulture)}*{motionProfile.PanStrength.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture)}*iw*(on/{totalFrames}.0)";
+        var xExpression = $"iw/2-(iw/zoom/2)+({panOffsetExpression})";
+        return $"zoompan=z='{zoomExpression}':x='{xExpression}':y='ih/2-(ih/zoom/2)':d={totalFrames}:s={outputWidth}x{outputHeight}";
     }
+
+    private MotionProfile ResolveMotionProfile(RenderScene scene)
+    {
+        var isOverview = string.Equals(scene.ObjectType, "Overview", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.SceneType, "Overview", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
+        var isPlanetary = string.Equals(scene.ObjectName, "Moon", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.ObjectType, "Planet", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.SceneType, "Planet", StringComparison.OrdinalIgnoreCase);
+        var direction = scene.DirectionLabel ?? string.Empty;
+        if (scene.AzimuthDegrees is >= 45 and <= 135) direction = "East";
+        if (scene.AzimuthDegrees is >= 225 and <= 315) direction = "West";
+        var panDirectionSign = direction.Contains("West", StringComparison.OrdinalIgnoreCase) ? 1d :
+            direction.Contains("East", StringComparison.OrdinalIgnoreCase) ? -1d : 0d;
+        if (!_options.EnableDirectionalMotion)
+        {
+            return new MotionProfile(_options.KenBurnsZoomStart, _options.KenBurnsZoomEnd, 0d, 0d, "none");
+        }
+
+        var zoomStart = _options.KenBurnsZoomStart;
+        var zoomEnd = _options.KenBurnsZoomEnd;
+        if (isOverview)
+        {
+            zoomEnd = Math.Max(1.0d, zoomStart + (zoomEnd - zoomStart) * 0.25d);
+        }
+        else if (isPlanetary)
+        {
+            zoomEnd = Math.Max(zoomEnd, zoomStart + 0.12d);
+        }
+
+        return new MotionProfile(zoomStart, zoomEnd, Math.Clamp(_options.DirectionalPanStrength, 0d, 0.08d), panDirectionSign, panDirectionSign > 0 ? "right" : panDirectionSign < 0 ? "left" : "none");
+    }
+    private sealed record MotionProfile(double ZoomStart, double ZoomEnd, double PanStrength, double PanDirectionSign, string PanDirection);
     private static string EscapeForJson(string? value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
     private static (int Width, int Height) GetOutputSize(RenderManifest manifest)
     {
