@@ -171,7 +171,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             EnableVerticalCrop = true,
             Scenes = shortSequence.Select(scene => new RenderScene
             {
-                Caption = $"{scene.SceneIndex + 1}. {scene.ObjectName}",
+                Caption = $"{scene.Index}. {scene.ObjectName}",
                 VisualPath = scene.VisualPath,
                 DurationSeconds = scene.DurationSeconds,
                 AudioPath = scene.AudioPath
