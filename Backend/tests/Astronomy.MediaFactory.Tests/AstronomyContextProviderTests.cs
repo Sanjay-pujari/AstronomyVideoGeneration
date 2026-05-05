@@ -69,6 +69,57 @@ public sealed class AstronomyContextProviderTests
     }
 
     [Fact]
+    public async Task BuildContextAsync_HybridMode_UsesAttractiveObjectAsOverviewHook()
+    {
+        var provider = CreateProvider(new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse
+        {
+            VisibleObjects =
+            [
+                CreateVisible("Jupiter", "Planet", "2026-03-17T21:10:00", 52, [Sample("2026-03-17T21:10:00", 52)]),
+                CreateVisible("Mars", "Planet", "2026-03-17T22:10:00", 35, [Sample("2026-03-17T22:10:00", 35)])
+            ]
+        }));
+
+        var result = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "Udaipur, India", "Asia/Kolkata", CancellationToken.None);
+        var overview = result.SceneObservationContexts.First();
+        Assert.Equal("Jupiter", overview.ObjectName);
+        Assert.Contains("Tonight's sky opens with Jupiter", overview.NarrationFocus);
+    }
+
+    [Fact]
+    public async Task BuildContextAsync_HybridNarration_IncludesPolarisOrientation_ForUdaipur()
+    {
+        var provider = CreateProvider(new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse
+        {
+            VisibleObjects =
+            [
+                CreateVisible("Jupiter", "Planet", "2026-03-17T21:10:00", 52, [Sample("2026-03-17T21:10:00", 52)]),
+                CreateVisible("Polaris", "Star", "2026-03-17T22:10:00", 25, [Sample("2026-03-17T22:10:00", 25)])
+            ]
+        }));
+        var result = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "Udaipur, India", "Asia/Kolkata", CancellationToken.None);
+        Assert.Contains("find north using Polaris", result.SceneObservationContexts.First().NarrationFocus, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task BuildContextAsync_HybridNarration_DoesNotForcePolaris_InSouthernHemisphere()
+    {
+        var provider = CreateProvider(
+            new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse
+            {
+                VisibleObjects =
+                [
+                    CreateVisible("Jupiter", "Planet", "2026-03-17T21:10:00", 52, [Sample("2026-03-17T21:10:00", 52)]),
+                    CreateVisible("Polaris", "Star", "2026-03-17T22:10:00", 5, [Sample("2026-03-17T22:10:00", 5)])
+                ]
+            }),
+            new ObservationOptions { LocationName = "Sydney, Australia", Timezone = "Australia/Sydney", Latitude = -33.8688, Longitude = 151.2093 });
+        var result = await provider.BuildContextAsync(new DateOnly(2026, 3, 17), ContentType.DailySkyGuide, "Sydney, Australia", "Australia/Sydney", CancellationToken.None);
+        Assert.DoesNotContain("find north using Polaris", result.SceneObservationContexts.First().NarrationFocus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("south-facing sky reference", result.SceneObservationContexts.First().NarrationFocus, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task BuildContextAsync_ShiftsDuplicateTimes_AndAddsNarrationSpecificTime()
     {
         var provider = CreateProvider(new FakeSkyfieldSidecarClient(new SkyfieldNightPlanResponse
@@ -235,7 +286,7 @@ public sealed class AstronomyContextProviderTests
         Assert.Null(result);
     }
 
-    private static AstronomyContextProvider CreateProvider(ISkyfieldSidecarClient skyfieldSidecarClient)
+    private static AstronomyContextProvider CreateProvider(ISkyfieldSidecarClient skyfieldSidecarClient, ObservationOptions? observationOptions = null)
     {
         var options = Options.Create(new AstronomyApiOptions { NasaBaseUrl = "http://localhost", NasaApiKey = "demo" });
         var nasaClient = new HttpClient(new StubHttpMessageHandler(request =>
@@ -261,7 +312,7 @@ public sealed class AstronomyContextProviderTests
             new ObservationWindowService(skyfieldSidecarClient, NullLogger<ObservationWindowService>.Instance),
             NullLogger<AstronomyContextProvider>.Instance,
             Options.Create(new SkyfieldSidecarOptions { Enabled = true, BaseUrl = "http://localhost:8010" }),
-            Options.Create(new ObservationOptions { LocationName = "Pune, India", Timezone = "Asia/Kolkata", Latitude = 18.5204, Longitude = 73.8567 }));
+            Options.Create(observationOptions ?? new ObservationOptions { LocationName = "Pune, India", Timezone = "Asia/Kolkata", Latitude = 18.5204, Longitude = 73.8567 }));
     }
 
     private sealed class FakeSkyfieldSidecarClient : ISkyfieldSidecarClient

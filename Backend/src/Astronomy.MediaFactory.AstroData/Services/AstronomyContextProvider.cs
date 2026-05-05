@@ -232,11 +232,20 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
             _loggerStatic?.LogInformation("Scene timeline [{SceneIndex}] {ObjectName} at local {LocalTime}", index + 1, scene.ObjectName, scene.LocalObservationTime);
         }
 
+        var overviewDecision = BuildOverviewDecision(selected, visible, context, observationOptions);
+        var overviewNarration = BuildOverviewNarration(overviewDecision, context);
+        scenes[0] = scenes[0] with
+        {
+            ObjectName = overviewDecision.PrimaryObject ?? scenes[0].ObjectName,
+            NarrationFocus = overviewNarration
+        };
+
         context.SceneObservationContexts = scenes;
 
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "selected-visible-objects", Description = Serialize(selected.Select(v => new { v.ObjectName, v.BestLocalTime, v.BestUtcTime, v.DirectionLabel, v.AltitudeDegrees, v.IsVisible, v.VisibilityReason })) });
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "scene-observation-context", Description = Serialize(scenes) });
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "narration-context", Description = Serialize(scenes.Select(s => new { s.SceneId, s.ObjectName, s.LocalObservationTime, s.UtcObservationTime, s.DirectionLabel, s.AltitudeDegrees, s.IsVisible, s.VisibilityReason })) });
+        context.VisualIdeas.Add(new VisualIdeaModel { Title = "overview-strategy.json", Description = Serialize(overviewDecision) });
         return true;
     }
 
@@ -363,4 +372,82 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
     }
 
     private static DateTime Clamp(DateTime value, DateTime min, DateTime max) => value < min ? min : value > max ? max : value;
+
+    private static OverviewStrategyDiagnostics BuildOverviewDecision(
+        IReadOnlyList<SkyfieldObjectVisibility> selected,
+        IReadOnlyList<SkyfieldObjectVisibility> visible,
+        AstronomyContext context,
+        ObservationOptions options)
+    {
+        var mode = options.Overview.Mode;
+        var hemisphere = context.Latitude >= 0 ? "Northern" : "Southern";
+        var primary = SelectPrimaryAttractiveObject(selected, options.MinimumObjectAltitudeDegrees)
+            ?? SelectPrimaryAttractiveObject(visible, options.MinimumObjectAltitudeDegrees)
+            ?? "Sky";
+        var polaris = visible.FirstOrDefault(v => v.ObjectName.Equals("Polaris", StringComparison.OrdinalIgnoreCase));
+        var polarisUsable = options.Overview.EnablePolarisOrientation
+            && hemisphere == "Northern"
+            && polaris is not null
+            && (polaris.AltitudeDegrees ?? 0) >= options.MinimumObjectAltitudeDegrees;
+        var polarisUsed = mode == "PolarisOnly" ? polarisUsable : mode == "Hybrid" && polarisUsable;
+        var reason = mode switch
+        {
+            "AttractiveOnly" => "Attractive hook selected for overview.",
+            "PolarisOnly" when !polarisUsable => "Polaris unavailable; fallback to sky orientation.",
+            "PolarisOnly" => "Polaris selected as orientation-first mode.",
+            "Hybrid" when !polarisUsable => "Hybrid mode without usable Polaris; narration keeps orientation generic.",
+            _ => "Hybrid mode uses attractive hook first with Polaris orientation support."
+        };
+
+        return new(mode, options.Overview.DefaultHookStrategy, primary, options.Overview.EnablePolarisOrientation, polarisUsed, reason, hemisphere);
+    }
+
+    private static string BuildOverviewNarration(OverviewStrategyDiagnostics overviewDecision, AstronomyContext context)
+    {
+        var mode = overviewDecision.mode;
+        var primaryObject = overviewDecision.primaryObject;
+        var polarisUsed = overviewDecision.polarisUsed;
+        var hemisphere = overviewDecision.hemisphere;
+
+        var hook = $"Tonight's sky opens with {primaryObject} drawing your eye first.";
+        if (mode == "AttractiveOnly")
+            return hook;
+        if (mode == "PolarisOnly")
+            return polarisUsed
+                ? "To orient yourself, find north using Polaris, the North Star, then scan tonight's sky."
+                : "To orient yourself, face the darker southern sky and then scan tonight's best objects.";
+
+        var orientation = polarisUsed
+            ? "To orient yourself, find north using Polaris, the North Star."
+            : hemisphere == "Southern"
+                ? "To orient yourself, use a south-facing sky reference instead of Polaris."
+                : "To orient yourself, find local north before moving through the targets.";
+        return $"{hook} {orientation} Now let's move through tonight's best objects.";
+    }
+
+    private static string? SelectPrimaryAttractiveObject(IEnumerable<SkyfieldObjectVisibility> candidates, double minimumAltitude)
+    {
+        var list = candidates.Where(v => v.IsVisible && (v.AltitudeDegrees ?? 0) >= minimumAltitude).ToList();
+        var moon = list.FirstOrDefault(v => v.ObjectName.Equals("Moon", StringComparison.OrdinalIgnoreCase));
+        if (moon is not null)
+            return moon.ObjectName;
+
+        foreach (var name in new[] { "Jupiter", "Venus", "Saturn" })
+        {
+            var match = list.FirstOrDefault(v => v.ObjectName.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+                return match.ObjectName;
+        }
+
+        return list.OrderByDescending(v => v.AltitudeDegrees ?? 0).FirstOrDefault()?.ObjectName;
+    }
+
+    private sealed record OverviewStrategyDiagnostics(
+        string mode,
+        string hookStrategy,
+        string primaryObject,
+        bool polarisOrientationEnabled,
+        bool polarisUsed,
+        string reason,
+        string hemisphere);
 }
