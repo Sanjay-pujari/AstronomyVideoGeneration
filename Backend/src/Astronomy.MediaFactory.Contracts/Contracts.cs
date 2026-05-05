@@ -118,6 +118,8 @@ public sealed class RenderingOptions
     public double KenBurnsZoomEnd { get; set; } = 1.12d;
     public int KenBurnsFps { get; set; } = 30;
     public bool KenBurnsUseEasing { get; set; } = true;
+    public bool EnableDirectionalMotion { get; set; } = false;
+    public double DirectionalPanStrength { get; set; } = 0.04d;
     public OutputCleanupOptions OutputCleanup { get; set; } = new();
 }
 

@@ -426,12 +426,21 @@ public sealed class PipelineOrchestrator
                 Title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
                 AudioPath = audioPath,
                 OutputPath = Path.Combine(outputDir, "final-video.mp4"),
-                Scenes = visuals.Select((v, i) => new RenderScene
+                Scenes = visuals.Select((v, i) =>
                 {
-                    Caption = i < context.VisualIdeas.Count ? context.VisualIdeas[i].Title : $"Scene {i + 1}",
-                    VisualPath = v,
-                    DurationSeconds = durationPerScene,
-                    AudioPath = i < sceneAudioSegments.Count ? sceneAudioSegments[i] : null
+                    var observation = i < context.SceneObservationContexts.Count ? context.SceneObservationContexts[i] : null;
+                    return new RenderScene
+                    {
+                        Caption = i < context.VisualIdeas.Count ? context.VisualIdeas[i].Title : $"Scene {i + 1}",
+                        VisualPath = v,
+                        DurationSeconds = durationPerScene,
+                        AudioPath = i < sceneAudioSegments.Count ? sceneAudioSegments[i] : null,
+                        ObjectName = observation?.ObjectName,
+                        ObjectType = observation?.ObjectType,
+                        SceneType = observation?.SceneType,
+                        DirectionLabel = observation?.DirectionLabel,
+                        AzimuthDegrees = observation?.AzimuthDegrees
+                    };
                 }).ToList()
             };
 
