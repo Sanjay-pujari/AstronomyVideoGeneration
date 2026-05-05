@@ -14,6 +14,10 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private readonly IProcessRunner _processRunner;
     private readonly IFileSystem _fileSystem;
     private readonly ILogger<FfmpegVideoRenderService> _logger;
+    private const int LongOutputWidth = 1920;
+    private const int LongOutputHeight = 1080;
+    private const int ShortOutputWidth = 1080;
+    private const int ShortOutputHeight = 1920;
 
     public FfmpegVideoRenderService(
         IOptions<RenderingOptions> options,
@@ -156,6 +160,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var segmentPaths = new List<string>();
         var segmentDurationsSeconds = new List<double>();
         var segmentDiagnostics = new List<string>();
+        var motionDiagnostics = new List<string>();
         var sceneCount = plan.Scenes.Count;
         var transitionDurationSeconds = GetTransitionDurationSeconds();
         var transitionsEnabled = IsXfadeEnabled(sceneCount, transitionDurationSeconds);
@@ -198,23 +203,27 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         {
             var scene = plan.Scenes[i];
             var duration = durationPerScene > 0 ? durationPerScene : 1d;
-            var frameCount = Math.Max(1, (int)Math.Round(duration * 30d, MidpointRounding.AwayFromZero));
+            var fps = Math.Max(1, _options.KenBurnsFps > 0 ? _options.KenBurnsFps : _options.FrameRate);
+            var frameCount = Math.Max(1, (int)Math.Round(duration * fps, MidpointRounding.AwayFromZero));
             var segmentPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
             if (!File.Exists(scene.VisualPath))
             {
                 throw new FileNotFoundException($"Scene image not found for segment {i + 1}.", scene.VisualPath);
             }
 
-            var zoomPanFilter = BuildKenBurnsFilter(i, frameCount);
+            var (outputWidth, outputHeight) = GetOutputSize(plan);
+            var zoomPanFilter = BuildKenBurnsFilter(frameCount, fps, outputWidth, outputHeight);
             const double fadeDurationSeconds = 0.5d;
             var fadeOutStartSeconds = Math.Max(0d, duration - fadeDurationSeconds);
             var roundedFadeOutStartSeconds = Math.Round(fadeOutStartSeconds, 3, MidpointRounding.AwayFromZero);
             var formattedFadeOutStartSeconds = roundedFadeOutStartSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             var formattedFadeDurationSeconds = fadeDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             var segmentFilter =
-                $"{zoomPanFilter},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}";
+                _options.EnableKenBurns
+                    ? $"scale={outputWidth}:{outputHeight},{zoomPanFilter},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}"
+                    : $"scale={outputWidth}:{outputHeight},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}";
             var segmentArguments =
-                $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{segmentFilter}\" -frames:v {frameCount} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 30 \"{NormalizePath(segmentPath)}\"";
+                $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{segmentFilter}\" -frames:v {frameCount} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} \"{NormalizePath(segmentPath)}\"";
             var segmentCommand = $"{_options.FfmpegPath} {segmentArguments}";
             await _fileSystem.WriteAllTextAsync(commandPath, segmentCommand, cancellationToken);
             var segmentCommandPath = Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt");
@@ -230,6 +239,18 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                 $"Command: {segmentCommand}"
             });
             segmentDiagnostics.Add(segmentDiagnosticsEntry);
+            motionDiagnostics.Add(string.Join(Environment.NewLine, new[]
+            {
+                "{",
+                $"  \"sceneId\": \"scene-{i + 1:000}\",",
+                $"  \"imagePath\": \"{EscapeForJson(scene.VisualPath)}\",",
+                $"  \"duration\": {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
+                $"  \"zoomStart\": {_options.KenBurnsZoomStart.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
+                $"  \"zoomEnd\": {_options.KenBurnsZoomEnd.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
+                $"  \"outputSize\": \"{outputWidth}x{outputHeight}\",",
+                $"  \"isShort\": {(outputHeight > outputWidth ? "true" : "false")}",
+                "}"
+            }));
             await _fileSystem.WriteAllTextAsync(segmentCommandPath, segmentDiagnosticsEntry, cancellationToken);
             _logger.LogInformation(
                 "Segment #{SegmentIndex} duration: {SegmentDurationSeconds} seconds. Configured segment timeout: {ConfiguredTimeoutSeconds} seconds. Effective segment timeout: {EffectiveTimeoutSeconds} seconds",
@@ -288,6 +309,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics), cancellationToken);
+        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "video-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
 
         var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken);
@@ -299,17 +321,20 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return (finalCommand, finalResult);
     }
 
-    private static string BuildKenBurnsFilter(int sceneIndex, int frameCount)
+    private string BuildKenBurnsFilter(int frameCount, int fps, int outputWidth, int outputHeight)
     {
-        var effect = sceneIndex % 5;
-        return effect switch
-        {
-            0 => $"zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30",
-            1 => $"zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)-iw*0.08':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30",
-            2 => $"zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)+iw*0.08':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30",
-            3 => $"zoompan=z='if(eq(on,1),1.3,max(zoom-0.0015,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30",
-            _ => $"zoompan=z='1.12':x='if(gte(x,iw-iw/zoom),0,x+1)':y='ih/2-(ih/zoom/2)':d={frameCount}:s=1280x720:fps=30"
-        };
+        var zoomStart = Math.Max(1d, _options.KenBurnsZoomStart);
+        var zoomEnd = Math.Max(zoomStart, _options.KenBurnsZoomEnd);
+        var zoomStep = frameCount <= 1 ? 0d : (zoomEnd - zoomStart) / frameCount;
+        var zoomStepText = zoomStep.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+        var zoomEndText = zoomEnd.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        return $"zoompan=z='if(eq(on,1),{zoomStart.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)},min(zoom+{zoomStepText},{zoomEndText}))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frameCount}:s={outputWidth}x{outputHeight}:fps={fps}";
+    }
+    private static string EscapeForJson(string? value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
+    private static (int Width, int Height) GetOutputSize(RenderPlan plan)
+    {
+        var isShort = plan.Manifest.OutputHeight.GetValueOrDefault() > plan.Manifest.OutputWidth.GetValueOrDefault();
+        return isShort ? (ShortOutputWidth, ShortOutputHeight) : (LongOutputWidth, LongOutputHeight);
     }
 
     private async Task<double> ProbeMediaDurationSecondsAsync(string mediaPath, CancellationToken cancellationToken)

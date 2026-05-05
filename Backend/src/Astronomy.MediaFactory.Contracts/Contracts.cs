@@ -113,6 +113,10 @@ public sealed class RenderingOptions
     public int FfmpegTimeoutSeconds { get; set; } = 600;
     public int FfmpegSegmentTimeoutSeconds { get; set; } = 180;
     public bool KeepIntermediateFiles { get; set; } = true;
+    public bool EnableKenBurns { get; set; } = true;
+    public double KenBurnsZoomStart { get; set; } = 1.0d;
+    public double KenBurnsZoomEnd { get; set; } = 1.12d;
+    public int KenBurnsFps { get; set; } = 30;
     public OutputCleanupOptions OutputCleanup { get; set; } = new();
 }
 
