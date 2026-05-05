@@ -234,8 +234,28 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
         var overviewDecision = BuildOverviewDecision(selected, visible, context, observationOptions);
         var overviewNarration = BuildOverviewNarration(overviewDecision, context);
-        scenes[0].ObjectName = overviewDecision.PrimaryObject ?? scenes[0].ObjectName;
-        scenes[0].NarrationFocus = overviewNarration;
+        var overviewScene = scenes[0];
+        scenes[0] = new SceneObservationContext
+        {
+            SceneId = overviewScene.SceneId,
+            SceneTitle = overviewScene.SceneTitle,
+            SceneType = overviewScene.SceneType,
+            ObjectName = overviewDecision.PrimaryObject ?? overviewScene.ObjectName,
+            ObjectType = overviewScene.ObjectType,
+            LocalObservationTime = overviewScene.LocalObservationTime,
+            UtcObservationTime = overviewScene.UtcObservationTime,
+            Timezone = overviewScene.Timezone,
+            AltitudeDegrees = overviewScene.AltitudeDegrees,
+            AzimuthDegrees = overviewScene.AzimuthDegrees,
+            DirectionLabel = overviewScene.DirectionLabel,
+            IsVisible = overviewScene.IsVisible,
+            VisibilityReason = overviewScene.VisibilityReason,
+            RecommendedTool = overviewScene.RecommendedTool,
+            NarrationFocus = overviewNarration,
+            Latitude = overviewScene.Latitude,
+            Longitude = overviewScene.Longitude,
+            LocationName = overviewScene.LocationName
+        };
 
         context.SceneObservationContexts = scenes;
 
