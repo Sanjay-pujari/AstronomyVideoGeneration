@@ -221,7 +221,9 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             var results = new List<SceneNarrationSegment>(sourceSegments.Count);
             for (var i = 0; i < sourceSegments.Count; i++)
             {
-                var segmentDirectory = Path.Combine(outputDirectory, $"scene-audio-{i + 1:000}");
+                var segmentDirectory = _renderingOptions.OutputCleanup.CreateLegacySegmentFolders
+                    ? Path.Combine(outputDirectory, $"scene-audio-{i + 1:000}")
+                    : outputDirectory;
                 var segmentSourceAudioPath = await _speechSynthesisService.SynthesizeAsync(sourceSegments[i].NarrationText, segmentDirectory, cancellationToken);
                 var segmentAudioPath = Path.Combine(outputDirectory, $"scene-audio-{i + 1:000}.mp3");
                 File.Copy(segmentSourceAudioPath, segmentAudioPath, true);
@@ -285,6 +287,21 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         var expectedDuration = segmentedNarration.Sum(segment => segment.DurationSeconds);
         var actualDuration = GetAudioDurationSeconds(narrationPath);
         _logger.LogInformation("Final narration generated at {Path}. Expected duration ~{Expected}s, actual duration {Actual}s.", narrationPath, expectedDuration, actualDuration);
+
+        if (_renderingOptions.OutputCleanup.KeepDiagnostics)
+        {
+            var outputFileMapPath = Path.Combine(outputDirectory, "output-file-map.json");
+            var outputFileMap = new[]
+            {
+                new { filePath = "scene-narration-###.txt", purpose = "Per-scene short narration text mapped to ordered short sequence.", usedBy = new[] { "short-sequence-map.json" }, requiredForFinalRender = false },
+                new { filePath = "scene-audio-###.mp3", purpose = "Per-scene short narration audio used for concat and/or segmented render.", usedBy = new[] { "audio-concat-list.txt", "render-manifest.json" }, requiredForFinalRender = true },
+                new { filePath = "audio-concat-list.txt", purpose = "FFmpeg concat input list for shorts narration.mp3.", usedBy = new[] { "ffmpeg-audio-concat-command.txt", "ffmpeg" }, requiredForFinalRender = true },
+                new { filePath = "narration.mp3", purpose = "Short final narration audio consumed by render manifest.", usedBy = new[] { "render-manifest.json", "ffmpeg final render" }, requiredForFinalRender = true },
+                new { filePath = "render-manifest.json", purpose = "Canonical render plan for final-video.mp4 generation.", usedBy = new[] { "FfmpegVideoRenderService" }, requiredForFinalRender = true }
+            };
+            await File.WriteAllTextAsync(outputFileMapPath, JsonSerializer.Serialize(outputFileMap, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        }
+
         return narrationPath;
     }
 

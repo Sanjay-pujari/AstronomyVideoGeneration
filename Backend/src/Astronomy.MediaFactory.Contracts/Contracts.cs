@@ -113,6 +113,13 @@ public sealed class RenderingOptions
     public int FfmpegTimeoutSeconds { get; set; } = 600;
     public int FfmpegSegmentTimeoutSeconds { get; set; } = 180;
     public bool KeepIntermediateFiles { get; set; } = true;
+    public OutputCleanupOptions OutputCleanup { get; set; } = new();
+}
+
+public sealed class OutputCleanupOptions
+{
+    public bool CreateLegacySegmentFolders { get; set; } = false;
+    public bool KeepDiagnostics { get; set; } = true;
 }
 
 
