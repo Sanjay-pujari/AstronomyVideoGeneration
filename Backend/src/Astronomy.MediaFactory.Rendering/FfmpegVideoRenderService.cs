@@ -345,19 +345,12 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return $"zoompan=z='{zoomExpression}':x='{xExpression}':y='ih/2-(ih/zoom/2)':d={totalFrames}:s={outputWidth}x{outputHeight}";
     }
 
-    private MotionProfile ResolveMotionProfile(RenderScene scene)
+    private MotionProfile ResolveMotionProfile(RenderPlanScene scene)
     {
-        var isOverview = string.Equals(scene.ObjectType, "Overview", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(scene.SceneType, "Overview", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(scene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
-        var isPlanetary = string.Equals(scene.ObjectName, "Moon", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(scene.ObjectType, "Planet", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(scene.SceneType, "Planet", StringComparison.OrdinalIgnoreCase);
-        var direction = scene.DirectionLabel ?? string.Empty;
-        if (scene.AzimuthDegrees is >= 45 and <= 135) direction = "East";
-        if (scene.AzimuthDegrees is >= 225 and <= 315) direction = "West";
-        var panDirectionSign = direction.Contains("West", StringComparison.OrdinalIgnoreCase) ? 1d :
-            direction.Contains("East", StringComparison.OrdinalIgnoreCase) ? -1d : 0d;
+        var isOverview = string.Equals(scene.Segment, "intro", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.Segment, "outro", StringComparison.OrdinalIgnoreCase);
+        var isPlanetary = string.Equals(scene.Segment, "main", StringComparison.OrdinalIgnoreCase);
+
         if (!_options.EnableDirectionalMotion)
         {
             return new MotionProfile(_options.KenBurnsZoomStart, _options.KenBurnsZoomEnd, 0d, 0d, "none");
@@ -374,7 +367,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             zoomEnd = Math.Max(zoomEnd, zoomStart + 0.12d);
         }
 
-        return new MotionProfile(zoomStart, zoomEnd, Math.Clamp(_options.DirectionalPanStrength, 0d, 0.08d), panDirectionSign, panDirectionSign > 0 ? "right" : panDirectionSign < 0 ? "left" : "none");
+        return new MotionProfile(zoomStart, zoomEnd, Math.Clamp(_options.DirectionalPanStrength, 0d, 0.08d), 0d, "none");
     }
     private sealed record MotionProfile(double ZoomStart, double ZoomEnd, double PanStrength, double PanDirectionSign, string PanDirection);
     private static string EscapeForJson(string? value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
