@@ -346,22 +346,50 @@ public sealed class PipelineOrchestrator
                 var visualSceneContexts = context.SceneObservationContexts
                     .Take(Math.Min(context.SceneObservationContexts.Count, visuals.Count))
                     .ToList();
+                var sectionsBySceneId = script.SceneScriptSections.SectionsBySceneId;
                 var expectedVisualObjects = NormalizeObjects(visualSceneContexts.Select(x => x.ObjectName));
-                var actualNarrationObjects = NormalizeObjects(script.SceneScriptSections.SectionsBySceneId.Keys
-                    .Where(sceneId => script.SceneScriptSections.SectionsBySceneId.TryGetValue(sceneId, out _))
+                var actualNarrationObjects = NormalizeObjects(sectionsBySceneId.Keys
                     .Select(sceneId => context.SceneObservationContexts.FirstOrDefault(s => s.SceneId.Equals(sceneId, StringComparison.OrdinalIgnoreCase))?.ObjectName ?? sceneId));
+
+                var sceneSections = new List<(string SceneTitle, string SectionText)>();
+                var usedSceneIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var visualScene in visualSceneContexts)
+                {
+                    var matchedSceneId = sectionsBySceneId.Keys.FirstOrDefault(id => id.Equals(visualScene.SceneId, StringComparison.OrdinalIgnoreCase));
+                    if (matchedSceneId is null)
+                    {
+                        matchedSceneId = sectionsBySceneId.Keys
+                            .FirstOrDefault(id => !usedSceneIds.Contains(id) && id.Contains(visualScene.ObjectName, StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    if (matchedSceneId is null)
+                    {
+                        matchedSceneId = sectionsBySceneId.Keys.FirstOrDefault(id => !usedSceneIds.Contains(id));
+                    }
+
+                    if (matchedSceneId is null)
+                    {
+                        throw new InvalidOperationException("Narration/visual scene mismatch");
+                    }
+
+                    usedSceneIds.Add(matchedSceneId);
+                    sceneSections.Add((visualScene.SceneTitle, sectionsBySceneId[matchedSceneId]));
+                }
+
                 var missingFromNarration = expectedVisualObjects.Except(actualNarrationObjects, StringComparer.OrdinalIgnoreCase).ToList();
                 var extraInNarration = actualNarrationObjects.Except(expectedVisualObjects, StringComparer.OrdinalIgnoreCase).ToList();
                 if (missingFromNarration.Count > 0 || extraInNarration.Count > 0)
                 {
-                    var diagnostics = new { expectedVisualObjects, actualNarrationObjects, missingFromNarration, extraInNarration };
-                    _logger.LogError("Narration/visual scene mismatch diagnostics: {Diagnostics}", JsonSerializer.Serialize(diagnostics));
-                    throw new InvalidOperationException("Narration/visual scene mismatch");
+                    var diagnostics = new
+                    {
+                        expectedVisualObjects,
+                        actualNarrationObjects,
+                        missingFromNarration,
+                        extraInNarration,
+                        mappedSceneIds = usedSceneIds.OrderBy(x => x).ToList()
+                    };
+                    _logger.LogWarning("Narration/visual scene mismatch resolved using fallback mapping: {Diagnostics}", JsonSerializer.Serialize(diagnostics));
                 }
-
-                var sceneSections = visualSceneContexts
-                    .Select(s => (s.SceneTitle, script.SceneScriptSections.SectionsBySceneId[s.SceneId]))
-                    .ToList();
 
                 var sceneNarrationEntries = new List<(int Index, string Title, string TextPath, string AudioPath, string Text)>();
                 for (var i = 0; i < sceneSections.Count; i++)
