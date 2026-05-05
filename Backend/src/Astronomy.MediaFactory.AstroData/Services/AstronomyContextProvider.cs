@@ -234,11 +234,8 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
         var overviewDecision = BuildOverviewDecision(selected, visible, context, observationOptions);
         var overviewNarration = BuildOverviewNarration(overviewDecision, context);
-        scenes[0] = scenes[0] with
-        {
-            ObjectName = overviewDecision.PrimaryObject ?? scenes[0].ObjectName,
-            NarrationFocus = overviewNarration
-        };
+        scenes[0].ObjectName = overviewDecision.PrimaryObject ?? scenes[0].ObjectName;
+        scenes[0].NarrationFocus = overviewNarration;
 
         context.SceneObservationContexts = scenes;
 
@@ -404,10 +401,10 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
     private static string BuildOverviewNarration(OverviewStrategyDiagnostics overviewDecision, AstronomyContext context)
     {
-        var mode = overviewDecision.mode;
-        var primaryObject = overviewDecision.primaryObject;
-        var polarisUsed = overviewDecision.polarisUsed;
-        var hemisphere = overviewDecision.hemisphere;
+        var mode = overviewDecision.Mode;
+        var primaryObject = overviewDecision.PrimaryObject;
+        var polarisUsed = overviewDecision.PolarisUsed;
+        var hemisphere = overviewDecision.Hemisphere;
 
         var hook = $"Tonight's sky opens with {primaryObject} drawing your eye first.";
         if (mode == "AttractiveOnly")
@@ -443,11 +440,11 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
     }
 
     private sealed record OverviewStrategyDiagnostics(
-        string mode,
-        string hookStrategy,
-        string primaryObject,
-        bool polarisOrientationEnabled,
-        bool polarisUsed,
-        string reason,
-        string hemisphere);
+        string Mode,
+        string HookStrategy,
+        string PrimaryObject,
+        bool PolarisOrientationEnabled,
+        bool PolarisUsed,
+        string Reason,
+        string Hemisphere);
 }
