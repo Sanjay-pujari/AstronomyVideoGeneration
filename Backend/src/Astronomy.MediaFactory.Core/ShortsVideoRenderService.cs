@@ -139,7 +139,10 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
 
         var shortScenesOrdered = BuildShortScenesOrdered(context, visualCandidates);
         var sceneCount = shortScenesOrdered.Count;
-        var segmentedNarration = await TryBuildSegmentedNarrationAsync(shortScript.SceneNarrationSegments, scriptBody, shortScenesOrdered, outputDirectory, cancellationToken);
+        var generatedPerSceneNarration = BuildShortSceneNarration(shortScenesOrdered);
+        ValidateShortNarrationBeforeAudioSynthesis(generatedPerSceneNarration, shortScenesOrdered);
+        var segmentedNarration = await TryBuildSegmentedNarrationAsync(generatedPerSceneNarration, scriptBody, shortScenesOrdered, outputDirectory, cancellationToken);
+        ValidateShortNarrationBeforeAudioSynthesis(segmentedNarration, shortScenesOrdered);
         var finalNarrationPath = await BuildFinalNarrationAudioAsync(segmentedNarration, shortAudioPath, outputDirectory, cancellationToken);
         var shortSequence = BuildShortSequenceMap(shortScenesOrdered, segmentedNarration, outputDirectory);
         await ValidateAndWriteShortSequenceDiagnosticsAsync(shortSequence, shortScenesOrdered, outputDirectory, cancellationToken);
@@ -179,6 +182,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         };
 
         var videoPath = await _videoRenderService.RenderAsync(manifest, cancellationToken);
+        await ValidateShortSequenceBeforeRenderAsync(shortSequence, shortScenesOrdered, outputDirectory, cancellationToken);
 
         string? blobUrl = null;
         try
@@ -354,80 +358,32 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     }
 
     private static List<SceneNarrationSegment> BuildSourceNarrationSegments(IReadOnlyCollection<SceneNarrationSegment> generatedSceneNarration, string scriptBody, IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered)
+        => generatedSceneNarration.Where(x => !string.IsNullOrWhiteSpace(x.NarrationText)).ToList();
+
+    private static List<SceneNarrationSegment> BuildShortSceneNarration(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered)
+        => shortScenesOrdered.Select(scene => new SceneNarrationSegment
+        {
+            SceneId = scene.SceneId,
+            SceneTitle = scene.SceneTitle,
+            VisualTarget = scene.ObjectName,
+            NarrationText = BuildNarrationForScene(scene)
+        }).ToList();
+
+    private static string BuildNarrationForScene(ShortSceneOrderEntry scene)
     {
-        var sceneCount = shortScenesOrdered.Count;
-        var generatedBySceneId = generatedSceneNarration
-            .Where(segment => !string.IsNullOrWhiteSpace(segment.SceneId))
-            .ToDictionary(segment => segment.SceneId, StringComparer.OrdinalIgnoreCase);
-        var generatedFallbackQueue = generatedSceneNarration.Where(segment => string.IsNullOrWhiteSpace(segment.SceneId)).ToList();
-        var aligned = new List<SceneNarrationSegment>(sceneCount);
-
-        foreach (var scene in shortScenesOrdered)
+        if (scene.SceneType.Equals("overview", StringComparison.OrdinalIgnoreCase))
         {
-            if (generatedBySceneId.TryGetValue(scene.SceneId, out var matchingSegment))
-            {
-                aligned.Add(matchingSegment);
-                continue;
-            }
-
-            if (generatedFallbackQueue.Count > 0)
-            {
-                var next = generatedFallbackQueue[0];
-                generatedFallbackQueue.RemoveAt(0);
-                aligned.Add(new SceneNarrationSegment
-                {
-                    SceneId = scene.SceneId,
-                    SceneTitle = scene.SceneTitle,
-                    VisualTarget = scene.ObjectName,
-                    NarrationText = next.NarrationText
-                });
-                continue;
-            }
-
-            aligned.Add(new SceneNarrationSegment
-            {
-                SceneId = scene.SceneId,
-                SceneTitle = scene.SceneTitle,
-                VisualTarget = scene.ObjectName,
-                NarrationText = string.Empty
-            });
+            return "Tonight's sky has beautiful highlights—here is what to watch for first.";
         }
 
-        if (aligned.All(x => string.IsNullOrWhiteSpace(x.NarrationText)))
+        if (scene.SceneType.Equals("closing", StringComparison.OrdinalIgnoreCase))
         {
-            return BuildFallbackSceneNarrationSegments(scriptBody, shortScenesOrdered);
+            return "Look up tonight and follow for your next quick sky guide.";
         }
 
-        return aligned;
-    }
-
-    private static List<SceneNarrationSegment> BuildFallbackSceneNarrationSegments(string scriptBody, IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered)
-    {
-        var sceneCount = shortScenesOrdered.Count;
-        var words = scriptBody.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        var wordSegments = new List<SceneNarrationSegment>(sceneCount);
-        var wordsPerScene = (int)Math.Ceiling((double)words.Length / sceneCount);
-        for (var i = 0; i < sceneCount; i++)
-        {
-            var scene = shortScenesOrdered[i];
-            var start = i * wordsPerScene;
-            if (start >= words.Length)
-            {
-                wordSegments.Add(new SceneNarrationSegment { SceneId = scene.SceneId, SceneTitle = scene.SceneTitle, VisualTarget = scene.ObjectName, NarrationText = words[^1] });
-                continue;
-            }
-
-            var take = Math.Min(wordsPerScene, words.Length - start);
-            wordSegments.Add(new SceneNarrationSegment
-            {
-                SceneId = scene.SceneId,
-                SceneTitle = scene.SceneTitle,
-                VisualTarget = scene.ObjectName,
-                NarrationText = string.Join(' ', words.Skip(start).Take(take))
-            });
-        }
-
-        return wordSegments;
+        var direction = string.IsNullOrWhiteSpace(scene.DirectionLabel) ? "the sky" : $"the {scene.DirectionLabel} sky";
+        var localTime = scene.LocalObservationTime == default ? "tonight" : scene.LocalObservationTime.ToString("h:mm tt");
+        return $"{scene.ObjectName} is visible around {localTime} in {direction}, high above the horizon.";
     }
 
     private static List<ShortSceneOrderEntry> BuildShortScenesOrdered(AstronomyContext context, IReadOnlyList<string> visualCandidates)
@@ -450,7 +406,9 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
                 sceneContext?.SceneTitle ?? $"Scene {index + 1}",
                 index + 1,
                 visualPath,
-                ResolveSceneType(sceneContext));
+                ResolveSceneType(sceneContext),
+                sceneContext?.LocalObservationTime ?? default,
+                sceneContext?.DirectionLabel);
         }).ToList();
     }
 
@@ -511,7 +469,56 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private static string ExtractMentionedObjectName(string narrationText, IEnumerable<string> candidateObjectNames)
         => candidateObjectNames.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name) && narrationText.Contains(name, StringComparison.OrdinalIgnoreCase)) ?? "unknown";
 
-    private sealed record ShortSceneOrderEntry(string SceneId, string ObjectName, string SceneTitle, int SceneIndex, string VisualPath, string SceneType);
+    private static void ValidateShortNarrationBeforeAudioSynthesis(IReadOnlyList<SceneNarrationSegment> narration, IReadOnlyList<ShortSceneOrderEntry> scenes)
+    {
+        for (var i = 0; i < scenes.Count; i++)
+        {
+            var scene = scenes[i];
+            var segment = narration.FirstOrDefault(n => n.SceneId.Equals(scene.SceneId, StringComparison.OrdinalIgnoreCase));
+            var text = segment?.NarrationText ?? string.Empty;
+            if (scene.SceneType.Equals("object", StringComparison.OrdinalIgnoreCase)
+                && !text.Contains(scene.ObjectName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Short narration/object mismatch before audio synthesis: index={i + 1} visual={scene.ObjectName}");
+            }
+        }
+    }
+
+    private static async Task ValidateShortSequenceBeforeRenderAsync(IReadOnlyList<ShortSequenceItem> sequence, IReadOnlyList<ShortSceneOrderEntry> scenes, string outputDirectory, CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < sequence.Count; i++)
+        {
+            var item = sequence[i];
+            var scene = scenes[i];
+            if (scene.SceneType.Equals("object", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!Path.GetFileNameWithoutExtension(item.VisualPath).Contains(scene.ObjectName, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"Short visual/object mismatch before rendering: index={item.Index} visual={scene.ObjectName}");
+                }
+
+                if (!item.NarrationText.Contains(scene.ObjectName, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"Short narration/object mismatch before rendering: index={item.Index} visual={scene.ObjectName}");
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(item.AudioPath) || !File.Exists(item.AudioPath))
+            {
+                throw new InvalidOperationException($"Short audio missing before rendering: index={item.Index}");
+            }
+
+            if (!File.Exists(item.SegmentPath))
+            {
+                throw new InvalidOperationException($"Short segment missing after rendering: index={item.Index}");
+            }
+        }
+
+        var diagnosticsPath = Path.Combine(outputDirectory, "short-sequence-map.json");
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(sequence, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private sealed record ShortSceneOrderEntry(string SceneId, string ObjectName, string SceneTitle, int SceneIndex, string VisualPath, string SceneType, DateTime LocalObservationTime, string? DirectionLabel);
     private sealed record ShortSequenceItem(int Index, string SceneId, string ObjectName, string SceneType, string VisualPath, string NarrationText, string NarrationTextPath, string AudioPath, int DurationSeconds, string SegmentPath);
 
     private int GetAudioDurationSeconds(string audioPath)
