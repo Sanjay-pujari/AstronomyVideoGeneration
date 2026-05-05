@@ -146,10 +146,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
         var sunsetLocal = observationWindow.SunsetLocal.DateTime;
         var overviewLocal = sunsetLocal.AddMinutes(observationOptions.SkyOverviewMinutesAfterSunset);
-        var scenes = new List<SceneObservationContext>
-        {
-            new() { SceneId = "sky-overview", SceneTitle = "Sky overview", SceneType = "Overview", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = overviewLocal, UtcObservationTime = ToUtc(overviewLocal, tz), Timezone = timezone, IsVisible = true, VisibilityReason = "Night overview", RecommendedTool = "Naked eye", NarrationFocus = "Night sky orientation.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName }
-        };
+        var scenes = new List<SceneObservationContext>();
 
         var usedTimes = new HashSet<DateTime> { overviewLocal };
         var objectScenes = new List<SceneObservationContext>();
@@ -174,6 +171,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 SceneId = $"object-{i + 1}",
                 SceneTitle = $"{v.ObjectName} focus",
                 SceneType = "Object",
+                SceneIndex = i + 2,
                 ObjectName = v.ObjectName,
                 ObjectType = string.IsNullOrWhiteSpace(v.ObjectType) ? "Object" : v.ObjectType,
                 LocalObservationTime = selection.Local,
@@ -206,6 +204,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 SceneId = $"object-{i + 1}",
                 SceneTitle = orderedScene.SceneTitle,
                 SceneType = orderedScene.SceneType,
+                SceneIndex = orderedScene.SceneIndex,
                 ObjectName = orderedScene.ObjectName,
                 ObjectType = orderedScene.ObjectType,
                 LocalObservationTime = orderedScene.LocalObservationTime,
@@ -225,44 +224,58 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         }
 
         var closingLocalTime = Clamp(scenes.Last().LocalObservationTime.AddMinutes(30), observationWindow.SunsetLocal.DateTime, observationWindow.SunriseLocal.DateTime);
-        scenes.Add(new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing wide sky", SceneType = "Tips", ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = closingLocalTime, UtcObservationTime = ToUtc(closingLocalTime, tz), Timezone = timezone, IsVisible = true, VisibilityReason = "Wrap-up", RecommendedTool = "Naked eye", NarrationFocus = "Safe viewing tips.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName });
+        scenes.Add(new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing wide sky", SceneType = "Tips", SceneIndex = scenes.Count + 1, ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = closingLocalTime, UtcObservationTime = ToUtc(closingLocalTime, tz), Timezone = timezone, IsVisible = true, VisibilityReason = "Wrap-up", RecommendedTool = "Naked eye", NarrationFocus = "Safe viewing tips.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName });
+
+        var overviewDecision = BuildOverviewDecision(selected, visible, context, observationOptions);
+        var overviewNarration = BuildOverviewNarration(overviewDecision);
+        var overviewScene = new SceneObservationContext
+        {
+            SceneId = "sky-overview",
+            SceneTitle = "Sky overview",
+            SceneType = "Overview",
+            SceneIndex = 1,
+            ObjectName = "Sky",
+            ObjectType = "Overview",
+            PrimaryObject = overviewDecision.PrimaryObject,
+            IncludePolarisOrientation = overviewDecision.PolarisOrientationEnabled,
+            LocalObservationTime = overviewLocal,
+            UtcObservationTime = ToUtc(overviewLocal, tz),
+            Timezone = timezone,
+            IsVisible = true,
+            VisibilityReason = "Night overview",
+            RecommendedTool = "Naked eye",
+            NarrationFocus = overviewNarration,
+            Latitude = context.Latitude,
+            Longitude = context.Longitude,
+            LocationName = context.LocationName
+        };
+        scenes.Insert(0, overviewScene);
+        if (scenes.Count == 0 || !string.Equals(scenes[0].SceneType, "Overview", StringComparison.OrdinalIgnoreCase) || scenes[0].SceneIndex != 1)
+        {
+            throw new InvalidOperationException("Overview scene missing from sequence");
+        }
 
         foreach (var (scene, index) in scenes.Select((scene, index) => (scene, index)))
         {
-            _loggerStatic?.LogInformation("Scene timeline [{SceneIndex}] {ObjectName} at local {LocalTime}", index + 1, scene.ObjectName, scene.LocalObservationTime);
+            _loggerStatic?.LogInformation("Scene timeline [{SceneIndex}] {ObjectName} at local {LocalTime}", scene.SceneIndex > 0 ? scene.SceneIndex : index + 1, scene.ObjectName, scene.LocalObservationTime);
         }
-
-        var overviewDecision = BuildOverviewDecision(selected, visible, context, observationOptions);
-        var overviewNarration = BuildOverviewNarration(overviewDecision, context);
-        var overviewScene = scenes[0];
-        scenes[0] = new SceneObservationContext
-        {
-            SceneId = overviewScene.SceneId,
-            SceneTitle = overviewScene.SceneTitle,
-            SceneType = overviewScene.SceneType,
-            ObjectName = overviewDecision.PrimaryObject ?? overviewScene.ObjectName,
-            ObjectType = overviewScene.ObjectType,
-            LocalObservationTime = overviewScene.LocalObservationTime,
-            UtcObservationTime = overviewScene.UtcObservationTime,
-            Timezone = overviewScene.Timezone,
-            AltitudeDegrees = overviewScene.AltitudeDegrees,
-            AzimuthDegrees = overviewScene.AzimuthDegrees,
-            DirectionLabel = overviewScene.DirectionLabel,
-            IsVisible = overviewScene.IsVisible,
-            VisibilityReason = overviewScene.VisibilityReason,
-            RecommendedTool = overviewScene.RecommendedTool,
-            NarrationFocus = overviewNarration,
-            Latitude = overviewScene.Latitude,
-            Longitude = overviewScene.Longitude,
-            LocationName = overviewScene.LocationName
-        };
 
         context.SceneObservationContexts = scenes;
 
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "selected-visible-objects", Description = Serialize(selected.Select(v => new { v.ObjectName, v.BestLocalTime, v.BestUtcTime, v.DirectionLabel, v.AltitudeDegrees, v.IsVisible, v.VisibilityReason })) });
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "scene-observation-context", Description = Serialize(scenes) });
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "narration-context", Description = Serialize(scenes.Select(s => new { s.SceneId, s.ObjectName, s.LocalObservationTime, s.UtcObservationTime, s.DirectionLabel, s.AltitudeDegrees, s.IsVisible, s.VisibilityReason })) });
-        context.VisualIdeas.Add(new VisualIdeaModel { Title = "overview-strategy.json", Description = Serialize(overviewDecision) });
+        context.VisualIdeas.Add(new VisualIdeaModel
+        {
+            Title = "overview-strategy.json",
+            Description = Serialize(new
+            {
+                mode = overviewDecision.Mode,
+                primaryObject = overviewDecision.PrimaryObject,
+                overviewSceneExists = true,
+                sceneIndex = overviewScene.SceneIndex
+            })
+        });
         return true;
     }
 
@@ -419,7 +432,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         return new(mode, options.Overview.DefaultHookStrategy, primary, options.Overview.EnablePolarisOrientation, polarisUsed, reason, hemisphere);
     }
 
-    private static string BuildOverviewNarration(OverviewStrategyDiagnostics overviewDecision, AstronomyContext context)
+    private static string BuildOverviewNarration(OverviewStrategyDiagnostics overviewDecision)
     {
         var mode = overviewDecision.Mode;
         var primaryObject = overviewDecision.PrimaryObject;

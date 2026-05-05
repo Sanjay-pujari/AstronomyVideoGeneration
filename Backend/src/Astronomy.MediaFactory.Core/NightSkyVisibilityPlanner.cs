@@ -17,8 +17,11 @@ public sealed class SceneObservationContext
     public string SceneId { get; init; } = "";
     public string SceneTitle { get; init; } = "";
     public string SceneType { get; init; } = "";
+    public int SceneIndex { get; init; }
     public string ObjectName { get; init; } = "";
     public string ObjectType { get; init; } = "";
+    public string? PrimaryObject { get; init; }
+    public bool IncludePolarisOrientation { get; init; }
     public DateTime LocalObservationTime { get; init; }
     public DateTimeOffset UtcObservationTime { get; init; }
     public string Timezone { get; init; } = "";
