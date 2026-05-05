@@ -213,7 +213,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             var (outputWidth, outputHeight) = GetOutputSize(manifest);
-            var zoomPanFilter = BuildKenBurnsFilter(frameCount, fps, outputWidth, outputHeight);
+            var zoomPanFilter = BuildKenBurnsFilter(duration, fps, outputWidth, outputHeight);
             const double fadeDurationSeconds = 0.5d;
             var fadeOutStartSeconds = Math.Max(0d, duration - fadeDurationSeconds);
             var roundedFadeOutStartSeconds = Math.Round(fadeOutStartSeconds, 3, MidpointRounding.AwayFromZero);
@@ -221,7 +221,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var formattedFadeDurationSeconds = fadeDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             var segmentFilter =
                 _options.EnableKenBurns
-                    ? $"scale={outputWidth}:{outputHeight},{zoomPanFilter},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}"
+                    ? $"fps={fps},scale={outputWidth}:{outputHeight}:flags=lanczos,{zoomPanFilter},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}"
                     : $"scale={outputWidth}:{outputHeight},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}";
             var segmentArguments =
                 $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{segmentFilter}\" -frames:v {frameCount} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} \"{NormalizePath(segmentPath)}\"";
@@ -245,10 +245,12 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                 "{",
                 $"  \"sceneId\": \"scene-{i + 1:000}\",",
                 $"  \"imagePath\": \"{EscapeForJson(scene.VisualPath)}\",",
-                $"  \"duration\": {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
+                $"  \"durationSeconds\": {duration.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
+                $"  \"fps\": {fps},",
+                $"  \"totalFrames\": {frameCount},",
                 $"  \"zoomStart\": {_options.KenBurnsZoomStart.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
                 $"  \"zoomEnd\": {_options.KenBurnsZoomEnd.ToString(System.Globalization.CultureInfo.InvariantCulture)},",
-                $"  \"outputSize\": \"{outputWidth}x{outputHeight}\",",
+                $"  \"outputResolution\": \"{outputWidth}x{outputHeight}\",",
                 $"  \"isShort\": {(outputHeight > outputWidth ? "true" : "false")}",
                 "}"
             }));
@@ -280,7 +282,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             segmentPaths.Add(segmentPath);
-            segmentDurationsSeconds.Add(frameCount / 30d);
+            segmentDurationsSeconds.Add(frameCount / (double)fps);
         }
 
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
@@ -322,14 +324,18 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return (finalCommand, finalResult);
     }
 
-    private string BuildKenBurnsFilter(int frameCount, int fps, int outputWidth, int outputHeight)
+    private string BuildKenBurnsFilter(double durationSeconds, int fps, int outputWidth, int outputHeight)
     {
         var zoomStart = Math.Max(1d, _options.KenBurnsZoomStart);
         var zoomEnd = Math.Max(zoomStart, _options.KenBurnsZoomEnd);
-        var zoomStep = frameCount <= 1 ? 0d : (zoomEnd - zoomStart) / frameCount;
-        var zoomStepText = zoomStep.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+        var totalFrames = Math.Max(1, (int)Math.Round(durationSeconds * fps, MidpointRounding.AwayFromZero));
+        var zoomStartText = zoomStart.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         var zoomEndText = zoomEnd.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-        return $"zoompan=z='if(eq(on,1),{zoomStart.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)},min(zoom+{zoomStepText},{zoomEndText}))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frameCount}:s={outputWidth}x{outputHeight}:fps={fps}";
+        var zoomDeltaText = (zoomEnd - zoomStart).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+        var zoomExpression = _options.KenBurnsUseEasing
+            ? $"{zoomStartText} + ({zoomDeltaText})*pow(on/{totalFrames}.0,1.2)"
+            : $"{zoomStartText} + ({zoomDeltaText})*(on/{totalFrames}.0)";
+        return $"zoompan=z='{zoomExpression}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={totalFrames}:s={outputWidth}x{outputHeight}";
     }
     private static string EscapeForJson(string? value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
     private static (int Width, int Height) GetOutputSize(RenderManifest manifest)
