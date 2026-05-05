@@ -211,7 +211,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                 throw new FileNotFoundException($"Scene image not found for segment {i + 1}.", scene.VisualPath);
             }
 
-            var (outputWidth, outputHeight) = GetOutputSize(plan);
+            var (outputWidth, outputHeight) = GetOutputSize(manifest);
             var zoomPanFilter = BuildKenBurnsFilter(frameCount, fps, outputWidth, outputHeight);
             const double fadeDurationSeconds = 0.5d;
             var fadeOutStartSeconds = Math.Max(0d, duration - fadeDurationSeconds);
@@ -331,9 +331,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return $"zoompan=z='if(eq(on,1),{zoomStart.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)},min(zoom+{zoomStepText},{zoomEndText}))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frameCount}:s={outputWidth}x{outputHeight}:fps={fps}";
     }
     private static string EscapeForJson(string? value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
-    private static (int Width, int Height) GetOutputSize(RenderPlan plan)
+    private static (int Width, int Height) GetOutputSize(RenderManifest manifest)
     {
-        var isShort = plan.Manifest.OutputHeight.GetValueOrDefault() > plan.Manifest.OutputWidth.GetValueOrDefault();
+        var isShort = manifest.OutputHeight.GetValueOrDefault() > manifest.OutputWidth.GetValueOrDefault();
         return isShort ? (ShortOutputWidth, ShortOutputHeight) : (LongOutputWidth, LongOutputHeight);
     }
 
