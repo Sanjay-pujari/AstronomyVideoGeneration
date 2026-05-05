@@ -81,7 +81,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(10, _options.FfmpegTimeoutSeconds)));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-            var (command, finalResult) = await RenderFromImageSegmentsAsync(plan, manifest.AudioPath, outputPath, outputDirectory, segmentConcatPath, commandPath, linkedCts.Token);
+            var (command, finalResult) = await RenderFromImageSegmentsAsync(manifest, plan, manifest.AudioPath, outputPath, outputDirectory, segmentConcatPath, commandPath, linkedCts.Token);
             await _fileSystem.WriteAllTextAsync(commandPath, command, cancellationToken);
             await _fileSystem.WriteAllTextAsync(ffmpegLogPath, BuildProcessDiagnostics(finalResult), cancellationToken);
         }
@@ -143,6 +143,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
 
     private async Task<(string Command, ProcessExecutionResult FinalResult)> RenderFromImageSegmentsAsync(
+        RenderManifest manifest,
         RenderPlan plan,
         string narrationAudioPath,
         string outputPath,
