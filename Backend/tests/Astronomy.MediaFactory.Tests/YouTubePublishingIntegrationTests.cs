@@ -167,7 +167,7 @@ public sealed class YouTubePublishingIntegrationTests
     }
 
     [Fact]
-    public async Task ShortVideoAsset_IsDetected_FromShortsFinalVideo()
+    public async Task ShortVideoAsset_IsDetected_FromShortsShortVideo()
     {
         using var workspace = new TempWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, createShort: true);
@@ -178,7 +178,25 @@ public sealed class YouTubePublishingIntegrationTests
         var assetsJson = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "youtube-publish-assets.json"));
 
         Assert.Contains("ShortVideo", assetsJson);
-        Assert.Contains(Path.Combine("shorts", "final-video.mp4"), assetsJson);
+        Assert.Contains(Path.Combine("shorts", "short-video.mp4"), assetsJson);
+        Assert.Contains("\"willUpload\": true", assetsJson);
+    }
+
+    [Fact]
+    public async Task ShortVideoAsset_DoesNotRequireShortsFinalVideo()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, createShort: true);
+        var shortFinalVideoPath = Path.Combine(workspace.OutputDirectory(run), "shorts", "final-video.mp4");
+        Assert.False(File.Exists(shortFinalVideoPath));
+        var api = new TrackingYouTubeApiClient();
+        var service = CreateContentService(workspace, repository, api, new PublishingOptions { Enabled = true, Mode = "Private", PublishLongVideo = false, PublishShortVideo = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "short", CancellationToken.None)).Single(x => x.AssetType == "ShortVideo");
+
+        Assert.True(result.Success);
+        Assert.Single(api.Requests);
+        Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4"), api.Requests[0].VideoPath);
     }
 
     [Fact]
@@ -286,6 +304,10 @@ public sealed class YouTubePublishingIntegrationTests
 
         Assert.Single(api.Requests);
         Assert.Equal(expectedAssetType, api.Requests[0].AssetType);
+        if (selector == "short")
+        {
+            Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4"), api.Requests[0].VideoPath);
+        }
     }
 
     [Fact]
@@ -399,7 +421,8 @@ public sealed class YouTubePublishingIntegrationTests
             publishService,
             Options.Create(publishingOptions),
             Options.Create(youTubeOptions),
-            Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }));
+            Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }),
+            NullLogger<ContentPublishService>.Instance);
     }
 
     private sealed class StaticAuthService : IYouTubeAuthService
@@ -480,7 +503,7 @@ public sealed class YouTubePublishingIntegrationTests
             {
                 var shorts = Path.Combine(output, "shorts");
                 Directory.CreateDirectory(shorts);
-                File.WriteAllText(Path.Combine(shorts, "final-video.mp4"), "short video");
+                File.WriteAllText(Path.Combine(shorts, "short-video.mp4"), "short video");
                 File.WriteAllText(Path.Combine(shorts, "seo-metadata.json"), "{\"title\":\"Short Title #Shorts\",\"description\":\"Short Description\",\"tagsCsv\":\"shorts,astronomy\"}");
                 File.WriteAllText(Path.Combine(shorts, "pre-publish-validation-report.json"), passedValidation
                     ? "{\"passed\":true,\"errors\":[]}"
