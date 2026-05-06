@@ -67,14 +67,16 @@ public sealed class StartupValidationTests
         AzureSpeechOptions speech,
         AzureBlobOptions blob,
         SkyfieldSidecarOptions sidecar,
-        YouTubeOptions youTube)
+        YouTubeOptions youTube,
+        PublishingOptions? publishing = null)
         => new(
             new TestHostEnvironment { EnvironmentName = environmentName },
             Options.Create(openAi),
             Options.Create(speech),
             Options.Create(blob),
             Options.Create(sidecar),
-            Options.Create(youTube));
+            Options.Create(youTube),
+            Options.Create(publishing ?? new PublishingOptions()));
 
     private sealed class TestHostEnvironment : IHostEnvironment
     {

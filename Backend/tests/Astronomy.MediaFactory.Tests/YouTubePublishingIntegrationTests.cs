@@ -308,7 +308,7 @@ public sealed class YouTubePublishingIntegrationTests
     private sealed class AutoFakeContextProvider : IAstronomyContextProvider
     {
         public Task<AstronomyContext> BuildContextAsync(DateOnly date, ContentType contentType, string locationName, string timeZone, CancellationToken cancellationToken)
-            => Task.FromResult(new AstronomyContext { Date = date, ContentType = contentType, LocationName = locationName });
+            => Task.FromResult(new AstronomyContext { Date = date, LocationName = locationName });
     }
 
     private sealed class AutoFakeTopicRankingService : ITopicRankingService
