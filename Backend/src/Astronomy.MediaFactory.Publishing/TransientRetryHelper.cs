@@ -61,10 +61,15 @@ internal static class TransientRetryHelper
             IOException => true,
             HttpRequestException => true,
             TaskCanceledException => true,
+            InvalidOperationException invalidOperationException when IsIncompleteUploadFailure(invalidOperationException) => true,
             RequestFailedException requestFailedException => requestFailedException.Status is 408 or 429 or 500 or 502 or 503 or 504,
             GoogleApiException googleApiException => (int?)googleApiException.HttpStatusCode is 408 or 429 or 500 or 502 or 503 or 504,
             _ => false
         };
+
+    private static bool IsIncompleteUploadFailure(InvalidOperationException exception)
+        => exception.Message.Contains("did not complete successfully", StringComparison.OrdinalIgnoreCase)
+            && exception.Message.Contains("Status: Failed", StringComparison.OrdinalIgnoreCase);
 
     private static TimeSpan GetRetryDelay(Exception exception, int attempt, TimeSpan baseDelay, TimeSpan maxDelay)
     {

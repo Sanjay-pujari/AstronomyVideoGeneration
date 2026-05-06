@@ -113,6 +113,27 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.Contains("Thumbnail file is missing", result.Error);
     }
 
+
+    [Fact]
+    public async Task ThumbnailTransientFailure_IsRetried_AndStillSucceedsWithoutError()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true);
+        var api = new TrackingYouTubeApiClient { ThumbnailFailuresBeforeSuccess = 1 };
+        var service = CreateContentService(
+            workspace,
+            repository,
+            api,
+            new PublishingOptions { Enabled = true, Mode = "Private", UploadThumbnail = true },
+            new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28", UploadRetryAttempts = 2, RetryBaseDelaySeconds = 0, MaxRetryDelaySeconds = 1 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Null(result.Error);
+        Assert.Equal(2, api.ThumbnailUploadCalls);
+    }
+
     [Fact]
     public async Task SuccessfulRealMode_SavesYouTubeVideoId()
     {
@@ -188,13 +209,19 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.Equal(run.Id, contentPublisher.PublishedRunId);
     }
 
-    private static IContentPublishService CreateContentService(TempWorkspace workspace, InMemoryRepository repository, TrackingYouTubeApiClient api, PublishingOptions publishingOptions)
+    private static IContentPublishService CreateContentService(
+        TempWorkspace workspace,
+        InMemoryRepository repository,
+        TrackingYouTubeApiClient api,
+        PublishingOptions publishingOptions,
+        YouTubeOptions? youTubeOptions = null)
     {
+        youTubeOptions ??= new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28" };
         var publishService = new YouTubePublishService(
             new StaticAuthService(),
             api,
             Options.Create(publishingOptions),
-            Options.Create(new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28" }),
+            Options.Create(youTubeOptions),
             Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }),
             repository,
             NullLogger<YouTubePublishService>.Instance);
@@ -203,7 +230,7 @@ public sealed class YouTubePublishingIntegrationTests
             repository,
             publishService,
             Options.Create(publishingOptions),
-            Options.Create(new YouTubeOptions { DefaultPrivacyStatus = "private" }),
+            Options.Create(youTubeOptions),
             Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }));
     }
 
@@ -215,6 +242,8 @@ public sealed class YouTubePublishingIntegrationTests
     private sealed class TrackingYouTubeApiClient : IYouTubeApiClient
     {
         public bool UploadCalled { get; private set; }
+        public int ThumbnailUploadCalls { get; private set; }
+        public int ThumbnailFailuresBeforeSuccess { get; init; }
         public PublishRequest? LastRequest { get; private set; }
         public string? ChannelFailure { get; init; }
         public string VideoId { get; init; } = "video-123";
@@ -231,7 +260,16 @@ public sealed class YouTubePublishingIntegrationTests
             return Task.FromResult(VideoId);
         }
 
-        public Task UploadThumbnailAsync(string videoId, string thumbnailPath, string accessToken, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task UploadThumbnailAsync(string videoId, string thumbnailPath, string accessToken, CancellationToken cancellationToken)
+        {
+            ThumbnailUploadCalls++;
+            if (ThumbnailUploadCalls <= ThumbnailFailuresBeforeSuccess)
+            {
+                throw new InvalidOperationException("YouTube thumbnail upload did not complete successfully. Status: Failed");
+            }
+
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StaticHandler : HttpMessageHandler
