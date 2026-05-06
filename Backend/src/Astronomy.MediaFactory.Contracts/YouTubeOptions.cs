@@ -5,7 +5,10 @@ public sealed class YouTubeOptions
     public const string SectionName = "YouTube";
     public string ClientId { get; set; } = "";
     public string ClientSecret { get; set; } = "";
+    public string RedirectUri { get; set; } = "http://localhost:5005/api/youtubeoauth/callback";
     public string ApplicationName { get; set; } = "AstronomyVideoGeneration";
+    public string ExpectedChannelTitle { get; set; } = "";
+    public string ExpectedChannelId { get; set; } = "";
     public string PrivacyStatus { get; set; } = "private";
     public string CategoryId { get; set; } = "28";
     public string DefaultPrivacyStatus { get; set; } = "private";

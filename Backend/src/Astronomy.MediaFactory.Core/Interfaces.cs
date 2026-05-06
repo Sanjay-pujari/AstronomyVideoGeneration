@@ -46,6 +46,12 @@ public interface IYouTubeAuthService
     Task<string> GetAccessTokenAsync(CancellationToken cancellationToken);
 }
 
+public interface IYouTubeOAuthService
+{
+    string BuildAuthorizationUrl();
+    Task<YouTubeOAuthSetupResult> CompleteSetupAsync(string code, CancellationToken cancellationToken);
+}
+
 public interface IYouTubeApiClient
 {
     Task<YouTubeChannelInfo> GetAuthenticatedChannelAsync(string accessToken, CancellationToken cancellationToken);
