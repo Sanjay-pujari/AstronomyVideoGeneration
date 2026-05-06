@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Google;
 using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Publishing;
@@ -10,6 +11,8 @@ namespace Astronomy.MediaFactory.Publishing;
 public sealed class YouTubeOAuthService : IYouTubeOAuthService
 {
     public const string YouTubeUploadScope = "https://www.googleapis.com/auth/youtube.upload";
+    public const string YouTubeReadonlyScope = "https://www.googleapis.com/auth/youtube.readonly";
+    public const string InsufficientOAuthScopesGuidance = "Google OAuth did not grant the required YouTube scopes. Restart setup at /api/youtubeoauth/start so consent includes both youtube.upload and youtube.readonly access.";
     public const string MissingRefreshTokenGuidance = "Google did not return refresh_token. Remove previous app consent and retry with prompt=consent.";
     public const string ChannelMismatchMessage = "Authenticated channel does not match configured expected channel.";
 
@@ -17,6 +20,8 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
     {
         WriteIndented = true
     };
+
+    private static readonly string[] RequiredAuthorizationScopes = [YouTubeUploadScope, YouTubeReadonlyScope];
 
     private readonly HttpClient _httpClient;
     private readonly IYouTubeApiClient _youTubeApiClient;
@@ -46,7 +51,7 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
             ["client_id"] = _options.ClientId,
             ["redirect_uri"] = _options.RedirectUri,
             ["response_type"] = "code",
-            ["scope"] = YouTubeUploadScope,
+            ["scope"] = string.Join(" ", RequiredAuthorizationScopes),
             ["access_type"] = "offline",
             ["prompt"] = "consent"
         };
@@ -74,7 +79,18 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
             throw new InvalidOperationException(MissingRefreshTokenGuidance);
         }
 
-        var channel = await _youTubeApiClient.GetAuthenticatedChannelAsync(token.AccessToken, cancellationToken);
+        ValidateGrantedScopes(token.Scope);
+
+        YouTubeChannelInfo channel;
+        try
+        {
+            channel = await _youTubeApiClient.GetAuthenticatedChannelAsync(token.AccessToken, cancellationToken);
+        }
+        catch (GoogleApiException ex) when (IsInsufficientScopeException(ex))
+        {
+            throw new InvalidOperationException(InsufficientOAuthScopesGuidance, ex);
+        }
+
         ValidateExpectedChannel(channel);
 
         var createdUtc = DateTimeOffset.UtcNow;
@@ -131,6 +147,27 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
 
         return token;
     }
+
+
+    private static void ValidateGrantedScopes(string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope))
+        {
+            return;
+        }
+
+        var grantedScopes = scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (RequiredAuthorizationScopes.Any(requiredScope => !grantedScopes.Contains(requiredScope)))
+        {
+            throw new InvalidOperationException(InsufficientOAuthScopesGuidance);
+        }
+    }
+
+    private static bool IsInsufficientScopeException(GoogleApiException exception)
+        => exception.HttpStatusCode == System.Net.HttpStatusCode.Forbidden
+            && exception.Message.Contains("insufficient", StringComparison.OrdinalIgnoreCase)
+            && exception.Message.Contains("scope", StringComparison.OrdinalIgnoreCase);
 
     private void ValidateExpectedChannel(YouTubeChannelInfo channel)
     {
