@@ -587,10 +587,10 @@ public sealed class PipelineOrchestrator
                 var publishResults = await RunStageAsync("YouTubePublish", async () =>
                 {
                     var results = await _contentPublishService.PublishForPipelineRunAsync(run.Id, cancellationToken);
-                    var youtubeResult = results.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase));
-                    if (youtubeResult is { Success: false })
+                    var attemptedResults = results.Where(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) && !IsPublishSkip(x)).ToList();
+                    if (attemptedResults.Count > 0 && attemptedResults.All(x => !x.Success))
                     {
-                        throw new InvalidOperationException(youtubeResult.Error ?? "YouTube publishing failed.");
+                        throw new InvalidOperationException(attemptedResults.First().Error ?? "YouTube publishing failed.");
                     }
 
                     return results;
@@ -603,10 +603,13 @@ public sealed class PipelineOrchestrator
                     PublishedUtc = DateTime.UtcNow
                 }]));
 
-                var youtubePublishResult = publishResults.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase));
+                var youtubePublishResult = publishResults.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) && x.Success && !x.IsShort)
+                    ?? publishResults.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) && x.Success)
+                    ?? publishResults.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) && !IsPublishSkip(x))
+                    ?? publishResults.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase));
                 if (youtubePublishResult is { Success: true })
                 {
-                    if (!string.Equals(youtubePublishResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase))
+                    if (!youtubePublishResult.IsShort && !string.Equals(youtubePublishResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase))
                     {
                         run.YouTubeVideoId = youtubePublishResult.VideoId;
                     }
@@ -728,6 +731,30 @@ public sealed class PipelineOrchestrator
                     shortVideo.YouTubeVideoId = publicationResults
                         .FirstOrDefault(x => x.Platform == ShortFormPlatform.YouTubeShorts && x.Status == PlatformPublicationStatus.Published)
                         ?.ExternalPostId;
+                }
+
+                if (_contentPublishService is not null && publishingEnabled && validationPassed && _publishingOptions.PublishShortVideo)
+                {
+                    _ = await RunStageAsync("YouTubeShortPublish", async () =>
+                    {
+                        var shortPublishResults = await _contentPublishService.PublishForPipelineRunAsync(run.Id, "short", cancellationToken);
+                        var attemptedShortResults = shortPublishResults.Where(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) && x.IsShort && !IsPublishSkip(x)).ToList();
+                        if (attemptedShortResults.Count > 0 && attemptedShortResults.All(x => !x.Success))
+                        {
+                            throw new InvalidOperationException(attemptedShortResults.First().Error ?? "YouTube Shorts publishing failed.");
+                        }
+
+                        return shortPublishResults;
+                    }, continueWithFallback: true, fallback: ex => Task.FromResult<IReadOnlyList<PublishResult>>([new PublishResult
+                    {
+                        Success = false,
+                        Platform = "YouTube",
+                        AssetType = "ShortVideo",
+                        IsShort = true,
+                        Mode = mode,
+                        Error = ex.Message,
+                        PublishedUtc = DateTime.UtcNow
+                    }]));
                 }
             }
 
@@ -988,6 +1015,9 @@ public sealed class PipelineOrchestrator
 
         return fileName;
     }
+
+    private static bool IsPublishSkip(PublishResult result)
+        => result.Error is not null && (result.Error.StartsWith("Skipped because", StringComparison.OrdinalIgnoreCase) || result.Error.Contains("validation", StringComparison.OrdinalIgnoreCase));
 
     private static OptimizedVideoMetadata ApplyMonetizationPlan(OptimizedVideoMetadata source, MonetizationPlan plan)
         => new()

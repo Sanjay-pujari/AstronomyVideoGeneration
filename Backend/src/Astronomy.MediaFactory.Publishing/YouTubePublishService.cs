@@ -9,7 +9,7 @@ namespace Astronomy.MediaFactory.Publishing;
 public sealed class YouTubePublishService : IYouTubePublishService
 {
     private const long MaxThumbnailBytes = 2 * 1024 * 1024;
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly IYouTubeAuthService _authService;
     private readonly IYouTubeApiClient _apiClient;
@@ -53,10 +53,12 @@ public sealed class YouTubePublishService : IYouTubePublishService
             {
                 Success = true,
                 Platform = PlatformName,
+                AssetType = normalizedRequest.AssetType,
+                IsShort = normalizedRequest.IsShort,
                 Mode = mode,
                 PublishedUtc = DateTime.UtcNow
             };
-            await WriteResultAndPersistAsync(outputDirectory, request.PipelineRunId, result, cancellationToken);
+            await WriteResultAndPersistAsync(outputDirectory, request.PipelineRunId, normalizedRequest, result, cancellationToken);
             return result;
         }
 
@@ -73,20 +75,28 @@ public sealed class YouTubePublishService : IYouTubePublishService
             await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-channel-info.json"), channel, cancellationToken);
 
             var videoId = await _apiClient.UploadVideoAsync(normalizedRequest, accessToken, cancellationToken);
-            var error = await TryUploadThumbnailAsync(normalizedRequest, videoId, accessToken, cancellationToken);
+            var thumbnailWarning = await TryUploadThumbnailAsync(normalizedRequest, videoId, accessToken, cancellationToken);
+            var warnings = new List<string>();
+            if (!string.IsNullOrWhiteSpace(thumbnailWarning))
+            {
+                warnings.Add($"Video uploaded but thumbnail upload failed: {thumbnailWarning}");
+            }
             var result = new PublishResult
             {
                 Success = true,
                 Platform = PlatformName,
+                AssetType = normalizedRequest.AssetType,
+                IsShort = normalizedRequest.IsShort,
                 VideoId = videoId,
                 VideoUrl = $"https://www.youtube.com/watch?v={videoId}",
                 ChannelId = channel.ChannelId,
                 ChannelTitle = channel.ChannelTitle,
-                Error = error,
+                Error = thumbnailWarning is null ? null : warnings[0],
+                Warnings = warnings,
                 Mode = mode,
                 PublishedUtc = DateTime.UtcNow
             };
-            await WriteResultAndPersistAsync(outputDirectory, request.PipelineRunId, result, cancellationToken);
+            await WriteResultAndPersistAsync(outputDirectory, request.PipelineRunId, normalizedRequest, result, cancellationToken);
             return result;
         }
         catch (Exception ex)
@@ -95,11 +105,13 @@ public sealed class YouTubePublishService : IYouTubePublishService
             {
                 Success = false,
                 Platform = PlatformName,
+                AssetType = normalizedRequest.AssetType,
+                IsShort = normalizedRequest.IsShort,
                 Error = ex.Message,
                 Mode = mode,
                 PublishedUtc = DateTime.UtcNow
             };
-            await WriteResultAndPersistAsync(outputDirectory, request.PipelineRunId, result, cancellationToken);
+            await WriteResultAndPersistAsync(outputDirectory, request.PipelineRunId, normalizedRequest, result, cancellationToken);
             return result;
         }
     }
@@ -116,6 +128,8 @@ public sealed class YouTubePublishService : IYouTubePublishService
         {
             PipelineRunId = request.PipelineRunId,
             Platform = PlatformName,
+            AssetType = string.IsNullOrWhiteSpace(request.AssetType) ? "LongVideo" : request.AssetType,
+            IsShort = request.IsShort,
             VideoPath = request.VideoPath,
             ThumbnailPath = request.ThumbnailPath,
             Title = string.IsNullOrWhiteSpace(request.Title) ? "Astronomy update" : request.Title.Trim(),
@@ -225,6 +239,8 @@ public sealed class YouTubePublishService : IYouTubePublishService
         => await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-publish-payload.json"), new
         {
             pipelineRunId = request.PipelineRunId,
+            assetType = request.AssetType,
+            isShort = request.IsShort,
             videoPath = request.VideoPath,
             thumbnailPath = request.ThumbnailPath,
             title = request.Title,
@@ -236,10 +252,12 @@ public sealed class YouTubePublishService : IYouTubePublishService
             generatedAtUtc = DateTime.UtcNow
         }, cancellationToken);
 
-    private async Task WriteResultAndPersistAsync(string outputDirectory, Guid pipelineRunId, PublishResult result, CancellationToken cancellationToken)
+    private async Task WriteResultAndPersistAsync(string outputDirectory, Guid pipelineRunId, PublishRequest request, PublishResult result, CancellationToken cancellationToken)
     {
+        var suffix = request.IsShort ? "short" : "long";
+        await WriteJsonAsync(Path.Combine(outputDirectory, $"youtube-publish-result-{suffix}.json"), result, cancellationToken);
         await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-publish-result.json"), result, cancellationToken);
-        if (result.Success && !string.Equals(result.Mode, "DryRun", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(result.VideoId))
+        if (!request.IsShort && result.Success && !string.Equals(result.Mode, "DryRun", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(result.VideoId))
         {
             var run = await _repository.GetAsync(pipelineRunId, cancellationToken);
             if (run is not null)

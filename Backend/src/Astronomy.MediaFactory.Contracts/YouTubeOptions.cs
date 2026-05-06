@@ -16,6 +16,8 @@ public sealed class YouTubeOptions
     public string? AccessToken { get; set; }
     public string? TokenFilePath { get; set; }
     public bool PublishingEnabled { get; set; }
+    public bool UploadThumbnailForLongVideos { get; set; } = true;
+    public bool UploadThumbnailForShorts { get; set; } = false;
     public int UploadRetryAttempts { get; set; } = 3;
     public int RetryBaseDelaySeconds { get; set; } = 2;
     public int MaxRetryDelaySeconds { get; set; } = 20;

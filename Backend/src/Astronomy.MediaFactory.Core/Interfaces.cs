@@ -35,6 +35,8 @@ public interface IPlatformPublishService
 public interface IContentPublishService
 {
     Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset, CancellationToken cancellationToken)
+        => PublishForPipelineRunAsync(pipelineRunId, cancellationToken);
 }
 
 public interface IYouTubePublishService : IPlatformPublishService
