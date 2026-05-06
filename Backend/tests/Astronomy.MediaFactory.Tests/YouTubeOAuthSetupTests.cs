@@ -117,8 +117,9 @@ public sealed class YouTubeOAuthSetupTests
         Assert.Equal("Astronomy Channel", result.ChannelTitle);
         Assert.Equal("UC123", result.ChannelId);
         Assert.True(result.RefreshTokenGenerated);
-        Assert.Equal("YouTube OAuth completed successfully.", result.Message);
+        Assert.Equal("YouTube OAuth completed successfully. Full refresh token was saved to tokenFilePath.", result.Message);
         Assert.NotEqual(refreshToken, result.RefreshTokenPreview);
+        Assert.Equal(workspace.TokenFilePath, result.TokenFilePath);
         Assert.True(File.Exists(workspace.TokenFilePath));
         var tokenFile = await File.ReadAllTextAsync(workspace.TokenFilePath);
         Assert.Contains(refreshToken, tokenFile);

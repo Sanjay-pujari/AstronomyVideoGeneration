@@ -94,7 +94,7 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
         ValidateExpectedChannel(channel);
 
         var createdUtc = DateTimeOffset.UtcNow;
-        await PersistRefreshTokenAsync(channel, token.RefreshToken, createdUtc, cancellationToken);
+        var tokenFilePath = await PersistRefreshTokenAsync(channel, token.RefreshToken, createdUtc, cancellationToken);
         await WriteDiagnosticsAsync(channel, createdUtc, refreshTokenGenerated: true, cancellationToken);
 
         return new YouTubeOAuthSetupResult(
@@ -102,8 +102,9 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
             ChannelTitle: channel.ChannelTitle,
             ChannelId: channel.ChannelId,
             RefreshTokenGenerated: true,
-            Message: "YouTube OAuth completed successfully.",
-            RefreshTokenPreview: MaskRefreshToken(token.RefreshToken));
+            Message: "YouTube OAuth completed successfully. Full refresh token was saved to tokenFilePath.",
+            RefreshTokenPreview: MaskRefreshToken(token.RefreshToken),
+            TokenFilePath: tokenFilePath);
     }
 
     private void ValidateTokenExchangeConfiguration()
@@ -184,13 +185,14 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
         }
     }
 
-    private async Task PersistRefreshTokenAsync(YouTubeChannelInfo channel, string refreshToken, DateTimeOffset createdUtc, CancellationToken cancellationToken)
+    private async Task<string> PersistRefreshTokenAsync(YouTubeChannelInfo channel, string refreshToken, DateTimeOffset createdUtc, CancellationToken cancellationToken)
     {
         var payload = new YouTubeOAuthTokenFile(channel.ChannelId, channel.ChannelTitle, refreshToken, createdUtc);
         var path = ResolveTokenFilePath();
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await using var stream = File.Create(path);
         await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        return path;
     }
 
     private async Task WriteDiagnosticsAsync(YouTubeChannelInfo channel, DateTimeOffset generatedUtc, bool refreshTokenGenerated, CancellationToken cancellationToken)

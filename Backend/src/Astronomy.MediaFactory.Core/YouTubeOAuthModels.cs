@@ -13,7 +13,8 @@ public sealed record YouTubeOAuthSetupResult(
     string ChannelId,
     bool RefreshTokenGenerated,
     string Message,
-    string? RefreshTokenPreview = null);
+    string? RefreshTokenPreview = null,
+    string? TokenFilePath = null);
 
 public sealed record YouTubeOAuthStartResponse(
     bool Success,
