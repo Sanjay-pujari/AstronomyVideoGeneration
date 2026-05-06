@@ -223,6 +223,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
         services.AddHttpClient<IYouTubeAuthService, YouTubeAuthService>();
+        services.AddHttpClient<IYouTubeOAuthService, YouTubeOAuthService>();
         services.AddScoped<IYouTubeApiClient, GoogleYouTubeApiClient>();
         services.AddScoped<IYouTubePublishService, YouTubePublishService>();
         services.AddScoped<IContentPublishService, ContentPublishService>();
