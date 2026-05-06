@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Publishing;
@@ -13,19 +14,22 @@ public sealed class ContentPublishService : IContentPublishService
     private readonly PublishingOptions _publishingOptions;
     private readonly YouTubeOptions _youTubeOptions;
     private readonly MaintenanceOptions _maintenanceOptions;
+    private readonly ILogger<ContentPublishService> _logger;
 
     public ContentPublishService(
         IPipelineRepository repository,
         IYouTubePublishService youTubePublishService,
         IOptions<PublishingOptions> publishingOptions,
         IOptions<YouTubeOptions> youTubeOptions,
-        IOptions<MaintenanceOptions> maintenanceOptions)
+        IOptions<MaintenanceOptions> maintenanceOptions,
+        ILogger<ContentPublishService> logger)
     {
         _repository = repository;
         _youTubePublishService = youTubePublishService;
         _publishingOptions = publishingOptions.Value;
         _youTubeOptions = youTubeOptions.Value;
         _maintenanceOptions = maintenanceOptions.Value;
+        _logger = logger;
     }
 
     public Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
@@ -122,17 +126,9 @@ public sealed class ContentPublishService : IContentPublishService
         };
 
         var assets = new List<PublishAsset> { longAsset };
-        var shortVideoPath = Path.Combine(outputDirectory, "shorts", "final-video.mp4");
-        if (!File.Exists(shortVideoPath))
-        {
-            var legacyShortVideoPath = Path.Combine(outputDirectory, "shorts", "short-video.mp4");
-            if (File.Exists(legacyShortVideoPath))
-            {
-                shortVideoPath = legacyShortVideoPath;
-            }
-        }
+        var shortVideoPath = ResolveShortVideoPath(outputDirectory);
 
-        if (File.Exists(shortVideoPath))
+        if (shortVideoPath is not null)
         {
             var shortMetadataPath = Path.Combine(outputDirectory, "shorts", "seo-metadata.json");
             var shortMetadata = File.Exists(shortMetadataPath)
@@ -153,6 +149,27 @@ public sealed class ContentPublishService : IContentPublishService
         }
 
         return assets;
+    }
+
+    private string? ResolveShortVideoPath(string outputDirectory)
+    {
+        var shortVideoPath = Path.Combine(outputDirectory, "shorts", "short-video.mp4");
+        if (File.Exists(shortVideoPath))
+        {
+            return shortVideoPath;
+        }
+
+        var fallbackPath = Path.Combine(outputDirectory, "shorts", "final-video.mp4");
+        if (File.Exists(fallbackPath))
+        {
+            _logger.LogWarning(
+                "Short video publish asset was not found at {ShortVideoPath}; falling back to legacy path {FallbackPath}.",
+                shortVideoPath,
+                fallbackPath);
+            return fallbackPath;
+        }
+
+        return null;
     }
 
     private IEnumerable<PublishAssetDiagnostic> BuildAssetDiagnostics(IReadOnlyList<PublishAsset> assets, string selector)
