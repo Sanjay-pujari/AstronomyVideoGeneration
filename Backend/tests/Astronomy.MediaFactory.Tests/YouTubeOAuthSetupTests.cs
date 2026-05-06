@@ -22,7 +22,7 @@ public sealed class YouTubeOAuthSetupTests
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddControllers().AddApplicationPart(typeof(YouTubeOAuthController).Assembly);
-        builder.Services.AddSingleton<IYouTubeOAuthService>(new StubOAuthService("https://accounts.google.com/o/oauth2/v2/auth?client_id=test-client&redirect_uri=http%3A%2F%2Flocalhost%3A5005%2Fapi%2Fyoutubeoauth%2Fcallback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fyoutube.upload&access_type=offline&prompt=consent"));
+        builder.Services.AddSingleton<IYouTubeOAuthService>(new StubOAuthService("https://accounts.google.com/o/oauth2/v2/auth?client_id=test-client&redirect_uri=http%3A%2F%2Flocalhost%3A5005%2Fapi%2Fyoutubeoauth%2Fcallback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fyoutube.upload%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fyoutube.readonly&access_type=offline&prompt=consent"));
         var app = builder.Build();
         app.MapControllers();
 
@@ -38,6 +38,7 @@ public sealed class YouTubeOAuthSetupTests
         Assert.Contains("access_type=offline", payload.AuthorizationUrl);
         Assert.Contains("prompt=consent", payload.AuthorizationUrl);
         Assert.Contains("youtube.upload", Uri.UnescapeDataString(payload.AuthorizationUrl));
+        Assert.Contains("youtube.readonly", Uri.UnescapeDataString(payload.AuthorizationUrl));
         await app.StopAsync();
     }
 
@@ -84,6 +85,23 @@ public sealed class YouTubeOAuthSetupTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains("Google OAuth returned error: access_denied", body);
+    }
+
+
+    [Fact]
+    public void BuildAuthorizationUrl_IncludesUploadAndReadonlyScopes()
+    {
+        using var workspace = new TemporaryOAuthWorkspace();
+        var service = CreateService(workspace.TokenFilePath, new TrackingYouTubeApiClient(), TokenJson("1//0gSCOPES"));
+
+        var authorizationUrl = service.BuildAuthorizationUrl();
+
+        var decodedUrl = Uri.UnescapeDataString(authorizationUrl);
+        Assert.StartsWith("https://accounts.google.com/o/oauth2/v2/auth", authorizationUrl, StringComparison.Ordinal);
+        Assert.Contains(YouTubeOAuthService.YouTubeUploadScope, decodedUrl);
+        Assert.Contains(YouTubeOAuthService.YouTubeReadonlyScope, decodedUrl);
+        Assert.Contains("access_type=offline", decodedUrl);
+        Assert.Contains("prompt=consent", decodedUrl);
     }
 
     [Fact]
@@ -142,6 +160,22 @@ public sealed class YouTubeOAuthSetupTests
         Assert.Equal(YouTubeOAuthService.MissingRefreshTokenGuidance, ex.Message);
     }
 
+
+    [Fact]
+    public async Task CompleteSetup_WhenGoogleOmitsReadonlyScope_FailsWithScopeGuidance()
+    {
+        using var workspace = new TemporaryOAuthWorkspace();
+        var service = CreateService(
+            workspace.TokenFilePath,
+            new TrackingYouTubeApiClient(),
+            TokenJson("1//0gMISSINGREAD", scope: YouTubeOAuthService.YouTubeUploadScope));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CompleteSetupAsync("auth-code", CancellationToken.None));
+
+        Assert.Equal(YouTubeOAuthService.InsufficientOAuthScopesGuidance, ex.Message);
+        Assert.False(File.Exists(workspace.TokenFilePath));
+    }
+
     [Fact]
     public async Task CompleteSetup_WritesDiagnostics_WithoutSecretsOrTokens()
     {
@@ -193,8 +227,11 @@ public sealed class YouTubeOAuthSetupTests
         return new YouTubeOAuthService(httpClient, apiClient, options);
     }
 
-    private static string TokenJson(string refreshToken, string accessToken = "access-token-from-google")
-        => $"{{\"access_token\":\"{accessToken}\",\"refresh_token\":\"{refreshToken}\",\"expires_in\":3600,\"scope\":\"https://www.googleapis.com/auth/youtube.upload\",\"token_type\":\"Bearer\"}}";
+    private static string TokenJson(
+        string refreshToken,
+        string accessToken = "access-token-from-google",
+        string scope = YouTubeOAuthService.YouTubeUploadScope + " " + YouTubeOAuthService.YouTubeReadonlyScope)
+        => $"{{\"access_token\":\"{accessToken}\",\"refresh_token\":\"{refreshToken}\",\"expires_in\":3600,\"scope\":\"{scope}\",\"token_type\":\"Bearer\"}}";
 
     private sealed class StubOAuthService : IYouTubeOAuthService
     {
