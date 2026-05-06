@@ -32,6 +32,7 @@ public sealed class PlatformPublicationTarget
     public string? ExternalPostId { get; set; }
     public string? ExternalUrl { get; set; }
     public string? ErrorMessage { get; set; }
+    public bool? YouTubeShortEligible { get; set; }
 }
 
 public sealed class ShortFormPublicationRequest

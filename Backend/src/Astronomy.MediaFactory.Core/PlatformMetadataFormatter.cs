@@ -48,15 +48,17 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
         string normalizedCaptionBody,
         IReadOnlyCollection<string> hashtags)
     {
-        var platformHashtags = EnsureHashtag(SelectHashtags(hashtags, minCount: 3, maxCount: 5), "shorts");
+        var platformHashtags = EnsureHashtag(SelectHashtags(hashtags, minCount: 3, maxCount: 5), "Shorts");
         var titleLikeLine = FirstNonEmpty(LimitAtWordBoundary(normalizedHook, 70), LimitAtWordBoundary(normalizedTitle, YouTubeTitleLimit));
         var cta = BuildYouTubeCta(normalizedCaptionBody);
-        var caption = BuildCaption(
-            YouTubeCaptionLimit,
-            "\n",
-            titleLikeLine,
-            cta,
-            string.Join(' ', platformHashtags.Take(5)));
+        var caption = YouTubeShortsValidation.EnsureShortsMarkerInDescription(
+            normalizedTitle,
+            BuildCaption(
+                YouTubeCaptionLimit,
+                "\n",
+                titleLikeLine,
+                cta,
+                string.Join(' ', platformHashtags.Take(5))));
 
         return new PlatformPublicationTarget
         {

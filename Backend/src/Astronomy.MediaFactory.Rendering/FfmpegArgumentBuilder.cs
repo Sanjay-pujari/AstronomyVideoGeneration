@@ -10,7 +10,7 @@ public sealed class FfmpegArgumentBuilder
         var width = manifest.OutputWidth ?? options.VideoWidth;
         var height = manifest.OutputHeight ?? options.VideoHeight;
         var filter = manifest.EnableVerticalCrop
-            ? $"scale='if(gt(a,{width}.0/{height}),-2,{width})':'if(gt(a,{width}.0/{height}),{height},-2)',crop={width}:{height}"
+            ? $"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
             : $"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2";
         var hasMusic = !string.IsNullOrWhiteSpace(options.BackgroundMusicPath) && File.Exists(options.BackgroundMusicPath);
         var audioFilter = hasMusic ? "-filter_complex \"[2:a]volume=0.2[music];[1:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]\" -map 0:v:0 -map \"[aout]\"" : string.Empty;
