@@ -171,7 +171,19 @@ public sealed class YouTubePublishService : IYouTubePublishService
 
         try
         {
-            await _apiClient.UploadThumbnailAsync(videoId, request.ThumbnailPath, accessToken, cancellationToken);
+            await TransientRetryHelper.ExecuteAsync(
+                async ct =>
+                {
+                    await _apiClient.UploadThumbnailAsync(videoId, request.ThumbnailPath, accessToken, ct);
+                    return true;
+                },
+                _youTubeOptions.UploadRetryAttempts,
+                TimeSpan.FromSeconds(_youTubeOptions.RetryBaseDelaySeconds),
+                TimeSpan.FromSeconds(_youTubeOptions.MaxRetryDelaySeconds),
+                _logger,
+                "YouTube thumbnail upload",
+                videoId,
+                cancellationToken);
             return null;
         }
         catch (Exception ex)
