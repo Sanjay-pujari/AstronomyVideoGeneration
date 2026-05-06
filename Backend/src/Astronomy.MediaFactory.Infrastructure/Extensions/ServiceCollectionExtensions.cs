@@ -55,6 +55,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<YouTubeOptions>()
             .Bind(configuration.GetSection(YouTubeOptions.SectionName))
             .Validate(options => string.IsNullOrWhiteSpace(options.PrivacyStatus) || options.PrivacyStatus is "private" or "public" or "unlisted", "YouTube:PrivacyStatus must be private, public, or unlisted.")
+            .Validate(options => string.IsNullOrWhiteSpace(options.DefaultPrivacyStatus) || options.DefaultPrivacyStatus is "private" or "public" or "unlisted", "YouTube:DefaultPrivacyStatus must be private, public, or unlisted.")
             .Validate(options => options.UploadRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds && options.PublishRetryCooldownSeconds > 0, "YouTube retry settings are invalid.")
             .ValidateOnStart();
 
@@ -101,7 +102,7 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<PublishingOptions>()
             .Bind(configuration.GetSection(PublishingOptions.SectionName))
-            .Validate(options => options.Mode is "Disabled" or "DryRun" or "Private" or "Scheduled" or "Public", "Publishing:Mode must be Disabled, DryRun, Private, Scheduled, or Public.")
+            .Validate(options => options.Mode is "Disabled" or "DryRun" or "Private" or "Public", "Publishing:Mode must be Disabled, DryRun, Private, or Public.")
             .Validate(options => string.IsNullOrWhiteSpace(options.DefaultPrivacyStatus) || options.DefaultPrivacyStatus is "private" or "public" or "unlisted", "Publishing:DefaultPrivacyStatus must be private, public, or unlisted.")
             .ValidateOnStart();
 
@@ -221,6 +222,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
+        services.AddHttpClient<IYouTubeAuthService, YouTubeAuthService>();
+        services.AddScoped<IYouTubeApiClient, GoogleYouTubeApiClient>();
+        services.AddScoped<IYouTubePublishService, YouTubePublishService>();
+        services.AddScoped<IContentPublishService, ContentPublishService>();
         services.AddScoped<IYouTubeAnalyticsService, YouTubeAnalyticsService>();
         services.AddScoped<IShortsVideoRenderService, ShortsVideoRenderService>();
         services.AddScoped<IShortFormPlatformMetadataFormatter>(sp => new PlatformMetadataFormatter(sp.GetRequiredService<IOptions<PlatformPublishingOptions>>().Value));

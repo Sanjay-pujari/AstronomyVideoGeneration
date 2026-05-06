@@ -25,6 +25,34 @@ public interface IShortsVideoRenderService { Task<ShortVideoRenderResult> Render
 public interface IShortFormPlatformMetadataFormatter { PlatformPublicationTarget FormatTarget(ShortFormPlatform platform, ShortFormPublicationRequest request); }
 public interface IShortFormPlatformPublisher { ShortFormPlatform Platform { get; } Task<PlatformPublicationTarget> PublishAsync(PlatformPublicationTarget target, CancellationToken cancellationToken); }
 public interface IShortFormPublishingService { Task<IReadOnlyCollection<PlatformPublicationTarget>> PublishAsync(ShortFormPublicationRequest request, CancellationToken cancellationToken); }
+
+public interface IPlatformPublishService
+{
+    string PlatformName { get; }
+    Task<PublishResult> PublishAsync(PublishRequest request, CancellationToken cancellationToken);
+}
+
+public interface IContentPublishService
+{
+    Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken);
+}
+
+public interface IYouTubePublishService : IPlatformPublishService
+{
+}
+
+public interface IYouTubeAuthService
+{
+    Task<string> GetAccessTokenAsync(CancellationToken cancellationToken);
+}
+
+public interface IYouTubeApiClient
+{
+    Task<YouTubeChannelInfo> GetAuthenticatedChannelAsync(string accessToken, CancellationToken cancellationToken);
+    Task<string> UploadVideoAsync(PublishRequest request, string accessToken, CancellationToken cancellationToken);
+    Task UploadThumbnailAsync(string videoId, string thumbnailPath, string accessToken, CancellationToken cancellationToken);
+}
+
 public interface IAzureBlobStorageService { Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken); }
 public interface IYouTubePublishingService { Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken); }
 public interface IYouTubeThumbnailPublisher { Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken); }

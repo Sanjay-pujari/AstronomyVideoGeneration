@@ -84,6 +84,18 @@ app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrc
     var result = await orchestrator.RunAsync(request, ct);
     return Results.Ok(new RunPipelineResponse(result.Id, result.Status, "Completed."));
 });
+app.MapPost("/api/youtubepublish/{pipelineRunId:guid}", async (Guid pipelineRunId, IContentPublishService publishService, IPipelineRepository repository, CancellationToken ct) =>
+{
+    var run = await repository.GetAsync(pipelineRunId, ct);
+    if (run is null)
+    {
+        return Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." });
+    }
+
+    var results = await publishService.PublishForPipelineRunAsync(pipelineRunId, ct);
+    var result = results.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase)) ?? results.FirstOrDefault();
+    return result is null ? Results.BadRequest(new { message = "No publishing result was produced." }) : Results.Ok(result);
+});
 app.MapPost("/api/jobs/enqueue", async (EnqueuePipelineJobRequest request, IPipelineJobQueue queue, CancellationToken ct) =>
 {
     try

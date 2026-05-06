@@ -1,0 +1,92 @@
+using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core;
+using Google.Apis.Auth.OAuth2;
+using Google.Apis.Services;
+using Google.Apis.Upload;
+using Google.Apis.YouTube.v3;
+using Google.Apis.YouTube.v3.Data;
+using Microsoft.Extensions.Options;
+
+namespace Astronomy.MediaFactory.Publishing;
+
+public sealed class GoogleYouTubeApiClient : IYouTubeApiClient
+{
+    private readonly YouTubeOptions _options;
+
+    public GoogleYouTubeApiClient(IOptions<YouTubeOptions> options)
+    {
+        _options = options.Value;
+    }
+
+    public async Task<YouTubeChannelInfo> GetAuthenticatedChannelAsync(string accessToken, CancellationToken cancellationToken)
+    {
+        var youtube = CreateService(accessToken);
+        var request = youtube.Channels.List("snippet");
+        request.Mine = true;
+        var response = await request.ExecuteAsync(cancellationToken);
+        var channel = response.Items?.FirstOrDefault();
+        if (channel is null || string.IsNullOrWhiteSpace(channel.Id))
+        {
+            throw new InvalidOperationException("No YouTube channel found for authenticated account.");
+        }
+
+        return new YouTubeChannelInfo
+        {
+            ChannelId = channel.Id,
+            ChannelTitle = channel.Snippet?.Title ?? string.Empty
+        };
+    }
+
+    public async Task<string> UploadVideoAsync(PublishRequest request, string accessToken, CancellationToken cancellationToken)
+    {
+        var youtube = CreateService(accessToken);
+        await using var stream = File.OpenRead(request.VideoPath);
+        var video = new Video
+        {
+            Snippet = new VideoSnippet
+            {
+                Title = request.Title,
+                Description = request.Description,
+                Tags = request.Tags,
+                CategoryId = string.IsNullOrWhiteSpace(_options.CategoryId) ? "28" : _options.CategoryId
+            },
+            Status = new VideoStatus
+            {
+                PrivacyStatus = string.IsNullOrWhiteSpace(request.PrivacyStatus) ? "private" : request.PrivacyStatus,
+                SelfDeclaredMadeForKids = false
+            }
+        };
+
+        var insert = youtube.Videos.Insert(video, "snippet,status", stream, "video/*");
+        await insert.UploadAsync(cancellationToken);
+        if (insert.GetProgress().Status != UploadStatus.Completed || string.IsNullOrWhiteSpace(insert.ResponseBody?.Id))
+        {
+            throw new InvalidOperationException($"YouTube upload did not complete successfully. Status: {insert.GetProgress().Status}");
+        }
+
+        return insert.ResponseBody.Id;
+    }
+
+    public async Task UploadThumbnailAsync(string videoId, string thumbnailPath, string accessToken, CancellationToken cancellationToken)
+    {
+        var youtube = CreateService(accessToken);
+        await using var stream = File.OpenRead(thumbnailPath);
+        var mimeType = Path.GetExtension(thumbnailPath).Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+            || Path.GetExtension(thumbnailPath).Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+                ? "image/jpeg"
+                : "image/png";
+        var upload = youtube.Thumbnails.Set(videoId, stream, mimeType);
+        await upload.UploadAsync(cancellationToken);
+        if (upload.GetProgress().Status != UploadStatus.Completed)
+        {
+            throw new InvalidOperationException($"YouTube thumbnail upload did not complete successfully. Status: {upload.GetProgress().Status}");
+        }
+    }
+
+    private YouTubeService CreateService(string accessToken)
+        => new(new BaseClientService.Initializer
+        {
+            HttpClientInitializer = GoogleCredential.FromAccessToken(accessToken),
+            ApplicationName = _options.ApplicationName
+        });
+}

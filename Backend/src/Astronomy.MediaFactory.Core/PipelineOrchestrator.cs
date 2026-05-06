@@ -42,6 +42,7 @@ public sealed class PipelineOrchestrator
     private readonly IPrePublishValidationService _prePublishValidationService;
     private readonly PublishingValidationOptions _publishingValidationOptions;
     private readonly PublishingOptions _publishingOptions;
+    private readonly IContentPublishService? _contentPublishService;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -75,7 +76,8 @@ public sealed class PipelineOrchestrator
         IOptions<MaintenanceOptions>? maintenanceOptions = null,
         IContentExperimentService? contentExperimentService = null,
         IShortFormPublishingService? shortFormPublishingService = null,
-        IPrePublishValidationService? prePublishValidationService = null)
+        IPrePublishValidationService? prePublishValidationService = null,
+        IContentPublishService? contentPublishService = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -109,6 +111,7 @@ public sealed class PipelineOrchestrator
         _prePublishValidationService = prePublishValidationService ?? new PrePublishValidationService(Options.Create(_renderingOptions), Options.Create(new PublishingValidationOptions()), Microsoft.Extensions.Logging.Abstractions.NullLogger<PrePublishValidationService>.Instance);
         _publishingValidationOptions = publishingValidationOptions.Value;
         _publishingOptions = publishingOptions?.Value ?? new PublishingOptions();
+        _contentPublishService = contentPublishService;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -551,109 +554,69 @@ public sealed class PipelineOrchestrator
             }
 
             var mode = (_publishingOptions.Mode ?? "DryRun").Trim();
-            var explicitPublicMode = string.Equals(mode, "Public", StringComparison.OrdinalIgnoreCase);
             var publishingEnabled = _publishingOptions.Enabled && !string.Equals(mode, "Disabled", StringComparison.OrdinalIgnoreCase);
-            var shouldAttemptPublishing = request.PublishToYouTube && validationPassed && publishingEnabled;
-            var selectedPrivacyStatus = string.Equals(mode, "Private", StringComparison.OrdinalIgnoreCase)
-                ? "private"
-                : string.Equals(mode, "Scheduled", StringComparison.OrdinalIgnoreCase)
-                    ? "private"
-                    : explicitPublicMode
-                        ? "public"
-                        : string.Equals(_publishingOptions.DefaultPrivacyStatus, "public", StringComparison.OrdinalIgnoreCase)
-                            ? "private"
-                            : _publishingOptions.DefaultPrivacyStatus;
-            if (string.IsNullOrWhiteSpace(selectedPrivacyStatus))
-            {
-                selectedPrivacyStatus = "private";
-            }
-
             _logger.LogInformation("PublishingMode={PublishingMode} ValidationPassed={ValidationPassed}", mode, validationPassed);
 
-            if (!shouldAttemptPublishing)
+            if (!publishingEnabled || !validationPassed)
             {
                 _logger.LogInformation("Uploaded/Skipped=Skipped");
             }
-            else if (string.Equals(mode, "DryRun", StringComparison.OrdinalIgnoreCase))
+            else if (_contentPublishService is null)
             {
-                var payload = new
+                var selectedPrivacyStatus = string.Equals(mode, "Public", StringComparison.Ordinal) ? "public" : "private";
+                if (string.Equals(mode, "DryRun", StringComparison.OrdinalIgnoreCase))
                 {
-                    videoPath,
-                    title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
-                    description = script.OptimizedMetadata?.OptimizedDescription ?? script.Description,
-                    tags = script.OptimizedMetadata?.Tags ?? script.Tags,
-                    hashtags = seoMetadata.HashtagsCsv
-                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
-                    thumbnailPath,
-                    privacyStatus = selectedPrivacyStatus
-                };
-
-                await File.WriteAllTextAsync(
-                    Path.Combine(outputDir, "youtube-publish-payload.json"),
-                    JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
-                    cancellationToken);
-                _logger.LogInformation("Uploaded/Skipped=Skipped");
-            }
-            else if (shouldAttemptPublishing)
-            {
-                try
+                    await File.WriteAllTextAsync(
+                        Path.Combine(outputDir, "youtube-publish-payload.json"),
+                        JsonSerializer.Serialize(new { pipelineRunId = run.Id, videoPath, thumbnailPath, title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title, description = script.OptimizedMetadata?.OptimizedDescription ?? script.Description, tags = script.OptimizedMetadata?.Tags ?? script.Tags, privacyStatus = selectedPrivacyStatus, uploadThumbnail = _publishingOptions.UploadThumbnail, mode, generatedAtUtc = DateTime.UtcNow }, new JsonSerializerOptions { WriteIndented = true }),
+                        cancellationToken);
+                    _logger.LogInformation("Uploaded/Skipped=Skipped");
+                }
+                else
                 {
-                    run.YouTubeVideoId = await RunStageAsync("YouTubeUpload", () => _youTubePublishingService.UploadAsync(
-                        videoPath,
-                        script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
-                        script.OptimizedMetadata?.OptimizedDescription ?? script.Description,
-                        script.OptimizedMetadata?.Tags ?? script.Tags,
-                        selectedPrivacyStatus,
-                        cancellationToken), continueWithFallback: true, fallback: _ => Task.FromResult<string?>(null));
-
-                    if (string.IsNullOrWhiteSpace(run.YouTubeVideoId))
+                    run.YouTubeVideoId = await _youTubePublishingService.UploadAsync(videoPath, script.OptimizedMetadata?.PrimaryTitle ?? script.Title, script.OptimizedMetadata?.OptimizedDescription ?? script.Description, script.OptimizedMetadata?.Tags ?? script.Tags, selectedPrivacyStatus, cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(run.YouTubeVideoId) && _publishingOptions.UploadThumbnail && _youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
                     {
-                        publishStatus = "UploadFailed";
-                        if (_operationalAlertNotifier is not null)
-                        {
-                            await _operationalAlertNotifier.NotifyAsync(new OperationalAlert(
-                                AlertCategory.PublishFailed,
-                                string.Empty,
-                                run.Id,
-                                "YouTubeUpload",
-                                request.ContentType,
-                                request.Date,
-                                request.LocationName,
-                                ErrorSummary: "YouTube upload returned no video id",
-                                OccurredAt: DateTimeOffset.UtcNow), cancellationToken);
-                        }
+                        youtubeThumbnailUploaded = await _youTubeThumbnailPublisher.UploadThumbnailAsync(run.YouTubeVideoId, thumbnailPath, cancellationToken);
                     }
-                    else if (_publishingOptions.UploadThumbnail && _youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
-                    {
-                        try
-                        {
-                            youtubeThumbnailUploaded = await _youTubeThumbnailPublisher.UploadThumbnailAsync(run.YouTubeVideoId, thumbnailPath, cancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "YouTube thumbnail upload failed for pipeline run {PipelineRunId}.", run.Id);
-                        }
-                    }
-
                     _logger.LogInformation("Uploaded/Skipped=Uploaded");
                 }
-                catch (Exception ex)
+            }
+            else
+            {
+                var publishResults = await RunStageAsync("YouTubePublish", async () =>
                 {
-                    _logger.LogError(ex, "YouTube upload failed for pipeline run {PipelineRunId}.", run.Id);
-                    publishStatus = "UploadFailed";
-                    if (_operationalAlertNotifier is not null)
+                    var results = await _contentPublishService.PublishForPipelineRunAsync(run.Id, cancellationToken);
+                    var youtubeResult = results.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase));
+                    if (youtubeResult is { Success: false })
                     {
-                        await _operationalAlertNotifier.NotifyAsync(new OperationalAlert(
-                            AlertCategory.PublishFailed,
-                            string.Empty,
-                            run.Id,
-                            "YouTubeUpload",
-                            request.ContentType,
-                            request.Date,
-                            request.LocationName,
-                            ErrorSummary: ex.Message,
-                            OccurredAt: DateTimeOffset.UtcNow), cancellationToken);
+                        throw new InvalidOperationException(youtubeResult.Error ?? "YouTube publishing failed.");
                     }
+
+                    return results;
+                }, continueWithFallback: true, fallback: ex => Task.FromResult<IReadOnlyList<PublishResult>>([new PublishResult
+                {
+                    Success = false,
+                    Platform = "YouTube",
+                    Mode = mode,
+                    Error = ex.Message,
+                    PublishedUtc = DateTime.UtcNow
+                }]));
+
+                var youtubePublishResult = publishResults.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase));
+                if (youtubePublishResult is { Success: true })
+                {
+                    if (!string.Equals(youtubePublishResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase))
+                    {
+                        run.YouTubeVideoId = youtubePublishResult.VideoId;
+                    }
+                    _logger.LogInformation("Uploaded/Skipped={UploadedOrSkipped}", string.Equals(youtubePublishResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase) ? "Skipped" : "Uploaded");
+                }
+                else if (youtubePublishResult is not null)
+                {
+                    publishStatus = "PublishFailed";
+                    run.FailureReason = $"Publishing failed: {youtubePublishResult.Error}";
+                    _logger.LogWarning("YouTube publishing failed for pipeline run {PipelineRunId}: {Error}", run.Id, youtubePublishResult.Error);
                 }
             }
 
