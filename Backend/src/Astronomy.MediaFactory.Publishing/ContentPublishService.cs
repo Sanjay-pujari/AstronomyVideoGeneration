@@ -7,7 +7,7 @@ namespace Astronomy.MediaFactory.Publishing;
 
 public sealed class ContentPublishService : IContentPublishService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true, WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private readonly IPipelineRepository _repository;
     private readonly IYouTubePublishService _youTubePublishService;
     private readonly PublishingOptions _publishingOptions;
@@ -28,7 +28,10 @@ public sealed class ContentPublishService : IContentPublishService
         _maintenanceOptions = maintenanceOptions.Value;
     }
 
-    public async Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+        => PublishForPipelineRunAsync(pipelineRunId, "all", cancellationToken);
+
+    public async Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset, CancellationToken cancellationToken)
     {
         var mode = NormalizeMode(_publishingOptions.Mode);
         if (mode == "Disabled")
@@ -43,67 +46,207 @@ public sealed class ContentPublishService : IContentPublishService
         }
 
         var outputDirectory = ResolveOutputDirectory(run);
-        if (_publishingOptions.RequirePrePublishValidation)
+        Directory.CreateDirectory(outputDirectory);
+        var selector = NormalizeAssetSelector(asset);
+        var assets = await BuildAssetsAsync(run, outputDirectory, mode, cancellationToken);
+        var diagnostics = BuildAssetDiagnostics(assets, selector).ToList();
+        var results = new List<PublishResult>();
+
+        if (mode == "Disabled")
         {
-            var validationResult = await ValidatePrePublishReportAsync(outputDirectory, run, mode, cancellationToken);
-            if (validationResult is not null)
-            {
-                return [validationResult];
-            }
+            // Defensive; the early return above should already handle this.
+            await WriteAssetsAsync(outputDirectory, diagnostics, cancellationToken);
+            return [new PublishResult { Success = false, Platform = "YouTube", Mode = mode, Error = "Publishing is disabled.", PublishedUtc = DateTime.UtcNow }];
         }
 
-        var metadata = await ReadRequiredJsonAsync<SeoMetadataResult>(Path.Combine(outputDirectory, "seo-metadata.json"), cancellationToken);
-        var request = new PublishRequest
+        foreach (var publishAsset in assets)
         {
-            PipelineRunId = pipelineRunId,
-            Platform = "YouTube",
+            var enabledSkipReason = GetAssetEnabledSkipReason(publishAsset, selector);
+            if (enabledSkipReason is not null)
+            {
+                diagnostics.First(x => x.AssetType == publishAsset.AssetType).WillUpload = false;
+                diagnostics.First(x => x.AssetType == publishAsset.AssetType).SkipReason = enabledSkipReason;
+                results.Add(SkippedResult(publishAsset, mode, enabledSkipReason));
+                continue;
+            }
+
+            var validationSkipReason = await GetValidationSkipReasonAsync(outputDirectory, run, publishAsset, mode, cancellationToken);
+            if (validationSkipReason is not null)
+            {
+                diagnostics.First(x => x.AssetType == publishAsset.AssetType).WillUpload = false;
+                diagnostics.First(x => x.AssetType == publishAsset.AssetType).SkipReason = validationSkipReason;
+                results.Add(SkippedResult(publishAsset, mode, validationSkipReason));
+                continue;
+            }
+
+            diagnostics.First(x => x.AssetType == publishAsset.AssetType).WillUpload = true;
+            var request = new PublishRequest
+            {
+                PipelineRunId = pipelineRunId,
+                Platform = "YouTube",
+                AssetType = publishAsset.AssetType,
+                IsShort = publishAsset.IsShort,
+                VideoPath = publishAsset.VideoPath,
+                ThumbnailPath = publishAsset.ThumbnailPath,
+                Title = publishAsset.Title,
+                Description = publishAsset.Description,
+                Tags = publishAsset.Tags,
+                PrivacyStatus = publishAsset.PrivacyStatus,
+                UploadThumbnail = publishAsset.UploadThumbnail
+            };
+
+            var result = await _youTubePublishService.PublishAsync(request, cancellationToken);
+            results.Add(result);
+        }
+
+        await WriteAssetsAsync(outputDirectory, diagnostics, cancellationToken);
+        await WriteCombinedResultsAsync(outputDirectory, results, cancellationToken);
+        return results;
+    }
+
+    private async Task<IReadOnlyList<PublishAsset>> BuildAssetsAsync(PipelineRun run, string outputDirectory, string mode, CancellationToken cancellationToken)
+    {
+        var metadata = await ReadRequiredJsonAsync<SeoMetadataResult>(Path.Combine(outputDirectory, "seo-metadata.json"), cancellationToken);
+        var privacyStatus = ResolvePrivacyStatus(mode);
+        var longAsset = new PublishAsset
+        {
+            AssetType = "LongVideo",
             VideoPath = Path.Combine(outputDirectory, "final-video.mp4"),
             ThumbnailPath = await ResolveThumbnailPathAsync(outputDirectory, cancellationToken),
             Title = metadata.Title,
             Description = metadata.Description,
             Tags = SplitCsv(metadata.TagsCsv),
-            PrivacyStatus = ResolvePrivacyStatus(mode),
-            UploadThumbnail = _publishingOptions.UploadThumbnail
+            PrivacyStatus = privacyStatus,
+            UploadThumbnail = _publishingOptions.UploadThumbnail && _youTubeOptions.UploadThumbnailForLongVideos,
+            IsShort = false
         };
 
-        return [await _youTubePublishService.PublishAsync(request, cancellationToken)];
-    }
-
-    private async Task<PublishResult?> ValidatePrePublishReportAsync(string outputDirectory, PipelineRun run, string mode, CancellationToken cancellationToken)
-    {
-        var reportPath = Path.Combine(outputDirectory, "pre-publish-validation-report.json");
-        if (!File.Exists(reportPath))
+        var assets = new List<PublishAsset> { longAsset };
+        var shortVideoPath = Path.Combine(outputDirectory, "shorts", "final-video.mp4");
+        if (!File.Exists(shortVideoPath))
         {
-            return await WriteBlockedResultAsync(outputDirectory, mode, "Pre-publish validation report is missing.", cancellationToken);
+            var legacyShortVideoPath = Path.Combine(outputDirectory, "shorts", "short-video.mp4");
+            if (File.Exists(legacyShortVideoPath))
+            {
+                shortVideoPath = legacyShortVideoPath;
+            }
         }
 
-        var report = await ReadRequiredJsonAsync<PrePublishValidationReport>(reportPath, cancellationToken);
-        if (!report.Passed)
+        if (File.Exists(shortVideoPath))
         {
-            var reason = report.Errors.Count > 0
-                ? $"Pre-publish validation failed: {string.Join("; ", report.Errors)}"
-                : "Pre-publish validation failed.";
-            run.FailureReason = reason;
-            await _repository.SaveChangesAsync(cancellationToken);
-            return await WriteBlockedResultAsync(outputDirectory, mode, reason, cancellationToken);
+            var shortMetadataPath = Path.Combine(outputDirectory, "shorts", "seo-metadata.json");
+            var shortMetadata = File.Exists(shortMetadataPath)
+                ? await ReadRequiredJsonAsync<SeoMetadataResult>(shortMetadataPath, cancellationToken)
+                : DeriveShortMetadata(metadata, run);
+            assets.Add(new PublishAsset
+            {
+                AssetType = "ShortVideo",
+                VideoPath = shortVideoPath,
+                ThumbnailPath = await ResolveShortThumbnailPathAsync(outputDirectory, cancellationToken),
+                Title = EnsureShortsMarker(ShortenTitle(shortMetadata.Title), shortMetadata.Description).Title,
+                Description = EnsureShortsMarker(ShortenTitle(shortMetadata.Title), shortMetadata.Description).Description,
+                Tags = SplitCsv(shortMetadata.TagsCsv),
+                PrivacyStatus = privacyStatus,
+                UploadThumbnail = _youTubeOptions.UploadThumbnailForShorts,
+                IsShort = true
+            });
+        }
+
+        return assets;
+    }
+
+    private IEnumerable<PublishAssetDiagnostic> BuildAssetDiagnostics(IReadOnlyList<PublishAsset> assets, string selector)
+    {
+        foreach (var asset in assets)
+        {
+            var skipReason = GetAssetEnabledSkipReason(asset, selector);
+            yield return new PublishAssetDiagnostic
+            {
+                AssetType = asset.AssetType,
+                VideoPath = asset.VideoPath,
+                ThumbnailPath = string.IsNullOrWhiteSpace(asset.ThumbnailPath) ? null : asset.ThumbnailPath,
+                WillUpload = skipReason is null,
+                SkipReason = skipReason
+            };
+        }
+    }
+
+    private string? GetAssetEnabledSkipReason(PublishAsset asset, string selector)
+    {
+        if (selector == "long" && asset.IsShort)
+        {
+            return "Skipped because asset=long was requested.";
+        }
+
+        if (selector == "short" && !asset.IsShort)
+        {
+            return "Skipped because asset=short was requested.";
+        }
+
+        if (!asset.IsShort && !_publishingOptions.PublishLongVideo)
+        {
+            return "Skipped because Publishing.PublishLongVideo is false.";
+        }
+
+        if (asset.IsShort && !_publishingOptions.PublishShortVideo)
+        {
+            return "Skipped because Publishing.PublishShortVideo is false.";
         }
 
         return null;
     }
 
-    private static async Task<PublishResult> WriteBlockedResultAsync(string outputDirectory, string mode, string error, CancellationToken cancellationToken)
+    private async Task<string?> GetValidationSkipReasonAsync(string outputDirectory, PipelineRun run, PublishAsset asset, string mode, CancellationToken cancellationToken)
     {
-        var result = new PublishResult
+        if (!File.Exists(asset.VideoPath))
+        {
+            return $"Video file is missing: {asset.VideoPath}";
+        }
+
+        if (!_publishingOptions.RequirePrePublishValidation)
+        {
+            return null;
+        }
+
+        var reportPath = asset.IsShort
+            ? Path.Combine(outputDirectory, "shorts", "pre-publish-validation-report.json")
+            : Path.Combine(outputDirectory, "pre-publish-validation-report.json");
+
+        if (!File.Exists(reportPath) && asset.IsShort)
+        {
+            reportPath = Path.Combine(outputDirectory, "pre-publish-validation-report.json");
+        }
+
+        if (!File.Exists(reportPath))
+        {
+            return "Pre-publish validation report is missing.";
+        }
+
+        var report = await ReadRequiredJsonAsync<PrePublishValidationReport>(reportPath, cancellationToken);
+        if (report.Passed)
+        {
+            return null;
+        }
+
+        var reason = report.Errors.Count > 0
+            ? $"Pre-publish validation failed: {string.Join("; ", report.Errors)}"
+            : "Pre-publish validation failed.";
+        run.FailureReason = reason;
+        await _repository.SaveChangesAsync(cancellationToken);
+        return reason;
+    }
+
+    private static PublishResult SkippedResult(PublishAsset asset, string mode, string reason)
+        => new()
         {
             Success = false,
             Platform = "YouTube",
+            AssetType = asset.AssetType,
+            IsShort = asset.IsShort,
             Mode = mode,
-            Error = error,
+            Error = reason,
             PublishedUtc = DateTime.UtcNow
         };
-        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "youtube-publish-result.json"), JsonSerializer.Serialize(result, JsonOptions), cancellationToken);
-        return result;
-    }
 
     private static async Task<T> ReadRequiredJsonAsync<T>(string path, CancellationToken cancellationToken)
     {
@@ -144,6 +287,42 @@ public sealed class ContentPublishService : IContentPublishService
         return File.Exists(fallback) ? fallback : Path.Combine(outputDirectory, "thumbnails", "thumbnail-1.png");
     }
 
+    private async Task<string> ResolveShortThumbnailPathAsync(string outputDirectory, CancellationToken cancellationToken)
+    {
+        var shortsDirectory = Path.Combine(outputDirectory, "shorts");
+        var selectionPath = Path.Combine(shortsDirectory, "thumbnail-selection.json");
+        if (File.Exists(selectionPath))
+        {
+            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath, cancellationToken));
+            foreach (var propertyName in new[] { "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath" })
+            {
+                if (doc.RootElement.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String)
+                {
+                    var candidate = property.GetString();
+                    if (!string.IsNullOrWhiteSpace(candidate))
+                    {
+                        return Path.IsPathRooted(candidate) ? candidate : Path.Combine(shortsDirectory, candidate);
+                    }
+                }
+            }
+        }
+
+        foreach (var candidate in new[]
+        {
+            Path.Combine(shortsDirectory, "thumbnail-1.png"),
+            Path.Combine(shortsDirectory, "short-cover-1.png"),
+            Path.Combine(shortsDirectory, "thumbnails", "thumbnail-1.png")
+        })
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return string.Empty;
+    }
+
     private string ResolveOutputDirectory(PipelineRun run)
         => Path.Combine(_maintenanceOptions.WorkingDirectory, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
 
@@ -164,9 +343,104 @@ public sealed class ContentPublishService : IContentPublishService
             : string.Equals(mode, "Disabled", StringComparison.OrdinalIgnoreCase) ? "Disabled"
             : "DryRun";
 
+    private static string NormalizeAssetSelector(string? asset)
+        => string.Equals(asset, "long", StringComparison.OrdinalIgnoreCase) ? "long"
+            : string.Equals(asset, "short", StringComparison.OrdinalIgnoreCase) ? "short"
+            : "all";
+
     private static List<string> SplitCsv(string csv)
         => csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    private static SeoMetadataResult DeriveShortMetadata(SeoMetadataResult root, PipelineRun run)
+    {
+        var title = ShortenTitle(root.Title);
+        var marker = EnsureShortsMarker(title, root.Description);
+        return new SeoMetadataResult
+        {
+            Title = marker.Title,
+            Description = marker.Description,
+            TagsCsv = string.Join(',', SplitCsv(root.TagsCsv).Concat(["shorts", "youtube shorts"]).Distinct(StringComparer.OrdinalIgnoreCase)),
+            HashtagsCsv = "#Shorts",
+            PinnedComment = root.PinnedComment
+        };
+    }
+
+    private static string ShortenTitle(string title)
+    {
+        var fallback = "Tonight's Sky #Shorts";
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return fallback;
+        }
+
+        var trimmed = title.Trim();
+        if (trimmed.Length <= 80)
+        {
+            return trimmed;
+        }
+
+        var shortened = trimmed[..Math.Min(72, trimmed.Length)].TrimEnd(' ', '-', ':', '|');
+        return string.IsNullOrWhiteSpace(shortened) ? fallback : shortened;
+    }
+
+    private static (string Title, string Description) EnsureShortsMarker(string title, string description)
+    {
+        var hasMarker = title.Contains("#Shorts", StringComparison.OrdinalIgnoreCase) || description.Contains("#Shorts", StringComparison.OrdinalIgnoreCase);
+        return hasMarker ? (title, description) : ($"{title} #Shorts", description);
+    }
+
+    private static Task WriteAssetsAsync(string outputDirectory, IReadOnlyCollection<PublishAssetDiagnostic> diagnostics, CancellationToken cancellationToken)
+        => WriteJsonAsync(Path.Combine(outputDirectory, "youtube-publish-assets.json"), diagnostics, cancellationToken);
+
+    private static async Task WriteCombinedResultsAsync(string outputDirectory, IReadOnlyCollection<PublishResult> results, CancellationToken cancellationToken)
+    {
+        var combined = results.ToList();
+        foreach (var fileName in new[] { "youtube-publish-result-long.json", "youtube-publish-result-short.json" })
+        {
+            var path = Path.Combine(outputDirectory, fileName);
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            var existing = JsonSerializer.Deserialize<PublishResult>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions);
+            if (existing is null)
+            {
+                continue;
+            }
+
+            var index = combined.FindIndex(x => x.AssetType.Equals(existing.AssetType, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0)
+            {
+                if (existing.Success || !combined[index].Success)
+                {
+                    combined[index] = existing;
+                }
+            }
+            else
+            {
+                combined.Add(existing);
+            }
+        }
+
+        await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-publish-results.json"), combined, cancellationToken);
+    }
+
+    private static async Task WriteJsonAsync<T>(string path, T value, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, JsonOptions), cancellationToken);
+    }
+
+    private sealed class PublishAssetDiagnostic
+    {
+        public string AssetType { get; init; } = string.Empty;
+        public string VideoPath { get; init; } = string.Empty;
+        public string? ThumbnailPath { get; init; }
+        public bool WillUpload { get; set; }
+        public string? SkipReason { get; set; }
+    }
 }

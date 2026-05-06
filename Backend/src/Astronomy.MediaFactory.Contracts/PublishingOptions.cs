@@ -7,5 +7,7 @@ public sealed class PublishingOptions
     public string Mode { get; set; } = "DryRun";
     public string DefaultPrivacyStatus { get; set; } = "private";
     public bool UploadThumbnail { get; set; } = true;
+    public bool PublishLongVideo { get; set; } = true;
+    public bool PublishShortVideo { get; set; } = true;
     public bool RequirePrePublishValidation { get; set; } = true;
 }
