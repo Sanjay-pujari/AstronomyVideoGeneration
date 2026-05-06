@@ -68,7 +68,10 @@ public sealed class FfmpegRenderingTests
             OutputPath = "/tmp/short-video.mp4"
         }, "/tmp/ffmpeg-input.txt", "/tmp/narration.mp3", "/tmp/short-video.mp4");
 
+        Assert.Contains("scale=1080:1920:force_original_aspect_ratio=increase", args);
         Assert.Contains("crop=1080:1920", args);
+        Assert.Contains("pad=1080:1920", args);
+        Assert.Contains("setsar=1", args);
     }
 
     [Fact]

@@ -68,6 +68,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         if (_options.UseSegmentedNarration && hasSegmentedAudio)
         {
             await RenderFromSegmentsAsync(manifest, plan, outputDirectory, segmentConcatPath, cancellationToken);
+            await WriteShortDiagnosticsIfNeededAsync(manifest, outputPath, outputDirectory, cancellationToken);
             return outputPath;
         }
 
@@ -99,6 +100,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             throw new InvalidOperationException($"FFmpeg execution failed. See {ffmpegLogPath} for details.", ex);
         }
 
+        await WriteShortDiagnosticsIfNeededAsync(manifest, outputPath, outputDirectory, cancellationToken);
         return outputPath;
     }
 
@@ -115,7 +117,11 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             var segmentOutputPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
-            var segmentArguments = $"-y -loop 1 -i \"{scene.VisualPath}\" -i \"{sceneAudioPath}\" -shortest -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac \"{segmentOutputPath}\"";
+            var (outputWidth, outputHeight) = GetOutputSize(manifest);
+            var fps = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate);
+            var segmentFilter = IsShortManifest(manifest) ? BuildExactOutputFilter(outputWidth, outputHeight) : $"scale={outputWidth}:{outputHeight}";
+            var shortLimit = IsShortManifest(manifest) ? $" -t {YouTubeShortsValidation.MaximumDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : string.Empty;
+            var segmentArguments = $"-y -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -i \"{NormalizePath(sceneAudioPath)}\" -vf \"{segmentFilter}\" -shortest{shortLimit} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} -c:a aac -f mp4 \"{NormalizePath(segmentOutputPath)}\"";
             var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
             if (segmentResult.ExitCode != 0 || !File.Exists(segmentOutputPath))
             {
@@ -133,7 +139,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var concatBody = string.Join(Environment.NewLine, segmentClipPaths.Select(path => $"file '{path.Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
 
-        var concatArguments = $"-y -f concat -safe 0 -i \"{segmentConcatPath}\" -c copy \"{manifest.OutputPath}\"";
+        var concatArguments = IsShortManifest(manifest)
+            ? $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -t {YouTubeShortsValidation.MaximumDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {GetShortSafeFps()} -c:a aac -f mp4 \"{NormalizePath(manifest.OutputPath)}\""
+            : $"-y -f concat -safe 0 -i \"{segmentConcatPath}\" -c copy \"{manifest.OutputPath}\"";
         var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
         if (concatResult.ExitCode != 0 || !File.Exists(manifest.OutputPath))
         {
@@ -204,7 +212,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         {
             var scene = plan.Scenes[i];
             var duration = durationPerScene > 0 ? durationPerScene : 1d;
-            var fps = Math.Max(1, _options.KenBurnsFps > 0 ? _options.KenBurnsFps : _options.FrameRate);
+            var fps = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.KenBurnsFps > 0 ? _options.KenBurnsFps : _options.FrameRate);
             var frameCount = Math.Max(1, (int)Math.Round(duration * fps, MidpointRounding.AwayFromZero));
             var segmentPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
             if (!File.Exists(scene.VisualPath))
@@ -220,12 +228,13 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var roundedFadeOutStartSeconds = Math.Round(fadeOutStartSeconds, 3, MidpointRounding.AwayFromZero);
             var formattedFadeOutStartSeconds = roundedFadeOutStartSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             var formattedFadeDurationSeconds = fadeDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            var exactOutputFilter = IsShortManifest(manifest) ? BuildExactOutputFilter(outputWidth, outputHeight) : $"scale={outputWidth}:{outputHeight}:flags=lanczos";
             var segmentFilter =
                 _options.EnableKenBurns
-                    ? $"fps={fps},scale={outputWidth}:{outputHeight}:flags=lanczos,{zoomPanFilter},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}"
-                    : $"scale={outputWidth}:{outputHeight},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}";
+                    ? $"fps={fps},{exactOutputFilter},{zoomPanFilter},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}"
+                    : $"{exactOutputFilter},fade=t=in:st=0:d={formattedFadeDurationSeconds},fade=t=out:st={formattedFadeOutStartSeconds}:d={formattedFadeDurationSeconds}";
             var segmentArguments =
-                $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{segmentFilter}\" -frames:v {frameCount} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} \"{NormalizePath(segmentPath)}\"";
+                $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{segmentFilter}\" -frames:v {frameCount} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} -f mp4 \"{NormalizePath(segmentPath)}\"";
             var segmentCommand = $"{_options.FfmpegPath} {segmentArguments}";
             await _fileSystem.WriteAllTextAsync(commandPath, segmentCommand, cancellationToken);
             var segmentCommandPath = Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt");
@@ -311,8 +320,10 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             throw new InvalidOperationException($"{warningMessage} Refusing final mux to avoid trimmed/missing scenes.");
         }
 
-        var finalArguments =
-            $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -shortest -c:v copy -c:a aac \"{NormalizePath(outputPath)}\"";
+        var shortDurationLimit = IsShortManifest(manifest) ? $" -t {YouTubeShortsValidation.MaximumDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : string.Empty;
+        var finalArguments = IsShortManifest(manifest)
+            ? $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -shortest{shortDurationLimit} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {GetShortSafeFps()} -c:a aac -f mp4 \"{NormalizePath(outputPath)}\""
+            : $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -shortest -c:v copy -c:a aac \"{NormalizePath(outputPath)}\"";
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics), cancellationToken);
@@ -372,9 +383,26 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private sealed record MotionProfile(double ZoomStart, double ZoomEnd, double PanStrength, double PanDirectionSign, string PanDirection);
     private static string EscapeForJson(string? value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
     private static (int Width, int Height) GetOutputSize(RenderManifest manifest)
+        => IsShortManifest(manifest) ? (ShortOutputWidth, ShortOutputHeight) : (LongOutputWidth, LongOutputHeight);
+
+    private static bool IsShortManifest(RenderManifest manifest)
+        => manifest.OutputHeight.GetValueOrDefault() > manifest.OutputWidth.GetValueOrDefault();
+
+    private static string BuildExactOutputFilter(int outputWidth, int outputHeight)
+        => $"scale={outputWidth}:{outputHeight}:force_original_aspect_ratio=increase,crop={outputWidth}:{outputHeight},pad={outputWidth}:{outputHeight}:(ow-iw)/2:(oh-ih)/2,setsar=1";
+
+    private static int GetShortSafeFps()
+        => 30;
+
+    private async Task WriteShortDiagnosticsIfNeededAsync(RenderManifest manifest, string outputPath, string outputDirectory, CancellationToken cancellationToken)
     {
-        var isShort = manifest.OutputHeight.GetValueOrDefault() > manifest.OutputWidth.GetValueOrDefault();
-        return isShort ? (ShortOutputWidth, ShortOutputHeight) : (LongOutputWidth, LongOutputHeight);
+        if (!IsShortManifest(manifest))
+        {
+            return;
+        }
+
+        var diagnostics = await YouTubeShortsValidation.ProbeAndWriteDiagnosticsAsync(outputPath, outputDirectory, ResolveFfprobePath(), cancellationToken);
+        _logger.LogInformation("Short video diagnostics complete for {OutputPath}. isValidYouTubeShort={IsValidYouTubeShort}", outputPath, diagnostics.IsValidYouTubeShort);
     }
 
     private async Task<double> ProbeMediaDurationSecondsAsync(string mediaPath, CancellationToken cancellationToken)

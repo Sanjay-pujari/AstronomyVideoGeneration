@@ -11,6 +11,7 @@ public sealed class PublishAsset
     public string PrivacyStatus { get; init; } = "private";
     public bool UploadThumbnail { get; init; }
     public bool IsShort { get; init; }
+    public bool? YouTubeShortEligible { get; init; }
 }
 
 public sealed class PublishRequest
@@ -26,6 +27,7 @@ public sealed class PublishRequest
     public List<string> Tags { get; init; } = [];
     public string PrivacyStatus { get; init; } = "private";
     public bool UploadThumbnail { get; init; }
+    public bool? YouTubeShortEligible { get; init; }
 }
 
 public sealed class PublishResult

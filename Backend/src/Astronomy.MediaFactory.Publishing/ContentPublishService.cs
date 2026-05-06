@@ -84,6 +84,18 @@ public sealed class ContentPublishService : IContentPublishService
             }
 
             diagnostics.First(x => x.AssetType == publishAsset.AssetType).WillUpload = true;
+            var youtubeShortEligible = publishAsset.YouTubeShortEligible;
+            if (publishAsset.IsShort)
+            {
+                var shortValidation = await YouTubeShortsValidation.ValidateBeforeUploadAsync(publishAsset.VideoPath, null, cancellationToken);
+                youtubeShortEligible = shortValidation.YouTubeShortEligible;
+                diagnostics.First(x => x.AssetType == publishAsset.AssetType).YouTubeShortEligible = youtubeShortEligible;
+                if (!shortValidation.YouTubeShortEligible)
+                {
+                    _logger.LogWarning("Short video at {VideoPath} is not eligible for YouTube Shorts: {Warnings}", publishAsset.VideoPath, string.Join("; ", shortValidation.Warnings));
+                }
+            }
+
             var request = new PublishRequest
             {
                 PipelineRunId = pipelineRunId,
@@ -96,7 +108,8 @@ public sealed class ContentPublishService : IContentPublishService
                 Description = publishAsset.Description,
                 Tags = publishAsset.Tags,
                 PrivacyStatus = publishAsset.PrivacyStatus,
-                UploadThumbnail = publishAsset.UploadThumbnail
+                UploadThumbnail = publishAsset.UploadThumbnail,
+                YouTubeShortEligible = youtubeShortEligible
             };
 
             var result = await _youTubePublishService.PublishAsync(request, cancellationToken);
@@ -404,10 +417,7 @@ public sealed class ContentPublishService : IContentPublishService
     }
 
     private static (string Title, string Description) EnsureShortsMarker(string title, string description)
-    {
-        var hasMarker = title.Contains("#Shorts", StringComparison.OrdinalIgnoreCase) || description.Contains("#Shorts", StringComparison.OrdinalIgnoreCase);
-        return hasMarker ? (title, description) : ($"{title} #Shorts", description);
-    }
+        => (title, YouTubeShortsValidation.EnsureShortsMarkerInDescription(title, description));
 
     private static Task WriteAssetsAsync(string outputDirectory, IReadOnlyCollection<PublishAssetDiagnostic> diagnostics, CancellationToken cancellationToken)
         => WriteJsonAsync(Path.Combine(outputDirectory, "youtube-publish-assets.json"), diagnostics, cancellationToken);
@@ -459,5 +469,6 @@ public sealed class ContentPublishService : IContentPublishService
         public string? ThumbnailPath { get; init; }
         public bool WillUpload { get; set; }
         public string? SkipReason { get; set; }
+        public bool? YouTubeShortEligible { get; set; }
     }
 }

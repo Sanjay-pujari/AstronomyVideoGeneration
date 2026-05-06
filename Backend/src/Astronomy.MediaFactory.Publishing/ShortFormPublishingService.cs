@@ -190,7 +190,8 @@ public sealed class ShortFormPublishingService : IShortFormPublishingService
             PublishedAt = target.PublishedAt,
             ExternalPostId = target.ExternalPostId,
             ExternalUrl = target.ExternalUrl,
-            ErrorMessage = target.ErrorMessage
+            ErrorMessage = target.ErrorMessage,
+            YouTubeShortEligible = target.YouTubeShortEligible
         };
 }
 
@@ -198,11 +199,19 @@ public sealed class YouTubeShortsPlatformPublisher : IShortFormPlatformPublisher
 {
     private readonly IYouTubePublishingService _youTubePublishingService;
     private readonly YouTubeOptions _options;
+    private readonly RenderingOptions _renderingOptions;
+    private readonly ILogger<YouTubeShortsPlatformPublisher> _logger;
 
-    public YouTubeShortsPlatformPublisher(IYouTubePublishingService youTubePublishingService, IOptions<YouTubeOptions> options)
+    public YouTubeShortsPlatformPublisher(
+        IYouTubePublishingService youTubePublishingService,
+        IOptions<YouTubeOptions> options,
+        IOptions<RenderingOptions>? renderingOptions = null,
+        ILogger<YouTubeShortsPlatformPublisher>? logger = null)
     {
         _youTubePublishingService = youTubePublishingService;
         _options = options.Value;
+        _renderingOptions = renderingOptions?.Value ?? new RenderingOptions();
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<YouTubeShortsPlatformPublisher>.Instance;
     }
 
     public ShortFormPlatform Platform => ShortFormPlatform.YouTubeShorts;
@@ -214,6 +223,14 @@ public sealed class YouTubeShortsPlatformPublisher : IShortFormPlatformPublisher
             target.Status = PlatformPublicationStatus.Skipped;
             target.ErrorMessage = "YouTube publishing credentials are not enabled.";
             return target;
+        }
+
+        target.Caption = YouTubeShortsValidation.EnsureShortsMarkerInDescription(target.Title, target.Caption);
+        var validation = await YouTubeShortsValidation.ValidateBeforeUploadAsync(target.VideoPath, _renderingOptions.FfprobePath, cancellationToken);
+        target.YouTubeShortEligible = validation.YouTubeShortEligible;
+        if (!validation.YouTubeShortEligible)
+        {
+            _logger.LogWarning("Short video at {VideoPath} is not eligible for YouTube Shorts: {Warnings}", target.VideoPath, string.Join("; ", validation.Warnings));
         }
 
         var tagValues = target.Hashtags.Select(static x => x.TrimStart('#')).Where(static x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
