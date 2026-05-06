@@ -6,6 +6,7 @@
     <PackageReference Include="Azure.Identity" />
     <PackageReference Include="Google.Apis.YouTube.v3" />
     <PackageReference Include="Google.Apis.Auth" />
+    <PackageReference Include="Google.Apis.Oauth2.v2" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
   </ItemGroup>
 </Project>
