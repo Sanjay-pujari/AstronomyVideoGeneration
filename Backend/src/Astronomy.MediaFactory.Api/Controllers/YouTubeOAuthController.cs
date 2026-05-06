@@ -15,11 +15,23 @@ public sealed class YouTubeOAuthController : ControllerBase
     }
 
     [HttpGet("start")]
-    public IActionResult Start()
+    [ProducesResponseType(typeof(YouTubeOAuthStartResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status302Found)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public IActionResult Start([FromQuery] bool redirect = false)
     {
         try
         {
-            return Redirect(_youTubeOAuthService.BuildAuthorizationUrl());
+            var authorizationUrl = _youTubeOAuthService.BuildAuthorizationUrl();
+            if (redirect)
+            {
+                return Redirect(authorizationUrl);
+            }
+
+            return Ok(new YouTubeOAuthStartResponse(
+                Success: true,
+                AuthorizationUrl: authorizationUrl,
+                Message: "Open authorizationUrl in a browser to grant YouTube upload access."));
         }
         catch (InvalidOperationException ex)
         {

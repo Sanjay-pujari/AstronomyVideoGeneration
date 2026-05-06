@@ -17,7 +17,7 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class YouTubeOAuthSetupTests
 {
     [Fact]
-    public async Task Start_ReturnsGoogleConsentRedirect_WithOfflineConsentParameters()
+    public async Task Start_ReturnsGoogleConsentUrl_WithOfflineConsentParameters()
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -28,13 +28,37 @@ public sealed class YouTubeOAuthSetupTests
 
         await app.StartAsync();
         var response = await app.GetTestClient().GetAsync("/api/youtubeoauth/start");
+        var payload = await response.Content.ReadFromJsonAsync<YouTubeOAuthStartResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.True(payload.Success);
+        Assert.Equal("Open authorizationUrl in a browser to grant YouTube upload access.", payload.Message);
+        Assert.StartsWith("https://accounts.google.com/o/oauth2/v2/auth", payload.AuthorizationUrl, StringComparison.Ordinal);
+        Assert.Contains("access_type=offline", payload.AuthorizationUrl);
+        Assert.Contains("prompt=consent", payload.AuthorizationUrl);
+        Assert.Contains("youtube.upload", Uri.UnescapeDataString(payload.AuthorizationUrl));
+        await app.StopAsync();
+    }
+
+    [Fact]
+    public async Task Start_WithRedirectQuery_ReturnsGoogleConsentRedirect()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddControllers().AddApplicationPart(typeof(YouTubeOAuthController).Assembly);
+        builder.Services.AddSingleton<IYouTubeOAuthService>(new StubOAuthService("https://accounts.google.com/o/oauth2/v2/auth?client_id=test-client&access_type=offline&prompt=consent"));
+        var app = builder.Build();
+        app.MapControllers();
+
+        await app.StartAsync();
+        var response = await app.GetTestClient().GetAsync("/api/youtubeoauth/start?redirect=true");
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
         var location = response.Headers.Location?.ToString() ?? string.Empty;
         Assert.StartsWith("https://accounts.google.com/o/oauth2/v2/auth", location, StringComparison.Ordinal);
         Assert.Contains("access_type=offline", location);
         Assert.Contains("prompt=consent", location);
-        Assert.Contains("youtube.upload", Uri.UnescapeDataString(location));
         await app.StopAsync();
     }
 

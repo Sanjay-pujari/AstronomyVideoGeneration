@@ -15,6 +15,11 @@ public sealed record YouTubeOAuthSetupResult(
     string Message,
     string? RefreshTokenPreview = null);
 
+public sealed record YouTubeOAuthStartResponse(
+    bool Success,
+    string AuthorizationUrl,
+    string Message);
+
 public sealed record YouTubeOAuthTokenFile(
     string ChannelId,
     string ChannelTitle,
