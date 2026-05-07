@@ -255,7 +255,7 @@ public sealed class MetaPublishingTests
             NullLogger<MetaPublishService>.Instance);
     }
 
-    private sealed class TempMetaWorkspace : IDisposable
+    public sealed class TempMetaWorkspace : IDisposable
     {
         public string Root { get; } = Path.Combine(Path.GetTempPath(), "meta-publish-tests", Guid.NewGuid().ToString("N"));
         public string TokenPath => Path.Combine(Root, "meta-oauth-token.json");
