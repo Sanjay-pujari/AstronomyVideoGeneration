@@ -87,6 +87,24 @@ public sealed class MetaPublishingTests
         Assert.Equal("post-456", result.PostId);
         Assert.Equal(["start", "upload", "finish"], handler.Requests.Select(x => x.Phase).ToArray());
         Assert.Contains("Authorization", handler.Requests[1].Headers.Keys);
+        Assert.Equal("0", handler.Requests[1].Headers["offset"]);
+        Assert.Equal(new FileInfo(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4")).Length.ToString(System.Globalization.CultureInfo.InvariantCulture), handler.Requests[1].Headers["file_size"]);
+        Assert.Equal("application/octet-stream", handler.Requests[1].ContentHeaders["Content-Type"]);
+    }
+
+    [Fact]
+    public async Task UploadFailure_IncludesResponseBody()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { FailUpload = true };
+        var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.False(result.Success);
+        Assert.Contains("Facebook Reel binary upload failed with status 400", result.Error);
+        Assert.Contains("missing offset", result.Error);
     }
 
     [Fact]
@@ -191,26 +209,29 @@ public sealed class MetaPublishingTests
     private sealed class TrackingMetaHandler : HttpMessageHandler
     {
         public string BaseAddress { get; set; } = "https://upload.example.test";
-        public List<(string Phase, Dictionary<string, string> Headers)> Requests { get; } = [];
+        public bool FailUpload { get; set; }
+        public List<(string Phase, Dictionary<string, string> Headers, Dictionary<string, string> ContentHeaders)> Requests { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
             if (request.RequestUri!.AbsolutePath.EndsWith("/video_reels", StringComparison.OrdinalIgnoreCase) && body.Contains("upload_phase=start", StringComparison.Ordinal))
             {
-                Requests.Add(("start", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value))));
+                Requests.Add(("start", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request)));
                 return JsonResponse(new { video_id = "video-123", upload_url = BaseAddress + "/upload/video-123" });
             }
 
             if (request.RequestUri!.Host == "upload.example.test")
             {
-                Requests.Add(("upload", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value))));
-                return JsonResponse(new { success = true });
+                Requests.Add(("upload", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request)));
+                return FailUpload
+                    ? new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = JsonContent.Create(new { error = new { message = "missing offset" } }) }
+                    : JsonResponse(new { success = true });
             }
 
             if (request.RequestUri!.AbsolutePath.EndsWith("/video_reels", StringComparison.OrdinalIgnoreCase) && body.Contains("upload_phase=finish", StringComparison.Ordinal))
             {
-                Requests.Add(("finish", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value))));
+                Requests.Add(("finish", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request)));
                 return JsonResponse(new { post_id = "post-456", id = "post-456" });
             }
 
@@ -218,6 +239,9 @@ public sealed class MetaPublishingTests
         }
 
         private static HttpResponseMessage JsonResponse(object payload) => new(HttpStatusCode.OK) { Content = JsonContent.Create(payload) };
+
+        private static Dictionary<string, string> ContentHeaders(HttpRequestMessage request)
+            => request.Content?.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)) ?? [];
     }
 
     private sealed class TrackingYouTubePublishService : IYouTubePublishService
