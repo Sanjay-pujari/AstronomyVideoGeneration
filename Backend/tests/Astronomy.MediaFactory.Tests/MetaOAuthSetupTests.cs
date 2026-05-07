@@ -37,6 +37,7 @@ public sealed class MetaOAuthSetupTests
         var payload = await response.Content.ReadFromJsonAsync<MetaOAuthStartResponse>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         Assert.NotNull(payload);
         Assert.True(payload.Success);
         Assert.Equal("Open authorizationUrl in a browser to grant Meta publishing access.", payload.Message);

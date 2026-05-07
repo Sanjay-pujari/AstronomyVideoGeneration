@@ -1,9 +1,11 @@
+using System.Net.Mime;
 using Astronomy.MediaFactory.Core;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Astronomy.MediaFactory.Api.Controllers;
 
 [ApiController]
+[Produces(MediaTypeNames.Application.Json)]
 [Route("api/metaoauth")]
 public sealed class MetaOAuthController : ControllerBase
 {
