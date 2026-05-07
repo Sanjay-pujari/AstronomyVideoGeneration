@@ -58,7 +58,8 @@ public sealed class MetaPublishService : IMetaPublishService
         var outputDirectory = ResolveOutputDirectory(run);
         Directory.CreateDirectory(outputDirectory);
         var videoPath = Path.Combine(outputDirectory, "shorts", "short-video.mp4");
-        var caption = await BuildFacebookCaptionAsync(outputDirectory, run, cancellationToken);
+        var metadata = await ReadFacebookMetadataAsync(outputDirectory, cancellationToken);
+        var caption = await BuildFacebookCaptionAsync(outputDirectory, run, metadata, cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "facebook-reel-caption.txt"), caption, cancellationToken);
 
         var request = new MetaPublishRequest
@@ -67,6 +68,7 @@ public sealed class MetaPublishService : IMetaPublishService
             Platform = "Facebook",
             VideoPath = videoPath,
             Caption = caption,
+            ShortTitle = BuildFacebookShortTitle(metadata?.Title, caption),
             IsReel = true
         };
 
@@ -75,11 +77,12 @@ public sealed class MetaPublishService : IMetaPublishService
         return [result];
     }
 
-    private async Task<string> BuildFacebookCaptionAsync(string outputDirectory, PipelineRun run, CancellationToken cancellationToken)
-    {
-        var metadata = await TryReadMetadataAsync(Path.Combine(outputDirectory, "shorts", "seo-metadata.json"), cancellationToken)
+    private static async Task<SeoMetadataResult?> ReadFacebookMetadataAsync(string outputDirectory, CancellationToken cancellationToken)
+        => await TryReadMetadataAsync(Path.Combine(outputDirectory, "shorts", "seo-metadata.json"), cancellationToken)
             ?? await TryReadMetadataAsync(Path.Combine(outputDirectory, "seo-metadata.json"), cancellationToken);
 
+    private async Task<string> BuildFacebookCaptionAsync(string outputDirectory, PipelineRun run, SeoMetadataResult? metadata, CancellationToken cancellationToken)
+    {
         var selectedObjects = await ReadSelectedObjectsAsync(outputDirectory, cancellationToken);
         var location = string.IsNullOrWhiteSpace(run.LocationName) ? "your night sky" : run.LocationName.Trim();
         var hook = !string.IsNullOrWhiteSpace(metadata?.Title)
@@ -110,6 +113,16 @@ public sealed class MetaPublishService : IMetaPublishService
 
         var caption = string.Join(Environment.NewLine, lines.Where(x => !string.IsNullOrWhiteSpace(x)));
         return caption.Length <= 1800 ? caption : caption[..1800].TrimEnd();
+    }
+
+
+    private static string BuildFacebookShortTitle(string? metadataTitle, string caption)
+    {
+        var title = !string.IsNullOrWhiteSpace(metadataTitle)
+            ? metadataTitle.Trim()
+            : caption.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? "Astronomy Reel";
+
+        return title.Length <= 120 ? title : title[..120].TrimEnd();
     }
 
     private static string BuildDescriptionLine(string? description)

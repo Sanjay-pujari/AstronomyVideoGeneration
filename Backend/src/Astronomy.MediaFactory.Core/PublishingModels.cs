@@ -58,6 +58,7 @@ public sealed class MetaPublishRequest
     public string Platform { get; init; } = "Facebook";
     public string VideoPath { get; init; } = string.Empty;
     public string Caption { get; init; } = string.Empty;
+    public string ShortTitle { get; init; } = string.Empty;
     public bool IsReel { get; init; } = true;
 }
 
@@ -70,5 +71,8 @@ public sealed class MetaPublishResult
     public string? VideoId { get; init; }
     public string? Url { get; init; }
     public string? Error { get; init; }
+    public bool PublishedVerified { get; init; }
+    public string? Warning { get; init; }
+    public List<string> Warnings { get; init; } = [];
     public DateTime PublishedUtc { get; init; } = DateTime.UtcNow;
 }
