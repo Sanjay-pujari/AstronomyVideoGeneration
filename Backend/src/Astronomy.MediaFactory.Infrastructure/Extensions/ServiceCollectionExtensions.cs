@@ -59,6 +59,11 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.UploadRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds && options.PublishRetryCooldownSeconds > 0, "YouTube retry settings are invalid.")
             .ValidateOnStart();
 
+        services.AddOptions<MetaOptions>()
+            .Bind(configuration.GetSection(MetaOptions.SectionName))
+            .Validate(options => options.Scopes is { Count: > 0 }, "Meta:Scopes must include at least one OAuth scope.")
+            .ValidateOnStart();
+
         services.AddOptions<PlatformPublishingOptions>()
             .Bind(configuration.GetSection(PlatformPublishingOptions.SectionName))
             .Validate(options => options.PublishRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds && options.PublishRetryCooldownSeconds > 0, "Platform publishing retry settings are invalid.")
@@ -224,6 +229,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
         services.AddHttpClient<IYouTubeAuthService, YouTubeAuthService>();
         services.AddHttpClient<IYouTubeOAuthService, YouTubeOAuthService>();
+        services.AddHttpClient<IMetaOAuthService, MetaOAuthService>();
         services.AddScoped<IYouTubeApiClient, GoogleYouTubeApiClient>();
         services.AddScoped<IYouTubePublishService, YouTubePublishService>();
         services.AddScoped<IContentPublishService, ContentPublishService>();
