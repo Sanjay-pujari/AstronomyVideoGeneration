@@ -15,13 +15,23 @@ public sealed class MetaOAuthController : ControllerBase
     }
 
     [HttpGet("start")]
+    [ProducesResponseType(typeof(MetaOAuthStartResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status302Found)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public IActionResult Start()
+    public IActionResult Start([FromQuery] bool redirect = false)
     {
         try
         {
-            return Redirect(_metaOAuthService.BuildAuthorizationUrl());
+            var authorizationUrl = _metaOAuthService.BuildAuthorizationUrl();
+            if (redirect)
+            {
+                return Redirect(authorizationUrl);
+            }
+
+            return Ok(new MetaOAuthStartResponse(
+                Success: true,
+                AuthorizationUrl: authorizationUrl,
+                Message: "Open authorizationUrl in a browser to grant Meta publishing access."));
         }
         catch (InvalidOperationException ex)
         {

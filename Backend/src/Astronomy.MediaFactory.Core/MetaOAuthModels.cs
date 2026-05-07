@@ -9,6 +9,11 @@ public sealed record MetaOAuthSetupResult(
     bool LongLivedTokenGenerated,
     string? Warning = null);
 
+public sealed record MetaOAuthStartResponse(
+    bool Success,
+    string AuthorizationUrl,
+    string Message);
+
 public sealed record MetaOAuthPage(
     string Id,
     string Name,
