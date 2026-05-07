@@ -127,14 +127,19 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
     {
         await using var stream = File.OpenRead(videoPath);
         using var content = new StreamContent(stream);
-        content.Headers.ContentType = new MediaTypeHeaderValue("video/mp4");
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+
         using var message = new HttpRequestMessage(HttpMethod.Post, uploadUrl) { Content = content };
         message.Headers.TryAddWithoutValidation("Authorization", $"OAuth {pageAccessToken}");
+        message.Headers.TryAddWithoutValidation("offset", "0");
         message.Headers.TryAddWithoutValidation("file_size", stream.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
         using var response = await _httpClient.SendAsync(message, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"Facebook Reel binary upload failed with status {(int)response.StatusCode}.");
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            var suffix = string.IsNullOrWhiteSpace(errorBody) ? string.Empty : $" Response: {errorBody}";
+            throw new InvalidOperationException($"Facebook Reel binary upload failed with status {(int)response.StatusCode}.{suffix}");
         }
     }
 
