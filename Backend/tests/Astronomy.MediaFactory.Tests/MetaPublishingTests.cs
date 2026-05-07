@@ -211,12 +211,143 @@ public sealed class MetaPublishingTests
         var handler = new TrackingMetaHandler();
         var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookReel = true, PublishInstagramReel = true });
 
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "invalid", CancellationToken.None)).Single();
+
+        Assert.False(result.Success);
+        Assert.Contains("Supported assets are facebook-reel, instagram-reel, and all", result.Error);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task InstagramDryRun_WritesPayload_AndDoesNotCallApi()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookReel = false, PublishInstagramReel = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal("Instagram", result.Platform);
+        Assert.Equal("DryRun", result.Mode);
+        Assert.Empty(handler.Requests);
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-publish-payload.json")));
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-caption.txt")));
+    }
+
+    [Fact]
+    public async Task InstagramMissingBusinessAccountId_FailsClearly()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        File.WriteAllText(workspace.TokenPath, JsonSerializer.Serialize(new MetaOAuthTokenFile("113", "AstroPulse", "page-token-secret", null, "astro", "user-token-secret", DateTimeOffset.UtcNow)));
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, new TrackingMetaHandler(), new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookReel = false, PublishInstagramReel = true });
+
         var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
 
         Assert.False(result.Success);
-        Assert.Contains("Only facebook-reel is implemented", result.Error);
+        Assert.Equal(InstagramReelPublishService.MissingInstagramBusinessAccountMessage, result.Error);
+    }
+
+    [Fact]
+    public async Task InstagramRealMode_MissingPublicVideoUrl_FailsBeforeApi()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.False(result.Success);
+        Assert.Equal(InstagramReelPublishService.MissingPublicVideoUrlMessage, result.Error);
         Assert.Empty(handler.Requests);
     }
+
+    [Fact]
+    public async Task InstagramContainerCreation_UsesReelsMediaType()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 1 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        var container = handler.Requests.Single(x => x.Phase == "ig-container");
+        Assert.Contains("media_type=REELS", container.Body);
+        Assert.Contains("video_url=https%3A%2F%2Fcdn.example.test%2Fshort-video.mp4", container.Body);
+    }
+
+    [Fact]
+    public async Task InstagramPolling_WaitsUntilFinished()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { InstagramContainerStatuses = new Queue<string>(new[] { "IN_PROGRESS", "FINISHED" }) };
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 3 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal(2, handler.Requests.Count(x => x.Phase == "ig-poll"));
+    }
+
+    [Fact]
+    public async Task InstagramMediaPublish_IsCalledAfterFinished()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { InstagramContainerStatuses = new Queue<string>(new[] { "FINISHED" }) };
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 1 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal(new[] { "ig-container", "ig-poll", "ig-publish", "ig-details" }, handler.Requests.Select(x => x.Phase).ToArray());
+        Assert.Equal("ig-media-456", result.VideoId);
+    }
+
+    [Fact]
+    public async Task AssetInstagramReel_PublishesOnlyInstagram()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookReel = true, PublishInstagramReel = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.Equal("Instagram", result.Platform);
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-publish-payload.json")));
+        Assert.False(File.Exists(Path.Combine(workspace.OutputDirectory(run), "facebook-reel-publish-payload.json")));
+    }
+
+    [Fact]
+    public async Task AssetAll_PublishesFacebookAndInstagramReelsOnly()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookReel = true, PublishInstagramReel = true, PublishFacebookFullVideo = true, PublishInstagramFullVideo = true });
+
+        var results = await service.PublishForPipelineRunAsync(run.Id, "all", CancellationToken.None);
+
+        Assert.Equal(new[] { "Facebook", "Instagram" }, results.Select(x => x.Platform).ToArray());
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "facebook-reel-publish-payload.json")));
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-publish-payload.json")));
+        var facebookPayload = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "facebook-reel-publish-payload.json"));
+        var instagramPayload = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-publish-payload.json"));
+        Assert.Contains("shorts", facebookPayload);
+        Assert.Contains("short-video.mp4", facebookPayload);
+        Assert.DoesNotContain("final-video.mp4", facebookPayload);
+        Assert.Contains("shorts", instagramPayload);
+        Assert.Contains("short-video.mp4", instagramPayload);
+        Assert.DoesNotContain("final-video.mp4", instagramPayload);
+    }
+
 
     [Fact]
     public async Task YouTubePublishing_RemainsUnaffected()
@@ -251,9 +382,17 @@ internal static class MetaPublishingTestFactory
             Options.Create(new RenderingOptions { FfprobePath = "missing-ffprobe-for-tests" }),
             NullLogger<FacebookReelPublishService>.Instance);
 
+        var instagram = new InstagramReelPublishService(
+            new HttpClient(handler),
+            Options.Create(new MetaOptions { TokenFilePath = workspace.TokenPath }),
+            Options.Create(options),
+            Options.Create(new RenderingOptions { FfprobePath = "missing-ffprobe-for-tests" }),
+            NullLogger<InstagramReelPublishService>.Instance);
+
         return new MetaPublishService(
             repository,
             facebook,
+            instagram,
             Options.Create(options),
             Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }),
             NullLogger<MetaPublishService>.Instance);
@@ -300,11 +439,37 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
     public string BaseAddress { get; set; } = "https://upload.example.test";
     public bool FailUpload { get; set; }
     public Queue<string> VerificationStatuses { get; set; } = new Queue<string>(new[] { "PUBLISHED" });
+    public Queue<string> InstagramContainerStatuses { get; set; } = new Queue<string>(new[] { "FINISHED" });
     public List<(string Phase, Dictionary<string, string> Headers, Dictionary<string, string> ContentHeaders, string Body)> Requests { get; } = new();
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
+        if (request.RequestUri!.AbsolutePath.EndsWith("/media", StringComparison.OrdinalIgnoreCase) && body.Contains("media_type=REELS", StringComparison.Ordinal))
+        {
+            Requests.Add(("ig-container", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+            return JsonResponse(new { creation_id = "creation-123" });
+        }
+
+        if (request.RequestUri!.AbsolutePath.EndsWith("/media_publish", StringComparison.OrdinalIgnoreCase))
+        {
+            Requests.Add(("ig-publish", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+            return JsonResponse(new { id = "ig-media-456" });
+        }
+
+        if (request.RequestUri!.AbsolutePath.EndsWith("/creation-123", StringComparison.OrdinalIgnoreCase))
+        {
+            Requests.Add(("ig-poll", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+            var status = InstagramContainerStatuses.Count > 0 ? InstagramContainerStatuses.Dequeue() : "IN_PROGRESS";
+            return JsonResponse(new { status_code = status, status });
+        }
+
+        if (request.RequestUri!.AbsolutePath.EndsWith("/ig-media-456", StringComparison.OrdinalIgnoreCase))
+        {
+            Requests.Add(("ig-details", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+            return JsonResponse(new { id = "ig-media-456", permalink = "https://instagram.example.test/reel/ig-media-456", media_type = "VIDEO", timestamp = "2026-05-07T00:00:00+0000" });
+        }
+
         if (request.RequestUri!.AbsolutePath.EndsWith("/video_reels", StringComparison.OrdinalIgnoreCase) && body.Contains("upload_phase=start", StringComparison.Ordinal))
         {
             Requests.Add(("start", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
@@ -325,16 +490,16 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
             return JsonResponse(new { post_id = "post-456", id = "post-456" });
         }
 
-        if (request.RequestUri!.AbsolutePath.EndsWith("/videos", StringComparison.OrdinalIgnoreCase))
+        if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/video-123", StringComparison.OrdinalIgnoreCase))
         {
             Requests.Add(("verify-video", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
             var status = VerificationStatuses.Count > 0 ? VerificationStatuses.Dequeue() : "PROCESSING";
-            return JsonResponse(new { data = new[] { new { id = "video-123", permalink_url = "https://facebook.example.test/reel/video-123", status } } });
+            return JsonResponse(new { id = "video-123", permalink_url = "https://facebook.example.test/reel/video-123", status });
         }
 
-        if (request.RequestUri!.AbsolutePath.EndsWith("/feed", StringComparison.OrdinalIgnoreCase))
+        if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/video_reels", StringComparison.OrdinalIgnoreCase))
         {
-            Requests.Add(("verify-feed", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+            Requests.Add(("verify-reels", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
             var status = VerificationStatuses.Count > 0 ? VerificationStatuses.Peek() : "PROCESSING";
             return JsonResponse(new { data = new[] { new { id = "video-123", permalink_url = "https://facebook.example.test/reel/video-123", status } } });
         }

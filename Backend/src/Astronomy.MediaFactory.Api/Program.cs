@@ -128,7 +128,7 @@ app.MapPost("/api/metapublish/{pipelineRunId:guid}", async (Guid pipelineRunId, 
         return Results.BadRequest(new { message = $"Pipeline run {pipelineRunId} is not completed." });
     }
 
-    var results = await publishService.PublishForPipelineRunAsync(pipelineRunId, asset ?? "facebook-reel", ct);
+    var results = await publishService.PublishForPipelineRunAsync(pipelineRunId, asset ?? "all", ct);
     return results.Count == 0 ? Results.BadRequest(new { message = "No Meta publishing result was produced." }) : Results.Ok(results);
 });
 app.MapPost("/api/jobs/enqueue", async (EnqueuePipelineJobRequest request, IPipelineJobQueue queue, CancellationToken ct) =>

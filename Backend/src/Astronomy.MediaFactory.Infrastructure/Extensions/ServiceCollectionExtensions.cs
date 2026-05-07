@@ -236,6 +236,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IYouTubeOAuthService, YouTubeOAuthService>();
         services.AddHttpClient<IMetaOAuthService, MetaOAuthService>();
         services.AddHttpClient<IFacebookReelPublishService, FacebookReelPublishService>();
+        services.AddHttpClient<IInstagramReelPublishService, InstagramReelPublishService>();
         services.AddScoped<IMetaPublishService, MetaPublishService>();
         services.AddScoped<IYouTubeApiClient, GoogleYouTubeApiClient>();
         services.AddScoped<IYouTubePublishService, YouTubePublishService>();

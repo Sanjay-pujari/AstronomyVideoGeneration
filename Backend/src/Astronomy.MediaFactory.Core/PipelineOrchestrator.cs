@@ -765,12 +765,15 @@ public sealed class PipelineOrchestrator
 
                 if (_metaPublishService is not null
                     && _metaPublishingOptions.Enabled
-                    && _metaPublishingOptions.PublishFacebookReel
+                    && (_metaPublishingOptions.PublishFacebookReel || _metaPublishingOptions.PublishInstagramReel)
                     && !string.Equals(_metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase))
                 {
-                    _ = await RunStageAsync("FacebookReelPublish", async () =>
+                    var metaAsset = _metaPublishingOptions.PublishFacebookReel && _metaPublishingOptions.PublishInstagramReel
+                        ? "all"
+                        : _metaPublishingOptions.PublishInstagramReel ? "instagram-reel" : "facebook-reel";
+                    _ = await RunStageAsync("MetaReelPublish", async () =>
                     {
-                        var metaResults = await _metaPublishService.PublishForPipelineRunAsync(run.Id, "facebook-reel", cancellationToken);
+                        var metaResults = await _metaPublishService.PublishForPipelineRunAsync(run.Id, metaAsset, cancellationToken);
                         var attemptedFacebookResults = metaResults.Where(x => x.Platform.Equals("Facebook", StringComparison.OrdinalIgnoreCase)).ToList();
                         if (attemptedFacebookResults.Count > 0 && attemptedFacebookResults.All(x => !x.Success))
                         {
