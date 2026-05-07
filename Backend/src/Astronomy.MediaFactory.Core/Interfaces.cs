@@ -43,6 +43,22 @@ public interface IYouTubePublishService : IPlatformPublishService
 {
 }
 
+public interface IMetaPublishService
+{
+    Task<IReadOnlyList<MetaPublishResult>> PublishForPipelineRunAsync(
+        Guid pipelineRunId,
+        string asset = "all",
+        CancellationToken cancellationToken = default);
+}
+
+public interface IFacebookReelPublishService
+{
+    Task<MetaPublishResult> PublishReelAsync(
+        MetaPublishRequest request,
+        CancellationToken cancellationToken);
+}
+
+
 public interface IYouTubeAuthService
 {
     Task<string> GetAccessTokenAsync(CancellationToken cancellationToken);

@@ -115,6 +115,22 @@ app.MapPost("/api/youtubepublish/{pipelineRunId:guid}", async (Guid pipelineRunI
     var results = await publishService.PublishForPipelineRunAsync(pipelineRunId, asset ?? "all", ct);
     return results.Count == 0 ? Results.BadRequest(new { message = "No publishing result was produced." }) : Results.Ok(results);
 });
+app.MapPost("/api/metapublish/{pipelineRunId:guid}", async (Guid pipelineRunId, string? asset, IMetaPublishService publishService, IPipelineRepository repository, CancellationToken ct) =>
+{
+    var run = await repository.GetAsync(pipelineRunId, ct);
+    if (run is null)
+    {
+        return Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." });
+    }
+
+    if (run.Status != PipelineRunStatus.Succeeded)
+    {
+        return Results.BadRequest(new { message = $"Pipeline run {pipelineRunId} is not completed." });
+    }
+
+    var results = await publishService.PublishForPipelineRunAsync(pipelineRunId, asset ?? "facebook-reel", ct);
+    return results.Count == 0 ? Results.BadRequest(new { message = "No Meta publishing result was produced." }) : Results.Ok(results);
+});
 app.MapPost("/api/jobs/enqueue", async (EnqueuePipelineJobRequest request, IPipelineJobQueue queue, CancellationToken ct) =>
 {
     try

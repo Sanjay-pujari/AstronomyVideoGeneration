@@ -64,6 +64,11 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.Scopes is { Count: > 0 }, "Meta:Scopes must include at least one OAuth scope.")
             .ValidateOnStart();
 
+        services.AddOptions<MetaPublishingOptions>()
+            .Bind(configuration.GetSection(MetaPublishingOptions.SectionName))
+            .Validate(options => options.Mode is null || options.Mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("DryRun", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Private", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Public", StringComparison.OrdinalIgnoreCase), "MetaPublishing:Mode must be Disabled, DryRun, Private, or Public.")
+            .ValidateOnStart();
+
         services.AddOptions<PlatformPublishingOptions>()
             .Bind(configuration.GetSection(PlatformPublishingOptions.SectionName))
             .Validate(options => options.PublishRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds && options.PublishRetryCooldownSeconds > 0, "Platform publishing retry settings are invalid.")
@@ -230,6 +235,8 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IYouTubeAuthService, YouTubeAuthService>();
         services.AddHttpClient<IYouTubeOAuthService, YouTubeOAuthService>();
         services.AddHttpClient<IMetaOAuthService, MetaOAuthService>();
+        services.AddHttpClient<IFacebookReelPublishService, FacebookReelPublishService>();
+        services.AddScoped<IMetaPublishService, MetaPublishService>();
         services.AddScoped<IYouTubeApiClient, GoogleYouTubeApiClient>();
         services.AddScoped<IYouTubePublishService, YouTubePublishService>();
         services.AddScoped<IContentPublishService, ContentPublishService>();

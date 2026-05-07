@@ -42,7 +42,9 @@ public sealed class PipelineOrchestrator
     private readonly IPrePublishValidationService _prePublishValidationService;
     private readonly PublishingValidationOptions _publishingValidationOptions;
     private readonly PublishingOptions _publishingOptions;
+    private readonly MetaPublishingOptions _metaPublishingOptions;
     private readonly IContentPublishService? _contentPublishService;
+    private readonly IMetaPublishService? _metaPublishService;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -77,7 +79,9 @@ public sealed class PipelineOrchestrator
         IContentExperimentService? contentExperimentService = null,
         IShortFormPublishingService? shortFormPublishingService = null,
         IPrePublishValidationService? prePublishValidationService = null,
-        IContentPublishService? contentPublishService = null)
+        IContentPublishService? contentPublishService = null,
+        IOptions<MetaPublishingOptions>? metaPublishingOptions = null,
+        IMetaPublishService? metaPublishService = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -111,7 +115,9 @@ public sealed class PipelineOrchestrator
         _prePublishValidationService = prePublishValidationService ?? new PrePublishValidationService(Options.Create(_renderingOptions), Options.Create(new PublishingValidationOptions()), Microsoft.Extensions.Logging.Abstractions.NullLogger<PrePublishValidationService>.Instance);
         _publishingValidationOptions = publishingValidationOptions.Value;
         _publishingOptions = publishingOptions?.Value ?? new PublishingOptions();
+        _metaPublishingOptions = metaPublishingOptions?.Value ?? new MetaPublishingOptions();
         _contentPublishService = contentPublishService;
+        _metaPublishService = metaPublishService;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -752,6 +758,31 @@ public sealed class PipelineOrchestrator
                         AssetType = "ShortVideo",
                         IsShort = true,
                         Mode = mode,
+                        Error = ex.Message,
+                        PublishedUtc = DateTime.UtcNow
+                    }]));
+                }
+
+                if (_metaPublishService is not null
+                    && _metaPublishingOptions.Enabled
+                    && _metaPublishingOptions.PublishFacebookReel
+                    && !string.Equals(_metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = await RunStageAsync("FacebookReelPublish", async () =>
+                    {
+                        var metaResults = await _metaPublishService.PublishForPipelineRunAsync(run.Id, "facebook-reel", cancellationToken);
+                        var attemptedFacebookResults = metaResults.Where(x => x.Platform.Equals("Facebook", StringComparison.OrdinalIgnoreCase)).ToList();
+                        if (attemptedFacebookResults.Count > 0 && attemptedFacebookResults.All(x => !x.Success))
+                        {
+                            throw new InvalidOperationException(attemptedFacebookResults.First().Error ?? "Facebook Reel publishing failed.");
+                        }
+
+                        return metaResults;
+                    }, continueWithFallback: true, fallback: ex => Task.FromResult<IReadOnlyList<MetaPublishResult>>([new MetaPublishResult
+                    {
+                        Success = false,
+                        Platform = "Facebook",
+                        Mode = _metaPublishingOptions.Mode,
                         Error = ex.Message,
                         PublishedUtc = DateTime.UtcNow
                     }]));
