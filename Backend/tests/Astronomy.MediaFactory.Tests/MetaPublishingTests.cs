@@ -85,7 +85,7 @@ public sealed class MetaPublishingTests
         Assert.True(result.Success);
         Assert.Equal("video-123", result.VideoId);
         Assert.Equal("post-456", result.PostId);
-        Assert.Equal(["start", "upload", "finish"], handler.Requests.Take(3).Select(x => x.Phase).ToArray());
+        Assert.Equal(new[] { "start", "upload", "finish" }, handler.Requests.Take(3).Select(x => x.Phase).ToArray());
         Assert.Contains("Authorization", handler.Requests[1].Headers.Keys);
         Assert.Equal("0", handler.Requests[1].Headers["offset"});
         Assert.Equal(new FileInfo(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4")).Length.ToString(System.Globalization.CultureInfo.InvariantCulture), handler.Requests[1].Headers["file_size"});
@@ -98,7 +98,7 @@ public sealed class MetaPublishingTests
     {
         using var workspace = new TempMetaWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
-        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PUBLISHED"}) };
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] { "PUBLISHED" }) };
         var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1 });
 
         var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
@@ -118,7 +118,7 @@ public sealed class MetaPublishingTests
     {
         using var workspace = new TempMetaWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
-        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PUBLISHED"}) };
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] { "PUBLISHED" }) };
         var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1 });
 
         _ = await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None);
@@ -133,7 +133,7 @@ public sealed class MetaPublishingTests
     {
         using var workspace = new TempMetaWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
-        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PROCESSING", "PUBLISHED"}) };
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] { "PROCESSING", "PUBLISHED" }) };
         var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 3 });
 
         var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
@@ -148,7 +148,7 @@ public sealed class MetaPublishingTests
     {
         using var workspace = new TempMetaWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
-        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PUBLISHED"}) };
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] { "PUBLISHED" }) };
         var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1 });
 
         _ = await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None);
@@ -166,7 +166,7 @@ public sealed class MetaPublishingTests
     {
         using var workspace = new TempMetaWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
-        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PROCESSING"}) };
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] { "PROCESSING" }) };
         var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1 });
 
         var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
@@ -294,8 +294,8 @@ public sealed class MetaPublishingTests
     {
         public string BaseAddress { get; set; } = "https://upload.example.test";
         public bool FailUpload { get; set; }
-        public Queue<string> VerificationStatuses { get; set; } = new Queue<string>(new[] {"PUBLISHED"});
-        public List<(string Phase, Dictionary<string, string> Headers, Dictionary<string, string> ContentHeaders, string Body)> Requests { get; } = [];
+        public Queue<string> VerificationStatuses { get; set; } = new Queue<string>(new[] { "PUBLISHED" });
+        public List<(string Phase, Dictionary<string, string> Headers, Dictionary<string, string> ContentHeaders, string Body)> Requests { get; } = new();
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -340,7 +340,7 @@ public sealed class MetaPublishingTests
         private static HttpResponseMessage JsonResponse(object payload) => new(HttpStatusCode.OK) { Content = JsonContent.Create(payload) };
 
         private static Dictionary<string, string> ContentHeaders(HttpRequestMessage request)
-            => request.Content?.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)) ?? [];
+            => request.Content?.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)) ?? new Dictionary<string, string>();
     }
 
     private sealed class TrackingYouTubePublishService : IYouTubePublishService
@@ -360,27 +360,27 @@ public sealed class MetaPublishingTests
         public InMemoryPipelineRepository(PipelineRun run) => _run = run;
         public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken) => Task.FromResult(run);
         public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(id == _run.Id ? _run : null);
-        public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([_run]);
+        public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>(new[] { _run });
         public Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
+        public Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>(Array.Empty<GeneratedScript>());
         public Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task AddPublishedVideoAsync(PublishedVideo publishedVideo, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task AddJobAsync(PipelineJob job, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<PipelineJob?> GetJobAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineJob?>(null);
-        public Task<IReadOnlyCollection<PipelineJob>> GetRecentJobsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineJob>>([]);
+        public Task<IReadOnlyCollection<PipelineJob>> GetRecentJobsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineJob>>(Array.Empty<PipelineJob>());
         public Task<PipelineJob?> GetNextRunnableJobAsync(DateTimeOffset now, CancellationToken cancellationToken) => Task.FromResult<PipelineJob?>(null);
         public Task<bool> HasQueuedOrCompletedMainJobAsync(DateOnly runDate, ContentType contentType, CancellationToken cancellationToken) => Task.FromResult(false);
-        public Task<IReadOnlyCollection<PublishedVideo>> GetRecentPublishedVideosAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PublishedVideo>>([]);
-        public Task<IReadOnlyCollection<GeneratedScript>> GetRecentGeneratedScriptsAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
+        public Task<IReadOnlyCollection<PublishedVideo>> GetRecentPublishedVideosAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PublishedVideo>>(Array.Empty<PublishedVideo>());
+        public Task<IReadOnlyCollection<GeneratedScript>> GetRecentGeneratedScriptsAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>(Array.Empty<GeneratedScript>());
         public Task AddVideoAnalyticsAsync(VideoAnalytics analytics, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<IReadOnlyCollection<VideoAnalytics>> GetRecentAnalyticsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
-        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsWindowAsync(DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
-        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByVideoIdAsync(string videoId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
-        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByContentTypeAsync(ContentType contentType, DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
-        public Task<IReadOnlyCollection<VideoAnalytics>> GetTopPerformingAnalyticsAsync(DateTimeOffset? from, DateTimeOffset? to, int take, bool shortsOnly, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>([]);
-        public Task<IReadOnlyCollection<PublishedVideo>> GetPublishedVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PublishedVideo>>([]);
-        public Task<IReadOnlyCollection<ShortVideo>> GetShortVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<ShortVideo>>([]);
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetRecentAnalyticsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(Array.Empty<VideoAnalytics>());
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsWindowAsync(DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(Array.Empty<VideoAnalytics>());
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByVideoIdAsync(string videoId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(Array.Empty<VideoAnalytics>());
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByContentTypeAsync(ContentType contentType, DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(Array.Empty<VideoAnalytics>());
+        public Task<IReadOnlyCollection<VideoAnalytics>> GetTopPerformingAnalyticsAsync(DateTimeOffset? from, DateTimeOffset? to, int take, bool shortsOnly, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<VideoAnalytics>>(Array.Empty<VideoAnalytics>());
+        public Task<IReadOnlyCollection<PublishedVideo>> GetPublishedVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PublishedVideo>>(Array.Empty<PublishedVideo>());
+        public Task<IReadOnlyCollection<ShortVideo>> GetShortVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<ShortVideo>>(Array.Empty<ShortVideo>());
         public Task<GeneratedScript?> GetLatestScriptByTitleAsync(string title, CancellationToken cancellationToken) => Task.FromResult<GeneratedScript?>(null);
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
