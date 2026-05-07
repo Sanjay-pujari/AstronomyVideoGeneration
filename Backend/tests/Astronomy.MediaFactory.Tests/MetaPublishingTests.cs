@@ -162,7 +162,7 @@ public sealed class MetaPublishingTests
 
         public InMemoryPipelineRepository CreateRepositoryWithRun(out PipelineRun run, bool createVideo, bool createToken)
         {
-            run = new PipelineRun { Id = Guid.NewGuid(), RunDate = new DateOnly(2026, 5, 7), ContentType = ContentType.DailySkyGuide, LocationName = "Denver", TimeZone = "America/Denver", Status = PipelineRunStatus.Succeeded };
+            run = new PipelineRun { RunDate = new DateOnly(2026, 5, 7), ContentType = ContentType.DailySkyGuide, LocationName = "Denver", TimeZone = "America/Denver", Status = PipelineRunStatus.Succeeded };
             var output = OutputDirectory(run);
             Directory.CreateDirectory(Path.Combine(output, "shorts"));
             File.WriteAllText(Path.Combine(output, "seo-metadata.json"), JsonSerializer.Serialize(new SeoMetadataResult { Title = "Root Title", Description = "Root description", TagsCsv = "astronomy" }));
