@@ -51,3 +51,24 @@ public sealed class YouTubeChannelInfo
     public string ChannelId { get; init; } = string.Empty;
     public string ChannelTitle { get; init; } = string.Empty;
 }
+
+public sealed class MetaPublishRequest
+{
+    public Guid PipelineRunId { get; init; }
+    public string Platform { get; init; } = "Facebook";
+    public string VideoPath { get; init; } = string.Empty;
+    public string Caption { get; init; } = string.Empty;
+    public bool IsReel { get; init; } = true;
+}
+
+public sealed class MetaPublishResult
+{
+    public bool Success { get; init; }
+    public string Platform { get; init; } = "Facebook";
+    public string Mode { get; init; } = "DryRun";
+    public string? PostId { get; init; }
+    public string? VideoId { get; init; }
+    public string? Url { get; init; }
+    public string? Error { get; init; }
+    public DateTime PublishedUtc { get; init; } = DateTime.UtcNow;
+}
