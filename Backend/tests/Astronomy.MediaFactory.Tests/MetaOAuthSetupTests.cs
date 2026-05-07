@@ -73,6 +73,31 @@ public sealed class MetaOAuthSetupTests
     }
 
     [Fact]
+    public async Task Start_WithRedirectQueryFromCorsRequest_ReturnsAuthorizationUrlWithoutFollowingExternalRedirect()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddControllers().AddApplicationPart(typeof(MetaOAuthController).Assembly);
+        using var workspace = new TemporaryMetaOAuthWorkspace();
+        builder.Services.AddSingleton<IMetaOAuthService>(CreateService(workspace.TokenFilePath, CreateSuccessHandler()));
+        var app = builder.Build();
+        app.MapControllers();
+
+        await app.StartAsync();
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/metaoauth/start?redirect=true");
+        request.Headers.Add("Origin", "http://localhost:5173");
+        var response = await app.GetTestClient().SendAsync(request);
+        var payload = await response.Content.ReadFromJsonAsync<MetaOAuthStartResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.True(payload.Success);
+        Assert.StartsWith("https://www.facebook.com/v23.0/dialog/oauth", payload.AuthorizationUrl, StringComparison.Ordinal);
+        Assert.Contains("top-level browser navigation", payload.Message);
+        await app.StopAsync();
+    }
+
+    [Fact]
     public async Task Callback_WithoutCode_FailsClearly()
     {
         using var app = await CreateCallbackAppAsync(new StubMetaOAuthService("https://example.test"));
