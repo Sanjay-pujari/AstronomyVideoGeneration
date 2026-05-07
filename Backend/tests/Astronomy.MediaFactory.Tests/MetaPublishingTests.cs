@@ -85,11 +85,95 @@ public sealed class MetaPublishingTests
         Assert.True(result.Success);
         Assert.Equal("video-123", result.VideoId);
         Assert.Equal("post-456", result.PostId);
-        Assert.Equal(["start", "upload", "finish"], handler.Requests.Select(x => x.Phase).ToArray());
+        Assert.Equal(["start", "upload", "finish"], handler.Requests.Take(3).Select(x => x.Phase).ToArray());
         Assert.Contains("Authorization", handler.Requests[1].Headers.Keys);
-        Assert.Equal("0", handler.Requests[1].Headers["offset"]);
-        Assert.Equal(new FileInfo(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4")).Length.ToString(System.Globalization.CultureInfo.InvariantCulture), handler.Requests[1].Headers["file_size"]);
-        Assert.Equal("application/octet-stream", handler.Requests[1].ContentHeaders["Content-Type"]);
+        Assert.Equal("0", handler.Requests[1].Headers["offset"});
+        Assert.Equal(new FileInfo(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4")).Length.ToString(System.Globalization.CultureInfo.InvariantCulture), handler.Requests[1].Headers["file_size"});
+        Assert.Equal("application/octet-stream", handler.Requests[1].ContentHeaders["Content-Type"});
+    }
+
+
+    [Fact]
+    public async Task FinishRequest_IncludesPublishedStateAndTitle()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PUBLISHED"}) };
+        var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.True(result.PublishedVerified);
+        var finish = handler.Requests.Single(x => x.Phase == "finish");
+        Assert.Contains("upload_phase=finish", finish.Body);
+        Assert.Contains("video_id=video-123", finish.Body);
+        Assert.Contains("video_state=PUBLISHED", finish.Body);
+        Assert.Contains("description=", finish.Body);
+        Assert.Contains("title=Amazing+Saturn+Tonight", finish.Body);
+    }
+
+    [Fact]
+    public async Task FinishRequest_MissingPublishedStateFailsTestGuard()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PUBLISHED"}) };
+        var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1 });
+
+        _ = await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None);
+
+        var finish = handler.Requests.Single(x => x.Phase == "finish");
+        Assert.DoesNotContain("video_state=", finish.Body.Replace("video_state=PUBLISHED", string.Empty, StringComparison.Ordinal));
+        Assert.Contains("video_state=PUBLISHED", finish.Body);
+    }
+
+    [Fact]
+    public async Task VerificationPolling_RetriesUntilStatusAvailable()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PROCESSING", "PUBLISHED"}) };
+        var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 3 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.True(result.PublishedVerified);
+        Assert.True(handler.Requests.Count(x => x.Phase == "verify-video") >= 2);
+    }
+
+    [Fact]
+    public async Task PublishDiagnostics_AreWrittenWithoutAccessToken()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PUBLISHED"}) };
+        var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1 });
+
+        _ = await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None);
+
+        var resultJson = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "facebook-reel-publish-result.json"));
+        Assert.Contains("startResponse", resultJson);
+        Assert.Contains("uploadResponseStatus", resultJson);
+        Assert.Contains("finishResponse", resultJson);
+        Assert.Contains("publishedVerified", resultJson);
+        Assert.DoesNotContain("page-token-secret", resultJson);
+    }
+
+    [Fact]
+    public async Task AppModeWarning_IsIncludedWhenVisibilityIsNotVerified()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] {"PROCESSING"}) };
+        var service = CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.False(result.PublishedVerified);
+        Assert.Contains(FacebookReelPublishService.MetaAppDevelopmentModeWarning, result.Warnings);
     }
 
     [Fact]
@@ -210,20 +294,21 @@ public sealed class MetaPublishingTests
     {
         public string BaseAddress { get; set; } = "https://upload.example.test";
         public bool FailUpload { get; set; }
-        public List<(string Phase, Dictionary<string, string> Headers, Dictionary<string, string> ContentHeaders)> Requests { get; } = [];
+        public Queue<string> VerificationStatuses { get; set; } = new Queue<string>(new[] {"PUBLISHED"});
+        public List<(string Phase, Dictionary<string, string> Headers, Dictionary<string, string> ContentHeaders, string Body)> Requests { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
             if (request.RequestUri!.AbsolutePath.EndsWith("/video_reels", StringComparison.OrdinalIgnoreCase) && body.Contains("upload_phase=start", StringComparison.Ordinal))
             {
-                Requests.Add(("start", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request)));
+                Requests.Add(("start", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
                 return JsonResponse(new { video_id = "video-123", upload_url = BaseAddress + "/upload/video-123" });
             }
 
             if (request.RequestUri!.Host == "upload.example.test")
             {
-                Requests.Add(("upload", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request)));
+                Requests.Add(("upload", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
                 return FailUpload
                     ? new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = JsonContent.Create(new { error = new { message = "missing offset" } }) }
                     : JsonResponse(new { success = true });
@@ -231,8 +316,22 @@ public sealed class MetaPublishingTests
 
             if (request.RequestUri!.AbsolutePath.EndsWith("/video_reels", StringComparison.OrdinalIgnoreCase) && body.Contains("upload_phase=finish", StringComparison.Ordinal))
             {
-                Requests.Add(("finish", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request)));
+                Requests.Add(("finish", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
                 return JsonResponse(new { post_id = "post-456", id = "post-456" });
+            }
+
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/video-123", StringComparison.OrdinalIgnoreCase))
+            {
+                Requests.Add(("verify-video", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+                var status = VerificationStatuses.Count > 1 ? VerificationStatuses.Dequeue() : VerificationStatuses.Peek();
+                return JsonResponse(new { id = "video-123", permalink_url = "https://facebook.example.test/reel/video-123", status });
+            }
+
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/video_reels", StringComparison.OrdinalIgnoreCase))
+            {
+                Requests.Add(("verify-reels", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+                var status = VerificationStatuses.Count > 0 ? VerificationStatuses.Peek() : "PROCESSING";
+                return JsonResponse(new { data = new[] { new { id = "video-123", permalink_url = "https://facebook.example.test/reel/video-123", status } } });
             }
 
             return new HttpResponseMessage(HttpStatusCode.BadRequest);

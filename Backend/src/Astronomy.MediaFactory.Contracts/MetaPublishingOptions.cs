@@ -10,4 +10,7 @@ public sealed class MetaPublishingOptions
     public string Mode { get; set; } = "DryRun";
     public string FacebookPageId { get; set; } = "";
     public string CaptionHashtagSuffix { get; set; } = "#Astronomy #NightSky #Stargazing";
+    public int FacebookReelProcessingPollSeconds { get; set; } = 10;
+    public int FacebookReelProcessingMaxAttempts { get; set; } = 12;
+    public bool RequirePublishedState { get; set; } = true;
 }
