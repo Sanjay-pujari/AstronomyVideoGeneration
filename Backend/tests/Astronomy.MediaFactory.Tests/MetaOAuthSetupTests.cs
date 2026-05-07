@@ -22,7 +22,7 @@ public sealed class MetaOAuthSetupTests
     private const string PageToken = "page-token-secret-value";
 
     [Fact]
-    public async Task Start_RedirectsToMetaConsentUrl_WithRequiredScopes()
+    public async Task Start_ReturnsMetaConsentUrl_WithRequiredScopes()
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -34,6 +34,33 @@ public sealed class MetaOAuthSetupTests
 
         await app.StartAsync();
         var response = await app.GetTestClient().GetAsync("/api/metaoauth/start");
+        var payload = await response.Content.ReadFromJsonAsync<MetaOAuthStartResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(payload);
+        Assert.True(payload.Success);
+        Assert.Equal("Open authorizationUrl in a browser to grant Meta publishing access.", payload.Message);
+        var authorizationUrl = Uri.UnescapeDataString(payload.AuthorizationUrl);
+        Assert.StartsWith("https://www.facebook.com/v23.0/dialog/oauth", authorizationUrl, StringComparison.Ordinal);
+        Assert.Contains("client_id=app-id", authorizationUrl);
+        Assert.Contains("response_type=code", authorizationUrl);
+        Assert.Contains("scope=pages_manage_posts,pages_read_engagement,pages_show_list,instagram_basic,instagram_content_publish,business_management", authorizationUrl);
+        await app.StopAsync();
+    }
+
+    [Fact]
+    public async Task Start_WithRedirectQuery_ReturnsMetaConsentRedirect()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddControllers().AddApplicationPart(typeof(MetaOAuthController).Assembly);
+        using var workspace = new TemporaryMetaOAuthWorkspace();
+        builder.Services.AddSingleton<IMetaOAuthService>(CreateService(workspace.TokenFilePath, CreateSuccessHandler()));
+        var app = builder.Build();
+        app.MapControllers();
+
+        await app.StartAsync();
+        var response = await app.GetTestClient().GetAsync("/api/metaoauth/start?redirect=true");
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
         var location = Uri.UnescapeDataString(response.Headers.Location?.ToString() ?? string.Empty);
