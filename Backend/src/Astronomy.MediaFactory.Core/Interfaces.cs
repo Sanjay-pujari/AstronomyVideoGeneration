@@ -58,6 +58,13 @@ public interface IFacebookReelPublishService
         CancellationToken cancellationToken);
 }
 
+public interface IInstagramReelPublishService
+{
+    Task<MetaPublishResult> PublishReelAsync(
+        MetaPublishRequest request,
+        CancellationToken cancellationToken);
+}
+
 
 public interface IYouTubeAuthService
 {

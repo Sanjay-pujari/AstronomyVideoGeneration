@@ -12,6 +12,7 @@ public sealed class MetaPublishService : IMetaPublishService
 
     private readonly IPipelineRepository _repository;
     private readonly IFacebookReelPublishService _facebookReelPublishService;
+    private readonly IInstagramReelPublishService _instagramReelPublishService;
     private readonly MetaPublishingOptions _options;
     private readonly MaintenanceOptions _maintenanceOptions;
     private readonly ILogger<MetaPublishService> _logger;
@@ -19,12 +20,14 @@ public sealed class MetaPublishService : IMetaPublishService
     public MetaPublishService(
         IPipelineRepository repository,
         IFacebookReelPublishService facebookReelPublishService,
+        IInstagramReelPublishService instagramReelPublishService,
         IOptions<MetaPublishingOptions> options,
         IOptions<MaintenanceOptions> maintenanceOptions,
         ILogger<MetaPublishService> logger)
     {
         _repository = repository;
         _facebookReelPublishService = facebookReelPublishService;
+        _instagramReelPublishService = instagramReelPublishService;
         _options = options.Value;
         _maintenanceOptions = maintenanceOptions.Value;
         _logger = logger;
@@ -35,49 +38,89 @@ public sealed class MetaPublishService : IMetaPublishService
         var mode = NormalizeMode(_options.Mode);
         if (mode == "Disabled")
         {
-            return [new MetaPublishResult { Success = false, Platform = "Facebook", Mode = mode, Error = "Meta publishing is disabled.", PublishedUtc = DateTime.UtcNow }];
+            return [new MetaPublishResult { Success = false, Platform = "Meta", Mode = mode, Error = "Meta publishing is disabled.", PublishedUtc = DateTime.UtcNow }];
         }
 
         var run = await _repository.GetAsync(pipelineRunId, cancellationToken);
         if (run is null)
         {
-            return [new MetaPublishResult { Success = false, Platform = "Facebook", Mode = mode, Error = $"Pipeline run {pipelineRunId} was not found.", PublishedUtc = DateTime.UtcNow }];
+            return [new MetaPublishResult { Success = false, Platform = "Meta", Mode = mode, Error = $"Pipeline run {pipelineRunId} was not found.", PublishedUtc = DateTime.UtcNow }];
         }
 
         var selector = NormalizeAsset(asset);
-        if (selector != "all" && selector != "facebook-reel")
+        if (selector != "all" && selector != "facebook-reel" && selector != "instagram-reel")
         {
-            return [new MetaPublishResult { Success = false, Platform = "Facebook", Mode = mode, Error = $"Unsupported Meta publish asset '{asset}'. Only facebook-reel is implemented.", PublishedUtc = DateTime.UtcNow }];
+            return [new MetaPublishResult { Success = false, Platform = "Meta", Mode = mode, Error = $"Unsupported Meta publish asset '{asset}'. Supported assets are facebook-reel, instagram-reel, and all.", PublishedUtc = DateTime.UtcNow }];
         }
 
-        if (!_options.PublishFacebookReel)
+        var publishFacebook = (selector == "all" || selector == "facebook-reel") && _options.PublishFacebookReel;
+        var publishInstagram = (selector == "all" || selector == "instagram-reel") && _options.PublishInstagramReel;
+        if (!publishFacebook && !publishInstagram)
         {
-            return [new MetaPublishResult { Success = false, Platform = "Facebook", Mode = mode, Error = "Facebook Reel publishing is disabled by configuration.", PublishedUtc = DateTime.UtcNow }];
+            var platform = selector == "instagram-reel" ? "Instagram" : selector == "facebook-reel" ? "Facebook" : "Meta";
+            return [new MetaPublishResult { Success = false, Platform = platform, Mode = mode, Error = "Requested Meta Reel publishing is disabled by configuration.", PublishedUtc = DateTime.UtcNow }];
+        }
+
+        if (_options.PublishFacebookFullVideo || _options.PublishInstagramFullVideo)
+        {
+            _logger.LogWarning("Meta full-video publishing flags are ignored. Only shorts/short-video.mp4 is eligible for Facebook and Instagram Reels.");
         }
 
         var outputDirectory = ResolveOutputDirectory(run);
         Directory.CreateDirectory(outputDirectory);
         var videoPath = Path.Combine(outputDirectory, "shorts", "short-video.mp4");
-        var metadata = await ReadFacebookMetadataAsync(outputDirectory, cancellationToken);
-        var caption = await BuildFacebookCaptionAsync(outputDirectory, run, metadata, cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "facebook-reel-caption.txt"), caption, cancellationToken);
+        var results = new List<MetaPublishResult>();
 
-        var request = new MetaPublishRequest
+        if (publishFacebook)
         {
-            PipelineRunId = pipelineRunId,
-            Platform = "Facebook",
-            VideoPath = videoPath,
-            Caption = caption,
-            ShortTitle = BuildFacebookShortTitle(metadata?.Title, caption),
-            IsReel = true
-        };
+            var metadata = await ReadFacebookMetadataAsync(outputDirectory, cancellationToken);
+            var caption = await BuildFacebookCaptionAsync(outputDirectory, run, metadata, cancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(outputDirectory, "facebook-reel-caption.txt"), caption, cancellationToken);
 
-        var result = await _facebookReelPublishService.PublishReelAsync(request, cancellationToken);
-        _logger.LogInformation("Facebook Reel publish for run {PipelineRunId} completed with success={Success} mode={Mode}.", pipelineRunId, result.Success, result.Mode);
-        return [result];
+            var request = new MetaPublishRequest
+            {
+                PipelineRunId = pipelineRunId,
+                Platform = "Facebook",
+                VideoPath = videoPath,
+                Caption = caption,
+                ShortTitle = BuildFacebookShortTitle(metadata?.Title, caption),
+                IsReel = true
+            };
+
+            var result = await _facebookReelPublishService.PublishReelAsync(request, cancellationToken);
+            _logger.LogInformation("Facebook Reel publish for run {PipelineRunId} completed with success={Success} mode={Mode}.", pipelineRunId, result.Success, result.Mode);
+            results.Add(result);
+        }
+
+        if (publishInstagram)
+        {
+            var metadata = await ReadInstagramMetadataAsync(outputDirectory, cancellationToken);
+            var caption = await BuildInstagramCaptionAsync(outputDirectory, run, metadata, cancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(outputDirectory, "instagram-reel-caption.txt"), caption, cancellationToken);
+
+            var request = new MetaPublishRequest
+            {
+                PipelineRunId = pipelineRunId,
+                Platform = "Instagram",
+                VideoPath = videoPath,
+                Caption = caption,
+                ShortTitle = BuildFacebookShortTitle(metadata?.Title, caption),
+                IsReel = true
+            };
+
+            var result = await _instagramReelPublishService.PublishReelAsync(request, cancellationToken);
+            _logger.LogInformation("Instagram Reel publish for run {PipelineRunId} completed with success={Success} mode={Mode}.", pipelineRunId, result.Success, result.Mode);
+            results.Add(result);
+        }
+
+        return results;
     }
 
     private static async Task<SeoMetadataResult?> ReadFacebookMetadataAsync(string outputDirectory, CancellationToken cancellationToken)
+        => await TryReadMetadataAsync(Path.Combine(outputDirectory, "shorts", "seo-metadata.json"), cancellationToken)
+            ?? await TryReadMetadataAsync(Path.Combine(outputDirectory, "seo-metadata.json"), cancellationToken);
+
+    private static async Task<SeoMetadataResult?> ReadInstagramMetadataAsync(string outputDirectory, CancellationToken cancellationToken)
         => await TryReadMetadataAsync(Path.Combine(outputDirectory, "shorts", "seo-metadata.json"), cancellationToken)
             ?? await TryReadMetadataAsync(Path.Combine(outputDirectory, "seo-metadata.json"), cancellationToken);
 
@@ -113,6 +156,52 @@ public sealed class MetaPublishService : IMetaPublishService
 
         var caption = string.Join(Environment.NewLine, lines.Where(x => !string.IsNullOrWhiteSpace(x)));
         return caption.Length <= 1800 ? caption : caption[..1800].TrimEnd();
+    }
+
+
+    private async Task<string> BuildInstagramCaptionAsync(string outputDirectory, PipelineRun run, SeoMetadataResult? metadata, CancellationToken cancellationToken)
+    {
+        var selectedObjects = await ReadSelectedObjectsAsync(outputDirectory, cancellationToken);
+        var location = string.IsNullOrWhiteSpace(run.LocationName) ? "your night sky" : run.LocationName.Trim();
+        var hook = !string.IsNullOrWhiteSpace(metadata?.Title)
+            ? metadata!.Title.Trim()
+            : $"Tonight's sky from {location}";
+
+        var lines = new List<string> { hook };
+        if (!string.IsNullOrWhiteSpace(location))
+        {
+            lines.Add($"Location: {location}");
+        }
+
+        if (selectedObjects.Count > 0)
+        {
+            lines.Add($"Featured: {string.Join(", ", selectedObjects.Take(5))}");
+        }
+
+        var hashtags = EnsureInstagramHashtags(_options.CaptionHashtagSuffix);
+        lines.Add(hashtags);
+
+        var caption = string.Join(Environment.NewLine, lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+        return caption.Length <= 1800 ? caption : caption[..1800].TrimEnd();
+    }
+
+    private static string EnsureInstagramHashtags(string? configuredSuffix)
+    {
+        var tags = new List<string>();
+        if (!string.IsNullOrWhiteSpace(configuredSuffix))
+        {
+            tags.AddRange(configuredSuffix.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        }
+
+        foreach (var required in new[] { "#Astronomy", "#NightSky", "#Stargazing", "#Reels" })
+        {
+            if (!tags.Any(x => x.Equals(required, StringComparison.OrdinalIgnoreCase)))
+            {
+                tags.Add(required);
+            }
+        }
+
+        return string.Join(' ', tags);
     }
 
 
@@ -241,5 +330,6 @@ public sealed class MetaPublishService : IMetaPublishService
     private static string NormalizeAsset(string? asset)
         => string.IsNullOrWhiteSpace(asset) || string.Equals(asset, "all", StringComparison.OrdinalIgnoreCase) ? "all"
             : string.Equals(asset, "facebook-reel", StringComparison.OrdinalIgnoreCase) ? "facebook-reel"
+            : string.Equals(asset, "instagram-reel", StringComparison.OrdinalIgnoreCase) ? "instagram-reel"
             : asset.Trim();
 }
