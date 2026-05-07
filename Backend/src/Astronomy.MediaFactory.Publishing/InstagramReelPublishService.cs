@@ -19,7 +19,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
     private readonly MetaOptions _metaOptions;
     private readonly MetaPublishingOptions _publishingOptions;
     private readonly RenderingOptions _renderingOptions;
-    private readonly IAzureBlobStorageService? _blobStorageService;
+    private readonly IPublicMediaStorageService? _publicMediaStorageService;
     private readonly ILogger<InstagramReelPublishService> _logger;
 
     public InstagramReelPublishService(
@@ -28,14 +28,14 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         IOptions<MetaPublishingOptions> publishingOptions,
         IOptions<RenderingOptions> renderingOptions,
         ILogger<InstagramReelPublishService> logger,
-        IAzureBlobStorageService? blobStorageService = null)
+        IPublicMediaStorageService? publicMediaStorageService = null)
     {
         _httpClient = httpClient;
         _metaOptions = metaOptions.Value;
         _publishingOptions = publishingOptions.Value;
         _renderingOptions = renderingOptions.Value;
         _logger = logger;
-        _blobStorageService = blobStorageService;
+        _publicMediaStorageService = publicMediaStorageService;
     }
 
     public async Task<MetaPublishResult> PublishReelAsync(MetaPublishRequest request, CancellationToken cancellationToken)
@@ -47,13 +47,17 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         MetaPublishResult result;
         InstagramContainerDiagnostics? containerDiagnostics = null;
         InstagramPublishDiagnostics? publishDiagnostics = null;
+        PublicMediaUploadResult? publicMediaUpload = null;
         try
         {
             var token = await LoadTokenAsync(cancellationToken);
             var accessToken = string.IsNullOrWhiteSpace(token.FacebookPageAccessToken) ? token.LongLivedUserAccessToken : token.FacebookPageAccessToken;
-            var publicVideoUrl = await ResolvePublicVideoUrlAsync(request, cancellationToken);
+            var publicVideo = await ResolvePublicVideoUrlAsync(request, mode, cancellationToken);
+            publicMediaUpload = publicVideo.UploadResult;
+            var publicVideoUrl = publicVideo.PublicUrl;
             var safePublicVideoUrl = RedactSensitiveQuery(publicVideoUrl);
-            await WritePayloadAsync(outputDirectory, token, request, mode, safePublicVideoUrl, cancellationToken);
+            await WritePublicMediaUploadResultAsync(outputDirectory, request.VideoPath, publicMediaUpload, publicVideoUrl, cancellationToken);
+            await WritePayloadAsync(outputDirectory, token, request, mode, safePublicVideoUrl, publicMediaUpload, cancellationToken);
 
             if (mode == "Disabled")
             {
@@ -65,7 +69,9 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             }
             else
             {
-                var validationError = await ValidateBeforePublishAsync(request.VideoPath, publicVideoUrl, cancellationToken);
+                var validationError = publicMediaUpload is { Success: false }
+                    ? publicMediaUpload.Error
+                    : await ValidateBeforePublishAsync(request.VideoPath, publicVideoUrl, cancellationToken);
                 if (validationError is not null)
                 {
                     result = Failed(mode, validationError);
@@ -85,6 +91,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             result = Failed(mode, ex.Message);
         }
 
+        await WritePublicMediaUploadResultAsync(outputDirectory, request.VideoPath, publicMediaUpload, null, cancellationToken);
         await WriteContainerResultAsync(outputDirectory, containerDiagnostics, result, cancellationToken);
         await WritePublishResultAsync(outputDirectory, publishDiagnostics, result, cancellationToken);
         return result;
@@ -204,39 +211,46 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         return new InstagramContainerPollResult(false, latest?.StatusCode, latest?.Status, maxAttempts);
     }
 
-    private async Task<string?> ResolvePublicVideoUrlAsync(MetaPublishRequest request, CancellationToken cancellationToken)
+    private async Task<(string? PublicUrl, PublicMediaUploadResult? UploadResult)> ResolvePublicVideoUrlAsync(MetaPublishRequest request, string mode, CancellationToken cancellationToken)
     {
-        if (_publishingOptions.PublicMediaUploadEnabled && _blobStorageService is not null)
+        if (mode != "DryRun" && mode != "Disabled")
         {
-            var upload = await _blobStorageService.UploadAsync(new BlobUploadRequest
+            if (!File.Exists(request.VideoPath))
             {
-                BasePath = $"meta/{request.PipelineRunId:N}/instagram-reel",
-                VideoPath = request.VideoPath,
-                AudioPath = string.Empty
-            }, cancellationToken);
-            if (IsPublicHttpsUrl(upload.VideoUrl))
-            {
-                return upload.VideoUrl;
+                throw new FileNotFoundException("Instagram Reel video is missing: shorts/short-video.mp4.", request.VideoPath);
             }
+
+            if (_publicMediaStorageService is null)
+            {
+                return (null, new PublicMediaUploadResult { Success = false, Error = "PublicMediaStorage is not configured for Instagram Reel publishing." });
+            }
+
+            var upload = await _publicMediaStorageService.UploadForInstagramAsync(request.VideoPath, request.PipelineRunId, cancellationToken);
+            if (!upload.Success)
+            {
+                return (null, upload);
+            }
+
+            return (upload.PublicUrl, upload);
         }
 
         var configured = _publishingOptions.PublicMediaBaseUrl?.Trim();
         if (string.IsNullOrWhiteSpace(configured))
         {
-            return null;
+            return (null, null);
         }
 
         if (Uri.TryCreate(configured, UriKind.Absolute, out var absolute) && absolute.Scheme == Uri.UriSchemeHttps && absolute.AbsolutePath.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase))
         {
-            return absolute.ToString();
+            return (absolute.ToString(), null);
         }
 
         if (Uri.TryCreate(configured.TrimEnd('/') + "/" + Uri.EscapeDataString(Path.GetFileName(request.VideoPath)), UriKind.Absolute, out var combined) && combined.Scheme == Uri.UriSchemeHttps)
         {
-            return combined.ToString();
+            return (combined.ToString(), null);
         }
 
-        return null;
+        return (null, null);
     }
 
     private async Task<string?> ValidateBeforePublishAsync(string videoPath, string? publicVideoUrl, CancellationToken cancellationToken)
@@ -254,6 +268,12 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         if (!IsPublicHttpsUrl(publicVideoUrl))
         {
             return MissingPublicVideoUrlMessage;
+        }
+
+        var reachabilityError = await ValidatePublicUrlReachableAsync(publicVideoUrl!, cancellationToken);
+        if (reachabilityError is not null)
+        {
+            return reachabilityError;
         }
 
         var validation = await YouTubeShortsValidation.ValidateBeforeUploadAsync(videoPath, _renderingOptions.FfprobePath, cancellationToken);
@@ -335,19 +355,56 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         }
     }
 
-    private static async Task WritePayloadAsync(string outputDirectory, MetaOAuthTokenFile token, MetaPublishRequest request, string mode, string? publicVideoUrl, CancellationToken cancellationToken)
+    private async Task<string?> ValidatePublicUrlReachableAsync(string publicVideoUrl, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Head, publicVideoUrl);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return $"Instagram Reel public video_url is not reachable by HEAD request. Status={(int)response.StatusCode}.";
+        }
+
+        if (response.Content.Headers.ContentType?.MediaType is { } mediaType && !string.Equals(mediaType, "video/mp4", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Instagram Reel public video_url content type is '{mediaType}'; expected video/mp4.";
+        }
+
+        return null;
+    }
+
+    private static async Task WritePayloadAsync(string outputDirectory, MetaOAuthTokenFile token, MetaPublishRequest request, string mode, string? publicVideoUrl, PublicMediaUploadResult? upload, CancellationToken cancellationToken)
     {
         var payload = new
         {
             instagramBusinessAccountId = token.InstagramBusinessAccountId,
             instagramUsername = token.InstagramUsername,
             localVideoPath = request.VideoPath,
-            publicVideoUrl,
+            localFilePath = request.VideoPath,
+            blobName = upload?.BlobName,
+            publicUrlMasked = publicVideoUrl,
+            expiresUtc = upload?.ExpiresUtc,
+            instagramVideoUrlUsedMasked = publicVideoUrl,
             caption = request.Caption,
             mode,
             generatedAtUtc = DateTime.UtcNow
         };
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "instagram-reel-publish-payload.json"), JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+    }
+
+    private static async Task WritePublicMediaUploadResultAsync(string outputDirectory, string localFilePath, PublicMediaUploadResult? upload, string? instagramVideoUrlUsed, CancellationToken cancellationToken)
+    {
+        var publicUrl = upload?.PublicUrl ?? instagramVideoUrlUsed;
+        var payload = new
+        {
+            localFilePath,
+            blobName = upload?.BlobName,
+            publicUrlMasked = RedactSensitiveQuery(publicUrl),
+            expiresUtc = upload?.ExpiresUtc,
+            instagramVideoUrlUsedMasked = RedactSensitiveQuery(instagramVideoUrlUsed ?? upload?.PublicUrl),
+            success = upload?.Success,
+            error = upload?.Error
+        };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "public-media-upload-result.json"), JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
     }
 
     private static async Task WriteContainerResultAsync(string outputDirectory, InstagramContainerDiagnostics? diagnostics, MetaPublishResult result, CancellationToken cancellationToken)
