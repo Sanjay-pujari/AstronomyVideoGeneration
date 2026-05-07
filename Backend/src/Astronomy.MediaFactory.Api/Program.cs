@@ -24,6 +24,22 @@ if (!string.IsNullOrWhiteSpace(telemetryOptions.ApplicationInsightsConnectionStr
     builder.Services.AddApplicationInsightsTelemetry();
 }
 
+const string DevelopmentCorsPolicy = "DevelopmentCorsPolicy";
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(DevelopmentCorsPolicy, policy =>
+    {
+        policy
+            .SetIsOriginAllowed(origin =>
+                builder.Environment.IsDevelopment()
+                && Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                && (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || uri.Host.Equals("127.0.0.1", StringComparison.Ordinal)))
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
+
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
@@ -39,6 +55,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
+app.UseCors(DevelopmentCorsPolicy);
 
 app.MapControllers();
 app.MapGet("/", () => Results.Ok(new { service = "Astronomy.MediaFactory.Api", status = "ok" }));

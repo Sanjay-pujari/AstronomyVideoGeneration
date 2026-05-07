@@ -25,20 +25,35 @@ public sealed class MetaOAuthController : ControllerBase
         try
         {
             var authorizationUrl = _metaOAuthService.BuildAuthorizationUrl();
-            if (redirect)
+            if (redirect && IsTopLevelNavigationRequest())
             {
                 return Redirect(authorizationUrl);
             }
 
+            var message = redirect
+                ? "Use authorizationUrl as a top-level browser navigation. Token files are generated after Meta redirects back to the callback."
+                : "Open authorizationUrl in a browser to grant Meta publishing access.";
+
             return Ok(new MetaOAuthStartResponse(
                 Success: true,
                 AuthorizationUrl: authorizationUrl,
-                Message: "Open authorizationUrl in a browser to grant Meta publishing access."));
+                Message: message));
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { success = false, message = ex.Message });
         }
+    }
+
+    private bool IsTopLevelNavigationRequest()
+    {
+        if (Request.Headers.ContainsKey("Origin"))
+        {
+            return false;
+        }
+
+        var fetchMode = Request.Headers["Sec-Fetch-Mode"].ToString();
+        return string.IsNullOrWhiteSpace(fetchMode) || string.Equals(fetchMode, "navigate", StringComparison.OrdinalIgnoreCase);
     }
 
     [HttpGet("callback")]
