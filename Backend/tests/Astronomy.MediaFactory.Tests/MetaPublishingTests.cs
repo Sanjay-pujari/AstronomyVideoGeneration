@@ -87,9 +87,9 @@ public sealed class MetaPublishingTests
         Assert.Equal("post-456", result.PostId);
         Assert.Equal(new[] { "start", "upload", "finish" }, handler.Requests.Take(3).Select(x => x.Phase).ToArray());
         Assert.Contains("Authorization", handler.Requests[1].Headers.Keys);
-        Assert.Equal("0", handler.Requests[1].Headers["offset"});
-        Assert.Equal(new FileInfo(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4")).Length.ToString(System.Globalization.CultureInfo.InvariantCulture), handler.Requests[1].Headers["file_size"});
-        Assert.Equal("application/octet-stream", handler.Requests[1].ContentHeaders["Content-Type"});
+        Assert.Equal("0", handler.Requests[1].Headers["offset"]);
+        Assert.Equal(new FileInfo(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4")).Length.ToString(System.Globalization.CultureInfo.InvariantCulture), handler.Requests[1].Headers["file_size"]);
+        Assert.Equal("application/octet-stream", handler.Requests[1].ContentHeaders["Content-Type"]);
     }
 
 
