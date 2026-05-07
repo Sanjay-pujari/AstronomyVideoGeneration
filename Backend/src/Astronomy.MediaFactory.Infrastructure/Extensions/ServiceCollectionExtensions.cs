@@ -69,6 +69,12 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.Mode is null || options.Mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("DryRun", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Private", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Public", StringComparison.OrdinalIgnoreCase), "MetaPublishing:Mode must be Disabled, DryRun, Private, or Public.")
             .ValidateOnStart();
 
+        services.AddOptions<PublicMediaStorageOptions>()
+            .Bind(configuration.GetSection(PublicMediaStorageOptions.SectionName))
+            .Validate(options => !options.Enabled || options.Provider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase), "PublicMediaStorage:Provider must be AzureBlob when public media storage is enabled.")
+            .Validate(options => options.SasExpiryHours > 0, "PublicMediaStorage:SasExpiryHours must be greater than zero.")
+            .ValidateOnStart();
+
         services.AddOptions<PlatformPublishingOptions>()
             .Bind(configuration.GetSection(PlatformPublishingOptions.SectionName))
             .Validate(options => options.PublishRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds && options.PublishRetryCooldownSeconds > 0, "Platform publishing retry settings are invalid.")
@@ -230,6 +236,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IThumbnailGeneratorService, ThumbnailGeneratorService>();
         services.AddScoped<ISeoMetadataGeneratorService, SeoMetadataGeneratorService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
+        services.AddScoped<IPublicMediaStorageService, AzureBlobPublicMediaStorageService>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
         services.AddHttpClient<IYouTubeAuthService, YouTubeAuthService>();

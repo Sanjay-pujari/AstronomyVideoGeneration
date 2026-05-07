@@ -282,6 +282,15 @@ public sealed class BlobUploadResult
     public string? ThumbnailUrl { get; init; }
 }
 
+public sealed class PublicMediaUploadResult
+{
+    public bool Success { get; init; }
+    public string PublicUrl { get; init; } = string.Empty;
+    public string BlobName { get; init; } = string.Empty;
+    public string Error { get; init; } = string.Empty;
+    public DateTime ExpiresUtc { get; init; }
+}
+
 public sealed class ShortVideoRenderResult
 {
     public required ShortScriptResult Script { get; init; }

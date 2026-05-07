@@ -251,7 +251,7 @@ public sealed class MetaPublishingTests
     }
 
     [Fact]
-    public async Task InstagramRealMode_MissingPublicVideoUrl_FailsBeforeApi()
+    public async Task InstagramRealMode_MissingStorageService_FailsBeforeApi()
     {
         using var workspace = new TempMetaWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
@@ -261,7 +261,7 @@ public sealed class MetaPublishingTests
         var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
 
         Assert.False(result.Success);
-        Assert.Equal(InstagramReelPublishService.MissingPublicVideoUrlMessage, result.Error);
+        Assert.Equal("PublicMediaStorage is not configured for Instagram Reel publishing.", result.Error);
         Assert.Empty(handler.Requests);
     }
 
@@ -306,7 +306,7 @@ public sealed class MetaPublishingTests
         var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
 
         Assert.True(result.Success);
-        Assert.Equal(new[] { "ig-container", "ig-poll", "ig-publish", "ig-details" }, handler.Requests.Select(x => x.Phase).ToArray());
+        Assert.Equal(new[] { "head-public-url", "ig-container", "ig-poll", "ig-publish", "ig-details" }, handler.Requests.Select(x => x.Phase).ToArray());
         Assert.Equal("ig-media-456", result.VideoId);
     }
 
@@ -350,6 +350,74 @@ public sealed class MetaPublishingTests
 
 
     [Fact]
+    public async Task InstagramPublicMediaUpload_WritesConfiguredBlobPath()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var storage = new RecordingPublicMediaStorageService("https://storage.example.test/meta-media/astronomy/reels/" + run.Id + "/short-video.mp4?sig=secret");
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 1 }, storage);
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4"), storage.LocalFilePath);
+        Assert.Equal(run.Id, storage.PipelineRunId);
+        var diagnostics = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "public-media-upload-result.json"));
+        Assert.Contains($"astronomy/reels/{run.Id}/short-video.mp4", diagnostics);
+        Assert.DoesNotContain("sig=secret", diagnostics);
+    }
+
+    [Fact]
+    public async Task InstagramMediaCall_ReceivesUploadedVideoUrl()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var storage = new RecordingPublicMediaStorageService("https://storage.example.test/meta-media/astronomy/reels/" + run.Id + "/short-video.mp4?sig=secret");
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 1 }, storage);
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        var container = handler.Requests.Single(x => x.Phase == "ig-container");
+        Assert.Contains("video_url=https%3A%2F%2Fstorage.example.test%2Fmeta-media%2Fastronomy%2Freels%2F", container.Body);
+        Assert.Contains("%2Fshort-video.mp4%3Fsig%3Dsecret", container.Body);
+    }
+
+    [Fact]
+    public async Task InstagramRealMode_MissingStorageConfig_FailsClearly()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var storage = new RecordingPublicMediaStorageService("", success: false, error: "PublicMediaStorage:ConnectionString is required for Azure Blob public media uploads.");
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true }, storage);
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.False(result.Success);
+        Assert.Equal("PublicMediaStorage:ConnectionString is required for Azure Blob public media uploads.", result.Error);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task FacebookPublishing_DoesNotUsePublicMediaStorage()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] { "PUBLISHED" }) };
+        var storage = new RecordingPublicMediaStorageService("https://storage.example.test/unused.mp4?sig=secret");
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, PublishInstagramReel = false, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1 }, storage);
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.False(storage.Called);
+        Assert.Equal(new[] { "start", "upload", "finish", "verify-video" }, handler.Requests.Select(x => x.Phase).ToArray());
+    }
+
+    [Fact]
     public async Task YouTubePublishing_RemainsUnaffected()
     {
         using var workspace = new TempMetaWorkspace();
@@ -373,8 +441,9 @@ public sealed class MetaPublishingTests
 
 internal static class MetaPublishingTestFactory
 {
-    public static MetaPublishService CreateMetaService(TempMetaWorkspace workspace, IPipelineRepository repository, TrackingMetaHandler handler, MetaPublishingOptions options)
+    public static MetaPublishService CreateMetaService(TempMetaWorkspace workspace, IPipelineRepository repository, TrackingMetaHandler handler, MetaPublishingOptions options, IPublicMediaStorageService? publicMediaStorageService = null)
     {
+        publicMediaStorageService ??= string.IsNullOrWhiteSpace(options.PublicMediaBaseUrl) ? null : new FixedPublicMediaStorageService(options.PublicMediaBaseUrl);
         var facebook = new FacebookReelPublishService(
             new HttpClient(handler),
             Options.Create(new MetaOptions { TokenFilePath = workspace.TokenPath }),
@@ -387,7 +456,8 @@ internal static class MetaPublishingTestFactory
             Options.Create(new MetaOptions { TokenFilePath = workspace.TokenPath }),
             Options.Create(options),
             Options.Create(new RenderingOptions { FfprobePath = "missing-ffprobe-for-tests" }),
-            NullLogger<InstagramReelPublishService>.Instance);
+            NullLogger<InstagramReelPublishService>.Instance,
+            publicMediaStorageService);
 
         return new MetaPublishService(
             repository,
@@ -396,6 +466,49 @@ internal static class MetaPublishingTestFactory
             Options.Create(options),
             Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }),
             NullLogger<MetaPublishService>.Instance);
+    }
+}
+
+internal sealed class FixedPublicMediaStorageService : IPublicMediaStorageService
+{
+    private readonly string _publicUrl;
+
+    public FixedPublicMediaStorageService(string publicUrl) => _publicUrl = publicUrl;
+
+    public Task<PublicMediaUploadResult> UploadForInstagramAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken)
+        => Task.FromResult(new PublicMediaUploadResult { Success = true, PublicUrl = _publicUrl, BlobName = $"astronomy/reels/{pipelineRunId}/short-video.mp4", ExpiresUtc = DateTime.UtcNow.AddHours(24) });
+}
+
+internal sealed class RecordingPublicMediaStorageService : IPublicMediaStorageService
+{
+    private readonly string _publicUrl;
+    private readonly bool _success;
+    private readonly string _error;
+
+    public bool Called { get; private set; }
+    public string? LocalFilePath { get; private set; }
+    public Guid PipelineRunId { get; private set; }
+
+    public RecordingPublicMediaStorageService(string publicUrl, bool success = true, string error = "")
+    {
+        _publicUrl = publicUrl;
+        _success = success;
+        _error = error;
+    }
+
+    public Task<PublicMediaUploadResult> UploadForInstagramAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken)
+    {
+        Called = true;
+        LocalFilePath = localFilePath;
+        PipelineRunId = pipelineRunId;
+        return Task.FromResult(new PublicMediaUploadResult
+        {
+            Success = _success,
+            PublicUrl = _publicUrl,
+            BlobName = $"astronomy/reels/{pipelineRunId}/short-video.mp4",
+            Error = _error,
+            ExpiresUtc = DateTime.UtcNow.AddHours(24)
+        });
     }
 }
 
@@ -445,6 +558,14 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
+        if (request.Method == HttpMethod.Head && request.RequestUri!.Scheme == Uri.UriSchemeHttps)
+        {
+            Requests.Add(("head-public-url", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Array.Empty<byte>()) };
+            response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("video/mp4");
+            return response;
+        }
+
         if (request.RequestUri!.AbsolutePath.EndsWith("/media", StringComparison.OrdinalIgnoreCase) && body.Contains("media_type=REELS", StringComparison.Ordinal))
         {
             Requests.Add(("ig-container", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
