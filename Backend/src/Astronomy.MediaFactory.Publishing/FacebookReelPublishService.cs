@@ -306,7 +306,10 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
     }
 
     private static async Task WriteResultAsync(string outputDirectory, FacebookReelPublishDiagnostics? diagnostics, MetaPublishResult result, CancellationToken cancellationToken)
-        => await File.WriteAllTextAsync(Path.Combine(outputDirectory, "facebook-reel-publish-result.json"), JsonSerializer.Serialize(diagnostics ?? result, JsonOptions), cancellationToken);
+    {
+        var output = diagnostics is null ? (object)result : diagnostics;
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "facebook-reel-publish-result.json"), JsonSerializer.Serialize(output, JsonOptions), cancellationToken);
+    }
 
     private static MetaPublishResult Failed(string mode, string error)
         => new() { Success = false, Platform = "Facebook", Mode = mode, Error = error, PublishedUtc = DateTime.UtcNow };
