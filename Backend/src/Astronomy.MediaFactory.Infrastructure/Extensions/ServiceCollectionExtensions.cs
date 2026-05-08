@@ -5,6 +5,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure;
 using Astronomy.MediaFactory.Infrastructure.Alerting;
+using Astronomy.MediaFactory.Infrastructure.Analytics;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Operations;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -143,6 +144,11 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(TelemetryOptions.SectionName))
             .ValidateOnStart();
 
+        services.AddOptions<AnalyticsOptions>()
+            .Bind(configuration.GetSection(AnalyticsOptions.SectionName))
+            .Validate(options => options.CollectEveryMinutes > 0 && options.CollectForRecentDays > 0, "Analytics collection values must be > 0.")
+            .ValidateOnStart();
+
         services.AddOptions<SchedulerOptions>()
             .Bind(configuration.GetSection(SchedulerOptions.SectionName))
             .Validate(options => options.MaxConcurrentRuns > 0, "Scheduler:MaxConcurrentRuns must be greater than 0.")
@@ -268,6 +274,14 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IYouTubePublishService, YouTubePublishService>();
         services.AddScoped<IContentPublishService, ContentPublishService>();
         services.AddScoped<IYouTubeAnalyticsService, YouTubeAnalyticsService>();
+        services.AddScoped<IYouTubeAnalyticsCollector, YouTubeAnalyticsCollector>();
+        services.AddScoped<IPlatformAnalyticsCollector>(sp => sp.GetRequiredService<IYouTubeAnalyticsCollector>());
+        services.AddHttpClient<IFacebookAnalyticsCollector, FacebookAnalyticsCollector>();
+        services.AddScoped<IPlatformAnalyticsCollector>(sp => sp.GetRequiredService<IFacebookAnalyticsCollector>());
+        services.AddHttpClient<IInstagramAnalyticsCollector, InstagramAnalyticsCollector>();
+        services.AddScoped<IPlatformAnalyticsCollector>(sp => sp.GetRequiredService<IInstagramAnalyticsCollector>());
+        services.AddScoped<IAnalyticsCollectionService, AnalyticsCollectionService>();
+        services.AddHostedService<AnalyticsCollectionBackgroundService>();
         services.AddScoped<IShortsVideoRenderService, ShortsVideoRenderService>();
         services.AddScoped<IShortFormPlatformMetadataFormatter>(sp => new PlatformMetadataFormatter(sp.GetRequiredService<IOptions<PlatformPublishingOptions>>().Value));
         services.AddScoped<IShortFormPlatformPublisher, YouTubeShortsPlatformPublisher>();

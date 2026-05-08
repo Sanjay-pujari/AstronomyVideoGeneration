@@ -106,6 +106,22 @@ public interface IPublicMediaStorageService
 public interface IYouTubePublishingService { Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken); }
 public interface IYouTubeThumbnailPublisher { Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken); }
 public interface IYouTubeAnalyticsService { Task<YouTubeVideoAnalyticsSnapshot?> GetVideoAnalyticsAsync(string videoId, CancellationToken cancellationToken); }
+
+public interface IAnalyticsCollectionService
+{
+    Task CollectRecentAnalyticsAsync(CancellationToken cancellationToken);
+    Task CollectForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken);
+}
+
+public interface IPlatformAnalyticsCollector
+{
+    string Platform { get; }
+    Task<PlatformContentAnalytics> CollectAsync(PlatformAnalyticsCollectionContext context, CancellationToken cancellationToken);
+}
+
+public interface IYouTubeAnalyticsCollector : IPlatformAnalyticsCollector { }
+public interface IFacebookAnalyticsCollector : IPlatformAnalyticsCollector { }
+public interface IInstagramAnalyticsCollector : IPlatformAnalyticsCollector { }
 public interface IAnalyticsAggregationService
 {
     Task<AnalyticsAggregationSummary> BuildSummaryAsync(DateTimeOffset? from, DateTimeOffset? to, int topN, CancellationToken cancellationToken);
@@ -182,6 +198,10 @@ public interface IPipelineRepository {
  Task<IReadOnlyCollection<PublishedVideo>> GetRecentPublishedVideosAsync(DateTimeOffset from, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<GeneratedScript>> GetRecentGeneratedScriptsAsync(DateTimeOffset from, CancellationToken cancellationToken);
  Task AddVideoAnalyticsAsync(VideoAnalytics analytics, CancellationToken cancellationToken);
+ Task UpsertPlatformContentAnalyticsAsync(PlatformContentAnalytics analytics, CancellationToken cancellationToken) => Task.CompletedTask;
+ Task<IReadOnlyCollection<PlatformContentAnalytics>> GetPlatformContentAnalyticsAsync(PlatformAnalyticsQuery query, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PlatformContentAnalytics>>([]);
+ Task<IReadOnlyCollection<PlatformContentAnalytics>> GetPlatformContentAnalyticsByRunAsync(Guid pipelineRunId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PlatformContentAnalytics>>([]);
+ Task<AnalyticsDashboardSummary> GetAnalyticsDashboardSummaryAsync(int days, CancellationToken cancellationToken) => Task.FromResult(new AnalyticsDashboardSummary([], 0, 0, null, null, null));
  Task<IReadOnlyCollection<VideoAnalytics>> GetRecentAnalyticsAsync(int take, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsWindowAsync(DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsByVideoIdAsync(string videoId, CancellationToken cancellationToken);

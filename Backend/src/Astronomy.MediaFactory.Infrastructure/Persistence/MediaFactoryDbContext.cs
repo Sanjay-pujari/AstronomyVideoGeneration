@@ -17,6 +17,7 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<PlatformPublicationRecord> PlatformPublicationRecords => Set<PlatformPublicationRecord>();
     public DbSet<PipelineJob> PipelineJobs => Set<PipelineJob>();
     public DbSet<VideoAnalytics> VideoAnalytics => Set<VideoAnalytics>();
+    public DbSet<PlatformContentAnalytics> PlatformContentAnalytics => Set<PlatformContentAnalytics>();
     public DbSet<PipelineStageExecution> PipelineStageExecutions => Set<PipelineStageExecution>();
     public DbSet<RecoveryOperation> RecoveryOperations => Set<RecoveryOperation>();
     public DbSet<ContentExperiment> ContentExperiments => Set<ContentExperiment>();
@@ -36,6 +37,7 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<PlatformPublicationRecord>().ToTable("platform_publication_records").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineJob>().ToTable("pipeline_jobs").HasKey(x => x.Id);
         modelBuilder.Entity<VideoAnalytics>().ToTable("video_analytics").HasKey(x => x.Id);
+        modelBuilder.Entity<PlatformContentAnalytics>().ToTable("platform_content_analytics").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineStageExecution>().ToTable("pipeline_stage_executions").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineStageExecution>().Ignore(x => x.StartedUtc);
         modelBuilder.Entity<PipelineStageExecution>().Ignore(x => x.CompletedUtc);
@@ -59,6 +61,10 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentExperiment>().HasIndex(x => new { x.VideoId, x.ExperimentType, x.Status });
         modelBuilder.Entity<ContentVariant>().HasIndex(x => new { x.ContentExperimentId, x.IsWinner });
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => new { x.PublishedVideoId, x.RetrievedAt });
+        modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.Platform);
+        modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.PublishedUtc);
+        modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.PipelineRunId);
+        modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => new { x.Platform, x.PlatformContentType, x.PlatformMediaId, x.CollectedUtc }).IsUnique();
         modelBuilder.Entity<PipelineStageExecution>().HasIndex(x => new { x.PipelineRunId, x.StageName, x.CreatedUtc });
     }
 }

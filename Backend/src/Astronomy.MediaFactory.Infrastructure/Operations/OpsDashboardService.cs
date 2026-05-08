@@ -75,6 +75,10 @@ public sealed class OpsDashboardService : IOpsDashboardService
         var performance = await BuildPerformanceSummaryAsync(cancellationToken);
         warnings.AddRange(performance.Warnings);
 
+        var analyticsSummary = await _db.Set<PlatformContentAnalytics>().AnyAsync(cancellationToken)
+            ? await BuildAnalyticsSummaryAsync(cancellationToken)
+            : new AnalyticsDashboardSummary([], 0, 0, null, null, null);
+
         var diagnostics = BuildDiagnosticsSummary();
         warnings.AddRange(diagnostics.Warnings);
 
@@ -86,6 +90,7 @@ public sealed class OpsDashboardService : IOpsDashboardService
             systemSummary,
             failures,
             performance,
+            analyticsSummary,
             diagnostics,
             warnings.Distinct(StringComparer.Ordinal).ToList());
     }
@@ -165,6 +170,36 @@ public sealed class OpsDashboardService : IOpsDashboardService
             .FirstOrDefault();
 
         return new FailureOpsSummary(failures24, failures7, commonStage, summaries);
+    }
+
+    private async Task<AnalyticsDashboardSummary> BuildAnalyticsSummaryAsync(CancellationToken cancellationToken)
+    {
+        var from = DateTimeOffset.UtcNow.AddDays(-14);
+        var analytics = await _db.PlatformContentAnalytics.AsNoTracking()
+            .Where(x => x.CollectedUtc >= from && x.IsAnalyticsAvailable)
+            .ToListAsync(cancellationToken);
+        var top = analytics
+            .OrderByDescending(x => (x.Likes ?? 0) + (x.Comments ?? 0) + (x.Shares ?? 0))
+            .ThenByDescending(x => x.Views ?? 0)
+            .Take(10)
+            .ToArray();
+        var totalEngagement = analytics.Sum(x => (x.Likes ?? 0) + (x.Comments ?? 0) + (x.Shares ?? 0));
+        var bestPlatform = analytics.GroupBy(x => x.Platform)
+            .OrderByDescending(x => x.Sum(v => v.Views ?? 0))
+            .ThenBy(x => x.Key, StringComparer.Ordinal)
+            .Select(x => x.Key)
+            .FirstOrDefault();
+        var bestReel = analytics
+            .Where(x => x.PlatformContentType.Contains("reel", StringComparison.OrdinalIgnoreCase) || x.PlatformContentType.Contains("short", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => (x.Likes ?? 0) + (x.Comments ?? 0) + (x.Shares ?? 0))
+            .ThenByDescending(x => x.Views ?? 0)
+            .FirstOrDefault();
+        var bestHour = analytics.Where(x => x.PublishedUtc.HasValue)
+            .GroupBy(x => x.PublishedUtc!.Value.UtcDateTime.Hour)
+            .OrderByDescending(x => x.Sum(v => v.Views ?? 0))
+            .Select(x => (int?)x.Key)
+            .FirstOrDefault();
+        return new AnalyticsDashboardSummary(top, analytics.Sum(x => x.Views ?? 0), totalEngagement, bestPlatform, bestReel, bestHour);
     }
 
     private async Task<SchedulerOpsSummary> BuildSchedulerSummaryAsync(CancellationToken cancellationToken)

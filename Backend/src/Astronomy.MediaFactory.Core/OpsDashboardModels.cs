@@ -10,6 +10,7 @@ public sealed record OpsDashboardResponse(
     SystemHealthOpsSummary SystemHealthSummary,
     FailureOpsSummary FailureSummary,
     PerformanceOpsSummary PerformanceSummary,
+    AnalyticsDashboardSummary AnalyticsSummary,
     OpsDashboardDiagnostics Diagnostics,
     IReadOnlyCollection<string> Warnings);
 

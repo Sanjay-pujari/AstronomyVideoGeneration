@@ -14,7 +14,7 @@ namespace Astronomy.MediaFactory.Publishing;
 
 public sealed class YouTubeAnalyticsService : IYouTubeAnalyticsService
 {
-    private static readonly string[] Scopes = [YouTubeService.Scope.YoutubeReadonly];
+    private static readonly string[] Scopes = [YouTubeService.Scope.YoutubeReadonly, "https://www.googleapis.com/auth/yt-analytics.readonly"];
 
     private readonly YouTubeOptions _options;
     private readonly ILogger<YouTubeAnalyticsService> _logger;
