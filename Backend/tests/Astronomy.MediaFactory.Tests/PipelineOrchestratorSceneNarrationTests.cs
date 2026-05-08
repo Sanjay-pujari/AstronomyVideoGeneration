@@ -18,6 +18,7 @@ public sealed class PipelineOrchestratorSceneNarrationTests
         {
             var repository = new InMemoryPipelineRepository();
             var render = new CapturingRenderService();
+            var stageExecutor = new PipelineStageExecutor(repository, NullLogger<PipelineStageExecutor>.Instance);
             var orchestrator = new PipelineOrchestrator(
                 new FakeContextProvider(),
                 new FakeTopicRankingService(),
@@ -37,7 +38,8 @@ public sealed class PipelineOrchestratorSceneNarrationTests
                 Options.Create(new PublishingValidationOptions()),
                 NullLogger<PipelineOrchestrator>.Instance,
                 operationsOptions: Options.Create(new OperationsOptions()),
-                maintenanceOptions: Options.Create(new MaintenanceOptions { WorkingDirectory = tempRoot }));
+                maintenanceOptions: Options.Create(new MaintenanceOptions { WorkingDirectory = tempRoot }),
+                pipelineStageExecutor: stageExecutor);
 
             await orchestrator.RunAsync(new RunPipelineRequest(
                 new DateOnly(2026, 4, 30),
@@ -47,6 +49,12 @@ public sealed class PipelineOrchestratorSceneNarrationTests
                 false), CancellationToken.None);
 
             var runDir = Directory.GetDirectories(Path.Combine(tempRoot, "DailySkyGuide", "2026-04-30"), "*").Single();
+            var pipelineRun = (await repository.GetRecentAsync(1, CancellationToken.None)).Single();
+            var stageNames = (await repository.GetStageExecutionsAsync(pipelineRun.Id, CancellationToken.None)).Select(stage => stage.StageName).ToArray();
+            Assert.Contains(PipelineStageNames.SpeechCompleted, stageNames);
+            Assert.Contains("SceneSpeechSynthesis-001", stageNames);
+            Assert.Contains("SceneSpeechSynthesis-002", stageNames);
+            Assert.Contains("SceneSpeechSynthesis-003", stageNames);
             var expectedTxt = Enumerable.Range(1, 3).Select(i => Path.Combine(runDir, $"scene-narration-{i:000}.txt")).ToArray();
             var expectedMp3 = Enumerable.Range(1, 3).Select(i => Path.Combine(runDir, $"scene-audio-{i:000}.mp3")).ToArray();
 
@@ -233,9 +241,17 @@ public sealed class PipelineOrchestratorSceneNarrationTests
 
     private sealed class InMemoryPipelineRepository : IPipelineRepository
     {
-        public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken) => Task.FromResult(run);
-        public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineRun?>(null);
-        public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
+        private readonly List<PipelineRun> _runs = [];
+        private readonly List<PipelineStageExecution> _stageExecutions = [];
+
+        public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken)
+        {
+            _runs.Add(run);
+            return Task.FromResult(run);
+        }
+
+        public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(_runs.FirstOrDefault(run => run.Id == id));
+        public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>(_runs.Take(take).ToArray());
         public Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
         public Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -257,6 +273,15 @@ public sealed class PipelineOrchestratorSceneNarrationTests
         public Task<IReadOnlyCollection<PublishedVideo>> GetPublishedVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PublishedVideo>>([]);
         public Task<IReadOnlyCollection<ShortVideo>> GetShortVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<ShortVideo>>([]);
         public Task<GeneratedScript?> GetLatestScriptByTitleAsync(string title, CancellationToken cancellationToken) => Task.FromResult<GeneratedScript?>(null);
+        public Task<IReadOnlyCollection<PipelineStageExecution>> GetStageExecutionsAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyCollection<PipelineStageExecution>>(_stageExecutions.Where(stage => stage.PipelineRunId == pipelineRunId).ToArray());
+        public Task<PipelineStageExecution?> GetLatestStageExecutionAsync(Guid pipelineRunId, string stageName, CancellationToken cancellationToken)
+            => Task.FromResult(_stageExecutions.LastOrDefault(stage => stage.PipelineRunId == pipelineRunId && stage.StageName == stageName));
+        public Task AddStageExecutionAsync(PipelineStageExecution stageExecution, CancellationToken cancellationToken)
+        {
+            _stageExecutions.Add(stageExecution);
+            return Task.CompletedTask;
+        }
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }
