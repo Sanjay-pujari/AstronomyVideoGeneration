@@ -315,6 +315,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOperationalAlertNotifier, SafeOperationalAlertNotifier>();
         services.AddScoped<IStageAlertPublisher, RoutingStageAlertPublisher>();
         services.AddScoped<IPipelineMonitoringService, PipelineMonitoringService>();
+        services.AddHttpClient<IOpsDashboardService, OpsDashboardService>();
         services.AddScoped<IRunOperationsService, RunOperationsService>();
         services.AddScoped<IMaintenanceService, MaintenanceService>();
 
