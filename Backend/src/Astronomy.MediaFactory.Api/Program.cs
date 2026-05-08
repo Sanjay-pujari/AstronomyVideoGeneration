@@ -105,9 +105,9 @@ app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrc
     return Results.Ok(new RunPipelineResponse(result.Id, result.Status, "Completed."));
 });
 
-app.MapGet("/api/pipeline/status/{pipelineRunId:guid}", async (Guid pipelineRunId, IPipelineRecoveryService recoveryService, CancellationToken ct) =>
+app.MapGet("/api/pipeline/status/{pipelineRunId:guid}", async (Guid pipelineRunId, bool? includeInternal, IPipelineRecoveryService recoveryService, CancellationToken ct) =>
 {
-    var status = await recoveryService.GetStatusAsync(pipelineRunId, ct);
+    var status = await recoveryService.GetStatusAsync(pipelineRunId, ct, includeInternal ?? false);
     return status is null ? Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." }) : Results.Ok(status);
 });
 app.MapPost("/api/pipeline/resume/{pipelineRunId:guid}", async (Guid pipelineRunId, string? forceStage, IPipelineRecoveryService recoveryService, CancellationToken ct) =>
