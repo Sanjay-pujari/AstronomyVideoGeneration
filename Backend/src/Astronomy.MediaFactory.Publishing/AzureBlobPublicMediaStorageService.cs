@@ -1,5 +1,9 @@
+using System.Diagnostics;
+using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Azure.Core;
+using Azure.Storage;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
@@ -10,6 +14,9 @@ namespace Astronomy.MediaFactory.Publishing;
 
 public sealed class AzureBlobPublicMediaStorageService : IPublicMediaStorageService
 {
+    private const int FourMegabytes = 4 * 1024 * 1024;
+    private static readonly TimeSpan UploadTimeout = TimeSpan.FromMinutes(15);
+
     private readonly PublicMediaStorageOptions _options;
     private readonly ILogger<AzureBlobPublicMediaStorageService> _logger;
     private readonly IAzurePublicBlobClientFactory _blobClientFactory;
@@ -51,26 +58,49 @@ public sealed class AzureBlobPublicMediaStorageService : IPublicMediaStorageServ
             return Failed($"Instagram Reel video is missing: {localFilePath}.");
         }
 
-        if (new FileInfo(localFilePath).Length <= 0)
+        var fileInfo = new FileInfo(localFilePath);
+        if (fileInfo.Length <= 0)
         {
             return Failed($"Instagram Reel video is empty: {localFilePath}.");
         }
 
         var blobName = BuildBlobName(pipelineRunId);
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             var blob = _blobClientFactory.Create(_options.ConnectionString, _options.ContainerName, blobName);
             await blob.CreateContainerIfNotExistsAsync(cancellationToken);
-            await blob.UploadAsync(localFilePath, "video/mp4", cancellationToken);
+
+            var transferOptions = CreateTransferOptions();
+            using var uploadTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            uploadTimeout.CancelAfter(UploadTimeout);
+
+            try
+            {
+                await blob.UploadAsync(localFilePath, "video/mp4", transferOptions, uploadTimeout.Token);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && uploadTimeout.IsCancellationRequested)
+            {
+                stopwatch.Stop();
+                const string timeoutError = "Azure Blob upload timed out.";
+                _logger.LogWarning(ex, "Public media upload timed out for Instagram Reel blob {BlobName} after {UploadDurationMs} ms.", blobName, stopwatch.ElapsedMilliseconds);
+                await WriteDiagnosticsAsync(localFilePath, fileInfo.Length, blobName, stopwatch.ElapsedMilliseconds, success: false, timeoutError, ex, cancellationToken);
+                return Failed(timeoutError, blobName);
+            }
 
             var expiresUtc = DateTime.UtcNow.AddHours(Math.Max(1, _options.SasExpiryHours));
             var publicUrl = BuildPublicUrl(blob, blobName, expiresUtc);
             if (!Uri.TryCreate(publicUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
             {
-                return Failed("Public media upload did not produce an HTTPS URL.", blobName, expiresUtc);
+                stopwatch.Stop();
+                const string invalidUrlError = "Public media upload did not produce an HTTPS URL.";
+                await WriteDiagnosticsAsync(localFilePath, fileInfo.Length, blobName, stopwatch.ElapsedMilliseconds, success: false, invalidUrlError, exception: null, cancellationToken);
+                return Failed(invalidUrlError, blobName, expiresUtc);
             }
 
-            _logger.LogInformation("Uploaded Instagram Reel public media blob {BlobName}. PublicUrl={PublicUrlMasked} ExpiresUtc={ExpiresUtc:o}", blobName, MaskSensitiveQuery(publicUrl), expiresUtc);
+            stopwatch.Stop();
+            await WriteDiagnosticsAsync(localFilePath, fileInfo.Length, blobName, stopwatch.ElapsedMilliseconds, success: true, failure: null, exception: null, cancellationToken);
+            _logger.LogInformation("Uploaded Instagram Reel public media blob {BlobName}. PublicUrl={PublicUrlMasked} ExpiresUtc={ExpiresUtc:o} UploadDurationMs={UploadDurationMs}", blobName, MaskSensitiveQuery(publicUrl), expiresUtc, stopwatch.ElapsedMilliseconds);
             return new PublicMediaUploadResult
             {
                 Success = true,
@@ -81,8 +111,60 @@ public sealed class AzureBlobPublicMediaStorageService : IPublicMediaStorageServ
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or Azure.RequestFailedException)
         {
-            _logger.LogWarning(ex, "Public media upload failed for Instagram Reel blob {BlobName}.", blobName);
+            stopwatch.Stop();
+            _logger.LogWarning(ex, "Public media upload failed for Instagram Reel blob {BlobName} after {UploadDurationMs} ms.", blobName, stopwatch.ElapsedMilliseconds);
+            await WriteDiagnosticsAsync(localFilePath, fileInfo.Length, blobName, stopwatch.ElapsedMilliseconds, success: false, $"Public media upload failed: {ex.Message}", ex, cancellationToken);
             return Failed($"Public media upload failed: {ex.Message}", blobName);
+        }
+    }
+
+    private static StorageTransferOptions CreateTransferOptions()
+        => new()
+        {
+            MaximumConcurrency = 2,
+            InitialTransferSize = FourMegabytes,
+            MaximumTransferSize = FourMegabytes
+        };
+
+    private async Task WriteDiagnosticsAsync(
+        string localFilePath,
+        long fileSize,
+        string blobName,
+        long uploadDurationMs,
+        bool success,
+        string? failure,
+        Exception? exception,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(localFilePath);
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                directory = Directory.GetCurrentDirectory();
+            }
+
+            Directory.CreateDirectory(directory);
+            var diagnostics = new PublicMediaUploadDiagnostics
+            {
+                LocalFilePath = localFilePath,
+                FileSize = fileSize,
+                BlobName = blobName,
+                UploadDurationMs = uploadDurationMs,
+                RetryCount = null,
+                Success = success,
+                Failure = failure,
+                ExceptionType = exception?.GetType().FullName,
+                GeneratedUtc = DateTime.UtcNow
+            };
+
+            var diagnosticsPath = Path.Combine(directory, "public-media-upload-result.json");
+            await using var stream = new FileStream(diagnosticsPath, FileMode.Create, FileAccess.Write, FileShare.Read, bufferSize: 16 * 1024, useAsync: true);
+            await JsonSerializer.SerializeAsync(stream, diagnostics, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to write public media upload diagnostics for blob {BlobName}.", blobName);
         }
     }
 
@@ -132,7 +214,7 @@ public interface IAzurePublicBlobClient
 {
     Uri Uri { get; }
     Task CreateContainerIfNotExistsAsync(CancellationToken cancellationToken);
-    Task UploadAsync(string localFilePath, string contentType, CancellationToken cancellationToken);
+    Task UploadAsync(string localFilePath, string contentType, StorageTransferOptions transferOptions, CancellationToken cancellationToken);
     string GenerateReadOnlySasUrl(DateTime expiresUtc);
 }
 
@@ -140,13 +222,28 @@ public sealed class AzurePublicBlobClientFactory : IAzurePublicBlobClientFactory
 {
     public IAzurePublicBlobClient Create(string connectionString, string containerName, string blobName)
     {
-        var container = new BlobContainerClient(connectionString, containerName);
+        var container = new BlobContainerClient(connectionString, containerName, CreateClientOptions());
         return new AzurePublicBlobClient(container, blobName);
     }
+
+    private static BlobClientOptions CreateClientOptions()
+        => new()
+        {
+            Retry =
+            {
+                Mode = RetryMode.Exponential,
+                Delay = TimeSpan.FromSeconds(2),
+                MaxDelay = TimeSpan.FromSeconds(20),
+                MaxRetries = 8,
+                NetworkTimeout = TimeSpan.FromMinutes(10)
+            }
+        };
 }
 
 public sealed class AzurePublicBlobClient : IAzurePublicBlobClient
 {
+    private const int FourMegabytes = 4 * 1024 * 1024;
+
     private readonly BlobContainerClient _container;
     private readonly BlobClient _blob;
 
@@ -161,10 +258,27 @@ public sealed class AzurePublicBlobClient : IAzurePublicBlobClient
     public async Task CreateContainerIfNotExistsAsync(CancellationToken cancellationToken)
         => await _container.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
 
-    public async Task UploadAsync(string localFilePath, string contentType, CancellationToken cancellationToken)
+    public async Task UploadAsync(string localFilePath, string contentType, StorageTransferOptions transferOptions, CancellationToken cancellationToken)
     {
-        await using var stream = File.OpenRead(localFilePath);
-        await _blob.UploadAsync(stream, new BlobUploadOptions { HttpHeaders = new BlobHttpHeaders { ContentType = contentType } }, cancellationToken);
+        await using var stream = new FileStream(
+            localFilePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: FourMegabytes,
+            useAsync: true);
+
+        await _blob.UploadAsync(
+            stream,
+            new BlobUploadOptions
+            {
+                HttpHeaders = new BlobHttpHeaders
+                {
+                    ContentType = contentType
+                },
+                TransferOptions = transferOptions
+            },
+            cancellationToken);
     }
 
     public string GenerateReadOnlySasUrl(DateTime expiresUtc)
@@ -184,4 +298,17 @@ public sealed class AzurePublicBlobClient : IAzurePublicBlobClient
         builder.SetPermissions(BlobSasPermissions.Read);
         return _blob.GenerateSasUri(builder).ToString();
     }
+}
+
+public sealed class PublicMediaUploadDiagnostics
+{
+    public string LocalFilePath { get; init; } = string.Empty;
+    public long FileSize { get; init; }
+    public string BlobName { get; init; } = string.Empty;
+    public long UploadDurationMs { get; init; }
+    public int? RetryCount { get; init; }
+    public bool Success { get; init; }
+    public string? Failure { get; init; }
+    public string? ExceptionType { get; init; }
+    public DateTime GeneratedUtc { get; init; }
 }
