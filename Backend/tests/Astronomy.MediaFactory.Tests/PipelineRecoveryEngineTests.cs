@@ -145,6 +145,115 @@ public sealed class PipelineRecoveryEngineTests
         Assert.Contains(status.Stages, s => s.StageName == PipelineStageNames.SpeechCompleted);
     }
 
+
+
+    [Fact]
+    public async Task OutputPath_IsPersisted_ForMainArtifactStages()
+    {
+        var expectedOutputs = new Dictionary<string, string>
+        {
+            [PipelineStageNames.ObservationWindowCompleted] = "observation-window.json",
+            [PipelineStageNames.SkyfieldCompleted] = "skyfield-night-plan-response.json",
+            [PipelineStageNames.SceneContextCompleted] = "scene-observation-context.json",
+            [PipelineStageNames.NarrationCompleted] = "narration-context.json",
+            [PipelineStageNames.SpeechCompleted] = "narration.mp3",
+            [PipelineStageNames.StellariumCompleted] = "stellarium",
+            [PipelineStageNames.RenderingCompleted] = "final-video.mp4",
+            [PipelineStageNames.ThumbnailCompleted] = "thumbnail-selection.json",
+            [PipelineStageNames.SeoCompleted] = "seo-metadata.json",
+            ["BlobUpload"] = "public-media-upload-result.json",
+            [PipelineStageNames.ValidationCompleted] = "pre-publish-validation-report.json",
+            [PipelineStageNames.YouTubeLongPublished] = "youtube-publish-result-long.json",
+            [PipelineStageNames.YouTubeShortPublished] = "youtube-publish-result-short.json",
+            [PipelineStageNames.FacebookReelPublished] = "facebook-reel-publish-result.json",
+            [PipelineStageNames.InstagramReelPublished] = "instagram-reel-publish-result.json",
+            [PipelineStageNames.Completed] = "output"
+        };
+        var repo = new MemoryPipelineRepository();
+        var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
+        var executor = new PipelineStageExecutor(repo, NullLogger<PipelineStageExecutor>.Instance);
+
+        foreach (var (stageName, fileName) in expectedOutputs)
+        {
+            var outputPath = Path.Combine(run.OutputFolder!, fileName);
+            await executor.ExecuteStageAsync(run.Id, stageName, _ => Task.FromResult(true), new StageExecutionOptions { MaxAttempts = 1, OutputPath = outputPath }, CancellationToken.None);
+        }
+
+        foreach (var (stageName, fileName) in expectedOutputs)
+        {
+            var stage = await repo.GetLatestStageExecutionAsync(run.Id, stageName, CancellationToken.None);
+            Assert.Equal(Path.Combine(run.OutputFolder!, fileName), stage!.OutputPath);
+        }
+    }
+
+    [Fact]
+    public async Task SucceededStage_WithMissingOutputPath_Reruns()
+    {
+        var repo = new MemoryPipelineRepository();
+        var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.RenderingCompleted, Status = PersistentStageStatuses.Succeeded, OutputPath = Path.Combine(run.OutputFolder!, "missing.mp4"), AttemptCount = 1, MaxAttempts = 1 }, CancellationToken.None);
+        var executor = new PipelineStageExecutor(repo, NullLogger<PipelineStageExecutor>.Instance);
+        var calls = 0;
+
+        var result = await executor.ExecuteStageAsync(run.Id, PipelineStageNames.RenderingCompleted, _ =>
+        {
+            calls++;
+            return Task.FromResult("rerendered");
+        }, new StageExecutionOptions { MaxAttempts = 1 }, CancellationToken.None);
+
+        Assert.Equal("rerendered", result);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task SucceededStringStage_WithExistingOutputPath_ReturnsPersistedPath()
+    {
+        var repo = new MemoryPipelineRepository();
+        var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
+        var outputPath = Path.Combine(run.OutputFolder!, "final-video.mp4");
+        await File.WriteAllTextAsync(outputPath, "video");
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.RenderingCompleted, Status = PersistentStageStatuses.Succeeded, OutputPath = outputPath, AttemptCount = 1, MaxAttempts = 1 }, CancellationToken.None);
+        var executor = new PipelineStageExecutor(repo, NullLogger<PipelineStageExecutor>.Instance);
+
+        var result = await executor.ExecuteStageAsync(run.Id, PipelineStageNames.RenderingCompleted, _ => Task.FromResult("should-not-run"), new StageExecutionOptions { MaxAttempts = 1 }, CancellationToken.None);
+
+        Assert.Equal(outputPath, result);
+    }
+
+    [Fact]
+    public async Task StatusApi_HidesInternalStagesByDefault_AndShowsWhenRequested()
+    {
+        var repo = new MemoryPipelineRepository();
+        var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.SpeechCompleted, Status = PersistentStageStatuses.Succeeded }, CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = "PromptGeneration", Status = PersistentStageStatuses.Succeeded }, CancellationToken.None);
+        var service = new PipelineRecoveryService(repo);
+
+        var defaultStatus = await service.GetStatusAsync(run.Id, CancellationToken.None);
+        var internalStatus = await service.GetStatusAsync(run.Id, CancellationToken.None, includeInternal: true);
+
+        Assert.DoesNotContain(defaultStatus!.Stages, s => s.StageName == "PromptGeneration");
+        Assert.Contains(internalStatus!.Stages, s => s.StageName == "PromptGeneration");
+    }
+
+    [Fact]
+    public async Task PublishedUrls_ContainsPlatformUrlsOnly()
+    {
+        var repo = new MemoryPipelineRepository();
+        var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
+        await repo.AddPublishedVideoAsync(new PublishedVideo { PipelineRunId = run.Id, YouTubeVideoId = "yt-long", BlobUrl = "https://storage.example/001-sky.png", ThumbnailUrl = "https://storage.example/thumb.png", Status = "Published" }, CancellationToken.None);
+        repo.PlatformPublications.Add(new PlatformPublicationRecord { ParentShortVideoId = Guid.NewGuid(), Platform = ShortFormPlatform.Facebook, Status = PlatformPublicationStatus.Published, ExternalUrl = "https://facebook.example/reel/1" });
+        repo.PlatformPublications.Add(new PlatformPublicationRecord { ParentShortVideoId = Guid.NewGuid(), Platform = ShortFormPlatform.InstagramReels, Status = PlatformPublicationStatus.Published, ExternalUrl = "https://instagram.example/reel/1" });
+        var service = new PipelineRecoveryService(repo);
+
+        var status = await service.GetStatusAsync(run.Id, CancellationToken.None);
+
+        Assert.Contains("https://www.youtube.com/watch?v=yt-long", status!.PublishedUrls);
+        Assert.Contains("https://facebook.example/reel/1", status.PublishedUrls);
+        Assert.Contains("https://instagram.example/reel/1", status.PublishedUrls);
+        Assert.DoesNotContain("https://storage.example/001-sky.png", status.PublishedUrls);
+    }
+
     [Fact]
     public void ValidationFailure_BlocksPublish_AndIsNonRetryable()
     {
@@ -171,6 +280,7 @@ public sealed class PipelineRecoveryEngineTests
         public List<PipelineRun> Runs { get; } = [];
         public List<PipelineStageExecution> Stages { get; } = [];
         public List<PublishedVideo> PublishedVideos { get; } = [];
+        public List<PlatformPublicationRecord> PlatformPublications { get; } = [];
 
         public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken) { Runs.Add(run); return Task.FromResult(run); }
         public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(Runs.FirstOrDefault(x => x.Id == id));

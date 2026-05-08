@@ -175,15 +175,54 @@ public sealed class PipelineOrchestrator
             async Task PublishFailureAlertAsync(PipelineStageExecution stage)
                 => await _stageAlertPublisher.PublishStageFailureAsync(BuildAlertContext(run, stage), cancellationToken);
 
-            async Task<T> RunStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null)
+            async Task<T> RunStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null, string? outputPath = null)
             {
                 var persistentStageName = MapPersistentStageName(stageName);
+                outputPath ??= GetExpectedOutputPath(persistentStageName, outputDir);
                 if (_pipelineStageExecutor is not null)
                 {
-                    return await _pipelineStageExecutor.ExecuteStageAsync(run.Id, persistentStageName, _ => RunInstrumentedStageAsync(stageName, action, continueWithFallback, fallback), new StageExecutionOptions { MaxAttempts = continueWithFallback ? 1 : 3, RetryDelaySeconds = 0, IsRetryableExceptionFunc = ex => !continueWithFallback && PipelineRetryClassifier.IsRetryable(ex), DiagnosticPath = Path.Combine(outputDir, $"{persistentStageName}.diagnostic.json") }, cancellationToken);
+                    return await _pipelineStageExecutor.ExecuteStageAsync(run.Id, persistentStageName, _ => RunInstrumentedStageAsync(stageName, action, continueWithFallback, fallback), new StageExecutionOptions { MaxAttempts = continueWithFallback ? 1 : 3, RetryDelaySeconds = 0, IsRetryableExceptionFunc = ex => !continueWithFallback && PipelineRetryClassifier.IsRetryable(ex), OutputPath = outputPath, DiagnosticPath = Path.Combine(outputDir, $"{persistentStageName}.diagnostic.json") }, cancellationToken);
                 }
 
                 return await RunInstrumentedStageAsync(stageName, action, continueWithFallback, fallback);
+            }
+
+            async Task SetStageStatusAsync(string stageName, string status, string? outputPath = null, string? reason = null)
+            {
+                if (_pipelineStageExecutor is null)
+                    return;
+
+                outputPath ??= GetExpectedOutputPath(stageName, outputDir);
+                var stage = await _repository.GetLatestStageExecutionAsync(run.Id, stageName, cancellationToken);
+                if (stage is null)
+                {
+                    stage = new PipelineStageExecution { PipelineRunId = run.Id, StageName = stageName, MaxAttempts = 1 };
+                    await _repository.AddStageExecutionAsync(stage, cancellationToken);
+                }
+
+                stage.Status = status;
+                stage.StartedUtc = stage.StartedUtc ?? DateTimeOffset.UtcNow;
+                stage.CompletedUtc = DateTimeOffset.UtcNow;
+                stage.OutputPath = outputPath;
+                stage.DiagnosticPath = Path.Combine(outputDir, $"{stageName}.diagnostic.json");
+                stage.LastError = reason;
+                stage.AttemptCount = Math.Max(1, stage.AttemptCount);
+                await _repository.SaveChangesAsync(cancellationToken);
+            }
+
+            async Task EnsurePublishStagesHandledAsync(bool currentPublishingEnabled, bool currentValidationPassed)
+            {
+                var stages = await _repository.GetStageExecutionsAsync(run.Id, cancellationToken);
+                var failedEnabledStages = stages
+                    .Where(s => IsEnabledPublishStage(s.StageName, currentPublishingEnabled, currentValidationPassed, request.PublishToYouTube, _publishingOptions.PublishShortVideo, _metaPublishingOptions))
+                    .Where(s => s.Status == PersistentStageStatuses.Failed)
+                    .Select(s => s.StageName)
+                    .ToArray();
+
+                if (failedEnabledStages.Length > 0)
+                {
+                    throw new InvalidOperationException($"Enabled publish stages failed: {string.Join(", ", failedEnabledStages)}");
+                }
             }
 
             async Task<T> RunInstrumentedStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null)
@@ -226,9 +265,10 @@ public sealed class PipelineOrchestrator
             }
 
             var context = await RunStageAsync("AstronomyData", () => _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken));
+            await WritePrimaryContextArtifactsAsync(context, outputDir, cancellationToken);
             if (_pipelineStageExecutor is not null)
             {
-                await _pipelineStageExecutor.ExecuteStageAsync(run.Id, PipelineStageNames.SceneContextCompleted, _ => Task.FromResult(true), new StageExecutionOptions { MaxAttempts = 1, RetryDelaySeconds = 0, DiagnosticPath = Path.Combine(outputDir, "scene-context.diagnostic.json") }, cancellationToken);
+                await _pipelineStageExecutor.ExecuteStageAsync(run.Id, PipelineStageNames.SceneContextCompleted, _ => Task.FromResult(true), new StageExecutionOptions { MaxAttempts = 1, RetryDelaySeconds = 0, OutputPath = GetExpectedOutputPath(PipelineStageNames.SceneContextCompleted, outputDir), DiagnosticPath = Path.Combine(outputDir, "scene-context.diagnostic.json") }, cancellationToken);
             }
             TopicSelectionPlan? topicSelectionPlan = null;
             if (request.UseTopicPlanner && _topicSelectionService is not null)
@@ -517,6 +557,7 @@ public sealed class PipelineOrchestrator
             }
 
             var thumbnailPath = thumbnailPlan.ThumbnailPath;
+            await WriteThumbnailSelectionAsync(thumbnailPlan, outputDir, cancellationToken);
             var selectedObjects = context.SceneObservationContexts
                 .Where(s => !string.IsNullOrWhiteSpace(s.ObjectName) && !s.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase))
                 .Select(s => s.ObjectName)
@@ -608,6 +649,7 @@ public sealed class PipelineOrchestrator
             else if (existingSuccessfulYouTube is not null)
             {
                 run.YouTubeVideoId = existingSuccessfulYouTube.YouTubeVideoId;
+                await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, PersistentStageStatuses.Succeeded);
                 _logger.LogInformation("Uploaded/Skipped=Skipped duplicate-prevention existing YouTube video {YouTubeVideoId}", run.YouTubeVideoId);
             }
             else if (_contentPublishService is null)
@@ -619,6 +661,7 @@ public sealed class PipelineOrchestrator
                         Path.Combine(outputDir, "youtube-publish-payload.json"),
                         JsonSerializer.Serialize(new { pipelineRunId = run.Id, videoPath, thumbnailPath, title = script.OptimizedMetadata?.PrimaryTitle ?? script.Title, description = script.OptimizedMetadata?.OptimizedDescription ?? script.Description, tags = script.OptimizedMetadata?.Tags ?? script.Tags, privacyStatus = selectedPrivacyStatus, uploadThumbnail = _publishingOptions.UploadThumbnail, mode, generatedAtUtc = DateTime.UtcNow }, new JsonSerializerOptions { WriteIndented = true }),
                         cancellationToken);
+                    await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, PersistentStageStatuses.Skipped, reason: "YouTube publishing dry run.");
                     _logger.LogInformation("Uploaded/Skipped=Skipped");
                 }
                 else
@@ -628,6 +671,7 @@ public sealed class PipelineOrchestrator
                     {
                         youtubeThumbnailUploaded = await _youTubeThumbnailPublisher.UploadThumbnailAsync(run.YouTubeVideoId, thumbnailPath, cancellationToken);
                     }
+                    await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, string.IsNullOrWhiteSpace(run.YouTubeVideoId) ? PersistentStageStatuses.Failed : PersistentStageStatuses.Succeeded, reason: string.IsNullOrWhiteSpace(run.YouTubeVideoId) ? "YouTube upload did not return a video id." : null);
                     _logger.LogInformation("Uploaded/Skipped=Uploaded");
                 }
             }
@@ -662,14 +706,21 @@ public sealed class PipelineOrchestrator
                     {
                         run.YouTubeVideoId = youtubePublishResult.VideoId;
                     }
+                    await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, string.Equals(youtubePublishResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase) || IsPublishSkip(youtubePublishResult) ? PersistentStageStatuses.Skipped : PersistentStageStatuses.Succeeded);
                     _logger.LogInformation("Uploaded/Skipped={UploadedOrSkipped}", string.Equals(youtubePublishResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase) ? "Skipped" : "Uploaded");
                 }
                 else if (youtubePublishResult is not null)
                 {
                     publishStatus = "PublishFailed";
                     run.FailureReason = $"Publishing failed: {youtubePublishResult.Error}";
+                    await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, PersistentStageStatuses.Failed, reason: youtubePublishResult.Error ?? "YouTube publishing failed.");
                     _logger.LogWarning("YouTube publishing failed for pipeline run {PipelineRunId}: {Error}", run.Id, youtubePublishResult.Error);
                 }
+            }
+
+            if (!request.PublishToYouTube || !publishingEnabled || !validationPassed)
+            {
+                await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, PersistentStageStatuses.Skipped, reason: !validationPassed ? "Pre-publish validation blocked publishing." : "YouTube publishing disabled.");
             }
 
             var publishedVideo = new PublishedVideo
@@ -784,16 +835,16 @@ public sealed class PipelineOrchestrator
 
                 if (_contentPublishService is not null && publishingEnabled && validationPassed && _publishingOptions.PublishShortVideo)
                 {
-                    _ = await RunStageAsync("YouTubeShortPublish", async () =>
+                    var shortPublishResults = await RunStageAsync("YouTubeShortPublish", async () =>
                     {
-                        var shortPublishResults = await _contentPublishService.PublishForPipelineRunAsync(run.Id, "short", cancellationToken);
-                        var attemptedShortResults = shortPublishResults.Where(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) && x.IsShort && !IsPublishSkip(x)).ToList();
+                        var results = await _contentPublishService.PublishForPipelineRunAsync(run.Id, "short", cancellationToken);
+                        var attemptedShortResults = results.Where(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) && x.IsShort && !IsPublishSkip(x)).ToList();
                         if (attemptedShortResults.Count > 0 && attemptedShortResults.All(x => !x.Success))
                         {
                             throw new InvalidOperationException(attemptedShortResults.First().Error ?? "YouTube Shorts publishing failed.");
                         }
 
-                        return shortPublishResults;
+                        return results;
                     }, continueWithFallback: true, fallback: ex => Task.FromResult<IReadOnlyList<PublishResult>>([new PublishResult
                     {
                         Success = false,
@@ -804,6 +855,20 @@ public sealed class PipelineOrchestrator
                         Error = ex.Message,
                         PublishedUtc = DateTime.UtcNow
                     }]));
+
+                    var youtubeShortResult = shortPublishResults.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) && x.IsShort);
+                    if (youtubeShortResult is { Success: true })
+                    {
+                        await SetStageStatusAsync(PipelineStageNames.YouTubeShortPublished, string.Equals(youtubeShortResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase) || IsPublishSkip(youtubeShortResult) ? PersistentStageStatuses.Skipped : PersistentStageStatuses.Succeeded);
+                    }
+                    else if (youtubeShortResult is not null)
+                    {
+                        await SetStageStatusAsync(PipelineStageNames.YouTubeShortPublished, PersistentStageStatuses.Failed, reason: youtubeShortResult.Error ?? "YouTube Shorts publishing failed.");
+                    }
+                }
+                else
+                {
+                    await SetStageStatusAsync(PipelineStageNames.YouTubeShortPublished, PersistentStageStatuses.Skipped, reason: "YouTube Shorts publishing disabled.");
                 }
 
                 if (_metaPublishService is not null
@@ -814,26 +879,35 @@ public sealed class PipelineOrchestrator
                     var metaAsset = _metaPublishingOptions.PublishFacebookReel && _metaPublishingOptions.PublishInstagramReel
                         ? "all"
                         : _metaPublishingOptions.PublishInstagramReel ? "instagram-reel" : "facebook-reel";
-                    _ = await RunStageAsync("MetaReelPublish", async () =>
+                    var metaResults = await RunStageAsync("MetaReelPublish-Internal", async () =>
                     {
-                        var metaResults = await _metaPublishService.PublishForPipelineRunAsync(run.Id, metaAsset, cancellationToken);
-                        var attemptedFacebookResults = metaResults.Where(x => x.Platform.Equals("Facebook", StringComparison.OrdinalIgnoreCase)).ToList();
-                        if (attemptedFacebookResults.Count > 0 && attemptedFacebookResults.All(x => !x.Success))
-                        {
-                            throw new InvalidOperationException(attemptedFacebookResults.First().Error ?? "Facebook Reel publishing failed.");
-                        }
-
-                        return metaResults;
+                        return await _metaPublishService.PublishForPipelineRunAsync(run.Id, metaAsset, cancellationToken);
                     }, continueWithFallback: true, fallback: ex => Task.FromResult<IReadOnlyList<MetaPublishResult>>([new MetaPublishResult
                     {
                         Success = false,
-                        Platform = "Facebook",
+                        Platform = _metaPublishingOptions.PublishInstagramReel && !_metaPublishingOptions.PublishFacebookReel ? "Instagram" : "Facebook",
                         Mode = _metaPublishingOptions.Mode,
                         Error = ex.Message,
                         PublishedUtc = DateTime.UtcNow
                     }]));
+
+                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", _metaPublishingOptions.PublishFacebookReel, metaResults, SetStageStatusAsync);
+                    await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", _metaPublishingOptions.PublishInstagramReel, metaResults, SetStageStatusAsync);
+                }
+                else
+                {
+                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", false, [], SetStageStatusAsync);
+                    await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", false, [], SetStageStatusAsync);
                 }
             }
+            else
+            {
+                await SetStageStatusAsync(PipelineStageNames.YouTubeShortPublished, PersistentStageStatuses.Skipped, reason: "Short video generation did not produce a publishable result.");
+                await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", false, [], SetStageStatusAsync);
+                await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", false, [], SetStageStatusAsync);
+            }
+
+            await EnsurePublishStagesHandledAsync(publishingEnabled, validationPassed);
 
             if (_pipelineStageExecutor is not null)
             {
@@ -919,6 +993,96 @@ public sealed class PipelineOrchestrator
             ThumbnailVariantPaths = fallbackVisual is null ? [] : [fallbackVisual],
             LayoutType = ThumbnailLayoutType.CenteredTitleOverlay
         };
+    }
+
+
+
+    private static string? GetExpectedOutputPath(string stageName, string outputDirectory)
+        => stageName switch
+        {
+            PipelineStageNames.Created => outputDirectory,
+            PipelineStageNames.ObservationWindowCompleted => Path.Combine(outputDirectory, "observation-window.json"),
+            PipelineStageNames.SkyfieldCompleted => Path.Combine(outputDirectory, "skyfield-night-plan-response.json"),
+            PipelineStageNames.SceneContextCompleted => Path.Combine(outputDirectory, "scene-observation-context.json"),
+            PipelineStageNames.NarrationCompleted => Path.Combine(outputDirectory, "narration-context.json"),
+            PipelineStageNames.SpeechCompleted => Path.Combine(outputDirectory, "narration.mp3"),
+            PipelineStageNames.StellariumCompleted => outputDirectory,
+            PipelineStageNames.RenderingCompleted => Path.Combine(outputDirectory, "final-video.mp4"),
+            PipelineStageNames.ThumbnailCompleted => Path.Combine(outputDirectory, "thumbnail-selection.json"),
+            PipelineStageNames.SeoCompleted => Path.Combine(outputDirectory, "seo-metadata.json"),
+            "BlobUpload" => Path.Combine(outputDirectory, "public-media-upload-result.json"),
+            PipelineStageNames.ValidationCompleted => Path.Combine(outputDirectory, "pre-publish-validation-report.json"),
+            PipelineStageNames.YouTubeLongPublished => Path.Combine(outputDirectory, "youtube-publish-result-long.json"),
+            PipelineStageNames.YouTubeShortPublished => Path.Combine(outputDirectory, "youtube-publish-result-short.json"),
+            PipelineStageNames.FacebookReelPublished => Path.Combine(outputDirectory, "facebook-reel-publish-result.json"),
+            PipelineStageNames.InstagramReelPublished => Path.Combine(outputDirectory, "instagram-reel-publish-result.json"),
+            PipelineStageNames.Completed => outputDirectory,
+            PipelineStageNames.Failed => outputDirectory,
+            _ => null
+        };
+
+    private static async Task SetMetaPublishStageAsync(
+        string stageName,
+        string platform,
+        bool enabled,
+        IReadOnlyList<MetaPublishResult> results,
+        Func<string, string, string?, string?, Task> setStageStatusAsync)
+    {
+        if (!enabled)
+        {
+            await setStageStatusAsync(stageName, PersistentStageStatuses.Skipped, null, $"{platform} Reel publishing disabled.");
+            return;
+        }
+
+        var result = results.FirstOrDefault(x => x.Platform.Equals(platform, StringComparison.OrdinalIgnoreCase));
+        if (result is { Success: true })
+        {
+            await setStageStatusAsync(stageName, PersistentStageStatuses.Succeeded);
+            return;
+        }
+
+        await setStageStatusAsync(stageName, PersistentStageStatuses.Failed, null, result?.Error ?? $"{platform} Reel publishing did not produce a successful result.");
+    }
+
+    private static bool IsEnabledPublishStage(
+        string stageName,
+        bool publishingEnabled,
+        bool validationPassed,
+        bool publishToYouTube,
+        bool publishShortVideo,
+        MetaPublishingOptions metaPublishingOptions)
+        => stageName switch
+        {
+            PipelineStageNames.YouTubeLongPublished => publishingEnabled && validationPassed && publishToYouTube,
+            PipelineStageNames.YouTubeShortPublished => publishingEnabled && validationPassed && publishShortVideo,
+            PipelineStageNames.FacebookReelPublished => metaPublishingOptions.Enabled && metaPublishingOptions.PublishFacebookReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
+            PipelineStageNames.InstagramReelPublished => metaPublishingOptions.Enabled && metaPublishingOptions.PublishInstagramReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+
+
+    private static async Task WriteThumbnailSelectionAsync(ThumbnailPlan thumbnailPlan, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var payload = new
+        {
+            thumbnailPlan.PrimaryThumbnailText,
+            thumbnailPlan.AlternateThumbnailTexts,
+            thumbnailPlan.SelectedVisualPath,
+            thumbnailPlan.ThumbnailPath,
+            thumbnailPlan.ThumbnailVariantPaths,
+            LayoutType = thumbnailPlan.LayoutType.ToString()
+        };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private static async Task WritePrimaryContextArtifactsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "observation-window");
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "skyfield-night-plan-response");
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "scene-observation-context");
+        WriteDiagnosticFromVisualIdea(context, outputDirectory, "narration-context");
+        await Task.CompletedTask;
     }
 
 

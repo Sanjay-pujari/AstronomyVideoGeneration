@@ -26,14 +26,26 @@ public sealed class PipelineStageExecutor : IPipelineStageExecutor
         var existing = await _repository.GetLatestStageExecutionAsync(pipelineRunId, stageName, cancellationToken);
         if (options.AllowSkipIfAlreadySucceeded
             && existing?.Status == PersistentStageStatuses.Succeeded
-            && (string.IsNullOrWhiteSpace(existing.OutputPath) || File.Exists(existing.OutputPath)))
+            && HasReusableOutput(existing.OutputPath))
         {
-            existing.Status = PersistentStageStatuses.Skipped;
-            existing.CompletedUtc = DateTimeOffset.UtcNow;
             existing.DiagnosticPath = options.DiagnosticPath ?? existing.DiagnosticPath;
             await _repository.SaveChangesAsync(cancellationToken);
             await WriteStateAsync(pipelineRunId, stageName, retryable: false, cancellationToken);
-            return default!;
+
+            if (typeof(T) == typeof(string))
+            {
+                return (T)(object)existing.OutputPath!;
+            }
+
+            if (typeof(T) == typeof(bool))
+            {
+                return (T)(object)true;
+            }
+        }
+
+        if (existing?.Status == PersistentStageStatuses.Succeeded)
+        {
+            existing.AttemptCount = 0;
         }
 
         Exception? lastException = null;
@@ -63,6 +75,7 @@ public sealed class PipelineStageExecutor : IPipelineStageExecutor
             try
             {
                 var result = await action(cancellationToken);
+                stage.OutputPath = ResolveOutputPath(result, options.OutputPath, stage.OutputPath);
                 stage.Status = PersistentStageStatuses.Succeeded;
                 stage.CompletedUtc = DateTimeOffset.UtcNow;
                 stage.DurationMs = (long)Math.Max(0, (stage.CompletedUtc.Value - stage.StartedAt).TotalMilliseconds);
@@ -94,6 +107,25 @@ public sealed class PipelineStageExecutor : IPipelineStageExecutor
         }
 
         throw lastException ?? new InvalidOperationException($"Stage {stageName} failed without an exception.");
+    }
+
+    private static bool HasReusableOutput(string? outputPath)
+    {
+        if (string.IsNullOrWhiteSpace(outputPath))
+            return false;
+
+        return File.Exists(outputPath) || Directory.Exists(outputPath);
+    }
+
+    private static string? ResolveOutputPath<T>(T result, string? configuredOutputPath, string? existingOutputPath)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredOutputPath))
+            return configuredOutputPath;
+
+        if (result is string outputPath && !string.IsNullOrWhiteSpace(outputPath))
+            return outputPath;
+
+        return existingOutputPath;
     }
 
     private async Task WriteStateAsync(Guid pipelineRunId, string currentStage, bool retryable, CancellationToken cancellationToken)

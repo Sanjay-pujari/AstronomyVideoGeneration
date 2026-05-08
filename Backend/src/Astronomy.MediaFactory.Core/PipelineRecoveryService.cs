@@ -20,20 +20,18 @@ public sealed class PipelineRecoveryService : IPipelineRecoveryService
         _repository = repository;
     }
 
-    public async Task<PipelineStatusResponse?> GetStatusAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+    public async Task<PipelineStatusResponse?> GetStatusAsync(Guid pipelineRunId, CancellationToken cancellationToken, bool includeInternal = false)
     {
         var run = await _repository.GetAsync(pipelineRunId, cancellationToken);
         if (run is null)
             return null;
 
-        var stages = await _repository.GetStageExecutionsAsync(pipelineRunId, cancellationToken);
+        var allStages = await _repository.GetStageExecutionsAsync(pipelineRunId, cancellationToken);
+        var stages = FilterStages(allStages, includeInternal).ToArray();
         var published = await _repository.GetPublishedVideosByRunAsync(pipelineRunId, cancellationToken);
+        var platformPublications = await _repository.GetPlatformPublicationRecordsByRunAsync(pipelineRunId, cancellationToken);
         var failed = stages.FirstOrDefault(s => s.Status == PersistentStageStatuses.Failed);
-        var urls = published.SelectMany(p => new[] { p.BlobUrl, p.ThumbnailUrl, p.YouTubeVideoId is null ? null : $"youtube:{p.YouTubeVideoId}" })
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var urls = BuildPublishedUrls(published, platformPublications);
 
         return new PipelineStatusResponse(
             run.Id,
@@ -104,6 +102,37 @@ public sealed class PipelineRecoveryService : IPipelineRecoveryService
         await _repository.SaveChangesAsync(cancellationToken);
         await WriteStateAsync(run, stages, targetStages.FirstOrDefault(), cancellationToken);
         return await GetStatusAsync(pipelineRunId, cancellationToken);
+    }
+
+    private static IReadOnlyCollection<PipelineStageExecution> FilterStages(IReadOnlyCollection<PipelineStageExecution> stages, bool includeInternal)
+    {
+        var filtered = includeInternal
+            ? stages
+            : stages.Where(s => PipelineStageNames.All.Contains(s.StageName, StringComparer.OrdinalIgnoreCase));
+
+        return filtered
+            .GroupBy(s => s.StageName, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(s => s.CreatedUtc).First())
+            .OrderBy(s => Array.IndexOf(PipelineStageNames.All, s.StageName) is var index && index >= 0 ? index : int.MaxValue)
+            .ThenBy(s => s.StartedUtc)
+            .ToArray();
+    }
+
+    private static IReadOnlyCollection<string> BuildPublishedUrls(
+        IReadOnlyCollection<PublishedVideo> published,
+        IReadOnlyCollection<PlatformPublicationRecord> platformPublications)
+    {
+        var urls = new List<string>();
+        urls.AddRange(published
+            .Where(p => !string.IsNullOrWhiteSpace(p.YouTubeVideoId) && p.Status.Equals("Published", StringComparison.OrdinalIgnoreCase))
+            .Select(p => $"https://www.youtube.com/watch?v={p.YouTubeVideoId}"));
+        urls.AddRange(platformPublications
+            .Where(p => p.Status == PlatformPublicationStatus.Published)
+            .Select(p => p.ExternalUrl)
+            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .Select(url => url!));
+
+        return urls.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static PipelineStageStatusDto ToDto(PipelineStageExecution s)

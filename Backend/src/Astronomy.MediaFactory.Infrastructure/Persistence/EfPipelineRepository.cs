@@ -144,6 +144,14 @@ public sealed class EfPipelineRepository : IPipelineRepository
     public async Task<IReadOnlyCollection<PlatformPublicationRecord>> GetPlatformPublicationRecordsByShortIdAsync(Guid shortVideoId, CancellationToken cancellationToken)
         => await _db.PlatformPublicationRecords.AsNoTracking().Where(x => x.ParentShortVideoId == shortVideoId).OrderByDescending(x => x.CreatedUtc).ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyCollection<PlatformPublicationRecord>> GetPlatformPublicationRecordsByRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+        => await (from record in _db.PlatformPublicationRecords.AsNoTracking()
+                  join shortVideo in _db.ShortVideos.AsNoTracking() on record.ParentShortVideoId equals shortVideo.Id
+                  join publishedVideo in _db.PublishedVideos.AsNoTracking() on shortVideo.ParentVideoId equals publishedVideo.Id
+                  where publishedVideo.PipelineRunId == pipelineRunId
+                  orderby record.CreatedUtc descending
+                  select record).ToListAsync(cancellationToken);
+
     public async Task<IReadOnlyCollection<PipelineStageExecution>> GetStageExecutionsAsync(Guid pipelineRunId, CancellationToken cancellationToken)
         => await _db.PipelineStageExecutions.Where(x => x.PipelineRunId == pipelineRunId).OrderBy(x => x.CreatedUtc).ToListAsync(cancellationToken);
 
