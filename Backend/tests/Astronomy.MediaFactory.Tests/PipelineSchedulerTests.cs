@@ -178,7 +178,8 @@ public sealed class PipelineSchedulerTests
             var services = new ServiceCollection();
             services.AddSingleton<IPipelineRepository>(Repository);
             services.AddSingleton<IPipelineRunExecutor>(Executor);
-            return new PipelineRunQueue(services.BuildServiceProvider(), Audit, _options, NullLogger<PipelineRunQueue>.Instance);
+            var serviceProvider = services.BuildServiceProvider();
+            return new PipelineRunQueue(serviceProvider.GetRequiredService<IServiceScopeFactory>(), Audit, _options, NullLogger<PipelineRunQueue>.Instance);
         }
 
         public PipelineSchedulerService CreateScheduler()
