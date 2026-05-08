@@ -431,10 +431,21 @@ public sealed class PipelineOrchestrator
                     var sceneOutputDirectory = _renderingOptions.OutputCleanup.CreateLegacySegmentFolders
                         ? Path.Combine(outputDir, $"scene-narration-{i + 1:000}")
                         : outputDir;
-                    var perSceneAudioPath = await RunStageAsync("SpeechSynthesis", () => _speechSynthesisService.SynthesizeAsync(sceneSections[i].Item2, sceneOutputDirectory, cancellationToken));
+                    var sceneNumber = i + 1;
+                    var perSceneAudioPath = await RunStageAsync($"SceneSpeechSynthesis-{sceneNumber:000}", () => _speechSynthesisService.SynthesizeAsync(sceneSections[i].Item2, sceneOutputDirectory, cancellationToken));
 
-                    var sceneTextPath = Path.Combine(outputDir, $"scene-narration-{i + 1:000}.txt");
-                    var sceneAudioPath = Path.Combine(outputDir, $"scene-audio-{i + 1:000}.mp3");
+                    if (string.IsNullOrWhiteSpace(perSceneAudioPath))
+                    {
+                        throw new InvalidOperationException($"Scene speech synthesis did not return an audio path for scene {sceneNumber:000}.");
+                    }
+
+                    if (!File.Exists(perSceneAudioPath))
+                    {
+                        throw new InvalidOperationException($"Scene speech synthesis did not create an audio file for scene {sceneNumber:000}: {perSceneAudioPath}");
+                    }
+
+                    var sceneTextPath = Path.Combine(outputDir, $"scene-narration-{sceneNumber:000}.txt");
+                    var sceneAudioPath = Path.Combine(outputDir, $"scene-audio-{sceneNumber:000}.mp3");
                     var sourceTextPath = Path.Combine(sceneOutputDirectory, "narration.txt");
 
                     var sceneText = File.Exists(sourceTextPath)
