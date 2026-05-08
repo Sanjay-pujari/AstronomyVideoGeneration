@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -89,6 +90,77 @@ public sealed class EfPipelineRepository : IPipelineRepository
 
     public async Task<IReadOnlyCollection<VideoAnalytics>> GetRecentAnalyticsAsync(int take, CancellationToken cancellationToken)
         => await _db.VideoAnalytics.AsNoTracking().OrderByDescending(x => x.RetrievedAt).Take(take).ToListAsync(cancellationToken);
+
+
+    public async Task UpsertPlatformContentAnalyticsAsync(PlatformContentAnalytics analytics, CancellationToken cancellationToken)
+    {
+        var existing = await _db.PlatformContentAnalytics.FirstOrDefaultAsync(x =>
+            x.Platform == analytics.Platform
+            && x.PlatformContentType == analytics.PlatformContentType
+            && x.PlatformMediaId == analytics.PlatformMediaId
+            && x.CollectedUtc == analytics.CollectedUtc, cancellationToken);
+
+        if (existing is null)
+        {
+            await _db.PlatformContentAnalytics.AddAsync(analytics, cancellationToken);
+            return;
+        }
+
+        existing.PipelineRunId = analytics.PipelineRunId;
+        existing.PlatformUrl = analytics.PlatformUrl;
+        existing.Title = analytics.Title;
+        existing.PublishedUtc = analytics.PublishedUtc;
+        existing.Views = analytics.Views;
+        existing.Likes = analytics.Likes;
+        existing.Comments = analytics.Comments;
+        existing.Shares = analytics.Shares;
+        existing.Reach = analytics.Reach;
+        existing.Impressions = analytics.Impressions;
+        existing.WatchTimeMinutes = analytics.WatchTimeMinutes;
+        existing.AverageViewDurationSeconds = analytics.AverageViewDurationSeconds;
+        existing.Ctr = analytics.Ctr;
+        existing.EngagementRate = analytics.EngagementRate;
+        existing.DurationSeconds = analytics.DurationSeconds;
+        existing.Hashtags = analytics.Hashtags;
+        existing.LocationName = analytics.LocationName;
+        existing.TargetDate = analytics.TargetDate;
+        existing.ContentCategory = analytics.ContentCategory;
+        existing.ThumbnailPath = analytics.ThumbnailPath;
+        existing.IsAnalyticsAvailable = analytics.IsAnalyticsAvailable;
+        existing.LastError = analytics.LastError;
+    }
+
+    public async Task<IReadOnlyCollection<PlatformContentAnalytics>> GetPlatformContentAnalyticsAsync(PlatformAnalyticsQuery query, CancellationToken cancellationToken)
+    {
+        var from = DateTimeOffset.UtcNow.AddDays(-Math.Clamp(query.Days, 1, 365));
+        var q = _db.PlatformContentAnalytics.AsNoTracking().Where(x => x.CollectedUtc >= from);
+        if (!string.IsNullOrWhiteSpace(query.Platform))
+            q = q.Where(x => x.Platform == query.Platform);
+        if (!string.IsNullOrWhiteSpace(query.Location))
+            q = q.Where(x => x.LocationName != null && x.LocationName.Contains(query.Location));
+        if (!string.IsNullOrWhiteSpace(query.ContentType) && Enum.TryParse<ContentType>(query.ContentType, true, out var contentType))
+            q = q.Where(x => x.ContentCategory == contentType);
+        if (!string.IsNullOrWhiteSpace(query.ContentType) && !Enum.TryParse<ContentType>(query.ContentType, true, out _))
+            q = q.Where(x => x.PlatformContentType == query.ContentType);
+
+        return await q.OrderByDescending(x => x.CollectedUtc).Take(Math.Clamp(query.Take, 1, 500)).ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyCollection<PlatformContentAnalytics>> GetPlatformContentAnalyticsByRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+        => await _db.PlatformContentAnalytics.AsNoTracking().Where(x => x.PipelineRunId == pipelineRunId).OrderByDescending(x => x.CollectedUtc).ToListAsync(cancellationToken);
+
+    public async Task<AnalyticsDashboardSummary> GetAnalyticsDashboardSummaryAsync(int days, CancellationToken cancellationToken)
+    {
+        var from = DateTimeOffset.UtcNow.AddDays(-Math.Clamp(days, 1, 365));
+        var analytics = await _db.PlatformContentAnalytics.AsNoTracking().Where(x => x.CollectedUtc >= from && x.IsAnalyticsAvailable).ToListAsync(cancellationToken);
+        var top = analytics.OrderByDescending(EngagementValue).ThenByDescending(x => x.Views ?? 0).Take(10).ToArray();
+        var bestPlatform = analytics.GroupBy(x => x.Platform).OrderByDescending(g => g.Sum(x => x.Views ?? 0)).ThenBy(g => g.Key).Select(g => g.Key).FirstOrDefault();
+        var bestReel = analytics.Where(x => x.PlatformContentType.Contains("reel", StringComparison.OrdinalIgnoreCase) || x.PlatformContentType.Contains("short", StringComparison.OrdinalIgnoreCase)).OrderByDescending(EngagementValue).FirstOrDefault();
+        var bestHour = analytics.Where(x => x.PublishedUtc.HasValue).GroupBy(x => x.PublishedUtc!.Value.UtcDateTime.Hour).OrderByDescending(g => g.Sum(x => x.Views ?? 0)).Select(g => (int?)g.Key).FirstOrDefault();
+        return new AnalyticsDashboardSummary(top, analytics.Sum(x => x.Views ?? 0), analytics.Sum(EngagementValue), bestPlatform, bestReel, bestHour);
+    }
+
+    private static long EngagementValue(PlatformContentAnalytics x) => (x.Likes ?? 0) + (x.Comments ?? 0) + (x.Shares ?? 0);
 
     public async Task<IReadOnlyCollection<VideoAnalytics>> GetAnalyticsWindowAsync(DateTimeOffset? from, DateTimeOffset? to, int take, CancellationToken cancellationToken)
     {

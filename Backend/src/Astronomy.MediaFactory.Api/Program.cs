@@ -252,14 +252,32 @@ app.MapGet("/api/experiments/{id:guid}", async (Guid id, IContentExperimentServi
 app.MapGet("/api/experiments/top-performing", async (int? take, IContentExperimentService experimentService, CancellationToken ct) =>
     Results.Ok(await experimentService.GetTopPerformingExperimentsAsync(take ?? 10, ct)));
 
-app.MapGet("/api/analytics/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentAnalyticsAsync(50, ct)));
+app.MapGet("/api/analytics/recent", async (int? days, string? platform, string? location, string? contentType, IPipelineRepository repository, CancellationToken ct) =>
+    Results.Ok(await repository.GetPlatformContentAnalyticsAsync(new PlatformAnalyticsQuery(days ?? 14, platform, location, contentType, 100), ct)));
+app.MapGet("/api/analytics/platform/{platform}", async (string platform, int? days, string? location, string? contentType, IPipelineRepository repository, CancellationToken ct) =>
+    Results.Ok(await repository.GetPlatformContentAnalyticsAsync(new PlatformAnalyticsQuery(days ?? 14, platform, location, contentType, 100), ct)));
+app.MapGet("/api/analytics/run/{pipelineRunId:guid}", async (Guid pipelineRunId, IPipelineRepository repository, CancellationToken ct) =>
+{
+    var items = await repository.GetPlatformContentAnalyticsByRunAsync(pipelineRunId, ct);
+    return items.Count == 0 ? Results.NotFound() : Results.Ok(items);
+});
+app.MapPost("/api/analytics/collect-now", async (Guid? pipelineRunId, IAnalyticsCollectionService collectionService, CancellationToken ct) =>
+{
+    if (pipelineRunId.HasValue)
+        await collectionService.CollectForPipelineRunAsync(pipelineRunId.Value, ct);
+    else
+        await collectionService.CollectRecentAnalyticsAsync(ct);
+    return Results.Accepted();
+});
+app.MapGet("/api/analytics/summary", async (int? days, IPipelineRepository repository, CancellationToken ct) =>
+    Results.Ok(await repository.GetAnalyticsDashboardSummaryAsync(days ?? 14, ct)));
 app.MapGet("/api/analytics/top-performing", async (int? topN, IAnalyticsAggregationService aggregationService, CancellationToken ct) =>
 {
     var take = topN.GetValueOrDefault(10);
     var summary = await aggregationService.BuildSummaryAsync(DateTimeOffset.UtcNow.AddDays(-30), DateTimeOffset.UtcNow, take, ct);
     return Results.Ok(summary);
 });
-app.MapGet("/api/analytics/{videoId}", async (string videoId, IPipelineRepository repository, CancellationToken ct) =>
+app.MapGet("/api/analytics/youtube/{videoId}", async (string videoId, IPipelineRepository repository, CancellationToken ct) =>
 {
     var items = await repository.GetAnalyticsByVideoIdAsync(videoId, ct);
     return items.Count == 0 ? Results.NotFound() : Results.Ok(items);

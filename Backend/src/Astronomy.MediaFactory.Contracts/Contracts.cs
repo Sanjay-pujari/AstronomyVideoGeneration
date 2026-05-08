@@ -127,9 +127,13 @@ public sealed class SchedulingOptions
 public sealed class AnalyticsOptions
 {
     public const string SectionName = "Analytics";
+    public bool Enabled { get; set; } = true;
+    public int CollectEveryMinutes { get; set; } = 60;
+    public int CollectForRecentDays { get; set; } = 14;
     public int FetchIntervalMinutes { get; set; } = 1440;
     public int TopN { get; set; } = 10;
 }
+
 
 public sealed class RenderingOptions
 {

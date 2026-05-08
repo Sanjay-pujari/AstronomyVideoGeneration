@@ -310,6 +310,8 @@ public sealed class YouTubeVideoAnalyticsSnapshot
     public int DurationSeconds { get; init; }
     public double? AverageViewDurationSeconds { get; init; }
     public double? CtrPercent { get; init; }
+    public double? EstimatedMinutesWatched { get; init; }
+    public long? Impressions { get; init; }
 }
 
 public sealed class AnalyticsAggregationSummary
