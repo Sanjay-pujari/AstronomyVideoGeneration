@@ -419,8 +419,10 @@ public sealed class YouTubePublishingIntegrationTests
         return new ContentPublishService(
             repository,
             publishService,
+            new FixedTokenHealthService(),
             Options.Create(publishingOptions),
             Options.Create(youTubeOptions),
+            Options.Create(new TokenHealthOptions { Enabled = false }),
             Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }),
             NullLogger<ContentPublishService>.Instance);
     }

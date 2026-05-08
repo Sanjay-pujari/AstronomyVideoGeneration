@@ -13,21 +13,27 @@ public sealed class ContentPublishService : IContentPublishService
     private readonly IYouTubePublishService _youTubePublishService;
     private readonly PublishingOptions _publishingOptions;
     private readonly YouTubeOptions _youTubeOptions;
+    private readonly TokenHealthOptions _tokenHealthOptions;
     private readonly MaintenanceOptions _maintenanceOptions;
+    private readonly ITokenHealthService _tokenHealthService;
     private readonly ILogger<ContentPublishService> _logger;
 
     public ContentPublishService(
         IPipelineRepository repository,
         IYouTubePublishService youTubePublishService,
+        ITokenHealthService tokenHealthService,
         IOptions<PublishingOptions> publishingOptions,
         IOptions<YouTubeOptions> youTubeOptions,
+        IOptions<TokenHealthOptions> tokenHealthOptions,
         IOptions<MaintenanceOptions> maintenanceOptions,
         ILogger<ContentPublishService> logger)
     {
         _repository = repository;
         _youTubePublishService = youTubePublishService;
+        _tokenHealthService = tokenHealthService;
         _publishingOptions = publishingOptions.Value;
         _youTubeOptions = youTubeOptions.Value;
+        _tokenHealthOptions = tokenHealthOptions.Value;
         _maintenanceOptions = maintenanceOptions.Value;
         _logger = logger;
     }
@@ -71,6 +77,15 @@ public sealed class ContentPublishService : IContentPublishService
                 diagnostics.First(x => x.AssetType == publishAsset.AssetType).WillUpload = false;
                 diagnostics.First(x => x.AssetType == publishAsset.AssetType).SkipReason = enabledSkipReason;
                 results.Add(SkippedResult(publishAsset, mode, enabledSkipReason));
+                continue;
+            }
+
+            var tokenHealthSkipReason = await GetTokenHealthSkipReasonAsync(cancellationToken);
+            if (tokenHealthSkipReason is not null)
+            {
+                diagnostics.First(x => x.AssetType == publishAsset.AssetType).WillUpload = false;
+                diagnostics.First(x => x.AssetType == publishAsset.AssetType).SkipReason = tokenHealthSkipReason;
+                results.Add(SkippedResult(publishAsset, mode, tokenHealthSkipReason));
                 continue;
             }
 
@@ -224,6 +239,25 @@ public sealed class ContentPublishService : IContentPublishService
         }
 
         return null;
+    }
+
+    private async Task<string?> GetTokenHealthSkipReasonAsync(CancellationToken cancellationToken)
+    {
+        if (!_tokenHealthOptions.Enabled || !_tokenHealthOptions.CheckBeforePublish)
+        {
+            return null;
+        }
+
+        var health = await _tokenHealthService.CheckYouTubeAsync(cancellationToken);
+        if (health.IsValid)
+        {
+            return null;
+        }
+
+        var reason = string.IsNullOrWhiteSpace(health.Error) ? health.Warning : health.Error;
+        return string.IsNullOrWhiteSpace(reason)
+            ? "YouTube token health check failed."
+            : $"YouTube token health check failed: {reason}";
     }
 
     private async Task<string?> GetValidationSkipReasonAsync(string outputDirectory, PipelineRun run, PublishAsset asset, string mode, CancellationToken cancellationToken)
