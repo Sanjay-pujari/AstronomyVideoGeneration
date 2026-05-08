@@ -491,7 +491,7 @@ public sealed class PipelineOrchestrator
 
             var videoPath = await RunStageAsync("Rendering", () => _videoRenderService.RenderAsync(manifest, cancellationToken));
 
-            ThumbnailPlan thumbnailPlan;
+            ThumbnailPlan? thumbnailPlan;
             try
             {
                 thumbnailPlan = await RunStageAsync("ThumbnailGeneration", () => _thumbnailGenerationService.GenerateAsync(new ThumbnailGenerationRequest
@@ -507,14 +507,13 @@ public sealed class PipelineOrchestrator
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Thumbnail generation failed for run {PipelineRunId}. Continuing without a generated thumbnail.", run.Id);
-                thumbnailPlan = new ThumbnailPlan
-                {
-                    PrimaryThumbnailText = optimizedMetadata.ThumbnailTextSuggestions.FirstOrDefault() ?? "ASTRONOMY UPDATE",
-                    AlternateThumbnailTexts = optimizedMetadata.ThumbnailTextSuggestions,
-                    SelectedVisualPath = visuals.FirstOrDefault(File.Exists),
-                    ThumbnailPath = visuals.FirstOrDefault(File.Exists),
-                    LayoutType = ThumbnailLayoutType.CenteredTitleOverlay
-                };
+                thumbnailPlan = BuildFallbackThumbnailPlan(optimizedMetadata, visuals);
+            }
+
+            if (thumbnailPlan is null)
+            {
+                _logger.LogWarning("Thumbnail generation returned no plan for run {PipelineRunId}. Continuing with a source visual fallback.", run.Id);
+                thumbnailPlan = BuildFallbackThumbnailPlan(optimizedMetadata, visuals);
             }
 
             var thumbnailPath = thumbnailPlan.ThumbnailPath;
@@ -530,7 +529,7 @@ public sealed class PipelineOrchestrator
                 LocationName = context.LocationName,
                 TargetDate = context.Date,
                 IsShortForm = false,
-                ThumbnailVariants = thumbnailPlan.ThumbnailVariantPaths.ToArray()
+                ThumbnailVariants = (thumbnailPlan.ThumbnailVariantPaths ?? []).ToArray()
             }, cancellationToken));
             await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDir, cancellationToken);
 
@@ -907,6 +906,21 @@ public sealed class PipelineOrchestrator
         };
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "publish-idempotency-check.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
+
+    private static ThumbnailPlan BuildFallbackThumbnailPlan(OptimizedVideoMetadata optimizedMetadata, IReadOnlyCollection<string> visuals)
+    {
+        var fallbackVisual = visuals.FirstOrDefault(File.Exists);
+        return new ThumbnailPlan
+        {
+            PrimaryThumbnailText = optimizedMetadata.ThumbnailTextSuggestions.FirstOrDefault() ?? "ASTRONOMY UPDATE",
+            AlternateThumbnailTexts = optimizedMetadata.ThumbnailTextSuggestions,
+            SelectedVisualPath = fallbackVisual,
+            ThumbnailPath = fallbackVisual,
+            ThumbnailVariantPaths = fallbackVisual is null ? [] : [fallbackVisual],
+            LayoutType = ThumbnailLayoutType.CenteredTitleOverlay
+        };
+    }
+
 
     private static string MapPersistentStageName(string stageName)
         => stageName switch
