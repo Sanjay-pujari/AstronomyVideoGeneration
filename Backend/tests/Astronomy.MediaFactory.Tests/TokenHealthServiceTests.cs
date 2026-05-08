@@ -71,6 +71,59 @@ public sealed class TokenHealthServiceTests
     }
 
     [Fact]
+    public async Task MetaExpiresAt_ReturnsExpiryFieldsFromDebugToken()
+    {
+        using var workspace = new TempTokenHealthWorkspace();
+        workspace.WriteMetaToken();
+        var expiresAt = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds();
+        using var handler = new TokenHealthHandler { MetaExpiresAt = expiresAt };
+        var service = CreateService(handler, meta: new MetaOptions { AppId = "app-id", AppSecret = "app-secret", TokenFilePath = workspace.TokenPath });
+
+        var result = await service.CheckMetaAsync(CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(expiresAt).UtcDateTime, result.ExpiresAtUtc);
+        Assert.InRange(result.DaysUntilExpiry.GetValueOrDefault(), 29, 30);
+
+        var debugRequest = handler.RequestUris.Single(uri => uri.AbsolutePath.Equals("/debug_token", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("https://graph.facebook.com/debug_token", debugRequest.GetLeftPart(UriPartial.Path));
+        Assert.Contains("input_token=user-token-secret", debugRequest.Query, StringComparison.Ordinal);
+        Assert.Contains("access_token=app-id%7Capp-secret", debugRequest.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MetaExpiresAtZero_ReturnsWarningWithoutExpiryFields()
+    {
+        using var workspace = new TempTokenHealthWorkspace();
+        workspace.WriteMetaToken();
+        using var handler = new TokenHealthHandler { MetaExpiresAt = 0 };
+        var service = CreateService(handler, meta: new MetaOptions { AppId = "app-id", AppSecret = "app-secret", TokenFilePath = workspace.TokenPath });
+
+        var result = await service.CheckMetaAsync(CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Null(result.ExpiresAtUtc);
+        Assert.Null(result.DaysUntilExpiry);
+        Assert.Equal("Meta token expiry was not returned by debug_token.", result.Warning);
+    }
+
+    [Fact]
+    public async Task MetaMissingExpiresAt_ReturnsWarningWithoutExpiryFields()
+    {
+        using var workspace = new TempTokenHealthWorkspace();
+        workspace.WriteMetaToken();
+        using var handler = new TokenHealthHandler { IncludeMetaExpiresAt = false };
+        var service = CreateService(handler, meta: new MetaOptions { AppId = "app-id", AppSecret = "app-secret", TokenFilePath = workspace.TokenPath });
+
+        var result = await service.CheckMetaAsync(CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Null(result.ExpiresAtUtc);
+        Assert.Null(result.DaysUntilExpiry);
+        Assert.Equal("Meta token expiry was not returned by debug_token.", result.Warning);
+    }
+
+    [Fact]
     public async Task MetaNearExpiry_ReturnsWarning()
     {
         using var workspace = new TempTokenHealthWorkspace();
@@ -195,6 +248,7 @@ public sealed class FixedTokenHealthService : ITokenHealthService
 public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
 {
     public List<string> RequestBodies { get; } = [];
+    public List<Uri> RequestUris { get; } = [];
     public List<string> MetaScopes { get; set; } =
     [
         "pages_manage_posts",
@@ -205,11 +259,13 @@ public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
         "business_management"
     ];
     public long MetaExpiresAt { get; set; } = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds();
+    public bool IncludeMetaExpiresAt { get; set; } = true;
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
         RequestBodies.Add(body);
+        RequestUris.Add(request.RequestUri!);
 
         if (request.RequestUri!.Host == "oauth2.googleapis.com")
         {
@@ -223,7 +279,20 @@ public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
 
         if (request.RequestUri.AbsolutePath.EndsWith("/debug_token", StringComparison.OrdinalIgnoreCase))
         {
-            return JsonResponse(new { data = new { is_valid = true, expires_at = MetaExpiresAt, scopes = MetaScopes } });
+            var data = new Dictionary<string, object?>
+            {
+                ["is_valid"] = true,
+                ["scopes"] = MetaScopes,
+                ["app_id"] = "app-id",
+                ["user_id"] = "user-1"
+            };
+
+            if (IncludeMetaExpiresAt)
+            {
+                data["expires_at"] = MetaExpiresAt;
+            }
+
+            return JsonResponse(new { data });
         }
 
         if (request.RequestUri.AbsolutePath.EndsWith("/page-1", StringComparison.OrdinalIgnoreCase))

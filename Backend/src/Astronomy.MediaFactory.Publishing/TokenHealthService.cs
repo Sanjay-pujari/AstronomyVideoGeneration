@@ -14,6 +14,8 @@ public sealed class TokenHealthService : ITokenHealthService
     private const string YouTubeTokenEndpoint = "https://oauth2.googleapis.com/token";
     private const string YouTubeChannelsEndpoint = "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true";
     private const string GraphEndpoint = "https://graph.facebook.com/v23.0";
+    private const string MetaDebugTokenEndpoint = "https://graph.facebook.com/debug_token";
+    private const string MetaMissingExpiryWarning = "Meta token expiry was not returned by debug_token.";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] RequiredMetaScopes =
@@ -172,7 +174,7 @@ public sealed class TokenHealthService : ITokenHealthService
                 return result;
             }
 
-            var debug = await GetGraphAsync<MetaDebugTokenResponse>("/debug_token", new Dictionary<string, string>
+            var debug = await GetAsync<MetaDebugTokenResponse>(MetaDebugTokenEndpoint, new Dictionary<string, string>
             {
                 ["input_token"] = token.LongLivedUserAccessToken,
                 ["access_token"] = $"{_metaOptions.AppId}|{_metaOptions.AppSecret}"
@@ -184,7 +186,7 @@ public sealed class TokenHealthService : ITokenHealthService
                 return result;
             }
 
-            if (debug.Data.ExpiresAt.HasValue && debug.Data.ExpiresAt.Value > 0)
+            if (debug.Data.ExpiresAt.GetValueOrDefault() > 0)
             {
                 result.ExpiresAtUtc = DateTimeOffset.FromUnixTimeSeconds(debug.Data.ExpiresAt.Value).UtcDateTime;
                 result.DaysUntilExpiry = (int)Math.Floor((result.ExpiresAtUtc.Value - DateTime.UtcNow).TotalDays);
@@ -194,8 +196,14 @@ public sealed class TokenHealthService : ITokenHealthService
                     return result;
                 }
             }
+            else
+            {
+                result.ExpiresAtUtc = null;
+                result.DaysUntilExpiry = null;
+                AppendWarning(result, MetaMissingExpiryWarning);
+            }
 
-            var missingScopes = RequiredMetaScopes
+            var missingScopes = GetRequiredMetaScopes()
                 .Except(debug.Data.Scopes ?? [], StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             if (missingScopes.Length > 0)
@@ -256,14 +264,12 @@ public sealed class TokenHealthService : ITokenHealthService
             }
             else
             {
-                result.Warning = MetaOAuthService.InstagramNotLinkedWarning;
+                AppendWarning(result, MetaOAuthService.InstagramNotLinkedWarning);
             }
 
             if (result.ExpiresAtUtc.HasValue && result.ExpiresAtUtc.Value <= DateTime.UtcNow.AddDays(Math.Max(0, _tokenHealthOptions.RefreshBeforeExpiryDays)))
             {
-                result.Warning = string.IsNullOrWhiteSpace(result.Warning)
-                    ? MetaExpiryWarning
-                    : $"{result.Warning} {MetaExpiryWarning}";
+                AppendWarning(result, MetaExpiryWarning);
             }
 
             result.IsValid = true;
@@ -281,6 +287,13 @@ public sealed class TokenHealthService : ITokenHealthService
         => ex is HttpRequestException
             ? "Token health HTTP request failed."
             : ex.Message;
+
+    private static void AppendWarning(TokenHealthResult result, string warning)
+    {
+        result.Warning = string.IsNullOrWhiteSpace(result.Warning)
+            ? warning
+            : $"{result.Warning} {warning}";
+    }
 
     private async Task<string?> ResolveYouTubeRefreshTokenAsync(CancellationToken cancellationToken)
     {
@@ -307,9 +320,17 @@ public sealed class TokenHealthService : ITokenHealthService
             ? Path.Combine(AppContext.BaseDirectory, "meta-oauth-token.json")
             : Path.GetFullPath(_metaOptions.TokenFilePath);
 
-    private async Task<T> GetGraphAsync<T>(string path, Dictionary<string, string> query, string operation, CancellationToken cancellationToken)
+    private IReadOnlyList<string> GetRequiredMetaScopes()
+        => _metaOptions.Scopes is { Count: > 0 }
+            ? _metaOptions.Scopes
+            : RequiredMetaScopes;
+
+    private Task<T> GetGraphAsync<T>(string path, Dictionary<string, string> query, string operation, CancellationToken cancellationToken)
+        => GetAsync<T>(GraphEndpoint + path, query, operation, cancellationToken);
+
+    private async Task<T> GetAsync<T>(string endpoint, Dictionary<string, string> query, string operation, CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(BuildUri(GraphEndpoint + path, query), cancellationToken);
+        using var response = await _httpClient.GetAsync(BuildUri(endpoint, query), cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             throw new InvalidOperationException($"{operation} failed with status {(int)response.StatusCode}.");
@@ -371,6 +392,12 @@ public sealed class TokenHealthService : ITokenHealthService
 
         [JsonPropertyName("scopes")]
         public List<string> Scopes { get; init; } = [];
+
+        [JsonPropertyName("app_id")]
+        public string? AppId { get; init; }
+
+        [JsonPropertyName("user_id")]
+        public string? UserId { get; init; }
     }
 
     private sealed class MetaPageResponse
