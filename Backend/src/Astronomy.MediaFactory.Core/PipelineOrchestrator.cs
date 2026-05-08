@@ -1037,7 +1037,7 @@ public sealed class PipelineOrchestrator
         var result = results.FirstOrDefault(x => x.Platform.Equals(platform, StringComparison.OrdinalIgnoreCase));
         if (result is { Success: true })
         {
-            await setStageStatusAsync(stageName, PersistentStageStatuses.Succeeded);
+            await setStageStatusAsync(stageName, PersistentStageStatuses.Succeeded, null, null);
             return;
         }
 
