@@ -267,6 +267,15 @@ public interface IPipelineJobExecutor
 }
 
 
+
+public interface IOpsDashboardService
+{
+    Task<OpsDashboardResponse> GetDashboardAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<OpsPipelineRunSummary>> GetRunsAsync(DateOnly? date, string? status, CancellationToken cancellationToken);
+    Task<OpsPipelineRunDetail?> GetRunAsync(Guid pipelineRunId, CancellationToken cancellationToken);
+    Task<FailureOpsSummary> GetFailuresAsync(int days, CancellationToken cancellationToken);
+}
+
 public interface IRunOperationsService
 {
     Task<OpsActionResult> ReplayRunAsync(Guid runId, ReplayPipelineRequest request, CancellationToken cancellationToken);
