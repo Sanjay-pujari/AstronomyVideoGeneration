@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.AstroData.Services;
 using Astronomy.MediaFactory.ContentGen;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure;
 using Astronomy.MediaFactory.Infrastructure.Alerting;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Operations;
@@ -116,6 +117,11 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<PublishingValidationOptions>()
             .Bind(configuration.GetSection(PublishingValidationOptions.SectionName));
+
+        services.AddOptions<TokenHealthOptions>()
+            .Bind(configuration.GetSection(TokenHealthOptions.SectionName))
+            .Validate(options => options.RefreshBeforeExpiryDays >= 0, "TokenHealth:RefreshBeforeExpiryDays must be >= 0.")
+            .ValidateOnStart();
 
         services.AddOptions<PublishingOptions>()
             .Bind(configuration.GetSection(PublishingOptions.SectionName))
@@ -255,6 +261,9 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IFacebookReelPublishService, FacebookReelPublishService>();
         services.AddHttpClient<IInstagramReelPublishService, InstagramReelPublishService>();
         services.AddScoped<IMetaPublishService, MetaPublishService>();
+        services.AddHttpClient<ITokenHealthService, TokenHealthService>();
+        services.AddScoped<ITokenHealthReportWriter, TokenHealthReportWriter>();
+        services.AddHostedService<TokenHealthStartupHostedService>();
         services.AddScoped<IYouTubeApiClient, GoogleYouTubeApiClient>();
         services.AddScoped<IYouTubePublishService, YouTubePublishService>();
         services.AddScoped<IContentPublishService, ContentPublishService>();

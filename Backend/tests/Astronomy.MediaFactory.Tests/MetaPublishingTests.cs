@@ -426,8 +426,10 @@ public sealed class MetaPublishingTests
         var content = new ContentPublishService(
             repository,
             youtube,
+            new FixedTokenHealthService(),
             Options.Create(new PublishingOptions { Enabled = true, Mode = "DryRun" }),
             Options.Create(new YouTubeOptions()),
+            Options.Create(new TokenHealthOptions { Enabled = false }),
             Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }),
             NullLogger<ContentPublishService>.Instance);
 
@@ -463,7 +465,9 @@ internal static class MetaPublishingTestFactory
             repository,
             facebook,
             instagram,
+            new FixedTokenHealthService(),
             Options.Create(options),
+            Options.Create(new TokenHealthOptions { Enabled = false }),
             Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }),
             NullLogger<MetaPublishService>.Instance);
     }

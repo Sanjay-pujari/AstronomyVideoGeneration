@@ -14,21 +14,27 @@ public sealed class MetaPublishService : IMetaPublishService
     private readonly IFacebookReelPublishService _facebookReelPublishService;
     private readonly IInstagramReelPublishService _instagramReelPublishService;
     private readonly MetaPublishingOptions _options;
+    private readonly TokenHealthOptions _tokenHealthOptions;
     private readonly MaintenanceOptions _maintenanceOptions;
+    private readonly ITokenHealthService _tokenHealthService;
     private readonly ILogger<MetaPublishService> _logger;
 
     public MetaPublishService(
         IPipelineRepository repository,
         IFacebookReelPublishService facebookReelPublishService,
         IInstagramReelPublishService instagramReelPublishService,
+        ITokenHealthService tokenHealthService,
         IOptions<MetaPublishingOptions> options,
+        IOptions<TokenHealthOptions> tokenHealthOptions,
         IOptions<MaintenanceOptions> maintenanceOptions,
         ILogger<MetaPublishService> logger)
     {
         _repository = repository;
         _facebookReelPublishService = facebookReelPublishService;
         _instagramReelPublishService = instagramReelPublishService;
+        _tokenHealthService = tokenHealthService;
         _options = options.Value;
+        _tokenHealthOptions = tokenHealthOptions.Value;
         _maintenanceOptions = maintenanceOptions.Value;
         _logger = logger;
     }
@@ -64,6 +70,23 @@ public sealed class MetaPublishService : IMetaPublishService
         if (_options.PublishFacebookFullVideo || _options.PublishInstagramFullVideo)
         {
             _logger.LogWarning("Meta full-video publishing flags are ignored. Only shorts/short-video.mp4 is eligible for Facebook and Instagram Reels.");
+        }
+
+        var tokenHealthBlock = await GetTokenHealthBlockReasonAsync(cancellationToken);
+        if (tokenHealthBlock is not null)
+        {
+            var blockedResults = new List<MetaPublishResult>();
+            if (publishFacebook)
+            {
+                blockedResults.Add(new MetaPublishResult { Success = false, Platform = "Facebook", Mode = mode, Error = tokenHealthBlock, PublishedUtc = DateTime.UtcNow });
+            }
+
+            if (publishInstagram)
+            {
+                blockedResults.Add(new MetaPublishResult { Success = false, Platform = "Instagram", Mode = mode, Error = tokenHealthBlock, PublishedUtc = DateTime.UtcNow });
+            }
+
+            return blockedResults;
         }
 
         var outputDirectory = ResolveOutputDirectory(run);
@@ -114,6 +137,25 @@ public sealed class MetaPublishService : IMetaPublishService
         }
 
         return results;
+    }
+
+    private async Task<string?> GetTokenHealthBlockReasonAsync(CancellationToken cancellationToken)
+    {
+        if (!_tokenHealthOptions.Enabled || !_tokenHealthOptions.CheckBeforePublish)
+        {
+            return null;
+        }
+
+        var health = await _tokenHealthService.CheckMetaAsync(cancellationToken);
+        if (health.IsValid)
+        {
+            return null;
+        }
+
+        var reason = string.IsNullOrWhiteSpace(health.Error) ? health.Warning : health.Error;
+        return string.IsNullOrWhiteSpace(reason)
+            ? "Meta token health check failed."
+            : $"Meta token health check failed: {reason}";
     }
 
     private static async Task<SeoMetadataResult?> ReadFacebookMetadataAsync(string outputDirectory, CancellationToken cancellationToken)

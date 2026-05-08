@@ -66,6 +66,14 @@ public interface IInstagramReelPublishService
 }
 
 
+
+public interface ITokenHealthService
+{
+    Task<IReadOnlyList<TokenHealthResult>> CheckAllAsync(CancellationToken cancellationToken);
+    Task<TokenHealthResult> CheckYouTubeAsync(CancellationToken cancellationToken);
+    Task<TokenHealthResult> CheckMetaAsync(CancellationToken cancellationToken);
+}
+
 public interface IYouTubeAuthService
 {
     Task<string> GetAccessTokenAsync(CancellationToken cancellationToken);
