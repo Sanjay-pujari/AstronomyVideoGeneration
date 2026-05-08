@@ -144,6 +144,21 @@ public sealed class EfPipelineRepository : IPipelineRepository
     public async Task<IReadOnlyCollection<PlatformPublicationRecord>> GetPlatformPublicationRecordsByShortIdAsync(Guid shortVideoId, CancellationToken cancellationToken)
         => await _db.PlatformPublicationRecords.AsNoTracking().Where(x => x.ParentShortVideoId == shortVideoId).OrderByDescending(x => x.CreatedUtc).ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyCollection<PipelineStageExecution>> GetStageExecutionsAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+        => await _db.PipelineStageExecutions.Where(x => x.PipelineRunId == pipelineRunId).OrderBy(x => x.CreatedUtc).ToListAsync(cancellationToken);
+
+    public Task<PipelineStageExecution?> GetLatestStageExecutionAsync(Guid pipelineRunId, string stageName, CancellationToken cancellationToken)
+        => _db.PipelineStageExecutions
+            .Where(x => x.PipelineRunId == pipelineRunId && x.StageName == stageName)
+            .OrderByDescending(x => x.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    public async Task AddStageExecutionAsync(PipelineStageExecution stageExecution, CancellationToken cancellationToken)
+        => await _db.PipelineStageExecutions.AddAsync(stageExecution, cancellationToken);
+
+    public async Task<IReadOnlyCollection<PublishedVideo>> GetPublishedVideosByRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+        => await _db.PublishedVideos.AsNoTracking().Where(x => x.PipelineRunId == pipelineRunId).OrderByDescending(x => x.CreatedAt).ToListAsync(cancellationToken);
+
     public Task SaveChangesAsync(CancellationToken cancellationToken)
         => _db.SaveChangesAsync(cancellationToken);
 }

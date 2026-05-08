@@ -264,6 +264,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<StellariumScriptBuilder>(sp =>
             new StellariumScriptBuilder(sp.GetRequiredService<IOptions<StellariumOptions>>().Value));
         services.AddScoped<IPrePublishValidationService, PrePublishValidationService>();
+        services.AddScoped<IPipelineStageExecutor, PipelineStageExecutor>();
+        services.AddScoped<IPipelineRecoveryService, PipelineRecoveryService>();
         services.AddScoped<PipelineOrchestrator>();
         services.AddScoped<IPipelineJobQueue, PipelineJobQueue>();
         services.AddScoped<IPipelineJobExecutor, PipelineJobExecutor>();
