@@ -399,11 +399,19 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("OutputFolder")
+                        .HasColumnType("text")
+                        .HasColumnName("outputFolder");
+
                     b.Property<bool>("PublishToYouTube")
                         .HasColumnType("boolean");
 
                     b.Property<DateOnly>("RunDate")
                         .HasColumnType("date");
+
+                    b.Property<bool>("ResumeSupported")
+                        .HasColumnType("boolean")
+                        .HasColumnName("resumeSupported");
 
                     b.Property<DateTimeOffset?>("StartedUtc")
                         .HasColumnType("timestamp with time zone");
@@ -435,6 +443,9 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("CreatedUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("DiagnosticPath")
+                        .HasColumnType("text");
+
                     b.Property<long?>("DurationMs")
                         .HasColumnType("bigint");
 
@@ -445,6 +456,15 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("MetadataJson")
+                        .HasColumnType("text");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("MaxAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("OutputPath")
                         .HasColumnType("text");
 
                     b.Property<Guid>("PipelineRunId")
@@ -465,6 +485,8 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("PipelineRunId", "StageName", "CreatedUtc");
 
                     b.ToTable("pipeline_stage_executions", (string)null);
                 });

@@ -1,71 +1,58 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
 {
+    [DbContext(typeof(MediaFactoryDbContext))]
+    [Migration("20260508000000_Phase4APipelineState")]
     public partial class Phase4APipelineState : Migration
     {
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.AddColumn<string>(
-                name: "outputFolder",
-                table: "pipeline_runs",
-                type: "text",
-                nullable: true);
+            migrationBuilder.Sql(
+                """
+                ALTER TABLE pipeline_runs
+                    ADD COLUMN IF NOT EXISTS "outputFolder" text;
 
-            migrationBuilder.AddColumn<bool>(
-                name: "resumeSupported",
-                table: "pipeline_runs",
-                type: "boolean",
-                nullable: false,
-                defaultValue: false);
+                ALTER TABLE pipeline_runs
+                    ADD COLUMN IF NOT EXISTS "resumeSupported" boolean NOT NULL DEFAULT false;
 
-            migrationBuilder.AddColumn<int>(
-                name: "AttemptCount",
-                table: "pipeline_stage_executions",
-                type: "integer",
-                nullable: false,
-                defaultValue: 0);
+                ALTER TABLE pipeline_stage_executions
+                    ADD COLUMN IF NOT EXISTS "AttemptCount" integer NOT NULL DEFAULT 0;
 
-            migrationBuilder.AddColumn<int>(
-                name: "MaxAttempts",
-                table: "pipeline_stage_executions",
-                type: "integer",
-                nullable: false,
-                defaultValue: 1);
+                ALTER TABLE pipeline_stage_executions
+                    ADD COLUMN IF NOT EXISTS "MaxAttempts" integer NOT NULL DEFAULT 1;
 
-            migrationBuilder.AddColumn<string>(
-                name: "OutputPath",
-                table: "pipeline_stage_executions",
-                type: "text",
-                nullable: true);
+                ALTER TABLE pipeline_stage_executions
+                    ADD COLUMN IF NOT EXISTS "OutputPath" text;
 
-            migrationBuilder.AddColumn<string>(
-                name: "DiagnosticPath",
-                table: "pipeline_stage_executions",
-                type: "text",
-                nullable: true);
+                ALTER TABLE pipeline_stage_executions
+                    ADD COLUMN IF NOT EXISTS "DiagnosticPath" text;
 
-            migrationBuilder.CreateIndex(
-                name: "IX_pipeline_stage_executions_PipelineRunId_StageName_CreatedUtc",
-                table: "pipeline_stage_executions",
-                columns: new[] { "PipelineRunId", "StageName", "CreatedUtc" });
+                CREATE INDEX IF NOT EXISTS "IX_pipeline_stage_executions_PipelineRunId_StageName_CreatedUtc"
+                    ON pipeline_stage_executions ("PipelineRunId", "StageName", "CreatedUtc");
+                """);
         }
 
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropIndex(
-                name: "IX_pipeline_stage_executions_PipelineRunId_StageName_CreatedUtc",
-                table: "pipeline_stage_executions");
+            migrationBuilder.Sql(
+                """
+                DROP INDEX IF EXISTS "IX_pipeline_stage_executions_PipelineRunId_StageName_CreatedUtc";
 
-            migrationBuilder.DropColumn(name: "outputFolder", table: "pipeline_runs");
-            migrationBuilder.DropColumn(name: "resumeSupported", table: "pipeline_runs");
-            migrationBuilder.DropColumn(name: "AttemptCount", table: "pipeline_stage_executions");
-            migrationBuilder.DropColumn(name: "MaxAttempts", table: "pipeline_stage_executions");
-            migrationBuilder.DropColumn(name: "OutputPath", table: "pipeline_stage_executions");
-            migrationBuilder.DropColumn(name: "DiagnosticPath", table: "pipeline_stage_executions");
+                ALTER TABLE pipeline_runs
+                    DROP COLUMN IF EXISTS "outputFolder",
+                    DROP COLUMN IF EXISTS "resumeSupported";
+
+                ALTER TABLE pipeline_stage_executions
+                    DROP COLUMN IF EXISTS "AttemptCount",
+                    DROP COLUMN IF EXISTS "MaxAttempts",
+                    DROP COLUMN IF EXISTS "OutputPath",
+                    DROP COLUMN IF EXISTS "DiagnosticPath";
+                """);
         }
     }
 }
