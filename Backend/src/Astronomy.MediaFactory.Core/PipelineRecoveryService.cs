@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Contracts;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Astronomy.MediaFactory.Core;
 
@@ -31,16 +32,17 @@ public sealed class PipelineRecoveryService : IPipelineRecoveryService
         var published = await _repository.GetPublishedVideosByRunAsync(pipelineRunId, cancellationToken);
         var platformPublications = await _repository.GetPlatformPublicationRecordsByRunAsync(pipelineRunId, cancellationToken);
         var failed = stages.FirstOrDefault(s => s.Status == PersistentStageStatuses.Failed);
-        var urls = BuildPublishedUrls(published, platformPublications);
+        var publishedUrlStatus = await BuildPublishedUrlStatusAsync(run, stages, published, platformPublications, cancellationToken);
 
         return new PipelineStatusResponse(
             run.Id,
             run.Status,
             stages.Select(ToDto).ToArray(),
-            urls,
+            publishedUrlStatus.Urls,
             failed?.StageName,
             failed?.LastError ?? run.FailureReason,
-            run.OutputFolder);
+            run.OutputFolder,
+            publishedUrlStatus.Warnings);
     }
 
     public async Task<PipelineStatusResponse?> ResumeAsync(Guid pipelineRunId, string? forceStage, CancellationToken cancellationToken)
@@ -118,22 +120,290 @@ public sealed class PipelineRecoveryService : IPipelineRecoveryService
             .ToArray();
     }
 
-    private static IReadOnlyCollection<string> BuildPublishedUrls(
+    private static async Task<PublishedUrlStatus> BuildPublishedUrlStatusAsync(
+        PipelineRun run,
+        IReadOnlyCollection<PipelineStageExecution> stages,
         IReadOnlyCollection<PublishedVideo> published,
-        IReadOnlyCollection<PlatformPublicationRecord> platformPublications)
+        IReadOnlyCollection<PlatformPublicationRecord> platformPublications,
+        CancellationToken cancellationToken)
     {
         var urls = new List<string>();
+        var warnings = new List<string>();
+
+        foreach (var result in await ReadPublishResultFilesAsync<PublishResult>(run.OutputFolder, stages, cancellationToken,
+            (PipelineStageNames.YouTubeLongPublished, "youtube-publish-result-long.json"),
+            (PipelineStageNames.YouTubeShortPublished, "youtube-publish-result-short.json")))
+        {
+            var url = BuildYouTubeUrl(result);
+            if (IsAllowedPublishedUrl(url))
+                urls.Add(url!);
+        }
+
         urls.AddRange(published
             .Where(p => !string.IsNullOrWhiteSpace(p.YouTubeVideoId) && p.Status.Equals("Published", StringComparison.OrdinalIgnoreCase))
             .Select(p => $"https://www.youtube.com/watch?v={p.YouTubeVideoId}"));
+
+        foreach (var result in await ReadMetaPublishResultFilesAsync(run.OutputFolder, stages, cancellationToken,
+            (PipelineStageNames.FacebookReelPublished, "facebook-reel-publish-result.json", "Facebook"),
+            (PipelineStageNames.InstagramReelPublished, "instagram-reel-publish-result.json", "Instagram")))
+        {
+            if (!result.Success)
+                continue;
+
+            if (result.Platform.Equals("Facebook", StringComparison.OrdinalIgnoreCase))
+            {
+                var url = BuildFacebookReelUrl(result);
+                if (IsAllowedPublishedUrl(url))
+                    urls.Add(url!);
+            }
+            else if (result.Platform.Equals("Instagram", StringComparison.OrdinalIgnoreCase))
+            {
+                var url = BuildInstagramPermalinkUrl(result);
+                if (IsAllowedPublishedUrl(url))
+                {
+                    urls.Add(url!);
+                }
+                else if (!string.IsNullOrWhiteSpace(result.VideoId) || !string.IsNullOrWhiteSpace(result.PostId))
+                {
+                    warnings.Add("Instagram Reel publish result contained an id but no permalink URL; omitting it from publishedUrls.");
+                }
+            }
+        }
+
         urls.AddRange(platformPublications
             .Where(p => p.Status == PlatformPublicationStatus.Published)
             .Select(p => p.ExternalUrl)
-            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .Where(IsAllowedPublishedUrl)
             .Select(url => url!));
 
-        return urls.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return new PublishedUrlStatus(
+            urls.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
+
+    private static string? BuildYouTubeUrl(PublishResult result)
+    {
+        if (!result.Success || !result.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(result.VideoId))
+            return result.IsShort
+                ? $"https://www.youtube.com/shorts/{result.VideoId}"
+                : $"https://www.youtube.com/watch?v={result.VideoId}";
+
+        return IsYouTubePublishedUrl(result.VideoUrl, result.IsShort) ? result.VideoUrl : null;
+    }
+
+    private static string? BuildFacebookReelUrl(StatusMetaPublishResult result)
+    {
+        if (IsFacebookReelUrl(result.Url))
+            return result.Url;
+
+        return string.IsNullOrWhiteSpace(result.VideoId) ? null : $"https://www.facebook.com/reel/{Uri.EscapeDataString(result.VideoId)}/";
+    }
+
+    private static string? BuildInstagramPermalinkUrl(StatusMetaPublishResult result)
+        => IsInstagramPermalinkUrl(result.Url) ? result.Url : null;
+
+    private static async Task<IReadOnlyCollection<T>> ReadPublishResultFilesAsync<T>(
+        string? outputFolder,
+        IReadOnlyCollection<PipelineStageExecution> stages,
+        CancellationToken cancellationToken,
+        params (string StageName, string FileName)[] stageFiles)
+    {
+        var results = new List<T>();
+        foreach (var (stageName, fileName) in stageFiles)
+        {
+            foreach (var path in GetPublishResultPaths(outputFolder, stages, stageName, fileName))
+            {
+                if (!File.Exists(path))
+                    continue;
+
+                try
+                {
+                    var result = JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions);
+                    if (result is not null)
+                        results.Add(result);
+                    break;
+                }
+                catch (JsonException)
+                {
+                    break;
+                }
+                catch (IOException)
+                {
+                    break;
+                }
+            }
+        }
+
+        return results;
+    }
+
+    private static async Task<IReadOnlyCollection<StatusMetaPublishResult>> ReadMetaPublishResultFilesAsync(
+        string? outputFolder,
+        IReadOnlyCollection<PipelineStageExecution> stages,
+        CancellationToken cancellationToken,
+        params (string StageName, string FileName, string Platform)[] stageFiles)
+    {
+        var results = new List<StatusMetaPublishResult>();
+        foreach (var (stageName, fileName, platform) in stageFiles)
+        {
+            var stageSucceeded = stages.Any(s => s.StageName.Equals(stageName, StringComparison.OrdinalIgnoreCase) && s.Status == PersistentStageStatuses.Succeeded);
+            foreach (var path in GetPublishResultPaths(outputFolder, stages, stageName, fileName))
+            {
+                if (!File.Exists(path))
+                    continue;
+
+                try
+                {
+                    using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path, cancellationToken));
+                    var root = document.RootElement;
+                    var url = FirstNonBlank(
+                        GetStringProperty(root, "url"),
+                        GetStringProperty(root, "permalinkUrl"),
+                        GetStringProperty(root, "permalink"));
+                    var videoId = FirstNonBlank(
+                        GetStringProperty(root, "videoId"),
+                        GetStringProperty(root, "mediaId"));
+                    var postId = FirstNonBlank(
+                        GetStringProperty(root, "postId"),
+                        GetStringProperty(root, "mediaId"));
+                    var filePlatform = FirstNonBlank(GetStringProperty(root, "platform"), platform) ?? platform;
+                    var success = GetBooleanProperty(root, "success") ?? (stageSucceeded && (!string.IsNullOrWhiteSpace(url) || !string.IsNullOrWhiteSpace(videoId) || !string.IsNullOrWhiteSpace(postId)));
+
+                    results.Add(new StatusMetaPublishResult(success, filePlatform, videoId, postId, url));
+                    break;
+                }
+                catch (JsonException)
+                {
+                    break;
+                }
+                catch (IOException)
+                {
+                    break;
+                }
+            }
+        }
+
+        return results;
+    }
+
+    private static string? GetStringProperty(JsonElement element, string name)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.NameEquals(name) || property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                return property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : property.Value.ToString();
+        }
+
+        return null;
+    }
+
+    private static bool? GetBooleanProperty(JsonElement element, string name)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!property.NameEquals(name) && !property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            return property.Value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String when bool.TryParse(property.Value.GetString(), out var value) => value,
+                _ => null
+            };
+        }
+
+        return null;
+    }
+
+    private static string? FirstNonBlank(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+    private static IEnumerable<string> GetPublishResultPaths(
+        string? outputFolder,
+        IReadOnlyCollection<PipelineStageExecution> stages,
+        string stageName,
+        string fileName)
+    {
+        var stageOutputPath = stages
+            .Where(s => s.StageName.Equals(stageName, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(s => s.CreatedUtc)
+            .Select(s => s.OutputPath)
+            .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
+        if (!string.IsNullOrWhiteSpace(stageOutputPath))
+            yield return stageOutputPath!;
+
+        if (!string.IsNullOrWhiteSpace(outputFolder))
+            yield return Path.Combine(outputFolder, fileName);
+    }
+
+    private static bool IsAllowedPublishedUrl(string? url)
+        => IsYouTubePublishedUrl(url, isShort: null) || IsFacebookReelUrl(url) || IsInstagramPermalinkUrl(url);
+
+    private static bool IsYouTubePublishedUrl(string? url, bool? isShort)
+    {
+        if (!TryGetHttpsHostAndPath(url, out var host, out var path))
+            return false;
+
+        var isYouTubeHost = host.Equals("youtube.com", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".youtube.com", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase);
+        if (!isYouTubeHost)
+            return false;
+
+        if (host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase))
+            return isShort is not true;
+
+        return isShort switch
+        {
+            true => path.StartsWith("/shorts/", StringComparison.OrdinalIgnoreCase),
+            false => path.Equals("/watch", StringComparison.OrdinalIgnoreCase),
+            _ => path.Equals("/watch", StringComparison.OrdinalIgnoreCase) || path.StartsWith("/shorts/", StringComparison.OrdinalIgnoreCase)
+        };
+    }
+
+    private static bool IsFacebookReelUrl(string? url)
+    {
+        if (!TryGetHttpsHostAndPath(url, out var host, out var path))
+            return false;
+
+        return (host.Equals("facebook.com", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".facebook.com", StringComparison.OrdinalIgnoreCase))
+            && path.StartsWith("/reel/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsInstagramPermalinkUrl(string? url)
+    {
+        if (!TryGetHttpsHostAndPath(url, out var host, out var path))
+            return false;
+
+        return (host.Equals("instagram.com", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".instagram.com", StringComparison.OrdinalIgnoreCase))
+            && (path.StartsWith("/reel/", StringComparison.OrdinalIgnoreCase) || path.StartsWith("/p/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool TryGetHttpsHostAndPath(string? url, out string host, out string path)
+    {
+        host = string.Empty;
+        path = string.Empty;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        host = uri.Host;
+        path = uri.AbsolutePath;
+        return true;
+    }
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
+    private sealed record StatusMetaPublishResult(bool Success, string Platform, string? VideoId, string? PostId, string? Url);
+
+    private sealed record PublishedUrlStatus(IReadOnlyCollection<string> Urls, IReadOnlyCollection<string> Warnings);
 
     private static PipelineStageStatusDto ToDto(PipelineStageExecution s)
         => new(s.StageName, s.Status, s.AttemptCount, s.MaxAttempts, s.StartedUtc, s.CompletedUtc, s.LastError, s.OutputPath, s.DiagnosticPath);

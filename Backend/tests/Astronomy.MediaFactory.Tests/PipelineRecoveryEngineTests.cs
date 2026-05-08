@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -237,27 +238,69 @@ public sealed class PipelineRecoveryEngineTests
     }
 
     [Fact]
-    public async Task PublishedUrls_ContainsPlatformUrlsOnly()
+    public async Task PublishedUrls_IncludesAllPlatformUrls_WhenPublished()
     {
         var repo = new MemoryPipelineRepository();
         var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
-        await repo.AddPublishedVideoAsync(new PublishedVideo { PipelineRunId = run.Id, YouTubeVideoId = "yt-long", BlobUrl = "https://storage.example/001-sky.png", ThumbnailUrl = "https://storage.example/thumb.png", Status = "Published" }, CancellationToken.None);
-        repo.PlatformPublications.Add(new PlatformPublicationRecord { ParentShortVideoId = Guid.NewGuid(), Platform = ShortFormPlatform.Facebook, Status = PlatformPublicationStatus.Published, ExternalUrl = "https://facebook.example/reel/1" });
-        repo.PlatformPublications.Add(new PlatformPublicationRecord { ParentShortVideoId = Guid.NewGuid(), Platform = ShortFormPlatform.InstagramReels, Status = PlatformPublicationStatus.Published, ExternalUrl = "https://instagram.example/reel/1" });
+        await WriteJsonAsync(Path.Combine(run.OutputFolder!, "youtube-publish-result-long.json"), new PublishResult { Success = true, Platform = "YouTube", VideoId = "yt-long", IsShort = false, Mode = "Public" });
+        await WriteJsonAsync(Path.Combine(run.OutputFolder!, "youtube-publish-result-short.json"), new PublishResult { Success = true, Platform = "YouTube", VideoId = "yt-short", IsShort = true, Mode = "Public" });
+        await WriteJsonAsync(Path.Combine(run.OutputFolder!, "facebook-reel-publish-result.json"), new MetaPublishResult { Success = true, Platform = "Facebook", VideoId = "fb-reel-1", Url = "https://www.facebook.com/reel/fb-reel-1/", Mode = "Public" });
+        await WriteJsonAsync(Path.Combine(run.OutputFolder!, "instagram-reel-publish-result.json"), new MetaPublishResult { Success = true, Platform = "Instagram", VideoId = "ig-reel-1", Url = "https://www.instagram.com/reel/ig-reel-1/", Mode = "Public" });
         var service = new PipelineRecoveryService(repo);
 
         var status = await service.GetStatusAsync(run.Id, CancellationToken.None);
 
         Assert.Contains("https://www.youtube.com/watch?v=yt-long", status!.PublishedUrls);
-        Assert.Contains("https://facebook.example/reel/1", status.PublishedUrls);
-        Assert.Contains("https://instagram.example/reel/1", status.PublishedUrls);
+        Assert.Contains("https://www.youtube.com/shorts/yt-short", status.PublishedUrls);
+        Assert.Contains("https://www.facebook.com/reel/fb-reel-1/", status.PublishedUrls);
+        Assert.Contains("https://www.instagram.com/reel/ig-reel-1/", status.PublishedUrls);
+    }
+
+    [Fact]
+    public async Task PublishedUrls_ExcludesStorageOnlyUrls()
+    {
+        var repo = new MemoryPipelineRepository();
+        var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
+        await repo.AddPublishedVideoAsync(new PublishedVideo { PipelineRunId = run.Id, YouTubeVideoId = "yt-long", BlobUrl = "https://storage.example/001-sky.png", ThumbnailUrl = "https://storage.example/thumb.png", Status = "Published" }, CancellationToken.None);
+        repo.PlatformPublications.Add(new PlatformPublicationRecord { ParentShortVideoId = Guid.NewGuid(), Platform = ShortFormPlatform.Facebook, Status = PlatformPublicationStatus.Published, ExternalUrl = "https://storage.example/final-short.mp4" });
+        await WriteJsonAsync(Path.Combine(run.OutputFolder!, "facebook-reel-publish-result.json"), new MetaPublishResult { Success = true, Platform = "Facebook", VideoId = "fb-reel-2", Url = "https://storage.example/fb-reel-2.mp4", Mode = "Public" });
+        await WriteJsonAsync(Path.Combine(run.OutputFolder!, "instagram-reel-publish-result.json"), new MetaPublishResult { Success = true, Platform = "Instagram", VideoId = "ig-reel-2", Url = "https://storage.example/ig-thumb.png", Mode = "Public" });
+        var service = new PipelineRecoveryService(repo);
+
+        var status = await service.GetStatusAsync(run.Id, CancellationToken.None);
+
+        Assert.Contains("https://www.youtube.com/watch?v=yt-long", status!.PublishedUrls);
+        Assert.Contains("https://www.facebook.com/reel/fb-reel-2/", status.PublishedUrls);
         Assert.DoesNotContain("https://storage.example/001-sky.png", status.PublishedUrls);
+        Assert.DoesNotContain("https://storage.example/thumb.png", status.PublishedUrls);
+        Assert.DoesNotContain("https://storage.example/final-short.mp4", status.PublishedUrls);
+        Assert.DoesNotContain("https://storage.example/ig-thumb.png", status.PublishedUrls);
+    }
+
+    [Fact]
+    public async Task PublishedUrls_HandlesMissingInstagramPermalinkSafely()
+    {
+        var repo = new MemoryPipelineRepository();
+        var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
+        await WriteJsonAsync(Path.Combine(run.OutputFolder!, "instagram-reel-publish-result.json"), new MetaPublishResult { Success = true, Platform = "Instagram", VideoId = "ig-reel-without-permalink", Mode = "Public" });
+        var service = new PipelineRecoveryService(repo);
+
+        var status = await service.GetStatusAsync(run.Id, CancellationToken.None);
+
+        Assert.Empty(status!.PublishedUrls);
+        Assert.Contains(status.Warnings, warning => warning.Contains("Instagram Reel publish result contained an id but no permalink URL", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
     public void ValidationFailure_BlocksPublish_AndIsNonRetryable()
     {
         Assert.False(PipelineRetryClassifier.IsRetryable(new InvalidOperationException("validation failed: missing required artifact")));
+    }
+
+
+    private static async Task WriteJsonAsync<T>(string path, T value)
+    {
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(value));
     }
 
     private static PipelineRun NewRun()
