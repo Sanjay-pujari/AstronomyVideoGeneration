@@ -118,15 +118,16 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             "Instagram Reel media container creation",
             cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(container.CreationId))
+        var containerId = container.ContainerId;
+        if (string.IsNullOrWhiteSpace(containerId))
         {
-            throw new InvalidOperationException("Instagram Reel media container creation did not return creation_id.");
+            throw new InvalidOperationException("Instagram Reel media container creation did not return id.");
         }
 
-        var poll = await PollContainerAsync(container.CreationId, accessToken, cancellationToken);
+        var poll = await PollContainerAsync(containerId, accessToken, cancellationToken);
         var containerDiagnostics = new InstagramContainerDiagnostics
         {
-            CreationId = container.CreationId,
+            CreationId = containerId,
             StatusCode = poll.StatusCode,
             Status = poll.Status,
             Attempts = poll.Attempts,
@@ -138,14 +139,14 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             var error = string.Equals(poll.StatusCode, "ERROR", StringComparison.OrdinalIgnoreCase)
                 ? $"Instagram Reel media container failed: {poll.Status ?? poll.StatusCode}."
                 : $"Instagram Reel media container did not finish after {poll.Attempts} attempts.";
-            return (Failed(mode, error), containerDiagnostics, new InstagramPublishDiagnostics { CreationId = container.CreationId, InstagramBusinessAccountId = instagramBusinessAccountId, InstagramUsername = instagramUsername });
+            return (Failed(mode, error), containerDiagnostics, new InstagramPublishDiagnostics { CreationId = containerId, InstagramBusinessAccountId = instagramBusinessAccountId, InstagramUsername = instagramUsername });
         }
 
         var publish = await PostGraphAsync<PublishContainerResponse>(
             $"{GraphEndpoint}/{Uri.EscapeDataString(instagramBusinessAccountId)}/media_publish",
             new Dictionary<string, string>
             {
-                ["creation_id"] = container.CreationId,
+                ["creation_id"] = containerId,
                 ["access_token"] = accessToken
             },
             "Instagram Reel media publish",
@@ -159,7 +160,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         var details = await TryGetGraphObjectAsync<InstagramMediaDetails>($"{GraphEndpoint}/{Uri.EscapeDataString(publish.Id)}?fields=id,permalink,media_type,timestamp&access_token={Uri.EscapeDataString(accessToken)}", cancellationToken);
         var diagnostics = new InstagramPublishDiagnostics
         {
-            CreationId = container.CreationId,
+            CreationId = containerId,
             MediaId = publish.Id,
             Permalink = details?.Permalink,
             MediaType = details?.MediaType,
@@ -444,7 +445,12 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
 
     private sealed record InstagramContainerPollResult(bool Finished, string? StatusCode, string? Status, int Attempts);
 
-    private sealed record CreateContainerResponse([property: JsonPropertyName("creation_id")] string? CreationId);
+    private sealed record CreateContainerResponse(
+        [property: JsonPropertyName("id")] string? Id,
+        [property: JsonPropertyName("creation_id")] string? CreationId)
+    {
+        public string? ContainerId => string.IsNullOrWhiteSpace(Id) ? CreationId : Id;
+    }
     private sealed record InstagramContainerStatus([property: JsonPropertyName("status_code")] string? StatusCode, [property: JsonPropertyName("status")] string? Status);
     private sealed record PublishContainerResponse([property: JsonPropertyName("id")] string? Id);
     private sealed record InstagramMediaDetails([property: JsonPropertyName("id")] string? Id, [property: JsonPropertyName("permalink")] string? Permalink, [property: JsonPropertyName("media_type")] string? MediaType, [property: JsonPropertyName("timestamp")] string? Timestamp);

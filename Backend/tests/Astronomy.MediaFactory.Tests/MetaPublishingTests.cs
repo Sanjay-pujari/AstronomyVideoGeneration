@@ -569,7 +569,7 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
         if (request.RequestUri!.AbsolutePath.EndsWith("/media", StringComparison.OrdinalIgnoreCase) && body.Contains("media_type=REELS", StringComparison.Ordinal))
         {
             Requests.Add(("ig-container", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
-            return JsonResponse(new { creation_id = "creation-123" });
+            return JsonResponse(new { id = "creation-123" });
         }
 
         if (request.RequestUri!.AbsolutePath.EndsWith("/media_publish", StringComparison.OrdinalIgnoreCase))
