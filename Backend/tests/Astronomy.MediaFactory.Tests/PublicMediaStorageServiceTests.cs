@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
+using Azure.Storage;
 using Astronomy.MediaFactory.Publishing;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -23,6 +25,34 @@ public sealed class PublicMediaStorageServiceTests
         Assert.Equal($"astronomy/reels/{runId}/short-video.mp4", client.BlobName);
         Assert.Equal(temp.Path, client.UploadedLocalFilePath);
         Assert.Equal("video/mp4", client.ContentType);
+        Assert.Equal(2, client.TransferOptions?.MaximumConcurrency);
+        Assert.Equal(4 * 1024 * 1024, client.TransferOptions?.InitialTransferSize);
+        Assert.Equal(4 * 1024 * 1024, client.TransferOptions?.MaximumTransferSize);
+    }
+
+    [Fact]
+    public async Task UploadForInstagram_WritesUploadDiagnostics()
+    {
+        using var temp = new TempFile();
+        var runId = Guid.NewGuid();
+        var client = new FakeAzurePublicBlobClient("https://account.blob.core.windows.net/meta-media/blob.mp4?sig=secret");
+        var service = CreateService(client);
+
+        var result = await service.UploadForInstagramAsync(temp.Path, runId, CancellationToken.None);
+
+        Assert.True(result.Success);
+        var diagnosticsPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(temp.Path)!, "public-media-upload-result.json");
+        Assert.True(File.Exists(diagnosticsPath));
+        using var diagnosticsJson = JsonDocument.Parse(File.ReadAllText(diagnosticsPath));
+        var root = diagnosticsJson.RootElement;
+        Assert.Equal(temp.Path, root.GetProperty("localFilePath").GetString());
+        Assert.Equal(3, root.GetProperty("fileSize").GetInt64());
+        Assert.Equal($"astronomy/reels/{runId}/short-video.mp4", root.GetProperty("blobName").GetString());
+        Assert.True(root.GetProperty("uploadDurationMs").GetInt64() >= 0);
+        Assert.True(root.GetProperty("success").GetBoolean());
+        Assert.True(root.TryGetProperty("retryCount", out _));
+        Assert.True(root.TryGetProperty("exceptionType", out _));
+        Assert.True(root.TryGetProperty("generatedUtc", out _));
     }
 
     [Fact]
@@ -115,14 +145,16 @@ public sealed class PublicMediaStorageServiceTests
         public string? BlobName { get; set; }
         public string? UploadedLocalFilePath { get; private set; }
         public string? ContentType { get; private set; }
+        public StorageTransferOptions? TransferOptions { get; private set; }
         public DateTime ExpiresUtc { get; private set; }
 
         public Task CreateContainerIfNotExistsAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task UploadAsync(string localFilePath, string contentType, CancellationToken cancellationToken)
+        public Task UploadAsync(string localFilePath, string contentType, StorageTransferOptions transferOptions, CancellationToken cancellationToken)
         {
             UploadedLocalFilePath = localFilePath;
             ContentType = contentType;
+            TransferOptions = transferOptions;
             return Task.CompletedTask;
         }
 
