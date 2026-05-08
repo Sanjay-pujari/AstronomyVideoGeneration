@@ -131,4 +131,5 @@ public sealed record PipelineStatusResponse(
     IReadOnlyCollection<string> PublishedUrls,
     string? FailedStage,
     string? LastError,
-    string? OutputFolder);
+    string? OutputFolder,
+    IReadOnlyCollection<string> Warnings);
