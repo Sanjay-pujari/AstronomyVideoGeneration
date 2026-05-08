@@ -51,7 +51,7 @@ public sealed class PipelineRecoveryEngineTests
         var executor = new PipelineStageExecutor(repo, NullLogger<PipelineStageExecutor>.Instance);
         var calls = 0;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteStageAsync(run.Id, PipelineStageNames.ValidationCompleted, _ =>
+        await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteStageAsync<bool>(run.Id, PipelineStageNames.ValidationCompleted, _ =>
         {
             calls++;
             throw new InvalidOperationException("validation failed: scene mismatch");
