@@ -15,18 +15,42 @@ public sealed class PipelineRun : EntityBase
     public string? YouTubeVideoId { get; set; }
     public DateTimeOffset? StartedUtc { get; set; }
     public DateTimeOffset? FinishedUtc { get; set; }
+    public string? OutputFolder { get; set; }
+    public bool ResumeSupported { get; set; }
 }
 
 public sealed class PipelineStageExecution : EntityBase
 {
     public Guid PipelineRunId { get; set; }
     public string StageName { get; set; } = "";
-    public string Status { get; set; } = "Started";
+    public string Status { get; set; } = PersistentStageStatuses.Pending;
     public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? FinishedAt { get; set; }
     public long? DurationMs { get; set; }
     public string? ErrorMessage { get; set; }
     public string? MetadataJson { get; set; }
+    public int AttemptCount { get; set; }
+    public int MaxAttempts { get; set; } = 1;
+    public string? OutputPath { get; set; }
+    public string? DiagnosticPath { get; set; }
+
+    public DateTimeOffset? StartedUtc
+    {
+        get => StartedAt;
+        set => StartedAt = value ?? DateTimeOffset.UtcNow;
+    }
+
+    public DateTimeOffset? CompletedUtc
+    {
+        get => FinishedAt;
+        set => FinishedAt = value;
+    }
+
+    public string? LastError
+    {
+        get => ErrorMessage;
+        set => ErrorMessage = value;
+    }
 }
 
 public sealed class AstronomyEvent : EntityBase

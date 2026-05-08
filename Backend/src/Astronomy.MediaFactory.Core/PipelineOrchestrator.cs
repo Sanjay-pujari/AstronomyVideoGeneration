@@ -45,6 +45,7 @@ public sealed class PipelineOrchestrator
     private readonly MetaPublishingOptions _metaPublishingOptions;
     private readonly IContentPublishService? _contentPublishService;
     private readonly IMetaPublishService? _metaPublishService;
+    private readonly IPipelineStageExecutor? _pipelineStageExecutor;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -81,7 +82,8 @@ public sealed class PipelineOrchestrator
         IPrePublishValidationService? prePublishValidationService = null,
         IContentPublishService? contentPublishService = null,
         IOptions<MetaPublishingOptions>? metaPublishingOptions = null,
-        IMetaPublishService? metaPublishService = null)
+        IMetaPublishService? metaPublishService = null,
+        IPipelineStageExecutor? pipelineStageExecutor = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -118,6 +120,7 @@ public sealed class PipelineOrchestrator
         _metaPublishingOptions = metaPublishingOptions?.Value ?? new MetaPublishingOptions();
         _contentPublishService = contentPublishService;
         _metaPublishService = metaPublishService;
+        _pipelineStageExecutor = pipelineStageExecutor;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -129,7 +132,8 @@ public sealed class PipelineOrchestrator
             LocationName = request.LocationName,
             TimeZone = request.TimeZone,
             PublishToYouTube = request.PublishToYouTube,
-            Status = PipelineRunStatus.Queued
+            Status = PipelineRunStatus.Queued,
+            ResumeSupported = true
         };
 
         await _repository.CreateAsync(run, cancellationToken);
@@ -149,6 +153,12 @@ public sealed class PipelineOrchestrator
         {
             var outputDir = Path.Combine(_maintenanceOptions.WorkingDirectory, request.ContentType.ToString(), request.Date.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
             Directory.CreateDirectory(outputDir);
+            run.OutputFolder = outputDir;
+            await _repository.SaveChangesAsync(cancellationToken);
+            if (_pipelineStageExecutor is not null)
+            {
+                await _pipelineStageExecutor.ExecuteStageAsync(run.Id, PipelineStageNames.Created, _ => Task.FromResult(true), new StageExecutionOptions { MaxAttempts = 1, RetryDelaySeconds = 0, OutputPath = outputDir, DiagnosticPath = Path.Combine(outputDir, "pipeline-state.json") }, cancellationToken);
+            }
 
             static StageAlertContext BuildAlertContext(PipelineRun pipelineRun, PipelineStageExecution stage)
                 => new(pipelineRun.Id, stage.StageName, stage.Status, stage.DurationMs, stage.ErrorMessage, stage.MetadataJson, stage.StartedAt, stage.FinishedAt);
@@ -166,6 +176,17 @@ public sealed class PipelineOrchestrator
                 => await _stageAlertPublisher.PublishStageFailureAsync(BuildAlertContext(run, stage), cancellationToken);
 
             async Task<T> RunStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null)
+            {
+                var persistentStageName = MapPersistentStageName(stageName);
+                if (_pipelineStageExecutor is not null)
+                {
+                    return await _pipelineStageExecutor.ExecuteStageAsync(run.Id, persistentStageName, _ => RunInstrumentedStageAsync(stageName, action, continueWithFallback, fallback), new StageExecutionOptions { MaxAttempts = continueWithFallback ? 1 : 3, RetryDelaySeconds = 0, IsRetryableExceptionFunc = ex => !continueWithFallback && PipelineRetryClassifier.IsRetryable(ex), DiagnosticPath = Path.Combine(outputDir, $"{persistentStageName}.diagnostic.json") }, cancellationToken);
+                }
+
+                return await RunInstrumentedStageAsync(stageName, action, continueWithFallback, fallback);
+            }
+
+            async Task<T> RunInstrumentedStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null)
             {
                 PipelineStageExecution? stage = null;
                 if (_pipelineStageRecorder is not null)
@@ -205,6 +226,10 @@ public sealed class PipelineOrchestrator
             }
 
             var context = await RunStageAsync("AstronomyData", () => _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken));
+            if (_pipelineStageExecutor is not null)
+            {
+                await _pipelineStageExecutor.ExecuteStageAsync(run.Id, PipelineStageNames.SceneContextCompleted, _ => Task.FromResult(true), new StageExecutionOptions { MaxAttempts = 1, RetryDelaySeconds = 0, DiagnosticPath = Path.Combine(outputDir, "scene-context.diagnostic.json") }, cancellationToken);
+            }
             TopicSelectionPlan? topicSelectionPlan = null;
             if (request.UseTopicPlanner && _topicSelectionService is not null)
             {
@@ -458,7 +483,7 @@ public sealed class PipelineOrchestrator
             ThumbnailPlan thumbnailPlan;
             try
             {
-                thumbnailPlan = await _thumbnailGenerationService.GenerateAsync(new ThumbnailGenerationRequest
+                thumbnailPlan = await RunStageAsync("ThumbnailGeneration", () => _thumbnailGenerationService.GenerateAsync(new ThumbnailGenerationRequest
                 {
                     ContentType = request.ContentType,
                     Context = context,
@@ -466,7 +491,7 @@ public sealed class PipelineOrchestrator
                     AvailableVisuals = visuals,
                     OutputDirectory = outputDir,
                     FeedbackSignals = feedbackSignals
-                }, cancellationToken);
+                }, cancellationToken));
             }
             catch (Exception ex)
             {
@@ -487,7 +512,7 @@ public sealed class PipelineOrchestrator
                 .Select(s => s.ObjectName)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            var seoMetadata = await _seoMetadataGeneratorService.GenerateAsync(new SeoMetadataRequest
+            var seoMetadata = await RunStageAsync("SeoGeneration", () => _seoMetadataGeneratorService.GenerateAsync(new SeoMetadataRequest
             {
                 SceneObservationContext = context.SceneObservationContexts,
                 SelectedVisibleObjects = selectedObjects,
@@ -495,7 +520,7 @@ public sealed class PipelineOrchestrator
                 TargetDate = context.Date,
                 IsShortForm = false,
                 ThumbnailVariants = thumbnailPlan.ThumbnailVariantPaths.ToArray()
-            }, cancellationToken);
+            }, cancellationToken));
             await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDir, cancellationToken);
 
             await _repository.AddAssetAsync(new MediaAsset
@@ -562,10 +587,18 @@ public sealed class PipelineOrchestrator
             var mode = (_publishingOptions.Mode ?? "DryRun").Trim();
             var publishingEnabled = _publishingOptions.Enabled && !string.Equals(mode, "Disabled", StringComparison.OrdinalIgnoreCase);
             _logger.LogInformation("PublishingMode={PublishingMode} ValidationPassed={ValidationPassed}", mode, validationPassed);
+            var existingPublishedVideos = await _repository.GetPublishedVideosByRunAsync(run.Id, cancellationToken);
+            var existingSuccessfulYouTube = existingPublishedVideos.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.YouTubeVideoId) && x.Status.Equals("Published", StringComparison.OrdinalIgnoreCase));
+            await WritePublishIdempotencyCheckAsync(run.Id, outputDir, existingSuccessfulYouTube, cancellationToken);
 
             if (!publishingEnabled || !validationPassed)
             {
                 _logger.LogInformation("Uploaded/Skipped=Skipped");
+            }
+            else if (existingSuccessfulYouTube is not null)
+            {
+                run.YouTubeVideoId = existingSuccessfulYouTube.YouTubeVideoId;
+                _logger.LogInformation("Uploaded/Skipped=Skipped duplicate-prevention existing YouTube video {YouTubeVideoId}", run.YouTubeVideoId);
             }
             else if (_contentPublishService is null)
             {
@@ -792,6 +825,11 @@ public sealed class PipelineOrchestrator
                 }
             }
 
+            if (_pipelineStageExecutor is not null)
+            {
+                await _pipelineStageExecutor.ExecuteStageAsync(run.Id, PipelineStageNames.Completed, _ => Task.FromResult(true), new StageExecutionOptions { MaxAttempts = 1, RetryDelaySeconds = 0, OutputPath = outputDir, DiagnosticPath = Path.Combine(outputDir, "pipeline-state.json") }, cancellationToken);
+            }
+
             run.Status = PipelineRunStatus.Succeeded;
             if (_operationalAlertNotifier is not null && request.PublishToYouTube && publishStatus == "Published")
             {
@@ -825,6 +863,17 @@ public sealed class PipelineOrchestrator
                     ErrorSummary: ex.Message,
                     OccurredAt: DateTimeOffset.UtcNow), cancellationToken);
             }
+            if (_pipelineStageExecutor is not null && !string.IsNullOrWhiteSpace(run.OutputFolder))
+            {
+                try
+                {
+                    await _pipelineStageExecutor.ExecuteStageAsync(run.Id, PipelineStageNames.Failed, _ => Task.FromResult(true), new StageExecutionOptions { MaxAttempts = 1, RetryDelaySeconds = 0, OutputPath = run.OutputFolder, DiagnosticPath = Path.Combine(run.OutputFolder, "pipeline-state.json") }, CancellationToken.None);
+                }
+                catch
+                {
+                    // Preserve original pipeline failure.
+                }
+            }
             run.Status = PipelineRunStatus.Failed;
             run.FailureReason = ex.Message;
             run.FinishedUtc = DateTimeOffset.UtcNow;
@@ -833,6 +882,39 @@ public sealed class PipelineOrchestrator
             throw;
         }
     }
+
+
+    private static async Task WritePublishIdempotencyCheckAsync(Guid runId, string outputDirectory, PublishedVideo? existingSuccessfulYouTube, CancellationToken cancellationToken)
+    {
+        var payload = new
+        {
+            runId,
+            checkedAtUtc = DateTimeOffset.UtcNow,
+            youtubeAlreadyPublished = existingSuccessfulYouTube is not null,
+            existingYouTubeVideoId = existingSuccessfulYouTube?.YouTubeVideoId,
+            existingUrl = existingSuccessfulYouTube?.BlobUrl
+        };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "publish-idempotency-check.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private static string MapPersistentStageName(string stageName)
+        => stageName switch
+        {
+            "AstronomyData" => PipelineStageNames.ObservationWindowCompleted,
+            "TopicSelection" => PipelineStageNames.SkyfieldCompleted,
+            "PromptGeneration" => PipelineStageNames.NarrationCompleted,
+            "SpeechSynthesis" => PipelineStageNames.SpeechCompleted,
+            "VisualGeneration" => PipelineStageNames.StellariumCompleted,
+            "Rendering" => PipelineStageNames.RenderingCompleted,
+            "ThumbnailVariants" => PipelineStageNames.ThumbnailCompleted,
+            "ThumbnailGeneration" => PipelineStageNames.ThumbnailCompleted,
+            "SeoGeneration" => PipelineStageNames.SeoCompleted,
+            "PrePublishValidation" => PipelineStageNames.ValidationCompleted,
+            "YouTubePublish" => PipelineStageNames.YouTubeLongPublished,
+            "YouTubeShortPublish" => PipelineStageNames.YouTubeShortPublished,
+            "MetaReelPublish" => PipelineStageNames.FacebookReelPublished,
+            _ => stageName
+        };
 
     private static async Task WriteSceneObservationDiagnosticsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
     {

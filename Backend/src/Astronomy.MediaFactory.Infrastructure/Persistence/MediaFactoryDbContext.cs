@@ -25,6 +25,8 @@ public sealed class MediaFactoryDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<PipelineRun>().ToTable("pipeline_runs").HasKey(x => x.Id);
+        modelBuilder.Entity<PipelineRun>().Property(x => x.OutputFolder).HasColumnName("outputFolder");
+        modelBuilder.Entity<PipelineRun>().Property(x => x.ResumeSupported).HasColumnName("resumeSupported");
         modelBuilder.Entity<AstronomyEvent>().ToTable("astronomy_events").HasKey(x => x.Id);
         modelBuilder.Entity<GeneratedScript>().ToTable("generated_scripts").HasKey(x => x.Id);
         modelBuilder.Entity<MediaAsset>().ToTable("media_assets").HasKey(x => x.Id);
@@ -35,6 +37,9 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<PipelineJob>().ToTable("pipeline_jobs").HasKey(x => x.Id);
         modelBuilder.Entity<VideoAnalytics>().ToTable("video_analytics").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineStageExecution>().ToTable("pipeline_stage_executions").HasKey(x => x.Id);
+        modelBuilder.Entity<PipelineStageExecution>().Ignore(x => x.StartedUtc);
+        modelBuilder.Entity<PipelineStageExecution>().Ignore(x => x.CompletedUtc);
+        modelBuilder.Entity<PipelineStageExecution>().Ignore(x => x.LastError);
         modelBuilder.Entity<RecoveryOperation>().ToTable("recovery_operations").HasKey(x => x.Id);
         modelBuilder.Entity<ContentExperiment>().ToTable("content_experiments").HasKey(x => x.Id);
         modelBuilder.Entity<ContentVariant>().ToTable("content_variants").HasKey(x => x.Id);
@@ -54,5 +59,6 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentExperiment>().HasIndex(x => new { x.VideoId, x.ExperimentType, x.Status });
         modelBuilder.Entity<ContentVariant>().HasIndex(x => new { x.ContentExperimentId, x.IsWinner });
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => new { x.PublishedVideoId, x.RetrievedAt });
+        modelBuilder.Entity<PipelineStageExecution>().HasIndex(x => new { x.PipelineRunId, x.StageName, x.CreatedUtc });
     }
 }

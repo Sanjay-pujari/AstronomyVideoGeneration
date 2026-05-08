@@ -104,6 +104,22 @@ app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrc
     var result = await orchestrator.RunAsync(request, ct);
     return Results.Ok(new RunPipelineResponse(result.Id, result.Status, "Completed."));
 });
+
+app.MapGet("/api/pipeline/status/{pipelineRunId:guid}", async (Guid pipelineRunId, IPipelineRecoveryService recoveryService, CancellationToken ct) =>
+{
+    var status = await recoveryService.GetStatusAsync(pipelineRunId, ct);
+    return status is null ? Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." }) : Results.Ok(status);
+});
+app.MapPost("/api/pipeline/resume/{pipelineRunId:guid}", async (Guid pipelineRunId, string? forceStage, IPipelineRecoveryService recoveryService, CancellationToken ct) =>
+{
+    var status = await recoveryService.ResumeAsync(pipelineRunId, forceStage, ct);
+    return status is null ? Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." }) : Results.Ok(status);
+});
+app.MapPost("/api/pipeline/retry-publish/{pipelineRunId:guid}", async (Guid pipelineRunId, string? platform, IPipelineRecoveryService recoveryService, CancellationToken ct) =>
+{
+    var status = await recoveryService.RetryPublishAsync(pipelineRunId, platform ?? "all", ct);
+    return status is null ? Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." }) : Results.Ok(status);
+});
 app.MapPost("/api/youtubepublish/{pipelineRunId:guid}", async (Guid pipelineRunId, string? asset, IContentPublishService publishService, IPipelineRepository repository, CancellationToken ct) =>
 {
     var run = await repository.GetAsync(pipelineRunId, ct);
