@@ -23,6 +23,13 @@ public sealed class EfPipelineRepository : IPipelineRepository
     public async Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken)
         => await _db.PipelineRuns.OrderByDescending(x => x.CreatedUtc).Take(take).ToListAsync(cancellationToken);
 
+    public Task<bool> HasPipelineRunAsync(DateOnly runDate, ContentType contentType, string locationName, string timeZone, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken)
+        => _db.PipelineRuns.AnyAsync(x => x.RunDate == runDate
+            && x.ContentType == contentType
+            && x.LocationName == locationName
+            && x.TimeZone == timeZone
+            && statuses.Contains(x.Status), cancellationToken);
+
     public async Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken)
         => await _db.GeneratedScripts.AddAsync(script, cancellationToken);
 

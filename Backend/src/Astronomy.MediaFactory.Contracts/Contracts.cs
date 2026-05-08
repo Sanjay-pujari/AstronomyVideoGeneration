@@ -76,6 +76,42 @@ public sealed class TopicSelectionOptions
     public int RepetitionWindowDays { get; set; } = 5;
 }
 
+
+public sealed class SchedulerOptions
+{
+    public const string SectionName = "Scheduler";
+    public bool Enabled { get; set; } = false;
+    public bool RunOnStartup { get; set; } = false;
+    public int MaxConcurrentRuns { get; set; } = 1;
+    public ContentType DefaultContentType { get; set; } = ContentType.DailySkyGuide;
+    public List<SchedulerScheduleOptions> Schedules { get; set; } =
+    [
+        new SchedulerScheduleOptions
+        {
+            Name = "Udaipur Daily Sky",
+            Enabled = true,
+            LocationName = "Udaipur, India",
+            Latitude = 24.5854,
+            Longitude = 73.7125,
+            Timezone = "Asia/Kolkata",
+            LocalRunTime = "18:00",
+            PublishEnabled = true
+        }
+    ];
+}
+
+public sealed class SchedulerScheduleOptions
+{
+    public string Name { get; set; } = "";
+    public bool Enabled { get; set; } = true;
+    public string LocationName { get; set; } = "";
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public string Timezone { get; set; } = "Asia/Kolkata";
+    public string LocalRunTime { get; set; } = "18:00";
+    public bool PublishEnabled { get; set; } = true;
+}
+
 public sealed class SchedulingOptions
 {
     public const string SectionName = "Scheduling";
