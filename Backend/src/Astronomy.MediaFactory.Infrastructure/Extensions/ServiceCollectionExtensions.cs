@@ -7,6 +7,7 @@ using Astronomy.MediaFactory.Infrastructure.Alerting;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Operations;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Astronomy.MediaFactory.Infrastructure.Scheduling;
 using Astronomy.MediaFactory.Publishing;
 using Astronomy.MediaFactory.Rendering;
 using Microsoft.EntityFrameworkCore;
@@ -134,6 +135,15 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<TelemetryOptions>()
             .Bind(configuration.GetSection(TelemetryOptions.SectionName))
+            .ValidateOnStart();
+
+        services.AddOptions<SchedulerOptions>()
+            .Bind(configuration.GetSection(SchedulerOptions.SectionName))
+            .Validate(options => options.MaxConcurrentRuns > 0, "Scheduler:MaxConcurrentRuns must be greater than 0.")
+            .Validate(options => options.Schedules.All(schedule => !string.IsNullOrWhiteSpace(schedule.Name)), "Scheduler schedules must have names.")
+            .Validate(options => options.Schedules.All(schedule => schedule.Latitude is >= -90 and <= 90), "Scheduler schedule Latitude must be between -90 and 90.")
+            .Validate(options => options.Schedules.All(schedule => schedule.Longitude is >= -180 and <= 180), "Scheduler schedule Longitude must be between -180 and 180.")
+            .Validate(options => options.Schedules.All(schedule => TimeOnly.TryParse(schedule.LocalRunTime, out _)), "Scheduler schedule LocalRunTime must use HH:mm format.")
             .ValidateOnStart();
 
 
@@ -266,7 +276,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPrePublishValidationService, PrePublishValidationService>();
         services.AddScoped<IPipelineStageExecutor, PipelineStageExecutor>();
         services.AddScoped<IPipelineRecoveryService, PipelineRecoveryService>();
+        services.AddSingleton<ISchedulerAuditStore, JsonSchedulerAuditStore>();
+        services.AddSingleton<IPipelineRunQueue, PipelineRunQueue>();
+        services.AddSingleton<PipelineSchedulerService>();
+        services.AddSingleton<IPipelineSchedulerService>(sp => sp.GetRequiredService<PipelineSchedulerService>());
+        services.AddHostedService(sp => sp.GetRequiredService<PipelineSchedulerService>());
         services.AddScoped<PipelineOrchestrator>();
+        services.AddScoped<IPipelineRunExecutor, OrchestratorPipelineRunExecutor>();
         services.AddScoped<IPipelineJobQueue, PipelineJobQueue>();
         services.AddScoped<IPipelineJobExecutor, PipelineJobExecutor>();
         services.AddScoped<PipelineJobProcessor>();
