@@ -117,7 +117,6 @@ public sealed class RuleBasedOptimizationServiceTests
     private static PlatformContentAnalytics Sample(string id, int hour, double engagementRate, string topic, int duration = 30, double ctr = 0.05, string? thumbnail = null, string hashtags = "#Sky")
         => new()
         {
-            Id = Guid.NewGuid(),
             Platform = "YouTube",
             PlatformContentType = "Shorts",
             PlatformMediaId = id,
