@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -12,15 +13,19 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
     private readonly IOptionsMonitor<SchedulerOptions> _options;
     private readonly IPipelineRunQueue _queue;
     private readonly ISchedulerAuditStore _auditStore;
+    private readonly IOptionsMonitor<OptimizationOptions> _optimizationOptions;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<PipelineSchedulerService> _logger;
     private readonly ConcurrentDictionary<string, bool> _scheduleEnabledOverrides = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _evaluationGate = new(1, 1);
 
-    public PipelineSchedulerService(IOptionsMonitor<SchedulerOptions> options, IPipelineRunQueue queue, ISchedulerAuditStore auditStore, ILogger<PipelineSchedulerService> logger)
+    public PipelineSchedulerService(IOptionsMonitor<SchedulerOptions> options, IPipelineRunQueue queue, ISchedulerAuditStore auditStore, IOptionsMonitor<OptimizationOptions> optimizationOptions, IServiceScopeFactory scopeFactory, ILogger<PipelineSchedulerService> logger)
     {
         _options = options;
         _queue = queue;
         _auditStore = auditStore;
+        _optimizationOptions = optimizationOptions;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -60,8 +65,8 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
                 if (!scheduleEnabled || planned.PlannedRunUtc > nowUtc)
                     continue;
 
-                var request = BuildRequest(options.DefaultContentType, schedule, planned.TargetDate);
-                await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, request, planned.PlannedRunUtc, Force: false), cancellationToken);
+                var optimized = await BuildOptimizedRequestAsync(options.DefaultContentType, schedule, planned.TargetDate, cancellationToken);
+                await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, planned.PlannedRunUtc, Force: false, optimized.Plan, optimized.OriginalRequest), cancellationToken);
             }
         }
         finally
@@ -108,9 +113,9 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
 
         var nowUtc = DateTimeOffset.UtcNow;
         var targetDate = GetLocalDate(schedule, nowUtc);
-        var request = BuildRequest(options.DefaultContentType, schedule, targetDate);
+        var optimized = await BuildOptimizedRequestAsync(options.DefaultContentType, schedule, targetDate, cancellationToken);
         _logger.LogInformation("Scheduler run-now requested for {ScheduleName} on {TargetDate}; force={Force}", schedule.Name, targetDate, force);
-        return await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, request, nowUtc, force), cancellationToken);
+        return await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, nowUtc, force, optimized.Plan, optimized.OriginalRequest), cancellationToken);
     }
 
     public Task<bool> EnableScheduleAsync(string scheduleName, CancellationToken cancellationToken)
@@ -165,6 +170,22 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
             schedule.Timezone,
             schedule.LocationName,
             targetDate);
+
+    private async Task<(RunPipelineRequest Request, OptimizationPlan? Plan, RunPipelineRequest? OriginalRequest)> BuildOptimizedRequestAsync(ContentType contentType, SchedulerScheduleOptions schedule, DateOnly targetDate, CancellationToken cancellationToken)
+    {
+        var request = BuildRequest(contentType, schedule, targetDate);
+        var optimization = _optimizationOptions.CurrentValue;
+        if (!optimization.Enabled || optimization.Mode == OptimizationMode.Disabled || !optimization.ApplyToSchedulerRunsOnly)
+            return (request, null, null);
+
+        using var scope = _scopeFactory.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IOptimizationService>();
+        var plan = await service.BuildPlanAsync(schedule.LocationName, "YouTube", cancellationToken);
+        var optimizedRequest = optimization.Mode == OptimizationMode.ApplySafeRules
+            ? await service.ApplyPlanAsync(request, plan, cancellationToken)
+            : request;
+        return (optimizedRequest, plan, request);
+    }
 
     private static (DateOnly TargetDate, DateTimeOffset PlannedRunUtc) GetPlannedRunUtc(SchedulerScheduleOptions schedule, DateTimeOffset nowUtc)
     {

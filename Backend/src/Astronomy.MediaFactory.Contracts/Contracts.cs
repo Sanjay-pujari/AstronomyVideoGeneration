@@ -124,6 +124,29 @@ public sealed class SchedulingOptions
     public int QueuePollIntervalSeconds { get; set; } = 10;
 }
 
+
+public sealed class OptimizationOptions
+{
+    public const string SectionName = "Optimization";
+    public bool Enabled { get; set; } = true;
+    public OptimizationMode Mode { get; set; } = OptimizationMode.RecommendOnly;
+    public int MinimumDataPoints { get; set; } = 10;
+    public bool ApplyToSchedulerRunsOnly { get; set; } = true;
+    public bool AllowTitleOptimization { get; set; } = true;
+    public bool AllowThumbnailOptimization { get; set; } = true;
+    public bool AllowDurationOptimization { get; set; } = true;
+    public bool AllowPublishTimeOptimization { get; set; } = true;
+    public bool AllowObjectRankingOptimization { get; set; } = true;
+    public double ConfidenceThreshold { get; set; } = 0.6;
+}
+
+public enum OptimizationMode
+{
+    Disabled = 0,
+    RecommendOnly = 1,
+    ApplySafeRules = 2
+}
+
 public sealed class AnalyticsOptions
 {
     public const string SectionName = "Analytics";

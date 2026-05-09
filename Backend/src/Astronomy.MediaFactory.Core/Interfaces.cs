@@ -188,6 +188,12 @@ public interface IContentExperimentService
     Task<ExperimentFeedbackSnapshot> GetFeedbackSnapshotAsync(CancellationToken cancellationToken);
 }
 
+public interface IOptimizationService
+{
+    Task<OptimizationPlan> BuildPlanAsync(string locationName, string platform, CancellationToken cancellationToken);
+    Task<RunPipelineRequest> ApplyPlanAsync(RunPipelineRequest request, OptimizationPlan plan, CancellationToken cancellationToken);
+}
+
 public interface IPipelineRepository {
  Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken);
  Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken);

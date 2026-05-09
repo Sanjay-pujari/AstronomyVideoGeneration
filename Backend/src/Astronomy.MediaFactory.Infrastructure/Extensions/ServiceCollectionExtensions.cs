@@ -8,6 +8,7 @@ using Astronomy.MediaFactory.Infrastructure.Alerting;
 using Astronomy.MediaFactory.Infrastructure.Analytics;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Operations;
+using Astronomy.MediaFactory.Infrastructure.Optimization;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Infrastructure.Scheduling;
 using Astronomy.MediaFactory.Publishing;
@@ -192,6 +193,12 @@ public static class ServiceCollectionExtensions
         services.AddOptions<StartupValidationOptions>()
             .Bind(configuration.GetSection(StartupValidationOptions.SectionName))
             .ValidateOnStart();
+
+        services.AddOptions<OptimizationOptions>()
+            .Bind(configuration.GetSection(OptimizationOptions.SectionName))
+            .Validate(options => options.MinimumDataPoints > 0, "Optimization:MinimumDataPoints must be greater than 0.")
+            .Validate(options => options.ConfidenceThreshold is >= 0 and <= 1, "Optimization:ConfidenceThreshold must be between 0 and 1.")
+            .ValidateOnStart();
         services.AddSingleton<IValidateOptions<StartupValidationOptions>, ProductionStartupValidator>();
 
         services.AddHttpClient<NasaApodClient>();
@@ -290,6 +297,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IShortFormPublishingService, ShortFormPublishingService>();
         services.AddScoped<IAnalyticsAggregationService, AnalyticsAggregationService>();
         services.AddScoped<IAnalyticsIntelligenceService, AnalyticsIntelligenceService>();
+        services.AddScoped<IOptimizationService, RuleBasedOptimizationService>();
         services.AddScoped<IContentExperimentService, EfContentExperimentService>();
         services.AddScoped<IFeedbackSignalExtractor, TopKeywordSignalExtractor>();
         services.AddScoped<IFeedbackSignalExtractor, TopHookSignalExtractor>();
