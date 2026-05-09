@@ -38,13 +38,14 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
     public async Task CollectRecentAnalyticsAsync(CancellationToken cancellationToken)
     {
         var from = DateTimeOffset.UtcNow.AddDays(-Math.Clamp(_options.CollectForRecentDays, 1, 365));
-        var runs = await _db.PipelineRuns.AsNoTracking()
+        var runIds = await _db.PipelineRuns.AsNoTracking()
             .Where(x => (x.FinishedUtc ?? x.StartedUtc ?? x.CreatedUtc) >= from)
             .OrderByDescending(x => x.FinishedUtc ?? x.StartedUtc ?? x.CreatedUtc)
+            .Select(x => x.Id)
             .ToListAsync(cancellationToken);
 
-        foreach (var run in runs)
-            await CollectForPipelineRunAsync(run.Id, cancellationToken);
+        foreach (var runId in runIds)
+            await CollectForPipelineRunAsync(runId, cancellationToken);
     }
 
     public async Task CollectForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
@@ -120,7 +121,17 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
 
     private async Task<List<PlatformAnalyticsCollectionContext>> BuildContextsAsync(Guid pipelineRunId, CancellationToken cancellationToken)
     {
-        var run = await _db.PipelineRuns.AsNoTracking().FirstOrDefaultAsync(x => x.Id == pipelineRunId, cancellationToken);
+        var run = await _db.PipelineRuns.AsNoTracking()
+            .Where(x => x.Id == pipelineRunId)
+            .Select(x => new PipelineRunAnalyticsSeed(
+                x.Id,
+                x.ContentType,
+                x.RunDate,
+                x.RegionId,
+                x.Language,
+                x.LocationName,
+                x.OutputFolder))
+            .FirstOrDefaultAsync(cancellationToken);
         if (run is null)
             return [];
 
@@ -165,13 +176,22 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
             .ToList();
     }
 
-    private static PlatformAnalyticsCollectionContext Build(PipelineRun run, string platform, string contentType, string mediaId, string? url, string? title, DateTimeOffset? publishedUtc, int? duration, GeneratedScript? script, string? thumbnailPath, string? outputDirectory)
+    private sealed record PipelineRunAnalyticsSeed(
+        Guid Id,
+        ContentType ContentType,
+        DateOnly RunDate,
+        string? RegionId,
+        string Language,
+        string LocationName,
+        string? OutputFolder);
+
+    private static PlatformAnalyticsCollectionContext Build(PipelineRunAnalyticsSeed run, string platform, string contentType, string mediaId, string? url, string? title, DateTimeOffset? publishedUtc, int? duration, GeneratedScript? script, string? thumbnailPath, string? outputDirectory)
     {
         var growthMetadata = ReadGrowthMetadata(outputDirectory);
         return new(run.Id, platform, contentType, mediaId, url, title ?? script?.Title, publishedUtc, duration ?? script?.EstimatedDurationSeconds, script?.OptimizedHashtagsCsv ?? script?.TagsCsv, run.RegionId, run.Language, run.LocationName, run.RunDate, run.ContentType, thumbnailPath, outputDirectory, growthMetadata?.CtaVariant, growthMetadata?.AffiliateBlockEnabled);
     }
 
-    private static void AddJsonContext(List<PlatformAnalyticsCollectionContext> contexts, PipelineRun run, string outputDirectory, string fileName, string platform, string contentType, GeneratedScript? script)
+    private static void AddJsonContext(List<PlatformAnalyticsCollectionContext> contexts, PipelineRunAnalyticsSeed run, string outputDirectory, string fileName, string platform, string contentType, GeneratedScript? script)
     {
         var path = Path.Combine(outputDirectory, fileName);
         if (!File.Exists(path)) return;
@@ -235,7 +255,17 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
 
     private async Task WriteReportAsync(Guid pipelineRunId, IReadOnlyCollection<AnalyticsCollectionReport> reports, CancellationToken cancellationToken)
     {
-        var run = await _db.PipelineRuns.AsNoTracking().FirstOrDefaultAsync(x => x.Id == pipelineRunId, cancellationToken);
+        var run = await _db.PipelineRuns.AsNoTracking()
+            .Where(x => x.Id == pipelineRunId)
+            .Select(x => new PipelineRunAnalyticsSeed(
+                x.Id,
+                x.ContentType,
+                x.RunDate,
+                x.RegionId,
+                x.Language,
+                x.LocationName,
+                x.OutputFolder))
+            .FirstOrDefaultAsync(cancellationToken);
         var outputDirectory = run?.OutputFolder ?? _maintenanceOptions.WorkingDirectory;
         Directory.CreateDirectory(outputDirectory);
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "analytics-collection-report.json"), JsonSerializer.Serialize(reports, JsonOptions), cancellationToken);
