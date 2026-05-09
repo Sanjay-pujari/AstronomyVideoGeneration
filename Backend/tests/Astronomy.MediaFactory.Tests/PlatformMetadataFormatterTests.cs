@@ -23,7 +23,8 @@ public sealed class PlatformMetadataFormatterTests
         Assert.Contains("#shorts", result.Hashtags, StringComparer.OrdinalIgnoreCase);
         Assert.InRange(result.Hashtags.Count, 3, 5);
         Assert.Contains("Look up tonight.", result.Caption);
-        Assert.True(result.Caption.Length <= 120);
+        Assert.Contains("Subscribe and watch the next video.", result.Caption);
+        Assert.True(result.Caption.Length <= 500);
         Assert.Equal("19:45", result.PreferredPublishLocalTime);
     }
 
@@ -35,10 +36,11 @@ public sealed class PlatformMetadataFormatterTests
         var paragraphs = result.Caption.Split("\n\n", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal("Watch Jupiter rise tonight before the clouds roll in.", paragraphs[0]);
         Assert.Contains("Save this for tonight.", result.Caption);
+        Assert.Contains("Follow and save this reel.", result.Caption);
         Assert.Contains("#astronomy", result.Hashtags, StringComparer.OrdinalIgnoreCase);
         Assert.InRange(result.Hashtags.Count, 5, 10);
         Assert.DoesNotContain(result.Hashtags, x => x.Equals("#shorts", StringComparison.OrdinalIgnoreCase));
-        Assert.True(result.Caption.Length <= 280);
+        Assert.True(result.Caption.Length <= 500);
         Assert.Equal("21:15", result.PreferredPublishLocalTime);
     }
 
@@ -50,8 +52,9 @@ public sealed class PlatformMetadataFormatterTests
         var paragraphs = result.Caption.Split("\n\n", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal("Watch Jupiter rise tonight before the clouds roll in.", paragraphs[0]);
         Assert.Contains("Follow for more night-sky updates", result.Caption);
+        Assert.Contains("Follow the page and share with friends.", result.Caption);
         Assert.InRange(result.Hashtags.Count, 0, 3);
-        Assert.True(result.Caption.Length <= 360);
+        Assert.True(result.Caption.Length <= 500);
         Assert.Equal("20:15", result.PreferredPublishLocalTime);
     }
 
@@ -111,10 +114,36 @@ public sealed class PlatformMetadataFormatterTests
         var youtube = _formatter.FormatTarget(ShortFormPlatform.YouTubeShorts, request);
         var instagram = _formatter.FormatTarget(ShortFormPlatform.InstagramReels, request);
 
-        Assert.True(youtube.Caption.Length <= 120);
+        Assert.True(youtube.Caption.Length <= 500);
         Assert.False(youtube.Caption.EndsWith("-", StringComparison.Ordinal));
         Assert.False(youtube.Caption.EndsWith(",", StringComparison.Ordinal));
-        Assert.True(instagram.Caption.Length <= 280);
+        Assert.True(instagram.Caption.Length <= 500);
+    }
+
+
+    [Fact]
+    public void FormatTarget_AddsAffiliateDisclosureOnlyWhenEnabled()
+    {
+        var disabled = _formatter.FormatTarget(ShortFormPlatform.InstagramReels, BuildRequest());
+        Assert.DoesNotContain("affiliate links", disabled.Caption, StringComparison.OrdinalIgnoreCase);
+
+        var enabledFormatter = new PlatformMetadataFormatter(
+            new PlatformPublishingOptions(),
+            new GrowthOptions { EnableAffiliateBlocks = true });
+        var enabled = enabledFormatter.FormatTarget(ShortFormPlatform.InstagramReels, BuildRequest());
+
+        Assert.Contains("affiliate links", enabled.Caption, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("telescope and binocular links coming soon", enabled.Caption, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FormatTarget_DoesNotDuplicateGrowthCta()
+    {
+        var request = Clone(BuildRequest(), caption: "A fast sky update. Follow and save this reel.");
+
+        var result = _formatter.FormatTarget(ShortFormPlatform.InstagramReels, request);
+
+        Assert.Equal(1, CountOccurrences(result.Caption, "Follow and save this reel."));
     }
 
     private static ShortFormPublicationRequest BuildRequest()
@@ -140,6 +169,19 @@ public sealed class PlatformMetadataFormatterTests
             hookLine: "  Watch   Jupiter rise tonight before the clouds roll in.  ",
             tags: ["astronomy", "jupiter", "night sky", "night sky"],
             hashtags: [" astronomy ", "#Jupiter", "#jupiter", " #night_sky "]);
+
+    private static int CountOccurrences(string source, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = source.IndexOf(value, index, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
 
     private static ShortFormPublicationRequest Clone(
         ShortFormPublicationRequest source,

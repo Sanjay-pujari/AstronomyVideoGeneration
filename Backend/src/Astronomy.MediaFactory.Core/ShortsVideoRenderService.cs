@@ -21,6 +21,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
     private readonly IPromptFeedbackService? _promptFeedbackService;
     private readonly RenderingOptions _renderingOptions;
+    private readonly GrowthOptions _growthOptions;
 
     public ShortsVideoRenderService(
         IShortsScriptGenerationService shortsScriptGenerationService,
@@ -36,7 +37,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         ILogger<ShortsVideoRenderService> logger,
         IContentMonetizationService? contentMonetizationService = null,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
-        IPromptFeedbackService? promptFeedbackService = null)
+        IPromptFeedbackService? promptFeedbackService = null,
+        IOptions<GrowthOptions>? growthOptions = null)
     {
         _shortsScriptGenerationService = shortsScriptGenerationService;
         _speechSynthesisService = speechSynthesisService;
@@ -50,6 +52,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         _contentMonetizationService = contentMonetizationService;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
         _promptFeedbackService = promptFeedbackService;
+        _growthOptions = growthOptions?.Value ?? new GrowthOptions();
     }
 
     public async Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken)
@@ -147,6 +150,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         var shortSequence = BuildShortSequenceMap(shortScenesOrdered, segmentedNarration, outputDirectory);
         await ValidateAndWriteShortSequenceDiagnosticsAsync(shortSequence, shortScenesOrdered, outputDirectory, cancellationToken);
 
+        optimizedMetadata = ApplyGrowthMetadata(optimizedMetadata, _growthOptions, context.Localization.ResolvedLanguage, context.LocationName);
+
         var shortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
         var selectedObjects = context.SceneObservationContexts
             .Where(s => !string.IsNullOrWhiteSpace(s.ObjectName) && !s.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase))
@@ -166,7 +171,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             EventType = context.SpecialEvent?.EventType,
             EventTitle = context.SpecialEvent?.EventTitle,
             EventDescription = context.SpecialEvent?.EventDescription,
-            Language = context.Localization.ResolvedLanguage
+            Language = context.Localization.ResolvedLanguage,
+            RegionId = context.LocationName
         }, cancellationToken);
         await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDirectory, cancellationToken);
 
@@ -218,6 +224,28 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             VideoPath = videoPath,
             BlobUrl = blobUrl,
             PublishStatus = publishToYouTube ? "ReadyToPublish" : "Skipped"
+        };
+    }
+
+    private static OptimizedVideoMetadata ApplyGrowthMetadata(OptimizedVideoMetadata source, GrowthOptions growthOptions, string language, string? region)
+    {
+        var description = GrowthMetadataComposer.ApplyGrowthBlock(source.OptimizedDescription, growthOptions, new GrowthMetadataInput
+        {
+            Platform = "YouTubeShorts",
+            Language = language,
+            Region = region,
+            IsShortForm = true
+        });
+
+        return new OptimizedVideoMetadata
+        {
+            PrimaryTitle = source.PrimaryTitle,
+            AlternateTitles = source.AlternateTitles,
+            OptimizedDescription = description,
+            Tags = source.Tags,
+            Hashtags = source.Hashtags,
+            ThumbnailTextSuggestions = source.ThumbnailTextSuggestions,
+            HookLine = source.HookLine
         };
     }
 

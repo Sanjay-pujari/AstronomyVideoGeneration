@@ -141,6 +141,8 @@ public sealed class EfPipelineRepository : IPipelineRepository
         existing.TargetDate = analytics.TargetDate;
         existing.ContentCategory = analytics.ContentCategory;
         existing.ThumbnailPath = analytics.ThumbnailPath;
+        existing.CtaVariant = analytics.CtaVariant;
+        existing.AffiliateBlockEnabled = analytics.AffiliateBlockEnabled;
         existing.PerformanceScore = analytics.PerformanceScore;
         existing.IsAnalyticsAvailable = analytics.IsAnalyticsAvailable;
         existing.LastError = analytics.LastError;

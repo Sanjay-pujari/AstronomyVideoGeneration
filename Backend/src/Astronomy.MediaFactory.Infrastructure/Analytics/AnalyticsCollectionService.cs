@@ -71,6 +71,8 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
                         var analytics = await collector.CollectAsync(context, cancellationToken);
                         analytics.RegionId = context.RegionId;
                         analytics.Language = context.Language;
+                        analytics.CtaVariant = context.CtaVariant;
+                        analytics.AffiliateBlockEnabled = context.AffiliateBlockEnabled;
                         analytics.LocationName ??= context.LocationName;
                         await _repository.UpsertPlatformContentAnalyticsAsync(analytics, cancellationToken);
                         if (analytics.IsAnalyticsAvailable) success++; else failures++;
@@ -94,6 +96,8 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
                             Hashtags = context.Hashtags,
                             RegionId = context.RegionId,
                             Language = context.Language,
+                            CtaVariant = context.CtaVariant,
+                            AffiliateBlockEnabled = context.AffiliateBlockEnabled,
                             LocationName = context.LocationName,
                             TargetDate = context.TargetDate,
                             ContentCategory = context.ContentCategory,
@@ -162,7 +166,10 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
     }
 
     private static PlatformAnalyticsCollectionContext Build(PipelineRun run, string platform, string contentType, string mediaId, string? url, string? title, DateTimeOffset? publishedUtc, int? duration, GeneratedScript? script, string? thumbnailPath, string? outputDirectory)
-        => new(run.Id, platform, contentType, mediaId, url, title ?? script?.Title, publishedUtc, duration ?? script?.EstimatedDurationSeconds, script?.OptimizedHashtagsCsv ?? script?.TagsCsv, run.RegionId, run.Language, run.LocationName, run.RunDate, run.ContentType, thumbnailPath, outputDirectory);
+    {
+        var growthMetadata = ReadGrowthMetadata(outputDirectory);
+        return new(run.Id, platform, contentType, mediaId, url, title ?? script?.Title, publishedUtc, duration ?? script?.EstimatedDurationSeconds, script?.OptimizedHashtagsCsv ?? script?.TagsCsv, run.RegionId, run.Language, run.LocationName, run.RunDate, run.ContentType, thumbnailPath, outputDirectory, growthMetadata?.CtaVariant, growthMetadata?.AffiliateBlockEnabled);
+    }
 
     private static void AddJsonContext(List<PlatformAnalyticsCollectionContext> contexts, PipelineRun run, string outputDirectory, string fileName, string platform, string contentType, GeneratedScript? script)
     {
@@ -181,6 +188,29 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
         catch (JsonException)
         {
             // Invalid publish diagnostics should not affect pipeline or analytics scheduling.
+        }
+    }
+
+    private static GrowthMetadata? ReadGrowthMetadata(string? outputDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            return null;
+        }
+
+        var path = Path.Combine(outputDirectory, "growth-metadata.json");
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<GrowthMetadata>(File.ReadAllText(path), JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

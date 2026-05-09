@@ -71,6 +71,8 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => x.EventId);
         modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.RegionId).HasColumnName("regionId");
         modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.Language).HasColumnName("language");
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.CtaVariant).HasColumnName("ctaVariant");
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.AffiliateBlockEnabled).HasColumnName("affiliateBlockEnabled");
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.RegionId);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.Language);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.Platform);

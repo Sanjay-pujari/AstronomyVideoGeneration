@@ -177,6 +177,7 @@ public sealed class SeoMetadataRequest
     public string? EventTitle { get; init; }
     public string? EventDescription { get; init; }
     public string Language { get; init; } = "en";
+    public string? RegionId { get; init; }
 }
 
 public sealed class SeoMetadataResult
@@ -186,6 +187,7 @@ public sealed class SeoMetadataResult
     public string TagsCsv { get; init; } = "";
     public string HashtagsCsv { get; init; } = "";
     public string PinnedComment { get; init; } = "";
+    public GrowthMetadata? GrowthMetadata { get; init; }
 }
 
 public sealed class RenderManifest

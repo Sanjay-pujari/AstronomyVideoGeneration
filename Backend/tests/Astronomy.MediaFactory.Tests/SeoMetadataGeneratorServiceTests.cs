@@ -1,4 +1,6 @@
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -71,6 +73,56 @@ public sealed class SeoMetadataGeneratorServiceTests
         Assert.Contains("astronomy event", result.TagsCsv);
     }
 
+
+    [Fact]
+    public async Task Description_contains_growth_cta()
+    {
+        var result = await CreateService().GenerateAsync(CreateRequest(), default);
+
+        Assert.Contains("Subscribe and watch the next video.", result.Description);
+        Assert.Contains("Follow AstroPulse for your daily sky guide.", result.Description);
+    }
+
+    [Fact]
+    public async Task Affiliate_disclosure_appears_only_when_enabled()
+    {
+        var disabled = await CreateService(new GrowthOptions { EnableAffiliateBlocks = false }).GenerateAsync(CreateRequest(), default);
+        Assert.DoesNotContain("affiliate links", disabled.Description, StringComparison.OrdinalIgnoreCase);
+
+        var enabled = await CreateService(new GrowthOptions { EnableAffiliateBlocks = true }).GenerateAsync(CreateRequest(), default);
+        Assert.Contains("affiliate links", enabled.Description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("telescope and binocular links coming soon", enabled.Description, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Hindi_localization_keeps_growth_cta_localized()
+    {
+        var request = Clone(CreateRequest(), language: "hi");
+        var result = await CreateService().GenerateAsync(request, default);
+
+        Assert.Contains("स्थान:", result.Description);
+        Assert.Contains("सब्सक्राइब करें", result.Description);
+    }
+
+
+    [Fact]
+    public async Task Description_does_not_duplicate_growth_cta()
+    {
+        var request = CreateRequest();
+        var service = CreateService(new GrowthOptions { DefaultCallToAction = "Follow AstroPulse for your daily sky guide." });
+
+        var result = await service.GenerateAsync(request, default);
+        var secondPass = GrowthMetadataComposer.ApplyGrowthBlock(result.Description, new GrowthOptions(), new GrowthMetadataInput
+        {
+            Platform = "YouTube",
+            Language = request.Language,
+            Region = request.LocationName,
+            IsShortForm = false
+        });
+
+        Assert.Equal(result.Description, secondPass);
+    }
+
     [Fact]
     public async Task Metadata_file_is_written()
     {
@@ -78,9 +130,29 @@ public sealed class SeoMetadataGeneratorServiceTests
         var dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         await SeoMetadataGeneratorService.WriteToFileAsync(result, dir, default);
         Assert.True(File.Exists(Path.Combine(dir, "seo-metadata.json")));
+        Assert.True(File.Exists(Path.Combine(dir, "growth-metadata.json")));
     }
 
-    private static SeoMetadataGeneratorService CreateService() => new();
+    private static SeoMetadataGeneratorService CreateService(GrowthOptions? options = null)
+        => new(Options.Create(options ?? new GrowthOptions()));
+
+    private static SeoMetadataRequest Clone(SeoMetadataRequest source, string? language = null)
+        => new()
+        {
+            SceneObservationContext = source.SceneObservationContext,
+            SelectedVisibleObjects = source.SelectedVisibleObjects,
+            LocationName = source.LocationName,
+            TargetDate = source.TargetDate,
+            IsShortForm = source.IsShortForm,
+            ThumbnailVariants = source.ThumbnailVariants,
+            ContentType = source.ContentType,
+            EventId = source.EventId,
+            EventType = source.EventType,
+            EventTitle = source.EventTitle,
+            EventDescription = source.EventDescription,
+            Language = language ?? source.Language,
+            RegionId = source.RegionId
+        };
 
     private static SeoMetadataRequest CreateRequest()
         => new()
