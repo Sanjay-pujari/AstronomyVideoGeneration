@@ -47,6 +47,7 @@ public sealed class PromptBuilder : IPromptBuilder
         var sb = new StringBuilder();
         sb.AppendLine("You are an astronomy educator creating a beginner-friendly YouTube script.");
         sb.AppendLine("Use the provided structured astronomy input.");
+        AppendLocalizationRequirements(sb, context.Localization);
         sb.AppendLine(PromptFeedbackComposer.BuildBoundaryRulesSection());
         sb.AppendLine("Requirements:");
         sb.AppendLine("1) Write for beginners using clear, approachable language.");
@@ -88,6 +89,14 @@ public sealed class PromptBuilder : IPromptBuilder
     }
 
 
+    private static void AppendLocalizationRequirements(StringBuilder sb, LocalizationContext localization)
+    {
+        var languageName = LocalizationResolver.LanguageDisplayName(localization.ResolvedLanguage);
+        sb.AppendLine($"Localization: Generate all user-facing narration, title, description, tags, SEO-ready text, and sceneScript values in {languageName} (language code: {localization.ResolvedLanguage}).");
+        sb.AppendLine("Do not translate internal JSON property names, scene IDs, technical IDs, file names, object keys, or structured input keys.");
+        sb.AppendLine("Keep astronomy object names readable; for non-English output, keep the English object name in brackets when helpful, for example: बृहस्पति (Jupiter).");
+    }
+
     private static string BuildSpecialEventPrompt(AstronomyContext context, PromptFeedbackContext? feedbackContext)
     {
         var astronomyInput = new
@@ -104,6 +113,7 @@ public sealed class PromptBuilder : IPromptBuilder
         var sb = new StringBuilder();
         sb.AppendLine("You are an astronomy educator creating a dedicated event-based YouTube guide.");
         sb.AppendLine("This is a SpecialEventGuide, not a DailySkyGuide. Keep the entire narration focused on the named event.");
+        AppendLocalizationRequirements(sb, context.Localization);
         sb.AppendLine(PromptFeedbackComposer.BuildBoundaryRulesSection());
         sb.AppendLine("Requirements:");
         sb.AppendLine("1) Explain why the event matters, rarity/urgency, and what viewers should look for.");

@@ -198,6 +198,8 @@ internal static class AnalyticsFactory
         CollectedUtc = DateTimeOffset.UtcNow,
         DurationSeconds = context.DurationSeconds,
         Hashtags = context.Hashtags,
+        RegionId = context.RegionId,
+        Language = context.Language,
         LocationName = context.LocationName,
         TargetDate = context.TargetDate,
         ContentCategory = context.ContentCategory,

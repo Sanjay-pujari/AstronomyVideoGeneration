@@ -46,6 +46,7 @@ public sealed class PipelineOrchestrator
     private readonly IContentPublishService? _contentPublishService;
     private readonly IMetaPublishService? _metaPublishService;
     private readonly IPipelineStageExecutor? _pipelineStageExecutor;
+    private readonly LocalizationOptions _localizationOptions;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -83,7 +84,8 @@ public sealed class PipelineOrchestrator
         IContentPublishService? contentPublishService = null,
         IOptions<MetaPublishingOptions>? metaPublishingOptions = null,
         IMetaPublishService? metaPublishService = null,
-        IPipelineStageExecutor? pipelineStageExecutor = null)
+        IPipelineStageExecutor? pipelineStageExecutor = null,
+        IOptions<LocalizationOptions>? localizationOptions = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -121,10 +123,12 @@ public sealed class PipelineOrchestrator
         _contentPublishService = contentPublishService;
         _metaPublishService = metaPublishService;
         _pipelineStageExecutor = pipelineStageExecutor;
+        _localizationOptions = localizationOptions?.Value ?? new LocalizationOptions();
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
     {
+        var localization = LocalizationResolver.Resolve(request.Language, _localizationOptions);
         var run = new PipelineRun
         {
             RunDate = request.Date,
@@ -132,6 +136,7 @@ public sealed class PipelineOrchestrator
             RegionId = NormalizeRegionId(request.RegionId, request.LocationName),
             LocationName = request.LocationName,
             TimeZone = request.TimeZone,
+            Language = localization.ResolvedLanguage,
             PublishToYouTube = request.PublishToYouTube,
             UseTopicPlanner = request.UseTopicPlanner,
             Status = PipelineRunStatus.Queued,
@@ -147,7 +152,8 @@ public sealed class PipelineOrchestrator
         {
             ["pipelineRunId"] = run.Id,
             ["contentType"] = run.ContentType.ToString(),
-            ["runDate"] = run.RunDate
+            ["runDate"] = run.RunDate,
+            ["language"] = run.Language
         });
         _logger.LogInformation("Pipeline run {PipelineRunId} starting for {ContentType} ({RunDate})", run.Id, run.ContentType, run.RunDate);
 
@@ -272,6 +278,8 @@ public sealed class PipelineOrchestrator
 
             var context = await RunStageAsync("AstronomyData", () => _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken));
             ApplySpecialEventRequestContext(request, context);
+            context.Localization = localization;
+            await WriteLocalizationContextAsync(context.Localization, outputDir, cancellationToken);
             await WritePrimaryContextArtifactsAsync(context, outputDir, cancellationToken);
             if (_pipelineStageExecutor is not null)
             {
@@ -396,7 +404,8 @@ public sealed class PipelineOrchestrator
                 OptimizedHashtagsCsv = string.Join(",", script.OptimizedMetadata?.Hashtags ?? []),
                 ThumbnailTextSuggestionsCsv = string.Join("|", script.OptimizedMetadata?.ThumbnailTextSuggestions ?? []),
                 HookLine = script.OptimizedMetadata?.HookLine,
-                PromptFeedbackContextJson = System.Text.Json.JsonSerializer.Serialize(context.PromptFeedbackContext)
+                PromptFeedbackContextJson = System.Text.Json.JsonSerializer.Serialize(context.PromptFeedbackContext),
+                Language = context.Localization.ResolvedLanguage
             }, cancellationToken);
 
             await _repository.AddAssetAsync(new MediaAsset
@@ -582,7 +591,8 @@ public sealed class PipelineOrchestrator
                 EventId = request.EventId,
                 EventType = request.EventType,
                 EventTitle = request.EventTitle,
-                EventDescription = request.EventDescription
+                EventDescription = request.EventDescription,
+                Language = context.Localization.ResolvedLanguage
             }, cancellationToken));
             await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDir, cancellationToken);
             await WriteSpecialEventDiagnosticsAsync(request, context, outputDir, seoMetadata, cancellationToken);
@@ -827,7 +837,8 @@ public sealed class PipelineOrchestrator
                         Tags = shortResult.Script.OptimizedMetadata?.Tags ?? shortResult.Script.Tags,
                         Hashtags = shortResult.Script.OptimizedMetadata?.Hashtags ?? [],
                         VideoPath = shortResult.VideoPath,
-                        ThumbnailPath = thumbnailPath
+                        ThumbnailPath = thumbnailPath,
+                        Language = context.Localization.ResolvedLanguage
                     }, cancellationToken);
 
                     foreach (var publication in publicationResults)
@@ -1212,7 +1223,20 @@ public sealed class PipelineOrchestrator
         WriteDiagnosticFromVisualIdea(context, outputDirectory, "skyfield-night-plan-response");
         WriteDiagnosticFromVisualIdea(context, outputDirectory, "scene-observation-context");
         WriteDiagnosticFromVisualIdea(context, outputDirectory, "narration-context");
-        await Task.CompletedTask;
+        await WriteLocalizationContextAsync(context.Localization, outputDirectory, cancellationToken);
+    }
+
+
+    private static async Task WriteLocalizationContextAsync(LocalizationContext localization, string outputDirectory, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        var payload = new
+        {
+            requestedLanguage = localization.RequestedLanguage,
+            resolvedLanguage = localization.ResolvedLanguage,
+            fallbackUsed = localization.FallbackUsed
+        };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "localization-context.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
 

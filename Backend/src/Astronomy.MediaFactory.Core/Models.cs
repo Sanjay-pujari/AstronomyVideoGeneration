@@ -15,6 +15,7 @@ public sealed class AstronomyContext
     public PromptFeedbackContext? PromptFeedbackContext { get; set; }
     public List<SceneObservationContext> SceneObservationContexts { get; set; } = new();
     public SpecialEventContext? SpecialEvent { get; set; }
+    public LocalizationContext Localization { get; set; } = LocalizationContext.English;
 }
 
 public sealed class SpecialEventContext
@@ -175,6 +176,7 @@ public sealed class SeoMetadataRequest
     public string? EventType { get; init; }
     public string? EventTitle { get; init; }
     public string? EventDescription { get; init; }
+    public string Language { get; init; } = "en";
 }
 
 public sealed class SeoMetadataResult

@@ -472,12 +472,19 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
     private static ScriptResult BuildFallback(ContractsContentType contentType, AstronomyContext context, string prompt)
     {
         var isSpecialEvent = contentType == ContractsContentType.SpecialEventGuide && context.SpecialEvent is not null;
-        var title = isSpecialEvent ? $"{context.SpecialEvent!.EventTitle}: How to Watch" : $"What to See in the Sky - {context.Date:MMMM dd, yyyy}";
-        var description = isSpecialEvent ? context.SpecialEvent!.EventDescription : $"Astronomy guide for {context.Date:MMMM dd, yyyy} in {context.LocationName}.";
+        var isHindi = LocalizationResolver.IsHindi(context.Localization.ResolvedLanguage);
+        var title = isSpecialEvent
+            ? isHindi ? $"{context.SpecialEvent!.EventTitle}: कैसे देखें" : $"{context.SpecialEvent!.EventTitle}: How to Watch"
+            : isHindi ? $"आज रात आसमान में क्या देखें - {context.Date:yyyy-MM-dd}" : $"What to See in the Sky - {context.Date:MMMM dd, yyyy}";
+        var description = isSpecialEvent
+            ? context.SpecialEvent!.EventDescription
+            : isHindi ? $"{context.LocationName} के लिए {context.Date:yyyy-MM-dd} की खगोल गाइड।" : $"Astronomy guide for {context.Date:MMMM dd, yyyy} in {context.LocationName}.";
         var eventLines = context.Events
             .OrderByDescending(x => x.Score)
-            .Select(x => $"Look for {x.ObjectName} {x.VisibilityWindow} toward the {x.Direction} using {x.ObservationTool}. {x.Details}")
-            .DefaultIfEmpty("Tonight offers a chance to step outside and observe the sky with the naked eye.");
+            .Select(x => isHindi
+                ? $"आज रात {x.ObjectName} को {x.Direction} दिशा में {x.VisibilityWindow} देखें। उपकरण: {x.ObservationTool}. {x.Details}"
+                : $"Look for {x.ObjectName} {x.VisibilityWindow} toward the {x.Direction} using {x.ObservationTool}. {x.Details}")
+            .DefaultIfEmpty(isHindi ? "आज रात बाहर निकलकर नंगी आंखों से आसमान देखने का अच्छा मौका है।" : "Tonight offers a chance to step outside and observe the sky with the naked eye.");
 
         return new ScriptResult
         {
@@ -487,8 +494,12 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             Tags = ["astronomy", "night sky", contentType.ToString()],
             EstimatedDurationSeconds = 900,
             ScriptBody = isSpecialEvent
-                ? $"Tonight we focus on {context.SpecialEvent!.EventTitle}. {context.SpecialEvent.EventDescription} We will cover why it matters, when to look, where to face, beginner viewing tips, rarity, and safe observing reminders. {string.Join(" ", eventLines)}"
-                : $"Welcome to your astronomy update for {context.Date:MMMM dd, yyyy}. {string.Join(" ", eventLines)}"
+                ? isHindi
+                    ? $"आज हम {context.SpecialEvent!.EventTitle} पर ध्यान देंगे। {context.SpecialEvent.EventDescription} हम बताएंगे कि यह क्यों महत्वपूर्ण है, कब देखना है, किस दिशा में देखना है, शुरुआती दर्शकों के लिए सुझाव, दुर्लभता, और सुरक्षित अवलोकन की याद दिलाने वाली बातें। {string.Join(" ", eventLines)}"
+                    : $"Tonight we focus on {context.SpecialEvent!.EventTitle}. {context.SpecialEvent.EventDescription} We will cover why it matters, when to look, where to face, beginner viewing tips, rarity, and safe observing reminders. {string.Join(" ", eventLines)}"
+                : isHindi
+                    ? $"{context.Date:yyyy-MM-dd} के लिए आपकी खगोल अपडेट में स्वागत है। {string.Join(" ", eventLines)}"
+                    : $"Welcome to your astronomy update for {context.Date:MMMM dd, yyyy}. {string.Join(" ", eventLines)}"
         };
     }
 
@@ -502,7 +513,10 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             .Select(e => $"{e.ObjectName}: {e.VisibilityWindow}, {e.Direction}, {e.Details}")
             .ToArray();
 
+        var languageName = LocalizationResolver.LanguageDisplayName(context.Localization.ResolvedLanguage);
+
         return "You are creating a YouTube Shorts script for astronomy audiences.\n" +
+               $"Generate all user-facing hook, shortScript, title, and narrationText values in {languageName} (language code: {context.Localization.ResolvedLanguage}). Do not translate JSON property names, scene IDs, object keys, or technical IDs. Keep English object names in brackets for non-English output when helpful.\n" +
                PromptFeedbackComposer.BuildBoundaryRulesSection() + "\n" +
                "Return ONLY valid JSON. No markdown, no code fences.\n" +
                "The short must be 30-60 seconds, include a strong hook in first 3 seconds, and punchy narration with simple structure.\n\n" +
@@ -638,19 +652,20 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
     private static ShortScriptResult BuildShortFallback(ContractsContentType contentType, AstronomyContext context)
     {
         var topEvent = context.Events.OrderByDescending(x => x.Score).FirstOrDefault();
+        var isHindi = LocalizationResolver.IsHindi(context.Localization.ResolvedLanguage);
         var hook = topEvent is null
-            ? "Stop scrolling — tonight's sky has a quick surprise for you."
-            : $"Stop scrolling — {topEvent.ObjectName} is putting on a show tonight.";
+            ? isHindi ? "रुकिए — आज रात का आसमान आपके लिए एक छोटा सरप्राइज रखता है।" : "Stop scrolling — tonight's sky has a quick surprise for you."
+            : isHindi ? $"रुकिए — आज रात {topEvent.ObjectName} शानदार दिखेगा।" : $"Stop scrolling — {topEvent.ObjectName} is putting on a show tonight.";
 
         var body = topEvent is null
-            ? "Step outside after sunset, let your eyes adapt for five minutes, and scan the brightest region overhead."
-            : $"In the next minute: look {topEvent.Direction} {topEvent.VisibilityWindow}. You can spot {topEvent.ObjectName} with {topEvent.ObservationTool}. {topEvent.Details}";
+            ? isHindi ? "सूर्यास्त के बाद बाहर निकलें, आंखों को पांच मिनट ढलने दें, और ऊपर के सबसे चमकीले हिस्से को देखें।" : "Step outside after sunset, let your eyes adapt for five minutes, and scan the brightest region overhead."
+            : isHindi ? $"अगले एक मिनट में: {topEvent.Direction} दिशा में {topEvent.VisibilityWindow} देखें। {topEvent.ObjectName} को {topEvent.ObservationTool} से देख सकते हैं। {topEvent.Details}" : $"In the next minute: look {topEvent.Direction} {topEvent.VisibilityWindow}. You can spot {topEvent.ObjectName} with {topEvent.ObservationTool}. {topEvent.Details}";
 
         return new ShortScriptResult
         {
             Hook = hook,
             ShortScript = body,
-            Title = $"{contentType} in 60 Seconds",
+            Title = isHindi ? $"{contentType} — 60 सेकंड में" : $"{contentType} in 60 Seconds",
             Tags = ["shorts", "astronomy", contentType.ToString()],
             EstimatedDurationSeconds = 45
         };
@@ -676,6 +691,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         return "You optimize YouTube astronomy metadata. Return ONLY strict JSON with these exact fields: " +
                "primaryTitle(string), alternateTitles(array), optimizedDescription(string), tags(array), hashtags(array), thumbnailTextSuggestions(array), hookLine(string|null). " +
                "No additional fields. Keep titles trustworthy and readable; no spammy clickbait. " +
+               $"Generate all user-facing values in {LocalizationResolver.LanguageDisplayName(input.Context.Localization.ResolvedLanguage)} (language code: {input.Context.Localization.ResolvedLanguage}); do not translate JSON property names, technical IDs, object keys, or file names; keep English object names in brackets for non-English output when helpful. " +
                $"shortForm={isShort}. contentType={input.ContentType}. date={input.Context.Date:yyyy-MM-dd}. location={input.Context.LocationName}. " +
                $"sourceTitle={input.SourceTitle}. sourceDescription={input.SourceDescription}. sourceTags={string.Join(',', input.SourceTags)}. " +
                $"sourceHook={input.SourceHookLine}. " +

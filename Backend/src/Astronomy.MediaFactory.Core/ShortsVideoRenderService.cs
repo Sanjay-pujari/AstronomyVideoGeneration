@@ -139,7 +139,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
 
         var shortScenesOrdered = BuildShortScenesOrdered(context, visualCandidates);
         var sceneCount = shortScenesOrdered.Count;
-        var generatedPerSceneNarration = BuildShortSceneNarration(shortScenesOrdered);
+        var generatedPerSceneNarration = BuildShortSceneNarration(shortScenesOrdered, context.Localization.ResolvedLanguage);
         ValidateShortNarrationBeforeAudioSynthesis(generatedPerSceneNarration, shortScenesOrdered);
         var segmentedNarration = await TryBuildSegmentedNarrationAsync(generatedPerSceneNarration, scriptBody, shortScenesOrdered, outputDirectory, cancellationToken);
         ValidateShortNarrationBeforeAudioSynthesis(segmentedNarration, shortScenesOrdered);
@@ -165,7 +165,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             EventId = context.SpecialEvent?.EventId,
             EventType = context.SpecialEvent?.EventType,
             EventTitle = context.SpecialEvent?.EventTitle,
-            EventDescription = context.SpecialEvent?.EventDescription
+            EventDescription = context.SpecialEvent?.EventDescription,
+            Language = context.Localization.ResolvedLanguage
         }, cancellationToken);
         await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDirectory, cancellationToken);
 
@@ -179,7 +180,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             EnableVerticalCrop = true,
             Scenes = shortSequence.Select(scene => new RenderScene
             {
-                Caption = $"{scene.Index}. {scene.ObjectName}",
+                Caption = BuildLocalizedSceneCaption(context.Localization.ResolvedLanguage, scene.Index, scene.ObjectName),
                 VisualPath = scene.VisualPath,
                 DurationSeconds = scene.DurationSeconds,
                 AudioPath = scene.AudioPath,
@@ -369,31 +370,37 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private static List<SceneNarrationSegment> BuildSourceNarrationSegments(IReadOnlyCollection<SceneNarrationSegment> generatedSceneNarration, string scriptBody, IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered)
         => generatedSceneNarration.Where(x => !string.IsNullOrWhiteSpace(x.NarrationText)).ToList();
 
-    private static List<SceneNarrationSegment> BuildShortSceneNarration(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered)
+    private static List<SceneNarrationSegment> BuildShortSceneNarration(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, string language)
         => shortScenesOrdered.Select(scene => new SceneNarrationSegment
         {
             SceneId = scene.SceneId,
             SceneTitle = scene.SceneTitle,
             VisualTarget = scene.ObjectName,
-            NarrationText = BuildNarrationForScene(scene)
+            NarrationText = BuildNarrationForScene(scene, language)
         }).ToList();
 
-    private static string BuildNarrationForScene(ShortSceneOrderEntry scene)
+    private static string BuildNarrationForScene(ShortSceneOrderEntry scene, string language)
     {
+        var isHindi = LocalizationResolver.IsHindi(language);
         if (scene.SceneType.Equals("overview", StringComparison.OrdinalIgnoreCase))
         {
-            return "Tonight's sky has beautiful highlights—here is what to watch for first.";
+            return isHindi ? "आज रात के आसमान में सुंदर हाइलाइट्स हैं—सबसे पहले इन्हें देखें।" : "Tonight's sky has beautiful highlights—here is what to watch for first.";
         }
 
         if (scene.SceneType.Equals("closing", StringComparison.OrdinalIgnoreCase))
         {
-            return "Look up tonight and follow for your next quick sky guide.";
+            return isHindi ? "आज रात ऊपर देखें और अगली तेज़ स्काई गाइड के लिए फॉलो करें।" : "Look up tonight and follow for your next quick sky guide.";
         }
 
-        var direction = string.IsNullOrWhiteSpace(scene.DirectionLabel) ? "the sky" : $"the {scene.DirectionLabel} sky";
-        var localTime = scene.LocalObservationTime == default ? "tonight" : scene.LocalObservationTime.ToString("h:mm tt");
-        return $"{scene.ObjectName} is visible around {localTime} in {direction}, high above the horizon.";
+        var direction = string.IsNullOrWhiteSpace(scene.DirectionLabel) ? isHindi ? "आसमान" : "the sky" : isHindi ? $"{scene.DirectionLabel} दिशा" : $"the {scene.DirectionLabel} sky";
+        var localTime = scene.LocalObservationTime == default ? isHindi ? "आज रात" : "tonight" : scene.LocalObservationTime.ToString("h:mm tt");
+        return isHindi
+            ? $"{scene.ObjectName} लगभग {localTime} पर {direction} में दिखाई देगा।"
+            : $"{scene.ObjectName} is visible around {localTime} in {direction}, high above the horizon.";
     }
+
+    private static string BuildLocalizedSceneCaption(string language, int index, string objectName)
+        => LocalizationResolver.IsHindi(language) ? $"{index}. {objectName} देखें" : $"{index}. {objectName}";
 
     private static List<ShortSceneOrderEntry> BuildShortScenesOrdered(AstronomyContext context, IReadOnlyList<string> visualCandidates)
     {

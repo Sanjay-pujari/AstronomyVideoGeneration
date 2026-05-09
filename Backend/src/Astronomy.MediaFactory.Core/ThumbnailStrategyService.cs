@@ -22,7 +22,7 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
 
         var alternates = request.Metadata.ThumbnailTextSuggestions
             .Concat(request.Context.PromptFeedbackContext?.ThumbnailStrategyHints ?? [])
-            .Concat(BuildAlternates(request.ContentType, objectName))
+            .Concat(BuildAlternates(request.ContentType, objectName, request.Context.Localization.ResolvedLanguage))
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(Normalize)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -68,24 +68,25 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
 
     private static string BuildPrimaryText(ThumbnailGenerationRequest request, string? objectName)
     {
+        var isHindi = LocalizationResolver.IsHindi(request.Context.Localization.ResolvedLanguage);
         var primary = request.ContentType switch
         {
             ContentType.SpecialEventGuide => BuildSpecialEventText(request, objectName),
             ContentType.DailySkyGuide => !string.IsNullOrWhiteSpace(objectName)
-                ? $"TONIGHT'S SKY: {objectName.ToUpperInvariant()}"
-                : "TONIGHT'S SKY",
+                ? isHindi ? $"आज रात: {objectName}" : $"TONIGHT'S SKY: {objectName.ToUpperInvariant()}"
+                : isHindi ? "आज रात का आसमान" : "TONIGHT'S SKY",
             ContentType.TelescopeTargets => !string.IsNullOrWhiteSpace(objectName)
-                ? $"BEST TARGETS: {objectName.ToUpperInvariant()}"
-                : "BEST TARGETS TONIGHT",
+                ? isHindi ? $"बेहतरीन लक्ष्य: {objectName}" : $"BEST TARGETS: {objectName.ToUpperInvariant()}"
+                : isHindi ? "आज रात के बेहतरीन लक्ष्य" : "BEST TARGETS TONIGHT",
             ContentType.SpaceNews => BuildSpaceNewsText(request.Context),
             ContentType.AstrophotographyTips => !string.IsNullOrWhiteSpace(objectName)
-                ? $"PHOTO TIP: {objectName.ToUpperInvariant()}"
-                : "ASTROPHOTO TIP TONIGHT",
-            _ => "ASTRONOMY UPDATE"
+                ? isHindi ? $"फोटो टिप: {objectName}" : $"PHOTO TIP: {objectName.ToUpperInvariant()}"
+                : isHindi ? "आज की एस्ट्रोफोटो टिप" : "ASTROPHOTO TIP TONIGHT",
+            _ => isHindi ? "खगोल अपडेट" : "ASTRONOMY UPDATE"
         };
 
         if (request.IsShortForm)
-            primary = $"SHORT: {Truncate(primary, 32)}";
+            primary = LocalizationResolver.IsHindi(request.Context.Localization.ResolvedLanguage) ? $"शॉर्ट: {Truncate(primary, 32)}" : $"SHORT: {Truncate(primary, 32)}";
 
         return primary;
     }
@@ -186,20 +187,21 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
         return $"{emphasis}: {Truncate(headline.ToUpperInvariant(), 34)}";
     }
 
-    private static IEnumerable<string> BuildAlternates(ContentType contentType, string? objectName)
+    private static IEnumerable<string> BuildAlternates(ContentType contentType, string? objectName, string language)
     {
+        var isHindi = LocalizationResolver.IsHindi(language);
         yield return contentType switch
         {
-            ContentType.SpecialEventGuide => "WATCH THIS SKY EVENT",
-            ContentType.DailySkyGuide => "TONIGHT'S TOP SKY EVENTS",
-            ContentType.TelescopeTargets => "EASY TARGETS FOR YOUR SCOPE",
-            ContentType.SpaceNews => "WHAT'S NEW IN SPACE",
-            ContentType.AstrophotographyTips => "CAPTURE BETTER NIGHT SKIES",
-            _ => "ASTRONOMY HIGHLIGHTS"
+            ContentType.SpecialEventGuide => isHindi ? "यह खगोलीय घटना देखें" : "WATCH THIS SKY EVENT",
+            ContentType.DailySkyGuide => isHindi ? "आज रात की प्रमुख घटनाएं" : "TONIGHT'S TOP SKY EVENTS",
+            ContentType.TelescopeTargets => isHindi ? "टेलिस्कोप के आसान लक्ष्य" : "EASY TARGETS FOR YOUR SCOPE",
+            ContentType.SpaceNews => isHindi ? "अंतरिक्ष में नया क्या है" : "WHAT'S NEW IN SPACE",
+            ContentType.AstrophotographyTips => isHindi ? "बेहतर रात का आसमान कैप्चर करें" : "CAPTURE BETTER NIGHT SKIES",
+            _ => isHindi ? "खगोल हाइलाइट्स" : "ASTRONOMY HIGHLIGHTS"
         };
 
         if (!string.IsNullOrWhiteSpace(objectName))
-            yield return $"{objectName.ToUpperInvariant()} TONIGHT";
+            yield return isHindi ? $"आज रात {objectName}" : $"{objectName.ToUpperInvariant()} TONIGHT";
     }
 
     private static string Normalize(string text) => Truncate(text.Trim(), 48);

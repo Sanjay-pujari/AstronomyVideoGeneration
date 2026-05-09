@@ -47,4 +47,5 @@ public sealed class ShortFormPublicationRequest
     public IReadOnlyCollection<string> Hashtags { get; init; } = [];
     public string VideoPath { get; init; } = "";
     public string? ThumbnailPath { get; init; }
+    public string Language { get; init; } = "en";
 }
