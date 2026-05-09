@@ -88,6 +88,31 @@ public sealed class OpsDashboardServiceTests
         Assert.Contains(dashboard.Warnings, x => x.Contains("ops-dashboard.json", StringComparison.OrdinalIgnoreCase));
     }
 
+
+    [Fact]
+    public async Task Dashboard_Groups_Runs_Views_And_Failures_By_Region()
+    {
+        await using var db = CreateDb();
+        var udaipur = new PipelineRun { RegionId = "india-udaipur", RunDate = new DateOnly(2026, 5, 8), ContentType = ContentType.DailySkyGuide, LocationName = "Udaipur, India", Status = PipelineRunStatus.Succeeded, StartedUtc = DateTimeOffset.UtcNow.AddHours(-3), FinishedUtc = DateTimeOffset.UtcNow.AddHours(-2) };
+        var newYork = new PipelineRun { RegionId = "usa-new-york", RunDate = new DateOnly(2026, 5, 8), ContentType = ContentType.DailySkyGuide, LocationName = "New York, USA", Status = PipelineRunStatus.Failed, StartedUtc = DateTimeOffset.UtcNow.AddHours(-4), FinishedUtc = DateTimeOffset.UtcNow.AddHours(-3) };
+        db.PipelineRuns.AddRange(udaipur, newYork);
+        db.PlatformContentAnalytics.AddRange(
+            new PlatformContentAnalytics { PipelineRunId = udaipur.Id, RegionId = "india-udaipur", LocationName = "Udaipur, India", Platform = "YouTube", PlatformContentType = "Short", PlatformMediaId = "u1", CollectedUtc = DateTimeOffset.UtcNow, Views = 120, IsAnalyticsAvailable = true },
+            new PlatformContentAnalytics { PipelineRunId = newYork.Id, RegionId = "usa-new-york", LocationName = "New York, USA", Platform = "YouTube", PlatformContentType = "Short", PlatformMediaId = "n1", CollectedUtc = DateTimeOffset.UtcNow, Views = 45, IsAnalyticsAvailable = true });
+        await db.SaveChangesAsync();
+
+        var dashboard = await CreateService(db).GetDashboardAsync(CancellationToken.None);
+
+        var udaipurRegion = Assert.Single(dashboard.RegionBreakdown, x => x.RegionId == "india-udaipur");
+        Assert.Equal(1, udaipurRegion.Runs);
+        Assert.Equal(120, udaipurRegion.Views);
+        Assert.Equal(0, udaipurRegion.Failures);
+        var newYorkRegion = Assert.Single(dashboard.RegionBreakdown, x => x.RegionId == "usa-new-york");
+        Assert.Equal(1, newYorkRegion.Runs);
+        Assert.Equal(45, newYorkRegion.Views);
+        Assert.Equal(1, newYorkRegion.Failures);
+    }
+
     private static MediaFactoryDbContext CreateDb()
     {
         var options = new DbContextOptionsBuilder<MediaFactoryDbContext>()
@@ -124,8 +149,12 @@ public sealed class OpsDashboardServiceTests
                 1,
                 0,
                 0,
-                [new SchedulerScheduleStatus("daily", true, "Udaipur", 0, 0, "UTC", "18:00", true, DateTimeOffset.UtcNow.AddHours(1), DateOnly.FromDateTime(DateTime.UtcNow))],
-                [new SchedulerRunRecord("daily", DateOnly.FromDateTime(DateTime.UtcNow), DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow.AddHours(-1), Guid.NewGuid(), "Succeeded", null, "Udaipur", "UTC", DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow)]));
+                [new SchedulerScheduleStatus("india-udaipur", "daily", true, "Udaipur", 0, 0, "UTC", "18:00", true, DateTimeOffset.UtcNow.AddHours(1), DateOnly.FromDateTime(DateTime.UtcNow))],
+                [new SchedulerRunRecord("india-udaipur", "daily", ContentType.DailySkyGuide, DateOnly.FromDateTime(DateTime.UtcNow), DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow.AddHours(-1), Guid.NewGuid(), "Succeeded", null, "Udaipur", "UTC", DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow)]));
+        public Task<RegionStatusResponse> GetRegionsAsync(CancellationToken cancellationToken) => Task.FromResult(new RegionStatusResponse(true, ["YouTube"], []));
+        public Task<SchedulerRunResult> RunRegionNowAsync(string regionId, bool force, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<bool> EnableRegionAsync(string regionId, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<bool> DisableRegionAsync(string regionId, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<SchedulerRunResult> RunNowAsync(string scheduleName, bool force, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<bool> EnableScheduleAsync(string scheduleName, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<bool> DisableScheduleAsync(string scheduleName, CancellationToken cancellationToken) => throw new NotImplementedException();

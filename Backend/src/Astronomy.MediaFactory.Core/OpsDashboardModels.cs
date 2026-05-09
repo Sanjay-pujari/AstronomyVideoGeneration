@@ -12,6 +12,7 @@ public sealed record OpsDashboardResponse(
     PerformanceOpsSummary PerformanceSummary,
     AnalyticsDashboardSummary AnalyticsSummary,
     OpsAnalyticsIntelligenceSummary AnalyticsIntelligence,
+    IReadOnlyCollection<RegionBreakdownItem> RegionBreakdown,
     OpsDashboardDiagnostics Diagnostics,
     IReadOnlyCollection<string> Warnings);
 

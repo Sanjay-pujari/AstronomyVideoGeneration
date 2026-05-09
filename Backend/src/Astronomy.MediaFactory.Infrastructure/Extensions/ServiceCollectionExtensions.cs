@@ -162,6 +162,10 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.Schedules.All(schedule => schedule.Latitude is >= -90 and <= 90), "Scheduler schedule Latitude must be between -90 and 90.")
             .Validate(options => options.Schedules.All(schedule => schedule.Longitude is >= -180 and <= 180), "Scheduler schedule Longitude must be between -180 and 180.")
             .Validate(options => options.Schedules.All(schedule => TimeOnly.TryParse(schedule.LocalRunTime, out _)), "Scheduler schedule LocalRunTime must use HH:mm format.")
+            .Validate(options => options.Regions.Items.All(region => !string.IsNullOrWhiteSpace(region.RegionId) && !string.IsNullOrWhiteSpace(region.DisplayName)), "Regions must have RegionId and DisplayName.")
+            .Validate(options => options.Regions.Items.All(region => region.Latitude is >= -90 and <= 90), "Region Latitude must be between -90 and 90.")
+            .Validate(options => options.Regions.Items.All(region => region.Longitude is >= -180 and <= 180), "Region Longitude must be between -180 and 180.")
+            .Validate(options => options.Regions.Items.All(region => TimeOnly.TryParse(region.LocalRunTime, out _)), "Region LocalRunTime must use HH:mm format.")
             .ValidateOnStart();
 
 

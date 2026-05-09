@@ -230,6 +230,7 @@ public sealed class AIOptimizationServiceTests
                 new AnalyticsOverallSummary(_analytics.Count, _analytics.Sum(x => x.Views ?? 0), _analytics.Sum(x => (x.Likes ?? 0) + (x.Comments ?? 0) + (x.Shares ?? 0)), 0.12, 18, "YouTube", "Shorts"),
                 [new AnalyticsPlatformBreakdown("YouTube", _analytics.Count, _analytics.Sum(x => x.Views ?? 0), 0.12, 18, item)],
                 [new AnalyticsContentTypeBreakdown("Shorts", _analytics.Count, _analytics.Sum(x => x.Views ?? 0), 0.12, 18, 20)],
+                [],
                 new AnalyticsTimeIntelligence(18, "Friday", "UTC", "Friday 18:00 UTC"),
                 new AstronomyIntelligenceSummary("Moon", "Moon", "Jupiter", [new AstronomyObjectPerformance("Moon", _analytics.Count / 2, 5000, 400, 0.12, 0.4)]),
                 new ReelIntelligenceSummary("15-30 sec", "Question-led hook", "12%+", 0.8, [new DurationBucketPerformance("15-30 sec", _analytics.Count, _analytics.Sum(x => x.Views ?? 0), 0.12, 0.8, 20)]),

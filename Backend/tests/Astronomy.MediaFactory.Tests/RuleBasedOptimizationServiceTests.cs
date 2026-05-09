@@ -154,7 +154,7 @@ public sealed class RuleBasedOptimizationServiceTests
                 new ThumbnailVariantPerformance("variant-2", 4, 0.04, 4000, 10, null)
             };
             var response = new AnalyticsDashboardResponse(
-                new AnalyticsOverallSummary(_analytics.Count, 0, 0, 0, 0, "YouTube", "Shorts"), [], [],
+                new AnalyticsOverallSummary(_analytics.Count, 0, 0, 0, 0, "YouTube", "Shorts"), [], [], [],
                 new AnalyticsTimeIntelligence(18, "Friday", "UTC", "Friday 18:00-19:00 UTC"),
                 new AstronomyIntelligenceSummary("Moon", "Moon", "Moon", []),
                 new ReelIntelligenceSummary("15-30 sec", "Question-led hook", "12%+", 0.8, buckets),

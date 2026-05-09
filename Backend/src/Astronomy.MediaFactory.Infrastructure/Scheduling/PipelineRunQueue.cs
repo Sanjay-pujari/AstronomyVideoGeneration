@@ -33,7 +33,7 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
     {
         if (!item.Force && await HasDuplicateAsync(item, cancellationToken))
         {
-            const string reason = "Duplicate scheduler or pipeline run already exists for schedule/date/location.";
+            const string reason = "Duplicate scheduler or pipeline run already exists for region/date/content type.";
             _logger.LogInformation("Scheduler duplicate skipped for {ScheduleName} on {TargetDate}: {Reason}", item.ScheduleName, item.Request.Date, reason);
             await UpsertAuditAsync(item, "Skipped", reason, null, null, cancellationToken);
             return new SchedulerRunResult(false, "Skipped", reason, null, item.Request.Date, item.PlannedRunUtc);
@@ -120,6 +120,7 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
         if (original.TimeZone != result.TimeZone) changed.Add(nameof(RunPipelineRequest.TimeZone));
         if (original.LocationName != result.LocationName) changed.Add(nameof(RunPipelineRequest.LocationName));
         if (original.Date != result.Date) changed.Add(nameof(RunPipelineRequest.Date));
+        if (original.RegionId != result.RegionId) changed.Add(nameof(RunPipelineRequest.RegionId));
         return changed;
     }
 
@@ -129,9 +130,10 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
     private async Task<bool> HasSchedulerDuplicateAsync(SchedulerRunQueueItem item, CancellationToken cancellationToken)
     {
         var runs = await _auditStore.GetRunsAsync(cancellationToken);
-        return runs.Any(x => x.ScheduleName.Equals(item.ScheduleName, StringComparison.OrdinalIgnoreCase)
+        var regionId = NormalizeRegionId(item);
+        return runs.Any(x => string.Equals(NormalizeRegionId(x.RegionId, x.LocationName), regionId, StringComparison.OrdinalIgnoreCase)
             && x.TargetDate == item.Request.Date
-            && x.LocationName.Equals(item.Request.LocationName, StringComparison.OrdinalIgnoreCase)
+            && (x.ContentType == item.Request.ContentType || x.ContentType == default)
             && x.Status is "Created" or "Running" or "Completed" or "Publishing" or "Recoverable");
     }
 
@@ -139,14 +141,40 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
     {
         using var scope = _scopeFactory.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IPipelineRepository>();
-        return await repository.HasPipelineRunAsync(item.Request.Date, item.Request.ContentType, item.Request.LocationName, item.Request.TimeZone, DuplicateStatuses, cancellationToken);
+        var duplicateKey = string.IsNullOrWhiteSpace(item.Request.RegionId) ? item.Request.LocationName : NormalizeRegionId(item);
+        return await repository.HasPipelineRunAsync(item.Request.Date, item.Request.ContentType, duplicateKey, item.Request.TimeZone, DuplicateStatuses, cancellationToken);
+    }
+
+    private static string NormalizeRegionId(SchedulerRunQueueItem item)
+        => NormalizeRegionId(item.Request.RegionId, item.Request.LocationName);
+
+    private static string NormalizeRegionId(string? regionId, string locationName)
+    {
+        if (!string.IsNullOrWhiteSpace(regionId))
+            return Slugify(regionId);
+        return Slugify(locationName);
+    }
+
+    private static string Slugify(string value)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (var ch in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+                builder.Append(ch);
+            else if (builder.Length > 0 && builder[^1] != '-')
+                builder.Append('-');
+        }
+        return builder.ToString().Trim('-') is { Length: > 0 } slug ? slug : "default-region";
     }
 
     private Task UpsertAuditAsync(SchedulerRunQueueItem item, string status, string? skipReason, DateTimeOffset? actualRunUtc, Guid? pipelineRunId, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         return _auditStore.UpsertAsync(new SchedulerRunRecord(
+            NormalizeRegionId(item),
             item.ScheduleName,
+            item.Request.ContentType,
             item.Request.Date,
             item.PlannedRunUtc,
             actualRunUtc,

@@ -44,6 +44,7 @@ public sealed class AnalyticsIntelligenceService : IAnalyticsIntelligenceService
             BuildOverallSummary(context),
             BuildPlatformBreakdown(context),
             BuildContentTypeBreakdown(context),
+            BuildRegionBreakdown(context),
             BuildTimeIntelligence(context),
             BuildAstronomySummary(objectPerformance),
             BuildReelIntelligence(context, durationBuckets),
@@ -84,7 +85,7 @@ public sealed class AnalyticsIntelligenceService : IAnalyticsIntelligenceService
         if (!string.IsNullOrWhiteSpace(request.Platform))
             query = query.Where(x => x.Platform == request.Platform);
         if (!string.IsNullOrWhiteSpace(request.Location))
-            query = query.Where(x => x.LocationName != null && x.LocationName.Contains(request.Location));
+            query = query.Where(x => (x.RegionId != null && x.RegionId.Contains(request.Location)) || (x.LocationName != null && x.LocationName.Contains(request.Location)));
         if (!string.IsNullOrWhiteSpace(request.ContentType))
         {
             if (Enum.TryParse<ContentType>(request.ContentType, true, out var contentType))
@@ -164,6 +165,45 @@ public sealed class AnalyticsIntelligenceService : IAnalyticsIntelligenceService
         Retention = _analyticsOptions.PerformanceScoreRetentionWeight
     };
 
+
+    private static IReadOnlyCollection<RegionBreakdownItem> BuildRegionBreakdown(IntelligenceContext context)
+        => context.Items
+            .GroupBy(x => ResolveRegionId(context, x), StringComparer.OrdinalIgnoreCase)
+            .Select(g => new RegionBreakdownItem(
+                g.Key,
+                g.Select(x => x.LocationName).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))
+                    ?? g.Select(x => x.PipelineRunId.HasValue && context.Runs.TryGetValue(x.PipelineRunId.Value, out var run) ? run.LocationName : null).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))
+                    ?? g.Key,
+                g.Select(IdentityKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                g.Sum(x => x.Views ?? 0),
+                0))
+            .OrderByDescending(x => x.Views)
+            .ThenBy(x => x.RegionId, StringComparer.Ordinal)
+            .ToArray();
+
+    private static string ResolveRegionId(IntelligenceContext context, PlatformContentAnalytics item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.RegionId))
+            return item.RegionId;
+
+        if (item.PipelineRunId.HasValue && context.Runs.TryGetValue(item.PipelineRunId.Value, out var run) && !string.IsNullOrWhiteSpace(run.RegionId))
+            return run.RegionId;
+
+        return Slugify(item.LocationName ?? "unknown-region");
+    }
+
+    private static string Slugify(string value)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (var ch in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+                builder.Append(ch);
+            else if (builder.Length > 0 && builder[^1] != '-')
+                builder.Append('-');
+        }
+        return builder.ToString().Trim('-') is { Length: > 0 } slug ? slug : "unknown-region";
+    }
     private static AnalyticsOverallSummary BuildOverallSummary(IntelligenceContext context)
     {
         var items = context.Items;

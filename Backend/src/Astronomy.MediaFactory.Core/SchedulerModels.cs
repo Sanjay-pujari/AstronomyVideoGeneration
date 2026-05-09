@@ -3,7 +3,9 @@ using Astronomy.MediaFactory.Contracts;
 namespace Astronomy.MediaFactory.Core;
 
 public sealed record SchedulerRunRecord(
+    string? RegionId,
     string ScheduleName,
+    ContentType ContentType,
     DateOnly TargetDate,
     DateTimeOffset PlannedRunUtc,
     DateTimeOffset? ActualRunUtc,
@@ -41,6 +43,7 @@ public sealed record SchedulerStatusResponse(
     IReadOnlyCollection<SchedulerRunRecord> RecentRuns);
 
 public sealed record SchedulerScheduleStatus(
+    string? RegionId,
     string Name,
     bool Enabled,
     string LocationName,
@@ -51,3 +54,27 @@ public sealed record SchedulerScheduleStatus(
     bool PublishEnabled,
     DateTimeOffset? NextPlannedRunUtc,
     DateOnly? NextTargetDate);
+
+public sealed record RegionStatusResponse(
+    bool Enabled,
+    IReadOnlyCollection<string> DefaultPublishPlatforms,
+    IReadOnlyCollection<RegionScheduleStatus> Items);
+
+public sealed record RegionScheduleStatus(
+    string RegionId,
+    string DisplayName,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    string Language,
+    string LocalRunTime,
+    bool Enabled,
+    DateTimeOffset? NextPlannedRunUtc,
+    DateOnly? NextTargetDate);
+
+public sealed record RegionBreakdownItem(
+    string RegionId,
+    string LocationName,
+    int Runs,
+    long Views,
+    int Failures);

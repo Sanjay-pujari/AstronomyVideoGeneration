@@ -5,7 +5,7 @@ public enum PipelineRunStatus { Queued = 1, Running = 2, Succeeded = 3, Failed =
 public enum PipelineJobType { GenerateMainVideo = 1, GenerateShorts = 2, PublishVideo = 3, ArchiveAssets = 4 }
 public enum PipelineJobStatus { Pending = 1, Running = 2, Succeeded = 3, Failed = 4, Retrying = 5, Stale = 6 }
 
-public sealed record RunPipelineRequest(DateOnly Date, ContentType ContentType, string LocationName, string TimeZone = "Asia/Kolkata", bool PublishToYouTube = false, bool UseTopicPlanner = false, double? Latitude = null, double? Longitude = null, string? OverrideTimezone = null, string? OverrideLocationName = null, DateOnly? TargetDate = null);
+public sealed record RunPipelineRequest(DateOnly Date, ContentType ContentType, string LocationName, string TimeZone = "Asia/Kolkata", bool PublishToYouTube = false, bool UseTopicPlanner = false, double? Latitude = null, double? Longitude = null, string? OverrideTimezone = null, string? OverrideLocationName = null, DateOnly? TargetDate = null, string? RegionId = null);
 public sealed record RunPipelineResponse(Guid PipelineRunId, PipelineRunStatus Status, string Message);
 
 public sealed record EnqueuePipelineJobRequest(
@@ -84,24 +84,13 @@ public sealed class SchedulerOptions
     public bool RunOnStartup { get; set; } = false;
     public int MaxConcurrentRuns { get; set; } = 1;
     public ContentType DefaultContentType { get; set; } = ContentType.DailySkyGuide;
-    public List<SchedulerScheduleOptions> Schedules { get; set; } =
-    [
-        new SchedulerScheduleOptions
-        {
-            Name = "Udaipur Daily Sky",
-            Enabled = true,
-            LocationName = "Udaipur, India",
-            Latitude = 24.5854,
-            Longitude = 73.7125,
-            Timezone = "Asia/Kolkata",
-            LocalRunTime = "18:00",
-            PublishEnabled = true
-        }
-    ];
+    public List<SchedulerScheduleOptions> Schedules { get; set; } = [];
+    public RegionSchedulingOptions Regions { get; set; } = new();
 }
 
 public sealed class SchedulerScheduleOptions
 {
+    public string? RegionId { get; set; }
     public string Name { get; set; } = "";
     public bool Enabled { get; set; } = true;
     public string LocationName { get; set; } = "";
@@ -110,6 +99,61 @@ public sealed class SchedulerScheduleOptions
     public string Timezone { get; set; } = "Asia/Kolkata";
     public string LocalRunTime { get; set; } = "18:00";
     public bool PublishEnabled { get; set; } = true;
+}
+
+
+public sealed class RegionSchedulingOptions
+{
+    public bool Enabled { get; set; } = true;
+    public List<string> DefaultPublishPlatforms { get; set; } = ["YouTube", "Facebook", "Instagram"];
+    public List<RegionScheduleOptions> Items { get; set; } =
+    [
+        new RegionScheduleOptions
+        {
+            RegionId = "india-udaipur",
+            DisplayName = "Udaipur, India",
+            Latitude = 24.5854,
+            Longitude = 73.7125,
+            Timezone = "Asia/Kolkata",
+            Language = "en",
+            LocalRunTime = "18:00",
+            Enabled = true
+        },
+        new RegionScheduleOptions
+        {
+            RegionId = "usa-new-york",
+            DisplayName = "New York, USA",
+            Latitude = 40.7128,
+            Longitude = -74.0060,
+            Timezone = "America/New_York",
+            Language = "en",
+            LocalRunTime = "18:00",
+            Enabled = false
+        },
+        new RegionScheduleOptions
+        {
+            RegionId = "australia-sydney",
+            DisplayName = "Sydney, Australia",
+            Latitude = -33.8688,
+            Longitude = 151.2093,
+            Timezone = "Australia/Sydney",
+            Language = "en",
+            LocalRunTime = "18:00",
+            Enabled = false
+        }
+    ];
+}
+
+public sealed class RegionScheduleOptions
+{
+    public string RegionId { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public string Timezone { get; set; } = "Asia/Kolkata";
+    public string Language { get; set; } = "en";
+    public string LocalRunTime { get; set; } = "18:00";
+    public bool Enabled { get; set; } = true;
 }
 
 public sealed class SchedulingOptions

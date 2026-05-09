@@ -26,6 +26,7 @@ public sealed class MediaFactoryDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<PipelineRun>().ToTable("pipeline_runs").HasKey(x => x.Id);
+        modelBuilder.Entity<PipelineRun>().Property(x => x.RegionId).HasColumnName("regionId");
         modelBuilder.Entity<PipelineRun>().Property(x => x.OutputFolder).HasColumnName("outputFolder");
         modelBuilder.Entity<PipelineRun>().Property(x => x.ResumeSupported).HasColumnName("resumeSupported");
         modelBuilder.Entity<AstronomyEvent>().ToTable("astronomy_events").HasKey(x => x.Id);
@@ -52,6 +53,7 @@ public sealed class MediaFactoryDbContext : DbContext
             .HasForeignKey(x => x.ContentExperimentId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        modelBuilder.Entity<PipelineRun>().HasIndex(x => new { x.RegionId, x.RunDate, x.ContentType });
         modelBuilder.Entity<PublishedVideo>().HasIndex(x => x.PipelineRunId);
         modelBuilder.Entity<PlatformPublicationRecord>().HasIndex(x => new { x.ParentShortVideoId, x.Platform, x.PublishedAt });
         modelBuilder.Entity<PlatformPublicationRecord>().HasIndex(x => new { x.Platform, x.ExternalPostId }).IsUnique();
@@ -61,6 +63,8 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentExperiment>().HasIndex(x => new { x.VideoId, x.ExperimentType, x.Status });
         modelBuilder.Entity<ContentVariant>().HasIndex(x => new { x.ContentExperimentId, x.IsWinner });
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => new { x.PublishedVideoId, x.RetrievedAt });
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.RegionId).HasColumnName("regionId");
+        modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.RegionId);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.Platform);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.PublishedUtc);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.PipelineRunId);

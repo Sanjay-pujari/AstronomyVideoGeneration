@@ -24,6 +24,7 @@ public sealed class PlatformContentAnalytics : Common.EntityBase
     public double? EngagementRate { get; set; }
     public int? DurationSeconds { get; set; }
     public string? Hashtags { get; set; }
+    public string? RegionId { get; set; }
     public string? LocationName { get; set; }
     public DateOnly? TargetDate { get; set; }
     public ContentType? ContentCategory { get; set; }
@@ -50,6 +51,7 @@ public sealed record PlatformAnalyticsCollectionContext(
     DateTimeOffset? PublishedUtc,
     int? DurationSeconds,
     string? Hashtags,
+    string? RegionId,
     string? LocationName,
     DateOnly? TargetDate,
     ContentType? ContentCategory,
