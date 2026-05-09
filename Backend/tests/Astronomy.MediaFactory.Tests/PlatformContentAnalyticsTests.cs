@@ -146,7 +146,7 @@ public sealed class PlatformContentAnalyticsTests
         => new(db, new EfPipelineRepository(db), collectors, Options.Create(new AnalyticsOptions { CollectForRecentDays = 14, CollectEveryMinutes = 60 }), Options.Create(new MaintenanceOptions { WorkingDirectory = Path.GetTempPath() }), NullLogger<AnalyticsCollectionService>.Instance);
 
     private static PlatformAnalyticsCollectionContext Context(string platform, string type, string id)
-        => new(Guid.NewGuid(), platform, type, id, null, "Title", DateTimeOffset.UtcNow, 30, "#space", null, "Austin", DateOnly.FromDateTime(DateTime.UtcNow), ContentType.SpaceNews, null, null);
+        => new(Guid.NewGuid(), platform, type, id, null, "Title", DateTimeOffset.UtcNow, 30, "#space", null, null, "Austin", DateOnly.FromDateTime(DateTime.UtcNow), ContentType.SpaceNews, null, null);
 
     private sealed class FakeYouTubeAnalyticsService : IYouTubeAnalyticsService
     {
