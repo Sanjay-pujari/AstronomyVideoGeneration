@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.DependencyInjection;
@@ -77,6 +78,7 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
             using var scope = _scopeFactory.CreateScope();
             var executor = scope.ServiceProvider.GetRequiredService<IPipelineRunExecutor>();
             var run = await executor.ExecuteAsync(item.Request, cancellationToken);
+            await WriteOptimizationDiagnosticsAsync(item, run, cancellationToken);
             await UpsertAuditAsync(item, run.Status == PipelineRunStatus.Succeeded ? "Completed" : run.Status.ToString(), null, actualRunUtc, run.Id, CancellationToken.None);
             _logger.LogInformation("Scheduler run completed for {ScheduleName} on {TargetDate} with pipeline {PipelineRunId} status {Status}", item.ScheduleName, item.Request.Date, run.Id, run.Status);
         }
@@ -90,6 +92,32 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
             Interlocked.Decrement(ref _activeCount);
             await DrainAsync(CancellationToken.None);
         }
+    }
+
+
+    private static async Task WriteOptimizationDiagnosticsAsync(SchedulerRunQueueItem item, PipelineRun run, CancellationToken cancellationToken)
+    {
+        if (item.OptimizationPlan is null || string.IsNullOrWhiteSpace(run.OutputFolder))
+            return;
+
+        Directory.CreateDirectory(run.OutputFolder);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+        await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "optimization-plan.json"), JsonSerializer.Serialize(item.OptimizationPlan, options), cancellationToken);
+        if (item.OriginalRequest is not null && item.OriginalRequest != item.Request)
+        {
+            var payload = new OptimizationApplyResult { OriginalRequest = item.OriginalRequest, ResultRequest = item.Request, Plan = item.OptimizationPlan, ChangedFields = ChangedFields(item.OriginalRequest, item.Request), Mode = OptimizationMode.ApplySafeRules.ToString() };
+            await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "optimization-applied.json"), JsonSerializer.Serialize(payload, options), cancellationToken);
+        }
+    }
+
+    private static IReadOnlyCollection<string> ChangedFields(RunPipelineRequest original, RunPipelineRequest result)
+    {
+        var changed = new List<string>();
+        if (original.UseTopicPlanner != result.UseTopicPlanner) changed.Add(nameof(RunPipelineRequest.UseTopicPlanner));
+        if (original.TimeZone != result.TimeZone) changed.Add(nameof(RunPipelineRequest.TimeZone));
+        if (original.LocationName != result.LocationName) changed.Add(nameof(RunPipelineRequest.LocationName));
+        if (original.Date != result.Date) changed.Add(nameof(RunPipelineRequest.Date));
+        return changed;
     }
 
     private async Task<bool> HasDuplicateAsync(SchedulerRunQueueItem item, CancellationToken cancellationToken)

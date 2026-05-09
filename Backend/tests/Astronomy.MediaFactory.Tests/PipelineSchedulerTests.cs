@@ -164,6 +164,7 @@ public sealed class PipelineSchedulerTests
     private sealed class SchedulerHarness
     {
         private readonly TestOptionsMonitor<SchedulerOptions> _options;
+        private readonly TestOptionsMonitor<OptimizationOptions> _optimizationOptions = new(new OptimizationOptions { Enabled = false, Mode = OptimizationMode.Disabled });
         public InMemoryAuditStore Audit { get; } = new();
         public FakeRepository Repository { get; } = new();
         public FakeExecutor Executor { get; init; } = new();
@@ -183,7 +184,13 @@ public sealed class PipelineSchedulerTests
         }
 
         public PipelineSchedulerService CreateScheduler()
-            => new(_options, CreateQueue(), Audit, NullLogger<PipelineSchedulerService>.Instance);
+        {
+            var services = new ServiceCollection();
+            services.AddSingleton<IPipelineRepository>(Repository);
+            services.AddSingleton<IPipelineRunExecutor>(Executor);
+            var serviceProvider = services.BuildServiceProvider();
+            return new PipelineSchedulerService(_options, CreateQueue(), Audit, _optimizationOptions, serviceProvider.GetRequiredService<IServiceScopeFactory>(), NullLogger<PipelineSchedulerService>.Instance);
+        }
     }
 
     private sealed class InMemoryAuditStore : ISchedulerAuditStore

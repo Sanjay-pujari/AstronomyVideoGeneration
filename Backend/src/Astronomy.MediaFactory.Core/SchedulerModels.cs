@@ -19,7 +19,9 @@ public sealed record SchedulerRunQueueItem(
     string ScheduleName,
     RunPipelineRequest Request,
     DateTimeOffset PlannedRunUtc,
-    bool Force);
+    bool Force,
+    OptimizationPlan? OptimizationPlan = null,
+    RunPipelineRequest? OriginalRequest = null);
 
 public sealed record SchedulerRunResult(
     bool Accepted,

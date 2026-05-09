@@ -280,6 +280,17 @@ app.MapGet("/api/analytics/platform-summary", async (int? days, string? platform
 app.MapGet("/api/analytics/content-performance", async (int? days, string? platform, string? contentType, string? location, int? limit, IAnalyticsIntelligenceService analytics, CancellationToken ct) =>
     Results.Ok(await analytics.GetContentPerformanceAsync(BuildAnalyticsIntelligenceRequest(days, platform, contentType, location, limit), ct)));
 
+
+app.MapGet("/api/optimization/plan", async (string location, string? platform, IOptimizationService optimizationService, CancellationToken ct) =>
+    Results.Ok(await optimizationService.BuildPlanAsync(location, platform ?? "YouTube", ct)));
+app.MapPost("/api/optimization/apply-preview", async (OptimizationApplyPreviewRequest request, IOptimizationService optimizationService, CancellationToken ct) =>
+{
+    var plan = request.Plan ?? await optimizationService.BuildPlanAsync(request.Request.LocationName, request.Platform, ct);
+    var result = await optimizationService.ApplyPlanAsync(request.Request, plan, ct);
+    var changed = GetChangedFields(request.Request, result);
+    return Results.Ok(new OptimizationApplyResult { OriginalRequest = request.Request, ResultRequest = result, Plan = plan, ChangedFields = changed, Mode = "Preview" });
+});
+
 app.MapGet("/api/analytics/summary", async (int? days, IPipelineRepository repository, CancellationToken ct) =>
     Results.Ok(await repository.GetAnalyticsDashboardSummaryAsync(days ?? 14, ct)));
 app.MapGet("/api/analytics/top-performing", async (int? topN, IAnalyticsAggregationService aggregationService, CancellationToken ct) =>
@@ -310,4 +321,21 @@ static async Task<IResult> ExecuteOpsAsync<T>(Func<Task<T>> action)
     {
         return Results.BadRequest(new { message = ex.Message });
     }
+}
+
+static IReadOnlyCollection<string> GetChangedFields(RunPipelineRequest original, RunPipelineRequest result)
+{
+    var changed = new List<string>();
+    if (original.Date != result.Date) changed.Add(nameof(RunPipelineRequest.Date));
+    if (original.ContentType != result.ContentType) changed.Add(nameof(RunPipelineRequest.ContentType));
+    if (original.LocationName != result.LocationName) changed.Add(nameof(RunPipelineRequest.LocationName));
+    if (original.TimeZone != result.TimeZone) changed.Add(nameof(RunPipelineRequest.TimeZone));
+    if (original.PublishToYouTube != result.PublishToYouTube) changed.Add(nameof(RunPipelineRequest.PublishToYouTube));
+    if (original.UseTopicPlanner != result.UseTopicPlanner) changed.Add(nameof(RunPipelineRequest.UseTopicPlanner));
+    if (original.Latitude != result.Latitude) changed.Add(nameof(RunPipelineRequest.Latitude));
+    if (original.Longitude != result.Longitude) changed.Add(nameof(RunPipelineRequest.Longitude));
+    if (original.OverrideTimezone != result.OverrideTimezone) changed.Add(nameof(RunPipelineRequest.OverrideTimezone));
+    if (original.OverrideLocationName != result.OverrideLocationName) changed.Add(nameof(RunPipelineRequest.OverrideLocationName));
+    if (original.TargetDate != result.TargetDate) changed.Add(nameof(RunPipelineRequest.TargetDate));
+    return changed;
 }
