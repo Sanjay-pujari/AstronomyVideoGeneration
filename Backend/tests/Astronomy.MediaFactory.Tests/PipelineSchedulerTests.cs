@@ -54,7 +54,7 @@ public sealed class PipelineSchedulerTests
         var schedule = DueUtcSchedule();
         var targetDate = DateOnly.FromDateTime(DateTime.UtcNow);
         var harness = new SchedulerHarness(CreateOptions(enabled: true, schedules: [schedule]));
-        await harness.Audit.UpsertAsync(new SchedulerRunRecord(schedule.Name, targetDate, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, Guid.NewGuid(), "Completed", null, schedule.LocationName, schedule.Timezone, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), CancellationToken.None);
+        await harness.Audit.UpsertAsync(new SchedulerRunRecord(schedule.RegionId, schedule.Name, ContentType.DailySkyGuide, targetDate, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, Guid.NewGuid(), "Completed", null, schedule.LocationName, schedule.Timezone, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), CancellationToken.None);
 
         await harness.CreateScheduler().EvaluateSchedulesAsync(CancellationToken.None);
 
@@ -157,6 +157,68 @@ public sealed class PipelineSchedulerTests
         Assert.Single(harness.Executor.CompletedRuns);
     }
 
+
+    [Fact]
+    public async Task Multiple_Enabled_Regions_Schedule_Independent_Runs()
+    {
+        var harness = new SchedulerHarness(CreateRegionOptions(
+            Region("india-udaipur", "Udaipur, India", "UTC", enabled: true),
+            Region("usa-new-york", "New York, USA", "UTC", enabled: true),
+            Region("australia-sydney", "Sydney, Australia", "UTC", enabled: false)));
+
+        await harness.CreateScheduler().EvaluateSchedulesAsync(CancellationToken.None);
+        await WaitForAsync(() => harness.Executor.CompletedRuns.Count == 2);
+
+        Assert.Contains(harness.Executor.CompletedRuns, x => x.RegionId == "india-udaipur");
+        Assert.Contains(harness.Executor.CompletedRuns, x => x.RegionId == "usa-new-york");
+        Assert.DoesNotContain(harness.Executor.CompletedRuns, x => x.RegionId == "australia-sydney");
+    }
+
+    [Fact]
+    public async Task Region_Timezone_Conversion_Uses_Each_Region_Timezone()
+    {
+        var harness = new SchedulerHarness(CreateRegionOptions(
+            Region("india-udaipur", "Udaipur, India", "Asia/Kolkata", enabled: true),
+            Region("usa-new-york", "New York, USA", "America/New_York", enabled: true)));
+
+        var status = await harness.CreateScheduler().GetStatusAsync(CancellationToken.None);
+
+        foreach (var schedule in status.Schedules)
+        {
+            Assert.NotNull(schedule.NextPlannedRunUtc);
+            var local = TimeZoneInfo.ConvertTime(schedule.NextPlannedRunUtc!.Value, TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone));
+            Assert.Equal(0, local.Hour);
+            Assert.Equal(0, local.Minute);
+        }
+    }
+
+    [Fact]
+    public async Task Duplicate_Prevention_Is_Region_Specific()
+    {
+        var options = CreateRegionOptions(
+            Region("india-udaipur", "Udaipur, India", "UTC", enabled: true),
+            Region("usa-new-york", "New York, USA", "UTC", enabled: true));
+        var harness = new SchedulerHarness(options);
+        var targetDate = DateOnly.FromDateTime(DateTime.UtcNow);
+        await harness.Audit.UpsertAsync(new SchedulerRunRecord("india-udaipur", "Udaipur, India", ContentType.DailySkyGuide, targetDate, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, Guid.NewGuid(), "Completed", null, "Udaipur, India", "UTC", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await harness.CreateScheduler().EvaluateSchedulesAsync(CancellationToken.None);
+        await WaitForAsync(() => harness.Executor.CompletedRuns.Count == 1);
+
+        Assert.Single(harness.Executor.CompletedRuns);
+        Assert.Equal("usa-new-york", harness.Executor.CompletedRuns.Single().RegionId);
+    }
+
+    [Fact]
+    public void Output_Path_Includes_Region_Id()
+    {
+        var runId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+
+        var output = PipelineOrchestrator.BuildOutputDirectory("/tmp/media", ContentType.DailySkyGuide, new DateOnly(2026, 5, 9), "india-udaipur", "Udaipur, India", runId);
+
+        Assert.EndsWith(Path.Combine("DailySkyGuide", "2026-05-09", "india-udaipur", runId.ToString("N")), output);
+    }
+
     private static SchedulerScheduleOptions DueUtcSchedule()
         => new()
         {
@@ -170,6 +232,31 @@ public sealed class PipelineSchedulerTests
             PublishEnabled = true
         };
 
+
+    private static SchedulerOptions CreateRegionOptions(params RegionScheduleOptions[] regions)
+        => new()
+        {
+            Enabled = true,
+            RunOnStartup = false,
+            MaxConcurrentRuns = 3,
+            DefaultContentType = ContentType.DailySkyGuide,
+            Schedules = [],
+            Regions = new RegionSchedulingOptions { Enabled = true, Items = regions.ToList() }
+        };
+
+    private static RegionScheduleOptions Region(string id, string name, string timezone, bool enabled)
+        => new()
+        {
+            RegionId = id,
+            DisplayName = name,
+            Latitude = 0,
+            Longitude = 0,
+            Timezone = timezone,
+            LocalRunTime = "00:00",
+            Language = "en",
+            Enabled = enabled
+        };
+
     private static SchedulerOptions CreateOptions(bool enabled, int maxConcurrentRuns = 2, IReadOnlyCollection<SchedulerScheduleOptions>? schedules = null)
         => new()
         {
@@ -177,7 +264,8 @@ public sealed class PipelineSchedulerTests
             RunOnStartup = false,
             MaxConcurrentRuns = maxConcurrentRuns,
             DefaultContentType = ContentType.DailySkyGuide,
-            Schedules = schedules?.ToList() ?? []
+            Schedules = schedules?.ToList() ?? [],
+            Regions = new RegionSchedulingOptions { Enabled = false, Items = [] }
         };
 
     private static async Task WaitForAsync(Func<bool> condition)
@@ -232,9 +320,9 @@ public sealed class PipelineSchedulerTests
 
         public Task UpsertAsync(SchedulerRunRecord record, CancellationToken cancellationToken)
         {
-            Runs.RemoveAll(x => x.Status == record.Status && x.ScheduleName == record.ScheduleName && x.TargetDate == record.TargetDate && x.LocationName == record.LocationName && x.PlannedRunUtc == record.PlannedRunUtc);
+            Runs.RemoveAll(x => x.Status == record.Status && x.ScheduleName == record.ScheduleName && x.TargetDate == record.TargetDate && x.ContentType == record.ContentType && x.RegionId == record.RegionId && x.PlannedRunUtc == record.PlannedRunUtc);
             if (record.Status != "Skipped")
-                Runs.RemoveAll(x => x.Status != "Skipped" && x.ScheduleName == record.ScheduleName && x.TargetDate == record.TargetDate && x.LocationName == record.LocationName);
+                Runs.RemoveAll(x => x.Status != "Skipped" && x.ScheduleName == record.ScheduleName && x.TargetDate == record.TargetDate && x.ContentType == record.ContentType && x.RegionId == record.RegionId);
             Runs.Add(record);
             return Task.CompletedTask;
         }
@@ -287,7 +375,7 @@ public sealed class PipelineSchedulerTests
                 await hold.Task.WaitAsync(cancellationToken);
             }
 
-            var run = new PipelineRun { RunDate = request.Date, ContentType = request.ContentType, LocationName = request.LocationName, TimeZone = request.TimeZone, UseTopicPlanner = request.UseTopicPlanner, Status = PipelineRunStatus.Succeeded, OutputFolder = OutputFolder };
+            var run = new PipelineRun { RunDate = request.Date, ContentType = request.ContentType, RegionId = request.RegionId, LocationName = request.LocationName, TimeZone = request.TimeZone, UseTopicPlanner = request.UseTopicPlanner, Status = PipelineRunStatus.Succeeded, OutputFolder = OutputFolder };
             CompletedRuns.Add(run);
             return run;
         }

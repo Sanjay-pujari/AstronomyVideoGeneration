@@ -56,7 +56,7 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         try
         {
             var nowUtc = DateTimeOffset.UtcNow;
-            foreach (var schedule in options.Schedules)
+            foreach (var schedule in GetEffectiveSchedules(options))
             {
                 var scheduleEnabled = IsScheduleEnabled(schedule);
                 var planned = GetPlannedRunUtc(schedule, nowUtc);
@@ -79,10 +79,11 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
     {
         var options = _options.CurrentValue;
         var nowUtc = DateTimeOffset.UtcNow;
-        var schedules = options.Schedules.Select(schedule =>
+        var schedules = GetEffectiveSchedules(options).Select(schedule =>
         {
             var next = GetNextPlannedRunUtc(schedule, nowUtc);
             return new SchedulerScheduleStatus(
+                schedule.RegionId,
                 schedule.Name,
                 IsScheduleEnabled(schedule),
                 schedule.LocationName,
@@ -116,6 +117,60 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         var optimized = await BuildOptimizedRequestAsync(options.DefaultContentType, schedule, targetDate, cancellationToken);
         _logger.LogInformation("Scheduler run-now requested for {ScheduleName} on {TargetDate}; force={Force}", schedule.Name, targetDate, force);
         return await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, nowUtc, force, optimized.Plan, optimized.OriginalRequest, optimized.AIProfile), cancellationToken);
+    }
+
+    public async Task<RegionStatusResponse> GetRegionsAsync(CancellationToken cancellationToken)
+    {
+        await Task.CompletedTask;
+        var options = _options.CurrentValue;
+        var regions = GetRegionSchedules(options).Select(schedule =>
+        {
+            var next = GetNextPlannedRunUtc(schedule, DateTimeOffset.UtcNow);
+            return new RegionScheduleStatus(
+                schedule.RegionId ?? Slugify(schedule.LocationName),
+                schedule.LocationName,
+                schedule.Latitude,
+                schedule.Longitude,
+                schedule.Timezone,
+                ResolveRegionLanguage(options, schedule.RegionId),
+                schedule.LocalRunTime,
+                IsScheduleEnabled(schedule),
+                next.PlannedRunUtc,
+                next.TargetDate);
+        }).ToArray();
+
+        return new RegionStatusResponse(options.Regions.Enabled, options.Regions.DefaultPublishPlatforms, regions);
+    }
+
+    public async Task<SchedulerRunResult> RunRegionNowAsync(string regionId, bool force, CancellationToken cancellationToken)
+    {
+        var schedule = FindRegionSchedule(regionId);
+        if (schedule is null)
+            return new SchedulerRunResult(false, "NotFound", $"Region '{regionId}' was not found.", null, DateOnly.FromDateTime(DateTime.UtcNow), DateTimeOffset.UtcNow);
+
+        return await RunNowAsync(schedule.Name, force, cancellationToken);
+    }
+
+    public Task<bool> EnableRegionAsync(string regionId, CancellationToken cancellationToken)
+    {
+        var schedule = FindRegionSchedule(regionId);
+        if (schedule is null)
+            return Task.FromResult(false);
+
+        _scheduleEnabledOverrides[schedule.Name] = true;
+        _logger.LogInformation("Scheduler region {RegionId} enabled", regionId);
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> DisableRegionAsync(string regionId, CancellationToken cancellationToken)
+    {
+        var schedule = FindRegionSchedule(regionId);
+        if (schedule is null)
+            return Task.FromResult(false);
+
+        _scheduleEnabledOverrides[schedule.Name] = false;
+        _logger.LogInformation("Scheduler region {RegionId} disabled", regionId);
+        return Task.FromResult(true);
     }
 
     public Task<bool> EnableScheduleAsync(string scheduleName, CancellationToken cancellationToken)
@@ -155,7 +210,10 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         => _scheduleEnabledOverrides.TryGetValue(schedule.Name, out var enabled) ? enabled : schedule.Enabled;
 
     private SchedulerScheduleOptions? FindSchedule(string scheduleName)
-        => _options.CurrentValue.Schedules.FirstOrDefault(x => x.Name.Equals(scheduleName, StringComparison.OrdinalIgnoreCase));
+        => GetEffectiveSchedules(_options.CurrentValue).FirstOrDefault(x => x.Name.Equals(scheduleName, StringComparison.OrdinalIgnoreCase));
+
+    private SchedulerScheduleOptions? FindRegionSchedule(string regionId)
+        => GetRegionSchedules(_options.CurrentValue).FirstOrDefault(x => (x.RegionId ?? "").Equals(regionId, StringComparison.OrdinalIgnoreCase));
 
     private static RunPipelineRequest BuildRequest(ContentType contentType, SchedulerScheduleOptions schedule, DateOnly targetDate)
         => new(
@@ -169,7 +227,8 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
             schedule.Longitude,
             schedule.Timezone,
             schedule.LocationName,
-            targetDate);
+            targetDate,
+            schedule.RegionId);
 
     private async Task<(RunPipelineRequest Request, OptimizationPlan? Plan, RunPipelineRequest? OriginalRequest, AIOptimizationAppliedProfile? AIProfile)> BuildOptimizedRequestAsync(ContentType contentType, SchedulerScheduleOptions schedule, DateOnly targetDate, CancellationToken cancellationToken)
     {
@@ -227,6 +286,42 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         var localNow = TimeZoneInfo.ConvertTime(nowUtc, ResolveTimeZone(schedule.Timezone));
         var targetDate = DateOnly.FromDateTime(localNow.DateTime);
         return (targetDate, ToUtc(schedule, targetDate));
+    }
+
+    private static IReadOnlyCollection<SchedulerScheduleOptions> GetEffectiveSchedules(SchedulerOptions options)
+        => options.Regions.Enabled ? GetRegionSchedules(options) : options.Schedules;
+
+    private static IReadOnlyCollection<SchedulerScheduleOptions> GetRegionSchedules(SchedulerOptions options)
+        => options.Regions.Items.Select(region => ToSchedule(region, options.Regions.DefaultPublishPlatforms)).ToArray();
+
+    private static SchedulerScheduleOptions ToSchedule(RegionScheduleOptions region, IReadOnlyCollection<string> defaultPublishPlatforms)
+        => new()
+        {
+            RegionId = Slugify(region.RegionId),
+            Name = string.IsNullOrWhiteSpace(region.DisplayName) ? region.RegionId : region.DisplayName,
+            Enabled = region.Enabled,
+            LocationName = region.DisplayName,
+            Latitude = region.Latitude,
+            Longitude = region.Longitude,
+            Timezone = region.Timezone,
+            LocalRunTime = region.LocalRunTime,
+            PublishEnabled = defaultPublishPlatforms.Contains("YouTube", StringComparer.OrdinalIgnoreCase)
+        };
+
+    private static string ResolveRegionLanguage(SchedulerOptions options, string? regionId)
+        => options.Regions.Items.FirstOrDefault(x => Slugify(x.RegionId).Equals(regionId, StringComparison.OrdinalIgnoreCase))?.Language ?? "en";
+
+    private static string Slugify(string value)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (var ch in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+                builder.Append(ch);
+            else if (builder.Length > 0 && builder[^1] != '-')
+                builder.Append('-');
+        }
+        return builder.ToString().Trim('-') is { Length: > 0 } slug ? slug : "default-region";
     }
 
     private static (DateOnly TargetDate, DateTimeOffset PlannedRunUtc) GetNextPlannedRunUtc(SchedulerScheduleOptions schedule, DateTimeOffset nowUtc)

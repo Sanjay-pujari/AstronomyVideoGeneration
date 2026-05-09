@@ -7,6 +7,7 @@ public sealed class PipelineRun : EntityBase
 {
     public DateOnly RunDate { get; set; }
     public ContentType ContentType { get; set; }
+    public string? RegionId { get; set; }
     public string LocationName { get; set; } = "";
     public string TimeZone { get; set; } = "Asia/Kolkata";
     public PipelineRunStatus Status { get; set; } = PipelineRunStatus.Queued;
@@ -162,6 +163,7 @@ public sealed class PipelineJob : EntityBase
     public string? ErrorMessage { get; set; }
     public DateOnly RunDate { get; set; }
     public ContentType ContentType { get; set; }
+    public string? RegionId { get; set; }
     public string LocationName { get; set; } = "";
     public string TimeZone { get; set; } = "Asia/Kolkata";
     public bool PublishToYouTube { get; set; }

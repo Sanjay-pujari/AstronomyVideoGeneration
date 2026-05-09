@@ -274,6 +274,10 @@ public interface IPipelineSchedulerService
     Task EvaluateSchedulesAsync(CancellationToken cancellationToken);
     Task<SchedulerStatusResponse> GetStatusAsync(CancellationToken cancellationToken);
     Task<SchedulerRunResult> RunNowAsync(string scheduleName, bool force, CancellationToken cancellationToken);
+    Task<RegionStatusResponse> GetRegionsAsync(CancellationToken cancellationToken);
+    Task<SchedulerRunResult> RunRegionNowAsync(string regionId, bool force, CancellationToken cancellationToken);
+    Task<bool> EnableRegionAsync(string regionId, CancellationToken cancellationToken);
+    Task<bool> DisableRegionAsync(string regionId, CancellationToken cancellationToken);
     Task<bool> EnableScheduleAsync(string scheduleName, CancellationToken cancellationToken);
     Task<bool> DisableScheduleAsync(string scheduleName, CancellationToken cancellationToken);
     Task RecoverStartupAsync(CancellationToken cancellationToken);

@@ -27,8 +27,7 @@ public sealed class EfPipelineRepository : IPipelineRepository
     public Task<bool> HasPipelineRunAsync(DateOnly runDate, ContentType contentType, string locationName, string timeZone, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken)
         => _db.PipelineRuns.AnyAsync(x => x.RunDate == runDate
             && x.ContentType == contentType
-            && x.LocationName == locationName
-            && x.TimeZone == timeZone
+            && ((x.RegionId != null && x.RegionId == locationName) || (x.RegionId == null && x.LocationName == locationName))
             && statuses.Contains(x.Status), cancellationToken);
 
     public async Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken)
@@ -122,6 +121,7 @@ public sealed class EfPipelineRepository : IPipelineRepository
         existing.EngagementRate = analytics.EngagementRate;
         existing.DurationSeconds = analytics.DurationSeconds;
         existing.Hashtags = analytics.Hashtags;
+        existing.RegionId = analytics.RegionId;
         existing.LocationName = analytics.LocationName;
         existing.TargetDate = analytics.TargetDate;
         existing.ContentCategory = analytics.ContentCategory;
@@ -138,7 +138,7 @@ public sealed class EfPipelineRepository : IPipelineRepository
         if (!string.IsNullOrWhiteSpace(query.Platform))
             q = q.Where(x => x.Platform == query.Platform);
         if (!string.IsNullOrWhiteSpace(query.Location))
-            q = q.Where(x => x.LocationName != null && x.LocationName.Contains(query.Location));
+            q = q.Where(x => (x.RegionId != null && x.RegionId.Contains(query.Location)) || (x.LocationName != null && x.LocationName.Contains(query.Location)));
         if (!string.IsNullOrWhiteSpace(query.ContentType) && Enum.TryParse<ContentType>(query.ContentType, true, out var contentType))
             q = q.Where(x => x.ContentCategory == contentType);
         if (!string.IsNullOrWhiteSpace(query.ContentType) && !Enum.TryParse<ContentType>(query.ContentType, true, out _))

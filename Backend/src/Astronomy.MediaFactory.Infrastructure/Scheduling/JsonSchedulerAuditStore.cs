@@ -72,11 +72,20 @@ public sealed class JsonSchedulerAuditStore : ISchedulerAuditStore
             return left.Status == right.Status
                 && left.ScheduleName.Equals(right.ScheduleName, StringComparison.OrdinalIgnoreCase)
                 && left.TargetDate == right.TargetDate
-                && left.LocationName.Equals(right.LocationName, StringComparison.OrdinalIgnoreCase)
+                && left.ContentType == right.ContentType
+                && string.Equals(NormalizeRegionId(left), NormalizeRegionId(right), StringComparison.OrdinalIgnoreCase)
                 && left.PlannedRunUtc == right.PlannedRunUtc;
 
         return left.ScheduleName.Equals(right.ScheduleName, StringComparison.OrdinalIgnoreCase)
             && left.TargetDate == right.TargetDate
-            && left.LocationName.Equals(right.LocationName, StringComparison.OrdinalIgnoreCase);
+            && left.ContentType == right.ContentType
+            && string.Equals(NormalizeRegionId(left), NormalizeRegionId(right), StringComparison.OrdinalIgnoreCase);
     }
+    private static string NormalizeRegionId(SchedulerRunRecord record)
+    {
+        if (!string.IsNullOrWhiteSpace(record.RegionId))
+            return record.RegionId.Trim().ToLowerInvariant();
+        return record.LocationName.Trim().ToLowerInvariant();
+    }
+
 }

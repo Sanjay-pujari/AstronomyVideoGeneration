@@ -129,6 +129,7 @@ public sealed class PipelineOrchestrator
         {
             RunDate = request.Date,
             ContentType = request.ContentType,
+            RegionId = NormalizeRegionId(request.RegionId, request.LocationName),
             LocationName = request.LocationName,
             TimeZone = request.TimeZone,
             PublishToYouTube = request.PublishToYouTube,
@@ -152,7 +153,7 @@ public sealed class PipelineOrchestrator
 
         try
         {
-            var outputDir = Path.Combine(_maintenanceOptions.WorkingDirectory, request.ContentType.ToString(), request.Date.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
+            var outputDir = BuildOutputDirectory(_maintenanceOptions.WorkingDirectory, request.ContentType, request.Date, request.RegionId, request.LocationName, run.Id);
             Directory.CreateDirectory(outputDir);
             run.OutputFolder = outputDir;
             await _repository.SaveChangesAsync(cancellationToken);
@@ -1336,4 +1337,33 @@ public sealed class PipelineOrchestrator
             ThumbnailTextSuggestions = source.ThumbnailTextSuggestions,
             HookLine = source.HookLine
         };
+    public static string BuildOutputDirectory(string workingDirectory, ContentType contentType, DateOnly date, string? regionId, string locationName, Guid runId)
+        => Path.Combine(workingDirectory, contentType.ToString(), date.ToString("yyyy-MM-dd"), NormalizeRegionId(regionId, locationName), runId.ToString("N"));
+
+    private static string NormalizeRegionId(string? regionId, string locationName)
+    {
+        if (!string.IsNullOrWhiteSpace(regionId))
+            return Slugify(regionId);
+
+        return Slugify(locationName);
+    }
+
+    private static string Slugify(string value)
+    {
+        var builder = new StringBuilder();
+        foreach (var ch in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(ch);
+            }
+            else if (builder.Length > 0 && builder[^1] != '-')
+            {
+                builder.Append('-');
+            }
+        }
+
+        return builder.ToString().Trim('-') is { Length: > 0 } slug ? slug : "default-region";
+    }
+
 }

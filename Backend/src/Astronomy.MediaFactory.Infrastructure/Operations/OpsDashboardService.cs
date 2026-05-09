@@ -92,6 +92,7 @@ public sealed class OpsDashboardService : IOpsDashboardService
             performance,
             analyticsSummary,
             analyticsIntelligence,
+            await BuildRegionBreakdownAsync(cancellationToken),
             diagnostics,
             warnings.Distinct(StringComparer.Ordinal).ToList());
     }
@@ -173,6 +174,68 @@ public sealed class OpsDashboardService : IOpsDashboardService
         return new FailureOpsSummary(failures24, failures7, commonStage, summaries);
     }
 
+
+    private async Task<IReadOnlyCollection<RegionBreakdownItem>> BuildRegionBreakdownAsync(CancellationToken cancellationToken)
+    {
+        var from = DateTimeOffset.UtcNow.AddDays(-14);
+        var runs = await _db.PipelineRuns.AsNoTracking()
+            .Where(x => (x.FinishedUtc ?? x.StartedUtc ?? x.CreatedUtc) >= from)
+            .ToListAsync(cancellationToken);
+        var analytics = await _db.PlatformContentAnalytics.AsNoTracking()
+            .Where(x => x.CollectedUtc >= from && x.IsAnalyticsAvailable)
+            .ToListAsync(cancellationToken);
+
+        var runGroups = runs.GroupBy(x => ResolveRegionId(x.RegionId, x.LocationName), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => new
+            {
+                LocationName = x.Select(r => r.LocationName).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? x.Key,
+                Runs = x.Count(),
+                Failures = x.Count(r => r.Status == PipelineRunStatus.Failed)
+            }, StringComparer.OrdinalIgnoreCase);
+
+        var viewGroups = analytics.GroupBy(x => ResolveRegionId(x.RegionId, x.LocationName), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Sum(a => a.Views ?? 0), StringComparer.OrdinalIgnoreCase);
+
+        return runGroups.Keys.Concat(viewGroups.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(regionId =>
+            {
+                var hasRunData = runGroups.TryGetValue(regionId, out var runData);
+                var locationName = hasRunData
+                    ? runData!.LocationName
+                    : analytics.FirstOrDefault(x => ResolveRegionId(x.RegionId, x.LocationName).Equals(regionId, StringComparison.OrdinalIgnoreCase))?.LocationName ?? regionId;
+
+                return new RegionBreakdownItem(
+                    regionId,
+                    locationName,
+                    hasRunData ? runData!.Runs : 0,
+                    viewGroups.GetValueOrDefault(regionId),
+                    hasRunData ? runData!.Failures : 0);
+            })
+            .OrderByDescending(x => x.Runs)
+            .ThenByDescending(x => x.Views)
+            .ThenBy(x => x.RegionId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string ResolveRegionId(string? regionId, string? locationName)
+    {
+        if (!string.IsNullOrWhiteSpace(regionId))
+            return regionId;
+        return Slugify(locationName ?? "unknown-region");
+    }
+
+    private static string Slugify(string value)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (var ch in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+                builder.Append(ch);
+            else if (builder.Length > 0 && builder[^1] != '-')
+                builder.Append('-');
+        }
+        return builder.ToString().Trim('-') is { Length: > 0 } slug ? slug : "unknown-region";
+    }
     private async Task<(AnalyticsDashboardSummary Summary, OpsAnalyticsIntelligenceSummary Intelligence)> BuildAnalyticsOpsDataAsync(CancellationToken cancellationToken)
     {
         var from = DateTimeOffset.UtcNow.AddDays(-14);

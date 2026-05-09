@@ -94,6 +94,22 @@ app.MapGet("/api/pipelines/{id:guid}", async (Guid id, IPipelineRepository repos
 });
 app.MapGet("/api/scripts/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentScriptsAsync(20, ct)));
 app.MapGet("/api/scheduler/status", async (IPipelineSchedulerService scheduler, CancellationToken ct) => Results.Ok(await scheduler.GetStatusAsync(ct)));
+app.MapGet("/api/regions", async (IPipelineSchedulerService scheduler, CancellationToken ct) => Results.Ok(await scheduler.GetRegionsAsync(ct)));
+app.MapPost("/api/regions/{regionId}/run-now", async (string regionId, bool? force, IPipelineSchedulerService scheduler, CancellationToken ct) =>
+{
+    var result = await scheduler.RunRegionNowAsync(regionId, force ?? false, ct);
+    return result.Status == "NotFound" ? Results.NotFound(new { message = result.Reason }) : Results.Ok(result);
+});
+app.MapPost("/api/regions/{regionId}/enable", async (string regionId, IPipelineSchedulerService scheduler, CancellationToken ct) =>
+{
+    var updated = await scheduler.EnableRegionAsync(regionId, ct);
+    return updated ? Results.Ok(new { regionId, enabled = true }) : Results.NotFound(new { message = $"Region '{regionId}' was not found." });
+});
+app.MapPost("/api/regions/{regionId}/disable", async (string regionId, IPipelineSchedulerService scheduler, CancellationToken ct) =>
+{
+    var updated = await scheduler.DisableRegionAsync(regionId, ct);
+    return updated ? Results.Ok(new { regionId, enabled = false }) : Results.NotFound(new { message = $"Region '{regionId}' was not found." });
+});
 app.MapGet("/api/tokenhealth", async (ITokenHealthService tokenHealth, CancellationToken ct) => Results.Ok(await tokenHealth.CheckAllAsync(ct)));
 app.MapGet("/api/tokenhealth/youtube", async (ITokenHealthService tokenHealth, CancellationToken ct) => Results.Ok(await tokenHealth.CheckYouTubeAsync(ct)));
 app.MapGet("/api/tokenhealth/meta", async (ITokenHealthService tokenHealth, CancellationToken ct) => Results.Ok(await tokenHealth.CheckMetaAsync(ct)));
@@ -118,6 +134,7 @@ app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrc
     {
         ["contentType"] = request.ContentType,
         ["runDate"] = request.Date,
+        ["regionId"] = request.RegionId ?? "",
         ["publishToYouTube"] = request.PublishToYouTube
     });
     var result = await orchestrator.RunAsync(request, ct);
@@ -351,5 +368,6 @@ static IReadOnlyCollection<string> GetChangedFields(RunPipelineRequest original,
     if (original.OverrideTimezone != result.OverrideTimezone) changed.Add(nameof(RunPipelineRequest.OverrideTimezone));
     if (original.OverrideLocationName != result.OverrideLocationName) changed.Add(nameof(RunPipelineRequest.OverrideLocationName));
     if (original.TargetDate != result.TargetDate) changed.Add(nameof(RunPipelineRequest.TargetDate));
+    if (original.RegionId != result.RegionId) changed.Add(nameof(RunPipelineRequest.RegionId));
     return changed;
 }

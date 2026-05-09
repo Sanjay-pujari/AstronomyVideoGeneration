@@ -20,6 +20,7 @@ public sealed record AnalyticsDashboardResponse(
     AnalyticsOverallSummary OverallSummary,
     IReadOnlyCollection<AnalyticsPlatformBreakdown> PlatformBreakdown,
     IReadOnlyCollection<AnalyticsContentTypeBreakdown> ContentTypeBreakdown,
+    IReadOnlyCollection<RegionBreakdownItem> RegionBreakdown,
     AnalyticsTimeIntelligence TimeIntelligence,
     AstronomyIntelligenceSummary AstronomyIntelligence,
     ReelIntelligenceSummary ReelIntelligence,
