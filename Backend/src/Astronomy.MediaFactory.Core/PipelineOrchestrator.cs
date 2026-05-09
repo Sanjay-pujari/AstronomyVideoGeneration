@@ -132,6 +132,7 @@ public sealed class PipelineOrchestrator
             LocationName = request.LocationName,
             TimeZone = request.TimeZone,
             PublishToYouTube = request.PublishToYouTube,
+            UseTopicPlanner = request.UseTopicPlanner,
             Status = PipelineRunStatus.Queued,
             ResumeSupported = true
         };
