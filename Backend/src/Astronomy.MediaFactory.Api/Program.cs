@@ -291,6 +291,11 @@ app.MapPost("/api/optimization/apply-preview", async (OptimizationApplyPreviewRe
     return Results.Ok(new OptimizationApplyResult { OriginalRequest = request.Request, ResultRequest = result, Plan = plan, ChangedFields = changed, Mode = "Preview" });
 });
 
+app.MapGet("/api/ai-optimization/recommendations", async (IAIOptimizationService service, CancellationToken ct) =>
+    Results.Ok(await service.GetRecommendationsAsync(ct)));
+app.MapPost("/api/ai-optimization/generate-now", async (IAIOptimizationService service, CancellationToken ct) =>
+    Results.Ok(await service.GenerateNowAsync(ct)));
+
 app.MapGet("/api/analytics/summary", async (int? days, IPipelineRepository repository, CancellationToken ct) =>
     Results.Ok(await repository.GetAnalyticsDashboardSummaryAsync(days ?? 14, ct)));
 app.MapGet("/api/analytics/top-performing", async (int? topN, IAnalyticsAggregationService aggregationService, CancellationToken ct) =>

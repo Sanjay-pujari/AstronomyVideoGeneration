@@ -194,6 +194,12 @@ public interface IOptimizationService
     Task<RunPipelineRequest> ApplyPlanAsync(RunPipelineRequest request, OptimizationPlan plan, CancellationToken cancellationToken);
 }
 
+public interface IAIOptimizationService
+{
+    Task<AIOptimizationRecommendations> GetRecommendationsAsync(CancellationToken cancellationToken);
+    Task<AIOptimizationRecommendations> GenerateNowAsync(CancellationToken cancellationToken);
+}
+
 public interface IPipelineRepository {
  Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken);
  Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken);
