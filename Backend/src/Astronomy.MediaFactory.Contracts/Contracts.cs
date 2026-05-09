@@ -64,6 +64,26 @@ public sealed class TelemetryOptions
 }
 
 
+
+public sealed class AstronomyEventsOptions
+{
+    public const string SectionName = "AstronomyEvents";
+    public bool Enabled { get; set; } = true;
+    public int LookAheadDays { get; set; } = 30;
+    public double MinimumContentOpportunityScore { get; set; } = 0.65;
+    public AstronomyEventSourceOptions Sources { get; set; } = new();
+}
+
+public sealed class AstronomyEventSourceOptions
+{
+    public bool MeteorShowers { get; set; } = true;
+    public bool MoonPhases { get; set; } = true;
+    public bool PlanetaryConjunctions { get; set; } = true;
+    public bool Eclipses { get; set; } = true;
+    public bool Comets { get; set; } = false;
+    public bool IssPasses { get; set; } = false;
+}
+
 public sealed class TopicSelectionOptions
 {
     public const string SectionName = "TopicSelection";

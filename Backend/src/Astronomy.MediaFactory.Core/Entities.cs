@@ -57,14 +57,24 @@ public sealed class PipelineStageExecution : EntityBase
 
 public sealed class AstronomyEvent : EntityBase
 {
-    public DateOnly EventDate { get; set; }
-    public string Category { get; set; } = "";
-    public string ObjectName { get; set; } = "";
-    public double RankScore { get; set; }
-    public string VisibilityWindow { get; set; } = "";
-    public string Direction { get; set; } = "";
-    public string ObservationTool { get; set; } = "";
-    public string Details { get; set; } = "";
+    public string EventId { get; set; } = "";
+    public string EventType { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Description { get; set; } = "";
+    public DateTimeOffset StartUtc { get; set; }
+    public DateTimeOffset? PeakUtc { get; set; }
+    public DateTimeOffset EndUtc { get; set; }
+    public string[] VisibilityRegions { get; set; } = [];
+    public bool GlobalVisibility { get; set; }
+    public string[] RelatedObjects { get; set; } = [];
+    public double RarityScore { get; set; }
+    public double VisibilityScore { get; set; }
+    public double AudienceInterestScore { get; set; }
+    public double TimingUrgencyScore { get; set; }
+    public double ContentOpportunityScore { get; set; }
+    public string RecommendedContentType { get; set; } = "";
+    public string Source { get; set; } = "";
+    public double SourceConfidence { get; set; }
 }
 
 public sealed class GeneratedScript : EntityBase

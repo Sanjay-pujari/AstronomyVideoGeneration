@@ -86,6 +86,18 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
     }
 });
 
+app.MapGet("/api/events/upcoming", async (int? days, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
+    Results.Ok(await events.GetUpcomingAsync(days, ct)));
+app.MapGet("/api/events/top", async (int? days, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
+    Results.Ok(await events.GetTopAsync(days, ct)));
+app.MapGet("/api/events/{eventId}", async (string eventId, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
+{
+    var item = await events.GetByIdAsync(eventId, ct);
+    return item is null ? Results.NotFound(new { message = $"Astronomy event '{eventId}' was not found." }) : Results.Ok(item);
+});
+app.MapPost("/api/events/refresh", async (int? days, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
+    Results.Ok(await events.RefreshAsync(days, ct)));
+
 app.MapGet("/api/pipelines/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentAsync(20, ct)));
 app.MapGet("/api/pipelines/{id:guid}", async (Guid id, IPipelineRepository repository, CancellationToken ct) =>
 {
