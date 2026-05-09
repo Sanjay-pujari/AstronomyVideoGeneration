@@ -132,6 +132,11 @@ public sealed class AnalyticsOptions
     public int CollectForRecentDays { get; set; } = 14;
     public int FetchIntervalMinutes { get; set; } = 1440;
     public int TopN { get; set; } = 10;
+    public double PerformanceScoreViewsWeight { get; set; } = 0.35;
+    public double PerformanceScoreEngagementWeight { get; set; } = 0.25;
+    public double PerformanceScoreWatchTimeWeight { get; set; } = 0.20;
+    public double PerformanceScoreSharesWeight { get; set; } = 0.10;
+    public double PerformanceScoreRetentionWeight { get; set; } = 0.10;
 }
 
 

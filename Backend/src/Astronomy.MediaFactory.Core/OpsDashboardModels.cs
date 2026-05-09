@@ -11,8 +11,16 @@ public sealed record OpsDashboardResponse(
     FailureOpsSummary FailureSummary,
     PerformanceOpsSummary PerformanceSummary,
     AnalyticsDashboardSummary AnalyticsSummary,
+    OpsAnalyticsIntelligenceSummary AnalyticsIntelligence,
     OpsDashboardDiagnostics Diagnostics,
     IReadOnlyCollection<string> Warnings);
+
+public sealed record OpsAnalyticsIntelligenceSummary(
+    IReadOnlyCollection<PlatformContentAnalytics> TopContent,
+    long TotalEngagement,
+    double AverageEngagementRate,
+    string? BestPlatform,
+    int ViralCandidateCount);
 
 public sealed record SchedulerOpsSummary(
     bool Enabled,

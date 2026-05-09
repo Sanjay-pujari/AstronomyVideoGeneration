@@ -75,9 +75,9 @@ public sealed class OpsDashboardService : IOpsDashboardService
         var performance = await BuildPerformanceSummaryAsync(cancellationToken);
         warnings.AddRange(performance.Warnings);
 
-        var analyticsSummary = await _db.Set<PlatformContentAnalytics>().AnyAsync(cancellationToken)
-            ? await BuildAnalyticsSummaryAsync(cancellationToken)
-            : new AnalyticsDashboardSummary([], 0, 0, null, null, null);
+        var analytics = await BuildAnalyticsOpsDataAsync(cancellationToken);
+        var analyticsSummary = analytics.Summary;
+        var analyticsIntelligence = analytics.Intelligence;
 
         var diagnostics = BuildDiagnosticsSummary();
         warnings.AddRange(diagnostics.Warnings);
@@ -91,6 +91,7 @@ public sealed class OpsDashboardService : IOpsDashboardService
             failures,
             performance,
             analyticsSummary,
+            analyticsIntelligence,
             diagnostics,
             warnings.Distinct(StringComparer.Ordinal).ToList());
     }
@@ -172,12 +173,14 @@ public sealed class OpsDashboardService : IOpsDashboardService
         return new FailureOpsSummary(failures24, failures7, commonStage, summaries);
     }
 
-    private async Task<AnalyticsDashboardSummary> BuildAnalyticsSummaryAsync(CancellationToken cancellationToken)
+    private async Task<(AnalyticsDashboardSummary Summary, OpsAnalyticsIntelligenceSummary Intelligence)> BuildAnalyticsOpsDataAsync(CancellationToken cancellationToken)
     {
         var from = DateTimeOffset.UtcNow.AddDays(-14);
         var analytics = await _db.PlatformContentAnalytics.AsNoTracking()
             .Where(x => x.CollectedUtc >= from && x.IsAnalyticsAvailable)
             .ToListAsync(cancellationToken);
+        if (analytics.Count == 0)
+            return (new AnalyticsDashboardSummary([], 0, 0, null, null, null), new OpsAnalyticsIntelligenceSummary([], 0, 0, null, 0));
         var top = analytics
             .OrderByDescending(x => (x.Likes ?? 0) + (x.Comments ?? 0) + (x.Shares ?? 0))
             .ThenByDescending(x => x.Views ?? 0)
@@ -199,7 +202,16 @@ public sealed class OpsDashboardService : IOpsDashboardService
             .OrderByDescending(x => x.Sum(v => v.Views ?? 0))
             .Select(x => (int?)x.Key)
             .FirstOrDefault();
-        return new AnalyticsDashboardSummary(top, analytics.Sum(x => x.Views ?? 0), totalEngagement, bestPlatform, bestReel, bestHour);
+        var averageEngagementRate = analytics.Average(x => x.EngagementRate ?? ((x.Views ?? 0) <= 0 ? 0 : (double)((x.Likes ?? 0) + (x.Comments ?? 0) + (x.Shares ?? 0)) / (x.Views ?? 1)));
+        var viralCandidates = analytics.Count(x =>
+        {
+            var engagement = (x.Likes ?? 0) + (x.Comments ?? 0) + (x.Shares ?? 0);
+            var engagementRate = x.EngagementRate ?? ((x.Views ?? 0) <= 0 ? 0 : (double)engagement / (x.Views ?? 1));
+            return engagementRate >= 0.08 && (x.Shares ?? 0) >= Math.Max(3, engagement * 0.15);
+        });
+        var summary = new AnalyticsDashboardSummary(top, analytics.Sum(x => x.Views ?? 0), totalEngagement, bestPlatform, bestReel, bestHour);
+        var intelligence = new OpsAnalyticsIntelligenceSummary(top, totalEngagement, averageEngagementRate, bestPlatform, viralCandidates);
+        return (summary, intelligence);
     }
 
     private async Task<SchedulerOpsSummary> BuildSchedulerSummaryAsync(CancellationToken cancellationToken)
