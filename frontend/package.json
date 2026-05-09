@@ -7,5 +7,7 @@
     "build": "tsc && node scripts/copy-static.mjs",
     "test": "npm run build && node --test test/*.test.mjs"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
 }
