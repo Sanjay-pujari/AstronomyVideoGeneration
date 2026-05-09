@@ -109,6 +109,17 @@ public sealed class AnalyticsIntelligenceServiceTests
     }
 
     [Fact]
+    public async Task TopContent_MissingAnalytics_ReturnsEmptyCollection()
+    {
+        await using var db = CreateDb();
+        var service = CreateService(db);
+
+        var top = await service.GetTopContentAsync(new AnalyticsIntelligenceRequest(Days: 30), CancellationToken.None);
+
+        Assert.Empty(top);
+    }
+
+    [Fact]
     public async Task ChartData_FormatIsFrontendReady()
     {
         await using var db = CreateDb();

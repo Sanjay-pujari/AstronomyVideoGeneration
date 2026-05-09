@@ -117,6 +117,9 @@ public sealed class AnalyticsIntelligenceService : IAnalyticsIntelligenceService
 
     private void ApplyPerformanceScores(IReadOnlyCollection<PlatformContentAnalytics> items)
     {
+        if (items.Count == 0)
+            return;
+
         var maxViews = Math.Max(1, items.Max(x => x.Views ?? 0));
         var maxEngagement = Math.Max(1, items.Max(EngagementValue));
         var maxWatch = Math.Max(1, items.Max(x => x.WatchTimeMinutes ?? 0));
