@@ -1,14 +1,15 @@
-﻿using System;
+using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
 {
-    /// <inheritdoc />
+    [DbContext(typeof(MediaFactoryDbContext))]
+    [Migration("20260508000001_AddPlatformContentAnalytics")]
     public partial class AddPlatformContentAnalytics : Migration
     {
-        /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.CreateTable(
@@ -56,7 +57,6 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
             migrationBuilder.CreateIndex(name: "IX_platform_content_analytics_Platform_PlatformContentType_PlatformMediaId_CollectedUtc", table: "platform_content_analytics", columns: new[] { "Platform", "PlatformContentType", "PlatformMediaId", "CollectedUtc" }, unique: true);
         }
 
-        /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(name: "platform_content_analytics");
