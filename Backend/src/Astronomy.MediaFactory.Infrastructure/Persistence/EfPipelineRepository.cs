@@ -31,8 +31,8 @@ public sealed class EfPipelineRepository : IPipelineRepository
             .Take(take)
             .ToListAsync(cancellationToken);
 
-    public Task<bool> HasSpecialEventRunAsync(string eventId, DateOnly runDate, string regionId, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken)
-        => _db.PipelineRuns.AnyAsync(x => x.ContentType == ContentType.SpecialEventGuide
+    public Task<bool> HasSpecialEventRunAsync(string eventId, DateOnly runDate, string regionId, ContentType contentType, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken)
+        => _db.PipelineRuns.AnyAsync(x => x.ContentType == contentType
             && x.EventId == eventId
             && x.RunDate == runDate
             && ((x.RegionId != null && x.RegionId == regionId) || (x.RegionId == null && x.LocationName == regionId))

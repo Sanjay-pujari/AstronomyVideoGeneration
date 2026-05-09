@@ -143,6 +143,7 @@ public sealed class OpsDashboardServiceTests
     {
         public Task EvaluateSchedulesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task RecoverStartupAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<SchedulerEventPlanResponse> GetEventPlanAsync(string regionId, DateOnly targetDate, CancellationToken cancellationToken) => Task.FromResult(new SchedulerEventPlanResponse(regionId, targetDate, true, [], [], []));
         public Task<SchedulerStatusResponse> GetStatusAsync(CancellationToken cancellationToken)
             => Task.FromResult(new SchedulerStatusResponse(
                 true,

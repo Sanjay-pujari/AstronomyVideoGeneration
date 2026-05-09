@@ -74,6 +74,7 @@ public sealed class AstronomyEventsOptions
     public bool EnableSpecialEventVideos { get; set; } = true;
     public double SpecialEventScoreThreshold { get; set; } = 0.70;
     public int MaxSpecialEventVideosPerDay { get; set; } = 2;
+    public bool RunSpecialEventsBeforeDailyGuide { get; set; } = false;
     public AstronomyEventSourceOptions Sources { get; set; } = new();
 }
 

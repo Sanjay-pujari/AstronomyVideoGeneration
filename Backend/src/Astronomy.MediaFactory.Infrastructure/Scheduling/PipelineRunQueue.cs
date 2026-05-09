@@ -106,6 +106,8 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
             await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "optimization-plan.json"), JsonSerializer.Serialize(item.OptimizationPlan, options), cancellationToken);
         if (item.AIOptimizationProfile is not null)
             await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "optimization-used.json"), JsonSerializer.Serialize(item.AIOptimizationProfile, options), cancellationToken);
+        if (item.EventPlan is not null)
+            await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "scheduler-event-plan.json"), JsonSerializer.Serialize(item.EventPlan, options), cancellationToken);
         if (item.OriginalRequest is not null && item.OptimizationPlan is not null && item.OriginalRequest != item.Request)
         {
             var payload = new OptimizationApplyResult { OriginalRequest = item.OriginalRequest, ResultRequest = item.Request, Plan = item.OptimizationPlan, ChangedFields = ChangedFields(item.OriginalRequest, item.Request), Mode = OptimizationMode.ApplySafeRules.ToString() };
@@ -145,7 +147,7 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
         var duplicateKey = string.IsNullOrWhiteSpace(item.Request.RegionId) ? item.Request.LocationName : NormalizeRegionId(item);
         if (IsSpecialEvent(item.Request) && !string.IsNullOrWhiteSpace(item.Request.EventId))
         {
-            return await repository.HasSpecialEventRunAsync(item.Request.EventId, item.Request.Date, duplicateKey, DuplicateStatuses, cancellationToken);
+            return await repository.HasSpecialEventRunAsync(item.Request.EventId, item.Request.Date, duplicateKey, item.Request.ContentType, DuplicateStatuses, cancellationToken);
         }
 
         return await repository.HasPipelineRunAsync(item.Request.Date, item.Request.ContentType, duplicateKey, item.Request.TimeZone, DuplicateStatuses, cancellationToken);

@@ -106,6 +106,8 @@ app.MapGet("/api/pipelines/{id:guid}", async (Guid id, IPipelineRepository repos
 });
 app.MapGet("/api/scripts/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentScriptsAsync(20, ct)));
 app.MapGet("/api/scheduler/status", async (IPipelineSchedulerService scheduler, CancellationToken ct) => Results.Ok(await scheduler.GetStatusAsync(ct)));
+app.MapGet("/api/scheduler/event-plan", async (string regionId, DateOnly date, IPipelineSchedulerService scheduler, CancellationToken ct) =>
+    Results.Ok(await scheduler.GetEventPlanAsync(regionId, date, ct)));
 app.MapGet("/api/regions", async (IPipelineSchedulerService scheduler, CancellationToken ct) => Results.Ok(await scheduler.GetRegionsAsync(ct)));
 app.MapPost("/api/regions/{regionId}/run-now", async (string regionId, bool? force, IPipelineSchedulerService scheduler, CancellationToken ct) =>
 {
@@ -149,7 +151,7 @@ app.MapPost("/api/events/{eventId}/generate", async (string eventId, RunPipeline
 
     var regionId = string.IsNullOrWhiteSpace(request.RegionId) ? request.LocationName : request.RegionId;
     var statuses = new[] { PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded };
-    if (await repository.HasSpecialEventRunAsync(eventId, request.Date, regionId, statuses, ct))
+    if (await repository.HasSpecialEventRunAsync(eventId, request.Date, regionId, ContentType.SpecialEventGuide, statuses, ct))
         return Results.Conflict(new { message = "Special event video already exists for event/date/region.", eventId, targetDate = request.Date, regionId });
 
     var specialRequest = request with
