@@ -140,33 +140,48 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
             : Path.Combine(_maintenanceOptions.WorkingDirectory, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
         var scripts = await _db.GeneratedScripts.AsNoTracking().Where(x => x.PipelineRunId == pipelineRunId).OrderByDescending(x => x.CreatedUtc).ToListAsync(cancellationToken);
         var script = scripts.FirstOrDefault();
-        var publishedVideos = await _db.PublishedVideos.AsNoTracking().Where(x => x.PipelineRunId == pipelineRunId).ToListAsync(cancellationToken);
+        var publishedVideos = await _db.PublishedVideos.AsNoTracking()
+            .Where(x => x.PipelineRunId == pipelineRunId)
+            .Select(x => new PublishedVideoAnalyticsSeed(x.Title, x.YouTubeVideoId, x.CreatedAt, x.ThumbnailPath))
+            .ToListAsync(cancellationToken);
         var shorts = await (from shortVideo in _db.ShortVideos.AsNoTracking()
                             join publishedVideo in _db.PublishedVideos.AsNoTracking() on shortVideo.ParentVideoId equals publishedVideo.Id
                             where publishedVideo.PipelineRunId == pipelineRunId
-                            select new { Short = shortVideo, Parent = publishedVideo }).ToListAsync(cancellationToken);
+                            select new ShortVideoAnalyticsSeed(
+                                shortVideo.YouTubeVideoId,
+                                shortVideo.CreatedAt,
+                                shortVideo.Duration,
+                                publishedVideo.Title,
+                                publishedVideo.ThumbnailPath)).ToListAsync(cancellationToken);
         var platformRecords = await (from record in _db.PlatformPublicationRecords.AsNoTracking()
                                      join shortVideo in _db.ShortVideos.AsNoTracking() on record.ParentShortVideoId equals shortVideo.Id
                                      join publishedVideo in _db.PublishedVideos.AsNoTracking() on shortVideo.ParentVideoId equals publishedVideo.Id
                                      where publishedVideo.PipelineRunId == pipelineRunId && record.Status == PlatformPublicationStatus.Published
-                                     select new { Record = record, Short = shortVideo, Parent = publishedVideo }).ToListAsync(cancellationToken);
+                                     select new PlatformPublicationAnalyticsSeed(
+                                         record.Platform,
+                                         record.ExternalPostId,
+                                         record.ExternalUrl,
+                                         record.PublishedAt,
+                                         shortVideo.Duration,
+                                         publishedVideo.Title,
+                                         publishedVideo.ThumbnailPath)).ToListAsync(cancellationToken);
         var contexts = new List<PlatformAnalyticsCollectionContext>();
 
         foreach (var video in publishedVideos.Where(x => !string.IsNullOrWhiteSpace(x.YouTubeVideoId)))
             contexts.Add(Build(run, "YouTube", "LongVideo", video.YouTubeVideoId!, BuildYouTubeUrl(video.YouTubeVideoId), video.Title, video.CreatedAt, null, script, video.ThumbnailPath, outputDirectory));
 
-        foreach (var item in shorts.Where(x => !string.IsNullOrWhiteSpace(x.Short.YouTubeVideoId)))
-            contexts.Add(Build(run, "YouTube", "Short", item.Short.YouTubeVideoId!, BuildYouTubeUrl(item.Short.YouTubeVideoId), item.Parent.Title, item.Short.CreatedAt, item.Short.Duration, script, item.Parent.ThumbnailPath, outputDirectory));
+        foreach (var item in shorts.Where(x => !string.IsNullOrWhiteSpace(x.YouTubeVideoId)))
+            contexts.Add(Build(run, "YouTube", "Short", item.YouTubeVideoId!, BuildYouTubeUrl(item.YouTubeVideoId), item.ParentTitle, item.CreatedAt, item.Duration, script, item.ParentThumbnailPath, outputDirectory));
 
         AddJsonContext(contexts, run, outputDirectory, "youtube-publish-result-long.json", "YouTube", "LongVideo", script);
         AddJsonContext(contexts, run, outputDirectory, "youtube-publish-result-short.json", "YouTube", "Short", script);
         AddJsonContext(contexts, run, outputDirectory, "facebook-reel-publish-result.json", "Facebook", "Reel", script);
         AddJsonContext(contexts, run, outputDirectory, "instagram-reel-publish-result.json", "Instagram", "Reel", script);
 
-        foreach (var item in platformRecords.Where(x => !string.IsNullOrWhiteSpace(x.Record.ExternalPostId)))
+        foreach (var item in platformRecords.Where(x => !string.IsNullOrWhiteSpace(x.ExternalPostId)))
         {
-            var platform = item.Record.Platform == ShortFormPlatform.InstagramReels ? "Instagram" : item.Record.Platform == ShortFormPlatform.Facebook ? "Facebook" : "YouTube";
-            contexts.Add(Build(run, platform, item.Record.Platform == ShortFormPlatform.YouTubeShorts ? "Short" : "Reel", item.Record.ExternalPostId!, item.Record.ExternalUrl, item.Parent.Title, item.Record.PublishedAt, item.Short.Duration, script, item.Parent.ThumbnailPath, outputDirectory));
+            var platform = item.Platform == ShortFormPlatform.InstagramReels ? "Instagram" : item.Platform == ShortFormPlatform.Facebook ? "Facebook" : "YouTube";
+            contexts.Add(Build(run, platform, item.Platform == ShortFormPlatform.YouTubeShorts ? "Short" : "Reel", item.ExternalPostId!, item.ExternalUrl, item.ParentTitle, item.PublishedAt, item.Duration, script, item.ParentThumbnailPath, outputDirectory));
         }
 
         return contexts
@@ -184,6 +199,29 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
         string Language,
         string LocationName,
         string? OutputFolder);
+
+
+    private sealed record PublishedVideoAnalyticsSeed(
+        string Title,
+        string? YouTubeVideoId,
+        DateTimeOffset CreatedAt,
+        string? ThumbnailPath);
+
+    private sealed record ShortVideoAnalyticsSeed(
+        string? YouTubeVideoId,
+        DateTimeOffset CreatedAt,
+        int Duration,
+        string ParentTitle,
+        string? ParentThumbnailPath);
+
+    private sealed record PlatformPublicationAnalyticsSeed(
+        ShortFormPlatform Platform,
+        string? ExternalPostId,
+        string? ExternalUrl,
+        DateTimeOffset? PublishedAt,
+        int Duration,
+        string ParentTitle,
+        string? ParentThumbnailPath);
 
     private static PlatformAnalyticsCollectionContext Build(PipelineRunAnalyticsSeed run, string platform, string contentType, string mediaId, string? url, string? title, DateTimeOffset? publishedUtc, int? duration, GeneratedScript? script, string? thumbnailPath, string? outputDirectory)
     {
