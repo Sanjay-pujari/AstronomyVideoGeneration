@@ -147,6 +147,17 @@ public enum OptimizationMode
     ApplySafeRules = 2
 }
 
+
+public sealed class AIOptimizationOptions
+{
+    public const string SectionName = "AIOptimization";
+    public bool Enabled { get; set; } = true;
+    public OptimizationMode Mode { get; set; } = OptimizationMode.RecommendOnly;
+    public bool UseAzureOpenAI { get; set; } = true;
+    public int MinimumAnalyticsRows { get; set; } = 20;
+    public string OutputFileName { get; set; } = "ai-optimization-recommendations.json";
+}
+
 public sealed class AnalyticsOptions
 {
     public const string SectionName = "Analytics";

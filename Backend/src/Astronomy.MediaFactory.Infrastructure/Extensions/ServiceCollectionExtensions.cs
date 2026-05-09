@@ -107,6 +107,11 @@ public static class ServiceCollectionExtensions
             .Validate(opt => opt.FetchIntervalMinutes > 0 && opt.TopN > 0, "Analytics values must be > 0.")
             .ValidateOnStart();
 
+        services.AddOptions<AIOptimizationOptions>()
+            .Bind(configuration.GetSection(AIOptimizationOptions.SectionName))
+            .Validate(opt => opt.MinimumAnalyticsRows > 0 && !string.IsNullOrWhiteSpace(opt.OutputFileName), "AIOptimization minimum rows and output file name are required.")
+            .ValidateOnStart();
+
         services.AddOptions<TopicSelectionOptions>()
             .Bind(configuration.GetSection(TopicSelectionOptions.SectionName))
             .Validate(opt => opt.RepetitionWindowDays > 0, "TopicSelection:RepetitionWindowDays must be > 0.")
@@ -298,6 +303,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAnalyticsAggregationService, AnalyticsAggregationService>();
         services.AddScoped<IAnalyticsIntelligenceService, AnalyticsIntelligenceService>();
         services.AddScoped<IOptimizationService, RuleBasedOptimizationService>();
+        services.AddHttpClient<IAIOptimizationService, AIOptimizationService>();
         services.AddScoped<IContentExperimentService, EfContentExperimentService>();
         services.AddScoped<IFeedbackSignalExtractor, TopKeywordSignalExtractor>();
         services.AddScoped<IFeedbackSignalExtractor, TopHookSignalExtractor>();
