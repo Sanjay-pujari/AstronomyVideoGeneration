@@ -198,6 +198,10 @@ public interface IAIOptimizationService
 {
     Task<AIOptimizationRecommendations> GetRecommendationsAsync(CancellationToken cancellationToken);
     Task<AIOptimizationRecommendations> GenerateNowAsync(CancellationToken cancellationToken);
+    Task<AIOptimizationRecommendations> GetPendingApprovalAsync(CancellationToken cancellationToken);
+    Task<AIOptimizationApplyResult> ApplyApprovedAsync(AIOptimizationApplyRequest request, CancellationToken cancellationToken);
+    Task<AIOptimizationApplyResult> RejectAsync(AIOptimizationApplyRequest request, CancellationToken cancellationToken);
+    Task<AIOptimizationAppliedProfile?> GetLatestApprovedProfileAsync(CancellationToken cancellationToken);
 }
 
 public interface IPipelineRepository {

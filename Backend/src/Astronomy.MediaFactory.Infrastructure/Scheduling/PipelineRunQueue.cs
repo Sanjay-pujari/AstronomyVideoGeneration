@@ -97,13 +97,16 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
 
     private static async Task WriteOptimizationDiagnosticsAsync(SchedulerRunQueueItem item, PipelineRun run, CancellationToken cancellationToken)
     {
-        if (item.OptimizationPlan is null || string.IsNullOrWhiteSpace(run.OutputFolder))
+        if (string.IsNullOrWhiteSpace(run.OutputFolder))
             return;
 
         Directory.CreateDirectory(run.OutputFolder);
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
-        await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "optimization-plan.json"), JsonSerializer.Serialize(item.OptimizationPlan, options), cancellationToken);
-        if (item.OriginalRequest is not null && item.OriginalRequest != item.Request)
+        if (item.OptimizationPlan is not null)
+            await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "optimization-plan.json"), JsonSerializer.Serialize(item.OptimizationPlan, options), cancellationToken);
+        if (item.AIOptimizationProfile is not null)
+            await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "optimization-used.json"), JsonSerializer.Serialize(item.AIOptimizationProfile, options), cancellationToken);
+        if (item.OriginalRequest is not null && item.OptimizationPlan is not null && item.OriginalRequest != item.Request)
         {
             var payload = new OptimizationApplyResult { OriginalRequest = item.OriginalRequest, ResultRequest = item.Request, Plan = item.OptimizationPlan, ChangedFields = ChangedFields(item.OriginalRequest, item.Request), Mode = OptimizationMode.ApplySafeRules.ToString() };
             await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "optimization-applied.json"), JsonSerializer.Serialize(payload, options), cancellationToken);
