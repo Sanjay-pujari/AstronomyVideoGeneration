@@ -21,7 +21,8 @@ public sealed record SchedulerRunQueueItem(
     DateTimeOffset PlannedRunUtc,
     bool Force,
     OptimizationPlan? OptimizationPlan = null,
-    RunPipelineRequest? OriginalRequest = null);
+    RunPipelineRequest? OriginalRequest = null,
+    AIOptimizationAppliedProfile? AIOptimizationProfile = null);
 
 public sealed record SchedulerRunResult(
     bool Accepted,

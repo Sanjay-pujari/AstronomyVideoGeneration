@@ -66,7 +66,7 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
                     continue;
 
                 var optimized = await BuildOptimizedRequestAsync(options.DefaultContentType, schedule, planned.TargetDate, cancellationToken);
-                await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, planned.PlannedRunUtc, Force: false, optimized.Plan, optimized.OriginalRequest), cancellationToken);
+                await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, planned.PlannedRunUtc, Force: false, optimized.Plan, optimized.OriginalRequest, optimized.AIProfile), cancellationToken);
             }
         }
         finally
@@ -115,7 +115,7 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         var targetDate = GetLocalDate(schedule, nowUtc);
         var optimized = await BuildOptimizedRequestAsync(options.DefaultContentType, schedule, targetDate, cancellationToken);
         _logger.LogInformation("Scheduler run-now requested for {ScheduleName} on {TargetDate}; force={Force}", schedule.Name, targetDate, force);
-        return await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, nowUtc, force, optimized.Plan, optimized.OriginalRequest), cancellationToken);
+        return await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, nowUtc, force, optimized.Plan, optimized.OriginalRequest, optimized.AIProfile), cancellationToken);
     }
 
     public Task<bool> EnableScheduleAsync(string scheduleName, CancellationToken cancellationToken)
@@ -171,20 +171,55 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
             schedule.LocationName,
             targetDate);
 
-    private async Task<(RunPipelineRequest Request, OptimizationPlan? Plan, RunPipelineRequest? OriginalRequest)> BuildOptimizedRequestAsync(ContentType contentType, SchedulerScheduleOptions schedule, DateOnly targetDate, CancellationToken cancellationToken)
+    private async Task<(RunPipelineRequest Request, OptimizationPlan? Plan, RunPipelineRequest? OriginalRequest, AIOptimizationAppliedProfile? AIProfile)> BuildOptimizedRequestAsync(ContentType contentType, SchedulerScheduleOptions schedule, DateOnly targetDate, CancellationToken cancellationToken)
     {
         var request = BuildRequest(contentType, schedule, targetDate);
         var optimization = _optimizationOptions.CurrentValue;
-        if (!optimization.Enabled || optimization.Mode == OptimizationMode.Disabled || !optimization.ApplyToSchedulerRunsOnly)
-            return (request, null, null);
-
         using var scope = _scopeFactory.CreateScope();
+        var aiProfile = await LoadApprovedAIProfileAsync(scope.ServiceProvider, cancellationToken);
+
+        if (!optimization.Enabled || optimization.Mode == OptimizationMode.Disabled || !optimization.ApplyToSchedulerRunsOnly)
+        {
+            var aiOnlyPlan = aiProfile is null ? null : ApplyAIProfileToPlan(new OptimizationPlan { LocationName = schedule.LocationName, Platform = "YouTube" }, aiProfile);
+            return (request, aiOnlyPlan, request, aiProfile);
+        }
+
         var service = scope.ServiceProvider.GetRequiredService<IOptimizationService>();
         var plan = await service.BuildPlanAsync(schedule.LocationName, "YouTube", cancellationToken);
+        plan = ApplyAIProfileToPlan(plan, aiProfile);
         var optimizedRequest = optimization.Mode == OptimizationMode.ApplySafeRules
             ? await service.ApplyPlanAsync(request, plan, cancellationToken)
             : request;
-        return (optimizedRequest, plan, request);
+        return (optimizedRequest, plan, request, aiProfile);
+    }
+
+    private async Task<AIOptimizationAppliedProfile?> LoadApprovedAIProfileAsync(IServiceProvider serviceProvider, CancellationToken cancellationToken)
+    {
+        var service = serviceProvider.GetService<IAIOptimizationService>();
+        return service is null ? null : await service.GetLatestApprovedProfileAsync(cancellationToken);
+    }
+
+    private static OptimizationPlan ApplyAIProfileToPlan(OptimizationPlan plan, AIOptimizationAppliedProfile? profile)
+    {
+        if (profile is null)
+            return plan;
+
+        var values = profile.AppliedValues;
+        if (values.RecommendedPublishTimes.Count > 0)
+            plan.RecommendedPublishTimeLocal = values.RecommendedPublishTimes.First();
+        if (values.RecommendedObjectsToBoost.Count > 0)
+            plan.PreferredContentObjects = values.RecommendedObjectsToBoost;
+        if (values.RecommendedHooks.Count > 0)
+            plan.RecommendedHookStyle = values.RecommendedHooks.First();
+        if (values.RecommendedThumbnailText.Count > 0)
+            plan.RecommendedThumbnailStyle = values.RecommendedThumbnailText.First();
+        if (values.RecommendedHashtagSets.Count > 0)
+            plan.RecommendedHashtags = values.RecommendedHashtagSets.First();
+
+        plan.ConfidenceScore = Math.Max(plan.ConfidenceScore, profile.ConfidenceScore);
+        plan.AppliedRules = plan.AppliedRules.Concat(["AIOptimizationApprovedProfile"]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        plan.Reasons = plan.Reasons.Concat([$"Approved AI optimization profile {profile.Id} applied to scheduler-safe fields only."]).ToArray();
+        return plan;
     }
 
     private static (DateOnly TargetDate, DateTimeOffset PlannedRunUtc) GetPlannedRunUtc(SchedulerScheduleOptions schedule, DateTimeOffset nowUtc)

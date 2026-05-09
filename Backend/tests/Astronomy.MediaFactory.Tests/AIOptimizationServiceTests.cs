@@ -56,6 +56,69 @@ public sealed class AIOptimizationServiceTests
         Assert.Equal(originalScheduleTime, scheduler.Schedules.Single().LocalRunTime);
     }
 
+
+    [Fact]
+    public async Task Low_Confidence_Recommendation_Is_Not_Applied()
+    {
+        using var temp = new TempOutput();
+        var service = CreateService(CreateAnalytics(24), temp.Path, useAzure: false, minimumRows: 20, mode: OptimizationMode.ApplySafeRecommendations);
+
+        var result = await service.ApplyApprovedAsync(new AIOptimizationApplyRequest { ApprovedBy = "reviewer", Recommendations = Recommendation(confidence: 0.5) }, CancellationToken.None);
+
+        Assert.False(result.Applied);
+        Assert.False(File.Exists(System.IO.Path.Combine(temp.Path, "ai-optimization-applied.json")));
+    }
+
+    [Fact]
+    public async Task Unapproved_Recommendation_Is_Not_Applied()
+    {
+        using var temp = new TempOutput();
+        var service = CreateService(CreateAnalytics(24), temp.Path, useAzure: false, minimumRows: 20, mode: OptimizationMode.ApplySafeRecommendations);
+
+        var result = await service.ApplyApprovedAsync(new AIOptimizationApplyRequest { Recommendations = Recommendation(confidence: 0.9) }, CancellationToken.None);
+
+        Assert.False(result.Applied);
+        Assert.Contains("Human approval", result.Reason);
+    }
+
+    [Fact]
+    public async Task Disallowed_Field_Is_Ignored()
+    {
+        using var temp = new TempOutput();
+        var service = CreateService(CreateAnalytics(24), temp.Path, useAzure: false, minimumRows: 20, mode: OptimizationMode.ApplySafeRecommendations);
+
+        var result = await service.ApplyApprovedAsync(new AIOptimizationApplyRequest
+        {
+            ApprovedBy = "reviewer",
+            AllowedApplyFields = ["recommendedHooks", "recommendedVideoIdeas"],
+            Recommendations = Recommendation(confidence: 0.9)
+        }, CancellationToken.None);
+
+        Assert.True(result.Applied);
+        Assert.Contains("recommendedHooks", result.AppliedFields);
+        Assert.DoesNotContain("recommendedVideoIdeas", result.AppliedFields);
+        Assert.Contains(nameof(AIOptimizationRecommendations.RecommendedVideoIdeas), result.IgnoredFields);
+        Assert.Empty(result.Profile!.AppliedValues.RecommendedThumbnailText);
+    }
+
+    [Fact]
+    public async Task Approved_Safe_Recommendation_Is_Applied_With_Rollback_Data()
+    {
+        using var temp = new TempOutput();
+        var service = CreateService(CreateAnalytics(24), temp.Path, useAzure: false, minimumRows: 20, mode: OptimizationMode.ApplySafeRecommendations);
+
+        var first = await service.ApplyApprovedAsync(new AIOptimizationApplyRequest { ApprovedBy = "reviewer", Recommendations = Recommendation(confidence: 0.9, hook: "First hook") }, CancellationToken.None);
+        var second = await service.ApplyApprovedAsync(new AIOptimizationApplyRequest { ApprovedBy = "reviewer", Recommendations = Recommendation(confidence: 0.95, hook: "Second hook") }, CancellationToken.None);
+        var json = await File.ReadAllTextAsync(System.IO.Path.Combine(temp.Path, "ai-optimization-applied.json"));
+        var profile = JsonSerializer.Deserialize<AIOptimizationAppliedProfile>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.True(first.Applied);
+        Assert.True(second.Applied);
+        Assert.Equal("Second hook", second.Profile!.AppliedValues.RecommendedHooks.Single());
+        Assert.Equal("First hook", second.Profile.PreviousValues.RecommendedHooks.Single());
+        Assert.Equal("First hook", profile!.PreviousValues.RecommendedHooks.Single());
+    }
+
     [Fact]
     public async Task Missing_Azure_OpenAI_Config_Fails_Gracefully()
     {
@@ -74,8 +137,9 @@ public sealed class AIOptimizationServiceTests
         string outputPath,
         bool useAzure,
         int minimumRows,
-        AzureOpenAiOptions? azureOptions = null)
-        => CreateService(new FakeRepository(analytics), new FakeAnalyticsIntelligenceService(analytics), new FakeOptimizationService(), outputPath, useAzure, minimumRows, azureOptions);
+        AzureOpenAiOptions? azureOptions = null,
+        OptimizationMode mode = OptimizationMode.RecommendOnly)
+        => CreateService(new FakeRepository(analytics), new FakeAnalyticsIntelligenceService(analytics), new FakeOptimizationService(), outputPath, useAzure, minimumRows, azureOptions, mode: mode);
 
     private static AIOptimizationService CreateService(
         FakeRepository repository,
@@ -85,17 +149,33 @@ public sealed class AIOptimizationServiceTests
         bool useAzure,
         int minimumRows,
         AzureOpenAiOptions? azureOptions = null,
-        SchedulerOptions? schedulerOptions = null)
+        SchedulerOptions? schedulerOptions = null,
+        OptimizationMode mode = OptimizationMode.RecommendOnly)
         => new(
             repository,
             analytics,
             optimization,
             new HttpClient(),
-            Options.Create(new AIOptimizationOptions { Enabled = true, Mode = OptimizationMode.RecommendOnly, UseAzureOpenAI = useAzure, MinimumAnalyticsRows = minimumRows }),
+            Options.Create(new AIOptimizationOptions { Enabled = true, Mode = mode, UseAzureOpenAI = useAzure, MinimumAnalyticsRows = minimumRows }),
             Options.Create(azureOptions ?? new AzureOpenAiOptions { Endpoint = "https://example.openai.azure.com", ChatDeployment = "gpt-4o", ApiKey = "test" }),
             Options.Create(schedulerOptions ?? SchedulerOptions()),
             Options.Create(new MaintenanceOptions { WorkingDirectory = outputPath }),
             NullLogger<AIOptimizationService>.Instance);
+
+
+    private static AIOptimizationRecommendations Recommendation(double confidence, string hook = "Question-led hook")
+        => new()
+        {
+            RecommendedHooks = [hook],
+            RecommendedVideoIdeas = ["Unsafe free-form video idea should remain advisory only"],
+            RecommendedThumbnailText = ["LOOK UP"],
+            RecommendedPublishTimes = ["19:00"],
+            RecommendedObjectsToBoost = ["Jupiter"],
+            RecommendedObjectsToAvoid = ["Moon"],
+            RecommendedHashtagSets = [["#space", "#astronomy"]],
+            ConfidenceScore = confidence,
+            ReasoningSummary = "Enough local analytics rows support these scheduler-safe recommendations."
+        };
 
     private static SchedulerOptions SchedulerOptions()
         => new()

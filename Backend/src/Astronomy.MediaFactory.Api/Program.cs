@@ -295,6 +295,15 @@ app.MapGet("/api/ai-optimization/recommendations", async (IAIOptimizationService
     Results.Ok(await service.GetRecommendationsAsync(ct)));
 app.MapPost("/api/ai-optimization/generate-now", async (IAIOptimizationService service, CancellationToken ct) =>
     Results.Ok(await service.GenerateNowAsync(ct)));
+app.MapGet("/api/ai-optimization/pending-approval", async (IAIOptimizationService service, CancellationToken ct) =>
+    Results.Ok(await service.GetPendingApprovalAsync(ct)));
+app.MapPost("/api/ai-optimization/apply-approved", async Task<IResult> (AIOptimizationApplyRequest request, IAIOptimizationService service, CancellationToken ct) =>
+{
+    var result = await service.ApplyApprovedAsync(request, ct);
+    return result.Applied ? Results.Ok(result) : Results.BadRequest(result);
+});
+app.MapPost("/api/ai-optimization/reject", async (AIOptimizationApplyRequest request, IAIOptimizationService service, CancellationToken ct) =>
+    Results.Ok(await service.RejectAsync(request, ct)));
 
 app.MapGet("/api/analytics/summary", async (int? days, IPipelineRepository repository, CancellationToken ct) =>
     Results.Ok(await repository.GetAnalyticsDashboardSummaryAsync(days ?? 14, ct)));

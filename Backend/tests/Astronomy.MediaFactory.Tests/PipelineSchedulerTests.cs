@@ -120,6 +120,33 @@ public sealed class PipelineSchedulerTests
         Assert.Empty(harness.Executor.CompletedRuns);
     }
 
+
+    [Fact]
+    public async Task Approved_AI_Profile_Writes_Optimization_Used_Without_Mutating_Request()
+    {
+        using var temp = new TempOutput();
+        var harness = new SchedulerHarness(CreateOptions(enabled: true, schedules: [DueUtcSchedule()]))
+        {
+            Executor = { OutputFolder = temp.Path }
+        };
+        var queue = harness.CreateQueue();
+        var request = new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "UTC", "UTC");
+        var profile = new AIOptimizationAppliedProfile
+        {
+            ApprovedBy = "reviewer",
+            ConfidenceScore = 0.9,
+            AppliedValues = new AIOptimizationSafeValues { RecommendedHooks = ["Question-led"], RecommendedObjectsToBoost = ["Jupiter"] },
+            AppliedFields = ["recommendedHooks", "recommendedObjectsToBoost"],
+            SourceRecommendations = new AIOptimizationRecommendations { ConfidenceScore = 0.9, ReasoningSummary = "approved safe profile" }
+        };
+
+        await queue.EnqueueAsync(new SchedulerRunQueueItem("UTC Daily", request, DateTimeOffset.UtcNow, Force: true, AIOptimizationProfile: profile), CancellationToken.None);
+        await WaitForAsync(() => harness.Executor.CompletedRuns.Count == 1);
+
+        Assert.True(File.Exists(Path.Combine(temp.Path, "optimization-used.json")));
+        Assert.False(harness.Executor.CompletedRuns.Single().UseTopicPlanner);
+    }
+
     [Fact]
     public async Task Scheduler_Does_Not_Block_Manual_Pipeline_Runs()
     {
@@ -249,6 +276,7 @@ public sealed class PipelineSchedulerTests
         private readonly List<TaskCompletionSource<bool>> _holds = [];
         public List<PipelineRun> CompletedRuns { get; } = [];
         public bool HoldRuns { get; set; }
+        public string? OutputFolder { get; set; }
 
         public async Task<PipelineRun> ExecuteAsync(RunPipelineRequest request, CancellationToken cancellationToken)
         {
@@ -259,7 +287,7 @@ public sealed class PipelineSchedulerTests
                 await hold.Task.WaitAsync(cancellationToken);
             }
 
-            var run = new PipelineRun { RunDate = request.Date, ContentType = request.ContentType, LocationName = request.LocationName, TimeZone = request.TimeZone, Status = PipelineRunStatus.Succeeded };
+            var run = new PipelineRun { RunDate = request.Date, ContentType = request.ContentType, LocationName = request.LocationName, TimeZone = request.TimeZone, UseTopicPlanner = request.UseTopicPlanner, Status = PipelineRunStatus.Succeeded, OutputFolder = OutputFolder };
             CompletedRuns.Add(run);
             return run;
         }
@@ -269,6 +297,13 @@ public sealed class PipelineSchedulerTests
             foreach (var hold in _holds)
                 hold.TrySetResult(true);
         }
+    }
+
+    private sealed class TempOutput : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "scheduler-ai-optimization-tests-" + Guid.NewGuid().ToString("N"));
+        public TempOutput() => Directory.CreateDirectory(Path);
+        public void Dispose() => Directory.Delete(Path, recursive: true);
     }
 
     private sealed class TestOptionsMonitor<T> : IOptionsMonitor<T>

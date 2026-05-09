@@ -144,7 +144,8 @@ public enum OptimizationMode
 {
     Disabled = 0,
     RecommendOnly = 1,
-    ApplySafeRules = 2
+    ApplySafeRules = 2,
+    ApplySafeRecommendations = 3
 }
 
 
@@ -155,6 +156,16 @@ public sealed class AIOptimizationOptions
     public OptimizationMode Mode { get; set; } = OptimizationMode.RecommendOnly;
     public bool UseAzureOpenAI { get; set; } = true;
     public int MinimumAnalyticsRows { get; set; } = 20;
+    public bool RequireHumanApproval { get; set; } = true;
+    public double MinimumConfidenceToApply { get; set; } = 0.75;
+    public IReadOnlyCollection<string> AllowedApplyFields { get; set; } =
+    [
+        "recommendedHooks",
+        "recommendedThumbnailText",
+        "recommendedHashtagSets",
+        "recommendedPublishTimes",
+        "recommendedObjectsToBoost"
+    ];
     public string OutputFileName { get; set; } = "ai-optimization-recommendations.json";
 }
 

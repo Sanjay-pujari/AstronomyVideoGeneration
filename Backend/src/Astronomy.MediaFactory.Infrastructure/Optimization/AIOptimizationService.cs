@@ -14,6 +14,14 @@ public sealed class AIOptimizationService : IAIOptimizationService
 {
     private const string ApiVersion = "2024-10-21";
     private static readonly Regex HashtagRegex = new("#[a-zA-Z0-9_]+", RegexOptions.Compiled);
+    private static readonly string[] SafeApplyFields =
+    [
+        "recommendedHooks",
+        "recommendedThumbnailText",
+        "recommendedHashtagSets",
+        "recommendedPublishTimes",
+        "recommendedObjectsToBoost"
+    ];
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -77,7 +85,100 @@ public sealed class AIOptimizationService : IAIOptimizationService
         var recommendations = await GenerateRecommendationsAsync(context, cancellationToken);
         recommendations = EnforceReadOnlyRecommendationRules(recommendations, context);
         await WriteRecommendationsAsync(recommendations, cancellationToken);
+        if (_options.Enabled && _options.Mode == OptimizationMode.ApplySafeRecommendations && _options.RequireHumanApproval)
+            await WritePendingApprovalAsync(recommendations, cancellationToken);
         return recommendations;
+    }
+
+    public async Task<AIOptimizationRecommendations> GetPendingApprovalAsync(CancellationToken cancellationToken)
+    {
+        if (!File.Exists(PendingApprovalPath))
+            return await GenerateNowAsync(cancellationToken);
+
+        try
+        {
+            await using var stream = File.OpenRead(PendingApprovalPath);
+            return await JsonSerializer.DeserializeAsync<AIOptimizationRecommendations>(stream, JsonOptions, cancellationToken)
+                   ?? await GenerateNowAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Unable to read pending AI optimization approval. Regenerating.");
+            return await GenerateNowAsync(cancellationToken);
+        }
+    }
+
+    public async Task<AIOptimizationApplyResult> ApplyApprovedAsync(AIOptimizationApplyRequest request, CancellationToken cancellationToken)
+    {
+        var recommendations = request.Recommendations ?? await GetPendingApprovalAsync(cancellationToken);
+        if (!_options.Enabled || _options.Mode != OptimizationMode.ApplySafeRecommendations)
+            return new AIOptimizationApplyResult { Applied = false, Status = "Rejected", Reason = "AI optimization apply mode is not enabled." };
+
+        if (_options.RequireHumanApproval && string.IsNullOrWhiteSpace(request.ApprovedBy))
+            return new AIOptimizationApplyResult { Applied = false, Status = "Rejected", Reason = "Human approval is required before applying AI optimization recommendations." };
+
+        if (recommendations.ConfidenceScore < _options.MinimumConfidenceToApply)
+            return new AIOptimizationApplyResult { Applied = false, Status = "Rejected", Reason = $"Recommendation confidence {recommendations.ConfidenceScore:0.00} is below the configured minimum {_options.MinimumConfidenceToApply:0.00}." };
+
+        var previous = await GetLatestApprovedProfileAsync(cancellationToken);
+        var safeFields = ResolveAllowedFields(request.AllowedApplyFields);
+        var appliedValues = BuildSafeValues(recommendations, safeFields);
+        var appliedFields = SafeApplyFields.Where(safeFields.Contains).Where(field => HasValue(appliedValues, field)).ToArray();
+        var ignoredFields = SafeApplyFields.Where(field => !safeFields.Contains(field) || !HasValue(appliedValues, field))
+            .Concat([nameof(AIOptimizationRecommendations.RecommendedVideoIdeas), nameof(AIOptimizationRecommendations.RecommendedObjectsToAvoid)])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var profile = new AIOptimizationAppliedProfile
+        {
+            ApprovedBy = request.ApprovedBy.Trim(),
+            ApprovalNotes = request.ApprovalNotes.Trim(),
+            ConfidenceScore = recommendations.ConfidenceScore,
+            ReasoningSummary = recommendations.ReasoningSummary,
+            AppliedValues = appliedValues,
+            PreviousValues = previous?.AppliedValues ?? new AIOptimizationSafeValues(),
+            AppliedFields = appliedFields,
+            IgnoredFields = ignoredFields,
+            SourceRecommendations = recommendations
+        };
+
+        Directory.CreateDirectory(OutputDirectory);
+        await File.WriteAllTextAsync(AppliedPath, JsonSerializer.Serialize(profile, JsonOptions), cancellationToken);
+        return new AIOptimizationApplyResult { Applied = true, Status = "Applied", Profile = profile, AppliedFields = appliedFields, IgnoredFields = ignoredFields };
+    }
+
+    public async Task<AIOptimizationApplyResult> RejectAsync(AIOptimizationApplyRequest request, CancellationToken cancellationToken)
+    {
+        var rejected = new
+        {
+            rejectedUtc = DateTimeOffset.UtcNow,
+            rejectedBy = request.ApprovedBy,
+            reason = request.ApprovalNotes,
+            recommendations = request.Recommendations ?? (File.Exists(PendingApprovalPath) ? await GetPendingApprovalAsync(cancellationToken) : null)
+        };
+        Directory.CreateDirectory(OutputDirectory);
+        await File.WriteAllTextAsync(RejectedPath, JsonSerializer.Serialize(rejected, JsonOptions), cancellationToken);
+        if (File.Exists(PendingApprovalPath))
+            File.Delete(PendingApprovalPath);
+
+        return new AIOptimizationApplyResult { Applied = false, Status = "Rejected", Reason = string.IsNullOrWhiteSpace(request.ApprovalNotes) ? "Rejected by human reviewer." : request.ApprovalNotes };
+    }
+
+    public async Task<AIOptimizationAppliedProfile?> GetLatestApprovedProfileAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.Enabled || _options.Mode != OptimizationMode.ApplySafeRecommendations || !File.Exists(AppliedPath))
+            return null;
+
+        try
+        {
+            await using var stream = File.OpenRead(AppliedPath);
+            return await JsonSerializer.DeserializeAsync<AIOptimizationAppliedProfile>(stream, JsonOptions, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Unable to read approved AI optimization profile; scheduler will ignore AI optimization for this run.");
+            return null;
+        }
     }
 
     private async Task<AIOptimizationContext> LoadContextAsync(CancellationToken cancellationToken)
@@ -315,8 +416,49 @@ public sealed class AIOptimizationService : IAIOptimizationService
         await File.WriteAllTextAsync(OutputPath, JsonSerializer.Serialize(recommendations, JsonOptions), cancellationToken);
     }
 
+    private async Task WritePendingApprovalAsync(AIOptimizationRecommendations recommendations, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(OutputDirectory);
+        await File.WriteAllTextAsync(PendingApprovalPath, JsonSerializer.Serialize(recommendations, JsonOptions), cancellationToken);
+    }
+
+    private HashSet<string> ResolveAllowedFields(IReadOnlyCollection<string>? requestedFields)
+    {
+        var configuredFields = _options.AllowedApplyFields ?? [];
+        var configured = (configuredFields.Count == 0 ? SafeApplyFields : configuredFields)
+            .Intersect(SafeApplyFields, StringComparer.OrdinalIgnoreCase);
+        var requested = requestedFields is null || requestedFields.Count == 0
+            ? configured
+            : configured.Intersect(requestedFields, StringComparer.OrdinalIgnoreCase);
+        return requested.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static AIOptimizationSafeValues BuildSafeValues(AIOptimizationRecommendations recommendations, HashSet<string> allowedFields)
+        => new()
+        {
+            RecommendedHooks = allowedFields.Contains("recommendedHooks") ? recommendations.RecommendedHooks.ToArray() : [],
+            RecommendedThumbnailText = allowedFields.Contains("recommendedThumbnailText") ? recommendations.RecommendedThumbnailText.ToArray() : [],
+            RecommendedHashtagSets = allowedFields.Contains("recommendedHashtagSets") ? recommendations.RecommendedHashtagSets.Select(x => x.ToArray()).ToArray() : [],
+            RecommendedPublishTimes = allowedFields.Contains("recommendedPublishTimes") ? recommendations.RecommendedPublishTimes.ToArray() : [],
+            RecommendedObjectsToBoost = allowedFields.Contains("recommendedObjectsToBoost") ? recommendations.RecommendedObjectsToBoost.ToArray() : []
+        };
+
+    private static bool HasValue(AIOptimizationSafeValues values, string field)
+        => field switch
+        {
+            "recommendedHooks" => values.RecommendedHooks.Count > 0,
+            "recommendedThumbnailText" => values.RecommendedThumbnailText.Count > 0,
+            "recommendedHashtagSets" => values.RecommendedHashtagSets.Count > 0,
+            "recommendedPublishTimes" => values.RecommendedPublishTimes.Count > 0,
+            "recommendedObjectsToBoost" => values.RecommendedObjectsToBoost.Count > 0,
+            _ => false
+        };
+
     private string OutputDirectory => string.IsNullOrWhiteSpace(_maintenanceOptions.WorkingDirectory) ? Directory.GetCurrentDirectory() : _maintenanceOptions.WorkingDirectory;
     private string OutputPath => Path.Combine(OutputDirectory, string.IsNullOrWhiteSpace(_options.OutputFileName) ? "ai-optimization-recommendations.json" : _options.OutputFileName);
+    private string PendingApprovalPath => Path.Combine(OutputDirectory, "ai-optimization-pending-approval.json");
+    private string AppliedPath => Path.Combine(OutputDirectory, "ai-optimization-applied.json");
+    private string RejectedPath => Path.Combine(OutputDirectory, "ai-optimization-rejected.json");
 
     private sealed record AIOptimizationContext(
         AnalyticsDashboardResponse Dashboard,
