@@ -45,6 +45,7 @@ public sealed class AnalyticsIntelligenceService : IAnalyticsIntelligenceService
             BuildPlatformBreakdown(context),
             BuildContentTypeBreakdown(context),
             BuildRegionBreakdown(context),
+            BuildLanguageBreakdown(context),
             BuildTimeIntelligence(context),
             BuildAstronomySummary(objectPerformance),
             BuildReelIntelligence(context, durationBuckets),
@@ -180,6 +181,29 @@ public sealed class AnalyticsIntelligenceService : IAnalyticsIntelligenceService
             .OrderByDescending(x => x.Views)
             .ThenBy(x => x.RegionId, StringComparer.Ordinal)
             .ToArray();
+
+    private static IReadOnlyCollection<LanguageBreakdownItem> BuildLanguageBreakdown(IntelligenceContext context)
+        => context.Items
+            .GroupBy(x => ResolveLanguage(context, x), StringComparer.OrdinalIgnoreCase)
+            .Select(g => new LanguageBreakdownItem(
+                g.Key,
+                g.Select(IdentityKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                g.Sum(x => x.Views ?? 0),
+                g.Average(x => x.EngagementRate ?? 0)))
+            .OrderByDescending(x => x.TotalViews)
+            .ThenBy(x => x.Language, StringComparer.Ordinal)
+            .ToArray();
+
+    private static string ResolveLanguage(IntelligenceContext context, PlatformContentAnalytics item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.Language))
+            return item.Language;
+
+        if (item.PipelineRunId.HasValue && context.Runs.TryGetValue(item.PipelineRunId.Value, out var run) && !string.IsNullOrWhiteSpace(run.Language))
+            return run.Language;
+
+        return "en";
+    }
 
     private static string ResolveRegionId(IntelligenceContext context, PlatformContentAnalytics item)
     {

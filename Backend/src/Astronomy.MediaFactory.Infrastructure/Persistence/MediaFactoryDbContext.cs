@@ -26,6 +26,7 @@ public sealed class MediaFactoryDbContext : DbContext
     {
         modelBuilder.Entity<PipelineRun>().ToTable("pipeline_runs").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineRun>().Property(x => x.RegionId).HasColumnName("regionId");
+        modelBuilder.Entity<PipelineRun>().Property(x => x.Language).HasColumnName("language");
         modelBuilder.Entity<PipelineRun>().Property(x => x.OutputFolder).HasColumnName("outputFolder");
         modelBuilder.Entity<PipelineRun>().Property(x => x.ResumeSupported).HasColumnName("resumeSupported");
         modelBuilder.Entity<PipelineRun>().Property(x => x.EventId).HasColumnName("eventId");
@@ -33,6 +34,7 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<PipelineRun>().Property(x => x.EventTitle).HasColumnName("eventTitle");
         modelBuilder.Entity<PipelineRun>().Property(x => x.EventDescription).HasColumnName("eventDescription");
         modelBuilder.Entity<GeneratedScript>().ToTable("generated_scripts").HasKey(x => x.Id);
+        modelBuilder.Entity<GeneratedScript>().Property(x => x.Language).HasColumnName("language");
         modelBuilder.Entity<MediaAsset>().ToTable("media_assets").HasKey(x => x.Id);
         modelBuilder.Entity<PublishedVideo>().ToTable("published_videos").HasKey(x => x.Id);
         modelBuilder.Entity<ShortVideo>().ToTable("short_videos").HasKey(x => x.Id);
@@ -68,7 +70,9 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => new { x.PublishedVideoId, x.RetrievedAt });
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => x.EventId);
         modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.RegionId).HasColumnName("regionId");
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.Language).HasColumnName("language");
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.RegionId);
+        modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.Language);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.Platform);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.PublishedUtc);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.PipelineRunId);

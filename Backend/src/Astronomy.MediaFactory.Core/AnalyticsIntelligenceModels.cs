@@ -21,6 +21,7 @@ public sealed record AnalyticsDashboardResponse(
     IReadOnlyCollection<AnalyticsPlatformBreakdown> PlatformBreakdown,
     IReadOnlyCollection<AnalyticsContentTypeBreakdown> ContentTypeBreakdown,
     IReadOnlyCollection<RegionBreakdownItem> RegionBreakdown,
+    IReadOnlyCollection<LanguageBreakdownItem> LanguageBreakdown,
     AnalyticsTimeIntelligence TimeIntelligence,
     AstronomyIntelligenceSummary AstronomyIntelligence,
     ReelIntelligenceSummary ReelIntelligence,
@@ -45,6 +46,12 @@ public sealed record AnalyticsPlatformBreakdown(
     double AverageEngagement,
     double AverageWatchDurationSeconds,
     AnalyticsTopContentItem? TopPost);
+
+public sealed record LanguageBreakdownItem(
+    string Language,
+    int ContentCount,
+    long TotalViews,
+    double AverageEngagementRate);
 
 public sealed record AnalyticsContentTypeBreakdown(
     string ContentType,

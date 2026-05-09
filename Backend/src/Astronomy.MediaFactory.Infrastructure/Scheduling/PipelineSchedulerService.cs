@@ -401,7 +401,8 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
             schedule.Timezone,
             schedule.LocationName,
             targetDate,
-            schedule.RegionId);
+            schedule.RegionId,
+            Language: schedule.Language);
 
     private async Task<(RunPipelineRequest Request, OptimizationPlan? Plan, RunPipelineRequest? OriginalRequest, AIOptimizationAppliedProfile? AIProfile)> BuildOptimizedRequestAsync(ContentType contentType, SchedulerScheduleOptions schedule, DateOnly targetDate, CancellationToken cancellationToken)
     {
@@ -478,7 +479,8 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
             Longitude = region.Longitude,
             Timezone = region.Timezone,
             LocalRunTime = region.LocalRunTime,
-            PublishEnabled = defaultPublishPlatforms.Contains("YouTube", StringComparer.OrdinalIgnoreCase)
+            PublishEnabled = defaultPublishPlatforms.Contains("YouTube", StringComparer.OrdinalIgnoreCase),
+            Language = string.IsNullOrWhiteSpace(region.Language) ? "en" : region.Language
         };
 
     private static string ResolveRegionLanguage(SchedulerOptions options, string? regionId)

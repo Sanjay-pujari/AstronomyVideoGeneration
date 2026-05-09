@@ -17,16 +17,17 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
             .ToList();
 
         var mainObjects = selectedObjects.Take(3).ToList();
+        var isHindi = LocalizationResolver.IsHindi(request.Language);
         var title = request.ContentType == ContentType.SpecialEventGuide
-            ? BuildSpecialEventTitle(request, mainObjects)
-            : BuildTitle(request.LocationName, request.TargetDate, mainObjects, request.IsShortForm);
+            ? BuildSpecialEventTitle(request, mainObjects, isHindi)
+            : BuildTitle(request.LocationName, request.TargetDate, mainObjects, request.IsShortForm, isHindi);
         var hashtags = request.ContentType == ContentType.SpecialEventGuide
             ? BuildSpecialEventHashtags(request)
             : request.IsShortForm
                 ? new[] { "#Astronomy", "#NightSky", "#Stargazing", "#Shorts" }
                 : new[] { "#Astronomy", "#NightSky", "#Stargazing" };
 
-        var description = BuildDescription(request, selectedObjects, hashtags);
+        var description = BuildDescription(request, selectedObjects, hashtags, isHindi);
 
         var tagSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -46,8 +47,12 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
         }
 
         var pinnedComment = request.ContentType == ContentType.SpecialEventGuide
-            ? $"Are you watching {request.EventTitle ?? "this astronomy event"}? Share your location and viewing conditions below!"
-            : $"What can you see tonight from {request.LocationName}? Drop your observation time and direction below!";
+            ? isHindi
+                ? $"क्या आप {request.EventTitle ?? "यह खगोलीय घटना"} देख रहे हैं? नीचे अपना स्थान और देखने की स्थिति साझा करें!"
+                : $"Are you watching {request.EventTitle ?? "this astronomy event"}? Share your location and viewing conditions below!"
+            : isHindi
+                ? $"आज रात {request.LocationName} से आप क्या देख पा रहे हैं? अपना अवलोकन समय और दिशा नीचे लिखें!"
+                : $"What can you see tonight from {request.LocationName}? Drop your observation time and direction below!";
 
         return Task.FromResult(new SeoMetadataResult
         {
@@ -67,27 +72,27 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
         await File.WriteAllTextAsync(path, payload, cancellationToken);
     }
 
-    private static string BuildTitle(string location, DateOnly date, IReadOnlyList<string> objects, bool isShort)
+    private static string BuildTitle(string location, DateOnly date, IReadOnlyList<string> objects, bool isShort, bool isHindi)
     {
-        var objectPart = objects.Count > 0 ? string.Join(", ", objects.Take(2)) + (objects.Count > 2 ? " & " + objects[2] : string.Empty) : "Night Sky";
-        var datePart = date.ToString("MMM d");
-        var baseTitle = $"Tonight's Sky in {location}: {objectPart} ({datePart})";
+        var objectPart = objects.Count > 0 ? string.Join(", ", objects.Take(2)) + (objects.Count > 2 ? " & " + objects[2] : string.Empty) : isHindi ? "रात का आसमान" : "Night Sky";
+        var datePart = isHindi ? date.ToString("yyyy-MM-dd") : date.ToString("MMM d");
+        var baseTitle = isHindi ? $"आज रात {location} का आसमान: {objectPart} ({datePart})" : $"Tonight's Sky in {location}: {objectPart} ({datePart})";
         if (!isShort)
         {
             return baseTitle;
         }
 
-        var compact = $"{location} Sky: {objectPart} #Shorts";
-        return compact.Length <= 100 ? compact : $"{location} Night Sky #Shorts";
+        var compact = isHindi ? $"{location} आसमान: {objectPart} #Shorts" : $"{location} Sky: {objectPart} #Shorts";
+        return compact.Length <= 100 ? compact : isHindi ? $"{location} रात का आसमान #Shorts" : $"{location} Night Sky #Shorts";
     }
 
-    private static string BuildSpecialEventTitle(SeoMetadataRequest request, IReadOnlyList<string> objects)
+    private static string BuildSpecialEventTitle(SeoMetadataRequest request, IReadOnlyList<string> objects, bool isHindi)
     {
-        var eventTitle = string.IsNullOrWhiteSpace(request.EventTitle) ? objects.FirstOrDefault() ?? "Astronomy Event" : request.EventTitle.Trim();
-        var urgency = request.TargetDate <= DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)) ? "Tonight" : request.TargetDate.ToString("MMM d");
-        var title = eventTitle.Contains("Tonight", StringComparison.OrdinalIgnoreCase)
-            ? eventTitle
-            : $"{eventTitle} {urgency}: How to Watch";
+        var eventTitle = string.IsNullOrWhiteSpace(request.EventTitle) ? objects.FirstOrDefault() ?? (isHindi ? "खगोलीय घटना" : "Astronomy Event") : request.EventTitle.Trim();
+        var urgency = request.TargetDate <= DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)) ? isHindi ? "आज रात" : "Tonight" : request.TargetDate.ToString(isHindi ? "yyyy-MM-dd" : "MMM d");
+        var title = isHindi
+            ? $"{eventTitle} {urgency}: कैसे देखें"
+            : eventTitle.Contains("Tonight", StringComparison.OrdinalIgnoreCase) ? eventTitle : $"{eventTitle} {urgency}: How to Watch";
         return title.Length <= 100 ? title : title[..100].TrimEnd();
     }
 
@@ -104,28 +109,30 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
     }
 
 
-    private static string BuildDescription(SeoMetadataRequest request, IReadOnlyCollection<string> selectedObjects, IReadOnlyCollection<string> hashtags)
+    private static string BuildDescription(SeoMetadataRequest request, IReadOnlyCollection<string> selectedObjects, IReadOnlyCollection<string> hashtags, bool isHindi)
     {
         var lines = new List<string>
         {
-            $"Location: {request.LocationName}",
-            $"Date: {request.TargetDate:yyyy-MM-dd}",
+            isHindi ? $"स्थान: {request.LocationName}" : $"Location: {request.LocationName}",
+            isHindi ? $"तारीख: {request.TargetDate:yyyy-MM-dd}" : $"Date: {request.TargetDate:yyyy-MM-dd}",
             ""
         };
 
         foreach (var scene in request.SceneObservationContext.Where(s => selectedObjects.Contains(s.ObjectName, StringComparer.OrdinalIgnoreCase)))
         {
-            lines.Add($"- {scene.ObjectName}: {scene.LocalObservationTime:hh:mm tt} ({scene.Timezone}), direction {scene.DirectionLabel ?? "unknown"}, altitude {(scene.AltitudeDegrees?.ToString("F1") ?? "n/a")}°");
+            lines.Add(isHindi
+                ? $"- {scene.ObjectName}: {scene.LocalObservationTime:hh:mm tt} ({scene.Timezone}), दिशा {scene.DirectionLabel ?? "अज्ञात"}, ऊंचाई {(scene.AltitudeDegrees?.ToString("F1") ?? "n/a")}°"
+                : $"- {scene.ObjectName}: {scene.LocalObservationTime:hh:mm tt} ({scene.Timezone}), direction {scene.DirectionLabel ?? "unknown"}, altitude {(scene.AltitudeDegrees?.ToString("F1") ?? "n/a")}°");
         }
 
         lines.Add("");
         lines.Add(request.ContentType == ContentType.SpecialEventGuide
-            ? "Recommended tool: match the event guidance; use certified eclipse protection for any solar eclipse viewing."
-            : "Recommended tool: binoculars or naked eye depending on target brightness.");
-        lines.Add("Disclaimer: Visibility depends on weather and your local horizon.");
+            ? isHindi ? "अनुशंसित उपकरण: घटना की गाइड के अनुसार चलें; सूर्य ग्रहण के लिए प्रमाणित सुरक्षा उपकरण इस्तेमाल करें।" : "Recommended tool: match the event guidance; use certified eclipse protection for any solar eclipse viewing."
+            : isHindi ? "अनुशंसित उपकरण: लक्ष्य की चमक के अनुसार दूरबीन या नंगी आंख।" : "Recommended tool: binoculars or naked eye depending on target brightness.");
+        lines.Add(isHindi ? "नोट: दृश्यता मौसम और आपके स्थानीय क्षितिज पर निर्भर करती है।" : "Disclaimer: Visibility depends on weather and your local horizon.");
         if (request.ThumbnailVariants.Count > 0)
         {
-            lines.Add($"Thumbnail variants available: {request.ThumbnailVariants.Count}");
+            lines.Add(isHindi ? $"थंबनेल विकल्प उपलब्ध: {request.ThumbnailVariants.Count}" : $"Thumbnail variants available: {request.ThumbnailVariants.Count}");
         }
 
         lines.Add(string.Join(" ", hashtags));

@@ -10,6 +10,7 @@ public sealed class PipelineRun : EntityBase
     public string? RegionId { get; set; }
     public string LocationName { get; set; } = "";
     public string TimeZone { get; set; } = "Asia/Kolkata";
+    public string Language { get; set; } = "en";
     public PipelineRunStatus Status { get; set; } = PipelineRunStatus.Queued;
     public string? FailureReason { get; set; }
     public bool PublishToYouTube { get; set; }
@@ -100,6 +101,7 @@ public sealed class GeneratedScript : EntityBase
     public string? ThumbnailTextSuggestionsCsv { get; set; }
     public string? HookLine { get; set; }
     public string? PromptFeedbackContextJson { get; set; }
+    public string Language { get; set; } = "en";
 }
 
 public sealed class MediaAsset : EntityBase
@@ -183,6 +185,7 @@ public sealed class PipelineJob : EntityBase
     public string? RegionId { get; set; }
     public string LocationName { get; set; } = "";
     public string TimeZone { get; set; } = "Asia/Kolkata";
+    public string Language { get; set; } = "en";
     public bool PublishToYouTube { get; set; }
     public bool UseTopicPlanner { get; set; }
     public DateTimeOffset? NextAttemptAt { get; set; }

@@ -5,7 +5,7 @@ public enum PipelineRunStatus { Queued = 1, Running = 2, Succeeded = 3, Failed =
 public enum PipelineJobType { GenerateMainVideo = 1, GenerateShorts = 2, PublishVideo = 3, ArchiveAssets = 4 }
 public enum PipelineJobStatus { Pending = 1, Running = 2, Succeeded = 3, Failed = 4, Retrying = 5, Stale = 6 }
 
-public sealed record RunPipelineRequest(DateOnly Date, ContentType ContentType, string LocationName, string TimeZone = "Asia/Kolkata", bool PublishToYouTube = false, bool UseTopicPlanner = false, double? Latitude = null, double? Longitude = null, string? OverrideTimezone = null, string? OverrideLocationName = null, DateOnly? TargetDate = null, string? RegionId = null, string? EventId = null, string? EventType = null, string? EventTitle = null, string? EventDescription = null);
+public sealed record RunPipelineRequest(DateOnly Date, ContentType ContentType, string LocationName, string TimeZone = "Asia/Kolkata", bool PublishToYouTube = false, bool UseTopicPlanner = false, double? Latitude = null, double? Longitude = null, string? OverrideTimezone = null, string? OverrideLocationName = null, DateOnly? TargetDate = null, string? RegionId = null, string? EventId = null, string? EventType = null, string? EventTitle = null, string? EventDescription = null, string? Language = null);
 public sealed record RunPipelineResponse(Guid PipelineRunId, PipelineRunStatus Status, string Message);
 
 public sealed record EnqueuePipelineJobRequest(
@@ -17,7 +17,8 @@ public sealed record EnqueuePipelineJobRequest(
     bool PublishToYouTube = false,
     bool UseTopicPlanner = false,
     DateTimeOffset? ScheduledAt = null,
-    Guid? ParentPipelineRunId = null);
+    Guid? ParentPipelineRunId = null,
+    string? Language = null);
 
 public sealed class OperationsOptions
 {
@@ -101,6 +102,15 @@ public sealed class TopicSelectionOptions
 }
 
 
+public sealed class LocalizationOptions
+{
+    public const string SectionName = "Localization";
+    public bool Enabled { get; set; } = true;
+    public string DefaultLanguage { get; set; } = "en";
+    public List<string> SupportedLanguages { get; set; } = ["en", "hi"];
+    public string FallbackLanguage { get; set; } = "en";
+}
+
 public sealed class SchedulerOptions
 {
     public const string SectionName = "Scheduler";
@@ -123,6 +133,7 @@ public sealed class SchedulerScheduleOptions
     public string Timezone { get; set; } = "Asia/Kolkata";
     public string LocalRunTime { get; set; } = "18:00";
     public bool PublishEnabled { get; set; } = true;
+    public string Language { get; set; } = "en";
 }
 
 

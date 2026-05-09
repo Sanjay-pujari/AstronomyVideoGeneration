@@ -31,7 +31,8 @@ public sealed class PipelineJobQueue : IPipelineJobQueue
             LocationName = request.LocationName,
             TimeZone = request.TimeZone,
             PublishToYouTube = request.PublishToYouTube,
-            UseTopicPlanner = request.UseTopicPlanner
+            UseTopicPlanner = request.UseTopicPlanner,
+            Language = string.IsNullOrWhiteSpace(request.Language) ? "en" : request.Language
         };
 
         await _repository.AddJobAsync(job, cancellationToken);

@@ -136,6 +136,7 @@ public sealed class EfPipelineRepository : IPipelineRepository
         existing.DurationSeconds = analytics.DurationSeconds;
         existing.Hashtags = analytics.Hashtags;
         existing.RegionId = analytics.RegionId;
+        existing.Language = analytics.Language;
         existing.LocationName = analytics.LocationName;
         existing.TargetDate = analytics.TargetDate;
         existing.ContentCategory = analytics.ContentCategory;

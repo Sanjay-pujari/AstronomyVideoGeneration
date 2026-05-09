@@ -248,6 +248,7 @@ public sealed class RunOperationsService : IRunOperationsService
                 throw new InvalidOperationException("Cannot regenerate shorts because the original visual assets are missing.");
 
             var context = await _contextProvider.BuildContextAsync(run.RunDate, run.ContentType, run.LocationName, run.TimeZone, cancellationToken);
+            context.Localization = LocalizationResolver.Resolve(run.Language);
             var outputDirectory = Path.Combine(_maintenanceOptions.WorkingDirectory, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"), "shorts-recovery");
             Directory.CreateDirectory(outputDirectory);
             var shortResult = await _shortsVideoRenderService.RenderAsync(run.ContentType, context, visuals, outputDirectory, request.PublishToYouTube, cancellationToken);
@@ -285,7 +286,8 @@ public sealed class RunOperationsService : IRunOperationsService
                     Tags = shortResult.Script.OptimizedMetadata?.Tags ?? shortResult.Script.Tags,
                     Hashtags = shortResult.Script.OptimizedMetadata?.Hashtags ?? [],
                     VideoPath = shortResult.VideoPath,
-                    ThumbnailPath = publishedVideo.ThumbnailPath
+                    ThumbnailPath = publishedVideo.ThumbnailPath,
+                    Language = run.Language
                 }, cancellationToken);
 
                 foreach (var publication in publicationResults)
@@ -327,6 +329,7 @@ public sealed class RunOperationsService : IRunOperationsService
                 ?? throw new InvalidOperationException("Cannot rerun metadata optimization because no generated script exists for the run.");
 
             var context = await _contextProvider.BuildContextAsync(run.RunDate, run.ContentType, run.LocationName, run.TimeZone, cancellationToken);
+            context.Localization = LocalizationResolver.Resolve(run.Language);
             var optimized = await _metadataOptimizationService.OptimizeForVideoAsync(new MetadataOptimizationInput
             {
                 ContentType = run.ContentType,
@@ -504,7 +507,8 @@ public sealed class RunOperationsService : IRunOperationsService
             ContentType = run.ContentType,
             LocationName = run.LocationName,
             TimeZone = run.TimeZone,
-            PublishToYouTube = run.PublishToYouTube
+            PublishToYouTube = run.PublishToYouTube,
+            Language = run.Language
         }, cancellationToken);
     }
 

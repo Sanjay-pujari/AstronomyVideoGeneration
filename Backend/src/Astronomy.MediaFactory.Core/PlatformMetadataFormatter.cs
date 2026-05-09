@@ -50,7 +50,7 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
     {
         var platformHashtags = EnsureHashtag(SelectHashtags(hashtags, minCount: 3, maxCount: 5), "Shorts");
         var titleLikeLine = FirstNonEmpty(LimitAtWordBoundary(normalizedHook, 70), LimitAtWordBoundary(normalizedTitle, YouTubeTitleLimit));
-        var cta = BuildYouTubeCta(normalizedCaptionBody);
+        var cta = BuildYouTubeCta(normalizedCaptionBody, request.Language);
         var caption = YouTubeShortsValidation.EnsureShortsMarkerInDescription(
             normalizedTitle,
             BuildCaption(
@@ -88,7 +88,7 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
             "\n\n",
             hookLine,
             bodyParagraph,
-            "Save this for tonight.",
+            LocalizationResolver.IsHindi(request.Language) ? "आज रात के लिए सेव करें।" : "Save this for tonight.",
             string.Join(' ', platformHashtags));
 
         return new PlatformPublicationTarget
@@ -122,7 +122,7 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
             "\n\n",
             openingLine,
             descriptiveBody,
-            "Follow for more night-sky updates and share this with your stargazing crew.",
+            LocalizationResolver.IsHindi(request.Language) ? "रात के आसमान की और अपडेट्स के लिए फॉलो करें और इसे अपने दोस्तों के साथ साझा करें।" : "Follow for more night-sky updates and share this with your stargazing crew.",
             hashtagLine);
 
         return new PlatformPublicationTarget
@@ -138,11 +138,16 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
         };
     }
 
-    private static string BuildYouTubeCta(string captionBody)
+    private static string BuildYouTubeCta(string captionBody, string language)
     {
         if (string.IsNullOrWhiteSpace(captionBody))
         {
             return string.Empty;
+        }
+
+        if (LocalizationResolver.IsHindi(language))
+        {
+            return "आज रात आसमान देखें।";
         }
 
         return captionBody.Contains("tonight", StringComparison.OrdinalIgnoreCase)

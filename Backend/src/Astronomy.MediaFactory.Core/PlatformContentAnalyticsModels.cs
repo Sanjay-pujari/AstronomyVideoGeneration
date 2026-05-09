@@ -25,6 +25,7 @@ public sealed class PlatformContentAnalytics : Common.EntityBase
     public int? DurationSeconds { get; set; }
     public string? Hashtags { get; set; }
     public string? RegionId { get; set; }
+    public string? Language { get; set; }
     public string? LocationName { get; set; }
     public DateOnly? TargetDate { get; set; }
     public ContentType? ContentCategory { get; set; }
@@ -52,6 +53,7 @@ public sealed record PlatformAnalyticsCollectionContext(
     int? DurationSeconds,
     string? Hashtags,
     string? RegionId,
+    string? Language,
     string? LocationName,
     DateOnly? TargetDate,
     ContentType? ContentCategory,

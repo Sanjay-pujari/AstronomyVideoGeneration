@@ -70,6 +70,7 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
                     {
                         var analytics = await collector.CollectAsync(context, cancellationToken);
                         analytics.RegionId = context.RegionId;
+                        analytics.Language = context.Language;
                         analytics.LocationName ??= context.LocationName;
                         await _repository.UpsertPlatformContentAnalyticsAsync(analytics, cancellationToken);
                         if (analytics.IsAnalyticsAvailable) success++; else failures++;
@@ -92,6 +93,7 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
                             DurationSeconds = context.DurationSeconds,
                             Hashtags = context.Hashtags,
                             RegionId = context.RegionId,
+                            Language = context.Language,
                             LocationName = context.LocationName,
                             TargetDate = context.TargetDate,
                             ContentCategory = context.ContentCategory,
@@ -160,7 +162,7 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
     }
 
     private static PlatformAnalyticsCollectionContext Build(PipelineRun run, string platform, string contentType, string mediaId, string? url, string? title, DateTimeOffset? publishedUtc, int? duration, GeneratedScript? script, string? thumbnailPath, string? outputDirectory)
-        => new(run.Id, platform, contentType, mediaId, url, title ?? script?.Title, publishedUtc, duration ?? script?.EstimatedDurationSeconds, script?.OptimizedHashtagsCsv ?? script?.TagsCsv, run.RegionId, run.LocationName, run.RunDate, run.ContentType, thumbnailPath, outputDirectory);
+        => new(run.Id, platform, contentType, mediaId, url, title ?? script?.Title, publishedUtc, duration ?? script?.EstimatedDurationSeconds, script?.OptimizedHashtagsCsv ?? script?.TagsCsv, run.RegionId, run.Language, run.LocationName, run.RunDate, run.ContentType, thumbnailPath, outputDirectory);
 
     private static void AddJsonContext(List<PlatformAnalyticsCollectionContext> contexts, PipelineRun run, string outputDirectory, string fileName, string platform, string contentType, GeneratedScript? script)
     {

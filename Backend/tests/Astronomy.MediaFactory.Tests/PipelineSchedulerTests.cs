@@ -174,6 +174,19 @@ public sealed class PipelineSchedulerTests
         Assert.DoesNotContain(harness.Executor.CompletedRuns, x => x.RegionId == "australia-sydney");
     }
 
+
+    [Fact]
+    public async Task Scheduler_Passes_Region_Language_To_Pipeline_Request()
+    {
+        var harness = new SchedulerHarness(CreateRegionOptions(
+            Region("india-udaipur", "Udaipur, India", "UTC", enabled: true, language: "hi")));
+
+        await harness.CreateScheduler().EvaluateSchedulesAsync(CancellationToken.None);
+        await WaitForAsync(() => harness.Executor.CompletedRuns.Count == 1);
+
+        Assert.Equal("hi", harness.Executor.CompletedRuns.Single().Language);
+    }
+
     [Fact]
     public async Task Region_Timezone_Conversion_Uses_Each_Region_Timezone()
     {
@@ -373,7 +386,7 @@ public sealed class PipelineSchedulerTests
             Regions = new RegionSchedulingOptions { Enabled = true, Items = regions.ToList() }
         };
 
-    private static RegionScheduleOptions Region(string id, string name, string timezone, bool enabled)
+    private static RegionScheduleOptions Region(string id, string name, string timezone, bool enabled, string language = "en")
         => new()
         {
             RegionId = id,
@@ -382,7 +395,7 @@ public sealed class PipelineSchedulerTests
             Longitude = 0,
             Timezone = timezone,
             LocalRunTime = "00:00",
-            Language = "en",
+            Language = language,
             Enabled = enabled
         };
 
@@ -520,7 +533,7 @@ public sealed class PipelineSchedulerTests
                 await hold.Task.WaitAsync(cancellationToken);
             }
 
-            var run = new PipelineRun { RunDate = request.Date, ContentType = request.ContentType, RegionId = request.RegionId, LocationName = request.LocationName, TimeZone = request.TimeZone, UseTopicPlanner = request.UseTopicPlanner, Status = PipelineRunStatus.Succeeded, OutputFolder = OutputFolder, EventId = request.EventId, EventType = request.EventType, EventTitle = request.EventTitle, EventDescription = request.EventDescription };
+            var run = new PipelineRun { RunDate = request.Date, ContentType = request.ContentType, RegionId = request.RegionId, LocationName = request.LocationName, TimeZone = request.TimeZone, Language = request.Language ?? "en", UseTopicPlanner = request.UseTopicPlanner, Status = PipelineRunStatus.Succeeded, OutputFolder = OutputFolder, EventId = request.EventId, EventType = request.EventType, EventTitle = request.EventTitle, EventDescription = request.EventDescription };
             CompletedRuns.Add(run);
             return run;
         }
