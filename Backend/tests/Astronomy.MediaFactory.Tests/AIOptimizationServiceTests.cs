@@ -119,7 +119,6 @@ public sealed class AIOptimizationServiceTests
     private static IReadOnlyCollection<PlatformContentAnalytics> CreateAnalytics(int count)
         => Enumerable.Range(0, count).Select(i => new PlatformContentAnalytics
         {
-            Id = Guid.NewGuid(),
             Platform = "YouTube",
             PlatformContentType = "Shorts",
             PlatformMediaId = $"video-{i}",
@@ -201,7 +200,7 @@ public sealed class AIOptimizationServiceTests
         public Task<IReadOnlyCollection<PlatformContentAnalytics>> GetPlatformContentAnalyticsAsync(PlatformAnalyticsQuery query, CancellationToken cancellationToken) => Task.FromResult(Analytics);
         public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken) { CreateCalled = true; return Task.FromResult(run); }
         public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineRun?>(null);
-        public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([new PipelineRun { Id = Guid.NewGuid(), RunDate = new DateOnly(2026, 5, 9), ContentType = ContentType.DailySkyGuide, LocationName = "Udaipur, India", Status = PipelineRunStatus.Succeeded }]);
+        public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([new PipelineRun { RunDate = new DateOnly(2026, 5, 9), ContentType = ContentType.DailySkyGuide, LocationName = "Udaipur, India", Status = PipelineRunStatus.Succeeded }]);
         public Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
         public Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken) => Task.CompletedTask;
