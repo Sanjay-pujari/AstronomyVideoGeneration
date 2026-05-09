@@ -68,8 +68,7 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
                     continue;
 
                 var optimized = await BuildOptimizedRequestAsync(options.DefaultContentType, schedule, planned.TargetDate, cancellationToken);
-                await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, planned.PlannedRunUtc, Force: false, optimized.Plan, optimized.OriginalRequest, optimized.AIProfile), cancellationToken);
-                await EnqueueSpecialEventRunsAsync(schedule, planned.TargetDate, planned.PlannedRunUtc, force: false, cancellationToken);
+                await EnqueuePlannedRunsAsync(schedule, planned.TargetDate, planned.PlannedRunUtc, false, optimized, cancellationToken);
             }
         }
         finally
@@ -119,9 +118,7 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         var targetDate = GetLocalDate(schedule, nowUtc);
         var optimized = await BuildOptimizedRequestAsync(options.DefaultContentType, schedule, targetDate, cancellationToken);
         _logger.LogInformation("Scheduler run-now requested for {ScheduleName} on {TargetDate}; force={Force}", schedule.Name, targetDate, force);
-        var result = await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, nowUtc, force, optimized.Plan, optimized.OriginalRequest, optimized.AIProfile), cancellationToken);
-        await EnqueueSpecialEventRunsAsync(schedule, targetDate, nowUtc, force, cancellationToken);
-        return result;
+        return await EnqueuePlannedRunsAsync(schedule, targetDate, nowUtc, force, optimized, cancellationToken);
     }
 
     public async Task<RegionStatusResponse> GetRegionsAsync(CancellationToken cancellationToken)
@@ -212,36 +209,159 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
     }
 
 
-    private async Task EnqueueSpecialEventRunsAsync(SchedulerScheduleOptions schedule, DateOnly targetDate, DateTimeOffset plannedRunUtc, bool force, CancellationToken cancellationToken)
+    public async Task<SchedulerEventPlanResponse> GetEventPlanAsync(string regionId, DateOnly targetDate, CancellationToken cancellationToken)
+    {
+        var schedule = FindRegionSchedule(regionId)
+            ?? GetEffectiveSchedules(_options.CurrentValue).FirstOrDefault(x => string.Equals(Slugify(x.RegionId ?? x.LocationName), Slugify(regionId), StringComparison.OrdinalIgnoreCase));
+        if (schedule is null)
+        {
+            return new SchedulerEventPlanResponse(Slugify(regionId), targetDate, false, [], [], [$"Region '{regionId}' was not found."]);
+        }
+
+        return await BuildEventPlanAsync(schedule, targetDate, cancellationToken);
+    }
+
+    private async Task<SchedulerRunResult> EnqueuePlannedRunsAsync(
+        SchedulerScheduleOptions schedule,
+        DateOnly targetDate,
+        DateTimeOffset plannedRunUtc,
+        bool force,
+        (RunPipelineRequest Request, OptimizationPlan? Plan, RunPipelineRequest? OriginalRequest, AIOptimizationAppliedProfile? AIProfile) optimized,
+        CancellationToken cancellationToken)
+    {
+        var eventPlan = await BuildEventPlanAsync(schedule, targetDate, cancellationToken);
+        var dailyItem = new SchedulerRunQueueItem(schedule.Name, optimized.Request, plannedRunUtc, force, optimized.Plan, optimized.OriginalRequest, optimized.AIProfile, eventPlan);
+        var eventItems = eventPlan.SpecialEventsPlanned
+            .Select(plannedEvent =>
+            {
+                var astronomyEvent = _lastPlannedEvents.TryGetValue(plannedEvent.EventId, out var cached) ? cached : null;
+                var request = BuildSpecialEventRequest(schedule, targetDate, plannedEvent, astronomyEvent);
+                return new SchedulerRunQueueItem($"{schedule.Name} special event", request, plannedRunUtc, force, EventPlan: eventPlan);
+            })
+            .ToArray();
+
+        SchedulerRunResult dailyResult;
+        if (_astronomyEventsOptions.CurrentValue.RunSpecialEventsBeforeDailyGuide)
+        {
+            foreach (var item in eventItems)
+                await _queue.EnqueueAsync(item, cancellationToken);
+            dailyResult = await _queue.EnqueueAsync(dailyItem, cancellationToken);
+        }
+        else
+        {
+            dailyResult = await _queue.EnqueueAsync(dailyItem, cancellationToken);
+            foreach (var item in eventItems)
+                await _queue.EnqueueAsync(item, cancellationToken);
+        }
+
+        return dailyResult;
+    }
+
+    private readonly ConcurrentDictionary<string, AstronomyEvent> _lastPlannedEvents = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task<SchedulerEventPlanResponse> BuildEventPlanAsync(SchedulerScheduleOptions schedule, DateOnly targetDate, CancellationToken cancellationToken)
     {
         var eventOptions = _astronomyEventsOptions.CurrentValue;
-        if (!eventOptions.EnableSpecialEventVideos || eventOptions.MaxSpecialEventVideosPerDay <= 0)
-            return;
+        var regionId = Slugify(schedule.RegionId ?? schedule.LocationName);
+        var reasons = new List<string> { $"DailySkyGuide planned for {regionId} on {targetDate:yyyy-MM-dd}." };
+        var planned = new List<SchedulerSpecialEventPlanItem>();
+        var skipped = new List<SchedulerSkippedEventPlanItem>();
+
+        if (!eventOptions.EnableSpecialEventVideos)
+        {
+            reasons.Add("Special event videos are disabled.");
+            return new SchedulerEventPlanResponse(regionId, targetDate, true, planned, skipped, reasons);
+        }
+
+        if (eventOptions.MaxSpecialEventVideosPerDay <= 0)
+        {
+            reasons.Add("MaxSpecialEventVideosPerDay is 0; no special event videos will be queued.");
+            return new SchedulerEventPlanResponse(regionId, targetDate, true, planned, skipped, reasons);
+        }
 
         using var scope = _scopeFactory.CreateScope();
         var discovery = scope.ServiceProvider.GetRequiredService<IAstronomyEventDiscoveryService>();
-        var events = await discovery.GetTopAsync(eventOptions.LookAheadDays, cancellationToken);
-        var selectedEvents = events
-            .Where(e => e.ContentOpportunityScore >= eventOptions.SpecialEventScoreThreshold)
+        var events = (await discovery.GetTopAsync(eventOptions.LookAheadDays, cancellationToken))
+            .Where(e => IsEventOnDate(e, targetDate))
+            .Where(e => IsVisibleInRegion(e, regionId))
             .Where(IsSupportedSpecialEventType)
             .OrderByDescending(e => e.ContentOpportunityScore)
             .ThenBy(e => e.PeakUtc ?? e.StartUtc)
-            .Take(eventOptions.MaxSpecialEventVideosPerDay)
             .ToArray();
 
-        foreach (var astronomyEvent in selectedEvents)
+        if (events.Length == 0)
+            reasons.Add("No supported astronomy events found for the requested region/date.");
+
+        foreach (var astronomyEvent in events)
         {
-            var request = BuildRequest(ContentType.SpecialEventGuide, schedule, targetDate) with
+            var duplicate = await HasSpecialEventDuplicateAsync(astronomyEvent.EventId, targetDate, regionId, ContentType.SpecialEventGuide, cancellationToken);
+            var score = astronomyEvent.ContentOpportunityScore;
+            if (score < eventOptions.SpecialEventScoreThreshold)
             {
-                EventId = astronomyEvent.EventId,
-                EventType = astronomyEvent.EventType,
-                EventTitle = astronomyEvent.Title,
-                EventDescription = astronomyEvent.Description,
-                UseTopicPlanner = false
-            };
-            await _queue.EnqueueAsync(new SchedulerRunQueueItem($"{schedule.Name} special event", request, plannedRunUtc, force), cancellationToken);
+                skipped.Add(ToSkipped(astronomyEvent, $"Score {score:0.00} is below threshold {eventOptions.SpecialEventScoreThreshold:0.00}."));
+                continue;
+            }
+
+            if (duplicate)
+            {
+                skipped.Add(ToSkipped(astronomyEvent, "Duplicate event video already exists for eventId + targetDate + regionId + contentType."));
+                continue;
+            }
+
+            if (planned.Count >= eventOptions.MaxSpecialEventVideosPerDay)
+            {
+                skipped.Add(ToSkipped(astronomyEvent, $"MaxSpecialEventVideosPerDay limit of {eventOptions.MaxSpecialEventVideosPerDay} reached."));
+                continue;
+            }
+
+            _lastPlannedEvents[astronomyEvent.EventId] = astronomyEvent;
+            planned.Add(new SchedulerSpecialEventPlanItem(astronomyEvent.EventId, astronomyEvent.EventType, astronomyEvent.Title, score, ContentType.SpecialEventGuide, astronomyEvent.PeakUtc, $"Score {score:0.00} meets threshold {eventOptions.SpecialEventScoreThreshold:0.00}."));
         }
+
+        reasons.Add(planned.Count == 0 ? "No SpecialEventGuide runs planned." : $"{planned.Count} SpecialEventGuide run(s) planned.");
+        return new SchedulerEventPlanResponse(regionId, targetDate, true, planned, skipped, reasons);
     }
+
+    private async Task<bool> HasSpecialEventDuplicateAsync(string eventId, DateOnly targetDate, string regionId, ContentType contentType, CancellationToken cancellationToken)
+    {
+        var auditRuns = await _auditStore.GetRunsAsync(cancellationToken);
+        if (auditRuns.Any(x => x.TargetDate == targetDate
+            && x.ContentType == contentType
+            && string.Equals(x.EventId, eventId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Slugify(x.RegionId ?? x.LocationName), regionId, StringComparison.OrdinalIgnoreCase)
+            && x.Status is "Created" or "Running" or "Completed" or "Publishing" or "Recoverable"))
+            return true;
+
+        using var scope = _scopeFactory.CreateScope();
+        var repository = scope.ServiceProvider.GetRequiredService<IPipelineRepository>();
+        return await repository.HasSpecialEventRunAsync(eventId, targetDate, regionId, contentType, [PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded], cancellationToken);
+    }
+
+    private static SchedulerSkippedEventPlanItem ToSkipped(AstronomyEvent astronomyEvent, string reason)
+        => new(astronomyEvent.EventId, astronomyEvent.EventType, astronomyEvent.Title, astronomyEvent.ContentOpportunityScore, ContentType.SpecialEventGuide, reason);
+
+    private static RunPipelineRequest BuildSpecialEventRequest(SchedulerScheduleOptions schedule, DateOnly targetDate, SchedulerSpecialEventPlanItem plannedEvent, AstronomyEvent? astronomyEvent)
+        => BuildRequest(ContentType.SpecialEventGuide, schedule, targetDate) with
+        {
+            EventId = plannedEvent.EventId,
+            EventType = plannedEvent.EventType,
+            EventTitle = plannedEvent.Title,
+            EventDescription = astronomyEvent?.Description,
+            UseTopicPlanner = false
+        };
+
+    private static bool IsEventOnDate(AstronomyEvent astronomyEvent, DateOnly targetDate)
+    {
+        var peakDate = astronomyEvent.PeakUtc is null ? (DateOnly?)null : DateOnly.FromDateTime(astronomyEvent.PeakUtc.Value.UtcDateTime);
+        return peakDate == targetDate
+            || DateOnly.FromDateTime(astronomyEvent.StartUtc.UtcDateTime) == targetDate
+            || DateOnly.FromDateTime(astronomyEvent.EndUtc.UtcDateTime) == targetDate;
+    }
+
+    private static bool IsVisibleInRegion(AstronomyEvent astronomyEvent, string regionId)
+        => astronomyEvent.GlobalVisibility
+            || astronomyEvent.VisibilityRegions.Length == 0
+            || astronomyEvent.VisibilityRegions.Any(region => string.Equals(Slugify(region), regionId, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsSupportedSpecialEventType(AstronomyEvent astronomyEvent)
     {

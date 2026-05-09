@@ -27,7 +27,8 @@ public sealed record SchedulerRunQueueItem(
     bool Force,
     OptimizationPlan? OptimizationPlan = null,
     RunPipelineRequest? OriginalRequest = null,
-    AIOptimizationAppliedProfile? AIOptimizationProfile = null);
+    AIOptimizationAppliedProfile? AIOptimizationProfile = null,
+    SchedulerEventPlanResponse? EventPlan = null);
 
 public sealed record SchedulerRunResult(
     bool Accepted,
@@ -81,3 +82,29 @@ public sealed record RegionBreakdownItem(
     int Runs,
     long Views,
     int Failures);
+
+
+public sealed record SchedulerEventPlanResponse(
+    string RegionId,
+    DateOnly TargetDate,
+    bool DailyGuidePlanned,
+    IReadOnlyCollection<SchedulerSpecialEventPlanItem> SpecialEventsPlanned,
+    IReadOnlyCollection<SchedulerSkippedEventPlanItem> SkippedEvents,
+    IReadOnlyCollection<string> Reasons);
+
+public sealed record SchedulerSpecialEventPlanItem(
+    string EventId,
+    string EventType,
+    string Title,
+    double Score,
+    ContentType ContentType,
+    DateTimeOffset? PeakUtc,
+    string Reason);
+
+public sealed record SchedulerSkippedEventPlanItem(
+    string EventId,
+    string EventType,
+    string Title,
+    double Score,
+    ContentType ContentType,
+    string Reason);

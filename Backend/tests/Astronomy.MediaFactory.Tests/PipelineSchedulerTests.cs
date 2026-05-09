@@ -209,6 +209,107 @@ public sealed class PipelineSchedulerTests
         Assert.Equal("usa-new-york", harness.Executor.CompletedRuns.Single().RegionId);
     }
 
+
+    [Fact]
+    public async Task High_Score_Event_Creates_SpecialEventGuide()
+    {
+        var harness = new SchedulerHarness(CreateOptions(enabled: true, schedules: [DueUtcSchedule()]))
+        {
+            EventOptions = SpecialEventOptions(),
+            Events = [Event("perseids", 0.95)]
+        };
+
+        await harness.CreateScheduler().EvaluateSchedulesAsync(CancellationToken.None);
+        await WaitForAsync(() => harness.Executor.CompletedRuns.Count == 2);
+
+        Assert.Contains(harness.Executor.CompletedRuns, x => x.ContentType == ContentType.DailySkyGuide);
+        Assert.Contains(harness.Executor.CompletedRuns, x => x.ContentType == ContentType.SpecialEventGuide && x.EventId == "perseids");
+    }
+
+    [Fact]
+    public async Task Low_Score_Event_Is_Skipped()
+    {
+        var harness = new SchedulerHarness(CreateOptions(enabled: true, schedules: [DueUtcSchedule()]))
+        {
+            EventOptions = SpecialEventOptions(),
+            Events = [Event("weak-meteor", 0.5)]
+        };
+
+        var plan = await harness.CreateScheduler().GetEventPlanAsync("UTC", DateOnly.FromDateTime(DateTime.UtcNow), CancellationToken.None);
+
+        Assert.Empty(plan.SpecialEventsPlanned);
+        Assert.Contains(plan.SkippedEvents, x => x.EventId == "weak-meteor" && x.Reason.Contains("below threshold", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Duplicate_Event_Is_Skipped_By_Event_Date_Region_And_ContentType()
+    {
+        var schedule = DueUtcSchedule();
+        var targetDate = DateOnly.FromDateTime(DateTime.UtcNow);
+        var harness = new SchedulerHarness(CreateOptions(enabled: true, schedules: [schedule]))
+        {
+            EventOptions = SpecialEventOptions(),
+            Events = [Event("perseids", 0.95)]
+        };
+        await harness.Audit.UpsertAsync(new SchedulerRunRecord("utc", "UTC Daily special event", ContentType.SpecialEventGuide, targetDate, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, Guid.NewGuid(), "Completed", null, schedule.LocationName, schedule.Timezone, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "perseids", "meteor_shower", "Perseids"), CancellationToken.None);
+
+        var plan = await harness.CreateScheduler().GetEventPlanAsync("UTC", targetDate, CancellationToken.None);
+
+        Assert.Empty(plan.SpecialEventsPlanned);
+        Assert.Contains(plan.SkippedEvents, x => x.EventId == "perseids" && x.Reason.Contains("eventId + targetDate + regionId + contentType", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task MaxSpecialEventVideosPerDay_Is_Enforced()
+    {
+        var options = SpecialEventOptions();
+        options.MaxSpecialEventVideosPerDay = 2;
+        var harness = new SchedulerHarness(CreateOptions(enabled: true, schedules: [DueUtcSchedule()]))
+        {
+            EventOptions = options,
+            Events = [Event("meteor-1", 0.95), Event("meteor-2", 0.94), Event("meteor-3", 0.93)]
+        };
+
+        var plan = await harness.CreateScheduler().GetEventPlanAsync("UTC", DateOnly.FromDateTime(DateTime.UtcNow), CancellationToken.None);
+
+        Assert.Equal(2, plan.SpecialEventsPlanned.Count);
+        Assert.Contains(plan.SkippedEvents, x => x.EventId == "meteor-3" && x.Reason.Contains("MaxSpecialEventVideosPerDay", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task DailySkyGuide_Still_Runs_With_SpecialEventGuide()
+    {
+        var harness = new SchedulerHarness(CreateOptions(enabled: true, schedules: [DueUtcSchedule()]))
+        {
+            EventOptions = SpecialEventOptions(),
+            Events = [Event("perseids", 0.95)]
+        };
+
+        await harness.CreateScheduler().EvaluateSchedulesAsync(CancellationToken.None);
+        await WaitForAsync(() => harness.Executor.CompletedRuns.Count == 2);
+
+        Assert.Single(harness.Executor.CompletedRuns.Where(x => x.ContentType == ContentType.DailySkyGuide));
+        Assert.Single(harness.Executor.CompletedRuns.Where(x => x.ContentType == ContentType.SpecialEventGuide));
+    }
+
+    [Fact]
+    public async Task Special_Event_Priority_Config_Is_Respected()
+    {
+        var eventOptions = SpecialEventOptions();
+        eventOptions.RunSpecialEventsBeforeDailyGuide = true;
+        var harness = new SchedulerHarness(CreateOptions(enabled: true, maxConcurrentRuns: 1, schedules: [DueUtcSchedule()]))
+        {
+            EventOptions = eventOptions,
+            Events = [Event("perseids", 0.95)]
+        };
+
+        await harness.CreateScheduler().EvaluateSchedulesAsync(CancellationToken.None);
+        await WaitForAsync(() => harness.Executor.CompletedRuns.Count == 2);
+
+        Assert.Equal(ContentType.SpecialEventGuide, harness.Executor.CompletedRuns[0].ContentType);
+        Assert.Equal(ContentType.DailySkyGuide, harness.Executor.CompletedRuns[1].ContentType);
+    }
+
     [Fact]
     public void Output_Path_Includes_Region_Id()
     {
@@ -232,6 +333,34 @@ public sealed class PipelineSchedulerTests
             PublishEnabled = true
         };
 
+
+
+    private static AstronomyEvent Event(string eventId, double score)
+    {
+        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        var start = new DateTimeOffset(date.ToDateTime(TimeOnly.FromTimeSpan(TimeSpan.FromHours(20))), TimeSpan.Zero);
+        return new AstronomyEvent
+        {
+            EventId = eventId,
+            EventType = "meteor_shower",
+            Title = "Perseids meteor shower",
+            Description = "A high-value meteor shower event.",
+            StartUtc = start,
+            PeakUtc = start.AddHours(1),
+            EndUtc = start.AddHours(2),
+            GlobalVisibility = true,
+            ContentOpportunityScore = score
+        };
+    }
+
+    private static AstronomyEventsOptions SpecialEventOptions()
+        => new()
+        {
+            EnableSpecialEventVideos = true,
+            SpecialEventScoreThreshold = 0.70,
+            MaxSpecialEventVideosPerDay = 2,
+            RunSpecialEventsBeforeDailyGuide = false
+        };
 
     private static SchedulerOptions CreateRegionOptions(params RegionScheduleOptions[] regions)
         => new()
@@ -280,7 +409,8 @@ public sealed class PipelineSchedulerTests
     {
         private readonly TestOptionsMonitor<SchedulerOptions> _options;
         private readonly TestOptionsMonitor<OptimizationOptions> _optimizationOptions = new(new OptimizationOptions { Enabled = false, Mode = OptimizationMode.Disabled });
-        private readonly TestOptionsMonitor<AstronomyEventsOptions> _astronomyEventsOptions = new(new AstronomyEventsOptions { EnableSpecialEventVideos = false });
+        public AstronomyEventsOptions EventOptions { get; init; } = new() { EnableSpecialEventVideos = false };
+        public IReadOnlyCollection<AstronomyEvent> Events { get; init; } = [];
         public InMemoryAuditStore Audit { get; } = new();
         public FakeRepository Repository { get; } = new();
         public FakeExecutor Executor { get; init; } = new();
@@ -304,9 +434,9 @@ public sealed class PipelineSchedulerTests
             var services = new ServiceCollection();
             services.AddSingleton<IPipelineRepository>(Repository);
             services.AddSingleton<IPipelineRunExecutor>(Executor);
-            services.AddSingleton<IAstronomyEventDiscoveryService, FakeAstronomyEventDiscoveryService>();
+            services.AddSingleton<IAstronomyEventDiscoveryService>(new FakeAstronomyEventDiscoveryService(Events));
             var serviceProvider = services.BuildServiceProvider();
-            return new PipelineSchedulerService(_options, CreateQueue(), Audit, _optimizationOptions, _astronomyEventsOptions, serviceProvider.GetRequiredService<IServiceScopeFactory>(), NullLogger<PipelineSchedulerService>.Instance);
+            return new PipelineSchedulerService(_options, CreateQueue(), Audit, _optimizationOptions, new TestOptionsMonitor<AstronomyEventsOptions>(EventOptions), serviceProvider.GetRequiredService<IServiceScopeFactory>(), NullLogger<PipelineSchedulerService>.Instance);
         }
     }
 
@@ -322,9 +452,9 @@ public sealed class PipelineSchedulerTests
 
         public Task UpsertAsync(SchedulerRunRecord record, CancellationToken cancellationToken)
         {
-            Runs.RemoveAll(x => x.Status == record.Status && x.ScheduleName == record.ScheduleName && x.TargetDate == record.TargetDate && x.ContentType == record.ContentType && x.RegionId == record.RegionId && x.PlannedRunUtc == record.PlannedRunUtc);
+            Runs.RemoveAll(x => x.Status == record.Status && x.ScheduleName == record.ScheduleName && x.TargetDate == record.TargetDate && x.ContentType == record.ContentType && x.RegionId == record.RegionId && x.EventId == record.EventId && x.PlannedRunUtc == record.PlannedRunUtc);
             if (record.Status != "Skipped")
-                Runs.RemoveAll(x => x.Status != "Skipped" && x.ScheduleName == record.ScheduleName && x.TargetDate == record.TargetDate && x.ContentType == record.ContentType && x.RegionId == record.RegionId);
+                Runs.RemoveAll(x => x.Status != "Skipped" && x.ScheduleName == record.ScheduleName && x.TargetDate == record.TargetDate && x.ContentType == record.ContentType && x.RegionId == record.RegionId && x.EventId == record.EventId);
             Runs.Add(record);
             return Task.CompletedTask;
         }
@@ -337,7 +467,7 @@ public sealed class PipelineSchedulerTests
         public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineRun?>(null);
         public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
         public Task<IReadOnlyCollection<PipelineRun>> GetGeneratedSpecialEventRunsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
-        public Task<bool> HasSpecialEventRunAsync(string eventId, DateOnly runDate, string regionId, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken) => Task.FromResult(HasDuplicate);
+        public Task<bool> HasSpecialEventRunAsync(string eventId, DateOnly runDate, string regionId, ContentType contentType, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken) => Task.FromResult(HasDuplicate);
         public Task<bool> HasPipelineRunAsync(DateOnly runDate, ContentType contentType, string locationName, string timeZone, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken) => Task.FromResult(HasDuplicate);
         public Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
@@ -366,10 +496,12 @@ public sealed class PipelineSchedulerTests
 
     private sealed class FakeAstronomyEventDiscoveryService : IAstronomyEventDiscoveryService
     {
-        public Task<IReadOnlyCollection<AstronomyEvent>> RefreshAsync(int? days, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<AstronomyEvent>>([]);
-        public Task<IReadOnlyCollection<AstronomyEvent>> GetUpcomingAsync(int? days, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<AstronomyEvent>>([]);
-        public Task<IReadOnlyCollection<AstronomyEvent>> GetTopAsync(int? days, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<AstronomyEvent>>([]);
-        public Task<AstronomyEvent?> GetByIdAsync(string eventId, CancellationToken cancellationToken) => Task.FromResult<AstronomyEvent?>(null);
+        private readonly IReadOnlyCollection<AstronomyEvent> _events;
+        public FakeAstronomyEventDiscoveryService(IReadOnlyCollection<AstronomyEvent> events) => _events = events;
+        public Task<IReadOnlyCollection<AstronomyEvent>> RefreshAsync(int? days, CancellationToken cancellationToken) => Task.FromResult(_events);
+        public Task<IReadOnlyCollection<AstronomyEvent>> GetUpcomingAsync(int? days, CancellationToken cancellationToken) => Task.FromResult(_events);
+        public Task<IReadOnlyCollection<AstronomyEvent>> GetTopAsync(int? days, CancellationToken cancellationToken) => Task.FromResult(_events);
+        public Task<AstronomyEvent?> GetByIdAsync(string eventId, CancellationToken cancellationToken) => Task.FromResult(_events.FirstOrDefault(x => x.EventId == eventId));
     }
 
     private sealed class FakeExecutor : IPipelineRunExecutor
@@ -388,7 +520,7 @@ public sealed class PipelineSchedulerTests
                 await hold.Task.WaitAsync(cancellationToken);
             }
 
-            var run = new PipelineRun { RunDate = request.Date, ContentType = request.ContentType, RegionId = request.RegionId, LocationName = request.LocationName, TimeZone = request.TimeZone, UseTopicPlanner = request.UseTopicPlanner, Status = PipelineRunStatus.Succeeded, OutputFolder = OutputFolder };
+            var run = new PipelineRun { RunDate = request.Date, ContentType = request.ContentType, RegionId = request.RegionId, LocationName = request.LocationName, TimeZone = request.TimeZone, UseTopicPlanner = request.UseTopicPlanner, Status = PipelineRunStatus.Succeeded, OutputFolder = OutputFolder, EventId = request.EventId, EventType = request.EventType, EventTitle = request.EventTitle, EventDescription = request.EventDescription };
             CompletedRuns.Add(run);
             return run;
         }
