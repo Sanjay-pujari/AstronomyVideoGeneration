@@ -70,6 +70,7 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
     {
         var primary = request.ContentType switch
         {
+            ContentType.SpecialEventGuide => BuildSpecialEventText(request, objectName),
             ContentType.DailySkyGuide => !string.IsNullOrWhiteSpace(objectName)
                 ? $"TONIGHT'S SKY: {objectName.ToUpperInvariant()}"
                 : "TONIGHT'S SKY",
@@ -89,6 +90,18 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
         return primary;
     }
 
+    private static string BuildSpecialEventText(ThumbnailGenerationRequest request, string? objectName)
+    {
+        var title = request.Context.SpecialEvent?.EventTitle;
+        if (!string.IsNullOrWhiteSpace(title))
+            return Truncate(title.ToUpperInvariant(), 42);
+
+        return !string.IsNullOrWhiteSpace(objectName)
+            ? $"WATCH: {objectName.ToUpperInvariant()}"
+            : "RARE SKY EVENT";
+    }
+
+
     private static ThumbnailLayoutType[] BuildLayoutCandidates(ThumbnailGenerationRequest request)
     {
         if (request.IsShortForm)
@@ -96,6 +109,7 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
 
         var preferredByContentType = request.ContentType switch
         {
+            ContentType.SpecialEventGuide => ThumbnailLayoutType.CenteredTitleOverlay,
             ContentType.DailySkyGuide => ThumbnailLayoutType.TopBanner,
             ContentType.SpaceNews => ThumbnailLayoutType.CenteredTitleOverlay,
             ContentType.AstrophotographyTips => ThumbnailLayoutType.TextLeftVisualRight,
@@ -176,6 +190,7 @@ public sealed class ThumbnailStrategyService : IThumbnailStrategyService
     {
         yield return contentType switch
         {
+            ContentType.SpecialEventGuide => "WATCH THIS SKY EVENT",
             ContentType.DailySkyGuide => "TONIGHT'S TOP SKY EVENTS",
             ContentType.TelescopeTargets => "EASY TARGETS FOR YOUR SCOPE",
             ContentType.SpaceNews => "WHAT'S NEW IN SPACE",

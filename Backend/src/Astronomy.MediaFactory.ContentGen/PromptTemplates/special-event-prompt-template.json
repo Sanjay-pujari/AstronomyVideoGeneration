@@ -1,0 +1,20 @@
+{
+  "contentType": "SpecialEventGuide",
+  "purpose": "Dedicated astronomy event video narration, separate from DailySkyGuide.",
+  "requiredFocus": [
+    "why the event matters",
+    "best viewing time",
+    "visibility direction",
+    "beginner observation tips",
+    "rarity and urgency",
+    "safe observing guidance when relevant"
+  ],
+  "visualPriorities": [
+    "event object focus",
+    "conjunction alignment",
+    "moon phase",
+    "meteor radiant direction",
+    "eclipse phases"
+  ],
+  "output": "valid JSON with title, description, tags, estimatedDurationSeconds, scriptBody, and sceneScript keyed by sceneId"
+}

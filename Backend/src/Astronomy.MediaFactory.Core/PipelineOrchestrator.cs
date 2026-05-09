@@ -135,7 +135,11 @@ public sealed class PipelineOrchestrator
             PublishToYouTube = request.PublishToYouTube,
             UseTopicPlanner = request.UseTopicPlanner,
             Status = PipelineRunStatus.Queued,
-            ResumeSupported = true
+            ResumeSupported = true,
+            EventId = request.EventId,
+            EventType = request.EventType,
+            EventTitle = request.EventTitle,
+            EventDescription = request.EventDescription
         };
 
         await _repository.CreateAsync(run, cancellationToken);
@@ -267,6 +271,7 @@ public sealed class PipelineOrchestrator
             }
 
             var context = await RunStageAsync("AstronomyData", () => _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken));
+            ApplySpecialEventRequestContext(request, context);
             await WritePrimaryContextArtifactsAsync(context, outputDir, cancellationToken);
             if (_pipelineStageExecutor is not null)
             {
@@ -572,9 +577,15 @@ public sealed class PipelineOrchestrator
                 LocationName = context.LocationName,
                 TargetDate = context.Date,
                 IsShortForm = false,
-                ThumbnailVariants = (thumbnailPlan.ThumbnailVariantPaths ?? []).ToArray()
+                ThumbnailVariants = (thumbnailPlan.ThumbnailVariantPaths ?? []).ToArray(),
+                ContentType = request.ContentType,
+                EventId = request.EventId,
+                EventType = request.EventType,
+                EventTitle = request.EventTitle,
+                EventDescription = request.EventDescription
             }, cancellationToken));
             await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDir, cancellationToken);
+            await WriteSpecialEventDiagnosticsAsync(request, context, outputDir, seoMetadata, cancellationToken);
 
             await _repository.AddAssetAsync(new MediaAsset
             {
@@ -738,7 +749,10 @@ public sealed class PipelineOrchestrator
                 ThumbnailUrl = blobUploadResult.ThumbnailUrl,
                 ThumbnailUploadedToYouTube = youtubeThumbnailUploaded,
                 CreatedAt = DateTimeOffset.UtcNow,
-                Status = publishStatus
+                Status = publishStatus,
+                EventId = request.EventId,
+                EventType = request.EventType,
+                EventTitle = request.EventTitle
             };
 
             await _repository.AddPublishedVideoAsync(publishedVideo, cancellationToken);
@@ -1061,6 +1075,120 @@ public sealed class PipelineOrchestrator
             PipelineStageNames.InstagramReelPublished => metaPublishingOptions.Enabled && metaPublishingOptions.PublishInstagramReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
             _ => false
         };
+
+
+    private static void ApplySpecialEventRequestContext(RunPipelineRequest request, AstronomyContext context)
+    {
+        if (request.ContentType != ContentType.SpecialEventGuide)
+            return;
+
+        var eventTitle = string.IsNullOrWhiteSpace(request.EventTitle) ? "Astronomy special event" : request.EventTitle.Trim();
+        var eventType = string.IsNullOrWhiteSpace(request.EventType) ? "special_event" : request.EventType.Trim();
+        var eventDescription = string.IsNullOrWhiteSpace(request.EventDescription) ? "A high-opportunity astronomy event selected for a dedicated video." : request.EventDescription.Trim();
+        context.SpecialEvent = new SpecialEventContext
+        {
+            EventId = request.EventId ?? string.Empty,
+            EventType = eventType,
+            EventTitle = eventTitle,
+            EventDescription = eventDescription,
+            ContentOpportunityScore = 1.0
+        };
+
+        var eventObject = ResolveSpecialEventObjectName(eventTitle, eventType);
+        context.Events.RemoveAll(e => e.Category.Equals("Overview", StringComparison.OrdinalIgnoreCase) && e.ObjectName.Equals("Night sky", StringComparison.OrdinalIgnoreCase));
+        context.Events.Insert(0, new AstronomyEventModel
+        {
+            Category = eventType,
+            ObjectName = eventObject,
+            VisibilityWindow = "Event window / best local visibility",
+            Direction = ResolveSpecialEventDirection(eventType),
+            ObservationTool = ResolveSpecialEventTool(eventType),
+            Details = eventDescription,
+            Score = 1.0
+        });
+
+        var baseLocal = context.SceneObservationContexts.FirstOrDefault()?.LocalObservationTime ?? context.Date.ToDateTime(new TimeOnly(21, 0));
+        var timezone = ResolveTimeZoneOrUtc(context.TimeZone);
+        context.SceneObservationContexts = BuildSpecialEventScenes(context, eventTitle, eventType, eventObject, baseLocal, timezone);
+        context.VisualIdeas.Add(new VisualIdeaModel { Title = "special-event-context", Description = JsonSerializer.Serialize(context.SpecialEvent, new JsonSerializerOptions { WriteIndented = true }) });
+    }
+
+    private static List<SceneObservationContext> BuildSpecialEventScenes(AstronomyContext context, string eventTitle, string eventType, string eventObject, DateTime baseLocal, TimeZoneInfo timezone)
+    {
+        var lower = eventType.ToLowerInvariant();
+        var peakFocus = "Best viewing time, direction, and what viewers should notice.";
+        if (lower.Contains("meteor"))
+            peakFocus = "Meteor radiant direction, moonlight impact, and patient scanning tips.";
+        else if (lower.Contains("eclipse"))
+            peakFocus = "Eclipse phase timing, safe viewing requirements, and what changes to watch.";
+        else if (lower.Contains("conjunction"))
+            peakFocus = "Planet alignment, separation impression, and framing both objects together.";
+        else if (lower.Contains("moon") || eventTitle.Contains("Moon", StringComparison.OrdinalIgnoreCase))
+            peakFocus = "Moon phase appearance, rise direction, and cinematic close-up framing.";
+
+        return
+        [
+            BuildEventScene("event-hook", eventTitle, "EventFocus", eventObject, baseLocal, timezone, context, "Cinematic opening focused on the event and why it matters."),
+            BuildEventScene("event-peak", $"{eventTitle} best viewing", "Object", eventObject, baseLocal.AddMinutes(25), timezone, context, peakFocus),
+            BuildEventScene("event-how-to-watch", "How to watch", "Tips", eventObject, baseLocal.AddMinutes(50), timezone, context, "Beginner observation tips and safe observing guidance."),
+            BuildEventScene("event-rarity", "Why this event is special", "EventFocus", eventObject, baseLocal.AddMinutes(75), timezone, context, "Rarity, urgency, and what makes this event worth a dedicated video."),
+            BuildEventScene("closing", "Viewing reminder", "Closing", eventObject, baseLocal.AddMinutes(95), timezone, context, "Concise reminder to check weather, horizon, and local timing.")
+        ];
+    }
+
+    private static SceneObservationContext BuildEventScene(string id, string title, string sceneType, string objectName, DateTime local, TimeZoneInfo timezone, AstronomyContext context, string narrationFocus)
+        => new()
+        {
+            SceneId = id,
+            SceneTitle = title,
+            SceneType = sceneType,
+            ObjectName = objectName,
+            ObjectType = objectName.Equals("Moon", StringComparison.OrdinalIgnoreCase) ? "Moon" : "Event",
+            LocalObservationTime = local,
+            UtcObservationTime = new DateTimeOffset(local, timezone.GetUtcOffset(local)).ToUniversalTime(),
+            Timezone = context.TimeZone,
+            DirectionLabel = ResolveSpecialEventDirection(context.SpecialEvent?.EventType ?? string.Empty),
+            AltitudeDegrees = 45,
+            AzimuthDegrees = 180,
+            IsVisible = true,
+            VisibilityReason = title,
+            RecommendedTool = ResolveSpecialEventTool(context.SpecialEvent?.EventType ?? string.Empty),
+            NarrationFocus = narrationFocus,
+            Latitude = context.Latitude,
+            Longitude = context.Longitude,
+            LocationName = context.LocationName
+        };
+
+    private static string ResolveSpecialEventObjectName(string title, string eventType)
+    {
+        if (title.Contains("Moon", StringComparison.OrdinalIgnoreCase) || eventType.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "Moon";
+        if (eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return title.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Meteor radiant";
+        if (eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return title.Contains("Moon", StringComparison.OrdinalIgnoreCase) ? "Moon" : "Sun";
+        return title;
+    }
+
+    private static string ResolveSpecialEventDirection(string eventType)
+        => eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) ? "Radiant direction / darkest sky" : "Event-specific horizon";
+
+    private static string ResolveSpecialEventTool(string eventType)
+        => eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase) ? "Proper eclipse safety gear when solar; naked eye for lunar" : "Naked eye / binoculars";
+
+    private static TimeZoneInfo ResolveTimeZoneOrUtc(string timeZone)
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById(timeZone); }
+        catch { return TimeZoneInfo.Utc; }
+    }
+
+    private static async Task WriteSpecialEventDiagnosticsAsync(RunPipelineRequest request, AstronomyContext context, string outputDirectory, SeoMetadataResult seoMetadata, CancellationToken cancellationToken)
+    {
+        if (request.ContentType != ContentType.SpecialEventGuide)
+            return;
+
+        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "special-event-context.json"), JsonSerializer.Serialize(context.SpecialEvent, jsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "special-event-visual-plan.json"), JsonSerializer.Serialize(context.SceneObservationContexts.Select(s => new { s.SceneId, s.SceneTitle, s.SceneType, s.ObjectName, s.DirectionLabel, s.NarrationFocus, s.RecommendedTool }), jsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "special-event-seo.json"), JsonSerializer.Serialize(seoMetadata, jsonOptions), cancellationToken);
+    }
 
 
     private static async Task WriteThumbnailSelectionAsync(ThumbnailPlan thumbnailPlan, string outputDirectory, CancellationToken cancellationToken)

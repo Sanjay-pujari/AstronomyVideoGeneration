@@ -14,7 +14,18 @@ public sealed class AstronomyContext
     public TopicSelectionPlan? TopicSelectionPlan { get; set; }
     public PromptFeedbackContext? PromptFeedbackContext { get; set; }
     public List<SceneObservationContext> SceneObservationContexts { get; set; } = new();
+    public SpecialEventContext? SpecialEvent { get; set; }
 }
+
+public sealed class SpecialEventContext
+{
+    public string EventId { get; init; } = "";
+    public string EventType { get; init; } = "";
+    public string EventTitle { get; init; } = "";
+    public string EventDescription { get; init; } = "";
+    public double ContentOpportunityScore { get; init; }
+}
+
 public sealed class AstronomyEventModel
 {
     public string Category { get; init; } = "";
@@ -159,6 +170,11 @@ public sealed class SeoMetadataRequest
     public required DateOnly TargetDate { get; init; }
     public required bool IsShortForm { get; init; }
     public IReadOnlyCollection<string> ThumbnailVariants { get; init; } = [];
+    public ContentType ContentType { get; init; } = ContentType.DailySkyGuide;
+    public string? EventId { get; init; }
+    public string? EventType { get; init; }
+    public string? EventTitle { get; init; }
+    public string? EventDescription { get; init; }
 }
 
 public sealed class SeoMetadataResult

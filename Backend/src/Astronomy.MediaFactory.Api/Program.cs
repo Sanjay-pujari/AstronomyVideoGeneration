@@ -140,6 +140,33 @@ app.MapPost("/api/scheduler/disable/{scheduleName}", async (string scheduleName,
     var updated = await scheduler.DisableScheduleAsync(scheduleName, ct);
     return updated ? Results.Ok(new { scheduleName, enabled = false }) : Results.NotFound(new { message = $"Schedule '{scheduleName}' was not found." });
 });
+
+app.MapPost("/api/events/{eventId}/generate", async (string eventId, RunPipelineRequest request, IAstronomyEventDiscoveryService events, IPipelineRepository repository, PipelineOrchestrator orchestrator, CancellationToken ct) =>
+{
+    var astronomyEvent = await events.GetByIdAsync(eventId, ct);
+    if (astronomyEvent is null)
+        return Results.NotFound(new { message = $"Astronomy event '{eventId}' was not found." });
+
+    var regionId = string.IsNullOrWhiteSpace(request.RegionId) ? request.LocationName : request.RegionId;
+    var statuses = new[] { PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded };
+    if (await repository.HasSpecialEventRunAsync(eventId, request.Date, regionId, statuses, ct))
+        return Results.Conflict(new { message = "Special event video already exists for event/date/region.", eventId, targetDate = request.Date, regionId });
+
+    var specialRequest = request with
+    {
+        ContentType = ContentType.SpecialEventGuide,
+        EventId = astronomyEvent.EventId,
+        EventType = astronomyEvent.EventType,
+        EventTitle = astronomyEvent.Title,
+        EventDescription = astronomyEvent.Description,
+        UseTopicPlanner = false
+    };
+    var result = await orchestrator.RunAsync(specialRequest, ct);
+    return Results.Ok(new RunPipelineResponse(result.Id, result.Status, "Special event guide completed."));
+});
+app.MapGet("/api/events/generated", async (int? take, IPipelineRepository repository, CancellationToken ct) =>
+    Results.Ok(await repository.GetGeneratedSpecialEventRunsAsync(Math.Clamp(take ?? 50, 1, 200), ct)));
+
 app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, ILogger<Program> logger, CancellationToken ct) =>
 {
     using var scope = logger.BeginScope(new Dictionary<string, object>

@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Contracts;
 using System.Text;
 using System.Text.Json;
 
@@ -16,10 +17,14 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
             .ToList();
 
         var mainObjects = selectedObjects.Take(3).ToList();
-        var title = BuildTitle(request.LocationName, request.TargetDate, mainObjects, request.IsShortForm);
-        var hashtags = request.IsShortForm
-            ? new[] { "#Astronomy", "#NightSky", "#Stargazing", "#Shorts" }
-            : new[] { "#Astronomy", "#NightSky", "#Stargazing" };
+        var title = request.ContentType == ContentType.SpecialEventGuide
+            ? BuildSpecialEventTitle(request, mainObjects)
+            : BuildTitle(request.LocationName, request.TargetDate, mainObjects, request.IsShortForm);
+        var hashtags = request.ContentType == ContentType.SpecialEventGuide
+            ? BuildSpecialEventHashtags(request)
+            : request.IsShortForm
+                ? new[] { "#Astronomy", "#NightSky", "#Stargazing", "#Shorts" }
+                : new[] { "#Astronomy", "#NightSky", "#Stargazing" };
 
         var description = BuildDescription(request, selectedObjects, hashtags);
 
@@ -28,6 +33,9 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
             "astronomy",
             "night sky",
             "stargazing",
+            request.ContentType == ContentType.SpecialEventGuide ? "astronomy event" : string.Empty,
+            request.EventTitle ?? string.Empty,
+            request.EventType ?? string.Empty,
             request.LocationName.Trim(),
             $"{request.LocationName.Trim()} night sky"
         };
@@ -37,7 +45,9 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
             tagSet.Add(obj.ToLowerInvariant());
         }
 
-        var pinnedComment = $"What can you see tonight from {request.LocationName}? Drop your observation time and direction below!";
+        var pinnedComment = request.ContentType == ContentType.SpecialEventGuide
+            ? $"Are you watching {request.EventTitle ?? "this astronomy event"}? Share your location and viewing conditions below!"
+            : $"What can you see tonight from {request.LocationName}? Drop your observation time and direction below!";
 
         return Task.FromResult(new SeoMetadataResult
         {
@@ -71,6 +81,29 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
         return compact.Length <= 100 ? compact : $"{location} Night Sky #Shorts";
     }
 
+    private static string BuildSpecialEventTitle(SeoMetadataRequest request, IReadOnlyList<string> objects)
+    {
+        var eventTitle = string.IsNullOrWhiteSpace(request.EventTitle) ? objects.FirstOrDefault() ?? "Astronomy Event" : request.EventTitle.Trim();
+        var urgency = request.TargetDate <= DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)) ? "Tonight" : request.TargetDate.ToString("MMM d");
+        var title = eventTitle.Contains("Tonight", StringComparison.OrdinalIgnoreCase)
+            ? eventTitle
+            : $"{eventTitle} {urgency}: How to Watch";
+        return title.Length <= 100 ? title : title[..100].TrimEnd();
+    }
+
+    private static string[] BuildSpecialEventHashtags(SeoMetadataRequest request)
+    {
+        var tags = new List<string> { "#Astronomy", "#Skywatching", "#Stargazing", "#AstronomyEvent" };
+        var eventText = $"{request.EventType} {request.EventTitle}";
+        if (eventText.Contains("moon", StringComparison.OrdinalIgnoreCase)) tags.Add("#FullMoon");
+        if (eventText.Contains("meteor", StringComparison.OrdinalIgnoreCase)) tags.Add("#MeteorShower");
+        if (eventText.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) tags.Add("#PlanetaryConjunction");
+        if (eventText.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) tags.Add("#Eclipse");
+        if (request.IsShortForm) tags.Add("#Shorts");
+        return tags.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+
     private static string BuildDescription(SeoMetadataRequest request, IReadOnlyCollection<string> selectedObjects, IReadOnlyCollection<string> hashtags)
     {
         var lines = new List<string>
@@ -86,7 +119,9 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
         }
 
         lines.Add("");
-        lines.Add("Recommended tool: binoculars or naked eye depending on target brightness.");
+        lines.Add(request.ContentType == ContentType.SpecialEventGuide
+            ? "Recommended tool: match the event guidance; use certified eclipse protection for any solar eclipse viewing."
+            : "Recommended tool: binoculars or naked eye depending on target brightness.");
         lines.Add("Disclaimer: Visibility depends on weather and your local horizon.");
         if (request.ThumbnailVariants.Count > 0)
         {

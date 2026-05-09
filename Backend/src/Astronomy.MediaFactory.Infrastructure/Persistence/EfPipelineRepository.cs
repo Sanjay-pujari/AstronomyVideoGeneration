@@ -24,6 +24,20 @@ public sealed class EfPipelineRepository : IPipelineRepository
     public async Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken)
         => await _db.PipelineRuns.OrderByDescending(x => x.CreatedUtc).Take(take).ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyCollection<PipelineRun>> GetGeneratedSpecialEventRunsAsync(int take, CancellationToken cancellationToken)
+        => await _db.PipelineRuns.AsNoTracking()
+            .Where(x => x.ContentType == ContentType.SpecialEventGuide && !string.IsNullOrWhiteSpace(x.EventId))
+            .OrderByDescending(x => x.CreatedUtc)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+    public Task<bool> HasSpecialEventRunAsync(string eventId, DateOnly runDate, string regionId, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken)
+        => _db.PipelineRuns.AnyAsync(x => x.ContentType == ContentType.SpecialEventGuide
+            && x.EventId == eventId
+            && x.RunDate == runDate
+            && ((x.RegionId != null && x.RegionId == regionId) || (x.RegionId == null && x.LocationName == regionId))
+            && statuses.Contains(x.Status), cancellationToken);
+
     public Task<bool> HasPipelineRunAsync(DateOnly runDate, ContentType contentType, string locationName, string timeZone, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken)
         => _db.PipelineRuns.AnyAsync(x => x.RunDate == runDate
             && x.ContentType == contentType

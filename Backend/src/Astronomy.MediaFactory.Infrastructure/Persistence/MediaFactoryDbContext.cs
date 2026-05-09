@@ -28,6 +28,10 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<PipelineRun>().Property(x => x.RegionId).HasColumnName("regionId");
         modelBuilder.Entity<PipelineRun>().Property(x => x.OutputFolder).HasColumnName("outputFolder");
         modelBuilder.Entity<PipelineRun>().Property(x => x.ResumeSupported).HasColumnName("resumeSupported");
+        modelBuilder.Entity<PipelineRun>().Property(x => x.EventId).HasColumnName("eventId");
+        modelBuilder.Entity<PipelineRun>().Property(x => x.EventType).HasColumnName("eventType");
+        modelBuilder.Entity<PipelineRun>().Property(x => x.EventTitle).HasColumnName("eventTitle");
+        modelBuilder.Entity<PipelineRun>().Property(x => x.EventDescription).HasColumnName("eventDescription");
         modelBuilder.Entity<GeneratedScript>().ToTable("generated_scripts").HasKey(x => x.Id);
         modelBuilder.Entity<MediaAsset>().ToTable("media_assets").HasKey(x => x.Id);
         modelBuilder.Entity<PublishedVideo>().ToTable("published_videos").HasKey(x => x.Id);
@@ -52,6 +56,7 @@ public sealed class MediaFactoryDbContext : DbContext
             .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<PipelineRun>().HasIndex(x => new { x.RegionId, x.RunDate, x.ContentType });
+        modelBuilder.Entity<PipelineRun>().HasIndex(x => new { x.EventId, x.RunDate, x.RegionId });
         modelBuilder.Entity<PublishedVideo>().HasIndex(x => x.PipelineRunId);
         modelBuilder.Entity<PlatformPublicationRecord>().HasIndex(x => new { x.ParentShortVideoId, x.Platform, x.PublishedAt });
         modelBuilder.Entity<PlatformPublicationRecord>().HasIndex(x => new { x.Platform, x.ExternalPostId }).IsUnique();
@@ -61,6 +66,7 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentExperiment>().HasIndex(x => new { x.VideoId, x.ExperimentType, x.Status });
         modelBuilder.Entity<ContentVariant>().HasIndex(x => new { x.ContentExperimentId, x.IsWinner });
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => new { x.PublishedVideoId, x.RetrievedAt });
+        modelBuilder.Entity<VideoAnalytics>().HasIndex(x => x.EventId);
         modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.RegionId).HasColumnName("regionId");
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.RegionId);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.Platform);

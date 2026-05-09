@@ -280,6 +280,7 @@ public sealed class PipelineSchedulerTests
     {
         private readonly TestOptionsMonitor<SchedulerOptions> _options;
         private readonly TestOptionsMonitor<OptimizationOptions> _optimizationOptions = new(new OptimizationOptions { Enabled = false, Mode = OptimizationMode.Disabled });
+        private readonly TestOptionsMonitor<AstronomyEventsOptions> _astronomyEventsOptions = new(new AstronomyEventsOptions { EnableSpecialEventVideos = false });
         public InMemoryAuditStore Audit { get; } = new();
         public FakeRepository Repository { get; } = new();
         public FakeExecutor Executor { get; init; } = new();
@@ -303,8 +304,9 @@ public sealed class PipelineSchedulerTests
             var services = new ServiceCollection();
             services.AddSingleton<IPipelineRepository>(Repository);
             services.AddSingleton<IPipelineRunExecutor>(Executor);
+            services.AddSingleton<IAstronomyEventDiscoveryService, FakeAstronomyEventDiscoveryService>();
             var serviceProvider = services.BuildServiceProvider();
-            return new PipelineSchedulerService(_options, CreateQueue(), Audit, _optimizationOptions, serviceProvider.GetRequiredService<IServiceScopeFactory>(), NullLogger<PipelineSchedulerService>.Instance);
+            return new PipelineSchedulerService(_options, CreateQueue(), Audit, _optimizationOptions, _astronomyEventsOptions, serviceProvider.GetRequiredService<IServiceScopeFactory>(), NullLogger<PipelineSchedulerService>.Instance);
         }
     }
 
@@ -334,6 +336,8 @@ public sealed class PipelineSchedulerTests
         public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken) => Task.FromResult(run);
         public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineRun?>(null);
         public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
+        public Task<IReadOnlyCollection<PipelineRun>> GetGeneratedSpecialEventRunsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
+        public Task<bool> HasSpecialEventRunAsync(string eventId, DateOnly runDate, string regionId, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken) => Task.FromResult(HasDuplicate);
         public Task<bool> HasPipelineRunAsync(DateOnly runDate, ContentType contentType, string locationName, string timeZone, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken) => Task.FromResult(HasDuplicate);
         public Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
@@ -357,6 +361,15 @@ public sealed class PipelineSchedulerTests
         public Task<IReadOnlyCollection<ShortVideo>> GetShortVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<ShortVideo>>([]);
         public Task<GeneratedScript?> GetLatestScriptByTitleAsync(string title, CancellationToken cancellationToken) => Task.FromResult<GeneratedScript?>(null);
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+
+    private sealed class FakeAstronomyEventDiscoveryService : IAstronomyEventDiscoveryService
+    {
+        public Task<IReadOnlyCollection<AstronomyEvent>> RefreshAsync(int? days, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<AstronomyEvent>>([]);
+        public Task<IReadOnlyCollection<AstronomyEvent>> GetUpcomingAsync(int? days, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<AstronomyEvent>>([]);
+        public Task<IReadOnlyCollection<AstronomyEvent>> GetTopAsync(int? days, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<AstronomyEvent>>([]);
+        public Task<AstronomyEvent?> GetByIdAsync(string eventId, CancellationToken cancellationToken) => Task.FromResult<AstronomyEvent?>(null);
     }
 
     private sealed class FakeExecutor : IPipelineRunExecutor

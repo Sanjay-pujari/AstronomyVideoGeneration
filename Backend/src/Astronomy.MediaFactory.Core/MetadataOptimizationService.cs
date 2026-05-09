@@ -43,7 +43,14 @@ public sealed class MetadataOptimizationService : IMetadataOptimizationService
                 ShortFormTitle: (lead, _, _) => lead is null ? "Fast Astrophotography Tip" : $"Shoot {lead} Better Tonight",
                 AlternateCategoryLabel: "Astrophotography",
                 ContentTypeHashtag: "#astrophotography",
-                LongThumbnailLabel: "CAMERA SETTINGS")
+                LongThumbnailLabel: "CAMERA SETTINGS"),
+
+            [ContentType.SpecialEventGuide] = new(
+                LongFormTitle: (lead, sourceTitle, datePart) => lead is null ? $"Rare Sky Event: {CleanTitle(sourceTitle, isShort: false)}" : $"{lead} Tonight: How to Watch ({datePart})",
+                ShortFormTitle: (lead, sourceTitle, _) => lead is null ? CleanTitle(sourceTitle, isShort: true) : $"Watch {lead} Tonight",
+                AlternateCategoryLabel: "Astronomy Event",
+                ContentTypeHashtag: "#astronomyevent",
+                LongThumbnailLabel: "RARE SKY EVENT")
         };
 
     private readonly IMetadataOptimizationModelClient? _modelClient;

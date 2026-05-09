@@ -14,17 +14,19 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
     private readonly IPipelineRunQueue _queue;
     private readonly ISchedulerAuditStore _auditStore;
     private readonly IOptionsMonitor<OptimizationOptions> _optimizationOptions;
+    private readonly IOptionsMonitor<AstronomyEventsOptions> _astronomyEventsOptions;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<PipelineSchedulerService> _logger;
     private readonly ConcurrentDictionary<string, bool> _scheduleEnabledOverrides = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _evaluationGate = new(1, 1);
 
-    public PipelineSchedulerService(IOptionsMonitor<SchedulerOptions> options, IPipelineRunQueue queue, ISchedulerAuditStore auditStore, IOptionsMonitor<OptimizationOptions> optimizationOptions, IServiceScopeFactory scopeFactory, ILogger<PipelineSchedulerService> logger)
+    public PipelineSchedulerService(IOptionsMonitor<SchedulerOptions> options, IPipelineRunQueue queue, ISchedulerAuditStore auditStore, IOptionsMonitor<OptimizationOptions> optimizationOptions, IOptionsMonitor<AstronomyEventsOptions> astronomyEventsOptions, IServiceScopeFactory scopeFactory, ILogger<PipelineSchedulerService> logger)
     {
         _options = options;
         _queue = queue;
         _auditStore = auditStore;
         _optimizationOptions = optimizationOptions;
+        _astronomyEventsOptions = astronomyEventsOptions;
         _scopeFactory = scopeFactory;
         _logger = logger;
     }
@@ -67,6 +69,7 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
 
                 var optimized = await BuildOptimizedRequestAsync(options.DefaultContentType, schedule, planned.TargetDate, cancellationToken);
                 await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, planned.PlannedRunUtc, Force: false, optimized.Plan, optimized.OriginalRequest, optimized.AIProfile), cancellationToken);
+                await EnqueueSpecialEventRunsAsync(schedule, planned.TargetDate, planned.PlannedRunUtc, force: false, cancellationToken);
             }
         }
         finally
@@ -116,7 +119,9 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         var targetDate = GetLocalDate(schedule, nowUtc);
         var optimized = await BuildOptimizedRequestAsync(options.DefaultContentType, schedule, targetDate, cancellationToken);
         _logger.LogInformation("Scheduler run-now requested for {ScheduleName} on {TargetDate}; force={Force}", schedule.Name, targetDate, force);
-        return await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, nowUtc, force, optimized.Plan, optimized.OriginalRequest, optimized.AIProfile), cancellationToken);
+        var result = await _queue.EnqueueAsync(new SchedulerRunQueueItem(schedule.Name, optimized.Request, nowUtc, force, optimized.Plan, optimized.OriginalRequest, optimized.AIProfile), cancellationToken);
+        await EnqueueSpecialEventRunsAsync(schedule, targetDate, nowUtc, force, cancellationToken);
+        return result;
     }
 
     public async Task<RegionStatusResponse> GetRegionsAsync(CancellationToken cancellationToken)
@@ -204,6 +209,54 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
             _logger.LogWarning("Scheduler-created run for {ScheduleName} on {TargetDate} is still marked Running since {ActualRunUtc}; leaving it non-duplicated for recovery/resume", run.ScheduleName, run.TargetDate, run.ActualRunUtc);
             await _auditStore.UpsertAsync(run with { Status = "Recoverable", SkipReason = "Detected as stale Running on API startup; not auto-duplicated.", UpdatedUtc = DateTimeOffset.UtcNow }, cancellationToken);
         }
+    }
+
+
+    private async Task EnqueueSpecialEventRunsAsync(SchedulerScheduleOptions schedule, DateOnly targetDate, DateTimeOffset plannedRunUtc, bool force, CancellationToken cancellationToken)
+    {
+        var eventOptions = _astronomyEventsOptions.CurrentValue;
+        if (!eventOptions.EnableSpecialEventVideos || eventOptions.MaxSpecialEventVideosPerDay <= 0)
+            return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var discovery = scope.ServiceProvider.GetRequiredService<IAstronomyEventDiscoveryService>();
+        var events = await discovery.GetTopAsync(eventOptions.LookAheadDays, cancellationToken);
+        var selectedEvents = events
+            .Where(e => e.ContentOpportunityScore >= eventOptions.SpecialEventScoreThreshold)
+            .Where(IsSupportedSpecialEventType)
+            .OrderByDescending(e => e.ContentOpportunityScore)
+            .ThenBy(e => e.PeakUtc ?? e.StartUtc)
+            .Take(eventOptions.MaxSpecialEventVideosPerDay)
+            .ToArray();
+
+        foreach (var astronomyEvent in selectedEvents)
+        {
+            var request = BuildRequest(ContentType.SpecialEventGuide, schedule, targetDate) with
+            {
+                EventId = astronomyEvent.EventId,
+                EventType = astronomyEvent.EventType,
+                EventTitle = astronomyEvent.Title,
+                EventDescription = astronomyEvent.Description,
+                UseTopicPlanner = false
+            };
+            await _queue.EnqueueAsync(new SchedulerRunQueueItem($"{schedule.Name} special event", request, plannedRunUtc, force), cancellationToken);
+        }
+    }
+
+    private static bool IsSupportedSpecialEventType(AstronomyEvent astronomyEvent)
+    {
+        var eventType = astronomyEvent.EventType.Replace("_", " ", StringComparison.OrdinalIgnoreCase);
+        var title = astronomyEvent.Title;
+        return eventType.Contains("full moon", StringComparison.OrdinalIgnoreCase)
+            || eventType.Contains("supermoon", StringComparison.OrdinalIgnoreCase)
+            || eventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || eventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase)
+            || eventType.Contains("eclipse", StringComparison.OrdinalIgnoreCase)
+            || title.Contains("Full Moon", StringComparison.OrdinalIgnoreCase)
+            || title.Contains("Supermoon", StringComparison.OrdinalIgnoreCase)
+            || title.Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || title.Contains("conjunction", StringComparison.OrdinalIgnoreCase)
+            || title.Contains("eclipse", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool IsScheduleEnabled(SchedulerScheduleOptions schedule)

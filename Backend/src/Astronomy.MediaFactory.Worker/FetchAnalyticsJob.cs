@@ -34,6 +34,7 @@ public sealed class FetchAnalyticsJob : IJob
         var videos = await _repository.GetPublishedVideosWithYouTubeIdAsync(since, context.CancellationToken);
         var shorts = await _repository.GetShortVideosWithYouTubeIdAsync(since, context.CancellationToken);
         var parentMap = videos.ToDictionary(x => x.Id, x => x.YouTubeVideoId, EqualityComparer<Guid>.Default);
+        var parentEventMap = videos.ToDictionary(x => x.Id, x => (EventId: x.EventId, EventType: x.EventType, EventTitle: x.EventTitle), EqualityComparer<Guid>.Default);
 
         foreach (var video in videos)
         {
@@ -47,12 +48,16 @@ public sealed class FetchAnalyticsJob : IJob
                 hookLine: null,
                 publishedVideoId: video.Id,
                 assignments: assignments,
+                eventId: video.EventId,
+                eventType: video.EventType,
+                eventTitle: video.EventTitle,
                 cancellationToken: context.CancellationToken);
         }
 
         foreach (var shortVideo in shorts)
         {
             parentMap.TryGetValue(shortVideo.ParentVideoId, out var parentYouTubeId);
+            parentEventMap.TryGetValue(shortVideo.ParentVideoId, out var parentEvent);
             await SaveSnapshotAsync(
                 videoId: shortVideo.YouTubeVideoId!,
                 title: null,
@@ -62,6 +67,9 @@ public sealed class FetchAnalyticsJob : IJob
                 hookLine: null,
                 publishedVideoId: null,
                 assignments: new ExperimentVariantAssignment(),
+                eventId: parentEvent.EventId,
+                eventType: parentEvent.EventType,
+                eventTitle: parentEvent.EventTitle,
                 cancellationToken: context.CancellationToken);
         }
 
@@ -70,7 +78,7 @@ public sealed class FetchAnalyticsJob : IJob
         _logger.LogInformation("Analytics fetch completed. TopN setting is {TopN}", _options.TopN);
     }
 
-    private async Task SaveSnapshotAsync(string videoId, string? title, bool isShort, ContentType contentType, string? parentVideoId, string? hookLine, Guid? publishedVideoId, ExperimentVariantAssignment assignments, CancellationToken cancellationToken)
+    private async Task SaveSnapshotAsync(string videoId, string? title, bool isShort, ContentType contentType, string? parentVideoId, string? hookLine, Guid? publishedVideoId, ExperimentVariantAssignment assignments, string? eventId, string? eventType, string? eventTitle, CancellationToken cancellationToken)
     {
         var snapshot = await _analyticsService.GetVideoAnalyticsAsync(videoId, cancellationToken);
         if (snapshot is null)
@@ -97,7 +105,10 @@ public sealed class FetchAnalyticsJob : IJob
             ThumbnailExperimentId = assignments.ThumbnailExperimentId,
             ThumbnailVariantId = assignments.ThumbnailVariantId,
             CtaExperimentId = assignments.CtaExperimentId,
-            CtaVariantId = assignments.CtaVariantId
+            CtaVariantId = assignments.CtaVariantId,
+            EventId = eventId,
+            EventType = eventType,
+            EventTitle = eventTitle
         }, cancellationToken);
     }
 }
