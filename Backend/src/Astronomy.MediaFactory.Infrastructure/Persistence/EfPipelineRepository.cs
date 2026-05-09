@@ -126,6 +126,7 @@ public sealed class EfPipelineRepository : IPipelineRepository
         existing.TargetDate = analytics.TargetDate;
         existing.ContentCategory = analytics.ContentCategory;
         existing.ThumbnailPath = analytics.ThumbnailPath;
+        existing.PerformanceScore = analytics.PerformanceScore;
         existing.IsAnalyticsAvailable = analytics.IsAnalyticsAvailable;
         existing.LastError = analytics.LastError;
     }

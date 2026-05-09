@@ -28,6 +28,7 @@ public sealed class PlatformContentAnalytics : Common.EntityBase
     public DateOnly? TargetDate { get; set; }
     public ContentType? ContentCategory { get; set; }
     public string? ThumbnailPath { get; set; }
+    public double? PerformanceScore { get; set; }
     public bool IsAnalyticsAvailable { get; set; } = true;
     public string? LastError { get; set; }
 }

@@ -289,6 +289,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IShortFormPlatformPublisher, FacebookPlatformPublisher>();
         services.AddScoped<IShortFormPublishingService, ShortFormPublishingService>();
         services.AddScoped<IAnalyticsAggregationService, AnalyticsAggregationService>();
+        services.AddScoped<IAnalyticsIntelligenceService, AnalyticsIntelligenceService>();
         services.AddScoped<IContentExperimentService, EfContentExperimentService>();
         services.AddScoped<IFeedbackSignalExtractor, TopKeywordSignalExtractor>();
         services.AddScoped<IFeedbackSignalExtractor, TopHookSignalExtractor>();

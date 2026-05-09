@@ -267,3 +267,5 @@ create table if not exists platform_publication_records
 );
 
 create index if not exists ix_platform_publication_records_short_platform on platform_publication_records(parent_short_video_id, platform, published_at desc);
+
+alter table if exists platform_content_analytics add column if not exists "PerformanceScore" double precision null;

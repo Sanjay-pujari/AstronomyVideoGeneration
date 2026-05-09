@@ -557,6 +557,9 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.Property<string>("PlatformUrl")
                         .HasColumnType("text");
 
+                    b.Property<double?>("PerformanceScore")
+                        .HasColumnType("double precision");
+
                     b.Property<DateTimeOffset?>("PublishedUtc")
                         .HasColumnType("timestamp with time zone");
 
