@@ -12,6 +12,7 @@ public sealed class PipelineRun : EntityBase
     public PipelineRunStatus Status { get; set; } = PipelineRunStatus.Queued;
     public string? FailureReason { get; set; }
     public bool PublishToYouTube { get; set; }
+    public bool UseTopicPlanner { get; set; }
     public string? YouTubeVideoId { get; set; }
     public DateTimeOffset? StartedUtc { get; set; }
     public DateTimeOffset? FinishedUtc { get; set; }
