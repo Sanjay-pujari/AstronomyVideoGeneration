@@ -134,6 +134,7 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
         return runs.Any(x => string.Equals(NormalizeRegionId(x.RegionId, x.LocationName), regionId, StringComparison.OrdinalIgnoreCase)
             && x.TargetDate == item.Request.Date
             && (x.ContentType == item.Request.ContentType || x.ContentType == default)
+            && (!IsSpecialEvent(item.Request) || string.Equals(x.EventId, item.Request.EventId, StringComparison.OrdinalIgnoreCase))
             && x.Status is "Created" or "Running" or "Completed" or "Publishing" or "Recoverable");
     }
 
@@ -142,8 +143,16 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
         using var scope = _scopeFactory.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IPipelineRepository>();
         var duplicateKey = string.IsNullOrWhiteSpace(item.Request.RegionId) ? item.Request.LocationName : NormalizeRegionId(item);
+        if (IsSpecialEvent(item.Request) && !string.IsNullOrWhiteSpace(item.Request.EventId))
+        {
+            return await repository.HasSpecialEventRunAsync(item.Request.EventId, item.Request.Date, duplicateKey, DuplicateStatuses, cancellationToken);
+        }
+
         return await repository.HasPipelineRunAsync(item.Request.Date, item.Request.ContentType, duplicateKey, item.Request.TimeZone, DuplicateStatuses, cancellationToken);
     }
+
+    private static bool IsSpecialEvent(RunPipelineRequest request)
+        => request.ContentType == ContentType.SpecialEventGuide;
 
     private static string NormalizeRegionId(SchedulerRunQueueItem item)
         => NormalizeRegionId(item.Request.RegionId, item.Request.LocationName);
@@ -184,6 +193,9 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
             item.Request.LocationName,
             item.Request.TimeZone,
             CreatedUtc: now,
-            UpdatedUtc: now), cancellationToken);
+            UpdatedUtc: now,
+            EventId: item.Request.EventId,
+            EventType: item.Request.EventType,
+            EventTitle: item.Request.EventTitle), cancellationToken);
     }
 }

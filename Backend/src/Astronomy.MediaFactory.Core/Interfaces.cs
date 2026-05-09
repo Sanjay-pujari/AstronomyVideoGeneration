@@ -223,6 +223,8 @@ public interface IPipelineRepository {
  Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken);
  Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken);
+ Task<IReadOnlyCollection<PipelineRun>> GetGeneratedSpecialEventRunsAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
+ Task<bool> HasSpecialEventRunAsync(string eventId, DateOnly runDate, string regionId, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken) => Task.FromResult(false);
  Task<bool> HasPipelineRunAsync(DateOnly runDate, ContentType contentType, string locationName, string timeZone, IReadOnlyCollection<PipelineRunStatus> statuses, CancellationToken cancellationToken) => Task.FromResult(false);
  Task AddScriptAsync(GeneratedScript script, CancellationToken cancellationToken);
  Task<IReadOnlyCollection<GeneratedScript>> GetRecentScriptsAsync(int take, CancellationToken cancellationToken);

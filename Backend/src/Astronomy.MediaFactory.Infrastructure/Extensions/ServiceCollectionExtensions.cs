@@ -114,7 +114,7 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<AstronomyEventsOptions>()
             .Bind(configuration.GetSection(AstronomyEventsOptions.SectionName))
-            .Validate(opt => opt.LookAheadDays > 0 && opt.MinimumContentOpportunityScore is >= 0 and <= 1, "AstronomyEvents values are invalid.")
+            .Validate(opt => opt.LookAheadDays > 0 && opt.MinimumContentOpportunityScore is >= 0 and <= 1 && opt.SpecialEventScoreThreshold is >= 0 and <= 1 && opt.MaxSpecialEventVideosPerDay >= 0, "AstronomyEvents values are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<TopicSelectionOptions>()

@@ -1,11 +1,11 @@
 namespace Astronomy.MediaFactory.Contracts;
 
-public enum ContentType { DailySkyGuide = 1, TelescopeTargets = 2, SpaceNews = 3, AstrophotographyTips = 4 }
+public enum ContentType { DailySkyGuide = 1, TelescopeTargets = 2, SpaceNews = 3, AstrophotographyTips = 4, SpecialEventGuide = 5 }
 public enum PipelineRunStatus { Queued = 1, Running = 2, Succeeded = 3, Failed = 4 }
 public enum PipelineJobType { GenerateMainVideo = 1, GenerateShorts = 2, PublishVideo = 3, ArchiveAssets = 4 }
 public enum PipelineJobStatus { Pending = 1, Running = 2, Succeeded = 3, Failed = 4, Retrying = 5, Stale = 6 }
 
-public sealed record RunPipelineRequest(DateOnly Date, ContentType ContentType, string LocationName, string TimeZone = "Asia/Kolkata", bool PublishToYouTube = false, bool UseTopicPlanner = false, double? Latitude = null, double? Longitude = null, string? OverrideTimezone = null, string? OverrideLocationName = null, DateOnly? TargetDate = null, string? RegionId = null);
+public sealed record RunPipelineRequest(DateOnly Date, ContentType ContentType, string LocationName, string TimeZone = "Asia/Kolkata", bool PublishToYouTube = false, bool UseTopicPlanner = false, double? Latitude = null, double? Longitude = null, string? OverrideTimezone = null, string? OverrideLocationName = null, DateOnly? TargetDate = null, string? RegionId = null, string? EventId = null, string? EventType = null, string? EventTitle = null, string? EventDescription = null);
 public sealed record RunPipelineResponse(Guid PipelineRunId, PipelineRunStatus Status, string Message);
 
 public sealed record EnqueuePipelineJobRequest(
@@ -71,6 +71,9 @@ public sealed class AstronomyEventsOptions
     public bool Enabled { get; set; } = true;
     public int LookAheadDays { get; set; } = 30;
     public double MinimumContentOpportunityScore { get; set; } = 0.65;
+    public bool EnableSpecialEventVideos { get; set; } = true;
+    public double SpecialEventScoreThreshold { get; set; } = 0.70;
+    public int MaxSpecialEventVideosPerDay { get; set; } = 2;
     public AstronomyEventSourceOptions Sources { get; set; } = new();
 }
 

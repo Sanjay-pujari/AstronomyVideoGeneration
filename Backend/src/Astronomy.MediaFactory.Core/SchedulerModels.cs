@@ -15,7 +15,10 @@ public sealed record SchedulerRunRecord(
     string LocationName,
     string TimeZone,
     DateTimeOffset CreatedUtc,
-    DateTimeOffset UpdatedUtc);
+    DateTimeOffset UpdatedUtc,
+    string? EventId = null,
+    string? EventType = null,
+    string? EventTitle = null);
 
 public sealed record SchedulerRunQueueItem(
     string ScheduleName,

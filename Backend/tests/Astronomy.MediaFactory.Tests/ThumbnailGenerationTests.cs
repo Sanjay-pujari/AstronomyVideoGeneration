@@ -136,4 +136,31 @@ public sealed class ThumbnailGenerationTests
         Assert.Equal(invalidVisual, plan.ThumbnailPath);
         Assert.Single(plan.ThumbnailVariantPaths);
     }
+
+    [Fact]
+    public void ThumbnailStrategy_GeneratesSpecialEventText()
+    {
+        var service = new ThumbnailStrategyService();
+        var plan = service.BuildPlan(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.SpecialEventGuide,
+            Context = new AstronomyContext
+            {
+                SpecialEvent = new SpecialEventContext
+                {
+                    EventId = "moon-full-moon-20260504",
+                    EventType = "full_moon",
+                    EventTitle = "Full Moon Tonight",
+                    EventDescription = "Full moon event."
+                }
+            },
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.GetTempPath()
+        });
+
+        Assert.Contains("FULL MOON", plan.PrimaryThumbnailText);
+        Assert.Equal(ThumbnailLayoutType.CenteredTitleOverlay, plan.LayoutType);
+    }
+
 }

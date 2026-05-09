@@ -471,8 +471,9 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
     private static ScriptResult BuildFallback(ContractsContentType contentType, AstronomyContext context, string prompt)
     {
-        var title = $"What to See in the Sky - {context.Date:MMMM dd, yyyy}";
-        var description = $"Astronomy guide for {context.Date:MMMM dd, yyyy} in {context.LocationName}.";
+        var isSpecialEvent = contentType == ContractsContentType.SpecialEventGuide && context.SpecialEvent is not null;
+        var title = isSpecialEvent ? $"{context.SpecialEvent!.EventTitle}: How to Watch" : $"What to See in the Sky - {context.Date:MMMM dd, yyyy}";
+        var description = isSpecialEvent ? context.SpecialEvent!.EventDescription : $"Astronomy guide for {context.Date:MMMM dd, yyyy} in {context.LocationName}.";
         var eventLines = context.Events
             .OrderByDescending(x => x.Score)
             .Select(x => $"Look for {x.ObjectName} {x.VisibilityWindow} toward the {x.Direction} using {x.ObservationTool}. {x.Details}")
@@ -485,7 +486,9 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             Description = description,
             Tags = ["astronomy", "night sky", contentType.ToString()],
             EstimatedDurationSeconds = 900,
-            ScriptBody = $"Welcome to your astronomy update for {context.Date:MMMM dd, yyyy}. {string.Join(" ", eventLines)}"
+            ScriptBody = isSpecialEvent
+                ? $"Tonight we focus on {context.SpecialEvent!.EventTitle}. {context.SpecialEvent.EventDescription} We will cover why it matters, when to look, where to face, beginner viewing tips, rarity, and safe observing reminders. {string.Join(" ", eventLines)}"
+                : $"Welcome to your astronomy update for {context.Date:MMMM dd, yyyy}. {string.Join(" ", eventLines)}"
         };
     }
 

@@ -46,6 +46,32 @@ public sealed class SeoMetadataGeneratorServiceTests
     }
 
     [Fact]
+    public async Task SpecialEventGuide_prioritizes_event_seo()
+    {
+        var request = CreateRequest();
+        request = new SeoMetadataRequest
+        {
+            SceneObservationContext = request.SceneObservationContext,
+            SelectedVisibleObjects = ["Moon"],
+            LocationName = request.LocationName,
+            TargetDate = request.TargetDate,
+            IsShortForm = false,
+            ContentType = Astronomy.MediaFactory.Contracts.ContentType.SpecialEventGuide,
+            EventId = "moon-full-moon-20260504",
+            EventType = "full_moon",
+            EventTitle = "Full Moon",
+            EventDescription = "A dedicated full moon viewing guide."
+        };
+
+        var result = await CreateService().GenerateAsync(request, default);
+
+        Assert.Contains("Full Moon", result.Title);
+        Assert.Contains("How to Watch", result.Title);
+        Assert.Contains("#FullMoon", result.HashtagsCsv);
+        Assert.Contains("astronomy event", result.TagsCsv);
+    }
+
+    [Fact]
     public async Task Metadata_file_is_written()
     {
         var result = await CreateService().GenerateAsync(CreateRequest(), default);

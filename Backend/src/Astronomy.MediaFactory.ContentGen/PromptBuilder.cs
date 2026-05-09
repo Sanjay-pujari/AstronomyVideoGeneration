@@ -14,6 +14,8 @@ public sealed class PromptBuilder : IPromptBuilder
 {
     public string Build(ContentType contentType, AstronomyContext context, PromptFeedbackContext? feedbackContext = null)
     {
+        if (contentType == ContentType.SpecialEventGuide)
+            return BuildSpecialEventPrompt(context, feedbackContext);
         var astronomyInput = new
         {
             date = context.Date.ToString("yyyy-MM-dd"),
@@ -82,6 +84,52 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine(JsonSerializer.Serialize(astronomyInput, new JsonSerializerOptions { WriteIndented = true }));
         sb.AppendLine("<END_ASTRONOMY_INPUT_JSON>");
 
+        return sb.ToString();
+    }
+
+
+    private static string BuildSpecialEventPrompt(AstronomyContext context, PromptFeedbackContext? feedbackContext)
+    {
+        var astronomyInput = new
+        {
+            date = context.Date.ToString("yyyy-MM-dd"),
+            location = context.LocationName,
+            timeZone = context.TimeZone,
+            contentType = ContentType.SpecialEventGuide.ToString(),
+            specialEvent = context.SpecialEvent,
+            astronomyEvents = context.Events.OrderByDescending(e => e.Score).Select(e => new { e.Category, e.ObjectName, e.VisibilityWindow, e.Direction, e.ObservationTool, e.Details, e.Score }),
+            sceneObservationContext = BuildSceneObservationContext(context)
+        };
+
+        var sb = new StringBuilder();
+        sb.AppendLine("You are an astronomy educator creating a dedicated event-based YouTube guide.");
+        sb.AppendLine("This is a SpecialEventGuide, not a DailySkyGuide. Keep the entire narration focused on the named event.");
+        sb.AppendLine(PromptFeedbackComposer.BuildBoundaryRulesSection());
+        sb.AppendLine("Requirements:");
+        sb.AppendLine("1) Explain why the event matters, rarity/urgency, and what viewers should look for.");
+        sb.AppendLine("2) Include best viewing time, direction, beginner tips, and safe-observing advice when relevant.");
+        sb.AppendLine("3) Prioritize event objects, alignment, moon phase, meteor radiant, or eclipse phases over generic sky overview.");
+        sb.AppendLine("4) Use cinematic pacing: strong hook, event build-up, observation instructions, and concise closing reminder.");
+        sb.AppendLine("5) Do not invent numeric values beyond supplied context.");
+        sb.AppendLine("6) Return ONLY valid JSON with no markdown, no code fences, and no commentary.");
+        sb.AppendLine("7) Each sceneScript section must map exactly to provided sceneObservationContext sceneId values.");
+        sb.AppendLine();
+        sb.AppendLine(PromptFeedbackComposer.BuildFeedbackSection(feedbackContext, isShortForm: false));
+        sb.AppendLine();
+        sb.AppendLine("Output JSON schema:");
+        sb.AppendLine("{");
+        sb.AppendLine("  \"title\": \"string\",");
+        sb.AppendLine("  \"description\": \"string\",");
+        sb.AppendLine("  \"tags\": [\"string\", \"string\"],");
+        sb.AppendLine("  \"estimatedDurationSeconds\": 600,");
+        sb.AppendLine("  \"scriptBody\": \"string\",");
+        sb.AppendLine("  \"sceneScript\": { \"scene-id\": \"string\" }");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("Structured special event input (JSON data block):");
+        sb.AppendLine("<BEGIN_SPECIAL_EVENT_INPUT_JSON>");
+        sb.AppendLine(JsonSerializer.Serialize(astronomyInput, new JsonSerializerOptions { WriteIndented = true }));
+        sb.AppendLine("<END_SPECIAL_EVENT_INPUT_JSON>");
         return sb.ToString();
     }
 

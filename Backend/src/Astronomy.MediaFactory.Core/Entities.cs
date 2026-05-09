@@ -19,6 +19,10 @@ public sealed class PipelineRun : EntityBase
     public DateTimeOffset? FinishedUtc { get; set; }
     public string? OutputFolder { get; set; }
     public bool ResumeSupported { get; set; }
+    public string? EventId { get; set; }
+    public string? EventType { get; set; }
+    public string? EventTitle { get; set; }
+    public string? EventDescription { get; set; }
 }
 
 public sealed class PipelineStageExecution : EntityBase
@@ -123,6 +127,9 @@ public sealed class PublishedVideo : EntityBase
     public string? ThumbnailPath { get; set; }
     public string? ThumbnailUrl { get; set; }
     public bool ThumbnailUploadedToYouTube { get; set; }
+    public string? EventId { get; set; }
+    public string? EventType { get; set; }
+    public string? EventTitle { get; set; }
     public Guid? TitleExperimentId { get; set; }
     public Guid? SelectedTitleVariantId { get; set; }
     public Guid? ThumbnailExperimentId { get; set; }
@@ -206,6 +213,9 @@ public sealed class VideoAnalytics : EntityBase
     public Guid? ThumbnailVariantId { get; set; }
     public Guid? CtaExperimentId { get; set; }
     public Guid? CtaVariantId { get; set; }
+    public string? EventId { get; set; }
+    public string? EventType { get; set; }
+    public string? EventTitle { get; set; }
 }
 
 public sealed class RecoveryOperation : EntityBase

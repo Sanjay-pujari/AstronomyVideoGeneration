@@ -104,6 +104,13 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
 
     private static List<string> BuildTextVariants(AstronomyContext context, string objectName, string narrationContext)
     {
+        if (context.SpecialEvent is not null)
+        {
+            var eventTitle = ToSafeWords(context.SpecialEvent.EventTitle);
+            var eventType = ToSafeWords(context.SpecialEvent.EventType.Replace("_", " ", StringComparison.OrdinalIgnoreCase));
+            return [eventTitle, string.IsNullOrWhiteSpace(eventType) ? "SKY EVENT" : eventType, $"WATCH {ToSafeWords(objectName)}"];
+        }
+
         var planetCount = context.SceneObservationContexts.Count(s => PriorityPlanets.Contains(s.ObjectName));
         var v1 = "TONIGHT'S SKY";
         var v2 = planetCount > 0 ? $"{planetCount} PLANETS VISIBLE" : $"{ToSafeWords(objectName)} TONIGHT";

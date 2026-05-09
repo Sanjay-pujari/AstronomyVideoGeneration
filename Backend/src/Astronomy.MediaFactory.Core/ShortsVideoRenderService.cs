@@ -160,7 +160,12 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             LocationName = context.LocationName,
             TargetDate = context.Date,
             IsShortForm = true,
-            ThumbnailVariants = visualCandidates.ToArray()
+            ThumbnailVariants = visualCandidates.ToArray(),
+            ContentType = contentType,
+            EventId = context.SpecialEvent?.EventId,
+            EventType = context.SpecialEvent?.EventType,
+            EventTitle = context.SpecialEvent?.EventTitle,
+            EventDescription = context.SpecialEvent?.EventDescription
         }, cancellationToken);
         await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDirectory, cancellationToken);
 
