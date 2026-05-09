@@ -500,6 +500,10 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<bool?>("AffiliateBlockEnabled")
+                        .HasColumnName("affiliateBlockEnabled")
+                        .HasColumnType("boolean");
+
                     b.Property<double?>("AverageViewDurationSeconds")
                         .HasColumnType("double precision");
 
@@ -517,6 +521,10 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
 
                     b.Property<double?>("Ctr")
                         .HasColumnType("double precision");
+
+                    b.Property<string>("CtaVariant")
+                        .HasColumnName("ctaVariant")
+                        .HasColumnType("text");
 
                     b.Property<int?>("DurationSeconds")
                         .HasColumnType("integer");

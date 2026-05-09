@@ -8,12 +8,13 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
     private const int YouTubeTitleLimit = 90;
     private const int InstagramTitleLimit = 120;
     private const int FacebookTitleLimit = 120;
-    private const int YouTubeCaptionLimit = 120;
-    private const int InstagramCaptionLimit = 280;
-    private const int FacebookCaptionLimit = 360;
+    private const int YouTubeCaptionLimit = 500;
+    private const int InstagramCaptionLimit = 500;
+    private const int FacebookCaptionLimit = 500;
     private static readonly string[] FallbackHashtags = ["#astronomy", "#nightsky", "#space"];
 
     private readonly PlatformPublishingOptions _options;
+    private readonly GrowthOptions _growthOptions;
 
     public PlatformMetadataFormatter()
         : this(new PlatformPublishingOptions())
@@ -21,7 +22,15 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
     }
 
     public PlatformMetadataFormatter(PlatformPublishingOptions options)
-        => _options = options ?? new PlatformPublishingOptions();
+        : this(options, new GrowthOptions())
+    {
+    }
+
+    public PlatformMetadataFormatter(PlatformPublishingOptions options, GrowthOptions growthOptions)
+    {
+        _options = options ?? new PlatformPublishingOptions();
+        _growthOptions = growthOptions ?? new GrowthOptions();
+    }
 
     public PlatformPublicationTarget FormatTarget(ShortFormPlatform platform, ShortFormPublicationRequest request)
     {
@@ -58,6 +67,7 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
                 "\n",
                 titleLikeLine,
                 cta,
+                BuildGrowthBlockIfMissing("YouTubeShorts", request, titleLikeLine, cta),
                 string.Join(' ', platformHashtags.Take(5))));
 
         return new PlatformPublicationTarget
@@ -89,6 +99,7 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
             hookLine,
             bodyParagraph,
             LocalizationResolver.IsHindi(request.Language) ? "आज रात के लिए सेव करें।" : "Save this for tonight.",
+            BuildGrowthBlockIfMissing("InstagramReels", request, hookLine, bodyParagraph),
             string.Join(' ', platformHashtags));
 
         return new PlatformPublicationTarget
@@ -123,6 +134,7 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
             openingLine,
             descriptiveBody,
             LocalizationResolver.IsHindi(request.Language) ? "रात के आसमान की और अपडेट्स के लिए फॉलो करें और इसे अपने दोस्तों के साथ साझा करें।" : "Follow for more night-sky updates and share this with your stargazing crew.",
+            BuildGrowthBlockIfMissing("Facebook", request, openingLine, descriptiveBody),
             hashtagLine);
 
         return new PlatformPublicationTarget
@@ -137,6 +149,30 @@ public sealed class PlatformMetadataFormatter : IShortFormPlatformMetadataFormat
             ThumbnailPath = request.ThumbnailPath
         };
     }
+
+    private string BuildGrowthBlockIfMissing(string platform, ShortFormPublicationRequest request, params string[] existingSegments)
+    {
+        var metadata = BuildGrowthMetadata(platform, request);
+        var block = GrowthMetadataComposer.BuildGrowthBlock(metadata, request.Language);
+        var existing = string.Join(" ", existingSegments.Where(static x => !string.IsNullOrWhiteSpace(x)));
+        var filteredLines = block
+            .Split('\n')
+            .Select(NormalizeInline)
+            .Where(line => !string.IsNullOrWhiteSpace(line) && !existing.Contains(line, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        return string.Join(Environment.NewLine, filteredLines).Trim();
+    }
+
+    private GrowthMetadata BuildGrowthMetadata(string platform, ShortFormPublicationRequest request)
+        => GrowthMetadataComposer.BuildMetadata(_growthOptions, new GrowthMetadataInput
+        {
+            Platform = platform,
+            Language = request.Language,
+            Region = null,
+            IsShortForm = true,
+            ContentType = request.ContentType
+        });
 
     private static string BuildYouTubeCta(string captionBody, string language)
     {

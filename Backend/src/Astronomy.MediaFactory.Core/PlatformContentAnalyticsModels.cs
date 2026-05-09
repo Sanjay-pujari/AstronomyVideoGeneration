@@ -30,6 +30,8 @@ public sealed class PlatformContentAnalytics : Common.EntityBase
     public DateOnly? TargetDate { get; set; }
     public ContentType? ContentCategory { get; set; }
     public string? ThumbnailPath { get; set; }
+    public string? CtaVariant { get; set; }
+    public bool? AffiliateBlockEnabled { get; set; }
     public double? PerformanceScore { get; set; }
     public bool IsAnalyticsAvailable { get; set; } = true;
     public string? LastError { get; set; }
@@ -58,7 +60,9 @@ public sealed record PlatformAnalyticsCollectionContext(
     DateOnly? TargetDate,
     ContentType? ContentCategory,
     string? ThumbnailPath,
-    string? OutputDirectory);
+    string? OutputDirectory,
+    string? CtaVariant = null,
+    bool? AffiliateBlockEnabled = null);
 
 public sealed record AnalyticsCollectionReport(
     string Platform,

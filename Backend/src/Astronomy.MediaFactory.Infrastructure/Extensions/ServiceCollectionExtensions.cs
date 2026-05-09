@@ -97,6 +97,13 @@ public static class ServiceCollectionExtensions
             .Validate(options => string.IsNullOrWhiteSpace(options.AffiliateBaseUrl) || Uri.TryCreate(options.AffiliateBaseUrl, UriKind.Absolute, out _), "Monetization:AffiliateBaseUrl must be an absolute URI when provided.")
             .ValidateOnStart();
 
+        services.AddOptions<GrowthOptions>()
+            .Bind(configuration.GetSection(GrowthOptions.SectionName))
+            .Validate(options => string.IsNullOrWhiteSpace(options.WebsiteUrl) || Uri.TryCreate(options.WebsiteUrl, UriKind.Absolute, out _), "Growth:WebsiteUrl must be an absolute URI when provided.")
+            .Validate(options => string.IsNullOrWhiteSpace(options.NewsletterUrl) || Uri.TryCreate(options.NewsletterUrl, UriKind.Absolute, out _), "Growth:NewsletterUrl must be an absolute URI when provided.")
+            .Validate(options => string.IsNullOrWhiteSpace(options.AppDownloadUrl) || Uri.TryCreate(options.AppDownloadUrl, UriKind.Absolute, out _), "Growth:AppDownloadUrl must be an absolute URI when provided.")
+            .ValidateOnStart();
+
         services.AddOptions<SchedulingOptions>()
             .Bind(configuration.GetSection(SchedulingOptions.SectionName))
             .Validate(opt => opt.MaxRetryAttempts > 0 && opt.RetryBackoffSeconds > 0 && opt.QueuePollIntervalSeconds > 0, "Scheduling values must be > 0.")
@@ -316,7 +323,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAnalyticsCollectionService, AnalyticsCollectionService>();
         services.AddHostedService<AnalyticsCollectionBackgroundService>();
         services.AddScoped<IShortsVideoRenderService, ShortsVideoRenderService>();
-        services.AddScoped<IShortFormPlatformMetadataFormatter>(sp => new PlatformMetadataFormatter(sp.GetRequiredService<IOptions<PlatformPublishingOptions>>().Value));
+        services.AddScoped<IShortFormPlatformMetadataFormatter>(sp => new PlatformMetadataFormatter(sp.GetRequiredService<IOptions<PlatformPublishingOptions>>().Value, sp.GetRequiredService<IOptions<GrowthOptions>>().Value));
         services.AddScoped<IShortFormPlatformPublisher, YouTubeShortsPlatformPublisher>();
         services.AddScoped<IShortFormPlatformPublisher, InstagramReelsPlatformPublisher>();
         services.AddScoped<IShortFormPlatformPublisher, FacebookPlatformPublisher>();

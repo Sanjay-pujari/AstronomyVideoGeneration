@@ -47,6 +47,7 @@ public sealed class PipelineOrchestrator
     private readonly IMetaPublishService? _metaPublishService;
     private readonly IPipelineStageExecutor? _pipelineStageExecutor;
     private readonly LocalizationOptions _localizationOptions;
+    private readonly GrowthOptions _growthOptions;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -85,7 +86,8 @@ public sealed class PipelineOrchestrator
         IOptions<MetaPublishingOptions>? metaPublishingOptions = null,
         IMetaPublishService? metaPublishService = null,
         IPipelineStageExecutor? pipelineStageExecutor = null,
-        IOptions<LocalizationOptions>? localizationOptions = null)
+        IOptions<LocalizationOptions>? localizationOptions = null,
+        IOptions<GrowthOptions>? growthOptions = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -124,6 +126,7 @@ public sealed class PipelineOrchestrator
         _metaPublishService = metaPublishService;
         _pipelineStageExecutor = pipelineStageExecutor;
         _localizationOptions = localizationOptions?.Value ?? new LocalizationOptions();
+        _growthOptions = growthOptions?.Value ?? new GrowthOptions();
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -366,6 +369,8 @@ public sealed class PipelineOrchestrator
                 }
             }
 
+            optimizedMetadata = ApplyGrowthMetadata(optimizedMetadata, _growthOptions, context.Localization.ResolvedLanguage, request.RegionId ?? context.LocationName);
+
             script = new ScriptResult
             {
                 Prompt = script.Prompt,
@@ -592,7 +597,8 @@ public sealed class PipelineOrchestrator
                 EventType = request.EventType,
                 EventTitle = request.EventTitle,
                 EventDescription = request.EventDescription,
-                Language = context.Localization.ResolvedLanguage
+                Language = context.Localization.ResolvedLanguage,
+                RegionId = request.RegionId
             }, cancellationToken));
             await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDir, cancellationToken);
             await WriteSpecialEventDiagnosticsAsync(request, context, outputDir, seoMetadata, cancellationToken);
@@ -1477,6 +1483,28 @@ public sealed class PipelineOrchestrator
 
     private static bool IsPublishSkip(PublishResult result)
         => result.Error is not null && (result.Error.StartsWith("Skipped because", StringComparison.OrdinalIgnoreCase) || result.Error.Contains("validation", StringComparison.OrdinalIgnoreCase));
+
+    private static OptimizedVideoMetadata ApplyGrowthMetadata(OptimizedVideoMetadata source, GrowthOptions growthOptions, string language, string? region)
+    {
+        var description = GrowthMetadataComposer.ApplyGrowthBlock(source.OptimizedDescription, growthOptions, new GrowthMetadataInput
+        {
+            Platform = "YouTube",
+            Language = language,
+            Region = region,
+            IsShortForm = false
+        });
+
+        return new OptimizedVideoMetadata
+        {
+            PrimaryTitle = source.PrimaryTitle,
+            AlternateTitles = source.AlternateTitles,
+            OptimizedDescription = description,
+            Tags = source.Tags,
+            Hashtags = source.Hashtags,
+            ThumbnailTextSuggestions = source.ThumbnailTextSuggestions,
+            HookLine = source.HookLine
+        };
+    }
 
     private static OptimizedVideoMetadata ApplyMonetizationPlan(OptimizedVideoMetadata source, MonetizationPlan plan)
         => new()

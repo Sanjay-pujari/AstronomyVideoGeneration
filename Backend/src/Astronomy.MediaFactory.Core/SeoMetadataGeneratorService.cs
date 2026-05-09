@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Contracts;
+using Microsoft.Extensions.Options;
 using System.Text;
 using System.Text.Json;
 
@@ -6,6 +7,16 @@ namespace Astronomy.MediaFactory.Core;
 
 public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
 {
+    private readonly GrowthOptions _growthOptions;
+
+    public SeoMetadataGeneratorService()
+        : this(Microsoft.Extensions.Options.Options.Create(new GrowthOptions()))
+    {
+    }
+
+    public SeoMetadataGeneratorService(IOptions<GrowthOptions> growthOptions)
+        => _growthOptions = growthOptions.Value ?? new GrowthOptions();
+
     public Task<SeoMetadataResult> GenerateAsync(SeoMetadataRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -27,7 +38,17 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
                 ? new[] { "#Astronomy", "#NightSky", "#Stargazing", "#Shorts" }
                 : new[] { "#Astronomy", "#NightSky", "#Stargazing" };
 
-        var description = BuildDescription(request, selectedObjects, hashtags, isHindi);
+        var growthMetadata = GrowthMetadataComposer.BuildMetadata(_growthOptions, new GrowthMetadataInput
+        {
+            Platform = "YouTube",
+            Language = request.Language,
+            Region = request.RegionId ?? request.LocationName,
+            IsShortForm = request.IsShortForm,
+            ContentType = request.ContentType
+        });
+        var description = GrowthMetadataComposer.AppendBlockOnce(
+            BuildDescription(request, selectedObjects, hashtags, isHindi),
+            GrowthMetadataComposer.BuildGrowthBlock(growthMetadata, request.Language));
 
         var tagSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -60,7 +81,8 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
             Description = description,
             TagsCsv = string.Join(",", tagSet.Where(x => !string.IsNullOrWhiteSpace(x))),
             HashtagsCsv = string.Join(",", hashtags),
-            PinnedComment = pinnedComment
+            PinnedComment = pinnedComment,
+            GrowthMetadata = growthMetadata
         });
     }
 
@@ -70,6 +92,13 @@ public sealed class SeoMetadataGeneratorService : ISeoMetadataGeneratorService
         var path = Path.Combine(outputDirectory, "seo-metadata.json");
         var payload = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(path, payload, cancellationToken);
+
+        if (result.GrowthMetadata is not null)
+        {
+            var growthPath = Path.Combine(outputDirectory, "growth-metadata.json");
+            var growthPayload = JsonSerializer.Serialize(result.GrowthMetadata, new JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(growthPath, growthPayload, cancellationToken);
+        }
     }
 
     private static string BuildTitle(string location, DateOnly date, IReadOnlyList<string> objects, bool isShort, bool isHindi)
