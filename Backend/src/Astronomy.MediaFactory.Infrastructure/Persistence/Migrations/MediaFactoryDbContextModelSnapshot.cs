@@ -406,9 +406,6 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.Property<bool>("PublishToYouTube")
                         .HasColumnType("boolean");
 
-                    b.Property<bool>("UseTopicPlanner")
-                        .HasColumnType("boolean");
-
                     b.Property<bool>("ResumeSupported")
                         .HasColumnType("boolean")
                         .HasColumnName("resumeSupported");
@@ -428,6 +425,9 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("UpdatedUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("UseTopicPlanner")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("YouTubeVideoId")
                         .HasColumnType("text");

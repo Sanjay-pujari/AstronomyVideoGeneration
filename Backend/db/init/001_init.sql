@@ -10,6 +10,7 @@ create table if not exists pipeline_runs
     status integer not null,
     failure_reason text null,
     publish_to_youtube boolean not null,
+    use_topic_planner boolean not null default false,
     youtube_video_id text null,
     started_utc timestamptz null,
     finished_utc timestamptz null
