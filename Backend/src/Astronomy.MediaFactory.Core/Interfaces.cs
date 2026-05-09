@@ -1,6 +1,21 @@
 using Astronomy.MediaFactory.Contracts;
 namespace Astronomy.MediaFactory.Core;
 
+
+public interface IAstronomyEventDiscoveryService
+{
+    Task<IReadOnlyCollection<AstronomyEvent>> RefreshAsync(int? days, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AstronomyEvent>> GetUpcomingAsync(int? days, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AstronomyEvent>> GetTopAsync(int? days, CancellationToken cancellationToken);
+    Task<AstronomyEvent?> GetByIdAsync(string eventId, CancellationToken cancellationToken);
+}
+
+public interface IAstronomyEventScoringService
+{
+    Task<IReadOnlyCollection<AstronomyEvent>> ScoreAsync(IReadOnlyCollection<AstronomyEvent> events, DateTimeOffset now, CancellationToken cancellationToken);
+    AstronomyEvent Score(AstronomyEvent astronomyEvent, DateTimeOffset now);
+}
+
 public interface IAstronomyContextProvider { Task<AstronomyContext> BuildContextAsync(DateOnly date, ContentType contentType, string locationName, string timeZone, CancellationToken cancellationToken); }
 public interface ITopicRankingService { Task<IReadOnlyCollection<RankedTopic>> RankAsync(AstronomyContext context, ContentType contentType, CancellationToken cancellationToken); }
 public interface ITopicSelectionService

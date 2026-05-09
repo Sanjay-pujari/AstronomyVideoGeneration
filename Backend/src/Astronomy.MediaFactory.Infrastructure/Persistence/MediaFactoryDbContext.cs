@@ -8,7 +8,6 @@ public sealed class MediaFactoryDbContext : DbContext
     public MediaFactoryDbContext(DbContextOptions<MediaFactoryDbContext> options) : base(options) { }
 
     public DbSet<PipelineRun> PipelineRuns => Set<PipelineRun>();
-    public DbSet<AstronomyEvent> AstronomyEvents => Set<AstronomyEvent>();
     public DbSet<GeneratedScript> GeneratedScripts => Set<GeneratedScript>();
     public DbSet<MediaAsset> MediaAssets => Set<MediaAsset>();
     public DbSet<PublishedVideo> PublishedVideos => Set<PublishedVideo>();
@@ -29,7 +28,6 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<PipelineRun>().Property(x => x.RegionId).HasColumnName("regionId");
         modelBuilder.Entity<PipelineRun>().Property(x => x.OutputFolder).HasColumnName("outputFolder");
         modelBuilder.Entity<PipelineRun>().Property(x => x.ResumeSupported).HasColumnName("resumeSupported");
-        modelBuilder.Entity<AstronomyEvent>().ToTable("astronomy_events").HasKey(x => x.Id);
         modelBuilder.Entity<GeneratedScript>().ToTable("generated_scripts").HasKey(x => x.Id);
         modelBuilder.Entity<MediaAsset>().ToTable("media_assets").HasKey(x => x.Id);
         modelBuilder.Entity<PublishedVideo>().ToTable("published_videos").HasKey(x => x.Id);

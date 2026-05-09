@@ -112,6 +112,11 @@ public static class ServiceCollectionExtensions
             .Validate(opt => opt.MinimumAnalyticsRows > 0 && !string.IsNullOrWhiteSpace(opt.OutputFileName), "AIOptimization minimum rows and output file name are required.")
             .ValidateOnStart();
 
+        services.AddOptions<AstronomyEventsOptions>()
+            .Bind(configuration.GetSection(AstronomyEventsOptions.SectionName))
+            .Validate(opt => opt.LookAheadDays > 0 && opt.MinimumContentOpportunityScore is >= 0 and <= 1, "AstronomyEvents values are invalid.")
+            .ValidateOnStart();
+
         services.AddOptions<TopicSelectionOptions>()
             .Bind(configuration.GetSection(TopicSelectionOptions.SectionName))
             .Validate(opt => opt.RepetitionWindowDays > 0, "TopicSelection:RepetitionWindowDays must be > 0.")
@@ -246,9 +251,12 @@ public static class ServiceCollectionExtensions
             }
         }
 
+        services.AddSingleton(TimeProvider.System);
         services.AddDbContext<MediaFactoryDbContext>(o => o.UseNpgsql(cs));
         services.AddScoped<IPipelineRepository, EfPipelineRepository>();
         services.AddScoped<IAstronomyContextProvider, AstronomyContextProvider>();
+        services.AddScoped<IAstronomyEventScoringService, AstronomyEventScoringService>();
+        services.AddScoped<IAstronomyEventDiscoveryService, AstronomyEventDiscoveryService>();
         services.AddScoped<IObservationWindowService, ObservationWindowService>();
         services.AddScoped<ITopicRankingService, TopicRankingService>();
         services.AddScoped<ITopicSelectionService, TopicSelectionService>();
