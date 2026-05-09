@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "AstroPulse",
+    "slug": "astropulse-mobile",
+    "scheme": "astropulse",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "extra": {
+      "apiBaseUrl": "https://api.astropulse.example"
+    }
+  }
+}

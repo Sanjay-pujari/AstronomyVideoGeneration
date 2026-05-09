@@ -1,0 +1,11 @@
+{
+  "name": "astropulse-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "rm -rf .test-build && tsc --outDir .test-build --noEmit false && node --test test/*.test.mjs"
+  },
+  "devDependencies": {}
+}
