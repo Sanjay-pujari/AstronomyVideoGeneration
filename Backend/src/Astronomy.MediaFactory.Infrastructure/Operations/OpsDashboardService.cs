@@ -304,11 +304,11 @@ public sealed class OpsDashboardService : IOpsDashboardService
     private async Task<PlatformPublishOpsSummary> BuildPublishSummaryAsync(Guid pipelineRunId, CancellationToken cancellationToken)
     {
         var warnings = new List<string>();
-        var publishedVideos = await _db.PublishedVideos.AsNoTracking()
+        var longVideo = await _db.PublishedVideos.AsNoTracking()
             .Where(x => x.PipelineRunId == pipelineRunId)
             .OrderByDescending(x => x.CreatedAt)
-            .ToListAsync(cancellationToken);
-        var longVideo = publishedVideos.FirstOrDefault();
+            .Select(x => new PublishedVideoPublishSummary(x.Status, x.YouTubeVideoId))
+            .FirstOrDefaultAsync(cancellationToken);
 
         var records = await (from record in _db.PlatformPublicationRecords.AsNoTracking()
                              join shortVideo in _db.ShortVideos.AsNoTracking() on record.ParentShortVideoId equals shortVideo.Id
@@ -473,6 +473,8 @@ public sealed class OpsDashboardService : IOpsDashboardService
 
     private static PlatformPublishOpsSummary EmptyPublishSummary(string warning)
         => new(new PlatformPublishStatus("Unknown", null), new PlatformPublishStatus("Unknown", null), new PlatformPublishStatus("Unknown", null), new PlatformPublishStatus("Unknown", null), [warning]);
+
+    private sealed record PublishedVideoPublishSummary(string Status, string? YouTubeVideoId);
 
     private static string? BuildYouTubeUrl(string? videoId)
         => string.IsNullOrWhiteSpace(videoId) ? null : $"https://www.youtube.com/watch?v={Uri.EscapeDataString(videoId)}";
