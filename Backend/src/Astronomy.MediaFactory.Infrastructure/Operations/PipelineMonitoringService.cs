@@ -82,7 +82,11 @@ public sealed class PipelineMonitoringService : IPipelineMonitoringService
     {
         var failedRuns = await _db.PipelineRuns.AsNoTracking().Where(x => x.Status == PipelineRunStatus.Failed).OrderByDescending(x => x.FinishedUtc).Take(take).ToListAsync(cancellationToken);
         var failedJobs = await _db.PipelineJobs.AsNoTracking().Where(x => x.Status == PipelineJobStatus.Failed).OrderByDescending(x => x.FinishedAt).Take(take).ToListAsync(cancellationToken);
-        var failedStages = await _db.PipelineStageExecutions.AsNoTracking().Where(x => PipelineStageStatuses.IsFailed(x.Status)).OrderByDescending(x => x.FinishedAt).Take(take).ToListAsync(cancellationToken);
+        var failedStages = await _db.PipelineStageExecutions.AsNoTracking()
+            .Where(x => x.Status == PipelineStageStatuses.Failed || x.Status == PipelineStageStatuses.FailedWithFallback)
+            .OrderByDescending(x => x.FinishedAt)
+            .Take(take)
+            .ToListAsync(cancellationToken);
         var latestByStage = failedStages
             .GroupBy(x => x.StageName)
             .Select(g => g.OrderByDescending(x => x.FinishedAt).First())
