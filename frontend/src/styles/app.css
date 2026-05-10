@@ -131,3 +131,12 @@ td { color: #dbe6ff; }
   .public-grid { grid-template-columns: 1fr; }
   .public-footer { align-items: flex-start; flex-direction: column; }
 }
+
+.alert-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.alert-form { display: grid; gap: 16px; }
+.alert-form label, .alert-form fieldset { display: grid; gap: 8px; color: #8fd3ff; font-weight: 900; }
+.alert-form fieldset { margin: 0; border: 1px solid rgba(159, 184, 255, 0.22); border-radius: 18px; padding: 14px; }
+.alert-form legend { padding: 0 6px; color: #f7fbff; }
+.alert-form input, .alert-form select { width: 100%; border: 1px solid rgba(159, 184, 255, 0.28); border-radius: 16px; padding: 12px 14px; color: #f7fbff; background: #111a3a; }
+.alert-form input[type="checkbox"] { width: auto; accent-color: #8fd3ff; }
+.check-row { display: flex !important; align-items: center; gap: 10px !important; color: #eaf4ff !important; font-weight: 750 !important; }

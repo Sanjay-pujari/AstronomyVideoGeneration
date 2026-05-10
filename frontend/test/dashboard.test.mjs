@@ -77,3 +77,13 @@ test('secret fields and SAS query strings are not rendered', () => {
   assert.doesNotMatch(html, /sv=secret/);
   assert.match(html, /https:\/\/storage.example\/video.mp4/);
 });
+
+
+test('admin alerts preview renders missing backend warning and candidate placeholders', () => {
+  const html = renderDashboardHtml(mockDashboardData, { page: 'alerts' });
+  assert.match(html, /Missing alert API warning/);
+  assert.match(html, /Alert queue mock/);
+  assert.match(html, /Upcoming alert candidates/);
+  assert.match(html, /POST \/api\/alerts\/subscribe/);
+  assert.match(html, /No production subscriptions or test notifications/);
+});

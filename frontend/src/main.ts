@@ -3,7 +3,7 @@ import { renderDashboardHtml, runDetails, type PageKey } from './ui/dashboard.js
 import { parsePublicRoute, renderPublicPortalHtml } from './ui/publicPortal.js';
 
 const root = document.getElementById('root');
-const validPages = new Set<PageKey>(['dashboard', 'runs', 'regions', 'events', 'analytics', 'settings']);
+const validPages = new Set<PageKey>(['dashboard', 'runs', 'regions', 'events', 'alerts', 'analytics', 'settings']);
 let latestData: DashboardData | undefined;
 let latestAdminData: DashboardData | undefined;
 let latestAdminError: string | undefined;
@@ -14,6 +14,7 @@ function isAdminRoute() {
 
 function currentPage(): PageKey {
   const page = location.hash.replace(/^#/, '') as PageKey;
+  if (location.pathname === '/admin/alerts') return 'alerts';
   return validPages.has(page) ? page : 'dashboard';
 }
 
@@ -56,6 +57,20 @@ async function loadRun(runId: string) {
 }
 
 function bindPublicInteractions() {
+  document.querySelectorAll<HTMLFormElement>('[data-alert-preferences]').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const state = form.querySelector<HTMLElement>('[data-alert-form-state]');
+      const formData = new FormData(form);
+      const hasEventType = formData.getAll('eventTypes').length > 0;
+      const hasChannel = formData.getAll('channels').length > 0;
+      if (!form.checkValidity() || !hasEventType || !hasChannel) {
+        if (state) state.textContent = 'Choose a region, language, time, at least one event type, and at least one placeholder channel.';
+        return;
+      }
+      if (state) state.textContent = 'Preferences look valid locally. Backend alert subscriptions are unavailable, so nothing was sent or stored.';
+    });
+  });
   document.querySelectorAll<HTMLSelectElement>('[data-region-selector]').forEach((select) => {
     select.addEventListener('change', () => {
       if (select.value) location.href = `/regions/${encodeURIComponent(select.value)}`;

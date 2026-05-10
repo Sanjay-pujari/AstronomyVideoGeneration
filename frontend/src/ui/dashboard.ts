@@ -1,12 +1,13 @@
 import type { AstroEvent, DashboardData, JsonRecord, MediaItem, PipelineRun, PipelineStage, PublishStatus, Region, SchedulerSchedule, TokenHealthItem } from '../services/api.js';
 
-export type PageKey = 'dashboard' | 'runs' | 'regions' | 'events' | 'analytics' | 'settings';
+export type PageKey = 'dashboard' | 'runs' | 'regions' | 'events' | 'alerts' | 'analytics' | 'settings';
 
 const PAGES: Array<{ key: PageKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'runs', label: 'Pipeline Runs' },
   { key: 'regions', label: 'Regions' },
   { key: 'events', label: 'Events' },
+  { key: 'alerts', label: 'Alerts' },
   { key: 'analytics', label: 'Analytics' },
   { key: 'settings', label: 'Settings' }
 ];
@@ -220,6 +221,18 @@ function eventsPage(data: DashboardData) {
   return `<section class="dashboard-grid">${card('Upcoming events', 'Planned astronomical opportunities', eventList(data.upcomingEvents))}${card('Top events', 'Ranked by event score/status', eventList(data.topEvents))}${card('All dashboard events', 'Operations event context', eventList(data.events), 'card--full')}</section>`;
 }
 
+
+function alertCandidateList(events: AstroEvent[]) {
+  if (!events.length) return emptyState('No upcoming alert candidates returned by /api/events/upcoming or /api/events/top yet.');
+  return `<div class="stack-list">${events.map((event) => `<article class="list-row"><div><h3>${escapeHtml(event.title)}</h3><p>${escapeHtml([event.eventType, event.regionName ?? event.regionId, formatDate(event.startsAt ?? event.startUtc), event.visibility].filter(Boolean).join(' • '))}</p></div><div class="badge-stack">${statusBadge('candidate')}<strong class="score-pill">${escapeHtml(event.score ?? event.priority ?? '—')}</strong></div></article>`).join('')}</div>`;
+}
+
+function alertsAdminPage(data: DashboardData) {
+  const candidates = [...data.upcomingEvents, ...data.topEvents].filter((event, index, all) => all.findIndex((item) => item.id === event.id) === index);
+  const queueRows = ['Daily sky guide reminder batch', 'Visible planet watchlist', 'Meteor shower peak preview', 'Special event video follow-up'];
+  return `<section class="dashboard-grid"><section class="card card--full"><div class="card__header"><div><h2>Missing alert API warning</h2><p>Admin alert actions are preview-only until backend contracts are implemented.</p></div>${statusBadge('blocked')}</div><div class="state state--error" role="alert">Required endpoints are unavailable: POST /api/alerts/subscribe, GET/PUT /api/alerts/preferences/{userId}, GET /api/alerts/upcoming, and POST /api/alerts/test. No production subscriptions or test notifications are sent from this screen.</div></section>${card('Alert queue mock', 'Placeholder queue only; no admin internals exposed', `<div class="stack-list">${queueRows.map((row) => `<article class="list-row"><div><h3>${escapeHtml(row)}</h3><p>Preview row for future alert orchestration.</p></div>${statusBadge('preview only')}</article>`).join('')}</div>`)}${card('Upcoming alert candidates', 'Loaded from existing public event APIs where available', alertCandidateList(candidates), 'card--full')}</section>`;
+}
+
 function settingsPage(data: DashboardData) {
   const settings = data.settingsSummary;
   const rows = [
@@ -240,7 +253,9 @@ export function renderDashboardHtml(data: DashboardData, options: { error?: stri
       ? regionsPage(data)
       : page === 'events'
         ? eventsPage(data)
-        : page === 'analytics'
+        : page === 'alerts'
+          ? alertsAdminPage(data)
+          : page === 'analytics'
           ? analyticsPage(data)
           : page === 'settings'
             ? settingsPage(data)

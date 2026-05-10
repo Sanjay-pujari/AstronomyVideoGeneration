@@ -1,4 +1,6 @@
 import { createInitialNavigationState, type MobileTab } from './navigation/AppNavigator.js';
+import { createAlertPreferencesScreen } from './screens/AlertPreferencesScreen.js';
+import { createAlertsScreen } from './screens/AlertsScreen.js';
 import { createEventsScreen } from './screens/EventsScreen.js';
 import { createHomeScreen } from './screens/HomeScreen.js';
 import { createRegionsScreen } from './screens/RegionsScreen.js';
@@ -17,6 +19,8 @@ function createScreenForTab(data: MobileHomeData, activeTab: MobileTab, selected
       return createSkyScreen(data, selectedRegionId);
     case 'events':
       return createEventsScreen(data);
+    case 'alerts':
+      return createAlertsScreen(data);
     case 'videos':
       return createVideosScreen(data);
     case 'settings':
@@ -40,6 +44,7 @@ export function createMobileAppModel(data: MobileHomeData = mockMobileHomeData, 
     screen,
     secondaryScreens: {
       regions: createRegionsScreen(data.regions),
+      alertPreferences: createAlertPreferencesScreen(data, selectedRegionId),
       systemAdminLite: createSystemAdminScreen(data)
     }
   };

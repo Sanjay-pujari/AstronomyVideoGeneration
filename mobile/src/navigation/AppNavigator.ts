@@ -1,9 +1,10 @@
-export type MobileTab = 'home' | 'sky' | 'events' | 'videos' | 'settings';
+export type MobileTab = 'home' | 'sky' | 'events' | 'alerts' | 'videos' | 'settings';
 
 export const mobileTabs: Array<{ id: MobileTab; label: string; icon: string }> = [
   { id: 'home', label: 'Home', icon: 'constellation' },
   { id: 'sky', label: 'Sky', icon: 'telescope' },
   { id: 'events', label: 'Events', icon: 'meteor' },
+  { id: 'alerts', label: 'Alerts', icon: 'bell' },
   { id: 'videos', label: 'Videos', icon: 'play' },
   { id: 'settings', label: 'Settings', icon: 'gear' }
 ];
@@ -13,7 +14,7 @@ export type NavigationState = {
   selectedRegionId?: string;
   notificationReady: boolean;
   bottomTabs: typeof mobileTabs;
-  secondaryRoutes: Array<'regions' | 'systemAdminLite'>;
+  secondaryRoutes: Array<'regions' | 'alertPreferences' | 'systemAdminLite'>;
 };
 
 export function createInitialNavigationState(selectedRegionId?: string): NavigationState {
@@ -22,6 +23,6 @@ export function createInitialNavigationState(selectedRegionId?: string): Navigat
     selectedRegionId,
     notificationReady: true,
     bottomTabs: mobileTabs,
-    secondaryRoutes: ['regions', 'systemAdminLite']
+    secondaryRoutes: ['regions', 'alertPreferences', 'systemAdminLite']
   };
 }
