@@ -1,25 +1,37 @@
-import { api, emptyDashboardData, getFrontendApiHealth, loadDashboardData, type DashboardData } from './services/api.js';
+import { api, emptyDashboardData, getFrontendApiHealth, loadDashboardData, loadPublicPortalData, type DashboardData } from './services/api.js';
 import { renderDashboardHtml, runDetails, type PageKey } from './ui/dashboard.js';
+import { parsePublicRoute, renderPublicPortalHtml } from './ui/publicPortal.js';
 
 const root = document.getElementById('root');
 const validPages = new Set<PageKey>(['dashboard', 'runs', 'regions', 'events', 'analytics', 'settings']);
 let latestData: DashboardData | undefined;
-let latestError: string | undefined;
+let latestAdminData: DashboardData | undefined;
+let latestAdminError: string | undefined;
+
+function isAdminRoute() {
+  return location.pathname === '/admin' || location.pathname.startsWith('/admin/') || location.pathname === '/dashboard' || location.pathname.startsWith('/dashboard/');
+}
 
 function currentPage(): PageKey {
   const page = location.hash.replace(/^#/, '') as PageKey;
   return validPages.has(page) ? page : 'dashboard';
 }
 
-function renderLoading() {
-  if (root) root.innerHTML = '<main class="app-shell"><div class="state state--loading" role="status">Loading AstroPulse telemetry…</div></main>';
+function renderLoading(message = 'Loading AstroPulse…') {
+  if (root) root.innerHTML = `<main class="app-shell"><div class="state state--loading" role="status">${message}</div></main>`;
 }
 
-function render(data: DashboardData, error?: string) {
-  latestData = data;
-  latestError = error;
+function renderAdmin(data: DashboardData, error?: string) {
+  latestAdminData = data;
+  latestAdminError = error;
   if (root) root.innerHTML = renderDashboardHtml(data, { error, page: currentPage() });
-  bindInteractions();
+  bindAdminInteractions();
+}
+
+function renderPublic(data: DashboardData) {
+  latestData = data;
+  if (root) root.innerHTML = renderPublicPortalHtml(data, parsePublicRoute(location.pathname));
+  bindPublicInteractions();
 }
 
 function publishDiagnostics() {
@@ -43,8 +55,16 @@ async function loadRun(runId: string) {
   }
 }
 
-function bindInteractions() {
-  document.getElementById('refresh-dashboard')?.addEventListener('click', () => void loadAndRender());
+function bindPublicInteractions() {
+  document.querySelectorAll<HTMLSelectElement>('[data-region-selector]').forEach((select) => {
+    select.addEventListener('change', () => {
+      if (select.value) location.href = `/regions/${encodeURIComponent(select.value)}`;
+    });
+  });
+}
+
+function bindAdminInteractions() {
+  document.getElementById('refresh-dashboard')?.addEventListener('click', () => void loadAndRenderAdmin());
   document.querySelectorAll<HTMLButtonElement>('[data-region-run]').forEach((button) => {
     button.addEventListener('click', async () => {
       const regionId = button.dataset.regionRun;
@@ -102,18 +122,39 @@ function bindInteractions() {
   });
 }
 
-async function loadAndRender() {
-  renderLoading();
+async function loadAndRenderAdmin() {
+  renderLoading('Loading AstroPulse telemetry…');
   try {
     const data = await loadDashboardData();
-    render(data, data.apiError);
+    renderAdmin(data, data.apiError);
   } catch {
-    render(emptyDashboardData(), 'Analytics service temporarily unavailable.');
+    renderAdmin(emptyDashboardData(), 'Analytics service temporarily unavailable.');
+  }
+}
+
+async function loadAndRenderPublic() {
+  renderLoading('Loading AstroPulse sky guides…');
+  try {
+    renderPublic(await loadPublicPortalData());
+  } catch {
+    renderPublic(emptyDashboardData());
   }
 }
 
 window.addEventListener('hashchange', () => {
-  if (latestData) render(latestData, latestError);
+  if (isAdminRoute() && latestAdminData) renderAdmin(latestAdminData, latestAdminError);
 });
 
-void loadAndRender();
+window.addEventListener('popstate', () => {
+  if (isAdminRoute()) {
+    if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
+  } else if (latestData) {
+    renderPublic(latestData);
+  }
+});
+
+if (isAdminRoute()) {
+  void loadAndRenderAdmin();
+} else {
+  void loadAndRenderPublic();
+}
