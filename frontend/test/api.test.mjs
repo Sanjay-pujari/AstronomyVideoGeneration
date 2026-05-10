@@ -15,3 +15,18 @@ test('api client wraps network failures', async () => {
   globalThis.fetch = async () => { throw new Error('offline'); };
   await assert.rejects(api.getRegions(), ApiError);
 });
+
+
+test('frontend alert form client calls backend subscribe endpoint', async () => {
+  let captured;
+  globalThis.fetch = async (url, init) => {
+    captured = { path: new URL(url).pathname, init };
+    return new Response(JSON.stringify({ subscriberId: 'sub-1', email: 'viewer@example.com', regionId: 'india-udaipur', language: 'en', isActive: true, preferences: { eventTypes: ['MeteorShower'], preferredAlertTimeLocal: '18:00', minimumEventScore: 0.65 } }), { status: 200 });
+  };
+
+  await api.subscribeToAlerts({ email: 'viewer@example.com', regionId: 'india-udaipur', language: 'en', eventTypes: ['MeteorShower'], preferredAlertTimeLocal: '18:00', minimumEventScore: 0.65 });
+
+  assert.equal(captured.path, '/api/alerts/subscribe');
+  assert.equal(captured.init.method, 'POST');
+  assert.match(String(captured.init.body), /MeteorShower/);
+});

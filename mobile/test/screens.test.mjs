@@ -20,7 +20,7 @@ test('mobile home model renders AstroPulse branding with mock sky data', () => {
 test('sky, events, alerts, videos, and settings screens render with mock data', () => {
   assert.match(cardTitles(createMobileAppModel(mockMobileHomeData, 'sky', 'eu')).join('|'), /Latest DailySkyGuide video/);
   assert.match(cardTitles(createMobileAppModel(mockMobileHomeData, 'events')).join('|'), /Upcoming events\|Top events/);
-  assert.match(cardTitles(createMobileAppModel(mockMobileHomeData, 'alerts')).join('|'), /Upcoming sky alerts\|Local notification placeholder/);
+  assert.match(cardTitles(createMobileAppModel(mockMobileHomeData, 'alerts')).join('|'), /Upcoming sky alerts\|Alert API actions/);
   assert.match(cardTitles(createMobileAppModel(mockMobileHomeData, 'videos')).join('|'), /Latest YouTube long videos\|YouTube Shorts\|Facebook Reels\|Instagram Reels/);
   assert.match(cardTitles(createMobileAppModel(mockMobileHomeData, 'settings')).join('|'), /API base URL\|Selected region\|Language\|Notifications/);
 });

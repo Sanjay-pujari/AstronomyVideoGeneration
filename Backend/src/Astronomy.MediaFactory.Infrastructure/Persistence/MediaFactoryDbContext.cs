@@ -21,6 +21,9 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<RecoveryOperation> RecoveryOperations => Set<RecoveryOperation>();
     public DbSet<ContentExperiment> ContentExperiments => Set<ContentExperiment>();
     public DbSet<ContentVariant> ContentVariants => Set<ContentVariant>();
+    public DbSet<AlertSubscriber> AlertSubscribers => Set<AlertSubscriber>();
+    public DbSet<AlertPreferences> AlertPreferences => Set<AlertPreferences>();
+    public DbSet<AlertNotification> AlertNotifications => Set<AlertNotification>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -50,6 +53,33 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<RecoveryOperation>().ToTable("recovery_operations").HasKey(x => x.Id);
         modelBuilder.Entity<ContentExperiment>().ToTable("content_experiments").HasKey(x => x.Id);
         modelBuilder.Entity<ContentVariant>().ToTable("content_variants").HasKey(x => x.Id);
+        modelBuilder.Entity<AlertSubscriber>().ToTable("alert_subscribers").HasKey(x => x.Id);
+        modelBuilder.Entity<AlertSubscriber>().Property(x => x.Email).HasColumnName("email");
+        modelBuilder.Entity<AlertSubscriber>().Property(x => x.Phone).HasColumnName("phone");
+        modelBuilder.Entity<AlertSubscriber>().Property(x => x.PreferredChannel).HasColumnName("preferredChannel").HasConversion<string>();
+        modelBuilder.Entity<AlertSubscriber>().Property(x => x.RegionId).HasColumnName("regionId");
+        modelBuilder.Entity<AlertSubscriber>().Property(x => x.Language).HasColumnName("language");
+        modelBuilder.Entity<AlertSubscriber>().Property(x => x.IsActive).HasColumnName("isActive");
+        modelBuilder.Entity<AlertSubscriber>().Property(x => x.CreatedUtc).HasColumnName("createdUtc");
+        modelBuilder.Entity<AlertSubscriber>().Property(x => x.UpdatedUtc).HasColumnName("updatedUtc");
+        modelBuilder.Entity<AlertPreferences>().ToTable("alert_preferences").HasKey(x => x.Id);
+        modelBuilder.Entity<AlertPreferences>().Property(x => x.SubscriberId).HasColumnName("subscriberId");
+        modelBuilder.Entity<AlertPreferences>().Property(x => x.EventTypes).HasColumnName("eventTypes");
+        modelBuilder.Entity<AlertPreferences>().Property(x => x.PreferredAlertTimeLocal).HasColumnName("preferredAlertTimeLocal");
+        modelBuilder.Entity<AlertPreferences>().Property(x => x.MinimumEventScore).HasColumnName("minimumEventScore");
+        modelBuilder.Entity<AlertPreferences>().Property(x => x.DailySkyGuideReminderEnabled).HasColumnName("dailySkyGuideReminderEnabled");
+        modelBuilder.Entity<AlertPreferences>().Property(x => x.SpecialEventAlertsEnabled).HasColumnName("specialEventAlertsEnabled");
+        modelBuilder.Entity<AlertNotification>().ToTable("alert_notifications").HasKey(x => x.Id);
+        modelBuilder.Entity<AlertNotification>().Property(x => x.SubscriberId).HasColumnName("subscriberId");
+        modelBuilder.Entity<AlertNotification>().Property(x => x.EventId).HasColumnName("eventId");
+        modelBuilder.Entity<AlertNotification>().Property(x => x.RegionId).HasColumnName("regionId");
+        modelBuilder.Entity<AlertNotification>().Property(x => x.Title).HasColumnName("title");
+        modelBuilder.Entity<AlertNotification>().Property(x => x.Message).HasColumnName("message");
+        modelBuilder.Entity<AlertNotification>().Property(x => x.Channel).HasColumnName("channel").HasConversion<string>();
+        modelBuilder.Entity<AlertNotification>().Property(x => x.Status).HasColumnName("status").HasConversion<string>();
+        modelBuilder.Entity<AlertNotification>().Property(x => x.ScheduledUtc).HasColumnName("scheduledUtc");
+        modelBuilder.Entity<AlertNotification>().Property(x => x.SentUtc).HasColumnName("sentUtc");
+        modelBuilder.Entity<AlertNotification>().Property(x => x.Error).HasColumnName("error");
 
         modelBuilder.Entity<ContentExperiment>()
             .HasMany(x => x.Variants)
@@ -67,6 +97,11 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<RecoveryOperation>().HasIndex(x => new { x.PipelineRunId, x.RequestedAt });
         modelBuilder.Entity<ContentExperiment>().HasIndex(x => new { x.VideoId, x.ExperimentType, x.Status });
         modelBuilder.Entity<ContentVariant>().HasIndex(x => new { x.ContentExperimentId, x.IsWinner });
+        modelBuilder.Entity<AlertSubscriber>().HasIndex(x => new { x.Email, x.RegionId, x.IsActive });
+        modelBuilder.Entity<AlertSubscriber>().HasOne(x => x.Preferences).WithOne().HasForeignKey<AlertPreferences>(x => x.SubscriberId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<AlertPreferences>().HasIndex(x => x.SubscriberId).IsUnique();
+        modelBuilder.Entity<AlertNotification>().HasIndex(x => new { x.SubscriberId, x.EventId, x.RegionId }).IsUnique();
+        modelBuilder.Entity<AlertNotification>().HasIndex(x => new { x.Status, x.ScheduledUtc });
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => new { x.PublishedVideoId, x.RetrievedAt });
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => x.EventId);
         modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.RegionId).HasColumnName("regionId");

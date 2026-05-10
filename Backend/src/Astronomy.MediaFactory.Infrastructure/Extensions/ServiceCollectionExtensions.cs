@@ -158,6 +158,16 @@ public static class ServiceCollectionExtensions
             .Validate(opt => !opt.Enabled || string.IsNullOrWhiteSpace(opt.SlackWebhookUrl) || Uri.TryCreate(opt.SlackWebhookUrl, UriKind.Absolute, out _), "Alerting:SlackWebhookUrl must be an absolute URI when provided.")
             .ValidateOnStart();
 
+        services.AddOptions<AlertsOptions>()
+            .Bind(configuration.GetSection(AlertsOptions.SectionName))
+            .Validate(opt => opt.GenerateEveryMinutes > 0 && opt.SendEveryMinutes > 0 && opt.DefaultMinimumEventScore is >= 0 and <= 1 && opt.MaxAlertsPerSubscriberPerDay > 0, "Alerts settings are invalid.")
+            .ValidateOnStart();
+
+        services.AddOptions<EmailOptions>()
+            .Bind(configuration.GetSection(EmailOptions.SectionName))
+            .Validate(opt => opt.SmtpPort > 0, "Email:SmtpPort must be > 0.")
+            .ValidateOnStart();
+
         services.AddOptions<TelemetryOptions>()
             .Bind(configuration.GetSection(TelemetryOptions.SectionName))
             .ValidateOnStart();
@@ -375,6 +385,11 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IOpsDashboardService, OpsDashboardService>();
         services.AddScoped<IRunOperationsService, RunOperationsService>();
         services.AddScoped<IMaintenanceService, MaintenanceService>();
+        services.AddScoped<ISkyAlertService, SkyAlertService>();
+        services.AddScoped<IEmailSender, SmtpEmailSender>();
+        services.AddSingleton<SkyAlertGenerationService>();
+        services.AddSingleton<ISkyAlertGenerationService>(sp => sp.GetRequiredService<SkyAlertGenerationService>());
+        services.AddHostedService(sp => sp.GetRequiredService<SkyAlertGenerationService>());
 
         services.AddHealthChecks()
             .AddCheck<DatabaseConnectivityHealthCheck>("database", tags: ["ready"])

@@ -67,19 +67,19 @@ test('loadPublicPortalData avoids operations APIs', async () => {
 });
 
 
-test('public alerts page renders signup, validates locally, and shows unavailable backend state', () => {
+test('public alerts page renders signup wired to backend alert APIs', () => {
   assert.deepEqual(parsePublicRoute('/alerts'), { page: 'alerts' });
   const html = renderPublicPortalHtml(mockDashboardData, { page: 'alerts' });
-  assert.match(html, /Sky alerts foundation/);
+  assert.match(html, /Sky alerts/);
   assert.match(html, /Alert preferences/);
-  assert.match(html, /Visible planets/);
+  assert.match(html, /Email/);
   assert.match(html, /Full moon \/ supermoon/);
   assert.match(html, /Meteor showers/);
   assert.match(html, /Eclipses/);
   assert.match(html, /Special event videos/);
   assert.match(html, /Daily sky guide reminders/);
-  assert.match(html, /Backend subscriptions are unavailable/);
-  assert.match(html, /Notify me/);
+  assert.match(html, /Submit to create or update an email sky-alert subscription/);
+  assert.match(html, /Save alert subscription/);
   assert.match(html, /Add to calendar/);
   assert.match(html, /Share link/);
   assert.doesNotMatch(html, /accessToken|clientSecret|connectionString/i);

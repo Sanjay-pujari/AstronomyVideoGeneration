@@ -52,8 +52,15 @@ export type MobileHomeData = {
   scheduler: SchedulerStatus;
   analytics: AnalyticsSummary;
   tokenHealth: TokenHealthItem[];
+  alertUpcomingEvents: AstroEvent[];
+  alertSubscription?: AlertSubscriber;
+  alertTestResult?: { notificationId: string; status: string; message: string };
   developmentMockData: boolean;
 };
+
+export type AlertSubscriber = { subscriberId: string; email: string; regionId: string; language: string; isActive: boolean; preferences: { eventTypes: string[]; preferredAlertTimeLocal: string; minimumEventScore: number } };
+export type AlertSubscriptionRequest = { email: string; regionId: string; language: string; eventTypes: string[]; preferredAlertTimeLocal: string; minimumEventScore?: number; preferredChannel?: 'Email' | 'Push' | 'WhatsAppLater' };
+
 
 const SECRET_FIELD_PATTERN = /(access|refresh)?token|secret|connectionstring|sas|signature|clientsecret|apikey/i;
 const BLOCKED_QUERY_PATTERN = /(sig|signature|se|sp|spr|sv|sr|srt|skoid|sktid|skt|ske|sks|skv|token|key|secret|code|client_secret)/i;
@@ -95,13 +102,23 @@ export function createSafeExternalLink(url: string | undefined): string | undefi
   }
 }
 
-async function request<T>(path: string): Promise<T> {
+
+function normalizeAlertEvents(events: AstroEvent[]): AstroEvent[] {
+  return events.map((event) => ({
+    ...event,
+    id: event.id ?? (event as AstroEvent & { eventId?: string }).eventId ?? event.title,
+    startsAt: event.startsAt ?? (event as AstroEvent & { peakUtc?: string; startUtc?: string }).peakUtc ?? (event as AstroEvent & { startUtc?: string }).startUtc
+  }));
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', ...(init?.headers ?? {}) },
+      ...init,
       signal: controller.signal
     });
   } catch (error) {
@@ -127,16 +144,23 @@ export const api = {
   getTopEvents: () => request<AstroEvent[]>('/api/events/top'),
   getAnalyticsDashboard: () => request<AnalyticsSummary>('/api/analytics/dashboard'),
   getTokenHealth: () => request<TokenHealthItem[]>('/api/tokenhealth'),
-  getPipelineStatus: (runId: string) => request<PipelineRunStatus>(`/api/pipeline/status/${encodeURIComponent(runId)}`)
+  getPipelineStatus: (runId: string) => request<PipelineRunStatus>(`/api/pipeline/status/${encodeURIComponent(runId)}`),
+  subscribeToAlerts: (payload: AlertSubscriptionRequest) => request<AlertSubscriber>('/api/alerts/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
+  getAlertPreferences: (subscriberId: string) => request<AlertSubscriber>(`/api/alerts/preferences/${encodeURIComponent(subscriberId)}`),
+  updateAlertPreferences: (subscriberId: string, payload: Omit<AlertSubscriptionRequest, 'email' | 'regionId'> & { dailySkyGuideReminderEnabled: boolean; specialEventAlertsEnabled: boolean }) => request<AlertSubscriber>(`/api/alerts/preferences/${encodeURIComponent(subscriberId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
+  getUpcomingAlerts: (regionId?: string) => request<AstroEvent[]>(`/api/alerts/upcoming${regionId ? `?regionId=${encodeURIComponent(regionId)}` : ''}`),
+  sendTestAlert: (subscriberId: string, eventId?: string) => request<{ notificationId: string; status: string; message: string }>('/api/alerts/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriberId, eventId }) }),
+  unsubscribeAlerts: (subscriberId: string) => request<{ subscriberId: string; isActive: boolean }>(`/api/alerts/unsubscribe/${encodeURIComponent(subscriberId)}`, { method: 'POST' })
 };
 
 export async function loadMobileHomeData(): Promise<MobileHomeData> {
-  const [ops, scheduler, regions, upcomingEvents, topEvents, analytics, tokenHealth] = await Promise.all([
+  const [ops, scheduler, regions, upcomingEvents, topEvents, alertUpcomingEvents, analytics, tokenHealth] = await Promise.all([
     api.getOpsDashboard(),
     api.getSchedulerStatus(),
     api.getRegions(),
     api.getUpcomingEvents(),
     api.getTopEvents(),
+    api.getUpcomingAlerts().catch(() => []),
     api.getAnalyticsDashboard(),
     api.getTokenHealth()
   ]);
@@ -154,6 +178,7 @@ export async function loadMobileHomeData(): Promise<MobileHomeData> {
     scheduler: ops.scheduler ?? scheduler,
     analytics,
     tokenHealth,
+    alertUpcomingEvents: normalizeAlertEvents(alertUpcomingEvents),
     developmentMockData: false
   };
 }

@@ -79,11 +79,12 @@ test('secret fields and SAS query strings are not rendered', () => {
 });
 
 
-test('admin alerts preview renders missing backend warning and candidate placeholders', () => {
+test('admin alerts page renders backend alert subscription controls', () => {
   const html = renderDashboardHtml(mockDashboardData, { page: 'alerts' });
-  assert.match(html, /Missing alert API warning/);
-  assert.match(html, /Alert queue mock/);
+  assert.match(html, /Sky alert subscription API/);
+  assert.match(html, /Save alert subscription/);
+  assert.match(html, /Send test alert/);
+  assert.match(html, /Unsubscribe/);
+  assert.match(html, /POST \/api\/alerts\/subscribe is ready/);
   assert.match(html, /Upcoming alert candidates/);
-  assert.match(html, /POST \/api\/alerts\/subscribe/);
-  assert.match(html, /No production subscriptions or test notifications/);
 });
