@@ -156,7 +156,8 @@ public sealed class OpsDashboardService : IOpsDashboardService
         var summaries = await SummarizeRunsAsync(failedRuns, cancellationToken);
 
         var failedStages = await _db.PipelineStageExecutions.AsNoTracking()
-            .Where(x => PipelineStageStatuses.IsFailed(x.Status) && x.StartedAt >= from7)
+            .Where(x => (x.Status == PipelineStageStatuses.Failed || x.Status == PipelineStageStatuses.FailedWithFallback)
+                && x.StartedAt >= from7)
             .ToListAsync(cancellationToken);
 
         var failures24 = await _db.PipelineRuns.AsNoTracking()
