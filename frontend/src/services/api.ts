@@ -38,12 +38,20 @@ export type MediaItem = {
   locationName?: string;
   createdAt?: string;
   publishedAt?: string;
+  publishedUtc?: string;
+  collectedUtc?: string;
   platform?: string;
+  contentType?: string;
+  platformContentType?: string;
+  mediaId?: string;
   previewUrl?: string;
   url?: string;
   durationSeconds?: number;
+  watchDurationSeconds?: number;
   views?: number;
   engagement?: number;
+  engagementRate?: number;
+  performanceScore?: number;
 };
 
 export type PublishStatus = {
@@ -220,6 +228,7 @@ export type DashboardData = {
   pipelineRuns: PipelineRun[];
   settingsSummary: SafeSettingsSummary;
   warnings: string[];
+  apiError?: string;
 };
 
 export type SafeSettingsSummary = {
@@ -230,7 +239,25 @@ export type SafeSettingsSummary = {
   secretPolicy: string;
 };
 
+export type FrontendApiHealthEntry = {
+  endpoint: string;
+  success: boolean;
+  responseTimeMs: number;
+  fallbackUsed: boolean;
+  status?: number;
+  error?: string;
+  checkedAt: string;
+};
+
+export type FrontendApiHealthReport = {
+  generatedAt: string;
+  apiBaseUrl: string;
+  endpoints: FrontendApiHealthEntry[];
+};
+
 const SECRET_FIELD_PATTERN = /(access|refresh)?token|secret|connectionstring|connectionString|sas|signature|password|clientSecret|appSecret|key$/i;
+const SUPPORTED_PLATFORMS = new Set(['youtube', 'facebook', 'instagram']);
+const diagnostics: FrontendApiHealthEntry[] = [];
 
 export class ApiError extends Error {
   status: number;
@@ -258,9 +285,42 @@ export function removeSecrets<T>(value: T): T {
   return value;
 }
 
+function nowMs() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function persistHealth() {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('frontend-api-health.json', JSON.stringify(getFrontendApiHealth(), null, 2));
+  }
+}
+
+function recordHealth(entry: FrontendApiHealthEntry) {
+  diagnostics.unshift(entry);
+  diagnostics.splice(50);
+  persistHealth();
+}
+
+function markFallbackUsed(endpoint: string) {
+  const entry = diagnostics.find((item) => item.endpoint === endpoint);
+  if (entry) {
+    entry.fallbackUsed = true;
+    persistHealth();
+  }
+}
+
+export function getFrontendApiHealth(): FrontendApiHealthReport {
+  return {
+    generatedAt: new Date().toISOString(),
+    apiBaseUrl: API_BASE_URL,
+    endpoints: diagnostics.slice()
+  };
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const started = nowMs();
 
   let response: Response;
   try {
@@ -273,6 +333,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const message = error instanceof DOMException && error.name === 'AbortError'
       ? `Request timed out after ${API_TIMEOUT_MS}ms`
       : error instanceof Error ? error.message : 'Network request failed';
+    recordHealth({ endpoint: path, success: false, responseTimeMs: Math.round(nowMs() - started), fallbackUsed: false, status: 0, error: message, checkedAt: new Date().toISOString() });
     throw new ApiError(message, 0);
   } finally {
     clearTimeout(timeout);
@@ -287,6 +348,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const sanitized = removeSecrets(body);
+  recordHealth({ endpoint: path, success: response.ok, responseTimeMs: Math.round(nowMs() - started), fallbackUsed: false, status: response.status, error: response.ok ? undefined : 'HTTP request failed', checkedAt: new Date().toISOString() });
   if (!response.ok) {
     const message = sanitized && typeof sanitized === 'object' && 'message' in sanitized
       ? String((sanitized as JsonRecord).message)
@@ -305,6 +367,7 @@ export const api = {
   getUpcomingEvents: () => request<AstroEvent[]>('/api/events/upcoming'),
   getTopEvents: () => request<AstroEvent[]>('/api/events/top'),
   getAnalyticsDashboard: () => request<AnalyticsDashboard>('/api/analytics/dashboard'),
+  getTopContent: () => request<MediaItem[] | { items?: MediaItem[] }>('/api/analytics/top-content'),
   getTokenHealth: () => request<TokenHealthItem[]>('/api/tokenhealth'),
   requestRegionRunNow: (regionId: string, force = false) => request<PipelineRun>(`/api/regions/${encodeURIComponent(regionId)}/run-now?force=${force}`, { method: 'POST' }),
   requestSchedulerRunNow: (scheduleName: string, force = false) => request<PipelineRun>(`/api/scheduler/run-now/${encodeURIComponent(scheduleName)}?force=${force}`, { method: 'POST' })
@@ -316,17 +379,62 @@ function arrayFrom<T>(value: unknown): T[] {
   return [];
 }
 
+function canonicalPlatform(value?: string) {
+  const raw = String(value ?? '').trim();
+  const normalized = raw.toLowerCase().replace(/[^a-z]/g, '');
+  if (normalized === 'youtube') return 'YouTube';
+  if (normalized === 'facebook') return 'Facebook';
+  if (normalized === 'instagram') return 'Instagram';
+  return undefined;
+}
+
+function isSupportedPlatform(value?: string) {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/[^a-z]/g, '');
+  return SUPPORTED_PLATFORMS.has(normalized);
+}
+
+function normalizeMediaItem(item: MediaItem): MediaItem | undefined {
+  const platform = canonicalPlatform(item.platform);
+  if (!platform) return undefined;
+  return {
+    ...item,
+    id: String(item.id ?? item.mediaId ?? item.url ?? item.title ?? 'content'),
+    title: item.title || item.mediaId || 'Untitled published content',
+    platform,
+    publishedAt: item.publishedAt ?? item.publishedUtc ?? item.createdAt,
+    contentType: item.contentType ?? item.platformContentType
+  };
+}
+
+function supportedMedia(items: MediaItem[]) {
+  return items.map(normalizeMediaItem).filter((item): item is MediaItem => Boolean(item));
+}
+
+function contentTypeValue(item: MediaItem) {
+  return String(item.contentType ?? item.platformContentType ?? '').toLowerCase();
+}
+
+function isShortForm(item: MediaItem) {
+  const contentType = contentTypeValue(item);
+  return contentType.includes('short') || contentType.includes('reel') || contentType.includes('story') || (item.durationSeconds !== undefined && item.durationSeconds <= 90);
+}
+
 function publishStatusesFromOps(ops: OpsDashboard): PublishStatus[] {
-  if (ops.publishStatuses?.length) return ops.publishStatuses;
-  const summary = ops.platformPublishSummary;
-  if (!summary || typeof summary !== 'object') return [];
-  return Object.entries(summary)
-    .filter(([, value]) => value && typeof value === 'object' && !Array.isArray(value))
-    .map(([platform, value]) => ({
-      platform: platform.replace(/([A-Z])/g, ' $1').trim(),
-      status: String(((value as JsonRecord).status as string | undefined) ?? 'unknown'),
-      url: (value as JsonRecord).url as string | undefined
-    }));
+  const statuses = ops.publishStatuses?.length
+    ? ops.publishStatuses
+    : ops.platformPublishSummary && typeof ops.platformPublishSummary === 'object'
+      ? Object.entries(ops.platformPublishSummary)
+        .filter(([, value]) => value && typeof value === 'object' && !Array.isArray(value))
+        .map(([platform, value]) => ({
+          platform: platform.replace(/([A-Z])/g, ' $1').trim(),
+          status: String(((value as JsonRecord).status as string | undefined) ?? 'unknown'),
+          url: (value as JsonRecord).url as string | undefined
+        }))
+      : [];
+
+  return statuses
+    .filter((item) => isSupportedPlatform(item.platform))
+    .map((item) => ({ ...item, platform: canonicalPlatform(item.platform) ?? item.platform }));
 }
 
 function tokenHealthFromSummary(summary?: TokenHealthSummary): TokenHealthItem[] {
@@ -337,36 +445,31 @@ function tokenHealthFromSummary(summary?: TokenHealthSummary): TokenHealthItem[]
   ];
 }
 
-function analyticsFromResponses(ops: OpsDashboard, analyticsDashboard: AnalyticsDashboard): AnalyticsSummary {
+function supportedPlatformBreakdown(items?: JsonRecord[]) {
+  return (items ?? [])
+    .filter((item) => isSupportedPlatform(String(item.platform ?? '')))
+    .map((item) => ({ ...item, platform: canonicalPlatform(String(item.platform ?? '')) ?? String(item.platform ?? '') }));
+}
+
+function analyticsFromResponses(ops: OpsDashboard, analyticsDashboard: AnalyticsDashboard, topContent: MediaItem[]): AnalyticsSummary {
   const overall = analyticsDashboard.overallSummary ?? {};
   const opsAnalytics = ops.analytics ?? {};
+  const bestPlatform = canonicalPlatform(String(overall.bestPerformingPlatform ?? ops.analyticsSummary?.bestPerformingPlatform ?? opsAnalytics.bestPlatform ?? opsAnalytics.topPlatform ?? ''));
   return {
-    ...opsAnalytics,
-    views: opsAnalytics.views ?? Number(overall.totalViews ?? ops.analyticsSummary?.totalViews ?? 0),
     totalViews: Number(overall.totalViews ?? ops.analyticsSummary?.totalViews ?? opsAnalytics.totalViews ?? opsAnalytics.views ?? 0),
+    views: Number(overall.totalViews ?? ops.analyticsSummary?.totalViews ?? opsAnalytics.totalViews ?? opsAnalytics.views ?? 0),
     totalEngagement: Number(overall.totalEngagement ?? ops.analyticsSummary?.totalEngagement ?? opsAnalytics.totalEngagement ?? 0),
-    engagementRate: opsAnalytics.engagementRate ?? Number(overall.averageEngagementRate ?? 0),
-    topPlatform: opsAnalytics.topPlatform ?? String(overall.bestPerformingPlatform ?? ops.analyticsSummary?.bestPerformingPlatform ?? ''),
-    bestPlatform: String(overall.bestPerformingPlatform ?? ops.analyticsSummary?.bestPerformingPlatform ?? ''),
-    topContent: analyticsDashboard.topContent ?? arrayFrom<MediaItem>(ops.analyticsIntelligence && typeof ops.analyticsIntelligence === 'object' ? (ops.analyticsIntelligence as JsonRecord).topContent : undefined),
+    engagementRate: Number(overall.averageEngagementRate ?? opsAnalytics.engagementRate ?? 0),
+    topPlatform: bestPlatform,
+    bestPlatform,
+    bestPerformingPlatform: bestPlatform,
+    topContent,
     engagementTrends: []
   };
 }
 
-export async function loadDashboardData(): Promise<DashboardData> {
-  const [ops, scheduler, regionsResponse, upcomingEvents, topEvents, analyticsDashboard, tokenHealth] = await Promise.all([
-    api.getOpsDashboard(),
-    api.getSchedulerStatus(),
-    api.getRegions(),
-    api.getUpcomingEvents(),
-    api.getTopEvents(),
-    api.getAnalyticsDashboard(),
-    api.getTokenHealth()
-  ]);
-
-  const regions = arrayFrom<Region>(regionsResponse);
-  const tokenHealthSummary = ops.tokenHealthSummary;
-  const pipelineRuns = ops.pipelineRuns ?? ops.recentPipelineRuns ?? scheduler.recentRuns?.map((run) => ({
+function schedulerPipelineRuns(scheduler: SchedulerStatus): PipelineRun[] {
+  return scheduler.recentRuns?.map((run) => ({
     runId: run.pipelineRunId ?? run.scheduleName,
     pipelineRunId: run.pipelineRunId,
     regionId: run.regionId,
@@ -377,30 +480,101 @@ export async function loadDashboardData(): Promise<DashboardData> {
     startedUtc: run.actualRunUtc ?? run.plannedRunUtc,
     message: run.skipReason ?? run.eventTitle
   })) ?? [];
+}
+
+function settingsSummary(): SafeSettingsSummary {
+  return {
+    apiBaseUrl: API_BASE_URL,
+    timeoutMs: API_TIMEOUT_MS,
+    environment: typeof location !== 'undefined' && location.hostname === 'localhost' ? 'local' : 'production',
+    productionApiConfigured: API_BASE_URL.startsWith('https://'),
+    secretPolicy: 'Secret-shaped fields are stripped before rendering; tokens, app secrets, connection strings, and SAS query strings are never shown.'
+  };
+}
+
+export function emptyDashboardData(): DashboardData {
+  return {
+    ops: {},
+    systemHealth: {},
+    latestVideos: [],
+    latestShorts: [],
+    publishStatuses: [],
+    scheduler: {},
+    tokenHealth: [],
+    analytics: analyticsFromResponses({}, {}, []),
+    analyticsDashboard: {},
+    regions: [],
+    events: [],
+    upcomingEvents: [],
+    topEvents: [],
+    pipelineRuns: [],
+    settingsSummary: settingsSummary(),
+    warnings: []
+  };
+}
+
+type Capture<T> = { value: T; failed: boolean };
+
+async function capture<T>(endpoint: string, loader: () => Promise<T>, fallback: T): Promise<Capture<T>> {
+  try {
+    return { value: await loader(), failed: false };
+  } catch {
+    markFallbackUsed(endpoint);
+    return { value: fallback, failed: true };
+  }
+}
+
+export async function loadDashboardData(): Promise<DashboardData> {
+  const [opsResult, schedulerResult, regionsResult, upcomingEventsResult, topEventsResult, analyticsDashboardResult, topContentResult, tokenHealthResult] = await Promise.all([
+    capture('/api/ops/dashboard', api.getOpsDashboard, {} as OpsDashboard),
+    capture('/api/scheduler/status', api.getSchedulerStatus, {} as SchedulerStatus),
+    capture('/api/regions', api.getRegions, [] as Region[]),
+    capture('/api/events/upcoming', api.getUpcomingEvents, [] as AstroEvent[]),
+    capture('/api/events/top', api.getTopEvents, [] as AstroEvent[]),
+    capture('/api/analytics/dashboard', api.getAnalyticsDashboard, {} as AnalyticsDashboard),
+    capture('/api/analytics/top-content', api.getTopContent, [] as MediaItem[]),
+    capture('/api/tokenhealth', api.getTokenHealth, [] as TokenHealthItem[])
+  ]);
+  const ops = opsResult.value;
+  const scheduler = schedulerResult.value;
+  const regionsResponse = regionsResult.value;
+  const upcomingEvents = upcomingEventsResult.value;
+  const topEvents = topEventsResult.value;
+  const analyticsDashboard = analyticsDashboardResult.value;
+  const topContentResponse = topContentResult.value;
+  const tokenHealth = tokenHealthResult.value;
+  const apiError = analyticsDashboardResult.failed || topContentResult.failed ? 'Analytics service temporarily unavailable.' : undefined;
+
+  const regions = arrayFrom<Region>(regionsResponse);
+  const topContent = supportedMedia(arrayFrom<MediaItem>(topContentResponse));
+  const analyticsDashboardWithSupportedPlatforms = {
+    ...analyticsDashboard,
+    platformBreakdown: supportedPlatformBreakdown(analyticsDashboard.platformBreakdown),
+    topContent
+  };
+  const tokenHealthSummary = ops.tokenHealthSummary;
+  const pipelineRuns = ops.pipelineRuns ?? ops.recentPipelineRuns ?? schedulerPipelineRuns(scheduler);
+  const videos = topContent.filter((item) => !isShortForm(item));
+  const shorts = topContent.filter(isShortForm);
 
   return {
     ops,
     systemHealth: ops.systemHealthSummary ?? {},
-    latestVideos: ops.latestVideos ?? [],
-    latestShorts: ops.latestShorts ?? [],
+    latestVideos: videos,
+    latestShorts: shorts,
     publishStatuses: publishStatusesFromOps(ops),
     scheduler: ops.scheduler ?? ops.schedulerStatus ?? scheduler,
     tokenHealth: ops.tokenHealth?.length ? ops.tokenHealth : tokenHealth.length ? tokenHealth : tokenHealthFromSummary(tokenHealthSummary),
     tokenHealthSummary,
-    analytics: analyticsFromResponses(ops, analyticsDashboard),
-    analyticsDashboard,
+    analytics: analyticsFromResponses(ops, analyticsDashboardWithSupportedPlatforms, topContent),
+    analyticsDashboard: analyticsDashboardWithSupportedPlatforms,
     regions: ops.regions ?? regions,
     events: ops.events ?? upcomingEvents,
     upcomingEvents,
     topEvents,
     pipelineRuns,
-    settingsSummary: {
-      apiBaseUrl: API_BASE_URL,
-      timeoutMs: API_TIMEOUT_MS,
-      environment: typeof location !== 'undefined' && location.hostname === 'localhost' ? 'local' : 'production',
-      productionApiConfigured: API_BASE_URL.startsWith('https://'),
-      secretPolicy: 'Secret-shaped fields are stripped before rendering; tokens, app secrets, connection strings, and SAS query strings are never shown.'
-    },
-    warnings: [...(ops.warnings ?? []), ...(scheduler.warnings ?? [])]
+    settingsSummary: settingsSummary(),
+    warnings: [...(ops.warnings ?? []), ...(scheduler.warnings ?? [])],
+    apiError
   };
 }

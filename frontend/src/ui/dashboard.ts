@@ -26,6 +26,10 @@ function formatNumber(value?: number) {
   return Number(value ?? 0).toLocaleString();
 }
 
+function formatOptionalNumber(value?: number) {
+  return value === undefined || Number.isNaN(value) ? '—' : Number(value).toLocaleString();
+}
+
 function seconds(value?: number) {
   if (!value) return '—';
   if (value < 60) return `${Math.round(value)}s`;
@@ -82,7 +86,8 @@ function hero(activePage: PageKey) {
 }
 
 function shell(activePage: PageKey, body: string, error?: string) {
-  return `<main class="app-shell">${nav(activePage)}${hero(activePage)}${error ? `<div class="state state--error" role="alert"><strong>Signal lost.</strong><span>${escapeHtml(error)} Showing safe mock telemetry.</span></div>` : ''}${body}</main>`;
+  const message = error || '';
+  return `<main class="app-shell">${nav(activePage)}${hero(activePage)}${message ? `<div class="state state--error" role="alert"><strong>Analytics service temporarily unavailable.</strong><span>${escapeHtml(message)}</span></div>` : ''}${body}</main>`;
 }
 
 function metric(label: string, value: string, hint: string) {
@@ -102,8 +107,19 @@ function systemHealth(data: DashboardData) {
 }
 
 function mediaList(items: MediaItem[]) {
-  if (!items.length) return emptyState('No generated media yet. Completed runs will appear here.');
-  return `<div class="stack-list">${items.map((item) => `<article class="list-row"><div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml([item.regionName ?? item.locationName, item.platform, item.durationSeconds ? `${item.durationSeconds}s` : undefined].filter(Boolean).join(' • '))}</p>${externalLink(item.url ?? item.previewUrl)}</div>${statusBadge(item.status)}</article>`).join('')}</div>`;
+  if (!items.length) return emptyState('Waiting for analytics data. Publish content and collect analytics to populate this card.');
+  return `<div class="stack-list">${items.map((item) => {
+    const publishDate = item.publishedAt ?? item.publishedUtc ?? item.createdAt;
+    const details = [
+      item.regionName ?? item.locationName,
+      item.platform,
+      publishDate ? `Published ${formatDate(publishDate)}` : undefined,
+      item.durationSeconds ? `${item.durationSeconds}s` : undefined,
+      item.views !== undefined ? `${formatOptionalNumber(item.views)} views` : undefined,
+      item.engagement !== undefined ? `${formatOptionalNumber(item.engagement)} engagement` : undefined
+    ];
+    return `<article class="list-row"><div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(details.filter(Boolean).join(' • '))}</p>${externalLink(item.url ?? item.previewUrl)}</div>${statusBadge(item.status ?? 'published')}</article>`;
+  }).join('')}</div>`;
 }
 
 function publishStatusList(items: PublishStatus[]) {
@@ -167,7 +183,8 @@ function analyticsPage(data: DashboardData) {
   const platformBreakdown = data.analyticsDashboard.platformBreakdown ?? [];
   const regionBreakdown = data.analyticsDashboard.regionBreakdown ?? [];
   const topContent = data.analytics.topContent ?? [];
-  return `<section class="metric-grid">${metric('Total views', formatNumber(data.analytics.totalViews ?? data.analytics.views), 'Platform summary')}${metric('Total engagement', formatNumber(data.analytics.totalEngagement), 'Recent reporting window')}${metric('Engagement rate', `${data.analytics.engagementRate ?? overall.averageEngagementRate ?? 0}%`, 'Average')}${metric('Best platform', data.analytics.bestPlatform || data.analytics.topPlatform || '—', 'Top performer')}</section><section class="dashboard-grid">${card('Platform summary', 'Views and engagement by platform', platformBreakdown.length ? `<div class="stack-list">${platformBreakdown.map((item) => `<div class="list-row"><div><h3>${escapeHtml(item.platform)}</h3><p>${escapeHtml(`${formatNumber(Number(item.totalViews))} views • ${formatNumber(Number(item.contentCount))} items`)}</p></div><strong class="score-pill">${escapeHtml(item.averageEngagement ?? item.averageEngagementRate ?? '—')}</strong></div>`).join('')}</div>` : emptyState('No platform summary returned.'))}${card('Top content', 'Best performing published content', topContent.length ? mediaList(topContent) : emptyState('No top content returned.'))}${card('Engagement trends', 'Trend data from analytics charts', trendPanel(data.analyticsDashboard.trends ?? data.analyticsDashboard.charts))}${card('Best region/platform', 'Operational winner summary', regionBreakdown.length ? `<div class="stack-list">${regionBreakdown.map((item) => `<div class="list-row"><div><h3>${escapeHtml(item.locationName ?? item.regionId ?? 'Region')}</h3><p>${escapeHtml(`${formatNumber(Number(item.views))} views • ${formatNumber(Number(item.runs))} runs`)}</p></div></div>`).join('')}</div>` : emptyState('No region breakdown returned.'))}</section>`;
+  const hasAnalytics = platformBreakdown.length > 0 || topContent.length > 0 || Number(overall.totalContentPublished ?? 0) > 0;
+  return `<section class="metric-grid">${metric('Total views', hasAnalytics ? formatOptionalNumber(data.analytics.totalViews ?? data.analytics.views) : '—', 'From /api/analytics/dashboard')}${metric('Total engagement', hasAnalytics ? formatOptionalNumber(data.analytics.totalEngagement) : '—', 'From /api/analytics/dashboard')}${metric('Engagement rate', hasAnalytics ? `${formatOptionalNumber(data.analytics.engagementRate ?? Number(overall.averageEngagementRate))}%` : '—', 'Average')}${metric('Best platform', data.analytics.bestPlatform || data.analytics.topPlatform || '—', 'Top performer')}</section><section class="dashboard-grid">${card('Platform summary', 'Views and engagement by platform', platformBreakdown.length ? `<div class="stack-list">${platformBreakdown.map((item) => `<div class="list-row"><div><h3>${escapeHtml(item.platform)}</h3><p>${escapeHtml(`${formatOptionalNumber(Number(item.totalViews))} views • ${formatOptionalNumber(Number(item.contentCount))} items`)}</p></div><strong class="score-pill">${escapeHtml(item.averageEngagement ?? item.averageEngagementRate ?? '—')}</strong></div>`).join('')}</div>` : emptyState('Waiting for analytics data. Connect YouTube, Facebook, or Instagram analytics collection to populate platform totals.'))}${card('Top content', 'Recent published content from analytics', topContent.length ? mediaList(topContent) : emptyState('Waiting for analytics data. Published YouTube, Facebook, and Instagram content will appear after analytics collection.'))}${card('Engagement trends', 'Trend data from analytics charts', trendPanel(data.analyticsDashboard.trends ?? data.analyticsDashboard.charts))}${card('Best region/platform', 'Operational winner summary', regionBreakdown.length ? `<div class="stack-list">${regionBreakdown.map((item) => `<div class="list-row"><div><h3>${escapeHtml(item.locationName ?? item.regionId ?? 'Region')}</h3><p>${escapeHtml(`${formatOptionalNumber(Number(item.views))} views • ${formatOptionalNumber(Number(item.runs))} runs`)}</p></div></div>`).join('')}</div>` : emptyState('Waiting for analytics data. Regional performance appears after collected analytics include locations.'))}</section>`;
 }
 
 function trendPanel(value?: JsonRecord) {
@@ -212,7 +229,7 @@ function settingsPage(data: DashboardData) {
     ['Production API configured', settings.productionApiConfigured ? 'yes' : 'no'],
     ['Secret policy', settings.secretPolicy]
   ];
-  return `<section class="dashboard-grid"><section class="card card--full"><div class="card__header"><div><h2>Settings Readonly</h2><p>Safe configuration summary only. Secrets and SAS query strings are intentionally hidden.</p></div></div><div class="settings-list">${rows.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></section></section>`;
+  return `<section class="dashboard-grid"><section class="card card--full"><div class="card__header"><div><h2>Settings Readonly</h2><p>Safe configuration summary only. Secrets and SAS query strings are intentionally hidden.</p></div></div><div class="settings-list">${rows.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div><p><a class="safe-link" href="frontend-api-health.json" data-api-health-download>Download frontend-api-health.json</a></p></section></section>`;
 }
 
 export function renderDashboardHtml(data: DashboardData, options: { error?: string; page?: PageKey } = {}) {
