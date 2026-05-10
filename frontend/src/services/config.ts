@@ -5,7 +5,7 @@ declare global {
   }
 }
 
-const DEFAULT_LOCAL_API_BASE_URL = 'http://localhost:8080';
+const DEFAULT_LOCAL_API_BASE_URL = 'https://localhost:59235';
 const DEFAULT_PRODUCTION_API_BASE_URL = 'https://api.astropulse.example';
 const DEFAULT_TIMEOUT_MS = 12_000;
 

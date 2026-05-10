@@ -38,7 +38,9 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     preferredAlertTimeLocal = table.Column<string>(type: "text", nullable: false),
                     minimumEventScore = table.Column<double>(type: "double precision", nullable: false),
                     dailySkyGuideReminderEnabled = table.Column<bool>(type: "boolean", nullable: false),
-                    specialEventAlertsEnabled = table.Column<bool>(type: "boolean", nullable: false)
+                    specialEventAlertsEnabled = table.Column<bool>(type: "boolean", nullable: false),
+                    createdUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    updatedUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -60,7 +62,9 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     status = table.Column<string>(type: "text", nullable: false),
                     scheduledUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     sentUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
-                    error = table.Column<string>(type: "text", nullable: true)
+                    error = table.Column<string>(type: "text", nullable: true),
+                    createdUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    updatedUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
                 },
                 constraints: table => table.PrimaryKey("PK_alert_notifications", x => x.Id));
 

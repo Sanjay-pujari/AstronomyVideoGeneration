@@ -69,6 +69,8 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<AlertPreferences>().Property(x => x.MinimumEventScore).HasColumnName("minimumEventScore");
         modelBuilder.Entity<AlertPreferences>().Property(x => x.DailySkyGuideReminderEnabled).HasColumnName("dailySkyGuideReminderEnabled");
         modelBuilder.Entity<AlertPreferences>().Property(x => x.SpecialEventAlertsEnabled).HasColumnName("specialEventAlertsEnabled");
+        modelBuilder.Entity<AlertPreferences>().Property(x => x.CreatedUtc).HasColumnName("createdUtc");
+        modelBuilder.Entity<AlertPreferences>().Property(x => x.UpdatedUtc).HasColumnName("updatedUtc");
         modelBuilder.Entity<AlertNotification>().ToTable("alert_notifications").HasKey(x => x.Id);
         modelBuilder.Entity<AlertNotification>().Property(x => x.SubscriberId).HasColumnName("subscriberId");
         modelBuilder.Entity<AlertNotification>().Property(x => x.EventId).HasColumnName("eventId");
@@ -80,6 +82,8 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<AlertNotification>().Property(x => x.ScheduledUtc).HasColumnName("scheduledUtc");
         modelBuilder.Entity<AlertNotification>().Property(x => x.SentUtc).HasColumnName("sentUtc");
         modelBuilder.Entity<AlertNotification>().Property(x => x.Error).HasColumnName("error");
+        modelBuilder.Entity<AlertNotification>().Property(x => x.CreatedUtc).HasColumnName("createdUtc");
+        modelBuilder.Entity<AlertNotification>().Property(x => x.UpdatedUtc).HasColumnName("updatedUtc");
 
         modelBuilder.Entity<ContentExperiment>()
             .HasMany(x => x.Variants)
