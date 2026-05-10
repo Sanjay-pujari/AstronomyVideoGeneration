@@ -1,5 +1,4 @@
-import { api, loadDashboardData, type DashboardData } from './services/api.js';
-import { mockDashboardData } from './services/mockData.js';
+import { api, emptyDashboardData, getFrontendApiHealth, loadDashboardData, type DashboardData } from './services/api.js';
 import { renderDashboardHtml, runDetails, type PageKey } from './ui/dashboard.js';
 
 const root = document.getElementById('root');
@@ -21,6 +20,15 @@ function render(data: DashboardData, error?: string) {
   latestError = error;
   if (root) root.innerHTML = renderDashboardHtml(data, { error, page: currentPage() });
   bindInteractions();
+}
+
+function publishDiagnostics() {
+  const report = JSON.stringify(getFrontendApiHealth(), null, 2);
+  const encoded = encodeURIComponent(report);
+  document.querySelectorAll<HTMLAnchorElement>('[data-api-health-download]').forEach((link) => {
+    link.href = `data:application/json;charset=utf-8,${encoded}`;
+    link.download = 'frontend-api-health.json';
+  });
 }
 
 async function loadRun(runId: string) {
@@ -76,6 +84,7 @@ function bindInteractions() {
       }
     });
   });
+  publishDiagnostics();
   document.getElementById('load-run')?.addEventListener('click', async () => {
     const input = document.getElementById('run-id') as HTMLInputElement | null;
     if (!input?.value) return;
@@ -97,9 +106,9 @@ async function loadAndRender() {
   renderLoading();
   try {
     const data = await loadDashboardData();
-    render(data);
-  } catch (error) {
-    render(mockDashboardData, error instanceof Error ? error.message : 'Unable to load dashboard data.');
+    render(data, data.apiError);
+  } catch {
+    render(emptyDashboardData(), 'Analytics service temporarily unavailable.');
   }
 }
 

@@ -1,0 +1,14 @@
+{
+  "generatedAt": null,
+  "apiBaseUrl": null,
+  "endpoints": [],
+  "schema": {
+    "endpoint": "string",
+    "success": "boolean",
+    "responseTimeMs": "number",
+    "fallbackUsed": "boolean",
+    "status": "number | optional",
+    "error": "string | optional",
+    "checkedAt": "ISO-8601 string"
+  }
+}

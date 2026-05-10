@@ -2,7 +2,7 @@ import type { DashboardData } from './api.js';
 
 export const mockDashboardData: DashboardData = {
   ops: {
-    warnings: ['Mock telemetry is active until the API responds.'],
+    warnings: [],
     systemHealthSummary: {
       ffmpegConfigured: true,
       stellariumConfigured: true,
@@ -23,12 +23,12 @@ export const mockDashboardData: DashboardData = {
     { id: 'vid-002', title: 'Eta Aquarids Meteor Watch', status: 'rendered', regionName: 'Europe', platform: 'YouTube', createdAt: '2026-05-08T18:30:00Z' }
   ],
   latestShorts: [
-    { id: 'short-001', title: 'Tonight: Saturn before sunrise', status: 'published', regionName: 'Pacific', platform: 'TikTok', durationSeconds: 42, url: 'https://tiktok.example/@astropulse/video/short-001' },
+    { id: 'short-001', title: 'Tonight: Saturn before sunrise', status: 'published', regionName: 'Pacific', platform: 'Facebook', durationSeconds: 42, url: 'https://facebook.example/astropulse/videos/short-001' },
     { id: 'short-002', title: '60-second sky map', status: 'queued', regionName: 'South America', platform: 'Instagram', durationSeconds: 58 }
   ],
   publishStatuses: [
     { platform: 'YouTube Long', status: 'healthy', lastPublishedAt: '2026-05-08T21:15:00Z', url: 'https://youtube.example/watch/vid-001?sv=sas-token' },
-    { platform: 'TikTok', status: 'warning', message: 'Refresh required soon' },
+    { platform: 'Facebook', status: 'healthy', message: 'Ready' },
     { platform: 'Instagram', status: 'queued' }
   ],
   scheduler: {
@@ -71,7 +71,7 @@ export const mockDashboardData: DashboardData = {
     platformBreakdown: [
       { platform: 'YouTube', contentCount: 12, totalViews: 98200, averageEngagement: 7.1 },
       { platform: 'Instagram', contentCount: 8, totalViews: 18400, averageEngagement: 5.3 },
-      { platform: 'TikTok', contentCount: 5, totalViews: 8200, averageEngagement: 4.9 }
+      { platform: 'Facebook', contentCount: 5, totalViews: 8200, averageEngagement: 4.9 }
     ],
     regionBreakdown: [
       { regionId: 'na', locationName: 'North America', runs: 24, views: 88200 },
