@@ -39,5 +39,8 @@ export const mockMobileHomeData: MobileHomeData = {
     { provider: 'YouTube', status: 'healthy' },
     { provider: 'Instagram', status: 'warning', expiresAt: '2026-05-12T00:00:00Z' }
   ],
+  alertUpcomingEvents: [
+    { id: 'alert-1', title: 'Meteor shower email alert candidate', eventType: 'MeteorShower', regionName: 'Global', startsAt: '2026-05-10T04:00:00Z', visibility: 'Email-ready backend candidate', score: 0.82 }
+  ],
   developmentMockData: true
 };

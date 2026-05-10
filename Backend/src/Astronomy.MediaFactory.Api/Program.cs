@@ -88,6 +88,64 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 
 app.MapGet("/api/events/upcoming", async (int? days, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
     Results.Ok(await events.GetUpcomingAsync(days, ct)));
+app.MapPost("/api/alerts/subscribe", async (AlertSubscribeRequest request, ISkyAlertService alerts, CancellationToken ct) =>
+{
+    try
+    {
+        var created = await alerts.SubscribeAsync(request, ct);
+        return Results.Created($"/api/alerts/preferences/{created.SubscriberId}", created);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { message = ex.Message });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+app.MapGet("/api/alerts/preferences/{subscriberId:guid}", async (Guid subscriberId, ISkyAlertService alerts, CancellationToken ct) =>
+{
+    var item = await alerts.GetPreferencesAsync(subscriberId, ct);
+    return item is null ? Results.NotFound(new { message = "Alert subscriber was not found." }) : Results.Ok(item);
+});
+app.MapPut("/api/alerts/preferences/{subscriberId:guid}", async (Guid subscriberId, AlertPreferenceUpdateRequest request, ISkyAlertService alerts, CancellationToken ct) =>
+{
+    try
+    {
+        var item = await alerts.UpdatePreferencesAsync(subscriberId, request, ct);
+        return item is null ? Results.NotFound(new { message = "Alert subscriber was not found." }) : Results.Ok(item);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+app.MapGet("/api/alerts/upcoming", async (string? regionId, ISkyAlertService alerts, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await alerts.GetUpcomingAsync(regionId, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+app.MapPost("/api/alerts/test", async (AlertTestRequest request, ISkyAlertService alerts, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await alerts.CreateTestAlertAsync(request, ct));
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+});
+app.MapPost("/api/alerts/unsubscribe/{subscriberId:guid}", async (Guid subscriberId, ISkyAlertService alerts, CancellationToken ct) =>
+    await alerts.UnsubscribeAsync(subscriberId, ct) ? Results.Ok(new { subscriberId, isActive = false }) : Results.NotFound(new { message = "Alert subscriber was not found." }));
+
 app.MapGet("/api/events/top", async (int? days, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
     Results.Ok(await events.GetTopAsync(days, ct)));
 app.MapGet("/api/events/{eventId}", async (string eventId, IAstronomyEventDiscoveryService events, CancellationToken ct) =>

@@ -231,6 +231,55 @@ export type DashboardData = {
   apiError?: string;
 };
 
+
+export type AlertSubscriptionRequest = {
+  email: string;
+  phone?: string;
+  preferredChannel?: 'Email' | 'Push' | 'WhatsAppLater';
+  regionId: string;
+  language: string;
+  eventTypes: string[];
+  preferredAlertTimeLocal: string;
+  minimumEventScore?: number;
+};
+
+export type AlertPreferencesUpdateRequest = {
+  eventTypes: string[];
+  preferredAlertTimeLocal: string;
+  minimumEventScore?: number;
+  dailySkyGuideReminderEnabled: boolean;
+  specialEventAlertsEnabled: boolean;
+  preferredChannel?: 'Email' | 'Push' | 'WhatsAppLater';
+  phone?: string;
+  language?: string;
+};
+
+export type AlertSubscriber = {
+  subscriberId: string;
+  email: string;
+  phone?: string;
+  preferredChannel: string;
+  regionId: string;
+  language: string;
+  isActive: boolean;
+  preferences: AlertPreferences;
+};
+
+export type AlertPreferences = {
+  subscriberId: string;
+  eventTypes: string[];
+  preferredAlertTimeLocal: string;
+  minimumEventScore: number;
+  dailySkyGuideReminderEnabled: boolean;
+  specialEventAlertsEnabled: boolean;
+};
+
+export type AlertUpcomingEvent = AstroEvent & {
+  eventId?: string;
+  peakUtc?: string;
+  endUtc?: string;
+};
+
 export type SafeSettingsSummary = {
   apiBaseUrl: string;
   timeoutMs: number;
@@ -370,7 +419,13 @@ export const api = {
   getTopContent: () => request<MediaItem[] | { items?: MediaItem[] }>('/api/analytics/top-content'),
   getTokenHealth: () => request<TokenHealthItem[]>('/api/tokenhealth'),
   requestRegionRunNow: (regionId: string, force = false) => request<PipelineRun>(`/api/regions/${encodeURIComponent(regionId)}/run-now?force=${force}`, { method: 'POST' }),
-  requestSchedulerRunNow: (scheduleName: string, force = false) => request<PipelineRun>(`/api/scheduler/run-now/${encodeURIComponent(scheduleName)}?force=${force}`, { method: 'POST' })
+  requestSchedulerRunNow: (scheduleName: string, force = false) => request<PipelineRun>(`/api/scheduler/run-now/${encodeURIComponent(scheduleName)}?force=${force}`, { method: 'POST' }),
+  subscribeToAlerts: (payload: AlertSubscriptionRequest) => request<AlertSubscriber>('/api/alerts/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
+  getAlertPreferences: (subscriberId: string) => request<AlertSubscriber>(`/api/alerts/preferences/${encodeURIComponent(subscriberId)}`),
+  updateAlertPreferences: (subscriberId: string, payload: AlertPreferencesUpdateRequest) => request<AlertSubscriber>(`/api/alerts/preferences/${encodeURIComponent(subscriberId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
+  getUpcomingAlerts: (regionId?: string) => request<AlertUpcomingEvent[]>(`/api/alerts/upcoming${regionId ? `?regionId=${encodeURIComponent(regionId)}` : ''}`),
+  sendTestAlert: (subscriberId: string, eventId?: string) => request<{ notificationId: string; status: string; message: string }>('/api/alerts/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriberId, eventId }) }),
+  unsubscribeAlerts: (subscriberId: string) => request<{ subscriberId: string; isActive: boolean }>(`/api/alerts/unsubscribe/${encodeURIComponent(subscriberId)}`, { method: 'POST' })
 };
 
 function arrayFrom<T>(value: unknown): T[] {
@@ -482,6 +537,18 @@ function schedulerPipelineRuns(scheduler: SchedulerStatus): PipelineRun[] {
   })) ?? [];
 }
 
+
+function normalizeAlertEvents(events: AlertUpcomingEvent[] | unknown): AstroEvent[] {
+  if (!Array.isArray(events)) return [];
+  return events.map((event) => ({
+    ...event,
+    id: event.id ?? event.eventId ?? event.title,
+    startsAt: event.startsAt ?? event.peakUtc ?? event.startUtc,
+    startUtc: event.startUtc ?? event.startsAt,
+    score: event.score ?? event.priority
+  }));
+}
+
 function settingsSummary(): SafeSettingsSummary {
   return {
     apiBaseUrl: API_BASE_URL,
@@ -525,12 +592,13 @@ async function capture<T>(endpoint: string, loader: () => Promise<T>, fallback: 
 }
 
 export async function loadDashboardData(): Promise<DashboardData> {
-  const [opsResult, schedulerResult, regionsResult, upcomingEventsResult, topEventsResult, analyticsDashboardResult, topContentResult, tokenHealthResult] = await Promise.all([
+  const [opsResult, schedulerResult, regionsResult, upcomingEventsResult, topEventsResult, alertUpcomingResult, analyticsDashboardResult, topContentResult, tokenHealthResult] = await Promise.all([
     capture('/api/ops/dashboard', api.getOpsDashboard, {} as OpsDashboard),
     capture('/api/scheduler/status', api.getSchedulerStatus, {} as SchedulerStatus),
     capture('/api/regions', api.getRegions, [] as Region[]),
     capture('/api/events/upcoming', api.getUpcomingEvents, [] as AstroEvent[]),
     capture('/api/events/top', api.getTopEvents, [] as AstroEvent[]),
+    capture('/api/alerts/upcoming', () => api.getUpcomingAlerts(), [] as AlertUpcomingEvent[]),
     capture('/api/analytics/dashboard', api.getAnalyticsDashboard, {} as AnalyticsDashboard),
     capture('/api/analytics/top-content', api.getTopContent, [] as MediaItem[]),
     capture('/api/tokenhealth', api.getTokenHealth, [] as TokenHealthItem[])
@@ -538,7 +606,8 @@ export async function loadDashboardData(): Promise<DashboardData> {
   const ops = opsResult.value;
   const scheduler = schedulerResult.value;
   const regionsResponse = regionsResult.value;
-  const upcomingEvents = upcomingEventsResult.value;
+  const alertUpcomingEvents = normalizeAlertEvents(alertUpcomingResult.value);
+  const upcomingEvents = alertUpcomingEvents.length ? alertUpcomingEvents : upcomingEventsResult.value;
   const topEvents = topEventsResult.value;
   const analyticsDashboard = analyticsDashboardResult.value;
   const topContentResponse = topContentResult.value;
@@ -580,16 +649,18 @@ export async function loadDashboardData(): Promise<DashboardData> {
 }
 
 export async function loadPublicPortalData(): Promise<DashboardData> {
-  const [regionsResult, upcomingEventsResult, topEventsResult, analyticsDashboardResult, topContentResult] = await Promise.all([
+  const [regionsResult, upcomingEventsResult, topEventsResult, alertUpcomingResult, analyticsDashboardResult, topContentResult] = await Promise.all([
     capture('/api/regions', api.getRegions, [] as Region[]),
     capture('/api/events/upcoming', api.getUpcomingEvents, [] as AstroEvent[]),
     capture('/api/events/top', api.getTopEvents, [] as AstroEvent[]),
+    capture('/api/alerts/upcoming', () => api.getUpcomingAlerts(), [] as AlertUpcomingEvent[]),
     capture('/api/analytics/dashboard', api.getAnalyticsDashboard, {} as AnalyticsDashboard),
     capture('/api/analytics/top-content', api.getTopContent, [] as MediaItem[])
   ]);
 
   const regions = arrayFrom<Region>(regionsResult.value);
-  const upcomingEvents = upcomingEventsResult.value;
+  const alertUpcomingEvents = normalizeAlertEvents(alertUpcomingResult.value);
+  const upcomingEvents = alertUpcomingEvents.length ? alertUpcomingEvents : upcomingEventsResult.value;
   const topEvents = topEventsResult.value;
   const topContent = supportedMedia(arrayFrom<MediaItem>(topContentResult.value));
   const analyticsDashboard = {

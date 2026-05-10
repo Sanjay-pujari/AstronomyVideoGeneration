@@ -255,3 +255,38 @@ public sealed class ContentVariant : EntityBase
     public double EngagementScore { get; set; }
     public bool IsWinner { get; set; }
 }
+
+public sealed class AlertSubscriber : EntityBase
+{
+    public string Email { get; set; } = "";
+    public string? Phone { get; set; }
+    public AlertPreferredChannel PreferredChannel { get; set; } = AlertPreferredChannel.Email;
+    public string RegionId { get; set; } = "";
+    public string Language { get; set; } = "en";
+    public bool IsActive { get; set; } = true;
+    public AlertPreferences? Preferences { get; set; }
+}
+
+public sealed class AlertPreferences : EntityBase
+{
+    public Guid SubscriberId { get; set; }
+    public string[] EventTypes { get; set; } = [];
+    public string PreferredAlertTimeLocal { get; set; } = "18:00";
+    public double MinimumEventScore { get; set; } = 0.65;
+    public bool DailySkyGuideReminderEnabled { get; set; } = true;
+    public bool SpecialEventAlertsEnabled { get; set; } = true;
+}
+
+public sealed class AlertNotification : EntityBase
+{
+    public Guid SubscriberId { get; set; }
+    public string? EventId { get; set; }
+    public string RegionId { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Message { get; set; } = "";
+    public AlertNotificationChannel Channel { get; set; } = AlertNotificationChannel.Email;
+    public AlertNotificationStatus Status { get; set; } = AlertNotificationStatus.Pending;
+    public DateTimeOffset ScheduledUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? SentUtc { get; set; }
+    public string? Error { get; set; }
+}

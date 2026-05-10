@@ -63,14 +63,66 @@ function bindPublicInteractions() {
       const state = form.querySelector<HTMLElement>('[data-alert-form-state]');
       const formData = new FormData(form);
       const hasEventType = formData.getAll('eventTypes').length > 0;
-      const hasChannel = formData.getAll('channels').length > 0;
-      if (!form.checkValidity() || !hasEventType || !hasChannel) {
-        if (state) state.textContent = 'Choose a region, language, time, at least one event type, and at least one placeholder channel.';
+      if (!form.checkValidity() || !hasEventType) {
+        if (state) state.textContent = 'Choose an email, region, language, time, and at least one event type.';
         return;
       }
-      if (state) state.textContent = 'Preferences look valid locally. Backend alert subscriptions are unavailable, so nothing was sent or stored.';
+      const subscriberId = String(formData.get('subscriberId') ?? '').trim();
+      const payload = {
+        email: String(formData.get('email') ?? '').trim(),
+        regionId: String(formData.get('regionId') ?? '').trim(),
+        language: String(formData.get('language') ?? 'en'),
+        eventTypes: formData.getAll('eventTypes').map(String),
+        preferredAlertTimeLocal: String(formData.get('preferredAlertTimeLocal') ?? '18:00'),
+        minimumEventScore: Number(formData.get('minimumEventScore') ?? 0.65),
+        preferredChannel: 'Email' as const
+      };
+      if (state) state.textContent = subscriberId ? 'Updating alert preferences…' : 'Creating alert subscription…';
+      void (async () => {
+        try {
+          const result = subscriberId
+            ? await api.updateAlertPreferences(subscriberId, { eventTypes: payload.eventTypes, preferredAlertTimeLocal: payload.preferredAlertTimeLocal, minimumEventScore: payload.minimumEventScore, dailySkyGuideReminderEnabled: payload.eventTypes.includes('DailySkyGuide'), specialEventAlertsEnabled: payload.eventTypes.some((type) => type !== 'DailySkyGuide'), preferredChannel: 'Email', language: payload.language })
+            : await api.subscribeToAlerts(payload);
+          form.querySelector<HTMLInputElement>('input[name="subscriberId"]')!.value = result.subscriberId;
+          if (state) state.textContent = `Alert subscription saved. Subscriber ID: ${result.subscriberId}`;
+        } catch (error) {
+          if (state) state.textContent = error instanceof Error ? error.message : 'Unable to save alert subscription.';
+        }
+      })();
     });
   });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-alert-test]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const form = button.closest<HTMLFormElement>('form[data-alert-preferences]');
+      const subscriberId = form?.querySelector<HTMLInputElement>('input[name="subscriberId"]')?.value.trim();
+      const state = form?.querySelector<HTMLElement>('[data-alert-form-state]');
+      if (!subscriberId) { if (state) state.textContent = 'Save the subscription before sending a test alert.'; return; }
+      try {
+        const result = await api.sendTestAlert(subscriberId);
+        if (state) state.textContent = result.message;
+      } catch (error) {
+        if (state) state.textContent = error instanceof Error ? error.message : 'Unable to send test alert.';
+      }
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-alert-unsubscribe]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const form = button.closest<HTMLFormElement>('form[data-alert-preferences]');
+      const subscriberIdInput = form?.querySelector<HTMLInputElement>('input[name="subscriberId"]');
+      const subscriberId = subscriberIdInput?.value.trim();
+      const state = form?.querySelector<HTMLElement>('[data-alert-form-state]');
+      if (!subscriberId) { if (state) state.textContent = 'Save the subscription before unsubscribing.'; return; }
+      try {
+        await api.unsubscribeAlerts(subscriberId);
+        if (subscriberIdInput) subscriberIdInput.value = '';
+        if (state) state.textContent = 'Alert subscription unsubscribed.';
+      } catch (error) {
+        if (state) state.textContent = error instanceof Error ? error.message : 'Unable to unsubscribe.';
+      }
+    });
+  });
+
   document.querySelectorAll<HTMLSelectElement>('[data-region-selector]').forEach((select) => {
     select.addEventListener('change', () => {
       if (select.value) location.href = `/regions/${encodeURIComponent(select.value)}`;
@@ -79,6 +131,7 @@ function bindPublicInteractions() {
 }
 
 function bindAdminInteractions() {
+  bindPublicInteractions();
   document.getElementById('refresh-dashboard')?.addEventListener('click', () => void loadAndRenderAdmin());
   document.querySelectorAll<HTMLButtonElement>('[data-region-run]').forEach((button) => {
     button.addEventListener('click', async () => {
