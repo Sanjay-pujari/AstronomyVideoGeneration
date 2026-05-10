@@ -75,7 +75,7 @@ public sealed class SkyAlertSubscriptionTests
             var db = scope.ServiceProvider.GetRequiredService<MediaFactoryDbContext>();
             await CreateService(db).SubscribeAsync(Request(), CancellationToken.None);
         }
-        var generator = new SkyAlertGenerationService(services, Options.Create(new AlertsOptions()), Options.Create(new MaintenanceOptions { WorkingDirectory = Path.GetTempPath() }), NullLogger<SkyAlertGenerationService>.Instance);
+        var generator = CreateGenerator(services);
 
         var first = await generator.GenerateAsync(CancellationToken.None);
         var second = await generator.GenerateAsync(CancellationToken.None);
@@ -98,7 +98,7 @@ public sealed class SkyAlertSubscriptionTests
             db.AlertNotifications.Add(new AlertNotification { SubscriberId = subscriberId, EventId = "event-1", RegionId = "india-udaipur", Title = "Test", Message = "Test", Status = AlertNotificationStatus.Pending, Channel = AlertNotificationChannel.Email, ScheduledUtc = DateTimeOffset.UtcNow });
             await db.SaveChangesAsync(CancellationToken.None);
         }
-        var generator = new SkyAlertGenerationService(services, Options.Create(new AlertsOptions()), Options.Create(new MaintenanceOptions { WorkingDirectory = Path.GetTempPath() }), NullLogger<SkyAlertGenerationService>.Instance);
+        var generator = CreateGenerator(services);
 
         var result = await generator.SendPendingAsync(CancellationToken.None);
 
@@ -108,6 +108,12 @@ public sealed class SkyAlertSubscriptionTests
     }
 
     private static AlertSubscribeRequest Request() => new("viewer@example.com", "india-udaipur", "en", ["MeteorShower"], "18:00", 0.65);
+
+    private static SkyAlertGenerationService CreateGenerator(ServiceProvider services) => new(
+        services.GetRequiredService<IServiceScopeFactory>(),
+        Options.Create(new AlertsOptions()),
+        Options.Create(new MaintenanceOptions { WorkingDirectory = Path.GetTempPath() }),
+        NullLogger<SkyAlertGenerationService>.Instance);
 
     private static MediaFactoryDbContext CreateDb()
     {
