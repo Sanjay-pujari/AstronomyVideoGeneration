@@ -1,7 +1,7 @@
 import type { AstroEvent, DashboardData, MediaItem, Region } from '../services/api.js';
 import { escapeHtml } from './dashboard.js';
 
-export type PublicPageKey = 'home' | 'tonight' | 'events' | 'videos' | 'region' | 'about';
+export type PublicPageKey = 'home' | 'tonight' | 'events' | 'videos' | 'alerts' | 'region' | 'about';
 
 const SOCIAL_LINKS = [
   { label: 'YouTube', href: 'https://www.youtube.com/@AstroPulse' },
@@ -14,6 +14,7 @@ const PUBLIC_NAV = [
   { label: "Tonight's Sky", href: '/tonight' },
   { label: 'Events', href: '/events' },
   { label: 'Videos', href: '/videos' },
+  { label: 'Alerts', href: '/alerts' },
   { label: 'About', href: '/about' }
 ];
 
@@ -27,6 +28,7 @@ export function parsePublicRoute(pathname: string): PublicRoute {
   if (path === '/tonight') return { page: 'tonight' };
   if (path === '/events') return { page: 'events' };
   if (path === '/videos') return { page: 'videos' };
+  if (path === '/alerts') return { page: 'alerts' };
   if (path === '/about') return { page: 'about' };
   const regionMatch = path.match(/^\/regions\/([^/]+)$/);
   if (regionMatch) return { page: 'region', regionId: decodeURIComponent(regionMatch[1]) };
@@ -130,10 +132,23 @@ function mediaGrid(items: MediaItem[], emptyMessage?: string) {
   return items.length ? `<div class="public-grid">${items.map(mediaCard).join('')}</div>` : emptyState(emptyMessage);
 }
 
+function calendarLink(event: AstroEvent) {
+  const starts = eventDate(event);
+  const date = starts ? new Date(starts) : undefined;
+  if (!date || Number.isNaN(date.getTime())) return '#alert-preferences';
+  const start = date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const end = new Date(date.getTime() + 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(event.title)}&dates=${start}/${end}&details=${encodeURIComponent('AstroPulse sky alert placeholder. Subscribe when alerts launch.')}`;
+}
+
+function shareLink(event: AstroEvent) {
+  return `/events#${encodeURIComponent(event.id)}`;
+}
+
 function eventCard(event: AstroEvent, videos: MediaItem[] = []) {
   const details = [event.eventType, event.regionName, event.visibility, eventDate(event) ? formatDate(eventDate(event)) : undefined].filter(Boolean).join(' • ');
   const matches = videos.filter((item) => eventKey(event).split(' ').some((part) => part.length > 3 && item.title.toLowerCase().includes(part))).slice(0, 2);
-  return `<article class="public-card event-card"><span class="eyebrow">${escapeHtml(event.eventType ?? 'Sky event')}</span><h3>${escapeHtml(event.title)}</h3><p>${escapeHtml(details || 'Event details coming soon.')}</p>${matches.length ? `<div class="mini-links">${matches.map((item) => `<a href="${escapeHtml(safeExternalUrl(item.url ?? item.previewUrl) ?? '/videos')}">Related video: ${escapeHtml(item.title)}</a>`).join('')}</div>` : '<span class="muted">Special event videos coming soon</span>'}</article>`;
+  return `<article class="public-card event-card"><span class="eyebrow">${escapeHtml(event.eventType ?? 'Sky event')}</span><h3>${escapeHtml(event.title)}</h3><p>${escapeHtml(details || 'Event details coming soon.')}</p>${matches.length ? `<div class="mini-links">${matches.map((item) => `<a href="${escapeHtml(safeExternalUrl(item.url ?? item.previewUrl) ?? '/videos')}">Related video: ${escapeHtml(item.title)}</a>`).join('')}</div>` : '<span class="muted">Special event videos coming soon</span>'}<div class="alert-actions"><a class="secondary-button" href="/alerts?event=${escapeHtml(encodeURIComponent(event.id))}">Notify me</a><a class="secondary-button" href="${escapeHtml(calendarLink(event))}" target="_blank" rel="noopener noreferrer">Add to calendar</a><a class="secondary-button" href="${escapeHtml(shareLink(event))}">Share link</a></div></article>`;
 }
 
 function eventGrid(events: AstroEvent[], media: MediaItem[], emptyMessage?: string) {
@@ -167,6 +182,13 @@ function tonightPage(data: DashboardData, selectedRegionId?: string) {
 function eventsPage(data: DashboardData) {
   const events = [...data.upcomingEvents, ...data.topEvents].filter((event, index, all) => all.findIndex((item) => item.id === event.id) === index);
   return `<header class="public-page-heading"><span class="eyebrow">Astronomy events</span><h1>Upcoming sky events</h1><p>Browse meteor showers, conjunctions, lunar moments, and other highlighted viewing opportunities.</p></header>${eventGrid(events, [...data.latestVideos, ...data.latestShorts], 'Upcoming astronomy events are coming soon.')}`;
+}
+
+
+function alertSignupPage(data: DashboardData) {
+  const events = [...data.upcomingEvents, ...data.topEvents].filter((event, index, all) => all.findIndex((item) => item.id === event.id) === index);
+  const types = ['Visible planets', 'Full moon / supermoon', 'Meteor showers', 'Eclipses', 'Special event videos', 'Daily sky guide reminders'];
+  return `<header class="public-page-heading"><span class="eyebrow">Sky alerts foundation</span><h1>Get ready for sky moments worth stepping outside for.</h1><p>Choose your region, language, event types, preferred local alert time, and channels. Subscriptions are not sent to production yet because the alert backend is not available.</p></header><section class="dashboard-grid"><form class="public-card card--full alert-form" id="alert-preferences" data-alert-preferences novalidate><div><h2>Alert preferences</h2><p class="muted">We only ask for the minimum needed to prepare alert preferences. Email and push are placeholders until the backend contracts launch.</p></div><label>Region<select name="region" required><option value="">Select a region</option>${data.regions.map((region) => `<option value="${escapeHtml(region.id)}">${escapeHtml(regionLabel(region))}</option>`).join('')}</select></label><label>Language<select name="language" required><option value="en">English</option><option value="en-GB">English (UK)</option><option value="en-NZ">English (NZ)</option><option value="es">Spanish placeholder</option></select></label><fieldset><legend>Event types</legend>${types.map((type) => `<label class="check-row"><input type="checkbox" name="eventTypes" value="${escapeHtml(type)}" ${type === 'Daily sky guide reminders' ? 'checked' : ''}>${escapeHtml(type)}</label>`).join('')}</fieldset><label>Preferred alert time<input name="preferredTime" type="time" value="19:30" required></label><fieldset><legend>Channels placeholder</legend><label class="check-row"><input type="checkbox" name="channels" value="email">Email (coming soon)</label><label class="check-row"><input type="checkbox" name="channels" value="push" checked>Push (local placeholder only)</label><label class="check-row"><input type="checkbox" name="channels" value="whatsapp">WhatsApp optional later</label></fieldset><div class="state state--empty" data-alert-form-state>Backend subscriptions are unavailable, so this form validates locally only and does not create a production subscription.</div><button class="primary-button" type="submit">Validate preferences</button></form><section class="public-card card--full"><h2>Upcoming alert cards</h2>${eventGrid(events, [...data.latestVideos, ...data.latestShorts], 'No alert candidates are available yet. Check back after upcoming events sync.')}</section></section>`;
 }
 
 function videosPage(data: DashboardData) {
@@ -207,7 +229,9 @@ export function renderPublicPortalHtml(data: DashboardData, route: PublicRoute =
         ? "Tonight's Sky | AstroPulse"
         : route.page === 'videos'
           ? 'Astronomy Videos, Shorts & Reels | AstroPulse'
-          : route.page === 'about'
+          : route.page === 'alerts'
+            ? 'Sky Alerts Signup | AstroPulse'
+            : route.page === 'about'
             ? 'About AstroPulse | Public Astronomy Guides'
             : 'AstroPulse | Tonight’s Sky Guides by Region';
   const description = route.page === 'region' && region
@@ -222,8 +246,10 @@ export function renderPublicPortalHtml(data: DashboardData, route: PublicRoute =
         ? videosPage(data)
         : route.page === 'region'
           ? regionPage(data, route.regionId)
-          : route.page === 'about'
-            ? aboutPage()
-            : homePage(data);
+          : route.page === 'alerts'
+            ? alertSignupPage(data)
+            : route.page === 'about'
+              ? aboutPage()
+              : homePage(data);
   return shell(route, body);
 }

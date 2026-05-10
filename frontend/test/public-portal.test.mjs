@@ -65,3 +65,22 @@ test('loadPublicPortalData avoids operations APIs', async () => {
   assert.ok(!paths.includes('/api/ops/dashboard'));
   assert.ok(!paths.includes('/api/tokenhealth'));
 });
+
+
+test('public alerts page renders signup, validates locally, and shows unavailable backend state', () => {
+  assert.deepEqual(parsePublicRoute('/alerts'), { page: 'alerts' });
+  const html = renderPublicPortalHtml(mockDashboardData, { page: 'alerts' });
+  assert.match(html, /Sky alerts foundation/);
+  assert.match(html, /Alert preferences/);
+  assert.match(html, /Visible planets/);
+  assert.match(html, /Full moon \/ supermoon/);
+  assert.match(html, /Meteor showers/);
+  assert.match(html, /Eclipses/);
+  assert.match(html, /Special event videos/);
+  assert.match(html, /Daily sky guide reminders/);
+  assert.match(html, /Backend subscriptions are unavailable/);
+  assert.match(html, /Notify me/);
+  assert.match(html, /Add to calendar/);
+  assert.match(html, /Share link/);
+  assert.doesNotMatch(html, /accessToken|clientSecret|connectionString/i);
+});
