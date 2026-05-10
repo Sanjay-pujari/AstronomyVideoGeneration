@@ -578,3 +578,38 @@ export async function loadDashboardData(): Promise<DashboardData> {
     apiError
   };
 }
+
+export async function loadPublicPortalData(): Promise<DashboardData> {
+  const [regionsResult, upcomingEventsResult, topEventsResult, analyticsDashboardResult, topContentResult] = await Promise.all([
+    capture('/api/regions', api.getRegions, [] as Region[]),
+    capture('/api/events/upcoming', api.getUpcomingEvents, [] as AstroEvent[]),
+    capture('/api/events/top', api.getTopEvents, [] as AstroEvent[]),
+    capture('/api/analytics/dashboard', api.getAnalyticsDashboard, {} as AnalyticsDashboard),
+    capture('/api/analytics/top-content', api.getTopContent, [] as MediaItem[])
+  ]);
+
+  const regions = arrayFrom<Region>(regionsResult.value);
+  const upcomingEvents = upcomingEventsResult.value;
+  const topEvents = topEventsResult.value;
+  const topContent = supportedMedia(arrayFrom<MediaItem>(topContentResult.value));
+  const analyticsDashboard = {
+    ...analyticsDashboardResult.value,
+    platformBreakdown: supportedPlatformBreakdown(analyticsDashboardResult.value.platformBreakdown),
+    topContent
+  };
+  const videos = topContent.filter((item) => !isShortForm(item));
+  const shorts = topContent.filter(isShortForm);
+
+  return {
+    ...emptyDashboardData(),
+    latestVideos: videos,
+    latestShorts: shorts,
+    analytics: analyticsFromResponses({}, analyticsDashboard, topContent),
+    analyticsDashboard,
+    regions,
+    events: upcomingEvents,
+    upcomingEvents,
+    topEvents,
+    apiError: analyticsDashboardResult.failed || topContentResult.failed ? 'Content service temporarily unavailable.' : undefined
+  };
+}
