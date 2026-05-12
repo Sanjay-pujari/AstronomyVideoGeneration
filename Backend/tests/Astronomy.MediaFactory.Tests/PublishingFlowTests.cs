@@ -275,6 +275,39 @@ public sealed class PublishingFlowTests
         Assert.False(yt.WasUploadCalled);
     }
 
+
+    [Fact]
+    public async Task PipelineOrchestrator_SkipsYouTubeShortPublish_WhenPublishToYouTubeFalse()
+    {
+        var repository = new FakePipelineRepository();
+        var contentPublishService = new TrackingContentPublishService();
+        var orchestrator = new PipelineOrchestrator(
+            new FakeContextProvider(),
+            new FakeTopicRankingService(),
+            new FakeVisualProvider(),
+            new FakeScriptService(),
+            new FakeSpeechService(),
+            new FakeRenderService(),
+            new PassThroughBlobService(),
+            new SuccessfulYouTubeService(),
+            new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new FakeThumbnailGenerationService(),
+            new PassThroughSeoMetadataGeneratorService(),
+            repository,
+            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
+            Options.Create(new PublishingValidationOptions { Enabled = true }),
+            NullLogger<PipelineOrchestrator>.Instance,
+            publishingOptions: Options.Create(new PublishingOptions { Enabled = true, Mode = "Private", PublishShortVideo = true }),
+            contentPublishService: contentPublishService);
+
+        var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: false), CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
+        Assert.False(contentPublishService.WasCalled);
+    }
+
     private static PipelineOrchestrator CreateOrchestrator(
         FakePipelineRepository repository,
         IYouTubePublishingService yt,
@@ -282,6 +315,24 @@ public sealed class PublishingFlowTests
         IPrePublishValidationService? validationService = null,
         IThumbnailGenerationService? thumbnailGenerationService = null)
         => new(new FakeContextProvider(), new FakeTopicRankingService(), new FakeVisualProvider(), new FakeScriptService(), new FakeSpeechService(), new FakeRenderService(), new PassThroughBlobService(), yt, new FakeShortsVideoRenderService(), new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance), thumbnailGenerationService ?? new FakeThumbnailGenerationService(), new PassThroughSeoMetadataGeneratorService(), repository, Options.Create(new YouTubeOptions { PrivacyStatus = "private" }), Options.Create(new RenderingOptions()), Options.Create(new PublishingValidationOptions { Enabled = true }), NullLogger<PipelineOrchestrator>.Instance, publishingOptions: publishingOptions, prePublishValidationService: validationService);
+
+
+    private sealed class TrackingContentPublishService : IContentPublishService
+    {
+        public bool WasCalled { get; private set; }
+
+        public Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+        {
+            WasCalled = true;
+            return Task.FromResult<IReadOnlyList<PublishResult>>([]);
+        }
+
+        public Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset, CancellationToken cancellationToken)
+        {
+            WasCalled = true;
+            return Task.FromResult<IReadOnlyList<PublishResult>>([]);
+        }
+    }
 
     private sealed class FakePipelineRepository : IPipelineRepository
     {
