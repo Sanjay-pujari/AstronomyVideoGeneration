@@ -137,7 +137,6 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
         => rate.Contains("fast", StringComparison.OrdinalIgnoreCase)
             || rate.StartsWith('+')
             || string.Equals(rate, "x-fast", StringComparison.OrdinalIgnoreCase);
-    }
 
     private sealed record NarrationTuning(string Rate, string Pitch, int SentencePauseMs, int CommaPauseMs, int ParagraphPauseMs);
 
