@@ -58,7 +58,7 @@ public sealed class ContentPublishService : IContentPublishService
         var outputDirectory = ResolveOutputDirectory(run);
         Directory.CreateDirectory(outputDirectory);
         var selector = NormalizeAssetSelector(asset);
-        var assets = await BuildAssetsAsync(run, outputDirectory, mode, cancellationToken);
+        var assets = await BuildAssetsAsync(run, outputDirectory, mode, selector, cancellationToken);
         var diagnostics = BuildAssetDiagnostics(assets, selector).ToList();
         var results = new List<PublishResult>();
 
@@ -136,10 +136,19 @@ public sealed class ContentPublishService : IContentPublishService
         return results;
     }
 
-    private async Task<IReadOnlyList<PublishAsset>> BuildAssetsAsync(PipelineRun run, string outputDirectory, string mode, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<PublishAsset>> BuildAssetsAsync(PipelineRun run, string outputDirectory, string mode, string selector, CancellationToken cancellationToken)
     {
-        var metadata = await ReadRequiredJsonAsync<SeoMetadataResult>(Path.Combine(outputDirectory, "seo-metadata.json"), cancellationToken);
         var privacyStatus = ResolvePrivacyStatus(mode);
+        if (selector == "short")
+        {
+            var shortVideoOnlyPath = ResolveShortVideoPath(outputDirectory);
+            if (shortVideoOnlyPath is not null)
+            {
+                return [await BuildShortAssetAsync(run, outputDirectory, shortVideoOnlyPath, privacyStatus, cancellationToken)];
+            }
+        }
+
+        var metadata = await ReadRequiredJsonAsync<SeoMetadataResult>(Path.Combine(outputDirectory, "seo-metadata.json"), cancellationToken);
         var longAsset = new PublishAsset
         {
             AssetType = "LongVideo",
@@ -158,25 +167,40 @@ public sealed class ContentPublishService : IContentPublishService
 
         if (shortVideoPath is not null)
         {
-            var shortMetadataPath = Path.Combine(outputDirectory, "shorts", "seo-metadata.json");
-            var shortMetadata = File.Exists(shortMetadataPath)
-                ? await ReadRequiredJsonAsync<SeoMetadataResult>(shortMetadataPath, cancellationToken)
-                : DeriveShortMetadata(metadata, run);
-            assets.Add(new PublishAsset
-            {
-                AssetType = "ShortVideo",
-                VideoPath = shortVideoPath,
-                ThumbnailPath = await ResolveShortThumbnailPathAsync(outputDirectory, cancellationToken),
-                Title = EnsureShortsMarker(ShortenTitle(shortMetadata.Title), shortMetadata.Description).Title,
-                Description = EnsureShortsMarker(ShortenTitle(shortMetadata.Title), shortMetadata.Description).Description,
-                Tags = SplitCsv(shortMetadata.TagsCsv),
-                PrivacyStatus = privacyStatus,
-                UploadThumbnail = _youTubeOptions.UploadThumbnailForShorts,
-                IsShort = true
-            });
+            assets.Add(await BuildShortAssetAsync(run, outputDirectory, shortVideoPath, privacyStatus, cancellationToken, metadata));
         }
 
         return assets;
+    }
+
+    private async Task<PublishAsset> BuildShortAssetAsync(
+        PipelineRun run,
+        string outputDirectory,
+        string shortVideoPath,
+        string privacyStatus,
+        CancellationToken cancellationToken,
+        SeoMetadataResult? rootMetadata = null)
+    {
+        var shortMetadataPath = Path.Combine(outputDirectory, "shorts", "seo-metadata.json");
+        var shortMetadata = File.Exists(shortMetadataPath)
+            ? await ReadRequiredJsonAsync<SeoMetadataResult>(shortMetadataPath, cancellationToken)
+            : rootMetadata is not null
+                ? DeriveShortMetadata(rootMetadata, run)
+                : await DeriveShortMetadataFromRootIfPresentAsync(outputDirectory, run, cancellationToken);
+        var marker = EnsureShortsMarker(ShortenTitle(shortMetadata.Title), shortMetadata.Description);
+
+        return new PublishAsset
+        {
+            AssetType = "ShortVideo",
+            VideoPath = shortVideoPath,
+            ThumbnailPath = await ResolveShortThumbnailPathAsync(outputDirectory, cancellationToken),
+            Title = marker.Title,
+            Description = marker.Description,
+            Tags = SplitCsv(shortMetadata.TagsCsv),
+            PrivacyStatus = privacyStatus,
+            UploadThumbnail = _youTubeOptions.UploadThumbnailForShorts,
+            IsShort = true
+        };
     }
 
     private string? ResolveShortVideoPath(string outputDirectory)
@@ -431,6 +455,38 @@ public sealed class ContentPublishService : IContentPublishService
             PinnedComment = root.PinnedComment
         };
     }
+
+
+    private static async Task<SeoMetadataResult> DeriveShortMetadataFromRootIfPresentAsync(string outputDirectory, PipelineRun run, CancellationToken cancellationToken)
+    {
+        var rootMetadataPath = Path.Combine(outputDirectory, "seo-metadata.json");
+        if (File.Exists(rootMetadataPath))
+        {
+            var rootMetadata = await ReadRequiredJsonAsync<SeoMetadataResult>(rootMetadataPath, cancellationToken);
+            return DeriveShortMetadata(rootMetadata, run);
+        }
+
+        var fallback = new SeoMetadataResult
+        {
+            Title = BuildFallbackShortTitle(run),
+            Description = BuildFallbackShortDescription(run),
+            TagsCsv = "astronomy,night sky,shorts,youtube shorts",
+            HashtagsCsv = "#Shorts",
+            PinnedComment = string.Empty
+        };
+
+        return DeriveShortMetadata(fallback, run);
+    }
+
+    private static string BuildFallbackShortTitle(PipelineRun run)
+        => string.IsNullOrWhiteSpace(run.LocationName)
+            ? $"Tonight's Sky - {run.RunDate:MMM d} #Shorts"
+            : $"Tonight's Sky Over {run.LocationName} - {run.RunDate:MMM d} #Shorts";
+
+    private static string BuildFallbackShortDescription(PipelineRun run)
+        => string.IsNullOrWhiteSpace(run.LocationName)
+            ? $"Quick night-sky highlights for {run.RunDate:MMMM d, yyyy}. #Shorts"
+            : $"Quick night-sky highlights for {run.LocationName} on {run.RunDate:MMMM d, yyyy}. #Shorts";
 
     private static string ShortenTitle(string title)
     {
