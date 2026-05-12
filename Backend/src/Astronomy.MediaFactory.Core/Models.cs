@@ -473,3 +473,14 @@ public sealed class PrePublishValidationReport
     public List<string> Warnings { get; init; } = [];
     public DateTimeOffset CheckedAtUtc { get; init; }
 }
+
+public sealed class EventContentDecision
+{
+    public bool HasEvent { get; init; }
+    public AstronomyEvent? PrimaryEvent { get; init; }
+    public string DecisionType { get; init; } = "None";
+    public IReadOnlyList<AstronomyEvent> InjectedEvents { get; init; } = [];
+    public IReadOnlyList<AstronomyEvent> SpecialEventCandidates { get; init; } = [];
+    public IReadOnlyList<AstronomyEvent> SkippedEvents { get; init; } = [];
+    public string Reason { get; init; } = "No event selected.";
+}

@@ -24,6 +24,9 @@ public sealed class PipelineRun : EntityBase
     public string? EventType { get; set; }
     public string? EventTitle { get; set; }
     public string? EventDescription { get; set; }
+    public string? DecisionType { get; set; }
+    public bool InjectedIntoDailyGuide { get; set; }
+    public bool SpecialEventGuideGenerated { get; set; }
 }
 
 public sealed class PipelineStageExecution : EntityBase
@@ -69,17 +72,35 @@ public sealed class AstronomyEvent : EntityBase
     public DateTimeOffset StartUtc { get; set; }
     public DateTimeOffset? PeakUtc { get; set; }
     public DateTimeOffset EndUtc { get; set; }
-    public string[] VisibilityRegions { get; set; } = [];
+    public DateOnly TargetDate { get; set; }
+    public string? RegionId { get; set; }
+    public string? LocationName { get; set; }
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+    public string? Timezone { get; set; }
     public bool GlobalVisibility { get; set; }
+    public string[] VisibilityRegions { get; set; } = [];
     public string[] RelatedObjects { get; set; } = [];
+    public string Source { get; set; } = "";
+    public double ConfidenceScore { get; set; }
+    public double SourceConfidence { get => ConfidenceScore; set => ConfidenceScore = value; }
     public double RarityScore { get; set; }
     public double VisibilityScore { get; set; }
     public double AudienceInterestScore { get; set; }
     public double TimingUrgencyScore { get; set; }
     public double ContentOpportunityScore { get; set; }
     public string RecommendedContentType { get; set; } = "";
-    public string Source { get; set; } = "";
-    public double SourceConfidence { get; set; }
+    public string Status { get; set; } = "Discovered";
+}
+
+public sealed class AstronomyEventGenerationHistory : EntityBase
+{
+    public Guid AstronomyEventId { get; set; }
+    public Guid PipelineRunId { get; set; }
+    public string RegionId { get; set; } = "";
+    public DateOnly TargetDate { get; set; }
+    public string ContentType { get; set; } = "";
+    public string GenerationMode { get; set; } = "";
 }
 
 public sealed class GeneratedScript : EntityBase
@@ -219,6 +240,9 @@ public sealed class VideoAnalytics : EntityBase
     public string? EventId { get; set; }
     public string? EventType { get; set; }
     public string? EventTitle { get; set; }
+    public string? DecisionType { get; set; }
+    public bool InjectedIntoDailyGuide { get; set; }
+    public bool SpecialEventGuideGenerated { get; set; }
 }
 
 public sealed class RecoveryOperation : EntityBase

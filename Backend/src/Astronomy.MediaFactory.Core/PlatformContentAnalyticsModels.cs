@@ -35,6 +35,12 @@ public sealed class PlatformContentAnalytics : Common.EntityBase
     public double? PerformanceScore { get; set; }
     public bool IsAnalyticsAvailable { get; set; } = true;
     public string? LastError { get; set; }
+    public string? EventId { get; set; }
+    public string? EventType { get; set; }
+    public string? EventTitle { get; set; }
+    public string? DecisionType { get; set; }
+    public bool? InjectedIntoDailyGuide { get; set; }
+    public bool? SpecialEventGuideGenerated { get; set; }
 }
 
 public sealed record PlatformAnalyticsQuery(

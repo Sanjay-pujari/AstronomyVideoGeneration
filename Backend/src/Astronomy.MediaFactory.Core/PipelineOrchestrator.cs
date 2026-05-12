@@ -48,6 +48,8 @@ public sealed class PipelineOrchestrator
     private readonly IPipelineStageExecutor? _pipelineStageExecutor;
     private readonly LocalizationOptions _localizationOptions;
     private readonly GrowthOptions _growthOptions;
+    private readonly IAstronomyEventDecisionService? _eventDecisionService;
+    private readonly IAstronomyEventStore? _eventStore;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -87,7 +89,9 @@ public sealed class PipelineOrchestrator
         IMetaPublishService? metaPublishService = null,
         IPipelineStageExecutor? pipelineStageExecutor = null,
         IOptions<LocalizationOptions>? localizationOptions = null,
-        IOptions<GrowthOptions>? growthOptions = null)
+        IOptions<GrowthOptions>? growthOptions = null,
+        IAstronomyEventDecisionService? eventDecisionService = null,
+        IAstronomyEventStore? eventStore = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -127,6 +131,8 @@ public sealed class PipelineOrchestrator
         _pipelineStageExecutor = pipelineStageExecutor;
         _localizationOptions = localizationOptions?.Value ?? new LocalizationOptions();
         _growthOptions = growthOptions?.Value ?? new GrowthOptions();
+        _eventDecisionService = eventDecisionService;
+        _eventStore = eventStore;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
@@ -147,7 +153,9 @@ public sealed class PipelineOrchestrator
             EventId = request.EventId,
             EventType = request.EventType,
             EventTitle = request.EventTitle,
-            EventDescription = request.EventDescription
+            EventDescription = request.EventDescription,
+            DecisionType = request.ContentType == ContentType.SpecialEventGuide ? "GenerateSpecialEventGuide" : null,
+            SpecialEventGuideGenerated = request.ContentType == ContentType.SpecialEventGuide
         };
 
         await _repository.CreateAsync(run, cancellationToken);
@@ -282,6 +290,21 @@ public sealed class PipelineOrchestrator
             var context = await RunStageAsync("AstronomyData", () => _contextProvider.BuildContextAsync(request.Date, request.ContentType, request.LocationName, request.TimeZone, cancellationToken));
             ApplySpecialEventRequestContext(request, context);
             context.Localization = localization;
+            EventContentDecision? eventDecision = null;
+            if (request.ContentType == ContentType.DailySkyGuide && _eventDecisionService is not null)
+            {
+                eventDecision = await ApplyDailyGuideEventDecisionAsync(request, context, outputDir, cancellationToken);
+                run.DecisionType = eventDecision.DecisionType;
+                run.InjectedIntoDailyGuide = eventDecision.DecisionType is "InjectIntoDailyGuide" or "GenerateBoth";
+                run.SpecialEventGuideGenerated = eventDecision.DecisionType is "GenerateSpecialEventGuide" or "GenerateBoth";
+                if (eventDecision.PrimaryEvent is not null)
+                {
+                    run.EventId = eventDecision.PrimaryEvent.EventId;
+                    run.EventType = eventDecision.PrimaryEvent.EventType;
+                    run.EventTitle = eventDecision.PrimaryEvent.Title;
+                }
+                await _repository.SaveChangesAsync(cancellationToken);
+            }
             await WriteLocalizationContextAsync(context.Localization, outputDir, cancellationToken);
             await WritePrimaryContextArtifactsAsync(context, outputDir, cancellationToken);
             if (_pipelineStageExecutor is not null)
@@ -766,9 +789,9 @@ public sealed class PipelineOrchestrator
                 ThumbnailUploadedToYouTube = youtubeThumbnailUploaded,
                 CreatedAt = DateTimeOffset.UtcNow,
                 Status = publishStatus,
-                EventId = request.EventId,
-                EventType = request.EventType,
-                EventTitle = request.EventTitle
+                EventId = run.EventId ?? request.EventId,
+                EventType = run.EventType ?? request.EventType,
+                EventTitle = run.EventTitle ?? request.EventTitle
             };
 
             await _repository.AddPublishedVideoAsync(publishedVideo, cancellationToken);
@@ -807,6 +830,16 @@ public sealed class PipelineOrchestrator
                 Path.Combine(outputDir, "shorts"),
                 request.PublishToYouTube,
                 cancellationToken), continueWithFallback: true, fallback: _ => Task.FromResult<ShortVideoRenderResult?>(null));
+
+            if (_eventStore is not null && !string.IsNullOrWhiteSpace(run.EventId))
+            {
+                var astronomyEvent = await _eventStore.GetByEventIdAsync(run.EventId, cancellationToken);
+                if (astronomyEvent is not null)
+                {
+                    var generationMode = request.ContentType == ContentType.SpecialEventGuide ? "SeparateSpecialEventGuide" : eventDecision?.DecisionType is "GenerateBoth" or "InjectIntoDailyGuide" ? "InjectedDailyGuide" : "MentionOnly";
+                    await _eventStore.AddGenerationHistoryAsync(astronomyEvent.Id, run.Id, run.RegionId ?? request.LocationName, request.Date, request.ContentType, generationMode, cancellationToken);
+                }
+            }
 
             if (shortResult is not null)
             {
@@ -1093,6 +1126,95 @@ public sealed class PipelineOrchestrator
             _ => false
         };
 
+
+
+    private async Task<EventContentDecision> ApplyDailyGuideEventDecisionAsync(RunPipelineRequest request, AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var regionId = NormalizeRegionId(request.RegionId, request.LocationName) ?? request.LocationName;
+        var decision = await _eventDecisionService!.DecideAsync(regionId, request.Date, cancellationToken);
+        if (decision.DecisionType is not ("InjectIntoDailyGuide" or "GenerateBoth") || decision.InjectedEvents.Count == 0)
+        {
+            await WriteDailyGuideEventInjectionDiagnosticsAsync(outputDirectory, decision, null, [], context.SceneObservationContexts, cancellationToken);
+            return decision;
+        }
+
+        var selected = decision.InjectedEvents[0];
+        var eventObject = ResolveSpecialEventObjectName(selected.Title, selected.EventType);
+        var removed = new List<string>();
+        var scenes = context.SceneObservationContexts.ToList();
+        var overview = scenes.FirstOrDefault(s => s.SceneType.Equals("Overview", StringComparison.OrdinalIgnoreCase)) ?? scenes.FirstOrDefault();
+        var closing = scenes.LastOrDefault(s => s.SceneId.Equals("closing", StringComparison.OrdinalIgnoreCase) || s.SceneType.Equals("Closing", StringComparison.OrdinalIgnoreCase) || s.SceneType.Equals("Tips", StringComparison.OrdinalIgnoreCase));
+        var objectScenes = scenes
+            .Where(s => !ReferenceEquals(s, overview) && !ReferenceEquals(s, closing))
+            .Where(s => !s.ObjectName.Equals(eventObject, StringComparison.OrdinalIgnoreCase))
+            .Take(3)
+            .ToList();
+        removed.AddRange(scenes.Where(s => !ReferenceEquals(s, overview) && !ReferenceEquals(s, closing) && (s.ObjectName.Equals(eventObject, StringComparison.OrdinalIgnoreCase) || !objectScenes.Contains(s))).Select(s => s.ObjectName));
+
+        var baseLocal = overview?.LocalObservationTime ?? request.Date.ToDateTime(new TimeOnly(21, 0));
+        var timezone = ResolveTimeZoneOrUtc(context.TimeZone);
+        var eventLocal = selected.PeakUtc?.UtcDateTime ?? selected.StartUtc.UtcDateTime;
+        try { eventLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(eventLocal, DateTimeKind.Utc), timezone); } catch { }
+        var highlight = BuildEventScene("special-event-highlight", selected.Title, "SpecialEventHighlight", eventObject, eventLocal == default ? baseLocal.AddMinutes(20) : eventLocal, timezone, context, $"Prioritize {selected.Title}: {selected.Description}");
+
+        var final = new List<SceneObservationContext>();
+        if (overview is not null) final.Add(CopyScene(overview, 1));
+        final.Add(CopyScene(highlight, final.Count + 1));
+        foreach (var scene in objectScenes.Take(3)) final.Add(CopyScene(scene, final.Count + 1));
+        if (closing is not null) final.Add(CopyScene(closing, final.Count + 1));
+        context.SceneObservationContexts = final;
+        context.SpecialEvent = new SpecialEventContext { EventId = selected.EventId, EventType = selected.EventType, EventTitle = LocalizeEventTitle(selected.Title, context.Localization.ResolvedLanguage), EventDescription = LocalizeEventDescription(selected, context.Localization.ResolvedLanguage), ContentOpportunityScore = selected.ContentOpportunityScore };
+        context.Events.Insert(0, new AstronomyEventModel { Category = selected.EventType, ObjectName = eventObject, VisibilityWindow = "Special event window", Direction = ResolveSpecialEventDirection(selected.EventType), ObservationTool = ResolveSpecialEventTool(selected.EventType), Details = context.SpecialEvent.EventDescription, Score = selected.ContentOpportunityScore });
+        context.VisualIdeas.Add(new VisualIdeaModel { Title = "daily-guide-event-injection", Description = JsonSerializer.Serialize(new { decision.DecisionType, selectedEvent = selected, injectedSceneIndex = 2, removedOrSkippedObjects = removed, finalSceneOrder = final.Select(s => new { s.SceneIndex, s.SceneId, s.SceneType, s.ObjectName }) }, new JsonSerializerOptions { WriteIndented = true }) });
+        await WriteDailyGuideEventInjectionDiagnosticsAsync(outputDirectory, decision, selected, removed, final, cancellationToken);
+        return decision;
+    }
+
+    private static SceneObservationContext CopyScene(SceneObservationContext source, int index) => new()
+    {
+        SceneId = source.SceneId,
+        SceneTitle = source.SceneTitle,
+        SceneType = source.SceneType,
+        SceneIndex = index,
+        ObjectName = source.ObjectName,
+        ObjectType = source.ObjectType,
+        PrimaryObject = source.PrimaryObject,
+        IncludePolarisOrientation = source.IncludePolarisOrientation,
+        LocalObservationTime = source.LocalObservationTime,
+        UtcObservationTime = source.UtcObservationTime,
+        Timezone = source.Timezone,
+        AltitudeDegrees = source.AltitudeDegrees,
+        AzimuthDegrees = source.AzimuthDegrees,
+        DirectionLabel = source.DirectionLabel,
+        IsVisible = source.IsVisible,
+        VisibilityReason = source.VisibilityReason,
+        RecommendedTool = source.RecommendedTool,
+        NarrationFocus = source.NarrationFocus,
+        Latitude = source.Latitude,
+        Longitude = source.Longitude,
+        LocationName = source.LocationName
+    };
+
+    private static async Task WriteDailyGuideEventInjectionDiagnosticsAsync(string outputDirectory, EventContentDecision decision, AstronomyEvent? selectedEvent, IReadOnlyCollection<string> removedOrSkippedObjects, IReadOnlyCollection<SceneObservationContext> scenes, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "daily-guide-event-injection.json"), JsonSerializer.Serialize(new
+        {
+            decision.DecisionType,
+            selectedEvent,
+            injectedSceneIndex = selectedEvent is null ? (int?)null : 2,
+            removedOrSkippedObjects,
+            finalSceneOrder = scenes.Select(s => new { s.SceneIndex, s.SceneId, s.SceneType, s.ObjectName })
+        }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private static string LocalizeEventTitle(string title, string language)
+        => language.Equals("hi", StringComparison.OrdinalIgnoreCase) ? title.Replace("Full Moon", "पूर्णिमा (Full Moon)", StringComparison.OrdinalIgnoreCase).Replace("New Moon", "अमावस्या (New Moon)", StringComparison.OrdinalIgnoreCase).Replace("meteor shower", "उल्का वर्षा (meteor shower)", StringComparison.OrdinalIgnoreCase) : title;
+
+    private static string LocalizeEventDescription(AstronomyEvent astronomyEvent, string language)
+        => language.Equals("hi", StringComparison.OrdinalIgnoreCase)
+            ? $"आज रात {LocalizeEventTitle(astronomyEvent.Title, language)} देखने का शानदार मौका है। {astronomyEvent.Description}"
+            : astronomyEvent.Description;
 
     private static void ApplySpecialEventRequestContext(RunPipelineRequest request, AstronomyContext context)
     {

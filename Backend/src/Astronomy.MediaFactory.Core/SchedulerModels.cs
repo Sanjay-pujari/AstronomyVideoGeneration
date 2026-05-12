@@ -90,7 +90,10 @@ public sealed record SchedulerEventPlanResponse(
     bool DailyGuidePlanned,
     IReadOnlyCollection<SchedulerSpecialEventPlanItem> SpecialEventsPlanned,
     IReadOnlyCollection<SchedulerSkippedEventPlanItem> SkippedEvents,
-    IReadOnlyCollection<string> Reasons);
+    IReadOnlyCollection<string> Reasons,
+    string DecisionType = "None",
+    IReadOnlyCollection<AstronomyEvent>? InjectedEvents = null,
+    IReadOnlyCollection<AstronomyEvent>? SpecialEventCandidates = null);
 
 public sealed record SchedulerSpecialEventPlanItem(
     string EventId,

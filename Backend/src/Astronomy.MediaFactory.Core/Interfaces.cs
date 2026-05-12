@@ -8,12 +8,32 @@ public interface IAstronomyEventDiscoveryService
     Task<IReadOnlyCollection<AstronomyEvent>> GetUpcomingAsync(int? days, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<AstronomyEvent>> GetTopAsync(int? days, CancellationToken cancellationToken);
     Task<AstronomyEvent?> GetByIdAsync(string eventId, CancellationToken cancellationToken);
+    async Task<IReadOnlyCollection<AstronomyEvent>> RefreshEventsAsync(DateOnly fromDate, DateOnly toDate, CancellationToken cancellationToken)
+        => await RefreshAsync(Math.Max(1, toDate.DayNumber - fromDate.DayNumber + 1), cancellationToken);
+    async Task<IReadOnlyCollection<AstronomyEvent>> DiscoverEventsForRegionAsync(string regionId, DateOnly targetDate, CancellationToken cancellationToken)
+        => (await GetUpcomingAsync(1, cancellationToken)).Where(e => (e.TargetDate == default ? DateOnly.FromDateTime((e.PeakUtc ?? e.StartUtc).UtcDateTime) : e.TargetDate) == targetDate && (e.GlobalVisibility || e.RegionId == regionId || e.VisibilityRegions.Length == 0 || e.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase)))).ToArray();
+    async Task<IReadOnlyCollection<AstronomyEvent>> GetTopEventsAsync(string regionId, DateOnly targetDate, CancellationToken cancellationToken)
+        => (await GetTopAsync(1, cancellationToken)).Where(e => (e.TargetDate == default ? DateOnly.FromDateTime((e.PeakUtc ?? e.StartUtc).UtcDateTime) : e.TargetDate) == targetDate && (e.GlobalVisibility || e.RegionId == regionId || e.VisibilityRegions.Length == 0 || e.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase)))).ToArray();
 }
 
 public interface IAstronomyEventScoringService
 {
     Task<IReadOnlyCollection<AstronomyEvent>> ScoreAsync(IReadOnlyCollection<AstronomyEvent> events, DateTimeOffset now, CancellationToken cancellationToken);
     AstronomyEvent Score(AstronomyEvent astronomyEvent, DateTimeOffset now);
+}
+
+public interface IAstronomyEventStore
+{
+    Task UpsertEventsAsync(IReadOnlyCollection<AstronomyEvent> events, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AstronomyEvent>> GetUpcomingAsync(DateOnly fromDate, DateOnly toDate, string? regionId, CancellationToken cancellationToken);
+    Task<AstronomyEvent?> GetByEventIdAsync(string eventId, CancellationToken cancellationToken);
+    Task<bool> HasGenerationHistoryAsync(string eventId, string regionId, DateOnly targetDate, ContentType contentType, CancellationToken cancellationToken);
+    Task AddGenerationHistoryAsync(Guid astronomyEventId, Guid pipelineRunId, string regionId, DateOnly targetDate, ContentType contentType, string generationMode, CancellationToken cancellationToken);
+}
+
+public interface IAstronomyEventDecisionService
+{
+    Task<EventContentDecision> DecideAsync(string regionId, DateOnly targetDate, CancellationToken cancellationToken);
 }
 
 public interface IAstronomyContextProvider { Task<AstronomyContext> BuildContextAsync(DateOnly date, ContentType contentType, string locationName, string timeZone, CancellationToken cancellationToken); }
