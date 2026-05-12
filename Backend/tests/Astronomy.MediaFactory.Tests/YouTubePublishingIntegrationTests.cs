@@ -199,6 +199,24 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4"), api.Requests[0].VideoPath);
     }
 
+
+    [Fact]
+    public async Task ShortOnlyPublish_DoesNotRequireRootSeoMetadata_WhenShortMetadataExists()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, createShort: true, createRootMetadata: false);
+        var api = new TrackingYouTubeApiClient();
+        var service = CreateContentService(workspace, repository, api, new PublishingOptions { Enabled = true, Mode = "Private", PublishLongVideo = false, PublishShortVideo = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "short", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal("ShortVideo", result.AssetType);
+        Assert.Single(api.Requests);
+        Assert.Equal("Short Title #Shorts", api.Requests[0].Title);
+        Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4"), api.Requests[0].VideoPath);
+    }
+
     [Fact]
     public async Task BothAssetsUploaded_WhenEnabled()
     {
@@ -484,7 +502,7 @@ public sealed class YouTubePublishingIntegrationTests
         public void Dispose() { if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true); }
         public string OutputDirectory(PipelineRun run) => Path.Combine(Root, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
 
-        public InMemoryRepository CreateRepositoryWithRun(out PipelineRun run, bool passedValidation, bool createThumbnail = true, bool createShort = false, bool largeThumbnail = false)
+        public InMemoryRepository CreateRepositoryWithRun(out PipelineRun run, bool passedValidation, bool createThumbnail = true, bool createShort = false, bool largeThumbnail = false, bool createRootMetadata = true)
         {
             run = new PipelineRun { ContentType = ContentType.DailySkyGuide, RunDate = DateOnly.FromDateTime(DateTime.UtcNow), LocationName = "Pune" };
             var output = OutputDirectory(run);
@@ -511,7 +529,10 @@ public sealed class YouTubePublishingIntegrationTests
                     ? "{\"passed\":true,\"errors\":[]}"
                     : "{\"passed\":false,\"errors\":[\"short validation failed\"]}");
             }
-            File.WriteAllText(Path.Combine(output, "seo-metadata.json"), "{\"title\":\"Title\",\"description\":\"Description\",\"tagsCsv\":\"astronomy,night sky\"}");
+            if (createRootMetadata)
+            {
+                File.WriteAllText(Path.Combine(output, "seo-metadata.json"), "{\"title\":\"Title\",\"description\":\"Description\",\"tagsCsv\":\"astronomy,night sky\"}");
+            }
             File.WriteAllText(Path.Combine(output, "pre-publish-validation-report.json"), passedValidation
                 ? "{\"passed\":true,\"errors\":[]}"
                 : "{\"passed\":false,\"errors\":[\"validation failed\"]}");
