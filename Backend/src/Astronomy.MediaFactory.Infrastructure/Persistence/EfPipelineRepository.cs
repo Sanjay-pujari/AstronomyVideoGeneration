@@ -202,7 +202,36 @@ public sealed class EfPipelineRepository : IPipelineRepository
         if (to.HasValue)
             query = query.Where(x => x.RetrievedAt <= to.Value);
 
-        return await query.OrderByDescending(x => x.Views).Take(take).ToListAsync(cancellationToken);
+        // Topic selection only needs the core performance fields below. Keep this
+        // projection narrow so databases that have not yet applied the special-event
+        // analytics metadata repair migration do not fail by selecting EventId/EventType/EventTitle.
+        return await query
+            .OrderByDescending(x => x.Views)
+            .Take(take)
+            .Select(x => new VideoAnalytics
+            {
+                VideoId = x.VideoId,
+                Views = x.Views,
+                Likes = x.Likes,
+                Comments = x.Comments,
+                DurationSeconds = x.DurationSeconds,
+                AverageViewDurationSeconds = x.AverageViewDurationSeconds,
+                CtrPercent = x.CtrPercent,
+                RetrievedAt = x.RetrievedAt,
+                ContentType = x.ContentType,
+                IsShort = x.IsShort,
+                ParentVideoId = x.ParentVideoId,
+                Title = x.Title,
+                HookLine = x.HookLine,
+                PublishedVideoId = x.PublishedVideoId,
+                TitleExperimentId = x.TitleExperimentId,
+                TitleVariantId = x.TitleVariantId,
+                ThumbnailExperimentId = x.ThumbnailExperimentId,
+                ThumbnailVariantId = x.ThumbnailVariantId,
+                CtaExperimentId = x.CtaExperimentId,
+                CtaVariantId = x.CtaVariantId
+            })
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyCollection<VideoAnalytics>> GetTopPerformingAnalyticsAsync(DateTimeOffset? from, DateTimeOffset? to, int take, bool shortsOnly, CancellationToken cancellationToken)
