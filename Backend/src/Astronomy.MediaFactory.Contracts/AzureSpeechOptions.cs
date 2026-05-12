@@ -11,7 +11,15 @@ public sealed class AzureSpeechOptions
     public string? ManagedIdentityClientId { get; set; }
 
     public bool UseSsml { get; set; } = true;
-    public string? SsmlRate { get; set; } = "0.92";
+    public string? DefaultProsodyRate { get; set; } = "medium";
+    public string? HindiProsodyRate { get; set; } = "medium";
+    public string? EnglishProsodyRate { get; set; } = "medium";
+    public bool AllowAudioTempoCompression { get; set; } = false;
+    public double MaxAudioTempo { get; set; } = 1.0d;
+    public double MinAudioTempo { get; set; } = 0.95d;
+
+    // Legacy SSML knobs. Rate is ignored when the natural prosody-rate settings above are configured.
+    public string? SsmlRate { get; set; }
     public string? SsmlPitch { get; set; } = "+2%";
 
     public string? PrimaryVoice { get; set; } = "en-US-AriaNeural";
@@ -67,4 +75,16 @@ public sealed class AzureSpeechOptions
 
         voices.Add(trimmedVoice);
     }
+}
+
+public sealed class SpeechOptions
+{
+    public const string SectionName = "Speech";
+    public bool UseSsml { get; set; } = true;
+    public string? DefaultProsodyRate { get; set; } = "medium";
+    public string? HindiProsodyRate { get; set; } = "medium";
+    public string? EnglishProsodyRate { get; set; } = "medium";
+    public bool AllowAudioTempoCompression { get; set; } = false;
+    public double MaxAudioTempo { get; set; } = 1.0d;
+    public double MinAudioTempo { get; set; } = 0.95d;
 }

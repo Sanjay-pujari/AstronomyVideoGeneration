@@ -163,7 +163,14 @@ public sealed class FfmpegRenderingTests
         await File.WriteAllBytesAsync(sceneAudioPath, [7, 8, 9]);
 
         var fileSystem = new InMemoryFileSystem();
-        var processRunner = new SegmentAwareProcessRunner();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 6d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 6d
+            }
+        };
         var sut = CreateService(fileSystem, processRunner);
 
         await sut.RenderAsync(new RenderManifest
@@ -233,6 +240,108 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("calculatedSceneDurationSeconds: 23.8", diagnostics, StringComparison.Ordinal);
         Assert.Contains("expectedCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
         Assert.Contains("actualCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_DoesNotApplyAtempoCompression_ByDefault()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-no-atempo");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 12d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 12d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "One calm narration scene", VisualPath = scenePath, DurationSeconds = 6 }]
+        }, CancellationToken.None);
+
+        Assert.All(processRunner.Commands, command => Assert.DoesNotContain("atempo", command, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_WritesSpeechSpeedDiagnostics()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-speech-diagnostics");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [audioPath] = 1d,
+                [Path.Combine(tempDir.FullName, "combined.mp4")] = 1d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner, enableTransitions: false);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "This narration is deliberately much too fast", VisualPath = scenePath, DurationSeconds = 6 }]
+        }, CancellationToken.None);
+
+        var diagnosticsPath = Path.Combine(tempDir.FullName, "speech-speed-diagnostics.json");
+        var diagnostics = fileSystem.TextWrites[diagnosticsPath];
+        Assert.Contains("\"sceneId\": \"scene-001\"", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("\"ssmlProsodyRate\": \"medium\"", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("\"tempoApplied\": false", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("Narration may be too fast.", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_SegmentedVisualDurationFollowsSceneAudioDuration()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-scene-audio-duration");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        var sceneAudioPath = Path.Combine(tempDir.FullName, "scene-1.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(sceneAudioPath, [7, 8, 9]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath = { [sceneAudioPath] = 8.25d }
+        };
+        var sut = CreateService(fileSystem, processRunner, useSegmentedNarration: true);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, AudioPath = sceneAudioPath, DurationSeconds = 2 }]
+        }, CancellationToken.None);
+
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains(sceneAudioPath, StringComparison.Ordinal));
+        Assert.Contains("-t 8.25", segmentCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("-shortest", segmentCommand, StringComparison.Ordinal);
     }
 
     [Fact]

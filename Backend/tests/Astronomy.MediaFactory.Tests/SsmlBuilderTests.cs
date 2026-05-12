@@ -64,10 +64,43 @@ public sealed class SsmlBuilderTests
     public void BuildSsml_ShortsProfile_UsesShorterPauses()
     {
         var ssml = _sut.BuildSsml("Mars, visible.\n\nOrion!", "en-US-AriaNeural", SsmlNarrationProfile.Shorts);
-        Assert.Contains("prosody rate=\"92%\" pitch=\"+3%\"", ssml);
+        Assert.Contains("prosody rate=\"medium\" pitch=\"+3%\"", ssml);
         Assert.Contains("<break time=\"300ms\"/>", ssml);
         Assert.Contains("<break time=\"450ms\"/>", ssml);
         Assert.Contains("<break time=\"600ms\"/>", ssml);
+    }
+
+
+    [Fact]
+    public void BuildSsml_HindiText_UsesMediumRate()
+    {
+        var ssml = _sut.BuildSsml("आज रात चंद्रमा देखें।", "hi-IN-SwaraNeural", rateOverride: "medium");
+
+        Assert.Contains("prosody rate=\"medium\"", ssml);
+        Assert.DoesNotContain("rate=\"fast\"", ssml, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildSsml_EnglishText_UsesMediumRate()
+    {
+        var ssml = _sut.BuildSsml("Look up at the Moon tonight.", "en-US-AriaNeural", rateOverride: "medium");
+
+        Assert.Contains("prosody rate=\"medium\"", ssml);
+        Assert.DoesNotContain("rate=\"+20%\"", ssml, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("fast")]
+    [InlineData("x-fast")]
+    [InlineData("+20%")]
+    [InlineData("+15%")]
+    [InlineData("1.2")]
+    public void BuildSsml_RejectsFastProsodyRates(string rate)
+    {
+        var ssml = _sut.BuildSsml("Hello Moon.", "en-US-AriaNeural", rateOverride: rate);
+
+        Assert.Contains("prosody rate=\"medium\"", ssml);
+        Assert.False(SsmlBuilder.ContainsUnsafeFastProsody(ssml));
     }
 
     private static int CountOccurrences(string source, string needle)
