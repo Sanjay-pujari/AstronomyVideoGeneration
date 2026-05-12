@@ -85,13 +85,6 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.PublishRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds && options.PublishRetryCooldownSeconds > 0, "Platform publishing retry settings are invalid.")
             .ValidateOnStart();
 
-        services.AddOptions<InstagramPublishingOptions>()
-            .Bind(configuration.GetSection(InstagramPublishingOptions.SectionName))
-            .ValidateOnStart();
-
-        services.AddOptions<FacebookPublishingOptions>()
-            .Bind(configuration.GetSection(FacebookPublishingOptions.SectionName))
-            .ValidateOnStart();
 
         services.AddOptions<MonetizationOptions>()
             .Bind(configuration.GetSection(MonetizationOptions.SectionName))
@@ -241,6 +234,7 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.ConfidenceThreshold is >= 0 and <= 1, "Optimization:ConfidenceThreshold must be between 0 and 1.")
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<StartupValidationOptions>, ProductionStartupValidator>();
+        services.AddHostedService<ObsoleteConfigurationWarningHostedService>();
 
         services.AddHttpClient<NasaApodClient>();
         services.AddHttpClient<NasaNeoWsClient>();

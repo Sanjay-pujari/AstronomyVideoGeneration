@@ -319,9 +319,6 @@ public sealed class AstronomyApiOptions
     public const string SectionName = "AstronomyApis";
     public string NasaApiKey { get; set; } = "DEMO_KEY";
     public string NasaBaseUrl { get; set; } = "https://api.nasa.gov";
-    public string MpcBaseUrl { get; set; } = "https://www.minorplanetcenter.net";
-    public string SkyfieldServiceUrl { get; set; } = "http://localhost:8099";
-    public string StellariumScriptsDirectory { get; set; } = "./stellarium-scripts";
 }
 
 public sealed class AzureOpenAiOptions

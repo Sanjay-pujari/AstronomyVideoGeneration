@@ -252,60 +252,122 @@ public sealed class YouTubeShortsPlatformPublisher : IShortFormPlatformPublisher
 
 public sealed class InstagramReelsPlatformPublisher : IShortFormPlatformPublisher
 {
-    private readonly InstagramPublishingOptions _options;
+    private readonly IInstagramReelPublishService _instagramReelPublishService;
+    private readonly MetaPublishingOptions _options;
     private readonly ILogger<InstagramReelsPlatformPublisher> _logger;
 
-    public InstagramReelsPlatformPublisher(IOptions<InstagramPublishingOptions> options, ILogger<InstagramReelsPlatformPublisher> logger)
+    public InstagramReelsPlatformPublisher(
+        IInstagramReelPublishService instagramReelPublishService,
+        IOptions<MetaPublishingOptions> options,
+        ILogger<InstagramReelsPlatformPublisher> logger)
     {
+        _instagramReelPublishService = instagramReelPublishService;
         _options = options.Value;
         _logger = logger;
     }
 
     public ShortFormPlatform Platform => ShortFormPlatform.InstagramReels;
 
-    public Task<PlatformPublicationTarget> PublishAsync(PlatformPublicationTarget target, CancellationToken cancellationToken)
+    public async Task<PlatformPublicationTarget> PublishAsync(PlatformPublicationTarget target, CancellationToken cancellationToken)
     {
-        if (!_options.PublishingEnabled || string.IsNullOrWhiteSpace(_options.AccessToken) || string.IsNullOrWhiteSpace(_options.BusinessAccountId))
+        if (!MetaPublishingEnabled(_options) || !_options.PublishInstagramReel)
         {
-            _logger.LogWarning("Instagram Reels publishing skipped because the business account id or access token is missing.");
             target.Status = PlatformPublicationStatus.Skipped;
-            target.ErrorMessage = "Instagram Reels publishing is not configured. Wire the Meta Graph API here.";
-            return Task.FromResult(target);
+            target.ErrorMessage = "Instagram Reels publishing is disabled by MetaPublishing configuration.";
+            return target;
         }
 
-        _logger.LogWarning("Instagram Reels publishing is configured but the live Graph API upload workflow has not been wired yet.");
-        target.Status = PlatformPublicationStatus.Failed;
-        target.ErrorMessage = "Instagram Reels publishing integration point is ready, but the live Graph API upload call still needs to be implemented.";
-        return Task.FromResult(target);
+        var result = await _instagramReelPublishService.PublishReelAsync(CreateMetaRequest(target, "Instagram"), cancellationToken);
+        return ApplyMetaResult(target, result, _logger);
+    }
+
+    private static bool MetaPublishingEnabled(MetaPublishingOptions options)
+        => options.Enabled && !string.Equals(options.Mode, "Disabled", StringComparison.OrdinalIgnoreCase);
+
+    private static MetaPublishRequest CreateMetaRequest(PlatformPublicationTarget target, string platform)
+        => new()
+        {
+            Platform = platform,
+            VideoPath = target.VideoPath,
+            Caption = target.Caption,
+            ShortTitle = target.Title,
+            IsReel = true
+        };
+
+    private static PlatformPublicationTarget ApplyMetaResult(PlatformPublicationTarget target, MetaPublishResult result, ILogger logger)
+    {
+        target.Status = result.Success ? PlatformPublicationStatus.Published : PlatformPublicationStatus.Failed;
+        target.PublishedAt = result.PublishedUtc;
+        target.ExternalPostId = string.IsNullOrWhiteSpace(result.PostId) ? result.VideoId : result.PostId;
+        target.ExternalUrl = result.Url;
+        target.ErrorMessage = result.Error ?? result.Warning;
+
+        if (!result.Success)
+        {
+            logger.LogWarning("{Platform} Reel publishing failed in MetaPublishing mode {Mode}: {Error}", result.Platform, result.Mode, result.Error);
+        }
+
+        return target;
     }
 }
 
 public sealed class FacebookPlatformPublisher : IShortFormPlatformPublisher
 {
-    private readonly FacebookPublishingOptions _options;
+    private readonly IFacebookReelPublishService _facebookReelPublishService;
+    private readonly MetaPublishingOptions _options;
     private readonly ILogger<FacebookPlatformPublisher> _logger;
 
-    public FacebookPlatformPublisher(IOptions<FacebookPublishingOptions> options, ILogger<FacebookPlatformPublisher> logger)
+    public FacebookPlatformPublisher(
+        IFacebookReelPublishService facebookReelPublishService,
+        IOptions<MetaPublishingOptions> options,
+        ILogger<FacebookPlatformPublisher> logger)
     {
+        _facebookReelPublishService = facebookReelPublishService;
         _options = options.Value;
         _logger = logger;
     }
 
     public ShortFormPlatform Platform => ShortFormPlatform.Facebook;
 
-    public Task<PlatformPublicationTarget> PublishAsync(PlatformPublicationTarget target, CancellationToken cancellationToken)
+    public async Task<PlatformPublicationTarget> PublishAsync(PlatformPublicationTarget target, CancellationToken cancellationToken)
     {
-        if (!_options.PublishingEnabled || string.IsNullOrWhiteSpace(_options.AccessToken) || string.IsNullOrWhiteSpace(_options.PageId))
+        if (!MetaPublishingEnabled(_options) || !_options.PublishFacebookReel)
         {
-            _logger.LogWarning("Facebook publishing skipped because the page id or access token is missing.");
             target.Status = PlatformPublicationStatus.Skipped;
-            target.ErrorMessage = "Facebook publishing is not configured. Wire the Meta Graph API here.";
-            return Task.FromResult(target);
+            target.ErrorMessage = "Facebook publishing is disabled by MetaPublishing configuration.";
+            return target;
         }
 
-        _logger.LogWarning("Facebook short-form publishing is configured but the live Graph API upload workflow has not been wired yet.");
-        target.Status = PlatformPublicationStatus.Failed;
-        target.ErrorMessage = "Facebook publishing integration point is ready, but the live Graph API upload call still needs to be implemented.";
-        return Task.FromResult(target);
+        var result = await _facebookReelPublishService.PublishReelAsync(CreateMetaRequest(target, "Facebook"), cancellationToken);
+        return ApplyMetaResult(target, result, _logger);
+    }
+
+    private static bool MetaPublishingEnabled(MetaPublishingOptions options)
+        => options.Enabled && !string.Equals(options.Mode, "Disabled", StringComparison.OrdinalIgnoreCase);
+
+    private static MetaPublishRequest CreateMetaRequest(PlatformPublicationTarget target, string platform)
+        => new()
+        {
+            Platform = platform,
+            VideoPath = target.VideoPath,
+            Caption = target.Caption,
+            ShortTitle = target.Title,
+            IsReel = true
+        };
+
+    private static PlatformPublicationTarget ApplyMetaResult(PlatformPublicationTarget target, MetaPublishResult result, ILogger logger)
+    {
+        target.Status = result.Success ? PlatformPublicationStatus.Published : PlatformPublicationStatus.Failed;
+        target.PublishedAt = result.PublishedUtc;
+        target.ExternalPostId = string.IsNullOrWhiteSpace(result.PostId) ? result.VideoId : result.PostId;
+        target.ExternalUrl = result.Url;
+        target.ErrorMessage = result.Error ?? result.Warning;
+
+        if (!result.Success)
+        {
+            logger.LogWarning("{Platform} Reel publishing failed in MetaPublishing mode {Mode}: {Error}", result.Platform, result.Mode, result.Error);
+        }
+
+        return target;
     }
 }
