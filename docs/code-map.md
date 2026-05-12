@@ -33,6 +33,10 @@
 - `Backend/src/Astronomy.MediaFactory.Core/ObservationTimeService.cs`
 - `Backend/src/Astronomy.MediaFactory.Core/Models.cs`
 
+### NASA API usage
+- `AstronomyContextProvider` actively depends on `NasaApodClient` for APOD data and `NasaNeoWsClient` for near-Earth object feed data when building `AstronomyContext`.
+- `AstronomyApis:NasaBaseUrl` and `AstronomyApis:NasaApiKey` are still runtime configuration for those NASA clients and should remain configured while those clients are registered.
+
 ### Prompt/content generation
 - `Backend/src/Astronomy.MediaFactory.ContentGen/AzureOpenAiContentGenerationService.cs`
 - `Backend/src/Astronomy.MediaFactory.ContentGen/PromptBuilder.cs`
