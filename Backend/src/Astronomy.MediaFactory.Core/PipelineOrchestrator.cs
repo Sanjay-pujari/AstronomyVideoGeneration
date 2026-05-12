@@ -899,7 +899,7 @@ public sealed class PipelineOrchestrator
                         ?.ExternalPostId;
                 }
 
-                if (_contentPublishService is not null && publishingEnabled && validationPassed && _publishingOptions.PublishShortVideo)
+                if (_contentPublishService is not null && request.PublishToYouTube && publishingEnabled && validationPassed && _publishingOptions.PublishShortVideo)
                 {
                     var shortPublishResults = await RunStageAsync("YouTubeShortPublish", async () =>
                     {
@@ -1120,7 +1120,7 @@ public sealed class PipelineOrchestrator
         => stageName switch
         {
             PipelineStageNames.YouTubeLongPublished => publishingEnabled && validationPassed && publishToYouTube,
-            PipelineStageNames.YouTubeShortPublished => publishingEnabled && validationPassed && publishShortVideo,
+            PipelineStageNames.YouTubeShortPublished => publishingEnabled && validationPassed && publishToYouTube && publishShortVideo,
             PipelineStageNames.FacebookReelPublished => metaPublishingOptions.Enabled && metaPublishingOptions.PublishFacebookReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
             PipelineStageNames.InstagramReelPublished => metaPublishingOptions.Enabled && metaPublishingOptions.PublishInstagramReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
             _ => false
