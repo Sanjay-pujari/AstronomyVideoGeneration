@@ -219,7 +219,11 @@ alter table if exists video_analytics add column if not exists thumbnail_experim
 alter table if exists video_analytics add column if not exists thumbnail_variant_id uuid null;
 alter table if exists video_analytics add column if not exists cta_experiment_id uuid null;
 alter table if exists video_analytics add column if not exists cta_variant_id uuid null;
+alter table if exists video_analytics add column if not exists "EventId" text null;
+alter table if exists video_analytics add column if not exists "EventType" text null;
+alter table if exists video_analytics add column if not exists "EventTitle" text null;
 create index if not exists ix_video_analytics_published_video on video_analytics(published_video_id, retrieved_at desc);
+create index if not exists "IX_video_analytics_EventId" on video_analytics("EventId");
 
 create table if not exists content_experiments
 (
