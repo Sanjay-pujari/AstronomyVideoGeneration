@@ -16,19 +16,22 @@ public sealed class AstronomyEventDiscoveryService : IAstronomyEventDiscoverySer
     private readonly IAstronomyEventScoringService _scoringService;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AstronomyEventDiscoveryService> _logger;
+    private readonly IAstronomyEventStore? _store;
 
     public AstronomyEventDiscoveryService(
         IOptions<AstronomyEventsOptions> options,
         IOptions<MaintenanceOptions> maintenanceOptions,
         IAstronomyEventScoringService scoringService,
         TimeProvider timeProvider,
-        ILogger<AstronomyEventDiscoveryService> logger)
+        ILogger<AstronomyEventDiscoveryService> logger,
+        IAstronomyEventStore? store = null)
     {
         _options = options.Value;
         _maintenanceOptions = maintenanceOptions.Value;
         _scoringService = scoringService;
         _timeProvider = timeProvider;
         _logger = logger;
+        _store = store;
     }
 
     public async Task<IReadOnlyCollection<AstronomyEvent>> RefreshAsync(int? days, CancellationToken cancellationToken)
@@ -43,17 +46,28 @@ public sealed class AstronomyEventDiscoveryService : IAstronomyEventDiscoverySer
         var ordered = scored.OrderBy(e => e.PeakUtc ?? e.StartUtc).ThenByDescending(e => e.ContentOpportunityScore).ToArray();
 
         await WriteDiagnosticsAsync(ordered, now, lookAheadDays, cancellationToken);
+        if (_store is not null)
+        {
+            await _store.UpsertEventsAsync(ordered, cancellationToken);
+        }
         return ordered;
     }
 
     public async Task<IReadOnlyCollection<AstronomyEvent>> GetUpcomingAsync(int? days, CancellationToken cancellationToken)
     {
+        var now = _timeProvider.GetUtcNow();
+        var end = now.AddDays(NormalizeDays(days));
+        if (_store is not null)
+        {
+            var stored = await _store.GetUpcomingAsync(DateOnly.FromDateTime(now.UtcDateTime.Date), DateOnly.FromDateTime(end.UtcDateTime.Date), null, cancellationToken);
+            if (stored.Count > 0)
+                return stored.OrderBy(e => e.PeakUtc ?? e.StartUtc).ThenByDescending(e => e.ContentOpportunityScore).ToArray();
+        }
+
         var cached = await ReadCacheAsync(cancellationToken);
         if (cached.Count == 0)
             return await RefreshAsync(days, cancellationToken);
 
-        var now = _timeProvider.GetUtcNow();
-        var end = now.AddDays(NormalizeDays(days));
         return cached
             .Where(e => (e.PeakUtc ?? e.StartUtc) >= now.AddHours(-12) && e.StartUtc <= end)
             .OrderBy(e => e.PeakUtc ?? e.StartUtc)
@@ -71,14 +85,50 @@ public sealed class AstronomyEventDiscoveryService : IAstronomyEventDiscoverySer
             .ToArray();
     }
 
+
+    public async Task<IReadOnlyCollection<AstronomyEvent>> RefreshEventsAsync(DateOnly fromDate, DateOnly toDate, CancellationToken cancellationToken)
+    {
+        var events = await RefreshAsync(Math.Max(1, toDate.DayNumber - DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime.Date).DayNumber + 1), cancellationToken);
+        return events.Where(e => EffectiveTargetDate(e) >= fromDate && EffectiveTargetDate(e) <= toDate).ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<AstronomyEvent>> DiscoverEventsForRegionAsync(string regionId, DateOnly targetDate, CancellationToken cancellationToken)
+    {
+        var events = await GetUpcomingAsync(Math.Max(_options.LookAheadDays, targetDate.DayNumber - DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime.Date).DayNumber + 1), cancellationToken);
+        return events.Where(e => EffectiveTargetDate(e) == targetDate && IsVisibleInRegion(e, regionId)).ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<AstronomyEvent>> GetTopEventsAsync(string regionId, DateOnly targetDate, CancellationToken cancellationToken)
+    {
+        var events = await DiscoverEventsForRegionAsync(regionId, targetDate, cancellationToken);
+        return events.Where(e => e.ContentOpportunityScore >= _options.MinimumContentOpportunityScore).OrderByDescending(e => e.ContentOpportunityScore).ToArray();
+    }
+
     public async Task<AstronomyEvent?> GetByIdAsync(string eventId, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(eventId))
             return null;
 
+        if (_store is not null)
+        {
+            var stored = await _store.GetByEventIdAsync(eventId, cancellationToken);
+            if (stored is not null)
+                return stored;
+        }
+
         var cached = await ReadCacheAsync(cancellationToken);
         return cached.FirstOrDefault(e => e.EventId.Equals(eventId, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static DateOnly EffectiveTargetDate(AstronomyEvent astronomyEvent)
+        => astronomyEvent.TargetDate == default ? DateOnly.FromDateTime((astronomyEvent.PeakUtc ?? astronomyEvent.StartUtc).UtcDateTime) : astronomyEvent.TargetDate;
+
+    private static bool IsVisibleInRegion(AstronomyEvent astronomyEvent, string regionId)
+        => astronomyEvent.GlobalVisibility
+            || string.IsNullOrWhiteSpace(regionId)
+            || string.Equals(astronomyEvent.RegionId, regionId, StringComparison.OrdinalIgnoreCase)
+            || astronomyEvent.VisibilityRegions.Length == 0
+            || astronomyEvent.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase) || regionId.Contains(r, StringComparison.OrdinalIgnoreCase));
 
     private IReadOnlyCollection<AstronomyEvent> DiscoverInternal(DateTimeOffset now, int lookAheadDays)
     {
@@ -90,12 +140,14 @@ public sealed class AstronomyEventDiscoveryService : IAstronomyEventDiscoverySer
             events.AddRange(BuildMoonPhaseEvents(windowStart, windowEnd));
         if (_options.Sources.MeteorShowers)
             events.AddRange(BuildMeteorShowerEvents(windowStart, windowEnd));
+        if (_options.Sources.PlanetaryConjunctions)
+            events.AddRange(BuildPlanetaryConjunctionFallbackEvents(windowStart, windowEnd));
+        if (_options.Sources.Eclipses)
+            events.AddRange(BuildEclipseFallbackEvents(windowStart, windowEnd));
 
-        // Phase 7A intentionally stays read-only and avoids speculative external calls. These source
-        // families are represented in diagnostics as unavailable until authoritative providers are added.
         return events
             .GroupBy(e => e.EventId, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.OrderByDescending(e => e.SourceConfidence).First())
+            .Select(g => g.OrderByDescending(e => e.ConfidenceScore).First())
             .ToArray();
     }
 
@@ -134,8 +186,9 @@ public sealed class AstronomyEventDiscoveryService : IAstronomyEventDiscoverySer
                     VisibilityScore = phase.Visibility,
                     AudienceInterestScore = phase.Audience,
                     RecommendedContentType = phase.Content,
-                    Source = "internal-fallback: mean lunar phase model",
-                    SourceConfidence = 0.72
+                    TargetDate = DateOnly.FromDateTime(peak.UtcDateTime),
+                    Source = "FallbackCalendar",
+                    ConfidenceScore = 0.72
                 };
             }
         }
@@ -181,10 +234,85 @@ public sealed class AstronomyEventDiscoveryService : IAstronomyEventDiscoverySer
                     VisibilityScore = shower.VisibilityScore,
                     AudienceInterestScore = shower.AudienceInterestScore,
                     RecommendedContentType = "short-form skywatching alert",
-                    Source = "internal-fallback: recurring meteor shower calendar",
-                    SourceConfidence = 0.82
+                    TargetDate = DateOnly.FromDateTime(peak.UtcDateTime),
+                    Source = "FallbackCalendar",
+                    ConfidenceScore = 0.82
                 };
             }
+        }
+    }
+
+
+    private static IEnumerable<AstronomyEvent> BuildPlanetaryConjunctionFallbackEvents(DateTime windowStart, DateTime windowEnd)
+    {
+        var year = windowStart.Year;
+        var candidates = new[]
+        {
+            new { Date = new DateTimeOffset(year, 8, 12, 2, 0, 0, TimeSpan.Zero), Title = "Venus and Jupiter close approach", Objects = new[] { "Venus", "Jupiter" } },
+            new { Date = new DateTimeOffset(year, 12, 8, 1, 0, 0, TimeSpan.Zero), Title = "Moon and Saturn conjunction", Objects = new[] { "Moon", "Saturn" } }
+        };
+
+        foreach (var item in candidates)
+        {
+            if (item.Date.UtcDateTime < windowStart || item.Date.UtcDateTime > windowEnd)
+                continue;
+
+            yield return new AstronomyEvent
+            {
+                EventId = $"conjunction-{item.Title.ToLowerInvariant().Replace(" ", "-", StringComparison.Ordinal)}-{item.Date:yyyyMMdd}",
+                EventType = "planetary_conjunction",
+                Title = item.Title,
+                Description = "Approximate bright-object conjunction from fallback calendar; verify local horizon and exact separation before publishing precise claims.",
+                StartUtc = item.Date.AddHours(-8),
+                PeakUtc = item.Date,
+                EndUtc = item.Date.AddHours(8),
+                TargetDate = DateOnly.FromDateTime(item.Date.UtcDateTime),
+                VisibilityRegions = ["Global where objects are above the horizon"],
+                GlobalVisibility = true,
+                RelatedObjects = item.Objects,
+                RarityScore = 0.76,
+                VisibilityScore = 0.68,
+                AudienceInterestScore = 0.78,
+                RecommendedContentType = "daily sky guide segment",
+                Source = "FallbackCalendar",
+                ConfidenceScore = 0.58
+            };
+        }
+    }
+
+    private static IEnumerable<AstronomyEvent> BuildEclipseFallbackEvents(DateTime windowStart, DateTime windowEnd)
+    {
+        var eclipses = new[]
+        {
+            new { Date = new DateTimeOffset(2026, 8, 12, 18, 0, 0, TimeSpan.Zero), Title = "Total solar eclipse", Type = "eclipse", Regions = new[] { "Arctic", "Greenland", "Iceland", "Spain" }, Objects = new[] { "Sun", "Moon" } },
+            new { Date = new DateTimeOffset(2026, 3, 3, 11, 0, 0, TimeSpan.Zero), Title = "Total lunar eclipse", Type = "eclipse", Regions = new[] { "Americas", "Pacific", "East Asia" }, Objects = new[] { "Moon" } }
+        };
+
+        foreach (var item in eclipses)
+        {
+            if (item.Date.UtcDateTime < windowStart || item.Date.UtcDateTime > windowEnd)
+                continue;
+
+            yield return new AstronomyEvent
+            {
+                EventId = $"eclipse-{item.Title.ToLowerInvariant().Replace(" ", "-", StringComparison.Ordinal)}-{item.Date:yyyyMMdd}",
+                EventType = item.Type,
+                Title = item.Title,
+                Description = "Known eclipse fallback entry with broad visibility regions; use authoritative local circumstances for exact contact times.",
+                StartUtc = item.Date.AddHours(-3),
+                PeakUtc = item.Date,
+                EndUtc = item.Date.AddHours(3),
+                TargetDate = DateOnly.FromDateTime(item.Date.UtcDateTime),
+                VisibilityRegions = item.Regions,
+                GlobalVisibility = false,
+                RelatedObjects = item.Objects,
+                RarityScore = 0.98,
+                VisibilityScore = 0.72,
+                AudienceInterestScore = 0.98,
+                RecommendedContentType = "SpecialEventGuide",
+                Source = "FallbackCalendar",
+                ConfidenceScore = 0.68
+            };
         }
     }
 
@@ -228,8 +356,8 @@ public sealed class AstronomyEventDiscoveryService : IAstronomyEventDiscoverySer
             {
                 moonPhases = _options.Sources.MoonPhases ? "internal fallback enabled" : "disabled",
                 meteorShowers = _options.Sources.MeteorShowers ? "internal fallback enabled" : "disabled",
-                planetaryConjunctions = _options.Sources.PlanetaryConjunctions ? "no authoritative source configured in Phase 7A" : "disabled",
-                eclipses = _options.Sources.Eclipses ? "no authoritative source configured in Phase 7A" : "disabled",
+                planetaryConjunctions = _options.Sources.PlanetaryConjunctions ? "fallback calendar enabled" : "disabled",
+                eclipses = _options.Sources.Eclipses ? "fallback known-events calendar enabled" : "disabled",
                 comets = _options.Sources.Comets ? "no authoritative source configured in Phase 7A" : "disabled",
                 issPasses = _options.Sources.IssPasses ? "no authoritative source configured in Phase 7A" : "disabled"
             },
@@ -247,7 +375,7 @@ public sealed class AstronomyEventDiscoveryService : IAstronomyEventDiscoverySer
                 e.TimingUrgencyScore,
                 e.ContentOpportunityScore,
                 e.Source,
-                e.SourceConfidence
+                e.ConfidenceScore
             })
         };
         await File.WriteAllTextAsync(ReportPath, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
@@ -273,6 +401,8 @@ public sealed class AstronomyEventScoringService : IAstronomyEventScoringService
         var urgency = TimingUrgency(astronomyEvent.PeakUtc ?? astronomyEvent.StartUtc, now);
         var opportunity = Clamp01(rarity) * 0.35 + Clamp01(visibility) * 0.30 + Clamp01(audience) * 0.25 + urgency * 0.10;
 
+        if (astronomyEvent.TargetDate == default)
+            astronomyEvent.TargetDate = DateOnly.FromDateTime((astronomyEvent.PeakUtc ?? astronomyEvent.StartUtc).UtcDateTime);
         astronomyEvent.RarityScore = Math.Round(Clamp01(rarity), 3);
         astronomyEvent.VisibilityScore = Math.Round(Clamp01(visibility), 3);
         astronomyEvent.AudienceInterestScore = Math.Round(Clamp01(audience), 3);

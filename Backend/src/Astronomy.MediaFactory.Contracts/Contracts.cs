@@ -68,14 +68,20 @@ public sealed class TelemetryOptions
 
 public sealed class AstronomyEventsOptions
 {
+    private double _majorEventThreshold = 0.85;
     public const string SectionName = "AstronomyEvents";
     public bool Enabled { get; set; } = true;
     public int LookAheadDays { get; set; } = 30;
+    public int RefreshEveryHours { get; set; } = 12;
+    public double MediumEventThreshold { get; set; } = 0.70;
+    public double MajorEventThreshold { get => _majorEventThreshold; set => _majorEventThreshold = value; }
     public double MinimumContentOpportunityScore { get; set; } = 0.65;
+    public bool EnableDailyGuideEventInjection { get; set; } = true;
     public bool EnableSpecialEventVideos { get; set; } = true;
-    public double SpecialEventScoreThreshold { get; set; } = 0.70;
+    public int MaxInjectedEventsPerDailyGuide { get; set; } = 1;
     public int MaxSpecialEventVideosPerDay { get; set; } = 2;
     public bool RunSpecialEventsBeforeDailyGuide { get; set; } = false;
+    public double SpecialEventScoreThreshold { get => MajorEventThreshold; set => MajorEventThreshold = value; }
     public AstronomyEventSourceOptions Sources { get; set; } = new();
 }
 

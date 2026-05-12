@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
 
@@ -24,6 +25,8 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<AlertSubscriber> AlertSubscribers => Set<AlertSubscriber>();
     public DbSet<AlertPreferences> AlertPreferences => Set<AlertPreferences>();
     public DbSet<AlertNotification> AlertNotifications => Set<AlertNotification>();
+    public DbSet<AstronomyEvent> AstronomyEvents => Set<AstronomyEvent>();
+    public DbSet<AstronomyEventGenerationHistory> AstronomyEventGenerationHistory => Set<AstronomyEventGenerationHistory>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,6 +39,9 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<PipelineRun>().Property(x => x.EventType).HasColumnName("eventType");
         modelBuilder.Entity<PipelineRun>().Property(x => x.EventTitle).HasColumnName("eventTitle");
         modelBuilder.Entity<PipelineRun>().Property(x => x.EventDescription).HasColumnName("eventDescription");
+        modelBuilder.Entity<PipelineRun>().Property(x => x.DecisionType).HasColumnName("decisionType");
+        modelBuilder.Entity<PipelineRun>().Property(x => x.InjectedIntoDailyGuide).HasColumnName("injectedIntoDailyGuide");
+        modelBuilder.Entity<PipelineRun>().Property(x => x.SpecialEventGuideGenerated).HasColumnName("specialEventGuideGenerated");
         modelBuilder.Entity<GeneratedScript>().ToTable("generated_scripts").HasKey(x => x.Id);
         modelBuilder.Entity<GeneratedScript>().Property(x => x.Language).HasColumnName("language");
         modelBuilder.Entity<MediaAsset>().ToTable("media_assets").HasKey(x => x.Id);
@@ -71,6 +77,48 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<AlertPreferences>().Property(x => x.SpecialEventAlertsEnabled).HasColumnName("specialEventAlertsEnabled");
         modelBuilder.Entity<AlertPreferences>().Property(x => x.CreatedUtc).HasColumnName("createdUtc");
         modelBuilder.Entity<AlertPreferences>().Property(x => x.UpdatedUtc).HasColumnName("updatedUtc");
+        modelBuilder.Entity<AstronomyEvent>().ToTable("astronomy_events").HasKey(x => x.Id);
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.EventId).HasColumnName("eventId");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.EventType).HasColumnName("eventType");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.Title).HasColumnName("title");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.Description).HasColumnName("description");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.StartUtc).HasColumnName("startUtc");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.PeakUtc).HasColumnName("peakUtc");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.EndUtc).HasColumnName("endUtc");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.TargetDate).HasColumnName("targetDate");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.RegionId).HasColumnName("regionId");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.LocationName).HasColumnName("locationName");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.Timezone).HasColumnName("timezone");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.GlobalVisibility).HasColumnName("globalVisibility");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.VisibilityRegions).HasColumnName("visibilityRegions").HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null), v => JsonSerializer.Deserialize<string[]>(v, (JsonSerializerOptions?)null) ?? Array.Empty<string>());
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.RelatedObjects).HasColumnName("relatedObjects").HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null), v => JsonSerializer.Deserialize<string[]>(v, (JsonSerializerOptions?)null) ?? Array.Empty<string>());
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.Source).HasColumnName("source");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.Status).HasColumnName("status");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.ConfidenceScore).HasColumnName("confidenceScore");
+        modelBuilder.Entity<AstronomyEvent>().Ignore(x => x.SourceConfidence);
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.RarityScore).HasColumnName("rarityScore");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.VisibilityScore).HasColumnName("visibilityScore");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.AudienceInterestScore).HasColumnName("audienceInterestScore");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.TimingUrgencyScore).HasColumnName("timingUrgencyScore");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.ContentOpportunityScore).HasColumnName("contentOpportunityScore");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.RecommendedContentType).HasColumnName("recommendedContentType");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.CreatedUtc).HasColumnName("createdUtc");
+        modelBuilder.Entity<AstronomyEvent>().Property(x => x.UpdatedUtc).HasColumnName("updatedUtc");
+        modelBuilder.Entity<AstronomyEvent>().HasIndex(x => x.EventId).IsUnique();
+        modelBuilder.Entity<AstronomyEvent>().HasIndex(x => x.TargetDate);
+        modelBuilder.Entity<AstronomyEvent>().HasIndex(x => x.RegionId);
+        modelBuilder.Entity<AstronomyEvent>().HasIndex(x => x.EventType);
+        modelBuilder.Entity<AstronomyEvent>().HasIndex(x => x.ContentOpportunityScore);
+        modelBuilder.Entity<AstronomyEventGenerationHistory>().ToTable("astronomy_event_generation_history").HasKey(x => x.Id);
+        modelBuilder.Entity<AstronomyEventGenerationHistory>().Property(x => x.AstronomyEventId).HasColumnName("astronomyEventId");
+        modelBuilder.Entity<AstronomyEventGenerationHistory>().Property(x => x.PipelineRunId).HasColumnName("pipelineRunId");
+        modelBuilder.Entity<AstronomyEventGenerationHistory>().Property(x => x.RegionId).HasColumnName("regionId");
+        modelBuilder.Entity<AstronomyEventGenerationHistory>().Property(x => x.TargetDate).HasColumnName("targetDate");
+        modelBuilder.Entity<AstronomyEventGenerationHistory>().Property(x => x.ContentType).HasColumnName("contentType");
+        modelBuilder.Entity<AstronomyEventGenerationHistory>().Property(x => x.GenerationMode).HasColumnName("generationMode");
+        modelBuilder.Entity<AstronomyEventGenerationHistory>().Property(x => x.CreatedUtc).HasColumnName("createdUtc");
+        modelBuilder.Entity<AstronomyEventGenerationHistory>().HasIndex(x => new { x.AstronomyEventId, x.RegionId, x.TargetDate, x.ContentType }).IsUnique();
+
         modelBuilder.Entity<AlertNotification>().ToTable("alert_notifications").HasKey(x => x.Id);
         modelBuilder.Entity<AlertNotification>().Property(x => x.SubscriberId).HasColumnName("subscriberId");
         modelBuilder.Entity<AlertNotification>().Property(x => x.EventId).HasColumnName("eventId");
@@ -106,12 +154,21 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<AlertPreferences>().HasIndex(x => x.SubscriberId).IsUnique();
         modelBuilder.Entity<AlertNotification>().HasIndex(x => new { x.SubscriberId, x.EventId, x.RegionId }).IsUnique();
         modelBuilder.Entity<AlertNotification>().HasIndex(x => new { x.Status, x.ScheduledUtc });
+        modelBuilder.Entity<VideoAnalytics>().Property(x => x.DecisionType).HasColumnName("decisionType");
+        modelBuilder.Entity<VideoAnalytics>().Property(x => x.InjectedIntoDailyGuide).HasColumnName("injectedIntoDailyGuide");
+        modelBuilder.Entity<VideoAnalytics>().Property(x => x.SpecialEventGuideGenerated).HasColumnName("specialEventGuideGenerated");
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => new { x.PublishedVideoId, x.RetrievedAt });
         modelBuilder.Entity<VideoAnalytics>().HasIndex(x => x.EventId);
         modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.RegionId).HasColumnName("regionId");
         modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.Language).HasColumnName("language");
         modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.CtaVariant).HasColumnName("ctaVariant");
         modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.AffiliateBlockEnabled).HasColumnName("affiliateBlockEnabled");
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.EventId).HasColumnName("eventId");
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.EventType).HasColumnName("eventType");
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.EventTitle).HasColumnName("eventTitle");
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.DecisionType).HasColumnName("decisionType");
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.InjectedIntoDailyGuide).HasColumnName("injectedIntoDailyGuide");
+        modelBuilder.Entity<PlatformContentAnalytics>().Property(x => x.SpecialEventGuideGenerated).HasColumnName("specialEventGuideGenerated");
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.RegionId);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.Language);
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => x.Platform);

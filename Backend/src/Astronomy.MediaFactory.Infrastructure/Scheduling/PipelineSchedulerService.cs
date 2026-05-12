@@ -266,42 +266,36 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         var reasons = new List<string> { $"DailySkyGuide planned for {regionId} on {targetDate:yyyy-MM-dd}." };
         var planned = new List<SchedulerSpecialEventPlanItem>();
         var skipped = new List<SchedulerSkippedEventPlanItem>();
+        EventContentDecision decision;
 
-        if (!eventOptions.EnableSpecialEventVideos)
+        try
         {
-            reasons.Add("Special event videos are disabled.");
-            return new SchedulerEventPlanResponse(regionId, targetDate, true, planned, skipped, reasons);
+            using var scope = _scopeFactory.CreateScope();
+            var discovery = scope.ServiceProvider.GetRequiredService<IAstronomyEventDiscoveryService>();
+            await discovery.RefreshEventsAsync(targetDate, targetDate.AddDays(eventOptions.LookAheadDays), cancellationToken);
+            var decisionService = scope.ServiceProvider.GetService<IAstronomyEventDecisionService>();
+            if (decisionService is not null)
+            {
+                decision = await decisionService.DecideAsync(regionId, targetDate, cancellationToken);
+            }
+            else
+            {
+                var events = (await discovery.GetTopEventsAsync(regionId, targetDate, cancellationToken)).OrderByDescending(e => e.ContentOpportunityScore).ToArray();
+                var major = events.Where(e => e.ContentOpportunityScore >= eventOptions.MajorEventThreshold).Take(eventOptions.MaxSpecialEventVideosPerDay).ToArray();
+                var injected = events.Where(e => e.ContentOpportunityScore >= eventOptions.MediumEventThreshold).Take(eventOptions.MaxInjectedEventsPerDailyGuide).ToArray();
+                decision = new EventContentDecision { HasEvent = events.Length > 0, PrimaryEvent = major.FirstOrDefault() ?? injected.FirstOrDefault() ?? events.FirstOrDefault(), DecisionType = major.Length > 0 ? "GenerateBoth" : injected.Length > 0 ? "InjectIntoDailyGuide" : "None", InjectedEvents = injected, SpecialEventCandidates = major, Reason = "Decision built from discovery fallback." };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Event planning failed for {RegionId} on {TargetDate}; scheduling DailySkyGuide only.", regionId, targetDate);
+            decision = new EventContentDecision { DecisionType = "None", Reason = $"Event planning failed: {ex.Message}" };
         }
 
-        if (eventOptions.MaxSpecialEventVideosPerDay <= 0)
-        {
-            reasons.Add("MaxSpecialEventVideosPerDay is 0; no special event videos will be queued.");
-            return new SchedulerEventPlanResponse(regionId, targetDate, true, planned, skipped, reasons);
-        }
-
-        using var scope = _scopeFactory.CreateScope();
-        var discovery = scope.ServiceProvider.GetRequiredService<IAstronomyEventDiscoveryService>();
-        var events = (await discovery.GetTopAsync(eventOptions.LookAheadDays, cancellationToken))
-            .Where(e => IsEventOnDate(e, targetDate))
-            .Where(e => IsVisibleInRegion(e, regionId))
-            .Where(IsSupportedSpecialEventType)
-            .OrderByDescending(e => e.ContentOpportunityScore)
-            .ThenBy(e => e.PeakUtc ?? e.StartUtc)
-            .ToArray();
-
-        if (events.Length == 0)
-            reasons.Add("No supported astronomy events found for the requested region/date.");
-
-        foreach (var astronomyEvent in events)
+        reasons.Add(decision.Reason);
+        foreach (var astronomyEvent in decision.SpecialEventCandidates)
         {
             var duplicate = await HasSpecialEventDuplicateAsync(astronomyEvent.EventId, targetDate, regionId, ContentType.SpecialEventGuide, cancellationToken);
-            var score = astronomyEvent.ContentOpportunityScore;
-            if (score < eventOptions.SpecialEventScoreThreshold)
-            {
-                skipped.Add(ToSkipped(astronomyEvent, $"Score {score:0.00} is below threshold {eventOptions.SpecialEventScoreThreshold:0.00}."));
-                continue;
-            }
-
             if (duplicate)
             {
                 skipped.Add(ToSkipped(astronomyEvent, "Duplicate event video already exists for eventId + targetDate + regionId + contentType."));
@@ -315,11 +309,14 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
             }
 
             _lastPlannedEvents[astronomyEvent.EventId] = astronomyEvent;
-            planned.Add(new SchedulerSpecialEventPlanItem(astronomyEvent.EventId, astronomyEvent.EventType, astronomyEvent.Title, score, ContentType.SpecialEventGuide, astronomyEvent.PeakUtc, $"Score {score:0.00} meets threshold {eventOptions.SpecialEventScoreThreshold:0.00}."));
+            planned.Add(new SchedulerSpecialEventPlanItem(astronomyEvent.EventId, astronomyEvent.EventType, astronomyEvent.Title, astronomyEvent.ContentOpportunityScore, ContentType.SpecialEventGuide, astronomyEvent.PeakUtc, $"Decision {decision.DecisionType}; score {astronomyEvent.ContentOpportunityScore:0.00}."));
         }
 
+        foreach (var skippedEvent in decision.SkippedEvents)
+            skipped.Add(ToSkipped(skippedEvent, "Skipped by event decision service."));
+
         reasons.Add(planned.Count == 0 ? "No SpecialEventGuide runs planned." : $"{planned.Count} SpecialEventGuide run(s) planned.");
-        return new SchedulerEventPlanResponse(regionId, targetDate, true, planned, skipped, reasons);
+        return new SchedulerEventPlanResponse(regionId, targetDate, true, planned, skipped, reasons, decision.DecisionType, decision.InjectedEvents, decision.SpecialEventCandidates);
     }
 
     private async Task<bool> HasSpecialEventDuplicateAsync(string eventId, DateOnly targetDate, string regionId, ContentType contentType, CancellationToken cancellationToken)

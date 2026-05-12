@@ -121,7 +121,7 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<AstronomyEventsOptions>()
             .Bind(configuration.GetSection(AstronomyEventsOptions.SectionName))
-            .Validate(opt => opt.LookAheadDays > 0 && opt.MinimumContentOpportunityScore is >= 0 and <= 1 && opt.SpecialEventScoreThreshold is >= 0 and <= 1 && opt.MaxSpecialEventVideosPerDay >= 0, "AstronomyEvents values are invalid.")
+            .Validate(opt => opt.LookAheadDays > 0 && opt.RefreshEveryHours > 0 && opt.MinimumContentOpportunityScore is >= 0 and <= 1 && opt.MediumEventThreshold is >= 0 and <= 1 && opt.MajorEventThreshold is >= 0 and <= 1 && opt.MaxInjectedEventsPerDailyGuide >= 0 && opt.MaxSpecialEventVideosPerDay >= 0, "AstronomyEvents values are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<TopicSelectionOptions>()
@@ -281,8 +281,10 @@ public static class ServiceCollectionExtensions
         services.AddDbContext<MediaFactoryDbContext>(o => o.UseNpgsql(cs));
         services.AddScoped<IPipelineRepository, EfPipelineRepository>();
         services.AddScoped<IAstronomyContextProvider, AstronomyContextProvider>();
+        services.AddScoped<IAstronomyEventStore, EfAstronomyEventStore>();
         services.AddScoped<IAstronomyEventScoringService, AstronomyEventScoringService>();
         services.AddScoped<IAstronomyEventDiscoveryService, AstronomyEventDiscoveryService>();
+        services.AddScoped<IAstronomyEventDecisionService, AstronomyEventDecisionService>();
         services.AddScoped<IObservationWindowService, ObservationWindowService>();
         services.AddScoped<ITopicRankingService, TopicRankingService>();
         services.AddScoped<ITopicSelectionService, TopicSelectionService>();

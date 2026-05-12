@@ -86,8 +86,11 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
     }
 });
 
-app.MapGet("/api/events/upcoming", async (int? days, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
-    Results.Ok(await events.GetUpcomingAsync(days, ct)));
+app.MapGet("/api/events/upcoming", async (int? days, string? regionId, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
+{
+    var upcoming = await events.GetUpcomingAsync(days, ct);
+    return Results.Ok(string.IsNullOrWhiteSpace(regionId) ? upcoming : upcoming.Where(e => e.GlobalVisibility || e.RegionId == regionId || e.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase))).ToArray());
+});
 app.MapPost("/api/alerts/subscribe", async (AlertSubscribeRequest request, ISkyAlertService alerts, CancellationToken ct) =>
 {
     try
@@ -146,8 +149,11 @@ app.MapPost("/api/alerts/test", async (AlertTestRequest request, ISkyAlertServic
 app.MapPost("/api/alerts/unsubscribe/{subscriberId:guid}", async (Guid subscriberId, ISkyAlertService alerts, CancellationToken ct) =>
     await alerts.UnsubscribeAsync(subscriberId, ct) ? Results.Ok(new { subscriberId, isActive = false }) : Results.NotFound(new { message = "Alert subscriber was not found." }));
 
-app.MapGet("/api/events/top", async (int? days, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
-    Results.Ok(await events.GetTopAsync(days, ct)));
+app.MapGet("/api/events/top", async (int? days, string? regionId, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
+{
+    var top = await events.GetTopAsync(days, ct);
+    return Results.Ok(string.IsNullOrWhiteSpace(regionId) ? top : top.Where(e => e.GlobalVisibility || e.RegionId == regionId || e.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase))).ToArray());
+});
 app.MapGet("/api/events/{eventId}", async (string eventId, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
 {
     var item = await events.GetByIdAsync(eventId, ct);
@@ -201,20 +207,22 @@ app.MapPost("/api/scheduler/disable/{scheduleName}", async (string scheduleName,
     return updated ? Results.Ok(new { scheduleName, enabled = false }) : Results.NotFound(new { message = $"Schedule '{scheduleName}' was not found." });
 });
 
-app.MapPost("/api/events/{eventId}/generate", async (string eventId, RunPipelineRequest request, IAstronomyEventDiscoveryService events, IPipelineRepository repository, PipelineOrchestrator orchestrator, CancellationToken ct) =>
+app.MapPost("/api/events/{eventId}/generate", async (string eventId, string? regionId, ContentType? contentType, RunPipelineRequest request, IAstronomyEventDiscoveryService events, IPipelineRepository repository, PipelineOrchestrator orchestrator, CancellationToken ct) =>
 {
     var astronomyEvent = await events.GetByIdAsync(eventId, ct);
     if (astronomyEvent is null)
         return Results.NotFound(new { message = $"Astronomy event '{eventId}' was not found." });
 
-    var regionId = string.IsNullOrWhiteSpace(request.RegionId) ? request.LocationName : request.RegionId;
+    var duplicateRegionId = string.IsNullOrWhiteSpace(regionId) ? (string.IsNullOrWhiteSpace(request.RegionId) ? request.LocationName : request.RegionId) : regionId;
+    var requestedContentType = contentType ?? ContentType.SpecialEventGuide;
     var statuses = new[] { PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded };
-    if (await repository.HasSpecialEventRunAsync(eventId, request.Date, regionId, ContentType.SpecialEventGuide, statuses, ct))
-        return Results.Conflict(new { message = "Special event video already exists for event/date/region.", eventId, targetDate = request.Date, regionId });
+    if (await repository.HasSpecialEventRunAsync(eventId, request.Date, duplicateRegionId, requestedContentType, statuses, ct))
+        return Results.Conflict(new { message = "Special event video already exists for event/date/region/contentType.", eventId, targetDate = request.Date, regionId = duplicateRegionId, contentType = requestedContentType });
 
     var specialRequest = request with
     {
-        ContentType = ContentType.SpecialEventGuide,
+        ContentType = requestedContentType,
+        RegionId = duplicateRegionId,
         EventId = astronomyEvent.EventId,
         EventType = astronomyEvent.EventType,
         EventTitle = astronomyEvent.Title,
