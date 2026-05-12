@@ -2,22 +2,30 @@ using Astronomy.MediaFactory.Contracts;
 
 namespace Astronomy.MediaFactory.Core;
 
-public sealed record LocalizationContext(string RequestedLanguage, string ResolvedLanguage, bool FallbackUsed)
+public sealed record LocalizationContext(string RequestedLanguage, string RegionLanguage, string ResolvedLanguage, bool FallbackUsed)
 {
-    public static LocalizationContext English { get; } = new("en", "en", false);
+    public static LocalizationContext English { get; } = new("en", "", "en", false);
 }
 
 public static class LocalizationResolver
 {
-    public static LocalizationContext Resolve(string? requestedLanguage, LocalizationOptions? options = null)
+    public static LocalizationContext Resolve(string? requestedLanguage, LocalizationOptions? options)
+        => Resolve(requestedLanguage, null, options);
+
+    public static LocalizationContext Resolve(string? requestedLanguage, string? regionLanguage = null, LocalizationOptions? options = null)
     {
         options ??= new LocalizationOptions();
-        var requested = Normalize(string.IsNullOrWhiteSpace(requestedLanguage) ? options.DefaultLanguage : requestedLanguage) ?? "en";
+        var requested = Normalize(requestedLanguage) ?? string.Empty;
+        var region = Normalize(regionLanguage) ?? string.Empty;
+        var candidate = Normalize(requestedLanguage)
+            ?? Normalize(regionLanguage)
+            ?? Normalize(options.DefaultLanguage)
+            ?? "en";
 
         if (!options.Enabled)
         {
             var defaultLanguage = Normalize(options.DefaultLanguage) ?? "en";
-            return new LocalizationContext(requested, defaultLanguage, !requested.Equals(defaultLanguage, StringComparison.OrdinalIgnoreCase));
+            return new LocalizationContext(requested, region, defaultLanguage, !candidate.Equals(defaultLanguage, StringComparison.OrdinalIgnoreCase));
         }
 
         var supported = options.SupportedLanguages
@@ -31,9 +39,9 @@ public static class LocalizationResolver
             supported.Add("en");
         }
 
-        if (supported.Contains(requested))
+        if (supported.Contains(candidate))
         {
-            return new LocalizationContext(requested, requested, false);
+            return new LocalizationContext(requested, region, candidate, false);
         }
 
         var fallback = Normalize(options.FallbackLanguage) ?? Normalize(options.DefaultLanguage) ?? "en";
@@ -42,7 +50,7 @@ public static class LocalizationResolver
             fallback = supported.Contains("en") ? "en" : supported.First();
         }
 
-        return new LocalizationContext(requested, fallback, true);
+        return new LocalizationContext(requested, region, fallback, true);
     }
 
     public static string LanguageDisplayName(string? language)

@@ -47,6 +47,7 @@ public sealed class PipelineOrchestrator
     private readonly IMetaPublishService? _metaPublishService;
     private readonly IPipelineStageExecutor? _pipelineStageExecutor;
     private readonly LocalizationOptions _localizationOptions;
+    private readonly SchedulerOptions _schedulerOptions;
     private readonly GrowthOptions _growthOptions;
     private readonly IAstronomyEventDecisionService? _eventDecisionService;
     private readonly IAstronomyEventStore? _eventStore;
@@ -90,6 +91,7 @@ public sealed class PipelineOrchestrator
         IPipelineStageExecutor? pipelineStageExecutor = null,
         IOptions<LocalizationOptions>? localizationOptions = null,
         IOptions<GrowthOptions>? growthOptions = null,
+        IOptions<SchedulerOptions>? schedulerOptions = null,
         IAstronomyEventDecisionService? eventDecisionService = null,
         IAstronomyEventStore? eventStore = null)
     {
@@ -130,6 +132,7 @@ public sealed class PipelineOrchestrator
         _metaPublishService = metaPublishService;
         _pipelineStageExecutor = pipelineStageExecutor;
         _localizationOptions = localizationOptions?.Value ?? new LocalizationOptions();
+        _schedulerOptions = schedulerOptions?.Value ?? new SchedulerOptions();
         _growthOptions = growthOptions?.Value ?? new GrowthOptions();
         _eventDecisionService = eventDecisionService;
         _eventStore = eventStore;
@@ -137,7 +140,8 @@ public sealed class PipelineOrchestrator
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
     {
-        var localization = LocalizationResolver.Resolve(request.Language, _localizationOptions);
+        var regionLanguage = ResolveRegionLanguage(request.RegionId, request.LocationName, _schedulerOptions);
+        var localization = LocalizationResolver.Resolve(request.Language, regionLanguage, _localizationOptions);
         var run = new PipelineRun
         {
             RunDate = request.Date,
@@ -406,6 +410,7 @@ public sealed class PipelineOrchestrator
                 SceneScriptSections = script.SceneScriptSections
             };
 
+            ValidateNarrationLanguage(script.ScriptBody, context.Localization.ResolvedLanguage);
             var audioPath = await RunStageAsync("SpeechSynthesis", () => _speechSynthesisService.SynthesizeAsync(script.ScriptBody, outputDir, cancellationToken));
             var visuals = await RunStageAsync("VisualGeneration", () => _visualAssetProvider.PrepareVisualsAsync(context, outputDir, cancellationToken));
 
@@ -516,6 +521,7 @@ public sealed class PipelineOrchestrator
                         ? Path.Combine(outputDir, $"scene-narration-{i + 1:000}")
                         : outputDir;
                     var sceneNumber = i + 1;
+                    ValidateNarrationLanguage(sceneSections[i].Item2, context.Localization.ResolvedLanguage);
                     var perSceneAudioPath = await RunStageAsync($"SceneSpeechSynthesis-{sceneNumber:000}", () => _speechSynthesisService.SynthesizeAsync(sceneSections[i].Item2, sceneOutputDirectory, cancellationToken));
 
                     if (string.IsNullOrWhiteSpace(perSceneAudioPath))
@@ -624,6 +630,7 @@ public sealed class PipelineOrchestrator
                 RegionId = request.RegionId
             }, cancellationToken));
             await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDir, cancellationToken);
+            await WriteLanguagePipelineDiagnosticsAsync(context.Localization.ResolvedLanguage, script.ScriptBody, seoMetadata, outputDir, null, cancellationToken);
             await WriteSpecialEventDiagnosticsAsync(request, context, outputDir, seoMetadata, cancellationToken);
 
             await _repository.AddAssetAsync(new MediaAsset
@@ -1024,6 +1031,10 @@ public sealed class PipelineOrchestrator
                     // Preserve original pipeline failure.
                 }
             }
+            if (!string.IsNullOrWhiteSpace(run.OutputFolder))
+            {
+                await WriteLanguagePipelineDiagnosticsAsync(run.Language, null, null, run.OutputFolder, ex.Message, CancellationToken.None);
+            }
             run.Status = PipelineRunStatus.Failed;
             run.FailureReason = ex.Message;
             run.FinishedUtc = DateTimeOffset.UtcNow;
@@ -1033,6 +1044,53 @@ public sealed class PipelineOrchestrator
         }
     }
 
+
+    private static string? ResolveRegionLanguage(string? regionId, string locationName, SchedulerOptions schedulerOptions)
+    {
+        var normalizedRegionId = NormalizeRegionId(regionId, locationName);
+        var region = schedulerOptions.Regions.Items.FirstOrDefault(item =>
+            string.Equals(NormalizeRegionId(item.RegionId, item.DisplayName), normalizedRegionId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(item.DisplayName, locationName, StringComparison.OrdinalIgnoreCase));
+        return string.IsNullOrWhiteSpace(region?.Language) ? null : region.Language;
+    }
+
+    private static bool ContainsDevanagari(string? text)
+        => !string.IsNullOrWhiteSpace(text) && text.Any(character => character >= '\u0900' && character <= '\u097F');
+
+    private static void ValidateNarrationLanguage(string narrationText, string resolvedLanguage)
+    {
+        if (LocalizationResolver.IsHindi(resolvedLanguage) && !ContainsDevanagari(narrationText))
+        {
+            throw new InvalidOperationException("Hindi narration validation failed: generated narration is not Hindi.");
+        }
+    }
+
+    private static async Task WriteLanguagePipelineDiagnosticsAsync(string resolvedLanguage, string? narrationText, SeoMetadataResult? seoMetadata, string outputDirectory, string? failedStage, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        var diagnostics = new
+        {
+            resolvedLanguage,
+            voiceName = LocalizationResolver.IsHindi(resolvedLanguage) ? "hi-IN-SwaraNeural" : "en-US-JennyNeural",
+            narrationLanguageDetected = ContainsDevanagari(narrationText) ? "hi" : string.IsNullOrWhiteSpace(narrationText) ? null : "en",
+            shortNarrationLanguageDetected = DetectShortNarrationLanguage(outputDirectory),
+            seoLanguageDetected = ContainsDevanagari((seoMetadata?.Title ?? string.Empty) + " " + (seoMetadata?.Description ?? string.Empty)) ? "hi" : seoMetadata is null ? null : "en",
+            failedStage
+        };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "language-pipeline-diagnostics.json"), JsonSerializer.Serialize(diagnostics, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private static string? DetectShortNarrationLanguage(string outputDirectory)
+    {
+        var shortsDirectory = Path.Combine(outputDirectory, "shorts");
+        if (!Directory.Exists(shortsDirectory))
+        {
+            return null;
+        }
+
+        var text = string.Join(" ", Directory.EnumerateFiles(shortsDirectory, "scene-narration-*.txt").Select(File.ReadAllText));
+        return ContainsDevanagari(text) ? "hi" : string.IsNullOrWhiteSpace(text) ? null : "en";
+    }
 
     private static async Task WritePublishIdempotencyCheckAsync(Guid runId, string outputDirectory, PublishedVideo? existingSuccessfulYouTube, CancellationToken cancellationToken)
     {
@@ -1361,6 +1419,7 @@ public sealed class PipelineOrchestrator
         var payload = new
         {
             requestedLanguage = localization.RequestedLanguage,
+            regionLanguage = localization.RegionLanguage,
             resolvedLanguage = localization.ResolvedLanguage,
             fallbackUsed = localization.FallbackUsed
         };

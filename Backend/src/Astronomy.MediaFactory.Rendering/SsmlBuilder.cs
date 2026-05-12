@@ -37,15 +37,26 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
     {
         var tuned = ResolveProfile(profile, rateOverride, pitchOverride);
         var escapedVoice = SecurityElement.Escape(voiceName) ?? "en-US-AriaNeural";
+        var xmlLanguage = ResolveXmlLanguage(voiceName);
         var body = BuildBody(text, tuned);
 
         return $"""
-                <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
+                <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{xmlLanguage}">
                   <voice name="{escapedVoice}">
                     <prosody rate="{tuned.Rate}" pitch="{tuned.Pitch}">{body}</prosody>
                   </voice>
                 </speak>
                 """;
+    }
+
+    private static string ResolveXmlLanguage(string voiceName)
+    {
+        if (voiceName.StartsWith("hi-IN", StringComparison.OrdinalIgnoreCase))
+        {
+            return "hi-IN";
+        }
+
+        return "en-US";
     }
 
     private static string BuildBody(string text, NarrationTuning tuning)

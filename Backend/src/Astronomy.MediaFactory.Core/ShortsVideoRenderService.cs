@@ -125,7 +125,9 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             OptimizedMetadata = optimizedMetadata
         };
         var scriptBody = $"{shortScript.OptimizedMetadata?.HookLine ?? shortScript.Hook} {shortScript.ShortScript}";
-        var shortAudioPath = await _speechSynthesisService.SynthesizeAsync(scriptBody, outputDirectory, cancellationToken);
+        var shortAudioPath = LocalizationResolver.IsHindi(context.Localization.ResolvedLanguage)
+            ? Path.Combine(outputDirectory, "narration-fallback-disabled-for-hi.mp3")
+            : await _speechSynthesisService.SynthesizeAsync(scriptBody, outputDirectory, cancellationToken);
 
         var visualCandidates = sourceVisuals.Where(File.Exists).ToList();
         if (visualCandidates.Count == 0)
@@ -146,9 +148,13 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         ValidateShortNarrationBeforeAudioSynthesis(generatedPerSceneNarration, shortScenesOrdered);
         var segmentedNarration = await TryBuildSegmentedNarrationAsync(generatedPerSceneNarration, scriptBody, shortScenesOrdered, outputDirectory, cancellationToken);
         ValidateShortNarrationBeforeAudioSynthesis(segmentedNarration, shortScenesOrdered);
+        if (LocalizationResolver.IsHindi(context.Localization.ResolvedLanguage) && segmentedNarration.Count == 0)
+        {
+            throw new InvalidOperationException("Hindi short narration validation failed: generated short narration is not Hindi.");
+        }
         var finalNarrationPath = await BuildFinalNarrationAudioAsync(segmentedNarration, shortAudioPath, outputDirectory, cancellationToken);
-        var shortSequence = BuildShortSequenceMap(shortScenesOrdered, segmentedNarration, outputDirectory);
-        await ValidateAndWriteShortSequenceDiagnosticsAsync(shortSequence, shortScenesOrdered, outputDirectory, cancellationToken);
+        var shortSequence = BuildShortSequenceMap(shortScenesOrdered, segmentedNarration, outputDirectory, context.Localization.ResolvedLanguage);
+        await ValidateAndWriteShortSequenceDiagnosticsAsync(shortSequence, shortScenesOrdered, context.Localization.ResolvedLanguage, outputDirectory, cancellationToken);
 
         optimizedMetadata = ApplyGrowthMetadata(optimizedMetadata, _growthOptions, context.Localization.ResolvedLanguage, context.LocationName);
 
@@ -197,8 +203,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             }).ToList()
         };
 
+        await ValidateShortSequenceBeforeRenderAsync(shortSequence, shortScenesOrdered, context.Localization.ResolvedLanguage, outputDirectory, cancellationToken);
         var videoPath = await _videoRenderService.RenderAsync(manifest, cancellationToken);
-        await ValidateShortSequenceBeforeRenderAsync(shortSequence, shortScenesOrdered, outputDirectory, cancellationToken);
 
         string? blobUrl = null;
         try
@@ -207,7 +213,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             {
                 BasePath = $"shorts/{contentType}/{context.Date:yyyy-MM-dd}",
                 VideoPath = videoPath,
-                AudioPath = shortAudioPath,
+                AudioPath = finalNarrationPath,
                 ThumbnailPath = visualCandidates.FirstOrDefault()
             }, cancellationToken);
             blobUrl = blobResult.VideoUrl;
@@ -398,6 +404,20 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private static List<SceneNarrationSegment> BuildSourceNarrationSegments(IReadOnlyCollection<SceneNarrationSegment> generatedSceneNarration, string scriptBody, IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered)
         => generatedSceneNarration.Where(x => !string.IsNullOrWhiteSpace(x.NarrationText)).ToList();
 
+    private static void ValidateHindiShortScript(ShortScriptResult shortScript, string language)
+    {
+        if (!LocalizationResolver.IsHindi(language))
+        {
+            return;
+        }
+
+        var text = string.Join(" ", new[] { shortScript.Hook, shortScript.ShortScript }.Concat(shortScript.SceneNarrationSegments.Select(s => s.NarrationText)));
+        if (!ContainsDevanagari(text))
+        {
+            throw new InvalidOperationException("Hindi short narration validation failed: generated short narration is not Hindi.");
+        }
+    }
+
     private static List<SceneNarrationSegment> BuildShortSceneNarration(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, string language)
         => shortScenesOrdered.Select(scene => new SceneNarrationSegment
         {
@@ -463,7 +483,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         if (sceneContext.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase)) return "overview";
         return "object";
     }
-    private static List<ShortSequenceItem> BuildShortSequenceMap(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, IReadOnlyList<SceneNarrationSegment> shortNarrationSegments, string outputDirectory)
+    private static List<ShortSequenceItem> BuildShortSequenceMap(IReadOnlyList<ShortSceneOrderEntry> shortScenesOrdered, IReadOnlyList<SceneNarrationSegment> shortNarrationSegments, string outputDirectory, string language)
         => shortScenesOrdered.Select((scene, index) =>
         {
             var narration = shortNarrationSegments.FirstOrDefault(x => x.SceneId.Equals(scene.SceneId, StringComparison.OrdinalIgnoreCase))
@@ -472,10 +492,10 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             var narrationTextPath = Path.Combine(outputDirectory, $"scene-narration-{index + 1:000}.txt");
             File.WriteAllText(narrationTextPath, narrationText);
             var audioPath = Path.Combine(outputDirectory, $"scene-audio-{index + 1:000}.mp3");
-            return new ShortSequenceItem(index + 1, scene.SceneId, scene.ObjectName, scene.SceneType, scene.VisualPath, narrationText, narrationTextPath, audioPath, Math.Max(1, narration.DurationSeconds), Path.Combine(outputDirectory, $"segment-{index + 1:000}.mp4"));
+            return new ShortSequenceItem(index + 1, scene.SceneId, scene.ObjectName, scene.SceneType, scene.VisualPath, narrationText, narrationTextPath, audioPath, Math.Max(1, narration.DurationSeconds), Path.Combine(outputDirectory, $"segment-{index + 1:000}.mp4"), language);
         }).ToList();
 
-    private async Task ValidateAndWriteShortSequenceDiagnosticsAsync(IReadOnlyList<ShortSequenceItem> orderedSequenceMap, IReadOnlyList<ShortSceneOrderEntry> expectedVisualScenes, string outputDirectory, CancellationToken cancellationToken)
+    private async Task ValidateAndWriteShortSequenceDiagnosticsAsync(IReadOnlyList<ShortSequenceItem> orderedSequenceMap, IReadOnlyList<ShortSceneOrderEntry> expectedVisualScenes, string language, string outputDirectory, CancellationToken cancellationToken)
     {
         var diagnosticsPath = Path.Combine(outputDirectory, "short-sequence-map.json");
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(orderedSequenceMap, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
@@ -493,6 +513,16 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             }
 
             var narrationText = orderedSequenceMap[i].NarrationText;
+            if (LocalizationResolver.IsHindi(language) && !ContainsDevanagari(narrationText))
+            {
+                throw new InvalidOperationException("Hindi short narration validation failed: generated short narration is not Hindi.");
+            }
+
+            if (!File.Exists(orderedSequenceMap[i].NarrationTextPath))
+            {
+                throw new InvalidOperationException($"Short narration file missing before rendering: index={orderedSequenceMap[i].Index}");
+            }
+
             if (!IsGenericSkyScene(orderedSequenceMap[i].ObjectName, orderedSequenceMap[i].SceneType)
                 && !string.IsNullOrWhiteSpace(orderedSequenceMap[i].ObjectName)
                 && !narrationText.Contains(orderedSequenceMap[i].ObjectName, StringComparison.OrdinalIgnoreCase))
@@ -513,6 +543,9 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private static string ExtractMentionedObjectName(string narrationText, IEnumerable<string> candidateObjectNames)
         => candidateObjectNames.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name) && narrationText.Contains(name, StringComparison.OrdinalIgnoreCase)) ?? "unknown";
 
+    private static bool ContainsDevanagari(string? text)
+        => !string.IsNullOrWhiteSpace(text) && text.Any(character => character >= '\u0900' && character <= '\u097F');
+
     private static void ValidateShortNarrationBeforeAudioSynthesis(IReadOnlyList<SceneNarrationSegment> narration, IReadOnlyList<ShortSceneOrderEntry> scenes)
     {
         for (var i = 0; i < scenes.Count; i++)
@@ -528,7 +561,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         }
     }
 
-    private static async Task ValidateShortSequenceBeforeRenderAsync(IReadOnlyList<ShortSequenceItem> sequence, IReadOnlyList<ShortSceneOrderEntry> scenes, string outputDirectory, CancellationToken cancellationToken)
+    private static async Task ValidateShortSequenceBeforeRenderAsync(IReadOnlyList<ShortSequenceItem> sequence, IReadOnlyList<ShortSceneOrderEntry> scenes, string language, string outputDirectory, CancellationToken cancellationToken)
     {
         for (var i = 0; i < sequence.Count; i++)
         {
@@ -547,14 +580,14 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
                 }
             }
 
+            if (LocalizationResolver.IsHindi(language) && !ContainsDevanagari(item.NarrationText))
+            {
+                throw new InvalidOperationException("Hindi short narration validation failed: generated short narration is not Hindi.");
+            }
+
             if (string.IsNullOrWhiteSpace(item.AudioPath) || !File.Exists(item.AudioPath))
             {
                 throw new InvalidOperationException($"Short audio missing before rendering: index={item.Index}");
-            }
-
-            if (!File.Exists(item.SegmentPath))
-            {
-                throw new InvalidOperationException($"Short segment missing after rendering: index={item.Index}");
             }
         }
 
@@ -588,7 +621,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     }
 
     private sealed record ShortSceneOrderEntry(string SceneId, string ObjectName, string SceneTitle, int SceneIndex, string VisualPath, string SceneType, DateTime LocalObservationTime, string? DirectionLabel);
-    private sealed record ShortSequenceItem(int Index, string SceneId, string ObjectName, string SceneType, string VisualPath, string NarrationText, string NarrationTextPath, string AudioPath, int DurationSeconds, string SegmentPath);
+    private sealed record ShortSequenceItem(int Index, string SceneId, string ObjectName, string SceneType, string VisualPath, string NarrationText, string NarrationTextPath, string AudioPath, int DurationSeconds, string SegmentPath, string NarrationLanguage);
 
     private int GetAudioDurationSeconds(string audioPath)
     {

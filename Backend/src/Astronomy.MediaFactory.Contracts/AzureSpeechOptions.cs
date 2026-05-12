@@ -11,6 +11,17 @@ public sealed class AzureSpeechOptions
     public string? ManagedIdentityClientId { get; set; }
 
     public bool UseSsml { get; set; } = true;
+    public string DefaultLanguage { get; set; } = "en";
+    public Dictionary<string, string> Voices { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["en"] = "en-US-JennyNeural",
+        ["hi"] = "hi-IN-SwaraNeural"
+    };
+    public Dictionary<string, string> ProsodyRate { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["en"] = "medium",
+        ["hi"] = "medium"
+    };
     public string? DefaultProsodyRate { get; set; } = "medium";
     public string? HindiProsodyRate { get; set; } = "medium";
     public string? EnglishProsodyRate { get; set; } = "medium";
@@ -31,14 +42,22 @@ public sealed class AzureSpeechOptions
     public int TimeoutRetryAttempts { get; set; } = 2;
     public int TimeoutRetryDelayMs { get; set; } = 750;
 
-    public IReadOnlyList<string> GetPreferredVoices()
+    public IReadOnlyList<string> GetPreferredVoices(string? language = null)
     {
         PrimaryVoice ??= "en-US-AriaNeural";
         FallbackVoices ??= ["en-US-JennyNeural", "en-US-GuyNeural"];
 
         var voices = new List<string>();
+        var normalizedLanguage = string.IsNullOrWhiteSpace(language) ? DefaultLanguage : language.Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(normalizedLanguage) && (Voices ?? new Dictionary<string, string>()).TryGetValue(normalizedLanguage, out var configuredVoice))
+        {
+            AddIfSet(voices, configuredVoice);
+        }
 
-        AddIfSet(voices, PrimaryVoice);
+        if (!string.Equals(normalizedLanguage, "hi", StringComparison.OrdinalIgnoreCase))
+        {
+            AddIfSet(voices, PrimaryVoice);
+        }
         foreach (var fallbackVoice in FallbackVoices)
         {
             AddIfSet(voices, fallbackVoice);
@@ -81,6 +100,17 @@ public sealed class SpeechOptions
 {
     public const string SectionName = "Speech";
     public bool UseSsml { get; set; } = true;
+    public string DefaultLanguage { get; set; } = "en";
+    public Dictionary<string, string> Voices { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["en"] = "en-US-JennyNeural",
+        ["hi"] = "hi-IN-SwaraNeural"
+    };
+    public Dictionary<string, string> ProsodyRate { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["en"] = "medium",
+        ["hi"] = "medium"
+    };
     public string? DefaultProsodyRate { get; set; } = "medium";
     public string? HindiProsodyRate { get; set; } = "medium";
     public string? EnglishProsodyRate { get; set; } = "medium";

@@ -514,9 +514,13 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             .ToArray();
 
         var languageName = LocalizationResolver.LanguageDisplayName(context.Localization.ResolvedLanguage);
+        var hindiInstruction = LocalizationResolver.IsHindi(context.Localization.ResolvedLanguage)
+            ? "पूरी narration हिंदी में लिखें। astronomy object names को जरूरत हो तो English नाम brackets में रखें, जैसे बृहस्पति (Jupiter). Scene labels/internal IDs English रह सकते हैं, लेकिन spoken narration Hindi होनी चाहिए.\n"
+            : string.Empty;
 
         return "You are creating a YouTube Shorts script for astronomy audiences.\n" +
                $"Generate all user-facing hook, shortScript, title, and narrationText values in {languageName} (language code: {context.Localization.ResolvedLanguage}). Do not translate JSON property names, scene IDs, object keys, or technical IDs. Keep English object names in brackets for non-English output when helpful.\n" +
+               hindiInstruction +
                PromptFeedbackComposer.BuildBoundaryRulesSection() + "\n" +
                "Return ONLY valid JSON. No markdown, no code fences.\n" +
                "The short must be 30-60 seconds, include a strong hook in first 3 seconds, and punchy narration with simple structure.\n\n" +
