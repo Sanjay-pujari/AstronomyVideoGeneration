@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.IO;
+using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Rendering;
 
@@ -107,6 +108,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private async Task RenderFromSegmentsAsync(RenderManifest manifest, RenderPlan plan, string outputDirectory, string segmentConcatPath, CancellationToken cancellationToken)
     {
         var segmentClipPaths = new List<string>();
+        var speechDiagnostics = new List<SpeechSpeedDiagnostic>();
         for (var i = 0; i < plan.Scenes.Count; i++)
         {
             var scene = plan.Scenes[i];
@@ -117,11 +119,20 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             }
 
             var segmentOutputPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
+            var audioDurationSeconds = await ProbeMediaDurationSecondsAsync(sceneAudioPath, cancellationToken);
+            if (audioDurationSeconds <= 0)
+            {
+                audioDurationSeconds = Math.Max(1d, scene.DurationSeconds);
+                _logger.LogWarning("Could not determine audio duration for scene #{SceneIndex}; using manifest duration {DurationSeconds:F3}s.", i + 1, audioDurationSeconds);
+            }
+
             var (outputWidth, outputHeight) = GetOutputSize(manifest);
             var fps = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate);
             var segmentFilter = IsShortManifest(manifest) ? BuildExactOutputFilter(outputWidth, outputHeight) : $"scale={outputWidth}:{outputHeight}";
-            var shortLimit = IsShortManifest(manifest) ? $" -t {YouTubeShortsValidation.MaximumDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : string.Empty;
-            var segmentArguments = $"-y -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -i \"{NormalizePath(sceneAudioPath)}\" -vf \"{segmentFilter}\" -shortest{shortLimit} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} -c:a aac -f mp4 \"{NormalizePath(segmentOutputPath)}\"";
+            var cappedDurationSeconds = IsShortManifest(manifest) ? Math.Min(audioDurationSeconds, YouTubeShortsValidation.MaximumDurationSeconds) : audioDurationSeconds;
+            var durationArgument = cappedDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            var segmentArguments = $"-y -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -i \"{NormalizePath(sceneAudioPath)}\" -vf \"{segmentFilter}\" -t {durationArgument} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} -c:a aac -f mp4 \"{NormalizePath(segmentOutputPath)}\"";
+            speechDiagnostics.Add(CreateSpeechSpeedDiagnostic(scene, i, audioDurationSeconds, cappedDurationSeconds));
             var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
             if (segmentResult.ExitCode != 0 || !File.Exists(segmentOutputPath))
             {
@@ -138,6 +149,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
         var concatBody = string.Join(Environment.NewLine, segmentClipPaths.Select(path => $"file '{path.Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
+        await WriteSpeechSpeedDiagnosticsAsync(outputDirectory, speechDiagnostics, cancellationToken);
 
         var concatArguments = IsShortManifest(manifest)
             ? $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -t {YouTubeShortsValidation.MaximumDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {GetShortSafeFps()} -c:a aac -f mp4 \"{NormalizePath(manifest.OutputPath)}\""
@@ -170,6 +182,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var segmentDurationsSeconds = new List<double>();
         var segmentDiagnostics = new List<string>();
         var motionDiagnostics = new List<string>();
+        var speechDiagnostics = new List<SpeechSpeedDiagnostic>();
         var sceneCount = plan.Scenes.Count;
         var transitionDurationSeconds = GetTransitionDurationSeconds();
         var transitionsEnabled = IsXfadeEnabled(sceneCount, transitionDurationSeconds);
@@ -294,8 +307,10 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                     $"Stderr: {segmentResult.StandardError}");
             }
 
+            var finalSegmentDurationSeconds = frameCount / (double)fps;
             segmentPaths.Add(segmentPath);
-            segmentDurationsSeconds.Add(frameCount / (double)fps);
+            segmentDurationsSeconds.Add(finalSegmentDurationSeconds);
+            speechDiagnostics.Add(CreateSpeechSpeedDiagnostic(scene, i, duration, finalSegmentDurationSeconds));
         }
 
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
@@ -327,6 +342,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics), cancellationToken);
+        await WriteSpeechSpeedDiagnosticsAsync(outputDirectory, speechDiagnostics, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "video-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "directional-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
@@ -338,6 +354,51 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         return (finalCommand, finalResult);
+    }
+
+
+    private Task WriteSpeechSpeedDiagnosticsAsync(string outputDirectory, IReadOnlyCollection<SpeechSpeedDiagnostic> diagnostics, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(diagnostics, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        return _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "speech-speed-diagnostics.json"), json, cancellationToken);
+    }
+
+    private static SpeechSpeedDiagnostic CreateSpeechSpeedDiagnostic(RenderPlanScene scene, int index, double audioDurationSeconds, double finalSegmentDurationSeconds)
+    {
+        var language = InferLanguage(scene.Caption);
+        var wordsPerMinute = CalculateWordsPerMinute(scene.Caption, audioDurationSeconds);
+        var warnings = new List<string>();
+        if ((string.Equals(language, "Hindi", StringComparison.OrdinalIgnoreCase) && wordsPerMinute > 180d)
+            || (string.Equals(language, "English", StringComparison.OrdinalIgnoreCase) && wordsPerMinute > 170d))
+        {
+            warnings.Add("Narration may be too fast.");
+        }
+
+        return new SpeechSpeedDiagnostic(
+            SceneId: $"scene-{index + 1:000}",
+            Language: language,
+            SsmlProsodyRate: "medium",
+            TextLength: scene.Caption.Length,
+            AudioDurationSeconds: Math.Round(audioDurationSeconds, 3, MidpointRounding.AwayFromZero),
+            CalculatedWordsPerMinute: Math.Round(wordsPerMinute, 1, MidpointRounding.AwayFromZero),
+            TempoApplied: false,
+            TempoFactor: 1.0d,
+            FinalSegmentDurationSeconds: Math.Round(finalSegmentDurationSeconds, 3, MidpointRounding.AwayFromZero),
+            Warnings: warnings);
+    }
+
+    private static string InferLanguage(string text)
+        => text.Any(character => character >= '\u0900' && character <= '\u097F') ? "Hindi" : "English";
+
+    private static double CalculateWordsPerMinute(string text, double durationSeconds)
+    {
+        if (durationSeconds <= 0)
+        {
+            return 0d;
+        }
+
+        var wordCount = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+        return wordCount * 60d / durationSeconds;
     }
 
     private string BuildKenBurnsFilter(double durationSeconds, int fps, int outputWidth, int outputHeight, MotionProfile motionProfile)
@@ -380,6 +441,18 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
         return new MotionProfile(zoomStart, zoomEnd, Math.Clamp(_options.DirectionalPanStrength, 0d, 0.08d), 0d, "none");
     }
+    private sealed record SpeechSpeedDiagnostic(
+        string SceneId,
+        string Language,
+        string SsmlProsodyRate,
+        int TextLength,
+        double AudioDurationSeconds,
+        double CalculatedWordsPerMinute,
+        bool TempoApplied,
+        double TempoFactor,
+        double FinalSegmentDurationSeconds,
+        IReadOnlyList<string> Warnings);
+
     private sealed record MotionProfile(double ZoomStart, double ZoomEnd, double PanStrength, double PanDirectionSign, string PanDirection);
     private static string EscapeForJson(string? value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
     private static (int Width, int Height) GetOutputSize(RenderManifest manifest)

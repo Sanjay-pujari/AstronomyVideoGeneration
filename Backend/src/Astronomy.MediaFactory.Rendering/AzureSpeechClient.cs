@@ -108,7 +108,13 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger, ISsmlBu
     {
         if (useSsml)
         {
-            var ssml = ssmlBuilder.BuildSsml(text, voice, rateOverride: options.SsmlRate, pitchOverride: options.SsmlPitch);
+            var ssml = ssmlBuilder.BuildSsml(text, voice, rateOverride: ResolveProsodyRate(text, voice, options), pitchOverride: options.SsmlPitch);
+            if (SsmlBuilder.ContainsUnsafeFastProsody(ssml))
+            {
+                logger.LogWarning("Generated SSML for voice {Voice} contains an unsafe fast prosody rate. Rebuilding with medium rate.", voice);
+                ssml = ssmlBuilder.BuildSsml(text, voice, rateOverride: "medium", pitchOverride: options.SsmlPitch);
+            }
+
             var ssmlResult = await synthesizer.SpeakSsmlAsync(ssml).WaitAsync(cancellationToken);
             if (ssmlResult.Reason == ResultReason.SynthesizingAudioCompleted)
             {
@@ -120,6 +126,23 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger, ISsmlBu
 
         return await synthesizer.SpeakTextAsync(text).WaitAsync(cancellationToken);
     }
+
+    private static string ResolveProsodyRate(string text, string voice, AzureSpeechOptions options)
+    {
+        if (IsHindi(text, voice))
+        {
+            return FirstConfigured(options.HindiProsodyRate, options.DefaultProsodyRate, options.SsmlRate, "medium");
+        }
+
+        return FirstConfigured(options.EnglishProsodyRate, options.DefaultProsodyRate, options.SsmlRate, "medium");
+    }
+
+    private static string FirstConfigured(params string?[] values)
+        => values.Select(value => value?.Trim()).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "medium";
+
+    private static bool IsHindi(string text, string voice)
+        => voice.StartsWith("hi-", StringComparison.OrdinalIgnoreCase)
+            || text.Any(character => character >= '\u0900' && character <= '\u097F');
 
     private static bool IsUnsupportedVoice(Exception ex)
         => ex.Message.Contains("Unsupported voice", StringComparison.OrdinalIgnoreCase)

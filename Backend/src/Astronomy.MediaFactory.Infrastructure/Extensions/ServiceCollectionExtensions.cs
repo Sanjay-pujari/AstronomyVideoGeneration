@@ -42,6 +42,7 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<AzureSpeechOptions>()
             .Bind(configuration.GetSection(AzureSpeechOptions.SectionName))
+            .Configure(options => ApplySpeechSpeedOptions(configuration.GetSection(SpeechOptions.SectionName).Get<SpeechOptions>(), options))
             .Validate(options => !AzureConfigurationValidation.ValidateSpeech(options, requireConfiguration: false).Any(), "AzureSpeech settings are invalid.")
             .ValidateOnStart();
 
@@ -399,5 +400,21 @@ public static class ServiceCollectionExtensions
             .AddCheck<OperationsConfigHealthCheck>("config", tags: ["ready"]);
 
         return services;
+    }
+
+    private static void ApplySpeechSpeedOptions(SpeechOptions? speechOptions, AzureSpeechOptions azureSpeechOptions)
+    {
+        if (speechOptions is null)
+        {
+            return;
+        }
+
+        azureSpeechOptions.UseSsml = speechOptions.UseSsml;
+        azureSpeechOptions.DefaultProsodyRate = speechOptions.DefaultProsodyRate;
+        azureSpeechOptions.HindiProsodyRate = speechOptions.HindiProsodyRate;
+        azureSpeechOptions.EnglishProsodyRate = speechOptions.EnglishProsodyRate;
+        azureSpeechOptions.AllowAudioTempoCompression = speechOptions.AllowAudioTempoCompression;
+        azureSpeechOptions.MaxAudioTempo = speechOptions.MaxAudioTempo;
+        azureSpeechOptions.MinAudioTempo = speechOptions.MinAudioTempo;
     }
 }

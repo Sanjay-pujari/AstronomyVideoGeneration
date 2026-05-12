@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Security;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Astronomy.MediaFactory.Rendering;
@@ -82,11 +81,11 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
     {
         var baseTuning = profile switch
         {
-            SsmlNarrationProfile.TelescopeTargets => new NarrationTuning("92%", "+3%", 450, 300, 900),
-            SsmlNarrationProfile.SpaceNews => new NarrationTuning("92%", "+3%", 450, 300, 900),
-            SsmlNarrationProfile.AstrophotographyTips => new NarrationTuning("92%", "+3%", 450, 300, 900),
-            SsmlNarrationProfile.Shorts => new NarrationTuning("92%", "+3%", 450, 300, 600),
-            _ => new NarrationTuning("92%", "+3%", 450, 300, 900)
+            SsmlNarrationProfile.TelescopeTargets => new NarrationTuning("medium", "+3%", 450, 300, 900),
+            SsmlNarrationProfile.SpaceNews => new NarrationTuning("medium", "+3%", 450, 300, 900),
+            SsmlNarrationProfile.AstrophotographyTips => new NarrationTuning("medium", "+3%", 450, 300, 900),
+            SsmlNarrationProfile.Shorts => new NarrationTuning("medium", "+3%", 450, 300, 600),
+            _ => new NarrationTuning("medium", "+3%", 450, 300, 900)
         };
 
         return baseTuning with
@@ -104,21 +103,40 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
         }
 
         var trimmedRate = rateOverride.Trim();
-        if (trimmedRate.EndsWith('%')
-            || trimmedRate.Contains("slow", StringComparison.OrdinalIgnoreCase)
-            || trimmedRate.Contains("fast", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(trimmedRate, "medium", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(trimmedRate, "default", StringComparison.OrdinalIgnoreCase))
+        if (IsUnsafeFastRate(trimmedRate))
+        {
+            return "medium";
+        }
+
+        if (string.Equals(trimmedRate, "medium", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmedRate, "default", StringComparison.OrdinalIgnoreCase)
+            || trimmedRate.Contains("slow", StringComparison.OrdinalIgnoreCase))
         {
             return trimmedRate;
         }
 
+        if (trimmedRate.EndsWith('%'))
+        {
+            return trimmedRate.StartsWith('+') ? "medium" : trimmedRate;
+        }
+
         if (double.TryParse(trimmedRate, NumberStyles.Float, CultureInfo.InvariantCulture, out var multiplier) && multiplier > 0)
         {
-            return $"{Math.Round(multiplier * 100d, 2).ToString("0.##", CultureInfo.InvariantCulture)}%";
+            return multiplier > 1.0d
+                ? "medium"
+                : $"{Math.Round(multiplier * 100d, 2).ToString("0.##", CultureInfo.InvariantCulture)}%";
         }
 
         return trimmedRate;
+    }
+
+    public static bool ContainsUnsafeFastProsody(string ssml)
+        => UnsafeFastProsodyRegex().IsMatch(ssml);
+
+    private static bool IsUnsafeFastRate(string rate)
+        => rate.Contains("fast", StringComparison.OrdinalIgnoreCase)
+            || rate.StartsWith('+')
+            || string.Equals(rate, "x-fast", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record NarrationTuning(string Rate, string Pitch, int SentencePauseMs, int CommaPauseMs, int ParagraphPauseMs);
@@ -128,4 +146,7 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
 
     [GeneratedRegex("([.!?])(?!\\s*<break)")]
     private static partial Regex SentencePauseRegexFactory();
+
+    [GeneratedRegex(@"rate=""(?:x-fast|fast|\+[^""]*)""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex UnsafeFastProsodyRegex();
 }
