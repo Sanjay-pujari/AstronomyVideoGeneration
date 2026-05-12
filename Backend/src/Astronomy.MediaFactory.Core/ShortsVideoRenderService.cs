@@ -562,6 +562,31 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(sequence, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
+    private string ResolveFfprobePath()
+    {
+        if (!string.IsNullOrWhiteSpace(_renderingOptions.FfprobePath))
+        {
+            return _renderingOptions.FfprobePath.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(_renderingOptions.FfmpegPath))
+        {
+            var ffmpegPath = _renderingOptions.FfmpegPath.Trim();
+            var ffmpegDirectory = Path.GetDirectoryName(ffmpegPath);
+            if (!string.IsNullOrWhiteSpace(ffmpegDirectory))
+            {
+                var extension = Path.GetExtension(ffmpegPath);
+                var ffprobeFileName = string.Equals(extension, ".exe", StringComparison.OrdinalIgnoreCase)
+                    ? "ffprobe.exe"
+                    : "ffprobe";
+
+                return Path.Combine(ffmpegDirectory, ffprobeFileName);
+            }
+        }
+
+        return "ffprobe";
+    }
+
     private sealed record ShortSceneOrderEntry(string SceneId, string ObjectName, string SceneTitle, int SceneIndex, string VisualPath, string SceneType, DateTime LocalObservationTime, string? DirectionLabel);
     private sealed record ShortSequenceItem(int Index, string SceneId, string ObjectName, string SceneType, string VisualPath, string NarrationText, string NarrationTextPath, string AudioPath, int DurationSeconds, string SegmentPath);
 
@@ -571,7 +596,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "ffprobe",
+                FileName = ResolveFfprobePath(),
                 Arguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{audioPath}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
