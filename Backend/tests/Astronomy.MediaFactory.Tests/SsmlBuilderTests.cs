@@ -29,6 +29,16 @@ public sealed class SsmlBuilderTests
     }
 
     [Fact]
+    public void BuildSsml_UsesHindiLocaleForHindiVoice()
+    {
+        var ssml = _sut.BuildSsml("आज रात बृहस्पति देखें।", "hi-IN-SwaraNeural", rateOverride: "medium");
+
+        Assert.Contains("xml:lang=\"hi-IN\"", ssml);
+        Assert.Contains("<voice name=\"hi-IN-SwaraNeural\">", ssml);
+        Assert.Contains("prosody rate=\"medium\"", ssml);
+    }
+
+    [Fact]
     public void BuildSsml_EscapesXmlCharacters()
     {
         var ssml = _sut.BuildSsml("A & B < C > D \"quote\" 'single'", "en-US-AriaNeural");

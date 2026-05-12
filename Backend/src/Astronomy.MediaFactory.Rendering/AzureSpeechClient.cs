@@ -29,7 +29,8 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger, ISsmlBu
         var useSsml = options.UseSsml;
         logger.LogInformation("Azure Speech SSML mode is {SsmlMode}", useSsml ? "enabled" : "disabled");
 
-        var voices = options.GetPreferredVoices();
+        var narrationLanguage = DetectLanguage(text);
+        var voices = options.GetPreferredVoices(narrationLanguage);
         Exception? lastUnsupportedVoiceException = null;
 
         foreach (var voice in voices)
@@ -131,11 +132,16 @@ public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger, ISsmlBu
     {
         if (IsHindi(text, voice))
         {
-            return FirstConfigured(options.HindiProsodyRate, options.DefaultProsodyRate, options.SsmlRate, "medium");
+            var configured = (options.ProsodyRate ?? new Dictionary<string, string>()).TryGetValue("hi", out var hindiRate) ? hindiRate : null;
+            return FirstConfigured(configured, options.HindiProsodyRate, options.DefaultProsodyRate, options.SsmlRate, "medium");
         }
 
-        return FirstConfigured(options.EnglishProsodyRate, options.DefaultProsodyRate, options.SsmlRate, "medium");
+        var englishConfigured = (options.ProsodyRate ?? new Dictionary<string, string>()).TryGetValue("en", out var englishRate) ? englishRate : null;
+        return FirstConfigured(englishConfigured, options.EnglishProsodyRate, options.DefaultProsodyRate, options.SsmlRate, "medium");
     }
+
+    private static string DetectLanguage(string text)
+        => text.Any(character => character >= '\u0900' && character <= '\u097F') ? "hi" : "en";
 
     private static string FirstConfigured(params string?[] values)
         => values.Select(value => value?.Trim()).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "medium";

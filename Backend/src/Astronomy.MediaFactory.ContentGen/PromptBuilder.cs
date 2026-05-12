@@ -94,7 +94,14 @@ public sealed class PromptBuilder : IPromptBuilder
         var languageName = LocalizationResolver.LanguageDisplayName(localization.ResolvedLanguage);
         sb.AppendLine($"Localization: Generate all user-facing narration, title, description, tags, SEO-ready text, and sceneScript values in {languageName} (language code: {localization.ResolvedLanguage}).");
         sb.AppendLine("Do not translate internal JSON property names, scene IDs, technical IDs, file names, object keys, or structured input keys.");
-        sb.AppendLine("Keep astronomy object names readable; for non-English output, keep the English object name in brackets when helpful, for example: बृहस्पति (Jupiter).");
+        if (LocalizationResolver.IsHindi(localization.ResolvedLanguage))
+        {
+            sb.AppendLine("पूरी narration हिंदी में लिखें। astronomy object names को जरूरत हो तो English नाम brackets में रखें, जैसे बृहस्पति (Jupiter). Scene labels/internal IDs English रह सकते हैं, लेकिन spoken narration Hindi होनी चाहिए.");
+        }
+        else
+        {
+            sb.AppendLine("Keep astronomy object names readable; for non-English output, keep the English object name in brackets when helpful, for example: बृहस्पति (Jupiter).");
+        }
     }
 
     private static string BuildSpecialEventPrompt(AstronomyContext context, PromptFeedbackContext? feedbackContext)

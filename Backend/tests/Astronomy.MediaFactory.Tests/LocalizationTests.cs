@@ -82,6 +82,39 @@ public sealed class LocalizationTests
         Assert.True(resolved.FallbackUsed);
     }
 
+    [Fact]
+    public void Region_language_is_used_when_request_language_is_missing()
+    {
+        var resolved = LocalizationResolver.Resolve(null, "hi", new LocalizationOptions
+        {
+            Enabled = true,
+            DefaultLanguage = "en",
+            SupportedLanguages = ["en", "hi"],
+            FallbackLanguage = "en"
+        });
+
+        Assert.Equal(string.Empty, resolved.RequestedLanguage);
+        Assert.Equal("hi", resolved.RegionLanguage);
+        Assert.Equal("hi", resolved.ResolvedLanguage);
+        Assert.False(resolved.FallbackUsed);
+    }
+
+    [Fact]
+    public void Unsupported_region_language_falls_back_to_English()
+    {
+        var resolved = LocalizationResolver.Resolve(null, "fr", new LocalizationOptions
+        {
+            Enabled = true,
+            DefaultLanguage = "en",
+            SupportedLanguages = ["en", "hi"],
+            FallbackLanguage = "en"
+        });
+
+        Assert.Equal("fr", resolved.RegionLanguage);
+        Assert.Equal("en", resolved.ResolvedLanguage);
+        Assert.True(resolved.FallbackUsed);
+    }
+
     private static AstronomyContext CreateContext(string language)
     {
         var context = new AstronomyContext
@@ -89,7 +122,7 @@ public sealed class LocalizationTests
             Date = new DateOnly(2026, 5, 4),
             LocationName = "Udaipur",
             TimeZone = "Asia/Kolkata",
-            Localization = new LocalizationContext(language, language, false)
+            Localization = new LocalizationContext(language, string.Empty, language, false)
         };
         context.Events.Add(new AstronomyEventModel { Category = "Planet", ObjectName = "Jupiter", VisibilityWindow = "Evening", Direction = "West", ObservationTool = "Naked eye", Details = "Bright planet", Score = 0.9 });
         return context;

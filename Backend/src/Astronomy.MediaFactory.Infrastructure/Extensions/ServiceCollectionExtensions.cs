@@ -410,6 +410,9 @@ public static class ServiceCollectionExtensions
         }
 
         azureSpeechOptions.UseSsml = speechOptions.UseSsml;
+        azureSpeechOptions.DefaultLanguage = speechOptions.DefaultLanguage;
+        azureSpeechOptions.Voices = new Dictionary<string, string>(speechOptions.Voices, StringComparer.OrdinalIgnoreCase);
+        azureSpeechOptions.ProsodyRate = new Dictionary<string, string>(speechOptions.ProsodyRate, StringComparer.OrdinalIgnoreCase);
         azureSpeechOptions.DefaultProsodyRate = speechOptions.DefaultProsodyRate;
         azureSpeechOptions.HindiProsodyRate = speechOptions.HindiProsodyRate;
         azureSpeechOptions.EnglishProsodyRate = speechOptions.EnglishProsodyRate;
