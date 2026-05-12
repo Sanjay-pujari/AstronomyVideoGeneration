@@ -16,6 +16,11 @@ create table if not exists pipeline_runs
     finished_utc timestamptz null
 );
 
+alter table if exists pipeline_runs add column if not exists "eventId" text null;
+alter table if exists pipeline_runs add column if not exists "eventType" text null;
+alter table if exists pipeline_runs add column if not exists "eventTitle" text null;
+alter table if exists pipeline_runs add column if not exists "eventDescription" text null;
+
 create table if not exists astronomy_events
 (
     id uuid primary key,
@@ -211,6 +216,9 @@ alter table if exists published_videos add column if not exists thumbnail_experi
 alter table if exists published_videos add column if not exists selected_thumbnail_variant_id uuid null;
 alter table if exists published_videos add column if not exists cta_experiment_id uuid null;
 alter table if exists published_videos add column if not exists selected_cta_variant_id uuid null;
+alter table if exists published_videos add column if not exists "EventId" text null;
+alter table if exists published_videos add column if not exists "EventType" text null;
+alter table if exists published_videos add column if not exists "EventTitle" text null;
 
 alter table if exists video_analytics add column if not exists published_video_id uuid null;
 alter table if exists video_analytics add column if not exists title_experiment_id uuid null;
