@@ -129,6 +129,50 @@ public sealed class ShortsVideoRenderServiceTests
         Assert.Contains("venus narration", mapText, StringComparison.OrdinalIgnoreCase);
     }
 
+
+    [Fact]
+    public void ResolveFfprobePath_UsesConfiguredFfprobePath()
+    {
+        var configuredPath = Path.Combine(Path.GetTempPath(), "custom-ffprobe.exe");
+        var sut = CreateService(new RenderingOptions
+        {
+            FfmpegPath = Path.Combine(Path.GetTempPath(), "ffmpeg.exe"),
+            FfprobePath = configuredPath
+        });
+
+        Assert.Equal(configuredPath, InvokeResolveFfprobePath(sut));
+    }
+
+    [Fact]
+    public void ResolveFfprobePath_DerivesPathBesideConfiguredFfmpeg_WhenFfprobePathIsMissing()
+    {
+        var ffmpegPath = Path.Combine(Path.GetTempPath(), "ffmpeg", "bin", "ffmpeg.exe");
+        var sut = CreateService(new RenderingOptions { FfmpegPath = ffmpegPath });
+
+        Assert.Equal(Path.Combine(Path.GetDirectoryName(ffmpegPath)!, "ffprobe.exe"), InvokeResolveFfprobePath(sut));
+    }
+
+    private static ShortsVideoRenderService CreateService(RenderingOptions renderingOptions)
+        => new(
+            new FakeShortScriptService(),
+            new TrackingSpeechService(),
+            new FixedVisualProvider(),
+            new CapturingRenderService(),
+            new NoopBlobService(),
+            new NoopYouTubeService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new PassThroughSeoMetadataGeneratorService(),
+            Options.Create(new YouTubeOptions()),
+            Options.Create(renderingOptions),
+            NullLogger<ShortsVideoRenderService>.Instance);
+
+    private static string InvokeResolveFfprobePath(ShortsVideoRenderService service)
+    {
+        var method = typeof(ShortsVideoRenderService).GetMethod("ResolveFfprobePath", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return Assert.IsType<string>(method.Invoke(service, []));
+    }
+
     private sealed class FakeShortScriptService : IShortsScriptGenerationService
     {
         public Task<ShortScriptResult> GenerateShortAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)

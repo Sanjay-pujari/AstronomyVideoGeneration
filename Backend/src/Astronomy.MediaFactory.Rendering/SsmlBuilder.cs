@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -40,9 +41,9 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
         var body = BuildBody(text, tuned);
 
         return $"""
-                <speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xml:lang=\"en-US\">
-                  <voice name=\"{escapedVoice}\">
-                    <prosody rate=\"{tuned.Rate}\" pitch=\"{tuned.Pitch}\">{body}</prosody>
+                <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
+                  <voice name="{escapedVoice}">
+                    <prosody rate="{tuned.Rate}" pitch="{tuned.Pitch}">{body}</prosody>
                   </voice>
                 </speak>
                 """;
@@ -90,9 +91,34 @@ public sealed partial class SsmlBuilder : ISsmlBuilder
 
         return baseTuning with
         {
-            Rate = string.IsNullOrWhiteSpace(rateOverride) ? baseTuning.Rate : rateOverride.Trim(),
+            Rate = NormalizeProsodyRate(rateOverride, baseTuning.Rate),
             Pitch = string.IsNullOrWhiteSpace(pitchOverride) ? baseTuning.Pitch : pitchOverride.Trim()
         };
+    }
+
+    private static string NormalizeProsodyRate(string? rateOverride, string fallbackRate)
+    {
+        if (string.IsNullOrWhiteSpace(rateOverride))
+        {
+            return fallbackRate;
+        }
+
+        var trimmedRate = rateOverride.Trim();
+        if (trimmedRate.EndsWith('%')
+            || trimmedRate.Contains("slow", StringComparison.OrdinalIgnoreCase)
+            || trimmedRate.Contains("fast", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmedRate, "medium", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmedRate, "default", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmedRate;
+        }
+
+        if (double.TryParse(trimmedRate, NumberStyles.Float, CultureInfo.InvariantCulture, out var multiplier) && multiplier > 0)
+        {
+            return $"{Math.Round(multiplier * 100d, 2).ToString("0.##", CultureInfo.InvariantCulture)}%";
+        }
+
+        return trimmedRate;
     }
 
     private sealed record NarrationTuning(string Rate, string Pitch, int SentencePauseMs, int CommaPauseMs, int ParagraphPauseMs);

@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Rendering;
+using System.Xml.Linq;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -13,6 +14,18 @@ public sealed class SsmlBuilderTests
         var ssml = _sut.BuildSsml("Hello Moon.", "en-US-AriaNeural");
         Assert.Contains("<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xml:lang=\"en-US\">", ssml);
         Assert.Contains("<voice name=\"en-US-AriaNeural\">", ssml);
+    }
+
+    [Fact]
+    public void BuildSsml_ProducesParseableXmlWithoutEscapedAttributeQuotes()
+    {
+        var ssml = _sut.BuildSsml("Hello Moon.", "en-US-AriaNeural", rateOverride: "0.92", pitchOverride: "+2%");
+
+        var document = XDocument.Parse(ssml);
+
+        Assert.Equal("speak", document.Root?.Name.LocalName);
+        Assert.DoesNotContain("\\\"", ssml, StringComparison.Ordinal);
+        Assert.Contains("prosody rate=\"92%\" pitch=\"+2%\"", ssml);
     }
 
     [Fact]
