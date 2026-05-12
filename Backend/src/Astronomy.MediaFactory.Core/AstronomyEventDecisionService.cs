@@ -72,7 +72,7 @@ public sealed class AstronomyEventDecisionService : IAstronomyEventDecisionServi
                 SpecialEventCandidates = special,
                 SkippedEvents = skipped,
                 Reason = primary is null
-                    ? $"No astronomy event met score { _options.MinimumContentOpportunityScore:0.00 } for {normalizedRegion} on {targetDate:yyyy-MM-dd}."
+                    ? $"No astronomy event met score {_options.MinimumContentOpportunityScore:0.00} for {normalizedRegion} on {targetDate:yyyy-MM-dd}."
                     : $"Top event score {primary.ContentOpportunityScore:0.00}; decision={decisionType}."
             };
 
