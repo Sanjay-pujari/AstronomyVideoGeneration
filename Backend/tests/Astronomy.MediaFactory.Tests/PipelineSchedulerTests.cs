@@ -254,6 +254,93 @@ public sealed class PipelineSchedulerTests
         Assert.Contains(plan.SkippedEvents, x => x.EventId == "weak-meteor" && x.Reason.Contains("below threshold", StringComparison.OrdinalIgnoreCase));
     }
 
+
+    [Fact]
+    public async Task EventPlan_Includes_NullRegion_Global_Event_For_Requested_Region()
+    {
+        var targetDate = new DateOnly(2026, 5, 16);
+        var harness = new SchedulerHarness(CreateRegionOptions(
+            Region("india-udaipur", "Udaipur, India", "Asia/Kolkata", enabled: true)))
+        {
+            EventOptions = SpecialEventOptions(),
+            Events = [Event("global-full-moon", 0.95, targetDate, regionId: null, globalVisibility: false, eventType: "full_moon")]
+        };
+
+        var plan = await harness.CreateScheduler().GetEventPlanAsync("india-udaipur", targetDate, CancellationToken.None);
+
+        var candidate = Assert.Single(plan.CandidateEvents!);
+        Assert.Equal("global-full-moon", candidate.EventId);
+        Assert.True(candidate.RegionApplied);
+        Assert.Null(candidate.OriginalEventRegionId);
+        Assert.Equal("india-udaipur", candidate.EffectiveRegionId);
+        Assert.Equal(1, plan.GlobalEventCount);
+        Assert.Contains(plan.SpecialEventsPlanned, x => x.EventId == "global-full-moon");
+    }
+
+    [Fact]
+    public async Task EventPlan_Includes_GlobalVisibility_Event_For_Any_Region()
+    {
+        var targetDate = new DateOnly(2026, 5, 24);
+        var harness = new SchedulerHarness(CreateRegionOptions(
+            Region("india-udaipur", "Udaipur, India", "Asia/Kolkata", enabled: true),
+            Region("usa-new-york", "New York, USA", "America/New_York", enabled: true)))
+        {
+            EventOptions = SpecialEventOptions(),
+            Events = [Event("global-visible", 0.9, targetDate, regionId: "india-udaipur", globalVisibility: true)]
+        };
+
+        var plan = await harness.CreateScheduler().GetEventPlanAsync("usa-new-york", targetDate, CancellationToken.None);
+
+        Assert.Contains(plan.CandidateEvents!, x => x.EventId == "global-visible" && x.EffectiveRegionId == "usa-new-york");
+        Assert.Equal(1, plan.GlobalEventCount);
+    }
+
+    [Fact]
+    public async Task EventPlan_RegionSpecific_Event_Appears_Only_For_Matching_Region_And_Date()
+    {
+        var targetDate = new DateOnly(2026, 5, 16);
+        var harness = new SchedulerHarness(CreateRegionOptions(
+            Region("india-udaipur", "Udaipur, India", "Asia/Kolkata", enabled: true),
+            Region("usa-new-york", "New York, USA", "America/New_York", enabled: true)))
+        {
+            EventOptions = SpecialEventOptions(),
+            Events =
+            [
+                Event("udaipur-only", 0.95, targetDate, regionId: "india-udaipur", globalVisibility: false),
+                Event("wrong-date", 0.95, targetDate.AddDays(1), regionId: null, globalVisibility: true)
+            ]
+        };
+
+        var matching = await harness.CreateScheduler().GetEventPlanAsync("india-udaipur", targetDate, CancellationToken.None);
+        var otherRegion = await harness.CreateScheduler().GetEventPlanAsync("usa-new-york", targetDate, CancellationToken.None);
+
+        Assert.Contains(matching.CandidateEvents!, x => x.EventId == "udaipur-only");
+        Assert.DoesNotContain(otherRegion.CandidateEvents!, x => x.EventId == "udaipur-only");
+        Assert.DoesNotContain(matching.CandidateEvents!, x => x.EventId == "wrong-date");
+    }
+
+    [Fact]
+    public async Task EventPlan_Global_Medium_Event_Is_Injected_And_Low_Score_Is_Skipped_With_Reason()
+    {
+        var targetDate = new DateOnly(2026, 5, 16);
+        var harness = new SchedulerHarness(CreateRegionOptions(
+            Region("india-udaipur", "Udaipur, India", "Asia/Kolkata", enabled: true)))
+        {
+            EventOptions = SpecialEventOptions(),
+            Events =
+            [
+                Event("medium-global", 0.75, targetDate, regionId: null, globalVisibility: false),
+                Event("low-global", 0.50, targetDate, regionId: null, globalVisibility: false)
+            ]
+        };
+
+        var plan = await harness.CreateScheduler().GetEventPlanAsync("india-udaipur", targetDate, CancellationToken.None);
+
+        Assert.Equal("InjectIntoDailyGuide", plan.DecisionType);
+        Assert.Contains(plan.InjectedEvents!, x => x.EventId == "medium-global" && x.RegionId == "india-udaipur");
+        Assert.Contains(plan.SkippedEvents, x => x.EventId == "low-global" && x.Reason.Contains("below threshold", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task Duplicate_Event_Is_Skipped_By_Event_Date_Region_And_ContentType()
     {
@@ -348,20 +435,22 @@ public sealed class PipelineSchedulerTests
 
 
 
-    private static AstronomyEvent Event(string eventId, double score)
+    private static AstronomyEvent Event(string eventId, double score, DateOnly? targetDate = null, string? regionId = null, bool globalVisibility = true, string eventType = "meteor_shower")
     {
-        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        var date = targetDate ?? DateOnly.FromDateTime(DateTime.UtcNow);
         var start = new DateTimeOffset(date.ToDateTime(TimeOnly.FromTimeSpan(TimeSpan.FromHours(20))), TimeSpan.Zero);
         return new AstronomyEvent
         {
             EventId = eventId,
-            EventType = "meteor_shower",
-            Title = "Perseids meteor shower",
-            Description = "A high-value meteor shower event.",
+            EventType = eventType,
+            Title = eventType == "full_moon" ? "Full Moon" : "Perseids meteor shower",
+            Description = "A high-value astronomy event.",
             StartUtc = start,
             PeakUtc = start.AddHours(1),
             EndUtc = start.AddHours(2),
-            GlobalVisibility = true,
+            TargetDate = date,
+            RegionId = regionId,
+            GlobalVisibility = globalVisibility,
             ContentOpportunityScore = score
         };
     }

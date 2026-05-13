@@ -93,7 +93,24 @@ public sealed record SchedulerEventPlanResponse(
     IReadOnlyCollection<string> Reasons,
     string DecisionType = "None",
     IReadOnlyCollection<AstronomyEvent>? InjectedEvents = null,
-    IReadOnlyCollection<AstronomyEvent>? SpecialEventCandidates = null);
+    IReadOnlyCollection<AstronomyEvent>? SpecialEventCandidates = null,
+    IReadOnlyCollection<SchedulerEventCandidatePlanItem>? CandidateEvents = null,
+    int CandidateEventCount = 0,
+    int GlobalEventCount = 0,
+    int RegionSpecificEventCount = 0);
+
+public sealed record SchedulerEventCandidatePlanItem(
+    string EventId,
+    string EventType,
+    string Title,
+    double Score,
+    DateOnly TargetDate,
+    bool RegionApplied,
+    string? OriginalEventRegionId,
+    string EffectiveRegionId,
+    bool GlobalVisibility,
+    string DecisionType,
+    string Reason);
 
 public sealed record SchedulerSpecialEventPlanItem(
     string EventId,

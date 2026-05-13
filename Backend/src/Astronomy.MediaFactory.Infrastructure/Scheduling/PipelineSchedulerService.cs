@@ -267,24 +267,23 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         var planned = new List<SchedulerSpecialEventPlanItem>();
         var skipped = new List<SchedulerSkippedEventPlanItem>();
         EventContentDecision decision;
+        var candidateEvents = Array.Empty<AstronomyEvent>();
+        var originalRegionByEventId = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
         try
         {
             using var scope = _scopeFactory.CreateScope();
             var discovery = scope.ServiceProvider.GetRequiredService<IAstronomyEventDiscoveryService>();
             await discovery.RefreshEventsAsync(targetDate, targetDate.AddDays(eventOptions.LookAheadDays), cancellationToken);
-            var decisionService = scope.ServiceProvider.GetService<IAstronomyEventDecisionService>();
-            if (decisionService is not null)
-            {
-                decision = await decisionService.DecideAsync(regionId, targetDate, cancellationToken);
-            }
-            else
-            {
-                var events = (await discovery.GetTopEventsAsync(regionId, targetDate, cancellationToken)).OrderByDescending(e => e.ContentOpportunityScore).ToArray();
-                var major = events.Where(e => e.ContentOpportunityScore >= eventOptions.MajorEventThreshold).Take(eventOptions.MaxSpecialEventVideosPerDay).ToArray();
-                var injected = events.Where(e => e.ContentOpportunityScore >= eventOptions.MediumEventThreshold).Take(eventOptions.MaxInjectedEventsPerDailyGuide).ToArray();
-                decision = new EventContentDecision { HasEvent = events.Length > 0, PrimaryEvent = major.FirstOrDefault() ?? injected.FirstOrDefault() ?? events.FirstOrDefault(), DecisionType = major.Length > 0 ? "GenerateBoth" : injected.Length > 0 ? "InjectIntoDailyGuide" : "None", InjectedEvents = injected, SpecialEventCandidates = major, Reason = "Decision built from discovery fallback." };
-            }
+            var discoveredEvents = (await discovery.DiscoverEventsForRegionAsync(regionId, targetDate, cancellationToken)).ToArray();
+            originalRegionByEventId = discoveredEvents.ToDictionary(e => e.EventId, e => e.RegionId, StringComparer.OrdinalIgnoreCase);
+            candidateEvents = discoveredEvents
+                .Select(e => ApplyRegionContext(e, schedule, regionId))
+                .OrderByDescending(e => e.ContentOpportunityScore)
+                .ThenBy(e => e.PeakUtc ?? e.StartUtc)
+                .ToArray();
+
+            decision = BuildDecisionFromCandidates(candidateEvents, eventOptions, regionId, targetDate);
         }
         catch (Exception ex)
         {
@@ -313,11 +312,122 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         }
 
         foreach (var skippedEvent in decision.SkippedEvents)
-            skipped.Add(ToSkipped(skippedEvent, "Skipped by event decision service."));
+        {
+            if (!skipped.Any(x => string.Equals(x.EventId, skippedEvent.EventId, StringComparison.OrdinalIgnoreCase)))
+                skipped.Add(ToSkipped(skippedEvent, GetScoreSkipReason(skippedEvent, eventOptions)));
+        }
 
+        var candidatePlan = candidateEvents
+            .Select(e => ToCandidatePlanItem(e, decision, planned, skipped, eventOptions, regionId, targetDate, originalRegionByEventId.TryGetValue(e.EventId, out var originalRegionId) ? originalRegionId : null))
+            .ToArray();
+        var globalEventCount = candidateEvents.Count(e => e.GlobalVisibility || (originalRegionByEventId.TryGetValue(e.EventId, out var originalRegionId) && originalRegionId is null));
+        var regionSpecificEventCount = candidateEvents.Length - globalEventCount;
+
+        reasons.Add($"candidateEventCount={candidateEvents.Length}; globalEventCount={globalEventCount}; regionSpecificEventCount={regionSpecificEventCount}.");
         reasons.Add(planned.Count == 0 ? "No SpecialEventGuide runs planned." : $"{planned.Count} SpecialEventGuide run(s) planned.");
-        return new SchedulerEventPlanResponse(regionId, targetDate, true, planned, skipped, reasons, decision.DecisionType, decision.InjectedEvents, decision.SpecialEventCandidates);
+        return new SchedulerEventPlanResponse(regionId, targetDate, true, planned, skipped, reasons, decision.DecisionType, decision.InjectedEvents, decision.SpecialEventCandidates, candidatePlan, candidateEvents.Length, globalEventCount, regionSpecificEventCount);
     }
+
+    private static EventContentDecision BuildDecisionFromCandidates(IReadOnlyCollection<AstronomyEvent> candidates, AstronomyEventsOptions options, string regionId, DateOnly targetDate)
+    {
+        var eligible = candidates
+            .Where(e => e.ContentOpportunityScore >= options.MinimumContentOpportunityScore)
+            .OrderByDescending(e => e.ContentOpportunityScore)
+            .ThenBy(e => e.PeakUtc ?? e.StartUtc)
+            .ToArray();
+        var skipped = candidates
+            .Where(e => e.ContentOpportunityScore < options.MinimumContentOpportunityScore)
+            .OrderByDescending(e => e.ContentOpportunityScore)
+            .ToArray();
+        var special = options.EnableSpecialEventVideos
+            ? eligible.Where(e => e.ContentOpportunityScore >= options.MajorEventThreshold).ToArray()
+            : [];
+        var injectable = options.EnableDailyGuideEventInjection
+            ? eligible.Where(e => e.ContentOpportunityScore >= options.MediumEventThreshold).Take(options.MaxInjectedEventsPerDailyGuide).ToArray()
+            : [];
+        var primary = special.FirstOrDefault() ?? injectable.FirstOrDefault() ?? eligible.FirstOrDefault();
+        var decisionType = primary is null || primary.ContentOpportunityScore < options.MediumEventThreshold
+            ? (primary is null ? "None" : "MentionOnly")
+            : special.Length > 0 ? "GenerateBoth" : "InjectIntoDailyGuide";
+
+        return new EventContentDecision
+        {
+            HasEvent = primary is not null,
+            PrimaryEvent = primary,
+            DecisionType = decisionType,
+            InjectedEvents = decisionType == "GenerateBoth" && primary is not null ? [primary] : injectable,
+            SpecialEventCandidates = special,
+            SkippedEvents = skipped,
+            Reason = primary is null
+                ? $"No astronomy event met score {options.MinimumContentOpportunityScore:0.00} for {regionId} on {targetDate:yyyy-MM-dd}."
+                : $"Top event score {primary.ContentOpportunityScore:0.00}; decision={decisionType}."
+        };
+    }
+
+    private static AstronomyEvent ApplyRegionContext(AstronomyEvent astronomyEvent, SchedulerScheduleOptions schedule, string effectiveRegionId)
+        => new()
+        {
+            EventId = astronomyEvent.EventId,
+            EventType = astronomyEvent.EventType,
+            Title = astronomyEvent.Title,
+            Description = astronomyEvent.Description,
+            StartUtc = astronomyEvent.StartUtc,
+            PeakUtc = astronomyEvent.PeakUtc,
+            EndUtc = astronomyEvent.EndUtc,
+            TargetDate = astronomyEvent.TargetDate == default ? DateOnly.FromDateTime((astronomyEvent.PeakUtc ?? astronomyEvent.StartUtc).UtcDateTime) : astronomyEvent.TargetDate,
+            RegionId = effectiveRegionId,
+            LocationName = schedule.LocationName,
+            Latitude = schedule.Latitude,
+            Longitude = schedule.Longitude,
+            Timezone = schedule.Timezone,
+            GlobalVisibility = astronomyEvent.GlobalVisibility || astronomyEvent.RegionId is null,
+            VisibilityRegions = astronomyEvent.VisibilityRegions,
+            RelatedObjects = astronomyEvent.RelatedObjects,
+            Source = astronomyEvent.Source,
+            ConfidenceScore = astronomyEvent.ConfidenceScore,
+            RarityScore = astronomyEvent.RarityScore,
+            VisibilityScore = astronomyEvent.VisibilityScore,
+            AudienceInterestScore = astronomyEvent.AudienceInterestScore,
+            TimingUrgencyScore = astronomyEvent.TimingUrgencyScore,
+            ContentOpportunityScore = astronomyEvent.ContentOpportunityScore,
+            RecommendedContentType = astronomyEvent.RecommendedContentType,
+            Status = astronomyEvent.Status
+        };
+
+    private static SchedulerEventCandidatePlanItem ToCandidatePlanItem(AstronomyEvent astronomyEvent, EventContentDecision decision, IReadOnlyCollection<SchedulerSpecialEventPlanItem> planned, IReadOnlyCollection<SchedulerSkippedEventPlanItem> skipped, AstronomyEventsOptions options, string regionId, DateOnly targetDate, string? originalRegionId)
+    {
+        var selected = decision.PrimaryEvent is not null && string.Equals(decision.PrimaryEvent.EventId, astronomyEvent.EventId, StringComparison.OrdinalIgnoreCase);
+        var injected = decision.InjectedEvents.Any(e => string.Equals(e.EventId, astronomyEvent.EventId, StringComparison.OrdinalIgnoreCase));
+        var special = decision.SpecialEventCandidates.Any(e => string.Equals(e.EventId, astronomyEvent.EventId, StringComparison.OrdinalIgnoreCase));
+        var skippedItem = skipped.FirstOrDefault(e => string.Equals(e.EventId, astronomyEvent.EventId, StringComparison.OrdinalIgnoreCase));
+        var candidateDecisionType = planned.Any(e => string.Equals(e.EventId, astronomyEvent.EventId, StringComparison.OrdinalIgnoreCase))
+            ? "SelectedSpecialEvent"
+            : skippedItem is not null ? "Skipped"
+            : special ? "SpecialEventCandidate"
+            : injected ? "InjectedEventCandidate"
+            : selected ? decision.DecisionType
+            : astronomyEvent.ContentOpportunityScore < options.MinimumContentOpportunityScore ? "Skipped"
+            : "Candidate";
+        var reason = skippedItem?.Reason
+            ?? (astronomyEvent.ContentOpportunityScore < options.MinimumContentOpportunityScore ? GetScoreSkipReason(astronomyEvent, options)
+            : $"Included for {regionId} on {targetDate:yyyy-MM-dd}; score {astronomyEvent.ContentOpportunityScore:0.00}.");
+
+        return new SchedulerEventCandidatePlanItem(
+            astronomyEvent.EventId,
+            astronomyEvent.EventType,
+            astronomyEvent.Title,
+            astronomyEvent.ContentOpportunityScore,
+            astronomyEvent.TargetDate,
+            !string.Equals(originalRegionId, regionId, StringComparison.OrdinalIgnoreCase),
+            originalRegionId,
+            regionId,
+            astronomyEvent.GlobalVisibility,
+            candidateDecisionType,
+            reason);
+    }
+
+    private static string GetScoreSkipReason(AstronomyEvent astronomyEvent, AstronomyEventsOptions options)
+        => $"Score {astronomyEvent.ContentOpportunityScore:0.00} is below threshold {options.MinimumContentOpportunityScore:0.00}.";
 
     private async Task<bool> HasSpecialEventDuplicateAsync(string eventId, DateOnly targetDate, string regionId, ContentType contentType, CancellationToken cancellationToken)
     {
@@ -357,7 +467,8 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
 
     private static bool IsVisibleInRegion(AstronomyEvent astronomyEvent, string regionId)
         => astronomyEvent.GlobalVisibility
-            || astronomyEvent.VisibilityRegions.Length == 0
+            || astronomyEvent.RegionId is null
+            || string.Equals(astronomyEvent.RegionId, regionId, StringComparison.OrdinalIgnoreCase)
             || astronomyEvent.VisibilityRegions.Any(region => string.Equals(Slugify(region), regionId, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsSupportedSpecialEventType(AstronomyEvent astronomyEvent)
