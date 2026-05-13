@@ -113,7 +113,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         }
     }
 
-    private static bool TryApplyNightPlanResponse(AstronomyContext context, SkyfieldNightPlanResponse? response, string timezone, ObservationOptions observationOptions, ObservationWindow observationWindow)
+    private bool TryApplyNightPlanResponse(AstronomyContext context, SkyfieldNightPlanResponse? response, string timezone, ObservationOptions observationOptions, ObservationWindow observationWindow)
     {
         var visible = response?.VisibleObjects?.Where(x => x.IsVisible).ToList() ?? [];
         if (visible.Count == 0)
