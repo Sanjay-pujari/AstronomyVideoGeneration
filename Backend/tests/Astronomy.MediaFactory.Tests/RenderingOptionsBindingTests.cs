@@ -14,7 +14,17 @@ public sealed class RenderingOptionsBindingTests
             {
                 [$"{RenderingOptions.SectionName}:EnableTransitions"] = "true",
                 [$"{RenderingOptions.SectionName}:TransitionDurationSeconds"] = "0.5",
-                [$"{RenderingOptions.SectionName}:TransitionType"] = "fade"
+                [$"{RenderingOptions.SectionName}:TransitionType"] = "fade",
+                [$"{RenderingOptions.SectionName}:EnableFadeInOut"] = "true",
+                [$"{RenderingOptions.SectionName}:FadeDurationSeconds"] = "0.75",
+                [$"{RenderingOptions.SectionName}:ShortFadeDurationSeconds"] = "0.4",
+                [$"{RenderingOptions.SectionName}:EnableKenBurns"] = "true",
+                [$"{RenderingOptions.SectionName}:KenBurnsZoomStart"] = "1.0",
+                [$"{RenderingOptions.SectionName}:KenBurnsZoomEnd"] = "1.10",
+                [$"{RenderingOptions.SectionName}:ShortKenBurnsZoomEnd"] = "1.08",
+                [$"{RenderingOptions.SectionName}:KenBurnsFps"] = "30",
+                [$"{RenderingOptions.SectionName}:KenBurnsUseEasing"] = "true",
+                [$"{RenderingOptions.SectionName}:EnableDirectionalMotion"] = "false"
             })
             .Build();
 
@@ -24,5 +34,15 @@ public sealed class RenderingOptionsBindingTests
         Assert.True(options.EnableTransitions);
         Assert.Equal(0.5d, options.TransitionDurationSeconds);
         Assert.Equal("fade", options.TransitionType);
+        Assert.True(options.EnableFadeInOut);
+        Assert.Equal(0.75d, options.FadeDurationSeconds);
+        Assert.Equal(0.4d, options.ShortFadeDurationSeconds);
+        Assert.True(options.EnableKenBurns);
+        Assert.Equal(1.0d, options.KenBurnsZoomStart);
+        Assert.Equal(1.10d, options.KenBurnsZoomEnd);
+        Assert.Equal(1.08d, options.ShortKenBurnsZoomEnd);
+        Assert.Equal(30, options.KenBurnsFps);
+        Assert.True(options.KenBurnsUseEasing);
+        Assert.False(options.EnableDirectionalMotion);
     }
 }

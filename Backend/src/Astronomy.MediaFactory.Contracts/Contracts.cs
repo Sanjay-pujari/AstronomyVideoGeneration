@@ -302,6 +302,7 @@ public sealed class AnalyticsOptions
 public sealed class RenderingOptions
 {
     public const string SectionName = "Rendering";
+    public const string VideoRenderSectionName = "VideoRender";
     public string FfmpegPath { get; set; } = "ffmpeg";
     public string? FfprobePath { get; set; }
     public string WorkingDirectory { get; set; } = "./media-output";
@@ -311,7 +312,10 @@ public sealed class RenderingOptions
     public double ImageTransitionSeconds { get; set; } = 1;
     public string? BackgroundMusicPath { get; set; }
     public bool UseSegmentedNarration { get; set; } = false;
-    public bool EnableTransitions { get; set; } = false;
+    public bool EnableTransitions { get; set; } = true;
+    public bool EnableFadeInOut { get; set; } = true;
+    public double FadeDurationSeconds { get; set; } = 0.75d;
+    public double ShortFadeDurationSeconds { get; set; } = 0.4d;
     public double TransitionDurationSeconds { get; set; } = 0.5;
     public string TransitionType { get; set; } = "fade";
     public int FfmpegTimeoutSeconds { get; set; } = 600;
@@ -319,7 +323,8 @@ public sealed class RenderingOptions
     public bool KeepIntermediateFiles { get; set; } = true;
     public bool EnableKenBurns { get; set; } = true;
     public double KenBurnsZoomStart { get; set; } = 1.0d;
-    public double KenBurnsZoomEnd { get; set; } = 1.12d;
+    public double KenBurnsZoomEnd { get; set; } = 1.10d;
+    public double ShortKenBurnsZoomEnd { get; set; } = 1.08d;
     public int KenBurnsFps { get; set; } = 30;
     public bool KenBurnsUseEasing { get; set; } = true;
     public bool EnableDirectionalMotion { get; set; } = false;
