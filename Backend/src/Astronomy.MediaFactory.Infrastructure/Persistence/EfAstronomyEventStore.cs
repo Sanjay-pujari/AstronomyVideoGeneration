@@ -64,7 +64,13 @@ public sealed class EfAstronomyEventStore : IAstronomyEventStore
         if (string.IsNullOrWhiteSpace(regionId))
             return events;
 
-        return events.Where(x => x.GlobalVisibility || x.RegionId == null || x.RegionId == regionId || x.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase))).ToArray();
+        return events.Where(x => x.TargetDate >= fromDate
+            && x.TargetDate <= toDate
+            && (x.GlobalVisibility
+                || x.RegionId is null
+                || string.Equals(x.RegionId, regionId, StringComparison.OrdinalIgnoreCase)
+                || x.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase))))
+            .ToArray();
     }
 
     public Task<AstronomyEvent?> GetByEventIdAsync(string eventId, CancellationToken cancellationToken)

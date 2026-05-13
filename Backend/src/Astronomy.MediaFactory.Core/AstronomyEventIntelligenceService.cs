@@ -126,8 +126,8 @@ public sealed class AstronomyEventDiscoveryService : IAstronomyEventDiscoverySer
     private static bool IsVisibleInRegion(AstronomyEvent astronomyEvent, string regionId)
         => astronomyEvent.GlobalVisibility
             || string.IsNullOrWhiteSpace(regionId)
+            || astronomyEvent.RegionId is null
             || string.Equals(astronomyEvent.RegionId, regionId, StringComparison.OrdinalIgnoreCase)
-            || astronomyEvent.VisibilityRegions.Length == 0
             || astronomyEvent.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase) || regionId.Contains(r, StringComparison.OrdinalIgnoreCase));
 
     private IReadOnlyCollection<AstronomyEvent> DiscoverInternal(DateTimeOffset now, int lookAheadDays)

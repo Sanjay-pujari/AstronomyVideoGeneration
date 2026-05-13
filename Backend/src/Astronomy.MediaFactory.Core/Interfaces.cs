@@ -11,9 +11,9 @@ public interface IAstronomyEventDiscoveryService
     async Task<IReadOnlyCollection<AstronomyEvent>> RefreshEventsAsync(DateOnly fromDate, DateOnly toDate, CancellationToken cancellationToken)
         => await RefreshAsync(Math.Max(1, toDate.DayNumber - fromDate.DayNumber + 1), cancellationToken);
     async Task<IReadOnlyCollection<AstronomyEvent>> DiscoverEventsForRegionAsync(string regionId, DateOnly targetDate, CancellationToken cancellationToken)
-        => (await GetUpcomingAsync(1, cancellationToken)).Where(e => (e.TargetDate == default ? DateOnly.FromDateTime((e.PeakUtc ?? e.StartUtc).UtcDateTime) : e.TargetDate) == targetDate && (e.GlobalVisibility || e.RegionId == regionId || e.VisibilityRegions.Length == 0 || e.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase)))).ToArray();
+        => (await GetUpcomingAsync(1, cancellationToken)).Where(e => (e.TargetDate == default ? DateOnly.FromDateTime((e.PeakUtc ?? e.StartUtc).UtcDateTime) : e.TargetDate) == targetDate && (e.GlobalVisibility || e.RegionId is null || string.Equals(e.RegionId, regionId, StringComparison.OrdinalIgnoreCase) || e.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase)))).ToArray();
     async Task<IReadOnlyCollection<AstronomyEvent>> GetTopEventsAsync(string regionId, DateOnly targetDate, CancellationToken cancellationToken)
-        => (await GetTopAsync(1, cancellationToken)).Where(e => (e.TargetDate == default ? DateOnly.FromDateTime((e.PeakUtc ?? e.StartUtc).UtcDateTime) : e.TargetDate) == targetDate && (e.GlobalVisibility || e.RegionId == regionId || e.VisibilityRegions.Length == 0 || e.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase)))).ToArray();
+        => (await GetTopAsync(1, cancellationToken)).Where(e => (e.TargetDate == default ? DateOnly.FromDateTime((e.PeakUtc ?? e.StartUtc).UtcDateTime) : e.TargetDate) == targetDate && (e.GlobalVisibility || e.RegionId is null || string.Equals(e.RegionId, regionId, StringComparison.OrdinalIgnoreCase) || e.VisibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase)))).ToArray();
 }
 
 public interface IAstronomyEventScoringService
