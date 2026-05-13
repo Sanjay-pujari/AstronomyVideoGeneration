@@ -492,14 +492,14 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             Title = title,
             Description = description,
             Tags = ["astronomy", "night sky", contentType.ToString()],
-            EstimatedDurationSeconds = 900,
+            EstimatedDurationSeconds = isSpecialEvent ? 480 : 360,
             ScriptBody = isSpecialEvent
                 ? isHindi
                     ? $"आज हम {context.SpecialEvent!.EventTitle} पर ध्यान देंगे। {context.SpecialEvent.EventDescription} हम बताएंगे कि यह क्यों महत्वपूर्ण है, कब देखना है, किस दिशा में देखना है, शुरुआती दर्शकों के लिए सुझाव, दुर्लभता, और सुरक्षित अवलोकन की याद दिलाने वाली बातें। {string.Join(" ", eventLines)}"
-                    : $"Tonight we focus on {context.SpecialEvent!.EventTitle}. {context.SpecialEvent.EventDescription} We will cover why it matters, when to look, where to face, beginner viewing tips, rarity, and safe observing reminders. {string.Join(" ", eventLines)}"
+                    : $"Tonight we focus on {context.SpecialEvent!.EventTitle}. {context.SpecialEvent.EventDescription} We begin with why this event matters, then move through the visual story, the best viewing time, the best direction to face, practical observation tips, extra context for beginners, and a final reminder before the event passes. {string.Join(" ", eventLines)}"
                 : isHindi
-                    ? $"{context.Date:yyyy-MM-dd} के लिए आपकी खगोल अपडेट में स्वागत है। {string.Join(" ", eventLines)}"
-                    : $"Welcome to your astronomy update for {context.Date:MMMM dd, yyyy}. {string.Join(" ", eventLines)}"
+                    ? $"{context.Date:yyyy-MM-dd} के लिए आपकी cinematic खगोल गाइड में स्वागत है। जैसे-जैसे अंधेरा गहराएगा, हम आसमान का overview, आज की highlight, Moon या सबसे चमकीले objects, फिर observation tips और closing recap देखेंगे। {string.Join(" ", eventLines)}"
+                    : $"Welcome to your cinematic astronomy guide for {context.Date:MMMM dd, yyyy}. As darkness settles over {context.LocationName}, we will begin with the shape of the sky, move into tonight's strongest highlight, follow the Moon or the brightest objects when present, add beginner-friendly context, and end with practical observing tips. {string.Join(" ", eventLines)}"
         };
     }
 

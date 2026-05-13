@@ -29,7 +29,7 @@ public sealed class FfmpegArgumentBuilder
             "-pix_fmt yuv420p",
             "-c:a aac",
             "-b:a 192k",
-            "-shortest",
+            hasMusic ? string.Empty : "-map 0:v:0 -map 1:a:0",
             $"\"{outputPath}\"");
     }
 }

@@ -49,6 +49,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("-i \"/tmp/narration.mp3\"", args);
         Assert.Contains("scale=1280:720", args);
         Assert.Contains("\"/tmp/final-video.mp4\"", args);
+        Assert.DoesNotContain("-shortest", args, StringComparison.Ordinal);
     }
 
 
@@ -151,7 +152,7 @@ public sealed class FfmpegRenderingTests
     }
 
     [Fact]
-    public async Task FfmpegVideoRenderService_BypassesSegmentFlow_WhenUseSegmentedNarrationDisabled()
+    public async Task FfmpegVideoRenderService_UsesSegmentFlow_WhenSceneAudioIsPresent()
     {
         var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-segmented");
         var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
@@ -190,9 +191,9 @@ public sealed class FfmpegRenderingTests
             ]
         }, CancellationToken.None);
 
-        var concatCommand = Assert.Single(processRunner.Commands.Where(command => command.Contains("-f concat", StringComparison.Ordinal)));
-        Assert.Contains($"-i \"{audioPath}\"", concatCommand, StringComparison.Ordinal);
-        Assert.Contains("-shortest", concatCommand, StringComparison.Ordinal);
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1", StringComparison.Ordinal) && command.Contains(sceneAudioPath, StringComparison.Ordinal));
+        Assert.Contains("-t 6", segmentCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("-shortest", string.Join(" ", processRunner.Commands), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -240,6 +241,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("calculatedSceneDurationSeconds: 23.8", diagnostics, StringComparison.Ordinal);
         Assert.Contains("expectedCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
         Assert.Contains("actualCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("segment-sync-report.json", string.Join("|", fileSystem.TextWrites.Keys), StringComparison.Ordinal);
     }
 
 
@@ -339,9 +341,11 @@ public sealed class FfmpegRenderingTests
             Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, AudioPath = sceneAudioPath, DurationSeconds = 2 }]
         }, CancellationToken.None);
 
-        var segmentCommand = processRunner.Commands.Single(command => command.Contains(sceneAudioPath, StringComparison.Ordinal));
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1", StringComparison.Ordinal) && command.Contains(sceneAudioPath, StringComparison.Ordinal));
         Assert.Contains("-t 8.25", segmentCommand, StringComparison.Ordinal);
-        Assert.DoesNotContain("-shortest", segmentCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("-shortest", string.Join(" ", processRunner.Commands), StringComparison.Ordinal);
+        var report = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "segment-sync-report.json")];
+        Assert.Contains("\"synchronizationStatus\": \"Synchronized\"", report, StringComparison.Ordinal);
     }
 
     [Fact]

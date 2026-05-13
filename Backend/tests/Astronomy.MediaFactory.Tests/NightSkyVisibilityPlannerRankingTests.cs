@@ -27,7 +27,7 @@ public sealed class NightSkyVisibilityPlannerRankingTests
             new NightSkyCandidateObject("Moon", "Moon", 1, "Naked eye", true)
         ]);
 
-        var names = plan.SelectedScenes.Where(s => s.SceneType == "Object").Select(s => s.ObjectName).ToList();
+        var names = plan.SelectedScenes.Where(s => s.ObjectName != "Sky").Select(s => s.ObjectName).ToList();
         Assert.Contains("Venus", names);
     }
 
@@ -44,7 +44,7 @@ public sealed class NightSkyVisibilityPlannerRankingTests
             new NightSkyCandidateObject("Jupiter", "Planet", 1, "Naked eye", true)
         ]);
 
-        var names = plan.SelectedScenes.Where(s => s.SceneType == "Object").Select(s => s.ObjectName).ToList();
+        var names = plan.SelectedScenes.Where(s => s.ObjectName != "Sky").Select(s => s.ObjectName).ToList();
         Assert.DoesNotContain("Moon", names);
     }
 
@@ -59,12 +59,12 @@ public sealed class NightSkyVisibilityPlannerRankingTests
             new NightSkyCandidateObject("Jupiter", "Planet", 1, "Naked eye", true)
         ]);
 
-        var names = plan.SelectedScenes.Where(s => s.SceneType == "Object").Select(s => s.ObjectName).ToList();
+        var names = plan.SelectedScenes.Where(s => s.ObjectName != "Sky").Select(s => s.ObjectName).ToList();
         Assert.DoesNotContain("LowTarget", names);
     }
 
     [Fact]
-    public void BuildPlan_SelectsDiverseFinalThreeObjects()
+    public void BuildPlan_SelectsDiverseDynamicObjectCount()
     {
         var planner = new NightSkyVisibilityPlanner();
         var plan = planner.BuildPlan(Options, new DateOnly(2026, 3, 17),
@@ -73,13 +73,34 @@ public sealed class NightSkyVisibilityPlannerRankingTests
             new NightSkyCandidateObject("Venus", "Planet", 1, "Naked eye", true),
             new NightSkyCandidateObject("Jupiter", "Planet", 1, "Naked eye", true),
             new NightSkyCandidateObject("Mars", "Planet", 1, "Naked eye", true),
+            new NightSkyCandidateObject("Orion", "Constellation", 1, "Naked eye", true),
+            new NightSkyCandidateObject("Sirius", "Star", 1, "Naked eye", true),
             new NightSkyCandidateObject("Orion Nebula", "DeepSky", 1, "Binoculars", true)
         ]);
 
-        var objects = plan.SelectedScenes.Where(s => s.SceneType == "Object").ToList();
-        Assert.Equal(3, objects.Count);
+        var objects = plan.SelectedScenes.Where(s => s.ObjectName != "Sky").ToList();
+        Assert.InRange(objects.Count, 4, 6);
         Assert.True(objects.Count(o => o.ObjectType.Contains("Moon", StringComparison.OrdinalIgnoreCase)) <= 1);
         Assert.True(objects.Count(o => o.ObjectType.Contains("Planet", StringComparison.OrdinalIgnoreCase)) <= 2);
         Assert.True(objects.Count(o => o.ObjectType.Contains("Deep", StringComparison.OrdinalIgnoreCase)) <= 1);
+    }
+
+    [Fact]
+    public void BuildPlan_AddsProductionOverviewTipsAndClosing()
+    {
+        var planner = new NightSkyVisibilityPlanner();
+        var plan = planner.BuildPlan(Options, new DateOnly(2026, 3, 17),
+        [
+            new NightSkyCandidateObject("Moon", "Moon", 1, "Naked eye", true),
+            new NightSkyCandidateObject("Venus", "Planet", 1, "Naked eye", true),
+            new NightSkyCandidateObject("Jupiter", "Planet", 1, "Naked eye", true),
+            new NightSkyCandidateObject("Orion", "Constellation", 1, "Naked eye", true),
+            new NightSkyCandidateObject("Sirius", "Star", 1, "Naked eye", true),
+            new NightSkyCandidateObject("Orion Nebula", "DeepSky", 1, "Binoculars", true)
+        ]);
+
+        Assert.Equal("sky-overview", plan.SelectedScenes.First().SceneId);
+        Assert.Contains(plan.SelectedScenes, scene => scene.SceneId == "observation-tips");
+        Assert.Contains(plan.SelectedScenes, scene => scene.SceneId == "closing");
     }
 }

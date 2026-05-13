@@ -463,6 +463,7 @@ public sealed class PipelineOrchestrator
             }
 
             var sceneAudioSegments = new List<string>();
+            var sceneSections = new List<(SceneObservationContext Scene, string SectionText)>();
             if (script.SceneScriptSections?.HasAllSections() == true)
             {
                 await WriteSceneObservationDiagnosticsAsync(context, outputDir, cancellationToken);
@@ -474,7 +475,6 @@ public sealed class PipelineOrchestrator
                 var actualNarrationObjects = NormalizeObjects(sectionsBySceneId.Keys
                     .Select(sceneId => context.SceneObservationContexts.FirstOrDefault(s => s.SceneId.Equals(sceneId, StringComparison.OrdinalIgnoreCase))?.ObjectName ?? sceneId));
 
-                var sceneSections = new List<(string SceneTitle, string SectionText)>();
                 var usedSceneIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var visualScene in visualSceneContexts)
                 {
@@ -496,7 +496,7 @@ public sealed class PipelineOrchestrator
                     }
 
                     usedSceneIds.Add(matchedSceneId);
-                    sceneSections.Add((visualScene.SceneTitle, sectionsBySceneId[matchedSceneId]));
+                    sceneSections.Add((visualScene, sectionsBySceneId[matchedSceneId]));
                 }
 
                 var missingFromNarration = expectedVisualObjects.Except(actualNarrationObjects, StringComparer.OrdinalIgnoreCase).ToList();
@@ -521,8 +521,8 @@ public sealed class PipelineOrchestrator
                         ? Path.Combine(outputDir, $"scene-narration-{i + 1:000}")
                         : outputDir;
                     var sceneNumber = i + 1;
-                    ValidateNarrationLanguage(sceneSections[i].Item2, context.Localization.ResolvedLanguage);
-                    var perSceneAudioPath = await RunStageAsync($"SceneSpeechSynthesis-{sceneNumber:000}", () => _speechSynthesisService.SynthesizeAsync(sceneSections[i].Item2, sceneOutputDirectory, cancellationToken));
+                    ValidateNarrationLanguage(sceneSections[i].SectionText, context.Localization.ResolvedLanguage);
+                    var perSceneAudioPath = await RunStageAsync($"SceneSpeechSynthesis-{sceneNumber:000}", () => _speechSynthesisService.SynthesizeAsync(sceneSections[i].SectionText, sceneOutputDirectory, cancellationToken));
 
                     if (string.IsNullOrWhiteSpace(perSceneAudioPath))
                     {
@@ -540,12 +540,12 @@ public sealed class PipelineOrchestrator
 
                     var sceneText = File.Exists(sourceTextPath)
                         ? await File.ReadAllTextAsync(sourceTextPath, cancellationToken)
-                        : sceneSections[i].Item2;
+                        : sceneSections[i].SectionText;
 
                     await File.WriteAllTextAsync(sceneTextPath, sceneText, cancellationToken);
                     File.Copy(perSceneAudioPath, sceneAudioPath, overwrite: true);
                     sceneAudioSegments.Add(sceneAudioPath);
-                    sceneNarrationEntries.Add((i + 1, sceneSections[i].Item1, sceneTextPath, sceneAudioPath, sceneText));
+                    sceneNarrationEntries.Add((i + 1, sceneSections[i].Scene.SceneTitle, sceneTextPath, sceneAudioPath, sceneText));
                 }
 
                 if (sceneNarrationEntries.Count > 0)
@@ -566,13 +566,17 @@ public sealed class PipelineOrchestrator
                     var observation = i < context.SceneObservationContexts.Count ? context.SceneObservationContexts[i] : null;
                     return new RenderScene
                     {
-                        Caption = i < context.VisualIdeas.Count ? context.VisualIdeas[i].Title : $"Scene {i + 1}",
+                        Caption = i < sceneSections.Count ? sceneSections[i].SectionText : (i < context.VisualIdeas.Count ? context.VisualIdeas[i].Title : $"Scene {i + 1}"),
                         VisualPath = v,
                         DurationSeconds = durationPerScene,
                         AudioPath = i < sceneAudioSegments.Count ? sceneAudioSegments[i] : null,
                         ObjectName = observation?.ObjectName,
                         ObjectType = observation?.ObjectType,
                         SceneType = observation?.SceneType,
+                        SceneId = observation?.SceneId,
+                        SegmentIndex = i + 1,
+                        NarrationLanguage = context.Localization.ResolvedLanguage,
+                        NarrationText = i < sceneSections.Count ? sceneSections[i].SectionText : null,
                         DirectionLabel = observation?.DirectionLabel,
                         AzimuthDegrees = observation?.AzimuthDegrees
                     };
@@ -632,6 +636,7 @@ public sealed class PipelineOrchestrator
             await SeoMetadataGeneratorService.WriteToFileAsync(seoMetadata, outputDir, cancellationToken);
             await WriteLanguagePipelineDiagnosticsAsync(context.Localization.ResolvedLanguage, script.ScriptBody, seoMetadata, outputDir, null, cancellationToken);
             await WriteSpecialEventDiagnosticsAsync(request, context, outputDir, seoMetadata, cancellationToken);
+            await WriteContentExpansionReportAsync(context, request, outputDir, script.EstimatedDurationSeconds, cancellationToken);
 
             await _repository.AddAssetAsync(new MediaAsset
             {
@@ -1445,6 +1450,43 @@ public sealed class PipelineOrchestrator
             "MetaReelPublish" => PipelineStageNames.FacebookReelPublished,
             _ => stageName
         };
+
+    private static async Task WriteContentExpansionReportAsync(AstronomyContext context, RunPipelineRequest request, string outputDirectory, int estimatedDurationSeconds, CancellationToken cancellationToken)
+    {
+        var selectedObjects = context.SceneObservationContexts
+            .Where(scene => !string.IsNullOrWhiteSpace(scene.ObjectName) && !scene.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase))
+            .Select(scene => new
+            {
+                scene.SceneId,
+                scene.SceneType,
+                scene.ObjectName,
+                scene.ObjectType,
+                scene.AltitudeDegrees,
+                scene.DirectionLabel,
+                scene.VisibilityReason
+            })
+            .DistinctBy(x => x.ObjectName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var selectedNames = selectedObjects.Select(x => x.ObjectName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var skippedObjects = context.Events
+            .Where(e => !string.IsNullOrWhiteSpace(e.ObjectName) && !selectedNames.Contains(e.ObjectName))
+            .Select(e => new { e.ObjectName, reason = "Not selected after visibility, ranking, duplicate, or maximum-count constraints." })
+            .ToList();
+
+        var report = new
+        {
+            selectedObjects,
+            skippedObjects,
+            reason = "Dynamic production expansion selected visible, beginner-friendly astronomy targets while avoiding duplicates and overcrowding.",
+            estimatedVideoMinutes = Math.Round(estimatedDurationSeconds / 60d, 2),
+            finalVideoMinutes = Math.Round(estimatedDurationSeconds / 60d, 2),
+            eventInjected = context.SpecialEvent is not null || request.EventId is not null || context.Events.Any(e => e.Score >= 0.85),
+            specialEventGuideGenerated = request.ContentType == ContentType.SpecialEventGuide
+        };
+
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "content-expansion-report.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
 
     private static async Task WriteSceneObservationDiagnosticsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
     {

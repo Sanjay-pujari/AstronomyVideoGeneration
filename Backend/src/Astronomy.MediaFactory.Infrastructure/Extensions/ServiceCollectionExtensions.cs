@@ -172,6 +172,18 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
 
 
+        services.AddOptions<ContentDurationOptions>()
+            .Bind(configuration.GetSection(ContentDurationOptions.SectionName))
+            .Validate(options => options.DailySkyGuideMinutes > 0 && options.SpecialEventGuideMinutes > 0, "ContentDuration long-form targets must be greater than 0.")
+            .Validate(options => options.YouTubeShortSeconds > 0 && options.InstagramReelSeconds > 0 && options.FacebookReelSeconds > 0, "ContentDuration short-form targets must be greater than 0.")
+            .ValidateOnStart();
+
+        services.AddOptions<ContentExpansionOptions>()
+            .Bind(configuration.GetSection(ContentExpansionOptions.SectionName))
+            .Validate(options => options.MinObjectsPerGuide > 0 && options.MaxObjectsPerGuide >= options.MinObjectsPerGuide, "ContentExpansion object bounds are invalid.")
+            .Validate(options => options.MinimumVisibilityScore is >= 0 and <= 1, "ContentExpansion:MinimumVisibilityScore must be between 0 and 1.")
+            .ValidateOnStart();
+
         services.AddOptions<LocalizationOptions>()
             .Bind(configuration.GetSection(LocalizationOptions.SectionName))
             .Validate(options => !string.IsNullOrWhiteSpace(options.DefaultLanguage), "Localization:DefaultLanguage is required.")

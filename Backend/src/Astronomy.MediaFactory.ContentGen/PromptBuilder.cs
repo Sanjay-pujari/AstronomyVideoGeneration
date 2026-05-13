@@ -45,8 +45,8 @@ public sealed class PromptBuilder : IPromptBuilder
         };
 
         var sb = new StringBuilder();
-        sb.AppendLine("You are an astronomy educator creating a beginner-friendly YouTube script.");
-        sb.AppendLine("Use the provided structured astronomy input.");
+        sb.AppendLine("You are an astronomy educator creating a production-quality cinematic YouTube sky guide.");
+        sb.AppendLine("Use the provided structured astronomy input and turn it into rich, educational storytelling rather than a robotic object list.");
         AppendLocalizationRequirements(sb, context.Localization);
         sb.AppendLine(PromptFeedbackComposer.BuildBoundaryRulesSection());
         sb.AppendLine("Requirements:");
@@ -59,6 +59,9 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("7) Keep object-scene narration chronological with explicit time progression language.");
         sb.AppendLine("8) Use natural transitions such as 'Later in the night...', 'As midnight approaches...', and 'In the early morning hours...' when they fit the local times.");
         sb.AppendLine("9) If the gap between consecutive object scenes exceeds 2 hours, include the phrase 'Later in the night...'.");
+        sb.AppendLine("10) DailySkyGuide target is about 5-6 minutes, naturally paced at 120-145 English words/minute or 110-130 Hindi words/minute.");
+        sb.AppendLine("11) Use this adaptable cinematic structure when matching the provided scenes: opening overview, tonight's highlight/event, Moon if present, 3-6 ranked objects, constellation/bright star/deep-sky context when present, observation tips, and closing overview.");
+        sb.AppendLine("12) Write natural transitions, educational context, and practical observing instructions. Avoid repetitive phrasing such as 'is visible' at the start of every scene.");
 
         sb.AppendLine();
         sb.AppendLine(PromptFeedbackComposer.BuildFeedbackSection(feedbackContext, isShortForm: false));
@@ -126,10 +129,11 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("1) Explain why the event matters, rarity/urgency, and what viewers should look for.");
         sb.AppendLine("2) Include best viewing time, direction, beginner tips, and safe-observing advice when relevant.");
         sb.AppendLine("3) Prioritize event objects, alignment, moon phase, meteor radiant, or eclipse phases over generic sky overview.");
-        sb.AppendLine("4) Use cinematic pacing: strong hook, event build-up, observation instructions, and concise closing reminder.");
+        sb.AppendLine("4) Use cinematic pacing: strong hook, why the event matters, event visualization, best viewing time, best direction, observation tips, extra context/storytelling, and closing CTA.");
         sb.AppendLine("5) Do not invent numeric values beyond supplied context.");
         sb.AppendLine("6) Return ONLY valid JSON with no markdown, no code fences, and no commentary.");
         sb.AppendLine("7) Each sceneScript section must map exactly to provided sceneObservationContext sceneId values.");
+        sb.AppendLine("8) SpecialEventGuide target is 7-9 minutes, naturally paced at 120-145 English words/minute or 110-130 Hindi words/minute. Do not pad with silence cues.");
         sb.AppendLine();
         sb.AppendLine(PromptFeedbackComposer.BuildFeedbackSection(feedbackContext, isShortForm: false));
         sb.AppendLine();

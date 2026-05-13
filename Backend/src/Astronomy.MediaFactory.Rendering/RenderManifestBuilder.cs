@@ -64,7 +64,12 @@ public sealed class RenderManifestBuilder
                 scene.VisualPath,
                 scene.DurationSeconds > 0 ? scene.DurationSeconds : 6,
                 "scene",
-                scene.AudioPath));
+                scene.AudioPath,
+                scene.SceneId,
+                scene.SceneType,
+                scene.ObjectName,
+                scene.NarrationLanguage,
+                scene.NarrationText));
         }
 
         if (!string.IsNullOrWhiteSpace(manifest.OutroVisualPath))
@@ -88,7 +93,12 @@ public sealed class RenderManifestBuilder
                 VisualPath = candidate.VisualPath,
                 DurationSeconds = candidate.DurationSeconds,
                 Segment = candidate.Segment,
-                AudioPath = candidate.AudioPath
+                AudioPath = candidate.AudioPath,
+                SceneId = candidate.SceneId,
+                SceneType = candidate.SceneType,
+                ObjectName = candidate.ObjectName,
+                NarrationLanguage = candidate.NarrationLanguage,
+                NarrationText = candidate.NarrationText
             });
 
             order++;
@@ -125,7 +135,7 @@ public sealed class RenderManifestBuilder
         => value.Replace("'", "'\\''", StringComparison.Ordinal);
 }
 
-file sealed record RenderSceneCandidate(string Caption, string VisualPath, int DurationSeconds, string Segment, string? AudioPath = null);
+file sealed record RenderSceneCandidate(string Caption, string VisualPath, int DurationSeconds, string Segment, string? AudioPath = null, string? SceneId = null, string? SceneType = null, string? ObjectName = null, string? NarrationLanguage = null, string? NarrationText = null);
 
 public sealed class RenderPlan
 {
@@ -147,4 +157,9 @@ public sealed class RenderPlanScene
     public int DurationSeconds { get; init; }
     public string Segment { get; init; } = string.Empty;
     public string? AudioPath { get; init; }
+    public string? SceneId { get; init; }
+    public string? SceneType { get; init; }
+    public string? ObjectName { get; init; }
+    public string? NarrationLanguage { get; init; }
+    public string? NarrationText { get; init; }
 }
