@@ -27,6 +27,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddOptions<RenderingOptions>()
             .Bind(configuration.GetSection(RenderingOptions.SectionName))
+            .Configure(options => configuration.GetSection(RenderingOptions.VideoRenderSectionName).Bind(options))
             .Validate(opt => opt.VideoWidth > 0 && opt.VideoHeight > 0 && opt.FrameRate > 0, "Rendering dimensions and frame rate must be > 0.")
             .ValidateOnStart();
 

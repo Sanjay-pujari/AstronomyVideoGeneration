@@ -227,7 +227,7 @@ public sealed class FfmpegRenderingTests
 
         var segmentCommands = processRunner.Commands.Where(command => command.Contains("-loop 1 -i", StringComparison.Ordinal)).ToList();
         Assert.Equal(5, segmentCommands.Count);
-        Assert.All(segmentCommands, command => Assert.Contains("-frames:v 714", command, StringComparison.Ordinal));
+        Assert.All(segmentCommands, command => Assert.Contains("-frames:v 702", command, StringComparison.Ordinal));
         Assert.All(segmentCommands, command => Assert.Contains("-r 30", command, StringComparison.Ordinal));
         Assert.All(segmentCommands, command => Assert.Contains("zoompan=", command, StringComparison.Ordinal));
         Assert.All(segmentCommands, command => Assert.DoesNotContain(" -t ", command, StringComparison.Ordinal));
@@ -236,9 +236,9 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("sceneCount: 5", diagnostics, StringComparison.Ordinal);
         Assert.Contains("transitionDurationSeconds: 0.5", diagnostics, StringComparison.Ordinal);
         Assert.Contains("transitionCount: 4", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("totalTransitionOverlapSeconds: 4", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("adjustedTotalSceneDuration: 119", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("calculatedSceneDurationSeconds: 23.8", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("totalTransitionOverlapSeconds: 2", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("adjustedTotalSceneDuration: 117", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("calculatedSceneDurationSeconds: 23.4", diagnostics, StringComparison.Ordinal);
         Assert.Contains("expectedCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
         Assert.Contains("actualCombinedDurationSeconds: 115", diagnostics, StringComparison.Ordinal);
         Assert.Contains("segment-sync-report.json", string.Join("|", fileSystem.TextWrites.Keys), StringComparison.Ordinal);
@@ -700,6 +700,93 @@ public sealed class FfmpegRenderingTests
         Assert.Contains(processRunner.FileNames, fileName => string.Equals(fileName, "ffprobe", StringComparison.Ordinal));
     }
 
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_SegmentedKenBurnsAndFade_AreVideoOnlyEffects()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-segmented-effects");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        var sceneAudioPath = Path.Combine(tempDir.FullName, "scene-1.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(sceneAudioPath, [7, 8, 9]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner
+        {
+            ProbeDurationsByPath =
+            {
+                [sceneAudioPath] = 8d,
+                [Path.Combine(tempDir.FullName, "segment-001.mp4")] = 8d
+            }
+        };
+        var sut = CreateService(fileSystem, processRunner);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Segmented effects",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, AudioPath = sceneAudioPath, DurationSeconds = 8 }]
+        }, CancellationToken.None);
+
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains(sceneAudioPath, StringComparison.Ordinal));
+        Assert.Contains("zoompan=z='1 + (0.1)*pow(on/240.0,1.2)'", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("fade=t=in:st=0:d=0.75", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("fade=t=out:st=7.25:d=0.75", segmentCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("atempo", segmentCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("-shortest", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("video-effects-report.json", string.Join('|', fileSystem.TextWrites.Keys), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_EffectsDisabled_ProducesPlainScaledVideo()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-effects-disabled");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 6d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 6d } };
+        var sut = CreateService(fileSystem, processRunner, enableTransitions: false, enableKenBurns: false, enableFadeInOut: false);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Plain", AudioPath = audioPath, OutputPath = outputPath, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }] }, CancellationToken.None);
+
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
+        Assert.Contains("-vf \"fps=30,scale=1920:1080:flags=lanczos\"", segmentCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("zoompan", segmentCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("fade=t=", segmentCommand, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_ShortVideoUsesPortraitSafeEffects()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-short-effects");
+        var outputPath = Path.Combine(tempDir.FullName, "short-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 5d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 5d, [outputPath] = 5d } };
+        var sut = CreateService(fileSystem, processRunner, enableTransitions: false);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Short", AudioPath = audioPath, OutputPath = outputPath, OutputWidth = 1080, OutputHeight = 1920, EnableVerticalCrop = true, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 5 }] }, CancellationToken.None);
+
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
+        Assert.Contains("scale=1080:1920:force_original_aspect_ratio=increase", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("crop=1080:1920", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("s=1080x1920", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("(0.08)*pow", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("fade=t=in:st=0:d=0.4", segmentCommand, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(180, 36, 360)]
     [InlineData(180, 100, 1000)]
@@ -736,7 +823,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true, bool enableDirectionalMotion = false, double directionalPanStrength = 0.04d)
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true, bool enableDirectionalMotion = false, double directionalPanStrength = 0.04d, bool enableFadeInOut = true)
     {
         var options = Options.Create(new RenderingOptions
         {
@@ -754,6 +841,14 @@ public sealed class FfmpegRenderingTests
             FfmpegSegmentTimeoutSeconds = 180,
             KeepIntermediateFiles = true,
             EnableKenBurns = enableKenBurns,
+            EnableFadeInOut = enableFadeInOut,
+            FadeDurationSeconds = 0.75d,
+            ShortFadeDurationSeconds = 0.4d,
+            KenBurnsZoomStart = 1.0d,
+            KenBurnsZoomEnd = 1.10d,
+            ShortKenBurnsZoomEnd = 1.08d,
+            KenBurnsFps = 30,
+            KenBurnsUseEasing = true,
             EnableDirectionalMotion = enableDirectionalMotion,
             DirectionalPanStrength = directionalPanStrength
         });
