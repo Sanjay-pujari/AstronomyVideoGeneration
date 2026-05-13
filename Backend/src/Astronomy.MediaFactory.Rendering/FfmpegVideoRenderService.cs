@@ -500,6 +500,19 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         IReadOnlyList<string> Warnings);
 
     private sealed record MotionProfile(double ZoomStart, double ZoomEnd, double PanStrength, double PanDirectionSign, string PanDirection);
+
+    private sealed record SegmentSyncReportEntry(
+        string SceneId,
+        string SceneType,
+        string NarrationLanguage,
+        double AudioDurationSeconds,
+        double VisualDurationSeconds,
+        double DurationDifference,
+        string SynchronizationStatus,
+        int NarrationWords,
+        double EstimatedWordsPerMinute,
+        string ObjectName,
+        int SegmentIndex);
     private static string EscapeForJson(string? value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
     private static (int Width, int Height) GetOutputSize(RenderManifest manifest)
         => IsShortManifest(manifest) ? (ShortOutputWidth, ShortOutputHeight) : (LongOutputWidth, LongOutputHeight);
@@ -671,5 +684,3 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }.Where(static line => !string.IsNullOrEmpty(line)));
     }
 }
-
-file sealed record SegmentSyncReportEntry(string SceneId, string SceneType, string NarrationLanguage, double AudioDurationSeconds, double VisualDurationSeconds, double DurationDifference, string SynchronizationStatus, int NarrationWords, double EstimatedWordsPerMinute, string ObjectName, int SegmentIndex);
