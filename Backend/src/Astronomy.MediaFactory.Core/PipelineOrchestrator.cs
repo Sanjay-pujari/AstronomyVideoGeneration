@@ -476,9 +476,11 @@ public sealed class PipelineOrchestrator
                     .Select(sceneId => context.SceneObservationContexts.FirstOrDefault(s => s.SceneId.Equals(sceneId, StringComparison.OrdinalIgnoreCase))?.ObjectName ?? sceneId));
 
                 var usedSceneIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var fallbackSceneIds = new List<string>();
+                var alignedSectionsBySceneId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var visualScene in visualSceneContexts)
                 {
-                    var matchedSceneId = sectionsBySceneId.Keys.FirstOrDefault(id => id.Equals(visualScene.SceneId, StringComparison.OrdinalIgnoreCase));
+                    var matchedSceneId = sectionsBySceneId.Keys.FirstOrDefault(id => !usedSceneIds.Contains(id) && id.Equals(visualScene.SceneId, StringComparison.OrdinalIgnoreCase));
                     if (matchedSceneId is null)
                     {
                         matchedSceneId = sectionsBySceneId.Keys
@@ -490,18 +492,26 @@ public sealed class PipelineOrchestrator
                         matchedSceneId = sectionsBySceneId.Keys.FirstOrDefault(id => !usedSceneIds.Contains(id));
                     }
 
+                    var sectionText = matchedSceneId is null
+                        ? BuildFallbackSceneNarration(visualScene, context.Localization.ResolvedLanguage)
+                        : sectionsBySceneId[matchedSceneId];
+
                     if (matchedSceneId is null)
                     {
-                        throw new InvalidOperationException("Narration/visual scene mismatch");
+                        fallbackSceneIds.Add(visualScene.SceneId);
+                    }
+                    else
+                    {
+                        usedSceneIds.Add(matchedSceneId);
                     }
 
-                    usedSceneIds.Add(matchedSceneId);
-                    sceneSections.Add((visualScene, sectionsBySceneId[matchedSceneId]));
+                    alignedSectionsBySceneId[visualScene.SceneId] = sectionText;
+                    sceneSections.Add((visualScene, sectionText));
                 }
 
                 var missingFromNarration = expectedVisualObjects.Except(actualNarrationObjects, StringComparer.OrdinalIgnoreCase).ToList();
                 var extraInNarration = actualNarrationObjects.Except(expectedVisualObjects, StringComparer.OrdinalIgnoreCase).ToList();
-                if (missingFromNarration.Count > 0 || extraInNarration.Count > 0)
+                if (missingFromNarration.Count > 0 || extraInNarration.Count > 0 || fallbackSceneIds.Count > 0)
                 {
                     var diagnostics = new
                     {
@@ -509,10 +519,13 @@ public sealed class PipelineOrchestrator
                         actualNarrationObjects,
                         missingFromNarration,
                         extraInNarration,
-                        mappedSceneIds = usedSceneIds.OrderBy(x => x).ToList()
+                        mappedSceneIds = usedSceneIds.OrderBy(x => x).ToList(),
+                        fallbackSceneIds
                     };
                     _logger.LogWarning("Narration/visual scene mismatch resolved using fallback mapping: {Diagnostics}", JsonSerializer.Serialize(diagnostics));
                 }
+
+                script = CopyScriptWithSceneSections(script, alignedSectionsBySceneId);
 
                 var sceneNarrationEntries = new List<(int Index, string Title, string TextPath, string AudioPath, string Text)>();
                 for (var i = 0; i < sceneSections.Count; i++)
@@ -1543,6 +1556,50 @@ public sealed class PipelineOrchestrator
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Equals("Night sky", StringComparison.OrdinalIgnoreCase) ? "Sky" : x)
             .ToList();
+
+    private static ScriptResult CopyScriptWithSceneSections(ScriptResult script, IReadOnlyDictionary<string, string> alignedSectionsBySceneId)
+        => new()
+        {
+            Prompt = script.Prompt,
+            Title = script.Title,
+            Description = script.Description,
+            ScriptBody = script.ScriptBody,
+            Tags = script.Tags,
+            EstimatedDurationSeconds = script.EstimatedDurationSeconds,
+            OptimizedMetadata = script.OptimizedMetadata,
+            SceneScriptSections = new SceneScriptSections
+            {
+                SectionsBySceneId = new Dictionary<string, string>(alignedSectionsBySceneId, StringComparer.OrdinalIgnoreCase)
+            }
+        };
+
+    private static string BuildFallbackSceneNarration(SceneObservationContext scene, string resolvedLanguage)
+    {
+        if (LocalizationResolver.IsHindi(resolvedLanguage))
+        {
+            return $"इस दृश्य में {scene.ObjectName} पर ध्यान दें। {FormatHindiObservationDetails(scene)}".Trim();
+        }
+
+        var title = string.IsNullOrWhiteSpace(scene.SceneTitle) ? scene.ObjectName : scene.SceneTitle;
+        var direction = string.IsNullOrWhiteSpace(scene.DirectionLabel) ? "the best visible part of the sky" : $"the {scene.DirectionLabel} sky";
+        var tool = string.IsNullOrWhiteSpace(scene.RecommendedTool) ? "your eyes" : scene.RecommendedTool;
+        var focus = string.IsNullOrWhiteSpace(scene.NarrationFocus)
+            ? "Take a moment to connect this view with the rest of tonight's observing plan."
+            : scene.NarrationFocus;
+
+        return $"{title}: look for {scene.ObjectName} toward {direction} using {tool}. {focus}";
+    }
+
+    private static string FormatHindiObservationDetails(SceneObservationContext scene)
+    {
+        var direction = string.IsNullOrWhiteSpace(scene.DirectionLabel) ? "आसमान में" : $"{scene.DirectionLabel} दिशा में";
+        var tool = string.IsNullOrWhiteSpace(scene.RecommendedTool) ? "अपनी आंखों" : scene.RecommendedTool;
+        var focus = string.IsNullOrWhiteSpace(scene.NarrationFocus)
+            ? "धीरे-धीरे देखें और इस दृश्य को आज रात की बाकी observing plan से जोड़ें।"
+            : scene.NarrationFocus;
+
+        return $"{direction} {tool} से देखें। {focus}";
+    }
 
     private static SceneObservationContextEntry BuildSceneObservationContextEntry(string sceneId, AstronomyEventModel? astronomyEvent) => new()
     {

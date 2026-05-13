@@ -97,6 +97,62 @@ public sealed class PipelineOrchestratorSceneNarrationTests
         }
     }
 
+
+    [Fact]
+    public async Task RunAsync_UsesFallbackSceneNarration_WhenScriptOmitsVisualScenes()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"pipeline-scenes-missing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var repository = new InMemoryPipelineRepository();
+            var render = new CapturingRenderService();
+            var stageExecutor = new PipelineStageExecutor(repository, NullLogger<PipelineStageExecutor>.Instance);
+            var orchestrator = new PipelineOrchestrator(
+                new FakeContextProvider(),
+                new FakeTopicRankingService(),
+                new MultiVisualProvider(),
+                new MissingSceneScriptService(),
+                new SceneSpeechService(),
+                render,
+                new NoOpBlobStorageService(),
+                new NoOpYouTubeService(),
+                new NoOpShortsService(),
+                new PassThroughMetadataOptimizationService(),
+                new StaticThumbnailGenerationService(),
+                new PassThroughSeoMetadataGeneratorService(),
+                repository,
+                Options.Create(new YouTubeOptions()),
+                Options.Create(new RenderingOptions { WorkingDirectory = tempRoot }),
+                Options.Create(new PublishingValidationOptions()),
+                NullLogger<PipelineOrchestrator>.Instance,
+                operationsOptions: Options.Create(new OperationsOptions()),
+                maintenanceOptions: Options.Create(new MaintenanceOptions { WorkingDirectory = tempRoot }),
+                pipelineStageExecutor: stageExecutor);
+
+            await orchestrator.RunAsync(new RunPipelineRequest(
+                new DateOnly(2026, 4, 30),
+                ContentType.DailySkyGuide,
+                "Seattle",
+                "America/Los_Angeles",
+                false), CancellationToken.None);
+
+            var runDir = Directory.GetDirectories(Path.Combine(tempRoot, "DailySkyGuide", "2026-04-30"), "*").Single();
+            var narrationTxt = await File.ReadAllTextAsync(Path.Combine(runDir, "narration.txt"));
+            Assert.Contains("[Scene 1: Sky Overview]", narrationTxt, StringComparison.Ordinal);
+            Assert.Contains("[Scene 2: Moon]", narrationTxt, StringComparison.Ordinal);
+            Assert.Contains("[Scene 3: Jupiter]", narrationTxt, StringComparison.Ordinal);
+            Assert.Contains("look for Jupiter", narrationTxt, StringComparison.Ordinal);
+            Assert.All(Enumerable.Range(1, 3), i => Assert.True(File.Exists(Path.Combine(runDir, $"scene-audio-{i:000}.mp3"))));
+            Assert.All(render.Manifest.Scenes, scene => Assert.False(string.IsNullOrWhiteSpace(scene.AudioPath)));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     private sealed class SceneSpeechService : ISpeechSynthesisService
     {
         public async Task<string> SynthesizeAsync(string script, string outputDirectory, CancellationToken cancellationToken)
@@ -128,6 +184,27 @@ public sealed class PipelineOrchestratorSceneNarrationTests
                         ["jupiter"] = "Jupiter text",
                         ["deepsky"] = "DeepSky text",
                         ["closing"] = "Closing text"
+                    }
+                }
+            });
+    }
+
+
+    private sealed class MissingSceneScriptService : IScriptGenerationService
+    {
+        public Task<ScriptResult> GenerateAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
+            => Task.FromResult(new ScriptResult
+            {
+                Title = "Sky",
+                Description = "Desc",
+                ScriptBody = "Body",
+                Tags = ["astronomy"],
+                EstimatedDurationSeconds = 45,
+                SceneScriptSections = new SceneScriptSections
+                {
+                    SectionsBySceneId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["overview"] = "Overview text"
                     }
                 }
             });
