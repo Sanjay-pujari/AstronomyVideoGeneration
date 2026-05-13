@@ -16,8 +16,9 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
     private readonly IObservationWindowService _observationWindowService;
     private readonly SkyfieldSidecarOptions _sidecarOptions;
     private readonly ObservationOptions _observationOptions;
+    private readonly ContentExpansionOptions _contentExpansionOptions;
 
-    public AstronomyContextProvider(NasaApodClient apodClient, NasaNeoWsClient neoWsClient, ISkyfieldSidecarClient skyfieldSidecarClient, IObservationWindowService observationWindowService, ILogger<AstronomyContextProvider> logger, IOptions<SkyfieldSidecarOptions> sidecarOptions, IOptions<ObservationOptions> observationOptions)
+    public AstronomyContextProvider(NasaApodClient apodClient, NasaNeoWsClient neoWsClient, ISkyfieldSidecarClient skyfieldSidecarClient, IObservationWindowService observationWindowService, ILogger<AstronomyContextProvider> logger, IOptions<SkyfieldSidecarOptions> sidecarOptions, IOptions<ObservationOptions> observationOptions, IOptions<ContentExpansionOptions>? contentExpansionOptions = null)
     {
         _apodClient = apodClient;
         _neoWsClient = neoWsClient;
@@ -27,6 +28,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         _loggerStatic = logger;
         _sidecarOptions = sidecarOptions.Value;
         _observationOptions = observationOptions.Value;
+        _contentExpansionOptions = contentExpansionOptions?.Value ?? new ContentExpansionOptions();
     }
 
     public async Task<AstronomyContext> BuildContextAsync(DateOnly date, ContentType contentType, string locationName, string timeZone, CancellationToken cancellationToken)
@@ -132,11 +134,14 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
         var selected = visible
             .Where(v => (v.AltitudeDegrees ?? 0) >= observationOptions.MinimumObjectAltitudeDegrees)
-            .OrderByDescending(v => (v.AltitudeDegrees ?? 0) >= observationOptions.PreferredObjectAltitudeDegrees)
-            .ThenByDescending(v => v.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase))
-            .ThenByDescending(v => v.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase))
-            .ThenByDescending(v => v.AltitudeDegrees ?? 0)
-            .Take(3)
+            .Where(IsAllowedByContentExpansion)
+            .Select(v => new { Visibility = v, Score = ScoreVisibility(v, observationOptions) })
+            .Where(x => x.Score >= (_contentExpansionOptions.Enabled ? _contentExpansionOptions.MinimumVisibilityScore : 0d))
+            .OrderByDescending(x => ResolveObjectPriority(x.Visibility.ObjectType, x.Visibility.ObjectName))
+            .ThenByDescending(x => x.Score)
+            .Select(x => x.Visibility)
+            .DistinctBy(v => v.ObjectName, StringComparer.OrdinalIgnoreCase)
+            .Take(_contentExpansionOptions.Enabled ? _contentExpansionOptions.MaxObjectsPerGuide : 3)
             .ToList();
         if (selected.Count == 0)
         {
@@ -262,7 +267,9 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
         context.SceneObservationContexts = scenes;
 
-        context.VisualIdeas.Add(new VisualIdeaModel { Title = "selected-visible-objects", Description = Serialize(selected.Select(v => new { v.ObjectName, v.BestLocalTime, v.BestUtcTime, v.DirectionLabel, v.AltitudeDegrees, v.IsVisible, v.VisibilityReason })) });
+        var skipped = visible.Where(v => selected.All(s => !s.ObjectName.Equals(v.ObjectName, StringComparison.OrdinalIgnoreCase))).ToList();
+        context.VisualIdeas.Add(new VisualIdeaModel { Title = "selected-visible-objects", Description = Serialize(selected.Select(v => new { v.ObjectName, v.ObjectType, v.BestLocalTime, v.BestUtcTime, v.DirectionLabel, v.AltitudeDegrees, v.IsVisible, v.VisibilityReason })) });
+        context.VisualIdeas.Add(new VisualIdeaModel { Title = "content-expansion-selection", Description = Serialize(new { selectedObjects = selected.Select(v => v.ObjectName), skippedObjects = skipped.Select(v => new { v.ObjectName, reason = "Lower rank, duplicate, below configured visibility score, or beyond max object count" }), minObjects = _contentExpansionOptions.MinObjectsPerGuide, maxObjects = _contentExpansionOptions.MaxObjectsPerGuide, enabled = _contentExpansionOptions.Enabled }) });
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "scene-observation-context", Description = Serialize(scenes) });
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "narration-context", Description = Serialize(scenes.Select(s => new { s.SceneId, s.ObjectName, s.LocalObservationTime, s.UtcObservationTime, s.DirectionLabel, s.AltitudeDegrees, s.IsVisible, s.VisibilityReason })) });
         context.VisualIdeas.Add(new VisualIdeaModel
@@ -279,6 +286,44 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         return true;
     }
 
+
+    private bool IsAllowedByContentExpansion(SkyfieldObjectVisibility visibility)
+    {
+        if (!_contentExpansionOptions.Enabled)
+        {
+            return true;
+        }
+
+        var type = visibility.ObjectType ?? string.Empty;
+        if (type.Equals("Moon", StringComparison.OrdinalIgnoreCase)) return _contentExpansionOptions.AllowMoonSegment;
+        if (type.Contains("Constellation", StringComparison.OrdinalIgnoreCase)) return _contentExpansionOptions.AllowConstellations;
+        if (type.Contains("Star", StringComparison.OrdinalIgnoreCase)) return _contentExpansionOptions.AllowBrightStars;
+        if (type.Contains("Deep", StringComparison.OrdinalIgnoreCase) || type.Contains("Cluster", StringComparison.OrdinalIgnoreCase) || type.Contains("Galaxy", StringComparison.OrdinalIgnoreCase) || type.Contains("Nebula", StringComparison.OrdinalIgnoreCase)) return _contentExpansionOptions.AllowDeepSkyObjects;
+        return true;
+    }
+
+    private double ScoreVisibility(SkyfieldObjectVisibility visibility, ObservationOptions observationOptions)
+    {
+        var altitude = Math.Max(0d, visibility.AltitudeDegrees ?? 0d);
+        var altitudeScore = Math.Clamp(altitude / 90d, 0d, 1d);
+        var typeScore = ResolveObjectPriority(visibility.ObjectType, visibility.ObjectName) / 100d;
+        var preferredAltitudeBoost = altitude >= observationOptions.PreferredObjectAltitudeDegrees ? 0.15d : 0d;
+        var beginnerBoost = visibility.ObjectType.Equals("Moon", StringComparison.OrdinalIgnoreCase) || visibility.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase) ? 0.1d : 0d;
+        return Math.Clamp((altitudeScore * 0.45d) + (typeScore * 0.35d) + preferredAltitudeBoost + beginnerBoost, 0d, 1d);
+    }
+
+    private static int ResolveObjectPriority(string? objectType, string? objectName)
+    {
+        var type = objectType ?? string.Empty;
+        var name = objectName ?? string.Empty;
+        if (type.Contains("Event", StringComparison.OrdinalIgnoreCase) || name.Contains("event", StringComparison.OrdinalIgnoreCase)) return 100;
+        if (type.Equals("Moon", StringComparison.OrdinalIgnoreCase)) return 90;
+        if (type.Equals("Planet", StringComparison.OrdinalIgnoreCase)) return 80;
+        if (type.Contains("Constellation", StringComparison.OrdinalIgnoreCase)) return 70;
+        if (type.Contains("Star", StringComparison.OrdinalIgnoreCase)) return 60;
+        if (type.Contains("Deep", StringComparison.OrdinalIgnoreCase) || type.Contains("Cluster", StringComparison.OrdinalIgnoreCase) || type.Contains("Galaxy", StringComparison.OrdinalIgnoreCase) || type.Contains("Nebula", StringComparison.OrdinalIgnoreCase)) return 50;
+        return 40;
+    }
 
     private static SkyfieldVisibilitySample? SelectBestSample(IReadOnlyCollection<SkyfieldVisibilitySample>? samples, double minimumAltitudeDegrees)
     {

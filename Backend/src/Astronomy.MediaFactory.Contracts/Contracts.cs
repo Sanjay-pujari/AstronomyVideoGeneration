@@ -108,6 +108,35 @@ public sealed class TopicSelectionOptions
 }
 
 
+
+
+public sealed class ContentDurationOptions
+{
+    public const string SectionName = "ContentDuration";
+    public int DailySkyGuideMinutes { get; set; } = 6;
+    public int SpecialEventGuideMinutes { get; set; } = 8;
+    public int YouTubeShortSeconds { get; set; } = 50;
+    public int InstagramReelSeconds { get; set; } = 40;
+    public int FacebookReelSeconds { get; set; } = 50;
+    public bool AllowDynamicOptimization { get; set; } = true;
+}
+
+public sealed class ContentExpansionOptions
+{
+    public const string SectionName = "ContentExpansion";
+    public bool Enabled { get; set; } = true;
+    public int TargetDailyGuideMinutes { get; set; } = 6;
+    public int TargetSpecialEventMinutes { get; set; } = 8;
+    public int MinObjectsPerGuide { get; set; } = 3;
+    public int MaxObjectsPerGuide { get; set; } = 6;
+    public bool AllowMoonSegment { get; set; } = true;
+    public bool AllowConstellations { get; set; } = true;
+    public bool AllowBrightStars { get; set; } = true;
+    public bool AllowDeepSkyObjects { get; set; } = true;
+    public bool AllowObservationTips { get; set; } = true;
+    public double MinimumVisibilityScore { get; set; } = 0.55;
+}
+
 public sealed class LocalizationOptions
 {
     public const string SectionName = "Localization";

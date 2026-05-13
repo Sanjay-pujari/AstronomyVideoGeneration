@@ -66,16 +66,11 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         var hasSegmentedAudio = plan.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.AudioPath) && File.Exists(s.AudioPath));
-        if (_options.UseSegmentedNarration && hasSegmentedAudio)
+        if (hasSegmentedAudio)
         {
             await RenderFromSegmentsAsync(manifest, plan, outputDirectory, segmentConcatPath, cancellationToken);
             await WriteShortDiagnosticsIfNeededAsync(manifest, outputPath, outputDirectory, cancellationToken);
             return outputPath;
-        }
-
-        if (!_options.UseSegmentedNarration && hasSegmentedAudio)
-        {
-            _logger.LogInformation("Bypassing segmented narration render flow because {Option}=false.", nameof(_options.UseSegmentedNarration));
         }
 
         try
@@ -109,13 +104,14 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     {
         var segmentClipPaths = new List<string>();
         var speechDiagnostics = new List<SpeechSpeedDiagnostic>();
+        var syncReports = new List<SegmentSyncReportEntry>();
         for (var i = 0; i < plan.Scenes.Count; i++)
         {
             var scene = plan.Scenes[i];
             var sceneAudioPath = scene.AudioPath;
             if (string.IsNullOrWhiteSpace(sceneAudioPath) || !File.Exists(sceneAudioPath))
             {
-                continue;
+                throw new InvalidOperationException($"Segmented narration requires audio for every scene; missing audio for scene #{i + 1} ({scene.SceneId ?? scene.Caption}).");
             }
 
             var segmentOutputPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
@@ -129,16 +125,24 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var (outputWidth, outputHeight) = GetOutputSize(manifest);
             var fps = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate);
             var segmentFilter = IsShortManifest(manifest) ? BuildExactOutputFilter(outputWidth, outputHeight) : $"scale={outputWidth}:{outputHeight}";
-            var cappedDurationSeconds = IsShortManifest(manifest) ? Math.Min(audioDurationSeconds, YouTubeShortsValidation.MaximumDurationSeconds) : audioDurationSeconds;
-            var durationArgument = cappedDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            var lockedDurationSeconds = audioDurationSeconds;
+            var durationArgument = lockedDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             var segmentArguments = $"-y -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -i \"{NormalizePath(sceneAudioPath)}\" -vf \"{segmentFilter}\" -t {durationArgument} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} -c:a aac -f mp4 \"{NormalizePath(segmentOutputPath)}\"";
-            speechDiagnostics.Add(CreateSpeechSpeedDiagnostic(scene, i, audioDurationSeconds, cappedDurationSeconds));
+            speechDiagnostics.Add(CreateSpeechSpeedDiagnostic(scene, i, audioDurationSeconds, lockedDurationSeconds));
             var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
             if (segmentResult.ExitCode != 0 || !File.Exists(segmentOutputPath))
             {
                 throw new InvalidOperationException($"FFmpeg segmented clip generation failed for scene #{i + 1}.");
             }
 
+            var visualDurationSeconds = await ProbeMediaDurationSecondsAsync(segmentOutputPath, cancellationToken);
+            if (visualDurationSeconds <= 0)
+            {
+                visualDurationSeconds = lockedDurationSeconds;
+            }
+
+            ValidateSegmentSynchronization(scene, i, audioDurationSeconds, visualDurationSeconds);
+            syncReports.Add(CreateSegmentSyncReportEntry(scene, i, audioDurationSeconds, visualDurationSeconds));
             segmentClipPaths.Add(segmentOutputPath);
         }
 
@@ -150,10 +154,11 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var concatBody = string.Join(Environment.NewLine, segmentClipPaths.Select(path => $"file '{path.Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
         await WriteSpeechSpeedDiagnosticsAsync(outputDirectory, speechDiagnostics, cancellationToken);
+        await WriteSegmentSyncReportAsync(outputDirectory, syncReports, cancellationToken);
 
         var concatArguments = IsShortManifest(manifest)
-            ? $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -t {YouTubeShortsValidation.MaximumDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {GetShortSafeFps()} -c:a aac -f mp4 \"{NormalizePath(manifest.OutputPath)}\""
-            : $"-y -f concat -safe 0 -i \"{segmentConcatPath}\" -c copy \"{manifest.OutputPath}\"";
+            ? $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {GetShortSafeFps()} -c:a aac -f mp4 \"{NormalizePath(manifest.OutputPath)}\""
+            : $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(manifest.OutputPath)}\"";
         var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
         if (concatResult.ExitCode != 0 || !File.Exists(manifest.OutputPath))
         {
@@ -183,6 +188,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var segmentDiagnostics = new List<string>();
         var motionDiagnostics = new List<string>();
         var speechDiagnostics = new List<SpeechSpeedDiagnostic>();
+        var syncReports = new List<SegmentSyncReportEntry>();
         var sceneCount = plan.Scenes.Count;
         var transitionDurationSeconds = GetTransitionDurationSeconds();
         var transitionsEnabled = IsXfadeEnabled(sceneCount, transitionDurationSeconds);
@@ -311,6 +317,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             segmentPaths.Add(segmentPath);
             segmentDurationsSeconds.Add(finalSegmentDurationSeconds);
             speechDiagnostics.Add(CreateSpeechSpeedDiagnostic(scene, i, duration, finalSegmentDurationSeconds));
+            ValidateSegmentSynchronization(scene, i, duration, finalSegmentDurationSeconds);
+            syncReports.Add(CreateSegmentSyncReportEntry(scene, i, duration, finalSegmentDurationSeconds));
         }
 
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
@@ -335,14 +343,14 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             throw new InvalidOperationException($"{warningMessage} Refusing final mux to avoid trimmed/missing scenes.");
         }
 
-        var shortDurationLimit = IsShortManifest(manifest) ? $" -t {YouTubeShortsValidation.MaximumDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : string.Empty;
         var finalArguments = IsShortManifest(manifest)
-            ? $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -shortest{shortDurationLimit} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {GetShortSafeFps()} -c:a aac -f mp4 \"{NormalizePath(outputPath)}\""
-            : $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -shortest -c:v copy -c:a aac \"{NormalizePath(outputPath)}\"";
+            ? $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {GetShortSafeFps()} -c:a aac -f mp4 \"{NormalizePath(outputPath)}\""
+            : $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac \"{NormalizePath(outputPath)}\"";
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics), cancellationToken);
         await WriteSpeechSpeedDiagnosticsAsync(outputDirectory, speechDiagnostics, cancellationToken);
+        await WriteSegmentSyncReportAsync(outputDirectory, syncReports, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "video-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "directional-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
@@ -356,6 +364,44 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         return (finalCommand, finalResult);
     }
 
+
+    private Task WriteSegmentSyncReportAsync(string outputDirectory, IReadOnlyCollection<SegmentSyncReportEntry> diagnostics, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(diagnostics, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        return _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "segment-sync-report.json"), json, cancellationToken);
+    }
+
+    private static void ValidateSegmentSynchronization(RenderPlanScene scene, int index, double audioDurationSeconds, double visualDurationSeconds)
+    {
+        var difference = Math.Abs(audioDurationSeconds - visualDurationSeconds);
+        if (difference > 0.25d)
+        {
+            throw new InvalidOperationException($"Segment synchronization failed for scene #{index + 1} ({scene.SceneId ?? scene.Caption}): audio={audioDurationSeconds:F3}s visual={visualDurationSeconds:F3}s difference={difference:F3}s.");
+        }
+    }
+
+    private static SegmentSyncReportEntry CreateSegmentSyncReportEntry(RenderPlanScene scene, int index, double audioDurationSeconds, double visualDurationSeconds)
+    {
+        var narrationText = string.IsNullOrWhiteSpace(scene.NarrationText) ? scene.Caption : scene.NarrationText!;
+        var wordCount = CountWords(narrationText);
+        var language = string.IsNullOrWhiteSpace(scene.NarrationLanguage) ? InferLanguage(narrationText) : scene.NarrationLanguage!;
+        var difference = Math.Abs(audioDurationSeconds - visualDurationSeconds);
+        return new SegmentSyncReportEntry(
+            SceneId: string.IsNullOrWhiteSpace(scene.SceneId) ? $"scene-{index + 1:000}" : scene.SceneId!,
+            SceneType: string.IsNullOrWhiteSpace(scene.SceneType) ? scene.Segment : scene.SceneType!,
+            NarrationLanguage: language,
+            AudioDurationSeconds: Math.Round(audioDurationSeconds, 3, MidpointRounding.AwayFromZero),
+            VisualDurationSeconds: Math.Round(visualDurationSeconds, 3, MidpointRounding.AwayFromZero),
+            DurationDifference: Math.Round(difference, 3, MidpointRounding.AwayFromZero),
+            SynchronizationStatus: difference <= 0.25d ? "Synchronized" : "Mismatch",
+            NarrationWords: wordCount,
+            EstimatedWordsPerMinute: Math.Round(CalculateWordsPerMinute(narrationText, audioDurationSeconds), 1, MidpointRounding.AwayFromZero),
+            ObjectName: scene.ObjectName ?? string.Empty,
+            SegmentIndex: index + 1);
+    }
+
+    private static int CountWords(string text)
+        => text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
     private Task WriteSpeechSpeedDiagnosticsAsync(string outputDirectory, IReadOnlyCollection<SpeechSpeedDiagnostic> diagnostics, CancellationToken cancellationToken)
     {
@@ -397,7 +443,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             return 0d;
         }
 
-        var wordCount = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+        var wordCount = CountWords(text);
         return wordCount * 60d / durationSeconds;
     }
 
@@ -625,3 +671,5 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }.Where(static line => !string.IsNullOrEmpty(line)));
     }
 }
+
+file sealed record SegmentSyncReportEntry(string SceneId, string SceneType, string NarrationLanguage, double AudioDurationSeconds, double VisualDurationSeconds, double DurationDifference, string SynchronizationStatus, int NarrationWords, double EstimatedWordsPerMinute, string ObjectName, int SegmentIndex);

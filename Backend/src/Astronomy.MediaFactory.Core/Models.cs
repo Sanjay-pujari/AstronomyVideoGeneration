@@ -212,6 +212,10 @@ public sealed class RenderScene
     public string? ObjectName { get; set; }
     public string? ObjectType { get; set; }
     public string? SceneType { get; set; }
+    public string? SceneId { get; set; }
+    public int? SegmentIndex { get; set; }
+    public string? NarrationLanguage { get; set; }
+    public string? NarrationText { get; set; }
     public string? DirectionLabel { get; set; }
     public double? AzimuthDegrees { get; set; }
 }
