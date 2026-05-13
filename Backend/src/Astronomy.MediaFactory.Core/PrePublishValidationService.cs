@@ -31,8 +31,14 @@ public sealed class PrePublishValidationService : IPrePublishValidationService
         var missing = request.VisualPaths.Where(p => !File.Exists(p)).ToList();
         if (missing.Count > 0) report.Errors.Add($"Missing screenshot files: {string.Join(", ", missing)}");
 
-        var expected = request.Context.SceneObservationContexts.Select(x => x.ObjectName).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase);
-        var actual = request.Script.SceneScriptSections?.SectionsBySceneId.Keys.Select(id => request.Context.SceneObservationContexts.FirstOrDefault(s => s.SceneId.Equals(id, StringComparison.OrdinalIgnoreCase))?.ObjectName ?? id).Distinct(StringComparer.OrdinalIgnoreCase) ?? [];
+        var expected = request.Context.SceneObservationContexts
+            .Take(Math.Min(request.Context.SceneObservationContexts.Count, request.VisualPaths.Count))
+            .Select(x => x.ObjectName)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var actual = request.Script.SceneScriptSections?.SectionsBySceneId.Keys
+            .Select(id => request.Context.SceneObservationContexts.FirstOrDefault(s => s.SceneId.Equals(id, StringComparison.OrdinalIgnoreCase))?.ObjectName ?? id)
+            .Distinct(StringComparer.OrdinalIgnoreCase) ?? [];
         if (!expected.SequenceEqual(actual, StringComparer.OrdinalIgnoreCase)) report.Errors.Add("Narration objects do not match visual objects.");
 
         var observationTimes = request.Context.SceneObservationContexts
