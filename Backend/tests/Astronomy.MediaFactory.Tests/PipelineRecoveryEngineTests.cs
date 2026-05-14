@@ -125,6 +125,89 @@ public sealed class PipelineRecoveryEngineTests
         Assert.Contains(status.Stages, s => s.StageName == PipelineStageNames.FacebookReelPublished && s.Status == PersistentStageStatuses.Failed);
     }
 
+
+    [Fact]
+    public async Task RetryPublish_InvalidYouTubeToken_MarksYouTubeStagesFailed()
+    {
+        var repo = new MemoryPipelineRepository();
+        var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.YouTubeLongPublished, Status = PersistentStageStatuses.Failed, LastError = "invalid_grant", AttemptCount = 1 }, CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.YouTubeShortPublished, Status = PersistentStageStatuses.Failed, LastError = "invalid_grant", AttemptCount = 1 }, CancellationToken.None);
+        var publisher = new RecordingContentPublishService(run.OutputFolder!);
+        var service = new PipelineRecoveryService(repo, FailingYouTubeTokenHealth(), publisher);
+
+        var status = await service.RetryPublishAsync(run.Id, "youtube", CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.CompletedWithPublishErrors, status!.RunStatus);
+        Assert.Equal("Succeeded", status.GenerationStatus);
+        Assert.Equal("Failed", status.PublishStatus);
+        Assert.Equal($"Re-run /api/youtubeoauth/start, then retry /api/pipeline/retry-publish/{run.Id}?platform=youtube", status.NextAction);
+        Assert.Contains(status.FailedStages, s => s.StageName == PipelineStageNames.YouTubeLongPublished && s.Error!.Contains("Re-run /api/youtubeoauth/start", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(status.FailedStages, s => s.StageName == PipelineStageNames.YouTubeShortPublished && s.Error!.Contains("Re-run /api/youtubeoauth/start", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(status.Stages, s => s.StageName == PipelineStageNames.YouTubeLongPublished && s.Status == PersistentStageStatuses.Failed && s.AttemptCount == 2 && s.CompletedUtc is not null);
+        Assert.Contains(status.Stages, s => s.StageName == PipelineStageNames.YouTubeShortPublished && s.Status == PersistentStageStatuses.Failed && s.AttemptCount == 2 && s.CompletedUtc is not null);
+        Assert.Empty(publisher.RequestedAssets);
+    }
+
+    [Fact]
+    public async Task RetryPublish_InvalidYouTubeToken_LeavesNoYouTubeStagePending()
+    {
+        var repo = new MemoryPipelineRepository();
+        var run = await repo.CreateAsync(NewRun(), CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.YouTubeLongPublished, Status = PersistentStageStatuses.Pending }, CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.YouTubeShortPublished, Status = PersistentStageStatuses.Pending }, CancellationToken.None);
+        var service = new PipelineRecoveryService(repo, FailingYouTubeTokenHealth(), new RecordingContentPublishService(run.OutputFolder!));
+
+        var status = await service.RetryPublishAsync(run.Id, "youtube", CancellationToken.None);
+
+        Assert.DoesNotContain(status!.Stages.Where(s => s.StageName == PipelineStageNames.YouTubeLongPublished || s.StageName == PipelineStageNames.YouTubeShortPublished), s => s.Status == PersistentStageStatuses.Pending);
+    }
+
+    [Fact]
+    public async Task RetryPublish_FixedYouTubeToken_UploadsExistingLongAndShortVideos()
+    {
+        var repo = new MemoryPipelineRepository();
+        var pipelineRun = NewRun();
+        pipelineRun.Status = PipelineRunStatus.CompletedWithPublishErrors;
+        var run = await repo.CreateAsync(pipelineRun, CancellationToken.None);
+        await WriteRetryPublishArtifactsAsync(run.OutputFolder!);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.YouTubeLongPublished, Status = PersistentStageStatuses.Failed, LastError = "invalid_grant" }, CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.YouTubeShortPublished, Status = PersistentStageStatuses.Failed, LastError = "invalid_grant" }, CancellationToken.None);
+        var publisher = new RecordingContentPublishService(run.OutputFolder!);
+        var service = new PipelineRecoveryService(repo, PassingYouTubeTokenHealth(), publisher);
+
+        var status = await service.RetryPublishAsync(run.Id, "youtube", CancellationToken.None);
+
+        Assert.Equal(["long", "short"], publisher.RequestedAssets);
+        Assert.Contains(status!.Stages, s => s.StageName == PipelineStageNames.YouTubeLongPublished && s.Status == PersistentStageStatuses.Succeeded);
+        Assert.Contains(status.Stages, s => s.StageName == PipelineStageNames.YouTubeShortPublished && s.Status == PersistentStageStatuses.Succeeded);
+        Assert.Equal(PipelineRunStatus.Succeeded, status.RunStatus);
+    }
+
+    [Fact]
+    public async Task RetryPublish_FixedYouTubeToken_DoesNotRerunGenerationOrMetaStages()
+    {
+        var repo = new MemoryPipelineRepository();
+        var pipelineRun = NewRun();
+        pipelineRun.Status = PipelineRunStatus.CompletedWithPublishErrors;
+        var run = await repo.CreateAsync(pipelineRun, CancellationToken.None);
+        await WriteRetryPublishArtifactsAsync(run.OutputFolder!);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.RenderingCompleted, Status = PersistentStageStatuses.Succeeded, AttemptCount = 1, OutputPath = Path.Combine(run.OutputFolder!, "final-video.mp4") }, CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.FacebookReelPublished, Status = PersistentStageStatuses.Succeeded, AttemptCount = 1 }, CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.InstagramReelPublished, Status = PersistentStageStatuses.Succeeded, AttemptCount = 1 }, CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.YouTubeLongPublished, Status = PersistentStageStatuses.Failed }, CancellationToken.None);
+        await repo.AddStageExecutionAsync(new PipelineStageExecution { PipelineRunId = run.Id, StageName = PipelineStageNames.YouTubeShortPublished, Status = PersistentStageStatuses.Failed }, CancellationToken.None);
+        var publisher = new RecordingContentPublishService(run.OutputFolder!);
+        var service = new PipelineRecoveryService(repo, PassingYouTubeTokenHealth(), publisher);
+
+        await service.RetryPublishAsync(run.Id, "youtube", CancellationToken.None);
+
+        Assert.Equal(["long", "short"], publisher.RequestedAssets);
+        Assert.Contains(repo.Stages, s => s.StageName == PipelineStageNames.RenderingCompleted && s.Status == PersistentStageStatuses.Succeeded && s.AttemptCount == 1);
+        Assert.Contains(repo.Stages, s => s.StageName == PipelineStageNames.FacebookReelPublished && s.Status == PersistentStageStatuses.Succeeded && s.AttemptCount == 1);
+        Assert.Contains(repo.Stages, s => s.StageName == PipelineStageNames.InstagramReelPublished && s.Status == PersistentStageStatuses.Succeeded && s.AttemptCount == 1);
+    }
+
     [Fact]
     public async Task PublishFailureStatus_IsReturnedAsCompletedWithPublishErrors()
     {
@@ -340,6 +423,26 @@ public sealed class PipelineRecoveryEngineTests
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(value));
     }
 
+
+    private static async Task WriteRetryPublishArtifactsAsync(string outputFolder)
+    {
+        await File.WriteAllTextAsync(Path.Combine(outputFolder, "final-video.mp4"), "long-video");
+        Directory.CreateDirectory(Path.Combine(outputFolder, "shorts"));
+        await File.WriteAllTextAsync(Path.Combine(outputFolder, "shorts", "short-video.mp4"), "short-video");
+    }
+
+    private static FixedTokenHealthService PassingYouTubeTokenHealth()
+        => new(new TokenHealthResult { Platform = "YouTube", IsConfigured = true, IsValid = true });
+
+    private static FixedTokenHealthService FailingYouTubeTokenHealth()
+        => new(new TokenHealthResult
+        {
+            Platform = "YouTube",
+            IsConfigured = true,
+            IsValid = false,
+            Error = "YouTube refresh token is invalid/revoked. Re-run /api/youtubeoauth/start."
+        });
+
     private static PipelineRun NewRun()
     {
         var output = Path.Combine(Path.GetTempPath(), "pipeline-recovery-tests", Guid.NewGuid().ToString("N"));
@@ -353,6 +456,73 @@ public sealed class PipelineRecoveryEngineTests
             OutputFolder = output,
             ResumeSupported = true
         };
+    }
+
+
+    private sealed class FixedTokenHealthService : ITokenHealthService
+    {
+        private readonly TokenHealthResult _youTubeResult;
+
+        public FixedTokenHealthService(TokenHealthResult youTubeResult)
+        {
+            _youTubeResult = youTubeResult;
+        }
+
+        public Task<IReadOnlyList<TokenHealthResult>> CheckAllAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<TokenHealthResult>>([_youTubeResult]);
+
+        public Task<TokenHealthResult> CheckYouTubeAsync(CancellationToken cancellationToken)
+            => Task.FromResult(_youTubeResult);
+
+        public Task<TokenHealthResult> CheckMetaAsync(CancellationToken cancellationToken)
+            => Task.FromResult(new TokenHealthResult { Platform = "Meta", IsConfigured = true, IsValid = true });
+    }
+
+    private sealed class RecordingContentPublishService : IContentPublishService
+    {
+        private readonly string _outputFolder;
+
+        public RecordingContentPublishService(string outputFolder)
+        {
+            _outputFolder = outputFolder;
+        }
+
+        public List<string> RequestedAssets { get; } = [];
+
+        public Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+            => PublishForPipelineRunAsync(pipelineRunId, "all", cancellationToken);
+
+        public Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset, CancellationToken cancellationToken)
+        {
+            RequestedAssets.Add(asset);
+            var isShort = asset.Equals("short", StringComparison.OrdinalIgnoreCase);
+            var expectedPath = isShort
+                ? Path.Combine(_outputFolder, "shorts", "short-video.mp4")
+                : Path.Combine(_outputFolder, "final-video.mp4");
+
+            if (!File.Exists(expectedPath))
+            {
+                return Task.FromResult<IReadOnlyList<PublishResult>>([new PublishResult
+                {
+                    Success = false,
+                    Platform = "YouTube",
+                    AssetType = isShort ? "ShortVideo" : "LongVideo",
+                    IsShort = isShort,
+                    Mode = "Public",
+                    Error = $"Missing expected asset {expectedPath}"
+                }]);
+            }
+
+            return Task.FromResult<IReadOnlyList<PublishResult>>([new PublishResult
+            {
+                Success = true,
+                Platform = "YouTube",
+                AssetType = isShort ? "ShortVideo" : "LongVideo",
+                IsShort = isShort,
+                Mode = "Public",
+                VideoId = isShort ? "yt-short" : "yt-long"
+            }]);
+        }
     }
 
     private sealed class MemoryPipelineRepository : IPipelineRepository

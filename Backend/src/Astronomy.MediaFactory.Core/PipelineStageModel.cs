@@ -124,6 +124,8 @@ public sealed record PipelineStageStatusDto(
     string? OutputPath,
     string? DiagnosticPath);
 
+public sealed record PipelineFailedStageResponse(string StageName, string? Error);
+
 public sealed record PipelineStatusResponse(
     Guid RunId,
     PipelineRunStatus RunStatus,
@@ -132,4 +134,51 @@ public sealed record PipelineStatusResponse(
     string? FailedStage,
     string? LastError,
     string? OutputFolder,
-    IReadOnlyCollection<string> Warnings);
+    IReadOnlyCollection<string> Warnings)
+{
+    private static readonly string[] PublishStages =
+    [
+        PipelineStageNames.YouTubeLongPublished,
+        PipelineStageNames.YouTubeShortPublished,
+        PipelineStageNames.FacebookReelPublished,
+        PipelineStageNames.InstagramReelPublished
+    ];
+
+    public string GenerationStatus => RunStatus is PipelineRunStatus.Succeeded or PipelineRunStatus.CompletedWithPublishErrors or PipelineRunStatus.PublishFailed
+        ? "Succeeded"
+        : RunStatus.ToString();
+
+    public string PublishStatus
+    {
+        get
+        {
+            var publishStages = Stages.Where(s => PublishStages.Contains(s.StageName, StringComparer.OrdinalIgnoreCase)).ToArray();
+            if (publishStages.Any(s => s.Status == PersistentStageStatuses.Failed))
+                return "Failed";
+            if (publishStages.Any(s => s.Status == PersistentStageStatuses.Pending))
+                return "Pending";
+            if (publishStages.Any(s => s.Status == PersistentStageStatuses.Succeeded))
+                return "Succeeded";
+            return "Skipped";
+        }
+    }
+
+    public IReadOnlyCollection<PipelineFailedStageResponse> FailedStages => Stages
+        .Where(s => s.Status == PersistentStageStatuses.Failed)
+        .Select(s => new PipelineFailedStageResponse(s.StageName, s.LastError))
+        .ToArray();
+
+    public string? NextAction => FailedStages.Any(s => IsYouTubePublishStage(s.StageName) && IsTokenHealthError(s.Error))
+        ? $"Re-run /api/youtubeoauth/start, then retry /api/pipeline/retry-publish/{RunId}?platform=youtube"
+        : null;
+
+    private static bool IsYouTubePublishStage(string stageName)
+        => stageName.Equals(PipelineStageNames.YouTubeLongPublished, StringComparison.OrdinalIgnoreCase)
+            || stageName.Equals(PipelineStageNames.YouTubeShortPublished, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTokenHealthError(string? error)
+        => !string.IsNullOrWhiteSpace(error)
+            && (error.Contains("token health", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("refresh token", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("/api/youtubeoauth/start", StringComparison.OrdinalIgnoreCase));
+}
