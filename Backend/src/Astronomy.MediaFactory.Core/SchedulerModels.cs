@@ -28,7 +28,8 @@ public sealed record SchedulerRunQueueItem(
     OptimizationPlan? OptimizationPlan = null,
     RunPipelineRequest? OriginalRequest = null,
     AIOptimizationAppliedProfile? AIOptimizationProfile = null,
-    SchedulerEventPlanResponse? EventPlan = null);
+    SchedulerEventPlanResponse? EventPlan = null,
+    Guid? PipelineRunId = null);
 
 public sealed record SchedulerRunResult(
     bool Accepted,
@@ -36,7 +37,9 @@ public sealed record SchedulerRunResult(
     string? Reason,
     Guid? PipelineRunId,
     DateOnly TargetDate,
-    DateTimeOffset PlannedRunUtc);
+    DateTimeOffset PlannedRunUtc,
+    string? RegionId = null,
+    string? ScheduleName = null);
 
 public sealed record SchedulerStatusResponse(
     bool Enabled,
