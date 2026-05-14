@@ -31,6 +31,27 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-publish-payload.json")));
     }
 
+
+    [Fact]
+    public async Task PublishForPipelineRun_UsesPersistedOutputFolder_WhenRegionSegmentIsPresent()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true);
+        var originalOutput = workspace.OutputDirectory(run);
+        run.RegionId = "india-pune";
+        run.OutputFolder = PipelineOrchestrator.BuildOutputDirectory(workspace.Root, run.ContentType, run.RunDate, run.RegionId, run.LocationName, run.Id);
+        Directory.CreateDirectory(Path.GetDirectoryName(run.OutputFolder!)!);
+        Directory.Move(originalOutput, run.OutputFolder!);
+        var api = new TrackingYouTubeApiClient();
+        var service = CreateContentService(workspace, repository, api, new PublishingOptions { Enabled = true, Mode = "DryRun", RequirePrePublishValidation = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.False(api.UploadCalled);
+        Assert.True(File.Exists(Path.Combine(run.OutputFolder!, "youtube-publish-payload.json")));
+    }
+
     [Fact]
     public async Task MissingRefreshToken_FailsClearly()
     {
@@ -500,7 +521,7 @@ public sealed class YouTubePublishingIntegrationTests
     {
         public string Root { get; } = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         public void Dispose() { if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true); }
-        public string OutputDirectory(PipelineRun run) => Path.Combine(Root, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
+        public string OutputDirectory(PipelineRun run) => run.OutputFolder ?? Path.Combine(Root, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
 
         public InMemoryRepository CreateRepositoryWithRun(out PipelineRun run, bool passedValidation, bool createThumbnail = true, bool createShort = false, bool largeThumbnail = false, bool createRootMetadata = true)
         {

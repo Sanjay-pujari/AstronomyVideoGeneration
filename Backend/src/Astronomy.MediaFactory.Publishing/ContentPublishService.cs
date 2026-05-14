@@ -412,7 +412,26 @@ public sealed class ContentPublishService : IContentPublishService
     }
 
     private string ResolveOutputDirectory(PipelineRun run)
-        => Path.Combine(_maintenanceOptions.WorkingDirectory, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
+    {
+        if (!string.IsNullOrWhiteSpace(run.OutputFolder))
+        {
+            return run.OutputFolder;
+        }
+
+        var regionAwarePath = PipelineOrchestrator.BuildOutputDirectory(
+            _maintenanceOptions.WorkingDirectory,
+            run.ContentType,
+            run.RunDate,
+            run.RegionId,
+            run.LocationName,
+            run.Id);
+        if (Directory.Exists(regionAwarePath))
+        {
+            return regionAwarePath;
+        }
+
+        return Path.Combine(_maintenanceOptions.WorkingDirectory, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
+    }
 
     private string ResolvePrivacyStatus(string mode)
         => mode == "Public"

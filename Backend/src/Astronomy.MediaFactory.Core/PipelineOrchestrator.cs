@@ -791,9 +791,14 @@ public sealed class PipelineOrchestrator
                 }
                 else if (youtubePublishResult is not null)
                 {
-                    publishStatus = "PublishFailed";
-                    run.FailureReason = $"Publishing failed: {youtubePublishResult.Error}";
-                    await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, PersistentStageStatuses.Failed, reason: youtubePublishResult.Error ?? "YouTube publishing failed.");
+                    var publishError = youtubePublishResult.Error ?? "YouTube publishing failed.";
+                    var stageStatus = IsPublishPrerequisiteSkip(publishError) ? PersistentStageStatuses.Skipped : PersistentStageStatuses.Failed;
+                    if (stageStatus == PersistentStageStatuses.Failed)
+                    {
+                        publishStatus = "PublishFailed";
+                        run.FailureReason = $"Publishing failed: {youtubePublishResult.Error}";
+                    }
+                    await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, stageStatus, reason: publishError);
                     _logger.LogWarning("YouTube publishing failed for pipeline run {PipelineRunId}: {Error}", run.Id, youtubePublishResult.Error);
                 }
             }
@@ -957,7 +962,11 @@ public sealed class PipelineOrchestrator
                     }
                     else if (youtubeShortResult is not null)
                     {
-                        await SetStageStatusAsync(PipelineStageNames.YouTubeShortPublished, PersistentStageStatuses.Failed, reason: youtubeShortResult.Error ?? "YouTube Shorts publishing failed.");
+                        var publishError = youtubeShortResult.Error ?? "YouTube Shorts publishing failed.";
+                        await SetStageStatusAsync(
+                            PipelineStageNames.YouTubeShortPublished,
+                            IsPublishPrerequisiteSkip(publishError) ? PersistentStageStatuses.Skipped : PersistentStageStatuses.Failed,
+                            reason: publishError);
                     }
                 }
                 else
