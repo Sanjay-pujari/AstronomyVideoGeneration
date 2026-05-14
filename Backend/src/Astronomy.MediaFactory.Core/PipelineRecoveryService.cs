@@ -15,10 +15,22 @@ public sealed class PipelineRecoveryService : IPipelineRecoveryService
     };
 
     private readonly IPipelineRepository _repository;
+    private readonly ITokenHealthService? _tokenHealthService;
+    private readonly IContentPublishService? _contentPublishService;
 
     public PipelineRecoveryService(IPipelineRepository repository)
     {
         _repository = repository;
+    }
+
+    public PipelineRecoveryService(
+        IPipelineRepository repository,
+        ITokenHealthService tokenHealthService,
+        IContentPublishService contentPublishService)
+    {
+        _repository = repository;
+        _tokenHealthService = tokenHealthService;
+        _contentPublishService = contentPublishService;
     }
 
     public async Task<PipelineStatusResponse?> GetStatusAsync(Guid pipelineRunId, CancellationToken cancellationToken, bool includeInternal = false)
@@ -83,16 +95,34 @@ public sealed class PipelineRecoveryService : IPipelineRecoveryService
             targetStages = PublishStagesByPlatform["all"];
 
         var stages = (await _repository.GetStageExecutionsAsync(pipelineRunId, cancellationToken)).ToList();
+        var targetStageSet = targetStages.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (targetStageSet.Contains(PipelineStageNames.YouTubeLongPublished) || targetStageSet.Contains(PipelineStageNames.YouTubeShortPublished))
+        {
+            var healthFailure = await GetYouTubeTokenHealthFailureAsync(cancellationToken);
+            if (healthFailure is not null)
+            {
+                var failedStages = PublishStagesByPlatform["youtube"];
+                foreach (var stageName in failedStages)
+                {
+                    var stage = await EnsureStageAsync(stages, pipelineRunId, stageName, cancellationToken);
+                    MarkStageFailed(stage, healthFailure);
+                }
+
+                run.Status = PipelineRunStatus.CompletedWithPublishErrors;
+                run.FailureReason = $"Publishing failed: {healthFailure}";
+                run.ResumeSupported = true;
+                await WritePublishIdempotencyAsync(run, cancellationToken);
+                await _repository.SaveChangesAsync(cancellationToken);
+                await WriteStateAsync(run, stages, failedStages.FirstOrDefault(), cancellationToken);
+                return await GetStatusAsync(pipelineRunId, cancellationToken);
+            }
+        }
+
         foreach (var stageName in targetStages)
         {
-            var stage = stages.FirstOrDefault(s => s.StageName == stageName);
-            if (stage is null)
-            {
-                stage = new PipelineStageExecution { PipelineRunId = pipelineRunId, StageName = stageName, Status = PersistentStageStatuses.Pending, MaxAttempts = 3 };
-                await _repository.AddStageExecutionAsync(stage, cancellationToken);
-                stages.Add(stage);
-            }
-            else if (stage.Status != PersistentStageStatuses.Succeeded)
+            var stage = await EnsureStageAsync(stages, pipelineRunId, stageName, cancellationToken);
+            if (stage.Status != PersistentStageStatuses.Succeeded)
             {
                 stage.Status = PersistentStageStatuses.Pending;
                 stage.LastError = null;
@@ -101,9 +131,115 @@ public sealed class PipelineRecoveryService : IPipelineRecoveryService
         }
 
         await WritePublishIdempotencyAsync(run, cancellationToken);
+
+        if (_contentPublishService is not null && targetStageSet.Contains(PipelineStageNames.YouTubeLongPublished))
+            await RetryYouTubePublishStageAsync(stages, pipelineRunId, PipelineStageNames.YouTubeLongPublished, "long", false, cancellationToken);
+
+        if (_contentPublishService is not null && targetStageSet.Contains(PipelineStageNames.YouTubeShortPublished))
+            await RetryYouTubePublishStageAsync(stages, pipelineRunId, PipelineStageNames.YouTubeShortPublished, "short", true, cancellationToken);
+
+        var failedTargetStages = stages.Where(s => targetStageSet.Contains(s.StageName) && s.Status == PersistentStageStatuses.Failed).ToArray();
+        if (failedTargetStages.Length > 0)
+        {
+            run.Status = PipelineRunStatus.CompletedWithPublishErrors;
+            run.FailureReason = $"Publishing failed: {string.Join(", ", failedTargetStages.Select(s => s.StageName))}";
+        }
+        else if (targetStageSet.Any(stageName => stages.Any(s => s.StageName.Equals(stageName, StringComparison.OrdinalIgnoreCase) && s.Status == PersistentStageStatuses.Pending)))
+        {
+            run.Status = PipelineRunStatus.Running;
+        }
+        else if (run.Status == PipelineRunStatus.CompletedWithPublishErrors || run.Status == PipelineRunStatus.PublishFailed)
+        {
+            run.Status = PipelineRunStatus.Succeeded;
+            run.FailureReason = null;
+        }
+
+        run.ResumeSupported = true;
         await _repository.SaveChangesAsync(cancellationToken);
         await WriteStateAsync(run, stages, targetStages.FirstOrDefault(), cancellationToken);
         return await GetStatusAsync(pipelineRunId, cancellationToken);
+    }
+
+
+    private async Task<string?> GetYouTubeTokenHealthFailureAsync(CancellationToken cancellationToken)
+    {
+        if (_tokenHealthService is null)
+            return null;
+
+        var health = await _tokenHealthService.CheckYouTubeAsync(cancellationToken);
+        if (health.IsValid)
+            return null;
+
+        var reason = string.IsNullOrWhiteSpace(health.Error) ? health.Warning : health.Error;
+        return string.IsNullOrWhiteSpace(reason)
+            ? "YouTube token health check failed."
+            : $"YouTube token health check failed: {reason}";
+    }
+
+    private async Task<PipelineStageExecution> EnsureStageAsync(List<PipelineStageExecution> stages, Guid pipelineRunId, string stageName, CancellationToken cancellationToken)
+    {
+        var stage = stages.FirstOrDefault(s => s.StageName.Equals(stageName, StringComparison.OrdinalIgnoreCase));
+        if (stage is not null)
+            return stage;
+
+        stage = new PipelineStageExecution { PipelineRunId = pipelineRunId, StageName = stageName, Status = PersistentStageStatuses.Pending, MaxAttempts = 3 };
+        await _repository.AddStageExecutionAsync(stage, cancellationToken);
+        stages.Add(stage);
+        return stage;
+    }
+
+    private static void MarkStageFailed(PipelineStageExecution stage, string error)
+    {
+        var now = DateTimeOffset.UtcNow;
+        stage.Status = PersistentStageStatuses.Failed;
+        stage.LastError = error;
+        stage.CompletedUtc = now;
+        stage.StartedUtc = now;
+        stage.AttemptCount += 1;
+        if (stage.MaxAttempts <= 0)
+            stage.MaxAttempts = 3;
+    }
+
+    private async Task RetryYouTubePublishStageAsync(
+        List<PipelineStageExecution> stages,
+        Guid pipelineRunId,
+        string stageName,
+        string asset,
+        bool isShort,
+        CancellationToken cancellationToken)
+    {
+        var stage = await EnsureStageAsync(stages, pipelineRunId, stageName, cancellationToken);
+        if (stage.Status == PersistentStageStatuses.Succeeded)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        stage.StartedUtc = now;
+        stage.AttemptCount += 1;
+
+        try
+        {
+            var results = await _contentPublishService!.PublishForPipelineRunAsync(pipelineRunId, asset, cancellationToken);
+            var result = results.FirstOrDefault(x => x.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) && x.IsShort == isShort);
+            if (result is { Success: true })
+            {
+                stage.Status = string.Equals(result.Mode, "DryRun", StringComparison.OrdinalIgnoreCase) ? PersistentStageStatuses.Skipped : PersistentStageStatuses.Succeeded;
+                stage.LastError = null;
+            }
+            else
+            {
+                stage.Status = PersistentStageStatuses.Failed;
+                stage.LastError = result?.Error ?? $"{stageName} retry did not produce a successful YouTube publish result.";
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
+        {
+            stage.Status = PersistentStageStatuses.Failed;
+            stage.LastError = ex.Message;
+        }
+
+        stage.CompletedUtc = DateTimeOffset.UtcNow;
+        if (stage.MaxAttempts <= 0)
+            stage.MaxAttempts = 3;
     }
 
     private static IReadOnlyCollection<PipelineStageExecution> FilterStages(IReadOnlyCollection<PipelineStageExecution> stages, bool includeInternal)
