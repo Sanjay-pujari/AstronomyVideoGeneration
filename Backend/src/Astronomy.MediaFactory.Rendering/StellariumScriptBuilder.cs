@@ -19,9 +19,7 @@ public sealed class StellariumScriptBuilder
         var escapedObjectName = (objectName ?? "Sky").Replace("\"", "\\\"");
         var isOverviewScene = IsOverviewScene(scene);
         var zoomLevel = isOverviewScene ? 80d : GetZoomLevel(scene.ObservationContext);
-        var minimumObjectAltitudeDegrees = _options.LowAltitudeLandscapeCutoffDegrees;
-
-        if (!isOverviewScene && (!scene.ObservationContext.IsVisible || scene.ObservationContext.AltitudeDegrees < minimumObjectAltitudeDegrees))
+        if (!isOverviewScene && !scene.ObservationContext.IsVisible)
         {
             return BuildSafeSkyFallbackScript(scene, utcDate, screenshotPrefix, screenshotDir, escapedLocationName);
         }
