@@ -346,6 +346,45 @@ public sealed class PublishingFlowTests
         Assert.Contains(repository.StageExecutions, s => s.StageName == PipelineStageNames.InstagramReelPublished && s.Status == PersistentStageStatuses.Skipped && s.LastError == "Pre-publish validation blocked publishing.");
     }
 
+    [Fact]
+    public async Task PipelineOrchestrator_SkipsPublishStages_WhenPublishArtifactsAreMissing()
+    {
+        var repository = new FakePipelineRepository();
+        var stageExecutor = new PipelineStageExecutor(repository, NullLogger<PipelineStageExecutor>.Instance);
+        var orchestrator = new PipelineOrchestrator(
+            new FakeContextProvider(),
+            new FakeTopicRankingService(),
+            new FakeVisualProvider(),
+            new FakeScriptService(),
+            new FakeSpeechService(),
+            new FakeRenderService(),
+            new PassThroughBlobService(),
+            new SuccessfulYouTubeService(),
+            new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new FakeThumbnailGenerationService(),
+            new PassThroughSeoMetadataGeneratorService(),
+            repository,
+            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
+            Options.Create(new PublishingValidationOptions { Enabled = true }),
+            NullLogger<PipelineOrchestrator>.Instance,
+            publishingOptions: Options.Create(new PublishingOptions { Enabled = true, Mode = "Private", PublishShortVideo = true }),
+            metaPublishingOptions: Options.Create(new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, PublishInstagramReel = true }),
+            contentPublishService: new MissingArtifactContentPublishService(),
+            metaPublishService: new MissingVideoMetaPublishService(),
+            pipelineStageExecutor: stageExecutor);
+
+        var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: true), CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
+        Assert.Contains(repository.StageExecutions, s => s.StageName == PipelineStageNames.YouTubeLongPublished && s.Status == PersistentStageStatuses.Skipped && s.LastError == "Required publish artifact is missing: seo-metadata.json");
+        Assert.Contains(repository.StageExecutions, s => s.StageName == PipelineStageNames.YouTubeShortPublished && s.Status == PersistentStageStatuses.Skipped && s.LastError == "Video file is missing: shorts/short-video.mp4");
+        Assert.Contains(repository.StageExecutions, s => s.StageName == PipelineStageNames.FacebookReelPublished && s.Status == PersistentStageStatuses.Skipped && s.LastError == "Facebook Reel video is missing: shorts/short-video.mp4.");
+        Assert.Contains(repository.StageExecutions, s => s.StageName == PipelineStageNames.InstagramReelPublished && s.Status == PersistentStageStatuses.Skipped && s.LastError == "Instagram Reel video is missing: shorts/short-video.mp4.");
+    }
+
+
 
     private static PipelineOrchestrator CreateOrchestrator(
         FakePipelineRepository repository,
@@ -354,6 +393,40 @@ public sealed class PublishingFlowTests
         IPrePublishValidationService? validationService = null,
         IThumbnailGenerationService? thumbnailGenerationService = null)
         => new(new FakeContextProvider(), new FakeTopicRankingService(), new FakeVisualProvider(), new FakeScriptService(), new FakeSpeechService(), new FakeRenderService(), new PassThroughBlobService(), yt, new FakeShortsVideoRenderService(), new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance), thumbnailGenerationService ?? new FakeThumbnailGenerationService(), new PassThroughSeoMetadataGeneratorService(), repository, Options.Create(new YouTubeOptions { PrivacyStatus = "private" }), Options.Create(new RenderingOptions()), Options.Create(new PublishingValidationOptions { Enabled = true }), NullLogger<PipelineOrchestrator>.Instance, publishingOptions: publishingOptions, prePublishValidationService: validationService);
+
+
+    private sealed class MissingArtifactContentPublishService : IContentPublishService
+    {
+        public Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<PublishResult>>([new PublishResult
+            {
+                Success = false,
+                Platform = "YouTube",
+                AssetType = "LongVideo",
+                Mode = "Private",
+                Error = "Required publish artifact is missing: seo-metadata.json"
+            }]);
+
+        public Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<PublishResult>>([new PublishResult
+            {
+                Success = false,
+                Platform = "YouTube",
+                AssetType = "ShortVideo",
+                IsShort = true,
+                Mode = "Private",
+                Error = "Video file is missing: shorts/short-video.mp4"
+            }]);
+    }
+
+    private sealed class MissingVideoMetaPublishService : IMetaPublishService
+    {
+        public Task<IReadOnlyList<MetaPublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset = "all", CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<MetaPublishResult>>([
+                new MetaPublishResult { Success = false, Platform = "Facebook", Mode = "Public", Error = "Facebook Reel video is missing: shorts/short-video.mp4." },
+                new MetaPublishResult { Success = false, Platform = "Instagram", Mode = "Public", Error = "Instagram Reel video is missing: shorts/short-video.mp4." }
+            ]);
+    }
 
 
     private sealed class TrackingContentPublishService : IContentPublishService

@@ -1194,7 +1194,8 @@ public sealed class PipelineOrchestrator
             return;
         }
 
-        await setStageStatusAsync(stageName, PersistentStageStatuses.Failed, null, result?.Error ?? $"{platform} Reel publishing did not produce a successful result.");
+        var error = result?.Error ?? $"{platform} Reel publishing did not produce a successful result.";
+        await setStageStatusAsync(stageName, IsPublishPrerequisiteSkip(error) ? PersistentStageStatuses.Skipped : PersistentStageStatuses.Failed, null, error);
     }
 
     private static bool IsEnabledPublishStage(
@@ -1773,7 +1774,15 @@ public sealed class PipelineOrchestrator
     }
 
     private static bool IsPublishSkip(PublishResult result)
-        => result.Error is not null && (result.Error.StartsWith("Skipped because", StringComparison.OrdinalIgnoreCase) || result.Error.Contains("validation", StringComparison.OrdinalIgnoreCase));
+        => result.Error is not null && (result.Error.StartsWith("Skipped because", StringComparison.OrdinalIgnoreCase)
+            || result.Error.Contains("validation", StringComparison.OrdinalIgnoreCase)
+            || IsPublishPrerequisiteSkip(result.Error));
+
+    private static bool IsPublishPrerequisiteSkip(string error)
+        => error.Contains("Required publish artifact is missing", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("Video file is missing", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("Reel video is missing", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("Reel video is empty", StringComparison.OrdinalIgnoreCase);
 
     private static OptimizedVideoMetadata ApplyGrowthMetadata(OptimizedVideoMetadata source, GrowthOptions growthOptions, string language, string? region)
     {
