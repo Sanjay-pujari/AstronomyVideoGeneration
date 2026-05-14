@@ -441,7 +441,7 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
 
         using var scope = _scopeFactory.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IPipelineRepository>();
-        return await repository.HasSpecialEventRunAsync(eventId, targetDate, regionId, contentType, [PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded], cancellationToken);
+        return await repository.HasSpecialEventRunAsync(eventId, targetDate, regionId, contentType, [PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded, PipelineRunStatus.CompletedWithPublishErrors], cancellationToken);
     }
 
     private static SchedulerSkippedEventPlanItem ToSkipped(AstronomyEvent astronomyEvent, string reason)

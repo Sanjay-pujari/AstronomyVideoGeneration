@@ -55,7 +55,7 @@ public sealed class YouTubePublishingIntegrationTests
     [Fact]
     public async Task MissingRefreshToken_FailsClearly()
     {
-        var auth = new YouTubeAuthService(new HttpClient(new StaticHandler(HttpStatusCode.OK, "{}")), Options.Create(new YouTubeOptions { ClientId = "id", ClientSecret = "secret", RefreshToken = "" }));
+        var auth = new YouTubeAuthService(new HttpClient(new StaticHandler(HttpStatusCode.OK, "{}")), Options.Create(new YouTubeOptions { ClientId = "id", ClientSecret = "secret", RefreshToken = "" }), NullLogger<YouTubeAuthService>.Instance);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => auth.GetAccessTokenAsync(CancellationToken.None));
 

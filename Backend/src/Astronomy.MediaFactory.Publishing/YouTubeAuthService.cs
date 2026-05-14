@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Publishing;
@@ -13,11 +14,13 @@ public sealed class YouTubeAuthService : IYouTubeAuthService
 
     private readonly HttpClient _httpClient;
     private readonly YouTubeOptions _options;
+    private readonly ILogger<YouTubeAuthService> _logger;
 
-    public YouTubeAuthService(HttpClient httpClient, IOptions<YouTubeOptions> options)
+    public YouTubeAuthService(HttpClient httpClient, IOptions<YouTubeOptions> options, ILogger<YouTubeAuthService> logger)
     {
         _httpClient = httpClient;
         _options = options.Value;
+        _logger = logger;
     }
 
     public async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
@@ -47,7 +50,9 @@ public sealed class YouTubeAuthService : IYouTubeAuthService
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"YouTube OAuth token refresh failed with status {(int)response.StatusCode}.");
+            var error = await YouTubeTokenRefreshDiagnostics.ReadAsync(response, cancellationToken);
+            YouTubeTokenRefreshDiagnostics.Log(_logger, error);
+            throw new InvalidOperationException(error.FriendlyMessage);
         }
 
         var token = await response.Content.ReadFromJsonAsync<TokenResponse>(cancellationToken);
