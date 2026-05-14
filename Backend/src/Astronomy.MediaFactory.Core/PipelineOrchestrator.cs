@@ -244,7 +244,9 @@ public sealed class PipelineOrchestrator
                 var failedEnabledStages = stages
                     .Where(s => IsEnabledPublishStage(s.StageName, currentPublishingEnabled, currentValidationPassed, request.PublishToYouTube, _publishingOptions.PublishShortVideo, _metaPublishingOptions))
                     .Where(s => s.Status == PersistentStageStatuses.Failed)
-                    .Select(s => s.StageName)
+                    .Select(s => string.IsNullOrWhiteSpace(s.LastError)
+                        ? s.StageName
+                        : $"{s.StageName} ({s.LastError})")
                     .ToArray();
 
                 if (failedEnabledStages.Length > 0)
@@ -964,6 +966,8 @@ public sealed class PipelineOrchestrator
                 }
 
                 if (_metaPublishService is not null
+                    && publishingEnabled
+                    && validationPassed
                     && _metaPublishingOptions.Enabled
                     && (_metaPublishingOptions.PublishFacebookReel || _metaPublishingOptions.PublishInstagramReel)
                     && !string.Equals(_metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase))
@@ -988,8 +992,13 @@ public sealed class PipelineOrchestrator
                 }
                 else
                 {
-                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", false, [], SetStageStatusAsync);
-                    await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", false, [], SetStageStatusAsync);
+                    var metaSkipReason = !publishingEnabled
+                        ? "Publishing disabled."
+                        : !validationPassed
+                            ? "Pre-publish validation blocked publishing."
+                            : "Meta Reel publishing disabled.";
+                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", false, [], SetStageStatusAsync, metaSkipReason);
+                    await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", false, [], SetStageStatusAsync, metaSkipReason);
                 }
             }
             else
@@ -1169,11 +1178,12 @@ public sealed class PipelineOrchestrator
         string platform,
         bool enabled,
         IReadOnlyList<MetaPublishResult> results,
-        Func<string, string, string?, string?, Task> setStageStatusAsync)
+        Func<string, string, string?, string?, Task> setStageStatusAsync,
+        string? disabledReason = null)
     {
         if (!enabled)
         {
-            await setStageStatusAsync(stageName, PersistentStageStatuses.Skipped, null, $"{platform} Reel publishing disabled.");
+            await setStageStatusAsync(stageName, PersistentStageStatuses.Skipped, null, disabledReason ?? $"{platform} Reel publishing disabled.");
             return;
         }
 
@@ -1198,8 +1208,8 @@ public sealed class PipelineOrchestrator
         {
             PipelineStageNames.YouTubeLongPublished => publishingEnabled && validationPassed && publishToYouTube,
             PipelineStageNames.YouTubeShortPublished => publishingEnabled && validationPassed && publishToYouTube && publishShortVideo,
-            PipelineStageNames.FacebookReelPublished => metaPublishingOptions.Enabled && metaPublishingOptions.PublishFacebookReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
-            PipelineStageNames.InstagramReelPublished => metaPublishingOptions.Enabled && metaPublishingOptions.PublishInstagramReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
+            PipelineStageNames.FacebookReelPublished => publishingEnabled && validationPassed && metaPublishingOptions.Enabled && metaPublishingOptions.PublishFacebookReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
+            PipelineStageNames.InstagramReelPublished => publishingEnabled && validationPassed && metaPublishingOptions.Enabled && metaPublishingOptions.PublishInstagramReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
             _ => false
         };
 
