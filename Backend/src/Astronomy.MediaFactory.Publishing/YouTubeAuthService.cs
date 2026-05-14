@@ -1,5 +1,4 @@
 using System.Net.Http.Json;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
@@ -25,7 +24,8 @@ public sealed class YouTubeAuthService : IYouTubeAuthService
 
     public async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
     {
-        var refreshToken = ResolveRefreshToken();
+        var resolvedToken = await YouTubeTokenResolver.ResolveAsync(_options, _logger, cancellationToken);
+        var refreshToken = resolvedToken.RefreshToken;
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
             throw new InvalidOperationException(MissingRefreshTokenMessage);
@@ -62,32 +62,6 @@ public sealed class YouTubeAuthService : IYouTubeAuthService
         }
 
         return token.AccessToken;
-    }
-
-    private string? ResolveRefreshToken()
-    {
-        if (!string.IsNullOrWhiteSpace(_options.RefreshToken))
-        {
-            return _options.RefreshToken;
-        }
-
-        var path = string.IsNullOrWhiteSpace(_options.TokenFilePath)
-            ? Path.Combine(AppContext.BaseDirectory, "youtube-oauth-token.json")
-            : Path.GetFullPath(_options.TokenFilePath);
-
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        var json = File.ReadAllText(path);
-        var tokenFile = JsonSerializer.Deserialize<StoredRefreshToken>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-        return tokenFile?.RefreshToken;
-    }
-
-    private sealed class StoredRefreshToken
-    {
-        public string? RefreshToken { get; init; }
     }
 
     private sealed class TokenResponse

@@ -89,6 +89,115 @@ public sealed class TokenHealthServiceTests
         Assert.Contains("refresh token", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
+
+    [Fact]
+    public async Task YouTubeTokenFilePreferredOverConfiguredRefreshToken()
+    {
+        using var workspace = new TempTokenHealthWorkspace();
+        workspace.WriteYouTubeToken("file-refresh-token");
+        using var handler = new TokenHealthHandler();
+        var service = CreateService(handler, youtube: new YouTubeOptions
+        {
+            ClientId = "client-id",
+            ClientSecret = "client-secret",
+            RefreshToken = "configured-refresh-token",
+            TokenFilePath = workspace.YouTubeTokenPath
+        });
+
+        var result = await service.CheckYouTubeAsync(CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal("TokenFile", result.TokenSource);
+        Assert.Contains("refresh_token=file-refresh-token", handler.RequestBodies.Single(body => body.Contains("grant_type=refresh_token", StringComparison.Ordinal)), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task YouTubeAppSettingsFallbackWorksIfTokenFileMissing()
+    {
+        using var workspace = new TempTokenHealthWorkspace();
+        using var handler = new TokenHealthHandler();
+        var service = CreateService(handler, youtube: new YouTubeOptions
+        {
+            ClientId = "client-id",
+            ClientSecret = "client-secret",
+            RefreshToken = "configured-refresh-token",
+            TokenFilePath = workspace.YouTubeTokenPath
+        });
+
+        var result = await service.CheckYouTubeAsync(CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal("AppSettings", result.TokenSource);
+        Assert.Contains("refresh_token=configured-refresh-token", handler.RequestBodies.Single(body => body.Contains("grant_type=refresh_token", StringComparison.Ordinal)), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task YouTubeMismatchWarningEmittedWhenTokenFileDiffersFromConfiguredToken()
+    {
+        using var workspace = new TempTokenHealthWorkspace();
+        workspace.WriteYouTubeToken("file-refresh-token");
+        using var handler = new TokenHealthHandler();
+        var logger = new ListLogger<TokenHealthService>();
+        var service = CreateService(handler, youtube: new YouTubeOptions
+        {
+            ClientId = "client-id",
+            ClientSecret = "client-secret",
+            RefreshToken = "configured-refresh-token",
+            TokenFilePath = workspace.YouTubeTokenPath
+        }, logger: logger);
+
+        var result = await service.CheckYouTubeAsync(CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Contains(YouTubeTokenResolver.MismatchWarning, logger.Messages);
+    }
+
+    [Fact]
+    public async Task YouTubeDiagnosticsNeverExposeFullSecret()
+    {
+        using var workspace = new TempTokenHealthWorkspace();
+        workspace.WriteYouTubeToken("file-refresh-token-secret-value");
+        using var handler = new TokenHealthHandler();
+        var service = CreateService(handler, youtube: new YouTubeOptions
+        {
+            ClientId = "client-id-1234567890.apps.googleusercontent.com",
+            ClientSecret = "client-secret-must-not-be-written",
+            RefreshToken = "configured-refresh-token-secret-value",
+            RedirectUri = "http://localhost/callback",
+            TokenFilePath = workspace.YouTubeTokenPath
+        });
+
+        var result = await service.CheckYouTubeAsync(CancellationToken.None);
+        var diagnostics = await File.ReadAllTextAsync(workspace.YouTubeDiagnosticsPath);
+
+        Assert.True(result.IsValid);
+        Assert.Contains("file-ref***", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("file-refresh-token-secret-value", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("configured-refresh-token-secret-value", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("client-secret-must-not-be-written", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task YouTubeTokenHealthUsesLatestTokenFileMetadata()
+    {
+        using var workspace = new TempTokenHealthWorkspace();
+        workspace.WriteYouTubeToken("file-refresh-token", channelId: "token-file-channel", channelTitle: "AstroPulse");
+        using var handler = new TokenHealthHandler();
+        var service = CreateService(handler, youtube: new YouTubeOptions
+        {
+            ClientId = "client-id",
+            ClientSecret = "client-secret",
+            TokenFilePath = workspace.YouTubeTokenPath
+        });
+
+        var result = await service.CheckYouTubeAsync(CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal("TokenFile", result.TokenSource);
+        Assert.Equal("channel-1", result.ChannelId);
+        Assert.Equal("Astronomy Channel", result.ChannelTitle);
+    }
+
     [Fact]
     public async Task MetaMissingTokenFile_ReturnsInvalid()
     {
@@ -262,13 +371,13 @@ public sealed class TokenHealthServiceTests
         Assert.DoesNotContain("user-token-secret", json, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static TokenHealthService CreateService(TokenHealthHandler handler, YouTubeOptions? youtube = null, MetaOptions? meta = null)
+    private static TokenHealthService CreateService(TokenHealthHandler handler, YouTubeOptions? youtube = null, MetaOptions? meta = null, Microsoft.Extensions.Logging.ILogger<TokenHealthService>? logger = null)
         => new(
             new HttpClient(handler),
             Options.Create(youtube ?? new YouTubeOptions()),
             Options.Create(meta ?? new MetaOptions()),
             Options.Create(new TokenHealthOptions { RefreshBeforeExpiryDays = 7 }),
-            NullLogger<TokenHealthService>.Instance);
+            logger ?? NullLogger<TokenHealthService>.Instance);
 
     private static TokenHealthResult ValidYouTube() => new() { Platform = "YouTube", IsValid = true, IsConfigured = true, AccountId = "channel-1", AccountName = "Astronomy" };
     private static TokenHealthResult ValidMeta() => new() { Platform = "Meta", IsValid = true, IsConfigured = true, AccountId = "page-1", AccountName = "AstroPulse" };
@@ -361,15 +470,34 @@ public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
     private static HttpResponseMessage JsonResponse(object payload, HttpStatusCode statusCode = HttpStatusCode.OK) => new(statusCode) { Content = JsonContent.Create(payload) };
 }
 
+
+public sealed class ListLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+{
+    public List<string> Messages { get; } = [];
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+    public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+    {
+        Messages.Add(formatter(state, exception));
+    }
+}
+
 public sealed class TempTokenHealthWorkspace : IDisposable
 {
     public string Root { get; } = Path.Combine(Path.GetTempPath(), "token-health-tests", Guid.NewGuid().ToString("N"));
     public string TokenPath => Path.Combine(Root, "meta-oauth-token.json");
+    public string YouTubeTokenPath => Path.Combine(Root, "youtube-oauth-token.json");
+    public string YouTubeDiagnosticsPath => Path.Combine(Root, "youtube-token-source-diagnostics.json");
 
     public TempTokenHealthWorkspace() => Directory.CreateDirectory(Root);
 
     public void WriteMetaToken()
         => File.WriteAllText(TokenPath, JsonSerializer.Serialize(new MetaOAuthTokenFile("page-1", "AstroPulse", "page-token-secret", "ig-1", "astro", "user-token-secret", DateTimeOffset.UtcNow)));
+
+    public void WriteYouTubeToken(string refreshToken, string channelId = "channel-1", string channelTitle = "Astronomy Channel")
+        => File.WriteAllText(YouTubeTokenPath, JsonSerializer.Serialize(new YouTubeOAuthTokenFile(channelId, channelTitle, refreshToken, DateTimeOffset.UtcNow)));
 
     public void Dispose()
     {
