@@ -349,6 +349,41 @@ public sealed class StellariumVisualGenerationServiceTests
     }
 
     [Fact]
+    public void BuildSceneScript_ForVisibleMoonBelowLandscapeCutoff_SelectsMoonInsteadOfFallback()
+    {
+        var builder = new StellariumScriptBuilder(new StellariumOptions
+        {
+            LowAltitudeLandscapeCutoffDegrees = 25
+        });
+
+        var scene = new StellariumScene
+        {
+            SceneId = "004-moon",
+            TargetObject = "Moon",
+            OutputImagePath = Path.Combine("/tmp", "004-moon.png"),
+            ObservationContext = new SceneObservationContext
+            {
+                ObjectName = "Moon",
+                ObjectType = "Moon",
+                IsVisible = true,
+                AltitudeDegrees = 21.05,
+                UtcObservationTime = new DateTimeOffset(2026, 5, 14, 19, 3, 33, TimeSpan.Zero),
+                LocalObservationTime = new DateTime(2026, 5, 15, 0, 33, 33),
+                Latitude = 24.5854,
+                Longitude = 73.7125,
+                LocationName = "Udaipur, India"
+            }
+        };
+
+        var script = builder.BuildSceneScript(scene);
+
+        Assert.Contains("core.selectObjectByName(\"Moon\", true);", script);
+        Assert.Contains("core.moveToSelectedObject(2.0);", script);
+        Assert.Contains("StelMovementMgr.zoomTo(30, 2.0);", script);
+        Assert.DoesNotContain("fallback: object skipped due to visibility/altitude", script);
+    }
+
+    [Fact]
     public void BuildSceneScript_WithCinematicMotionDisabled_UsesStableZoomBehavior()
     {
         var builder = new StellariumScriptBuilder(new StellariumOptions { EnableCinematicMotion = false });
