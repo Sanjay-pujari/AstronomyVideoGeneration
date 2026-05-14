@@ -9,6 +9,9 @@ public sealed class TokenHealthResult
     public DateTime? ExpiresAtUtc { get; set; }
     public int? DaysUntilExpiry { get; set; }
     public string AccountName { get; set; } = string.Empty;
+    public string ChannelTitle { get; set; } = string.Empty;
+    public string ChannelId { get; set; } = string.Empty;
+    public string TokenSource { get; set; } = string.Empty;
     public string AccountId { get; set; } = string.Empty;
     public string Warning { get; set; } = string.Empty;
     public string Error { get; set; } = string.Empty;

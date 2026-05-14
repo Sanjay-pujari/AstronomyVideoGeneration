@@ -14,7 +14,7 @@ public sealed class YouTubeOptions
     public string DefaultPrivacyStatus { get; set; } = "private";
     public string? RefreshToken { get; set; }
     public string? AccessToken { get; set; }
-    public string? TokenFilePath { get; set; }
+    public string? TokenFilePath { get; set; } = "youtube-oauth-token.json";
     public bool PublishingEnabled { get; set; }
     public bool UploadThumbnailForLongVideos { get; set; } = true;
     public bool UploadThumbnailForShorts { get; set; } = false;

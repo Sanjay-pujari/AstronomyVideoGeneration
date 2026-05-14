@@ -204,9 +204,7 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
     }
 
     private string ResolveTokenFilePath()
-        => string.IsNullOrWhiteSpace(_options.TokenFilePath)
-            ? Path.Combine(AppContext.BaseDirectory, "youtube-oauth-token.json")
-            : Path.GetFullPath(_options.TokenFilePath);
+        => YouTubeTokenResolver.ResolveTokenFilePath(_options);
 
     private static string MaskRefreshToken(string refreshToken)
         => refreshToken.Length <= 10 ? "***" : $"{refreshToken[..Math.Min(10, refreshToken.Length)]}...";

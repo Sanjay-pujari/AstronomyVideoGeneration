@@ -8,7 +8,6 @@ using Google.Apis.YouTube.v3;
 using Google.Apis.YouTube.v3.Data;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Publishing;
 
@@ -49,16 +48,9 @@ public sealed class YouTubeAnalyticsService : IYouTubeAnalyticsService
 
     private async Task<UserCredential?> BuildCredentialAsync(CancellationToken cancellationToken)
     {
-        var refreshToken = _options.RefreshToken;
+        var resolvedToken = await YouTubeTokenResolver.ResolveAsync(_options, _logger, cancellationToken);
+        var refreshToken = resolvedToken.RefreshToken;
         var accessToken = _options.AccessToken;
-
-        if (string.IsNullOrWhiteSpace(refreshToken) && !string.IsNullOrWhiteSpace(_options.TokenFilePath) && File.Exists(_options.TokenFilePath))
-        {
-            var tokenContent = await File.ReadAllTextAsync(_options.TokenFilePath, cancellationToken);
-            var token = JsonSerializer.Deserialize<TokenDocument>(tokenContent);
-            refreshToken = token?.refresh_token;
-            accessToken = token?.access_token;
-        }
 
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
@@ -79,11 +71,6 @@ public sealed class YouTubeAnalyticsService : IYouTubeAnalyticsService
         return credential;
     }
 
-    private sealed class TokenDocument
-    {
-        public string? access_token { get; set; }
-        public string? refresh_token { get; set; }
-    }
 }
 
 public static class YouTubeAnalyticsParser

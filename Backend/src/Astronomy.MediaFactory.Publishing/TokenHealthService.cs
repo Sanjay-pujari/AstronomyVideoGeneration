@@ -61,7 +61,13 @@ public sealed class TokenHealthService : ITokenHealthService
 
         try
         {
-            var refreshToken = await ResolveYouTubeRefreshTokenAsync(cancellationToken);
+            var resolvedToken = await YouTubeTokenResolver.ResolveAsync(_youTubeOptions, _logger, cancellationToken);
+            var refreshToken = resolvedToken.RefreshToken;
+            result.TokenSource = resolvedToken.TokenSource;
+            result.AccountId = resolvedToken.ChannelId;
+            result.AccountName = resolvedToken.ChannelTitle;
+            result.ChannelId = resolvedToken.ChannelId;
+            result.ChannelTitle = resolvedToken.ChannelTitle;
             result.IsConfigured = !string.IsNullOrWhiteSpace(refreshToken)
                 && !string.IsNullOrWhiteSpace(_youTubeOptions.ClientId)
                 && !string.IsNullOrWhiteSpace(_youTubeOptions.ClientSecret);
@@ -120,6 +126,8 @@ public sealed class TokenHealthService : ITokenHealthService
 
             result.AccountId = channel.Id;
             result.AccountName = channel.Snippet?.Title ?? string.Empty;
+            result.ChannelId = result.AccountId;
+            result.ChannelTitle = result.AccountName;
 
             if (!string.IsNullOrWhiteSpace(_youTubeOptions.ExpectedChannelId)
                 && !string.Equals(result.AccountId, _youTubeOptions.ExpectedChannelId.Trim(), StringComparison.Ordinal))
@@ -295,26 +303,6 @@ public sealed class TokenHealthService : ITokenHealthService
         result.Warning = string.IsNullOrWhiteSpace(result.Warning)
             ? warning
             : $"{result.Warning} {warning}";
-    }
-
-    private async Task<string?> ResolveYouTubeRefreshTokenAsync(CancellationToken cancellationToken)
-    {
-        if (!string.IsNullOrWhiteSpace(_youTubeOptions.RefreshToken))
-        {
-            return _youTubeOptions.RefreshToken;
-        }
-
-        var path = string.IsNullOrWhiteSpace(_youTubeOptions.TokenFilePath)
-            ? Path.Combine(AppContext.BaseDirectory, "youtube-oauth-token.json")
-            : Path.GetFullPath(_youTubeOptions.TokenFilePath);
-
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        var file = JsonSerializer.Deserialize<YouTubeOAuthTokenFile>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions);
-        return file?.RefreshToken;
     }
 
     private string ResolveMetaTokenFilePath()
