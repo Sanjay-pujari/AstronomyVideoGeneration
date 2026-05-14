@@ -10,8 +10,6 @@ public sealed class MetaOptions
     public string ExpectedFacebookPageName { get; set; } = "";
     public string ExpectedFacebookPageId { get; set; } = "";
     public string ExpectedInstagramUsername { get; set; } = "";
-    public bool PublishFacebook { get; set; } = true;
-    public bool PublishInstagram { get; set; } = true;
     public string? TokenFilePath { get; set; }
     public List<string> Scopes { get; set; } =
     [
