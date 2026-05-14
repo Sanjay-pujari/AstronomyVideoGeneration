@@ -295,7 +295,7 @@ public interface ISchedulerAuditStore
 
 public interface IPipelineRunExecutor
 {
-    Task<PipelineRun> ExecuteAsync(RunPipelineRequest request, CancellationToken cancellationToken);
+    Task<PipelineRun> ExecuteAsync(RunPipelineRequest request, Guid? pipelineRunId, CancellationToken cancellationToken);
 }
 
 public interface IPipelineRunQueue

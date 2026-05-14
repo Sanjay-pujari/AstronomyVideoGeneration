@@ -12,6 +12,6 @@ public sealed class OrchestratorPipelineRunExecutor : IPipelineRunExecutor
         _orchestrator = orchestrator;
     }
 
-    public Task<PipelineRun> ExecuteAsync(RunPipelineRequest request, CancellationToken cancellationToken)
-        => _orchestrator.RunAsync(request, cancellationToken);
+    public Task<PipelineRun> ExecuteAsync(RunPipelineRequest request, Guid? pipelineRunId, CancellationToken cancellationToken)
+        => _orchestrator.RunAsync(request, cancellationToken, pipelineRunId);
 }

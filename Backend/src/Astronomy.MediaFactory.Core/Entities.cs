@@ -5,6 +5,14 @@ namespace Astronomy.MediaFactory.Core;
 
 public sealed class PipelineRun : EntityBase
 {
+    public void AssignId(Guid id)
+    {
+        if (id == Guid.Empty)
+            throw new ArgumentException("Pipeline run id cannot be empty.", nameof(id));
+
+        Id = id;
+    }
+
     public DateOnly RunDate { get; set; }
     public ContentType ContentType { get; set; }
     public string? RegionId { get; set; }

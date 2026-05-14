@@ -112,7 +112,7 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
         var options = _options.CurrentValue;
         var schedule = FindSchedule(scheduleName);
         if (schedule is null)
-            return new SchedulerRunResult(false, "NotFound", $"Schedule '{scheduleName}' was not found.", null, DateOnly.FromDateTime(DateTime.UtcNow), DateTimeOffset.UtcNow);
+            return new SchedulerRunResult(false, "NotFound", $"Schedule '{scheduleName}' was not found.", null, DateOnly.FromDateTime(DateTime.UtcNow), DateTimeOffset.UtcNow, null, scheduleName);
 
         var nowUtc = DateTimeOffset.UtcNow;
         var targetDate = GetLocalDate(schedule, nowUtc);
@@ -148,7 +148,7 @@ public sealed class PipelineSchedulerService : BackgroundService, IPipelineSched
     {
         var schedule = FindRegionSchedule(regionId);
         if (schedule is null)
-            return new SchedulerRunResult(false, "NotFound", $"Region '{regionId}' was not found.", null, DateOnly.FromDateTime(DateTime.UtcNow), DateTimeOffset.UtcNow);
+            return new SchedulerRunResult(false, "NotFound", $"Region '{regionId}' was not found.", null, DateOnly.FromDateTime(DateTime.UtcNow), DateTimeOffset.UtcNow, Slugify(regionId), null);
 
         return await RunNowAsync(schedule.Name, force, cancellationToken);
     }

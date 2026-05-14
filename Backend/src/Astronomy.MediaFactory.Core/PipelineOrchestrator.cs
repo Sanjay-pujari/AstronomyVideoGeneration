@@ -138,29 +138,30 @@ public sealed class PipelineOrchestrator
         _eventStore = eventStore;
     }
 
-    public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken)
+    public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken, Guid? pipelineRunId = null)
     {
         var regionLanguage = ResolveRegionLanguage(request.RegionId, request.LocationName, _schedulerOptions);
         var localization = LocalizationResolver.Resolve(request.Language, regionLanguage, _localizationOptions);
-        var run = new PipelineRun
-        {
-            RunDate = request.Date,
-            ContentType = request.ContentType,
-            RegionId = NormalizeRegionId(request.RegionId, request.LocationName),
-            LocationName = request.LocationName,
-            TimeZone = request.TimeZone,
-            Language = localization.ResolvedLanguage,
-            PublishToYouTube = request.PublishToYouTube,
-            UseTopicPlanner = request.UseTopicPlanner,
-            Status = PipelineRunStatus.Queued,
-            ResumeSupported = true,
-            EventId = request.EventId,
-            EventType = request.EventType,
-            EventTitle = request.EventTitle,
-            EventDescription = request.EventDescription,
-            DecisionType = request.ContentType == ContentType.SpecialEventGuide ? "GenerateSpecialEventGuide" : null,
-            SpecialEventGuideGenerated = request.ContentType == ContentType.SpecialEventGuide
-        };
+        var run = new PipelineRun();
+        if (pipelineRunId.HasValue)
+            run.AssignId(pipelineRunId.Value);
+
+        run.RunDate = request.Date;
+        run.ContentType = request.ContentType;
+        run.RegionId = NormalizeRegionId(request.RegionId, request.LocationName);
+        run.LocationName = request.LocationName;
+        run.TimeZone = request.TimeZone;
+        run.Language = localization.ResolvedLanguage;
+        run.PublishToYouTube = request.PublishToYouTube;
+        run.UseTopicPlanner = request.UseTopicPlanner;
+        run.Status = PipelineRunStatus.Queued;
+        run.ResumeSupported = true;
+        run.EventId = request.EventId;
+        run.EventType = request.EventType;
+        run.EventTitle = request.EventTitle;
+        run.EventDescription = request.EventDescription;
+        run.DecisionType = request.ContentType == ContentType.SpecialEventGuide ? "GenerateSpecialEventGuide" : null;
+        run.SpecialEventGuideGenerated = request.ContentType == ContentType.SpecialEventGuide;
 
         await _repository.CreateAsync(run, cancellationToken);
         using var logScope = _logger.BeginScope(new Dictionary<string, object>

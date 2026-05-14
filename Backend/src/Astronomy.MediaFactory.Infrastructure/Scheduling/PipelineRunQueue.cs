@@ -36,14 +36,16 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
             const string reason = "Duplicate scheduler or pipeline run already exists for region/date/content type.";
             _logger.LogInformation("Scheduler duplicate skipped for {ScheduleName} on {TargetDate}: {Reason}", item.ScheduleName, item.Request.Date, reason);
             await UpsertAuditAsync(item, "Skipped", reason, null, null, cancellationToken);
-            return new SchedulerRunResult(false, "Skipped", reason, null, item.Request.Date, item.PlannedRunUtc);
+            return BuildResult(item, accepted: false, status: "Skipped", reason, pipelineRunId: null);
         }
 
-        _queue.Enqueue(item);
-        await UpsertAuditAsync(item, "Created", null, null, null, cancellationToken);
-        _logger.LogInformation("Scheduler run created for {ScheduleName} on {TargetDate}; queue depth is {QueuedRuns}", item.ScheduleName, item.Request.Date, _queue.Count);
+        var pipelineRunId = item.PipelineRunId ?? Guid.NewGuid();
+        var queuedItem = item with { PipelineRunId = pipelineRunId };
+        _queue.Enqueue(queuedItem);
+        await UpsertAuditAsync(queuedItem, "Created", null, null, pipelineRunId, cancellationToken);
+        _logger.LogInformation("Scheduler run created for {ScheduleName} on {TargetDate} with planned pipeline {PipelineRunId}; queue depth is {QueuedRuns}", queuedItem.ScheduleName, queuedItem.Request.Date, pipelineRunId, _queue.Count);
         await DrainAsync(cancellationToken);
-        return new SchedulerRunResult(true, "Created", null, null, item.Request.Date, item.PlannedRunUtc);
+        return BuildResult(queuedItem, accepted: true, status: "Created", reason: null, pipelineRunId);
     }
 
     public Task DrainAsync(CancellationToken cancellationToken)
@@ -72,12 +74,12 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
             }
 
             var actualRunUtc = DateTimeOffset.UtcNow;
-            await UpsertAuditAsync(item, "Running", null, actualRunUtc, null, cancellationToken);
+            await UpsertAuditAsync(item, "Running", null, actualRunUtc, item.PipelineRunId, cancellationToken);
             _logger.LogInformation("Scheduler run started for {ScheduleName} on {TargetDate}", item.ScheduleName, item.Request.Date);
 
             using var scope = _scopeFactory.CreateScope();
             var executor = scope.ServiceProvider.GetRequiredService<IPipelineRunExecutor>();
-            var run = await executor.ExecuteAsync(item.Request, cancellationToken);
+            var run = await executor.ExecuteAsync(item.Request, item.PipelineRunId, cancellationToken);
             await WriteOptimizationDiagnosticsAsync(item, run, cancellationToken);
             await UpsertAuditAsync(item, run.Status == PipelineRunStatus.Succeeded ? "Completed" : run.Status.ToString(), null, actualRunUtc, run.Id, CancellationToken.None);
             _logger.LogInformation("Scheduler run completed for {ScheduleName} on {TargetDate} with pipeline {PipelineRunId} status {Status}", item.ScheduleName, item.Request.Date, run.Id, run.Status);
@@ -85,7 +87,7 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
         catch (Exception ex)
         {
             _logger.LogError(ex, "Scheduler run failed for {ScheduleName} on {TargetDate}", item.ScheduleName, item.Request.Date);
-            await UpsertAuditAsync(item, "Failed", ex.Message, DateTimeOffset.UtcNow, null, CancellationToken.None);
+            await UpsertAuditAsync(item, "Failed", ex.Message, DateTimeOffset.UtcNow, item.PipelineRunId, CancellationToken.None);
         }
         finally
         {
@@ -178,6 +180,17 @@ public sealed class PipelineRunQueue : IPipelineRunQueue
         }
         return builder.ToString().Trim('-') is { Length: > 0 } slug ? slug : "default-region";
     }
+
+    private static SchedulerRunResult BuildResult(SchedulerRunQueueItem item, bool accepted, string status, string? reason, Guid? pipelineRunId)
+        => new(
+            accepted,
+            status,
+            reason,
+            pipelineRunId,
+            item.Request.Date,
+            item.PlannedRunUtc,
+            NormalizeRegionId(item),
+            item.ScheduleName);
 
     private Task UpsertAuditAsync(SchedulerRunQueueItem item, string status, string? skipReason, DateTimeOffset? actualRunUtc, Guid? pipelineRunId, CancellationToken cancellationToken)
     {
