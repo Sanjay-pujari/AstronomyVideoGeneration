@@ -238,21 +238,18 @@ public sealed class PipelineOrchestrator
                 await _repository.SaveChangesAsync(cancellationToken);
             }
 
-            async Task EnsurePublishStagesHandledAsync(bool currentPublishingEnabled, bool currentValidationPassed)
+            async Task<string[]> GetFailedEnabledPublishStagesAsync(bool currentPublishingEnabled, bool currentValidationPassed)
             {
                 var stages = await _repository.GetStageExecutionsAsync(run.Id, cancellationToken);
-                var failedEnabledStages = stages
+                return stages
                     .Where(s => IsEnabledPublishStage(s.StageName, currentPublishingEnabled, currentValidationPassed, request.PublishToYouTube, _publishingOptions.PublishShortVideo, _metaPublishingOptions))
+                    .GroupBy(s => s.StageName, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.OrderByDescending(s => s.CompletedUtc ?? s.StartedUtc ?? s.CreatedUtc).First())
                     .Where(s => s.Status == PersistentStageStatuses.Failed)
                     .Select(s => string.IsNullOrWhiteSpace(s.LastError)
                         ? s.StageName
                         : $"{s.StageName} ({s.LastError})")
                     .ToArray();
-
-                if (failedEnabledStages.Length > 0)
-                {
-                    throw new InvalidOperationException($"Enabled publish stages failed: {string.Join(", ", failedEnabledStages)}");
-                }
             }
 
             async Task<T> RunInstrumentedStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null)
@@ -746,13 +743,24 @@ public sealed class PipelineOrchestrator
                 }
                 else
                 {
-                    run.YouTubeVideoId = await _youTubePublishingService.UploadAsync(videoPath, script.OptimizedMetadata?.PrimaryTitle ?? script.Title, script.OptimizedMetadata?.OptimizedDescription ?? script.Description, script.OptimizedMetadata?.Tags ?? script.Tags, selectedPrivacyStatus, cancellationToken);
-                    if (!string.IsNullOrWhiteSpace(run.YouTubeVideoId) && _publishingOptions.UploadThumbnail && _youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+                    try
                     {
-                        youtubeThumbnailUploaded = await _youTubeThumbnailPublisher.UploadThumbnailAsync(run.YouTubeVideoId, thumbnailPath, cancellationToken);
+                        run.YouTubeVideoId = await _youTubePublishingService.UploadAsync(videoPath, script.OptimizedMetadata?.PrimaryTitle ?? script.Title, script.OptimizedMetadata?.OptimizedDescription ?? script.Description, script.OptimizedMetadata?.Tags ?? script.Tags, selectedPrivacyStatus, cancellationToken);
+                        if (!string.IsNullOrWhiteSpace(run.YouTubeVideoId) && _publishingOptions.UploadThumbnail && _youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+                        {
+                            youtubeThumbnailUploaded = await _youTubeThumbnailPublisher.UploadThumbnailAsync(run.YouTubeVideoId, thumbnailPath, cancellationToken);
+                        }
+
+                        await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, string.IsNullOrWhiteSpace(run.YouTubeVideoId) ? PersistentStageStatuses.Failed : PersistentStageStatuses.Succeeded, reason: string.IsNullOrWhiteSpace(run.YouTubeVideoId) ? "YouTube upload did not return a video id." : null);
+                        _logger.LogInformation("Uploaded/Skipped=Uploaded");
                     }
-                    await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, string.IsNullOrWhiteSpace(run.YouTubeVideoId) ? PersistentStageStatuses.Failed : PersistentStageStatuses.Succeeded, reason: string.IsNullOrWhiteSpace(run.YouTubeVideoId) ? "YouTube upload did not return a video id." : null);
-                    _logger.LogInformation("Uploaded/Skipped=Uploaded");
+                    catch (Exception ex)
+                    {
+                        publishStatus = "PublishFailed";
+                        run.FailureReason = $"Publishing failed: {ex.Message}";
+                        await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, PersistentStageStatuses.Failed, reason: ex.Message);
+                        _logger.LogWarning(ex, "YouTube publishing failed for pipeline run {PipelineRunId} after generation completed.", run.Id);
+                    }
                 }
             }
             else
@@ -1017,14 +1025,22 @@ public sealed class PipelineOrchestrator
                 await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", false, [], SetStageStatusAsync);
             }
 
-            await EnsurePublishStagesHandledAsync(publishingEnabled, validationPassed);
+            var failedEnabledPublishStages = await GetFailedEnabledPublishStagesAsync(publishingEnabled, validationPassed);
+            if (failedEnabledPublishStages.Length > 0)
+            {
+                publishStatus = "Failed";
+                run.FailureReason = $"Publishing failed: {string.Join(", ", failedEnabledPublishStages)}";
+                _logger.LogWarning("Pipeline run {PipelineRunId} completed generation with publish errors: {FailedPublishStages}", run.Id, string.Join(", ", failedEnabledPublishStages));
+            }
 
             if (_pipelineStageExecutor is not null)
             {
                 await _pipelineStageExecutor.ExecuteStageAsync(run.Id, PipelineStageNames.Completed, _ => Task.FromResult(true), new StageExecutionOptions { MaxAttempts = 1, RetryDelaySeconds = 0, OutputPath = outputDir, DiagnosticPath = Path.Combine(outputDir, "pipeline-state.json") }, cancellationToken);
             }
 
-            run.Status = PipelineRunStatus.Succeeded;
+            run.Status = failedEnabledPublishStages.Length > 0
+                ? PipelineRunStatus.CompletedWithPublishErrors
+                : PipelineRunStatus.Succeeded;
             if (_operationalAlertNotifier is not null && request.PublishToYouTube && publishStatus == "Published")
             {
                 await _operationalAlertNotifier.NotifyAsync(new OperationalAlert(

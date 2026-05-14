@@ -88,7 +88,9 @@ public sealed class TokenHealthService : ITokenHealthService
 
             if (!tokenResponse.IsSuccessStatusCode)
             {
-                result.Error = $"YouTube OAuth token refresh failed with status {(int)tokenResponse.StatusCode}.";
+                var error = await YouTubeTokenRefreshDiagnostics.ReadAsync(tokenResponse, cancellationToken);
+                YouTubeTokenRefreshDiagnostics.Log(_logger, error);
+                result.Error = error.FriendlyMessage;
                 return result;
             }
 

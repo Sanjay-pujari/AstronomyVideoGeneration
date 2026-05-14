@@ -10,7 +10,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Scheduling;
 
 public sealed class PipelineRunQueue : IPipelineRunQueue
 {
-    private static readonly PipelineRunStatus[] DuplicateStatuses = [PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded];
+    private static readonly PipelineRunStatus[] DuplicateStatuses = [PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded, PipelineRunStatus.CompletedWithPublishErrors];
     private readonly ConcurrentQueue<SchedulerRunQueueItem> _queue = new();
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ISchedulerAuditStore _auditStore;

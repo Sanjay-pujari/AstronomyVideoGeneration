@@ -32,6 +32,51 @@ public sealed class TokenHealthServiceTests
         Assert.Equal("Astronomy Channel", result.AccountName);
     }
 
+
+    [Fact]
+    public async Task YouTubeInvalidRefreshToken_ReturnsFriendlyTokenHealthError()
+    {
+        using var handler = new TokenHealthHandler
+        {
+            YouTubeTokenStatusCode = HttpStatusCode.BadRequest,
+            YouTubeTokenError = "invalid_grant",
+            YouTubeTokenErrorDescription = "Token has been expired or revoked."
+        };
+        var service = CreateService(handler, youtube: new YouTubeOptions
+        {
+            ClientId = "client-id",
+            ClientSecret = "client-secret",
+            RefreshToken = "refresh-secret"
+        });
+
+        var result = await service.CheckYouTubeAsync(CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Equal("YouTube refresh token is invalid/revoked. Re-run /api/youtubeoauth/start.", result.Error);
+    }
+
+    [Fact]
+    public async Task YouTubeInvalidClient_ReturnsFriendlyTokenHealthError()
+    {
+        using var handler = new TokenHealthHandler
+        {
+            YouTubeTokenStatusCode = HttpStatusCode.BadRequest,
+            YouTubeTokenError = "invalid_client",
+            YouTubeTokenErrorDescription = "Unauthorized"
+        };
+        var service = CreateService(handler, youtube: new YouTubeOptions
+        {
+            ClientId = "client-id",
+            ClientSecret = "client-secret",
+            RefreshToken = "refresh-secret"
+        });
+
+        var result = await service.CheckYouTubeAsync(CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Equal("YouTube client id/secret does not match the refresh token.", result.Error);
+    }
+
     [Fact]
     public async Task YouTubeMissingRefreshToken_ReturnsInvalid()
     {
@@ -260,6 +305,9 @@ public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
     ];
     public long MetaExpiresAt { get; set; } = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds();
     public bool IncludeMetaExpiresAt { get; set; } = true;
+    public HttpStatusCode YouTubeTokenStatusCode { get; set; } = HttpStatusCode.OK;
+    public string? YouTubeTokenError { get; set; }
+    public string? YouTubeTokenErrorDescription { get; set; }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -269,7 +317,9 @@ public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
 
         if (request.RequestUri!.Host == "oauth2.googleapis.com")
         {
-            return JsonResponse(new { access_token = "access-token", token_type = "Bearer" });
+            return YouTubeTokenStatusCode == HttpStatusCode.OK
+                ? JsonResponse(new { access_token = "access-token", token_type = "Bearer" })
+                : JsonResponse(new { error = YouTubeTokenError, error_description = YouTubeTokenErrorDescription }, YouTubeTokenStatusCode);
         }
 
         if (request.RequestUri.Host == "www.googleapis.com" && request.RequestUri.AbsolutePath.Contains("/youtube/v3/channels", StringComparison.OrdinalIgnoreCase))
@@ -308,7 +358,7 @@ public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
         return new HttpResponseMessage(HttpStatusCode.BadRequest);
     }
 
-    private static HttpResponseMessage JsonResponse(object payload) => new(HttpStatusCode.OK) { Content = JsonContent.Create(payload) };
+    private static HttpResponseMessage JsonResponse(object payload, HttpStatusCode statusCode = HttpStatusCode.OK) => new(statusCode) { Content = JsonContent.Create(payload) };
 }
 
 public sealed class TempTokenHealthWorkspace : IDisposable

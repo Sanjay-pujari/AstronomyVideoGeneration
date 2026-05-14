@@ -215,7 +215,7 @@ app.MapPost("/api/events/{eventId}/generate", async (string eventId, string? reg
 
     var duplicateRegionId = string.IsNullOrWhiteSpace(regionId) ? (string.IsNullOrWhiteSpace(request.RegionId) ? request.LocationName : request.RegionId) : regionId;
     var requestedContentType = contentType ?? ContentType.SpecialEventGuide;
-    var statuses = new[] { PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded };
+    var statuses = new[] { PipelineRunStatus.Queued, PipelineRunStatus.Running, PipelineRunStatus.Succeeded, PipelineRunStatus.CompletedWithPublishErrors };
     if (await repository.HasSpecialEventRunAsync(eventId, request.Date, duplicateRegionId, requestedContentType, statuses, ct))
         return Results.Conflict(new { message = "Special event video already exists for event/date/region/contentType.", eventId, targetDate = request.Date, regionId = duplicateRegionId, contentType = requestedContentType });
 
@@ -235,7 +235,7 @@ app.MapPost("/api/events/{eventId}/generate", async (string eventId, string? reg
 app.MapGet("/api/events/generated", async (int? take, IPipelineRepository repository, CancellationToken ct) =>
     Results.Ok(await repository.GetGeneratedSpecialEventRunsAsync(Math.Clamp(take ?? 50, 1, 200), ct)));
 
-app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, ILogger<Program> logger, CancellationToken ct) =>
+app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, IPipelineRecoveryService recoveryService, ILogger<Program> logger, CancellationToken ct) =>
 {
     using var scope = logger.BeginScope(new Dictionary<string, object>
     {
@@ -245,6 +245,29 @@ app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrc
         ["publishToYouTube"] = request.PublishToYouTube
     });
     var result = await orchestrator.RunAsync(request, ct);
+    if (result.Status is PipelineRunStatus.PublishFailed or PipelineRunStatus.CompletedWithPublishErrors)
+    {
+        var status = await recoveryService.GetStatusAsync(result.Id, ct);
+        var failedStages = status?.Stages
+            .Where(s => s.Status.Equals(PersistentStageStatuses.Failed, StringComparison.OrdinalIgnoreCase)
+                && (s.StageName.Equals(PipelineStageNames.YouTubeLongPublished, StringComparison.OrdinalIgnoreCase)
+                    || s.StageName.Equals(PipelineStageNames.YouTubeShortPublished, StringComparison.OrdinalIgnoreCase)
+                    || s.StageName.Equals(PipelineStageNames.FacebookReelPublished, StringComparison.OrdinalIgnoreCase)
+                    || s.StageName.Equals(PipelineStageNames.InstagramReelPublished, StringComparison.OrdinalIgnoreCase)))
+            .Select(s => s.StageName)
+            .ToArray() ?? [];
+
+        return Results.Ok(new RunPipelineExecutionResponse(
+            result.Id,
+            result.Status,
+            "Succeeded",
+            "Failed",
+            failedStages,
+            $"/api/pipeline/resume/{result.Id}",
+            $"/api/pipeline/retry-publish/{result.Id}?platform=youtube",
+            "Generation completed, but one or more publish stages failed."));
+    }
+
     return Results.Ok(new RunPipelineResponse(result.Id, result.Status, "Completed."));
 });
 
