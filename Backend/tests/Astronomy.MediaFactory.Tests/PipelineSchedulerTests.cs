@@ -173,7 +173,7 @@ public sealed class PipelineSchedulerTests
     public async Task Scheduler_Does_Not_Block_Manual_Pipeline_Runs()
     {
         var harness = new SchedulerHarness(CreateOptions(enabled: true, schedules: [DueUtcSchedule()])) { Repository = { HasDuplicate = true } };
-        var manualRun = await harness.Executor.ExecuteAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "UTC", "UTC"), CancellationToken.None);
+        var manualRun = await harness.Executor.ExecuteAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "UTC", "UTC"), null, CancellationToken.None);
 
         Assert.Equal(PipelineRunStatus.Succeeded, manualRun.Status);
         Assert.Single(harness.Executor.CompletedRuns);
