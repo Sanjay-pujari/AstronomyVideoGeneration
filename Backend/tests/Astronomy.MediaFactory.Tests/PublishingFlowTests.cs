@@ -308,6 +308,45 @@ public sealed class PublishingFlowTests
         Assert.False(contentPublishService.WasCalled);
     }
 
+    [Fact]
+    public async Task PipelineOrchestrator_SkipsMetaPublish_WhenValidationFails()
+    {
+        var repository = new FakePipelineRepository();
+        var metaPublishService = new TrackingMetaPublishService();
+        var stageExecutor = new PipelineStageExecutor(repository, NullLogger<PipelineStageExecutor>.Instance);
+        var orchestrator = new PipelineOrchestrator(
+            new FakeContextProvider(),
+            new FakeTopicRankingService(),
+            new FakeVisualProvider(),
+            new FakeScriptService(),
+            new FakeSpeechService(),
+            new FakeRenderService(),
+            new PassThroughBlobService(),
+            new SuccessfulYouTubeService(),
+            new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new FakeThumbnailGenerationService(),
+            new PassThroughSeoMetadataGeneratorService(),
+            repository,
+            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
+            Options.Create(new PublishingValidationOptions { Enabled = true }),
+            NullLogger<PipelineOrchestrator>.Instance,
+            publishingOptions: Options.Create(new PublishingOptions { Enabled = true, Mode = "Private", PublishShortVideo = true }),
+            prePublishValidationService: new FailingValidationService(),
+            metaPublishingOptions: Options.Create(new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, PublishInstagramReel = true }),
+            metaPublishService: metaPublishService,
+            pipelineStageExecutor: stageExecutor);
+
+        var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: true), CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
+        Assert.False(metaPublishService.WasCalled);
+        Assert.Contains(repository.StageExecutions, s => s.StageName == PipelineStageNames.FacebookReelPublished && s.Status == PersistentStageStatuses.Skipped && s.LastError == "Pre-publish validation blocked publishing.");
+        Assert.Contains(repository.StageExecutions, s => s.StageName == PipelineStageNames.InstagramReelPublished && s.Status == PersistentStageStatuses.Skipped && s.LastError == "Pre-publish validation blocked publishing.");
+    }
+
+
     private static PipelineOrchestrator CreateOrchestrator(
         FakePipelineRepository repository,
         IYouTubePublishingService yt,
@@ -334,11 +373,28 @@ public sealed class PublishingFlowTests
         }
     }
 
+    private sealed class TrackingMetaPublishService : IMetaPublishService
+    {
+        public bool WasCalled { get; private set; }
+
+        public Task<IReadOnlyList<MetaPublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset = "all", CancellationToken cancellationToken = default)
+        {
+            WasCalled = true;
+            return Task.FromResult<IReadOnlyList<MetaPublishResult>>([
+                new MetaPublishResult { Success = false, Platform = "Facebook", Mode = "Public", Error = "Facebook should have been skipped." },
+                new MetaPublishResult { Success = false, Platform = "Instagram", Mode = "Public", Error = "Instagram should have been skipped." }
+            ]);
+        }
+    }
+
     private sealed class FakePipelineRepository : IPipelineRepository
     {
+        private readonly List<PipelineRun> _runs = [];
+
         public List<MediaAsset> Assets { get; } = [];
         public List<PublishedVideo> PublishedVideos { get; } = [];
         public List<MonetizationRecord> MonetizationRecords { get; } = [];
+        public List<PipelineStageExecution> StageExecutions { get; } = [];
 
         public Task AddAssetAsync(MediaAsset asset, CancellationToken cancellationToken)
         {
@@ -361,10 +417,11 @@ public sealed class PublishingFlowTests
 
         public Task<PipelineRun> CreateAsync(PipelineRun run, CancellationToken cancellationToken)
         {
+            _runs.Add(run);
             return Task.FromResult(run);
         }
 
-        public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineRun?>(null);
+        public Task<PipelineRun?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(_runs.FirstOrDefault(x => x.Id == id));
         public Task<IReadOnlyCollection<PipelineRun>> GetRecentAsync(int take, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PipelineRun>>([]);
         public Task AddShortVideoAsync(ShortVideo shortVideo, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task AddJobAsync(PipelineJob job, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -382,6 +439,15 @@ public sealed class PublishingFlowTests
         public Task<IReadOnlyCollection<PublishedVideo>> GetPublishedVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PublishedVideo>>([]);
         public Task<IReadOnlyCollection<ShortVideo>> GetShortVideosWithYouTubeIdAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<ShortVideo>>([]);
         public Task<GeneratedScript?> GetLatestScriptByTitleAsync(string title, CancellationToken cancellationToken) => Task.FromResult<GeneratedScript?>(null);
+        public Task<IReadOnlyCollection<PipelineStageExecution>> GetStageExecutionsAsync(Guid pipelineRunId, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyCollection<PipelineStageExecution>>(StageExecutions.Where(x => x.PipelineRunId == pipelineRunId).ToArray());
+        public Task<PipelineStageExecution?> GetLatestStageExecutionAsync(Guid pipelineRunId, string stageName, CancellationToken cancellationToken)
+            => Task.FromResult(StageExecutions.LastOrDefault(x => x.PipelineRunId == pipelineRunId && x.StageName == stageName));
+        public Task AddStageExecutionAsync(PipelineStageExecution stageExecution, CancellationToken cancellationToken)
+        {
+            StageExecutions.Add(stageExecution);
+            return Task.CompletedTask;
+        }
         public Task<IReadOnlyCollection<PublishedVideo>> GetRecentPublishedVideosAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<PublishedVideo>>([]);
         public Task<IReadOnlyCollection<GeneratedScript>> GetRecentGeneratedScriptsAsync(DateTimeOffset from, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<GeneratedScript>>([]);
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
