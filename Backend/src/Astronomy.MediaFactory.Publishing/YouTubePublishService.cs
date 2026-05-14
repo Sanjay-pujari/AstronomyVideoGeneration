@@ -232,6 +232,23 @@ public sealed class YouTubePublishService : IYouTubePublishService
             return _maintenanceOptions.WorkingDirectory;
         }
 
+        if (!string.IsNullOrWhiteSpace(run.OutputFolder))
+        {
+            return run.OutputFolder;
+        }
+
+        var regionAwarePath = PipelineOrchestrator.BuildOutputDirectory(
+            _maintenanceOptions.WorkingDirectory,
+            run.ContentType,
+            run.RunDate,
+            run.RegionId,
+            run.LocationName,
+            run.Id);
+        if (Directory.Exists(regionAwarePath))
+        {
+            return regionAwarePath;
+        }
+
         return Path.Combine(_maintenanceOptions.WorkingDirectory, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
     }
 

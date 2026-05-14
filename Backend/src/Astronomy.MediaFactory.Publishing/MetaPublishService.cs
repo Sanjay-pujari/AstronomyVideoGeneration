@@ -361,7 +361,26 @@ public sealed class MetaPublishService : IMetaPublishService
     }
 
     private string ResolveOutputDirectory(PipelineRun run)
-        => Path.Combine(_maintenanceOptions.WorkingDirectory, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
+    {
+        if (!string.IsNullOrWhiteSpace(run.OutputFolder))
+        {
+            return run.OutputFolder;
+        }
+
+        var regionAwarePath = PipelineOrchestrator.BuildOutputDirectory(
+            _maintenanceOptions.WorkingDirectory,
+            run.ContentType,
+            run.RunDate,
+            run.RegionId,
+            run.LocationName,
+            run.Id);
+        if (Directory.Exists(regionAwarePath))
+        {
+            return regionAwarePath;
+        }
+
+        return Path.Combine(_maintenanceOptions.WorkingDirectory, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
+    }
 
     private static string NormalizeMode(string? mode)
         => string.Equals(mode, "Public", StringComparison.OrdinalIgnoreCase) ? "Public"
