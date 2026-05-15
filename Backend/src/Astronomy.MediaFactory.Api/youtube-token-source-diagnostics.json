@@ -1,0 +1,10 @@
+{
+  "tokenSource": "Missing",
+  "tokenFileExists": false,
+  "channelId": "",
+  "channelTitle": "",
+  "refreshTokenPreview": "",
+  "clientIdPreview": "78554627....com",
+  "redirectUri": "https://localhost:59235/api/youtubeoauth/callback",
+  "generatedUtc": "2026-05-15T05:42:44.5560791+00:00"
+}
