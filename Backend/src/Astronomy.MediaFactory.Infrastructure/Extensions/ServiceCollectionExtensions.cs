@@ -35,6 +35,20 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(AstronomyApiOptions.SectionName))
             .ValidateOnStart();
 
+        services.AddOptions<CelestialAssetsOptions>()
+            .Bind(configuration.GetSection(CelestialAssetsOptions.SectionName))
+            .Validate(options => options.MaxImagesPerObject > 0, "CelestialAssets:MaxImagesPerObject must be greater than 0.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.RootPath), "CelestialAssets:RootPath is required.")
+            .Validate(options => options.AllowedExtensions.Count > 0, "CelestialAssets:AllowedExtensions must not be empty.")
+            .ValidateOnStart();
+
+        services.AddOptions<NasaImagesOptions>()
+            .Bind(configuration.GetSection(NasaImagesOptions.SectionName))
+            .Validate(options => Uri.TryCreate(options.SearchBaseUrl, UriKind.Absolute, out _), "NasaImages:SearchBaseUrl must be an absolute URI.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.SearchEndpoint), "NasaImages:SearchEndpoint is required.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.AssetEndpoint), "NasaImages:AssetEndpoint is required.")
+            .ValidateOnStart();
+
         services.AddOptions<AzureOpenAiOptions>()
             .Bind(configuration.GetSection(AzureOpenAiOptions.SectionName))
             .ValidateOnStart();
@@ -266,10 +280,12 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<StartupValidationOptions>, ProductionStartupValidator>();
         services.AddHostedService<ObsoleteConfigurationWarningHostedService>();
+        services.AddHostedService<CelestialAssetWarmupHostedService>();
 
         services.AddHttpClient<NasaApodClient>();
         services.AddHttpClient<NasaNeoWsClient>();
-        services.AddHttpClient<ICelestialAssetProvider, CelestialAssetProvider>();
+        services.AddHttpClient<ICelestialAssetIngestionService, CelestialAssetIngestionService>(client => client.Timeout = TimeSpan.FromSeconds(20));
+        services.AddScoped<ICelestialAssetProvider, CelestialAssetProvider>();
         services.AddHttpClient<MinorPlanetCenterClient>();
         services.AddHttpClient<ISkyfieldSidecarClient, SkyfieldSidecarClient>((sp, client) =>
         {
