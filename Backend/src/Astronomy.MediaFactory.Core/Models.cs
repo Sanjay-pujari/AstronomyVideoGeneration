@@ -590,3 +590,55 @@ public sealed class EventContentDecision
     public IReadOnlyList<AstronomyEvent> SkippedEvents { get; init; } = [];
     public string Reason { get; init; } = "No event selected.";
 }
+
+public sealed class CelestialAssetImageMetadata
+{
+    public string ObjectKey { get; init; } = "";
+    public string Source { get; init; } = "NASA";
+    public string Title { get; init; } = "";
+    public string Description { get; init; } = "";
+    public string NasaId { get; init; } = "";
+    public string OriginalUrl { get; init; } = "";
+    public string LocalPath { get; init; } = "";
+    public DateTimeOffset DownloadedAtUtc { get; init; }
+    public string LicenseNote { get; init; } = "";
+    public int Width { get; init; }
+    public int Height { get; init; }
+    public double QualityScore { get; init; }
+}
+
+public sealed class CelestialObjectIngestionResult
+{
+    public string ObjectKey { get; init; } = "";
+    public int ImagesFound { get; init; }
+    public int ImagesDownloaded { get; init; }
+    public bool SkippedBecauseCached { get; init; }
+    public IReadOnlyCollection<string> Errors { get; init; } = [];
+    public string SelectedPrimaryAsset { get; init; } = "";
+}
+
+public sealed class CelestialAssetIngestionReport
+{
+    public DateTimeOffset GeneratedAtUtc { get; init; }
+    public IReadOnlyCollection<CelestialObjectIngestionResult> Objects { get; init; } = [];
+}
+
+public sealed class CelestialAssetObjectStatus
+{
+    public string ObjectKey { get; init; } = "";
+    public string Directory { get; init; } = "";
+    public int ImagesFound { get; init; }
+    public int RequiredImages { get; init; }
+    public bool IsSatisfied { get; init; }
+    public string SelectedPrimaryAsset { get; init; } = "";
+    public IReadOnlyCollection<CelestialAssetImageMetadata> Images { get; init; } = [];
+    public IReadOnlyCollection<string> Errors { get; init; } = [];
+}
+
+public sealed class CelestialAssetStatusResponse
+{
+    public bool Enabled { get; init; }
+    public string RootPath { get; init; } = "";
+    public DateTimeOffset GeneratedAtUtc { get; init; }
+    public IReadOnlyCollection<CelestialAssetObjectStatus> Objects { get; init; } = [];
+}

@@ -466,6 +466,16 @@ app.MapGet("/api/analytics/youtube/{videoId}", async (string videoId, IPipelineR
     return items.Count == 0 ? Results.NotFound() : Results.Ok(items);
 });
 
+app.MapPost("/api/assets/celestial/refresh", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
+    Results.Ok(await ingestion.RefreshAsync(ct)));
+app.MapGet("/api/assets/celestial/status", async (ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
+    Results.Ok(await ingestion.GetStatusAsync(ct)));
+app.MapGet("/api/assets/celestial/{objectKey}", async (string objectKey, ICelestialAssetIngestionService ingestion, CancellationToken ct) =>
+{
+    var status = await ingestion.GetObjectAsync(objectKey, ct);
+    return status is null ? Results.NotFound(new { message = $"Celestial object '{objectKey}' is not configured." }) : Results.Ok(status);
+});
+
 app.Run();
 
 

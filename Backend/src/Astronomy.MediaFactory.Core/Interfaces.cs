@@ -206,6 +206,15 @@ public interface IThumbnailCompositionService
     Task<string> ComposeAsync(ThumbnailCompositionRequest request, CancellationToken cancellationToken);
 }
 
+
+public interface ICelestialAssetIngestionService
+{
+    Task<CelestialAssetIngestionReport> RefreshAsync(CancellationToken cancellationToken);
+    Task<CelestialObjectIngestionResult> RefreshObjectAsync(string objectKey, CancellationToken cancellationToken);
+    Task<CelestialAssetStatusResponse> GetStatusAsync(CancellationToken cancellationToken);
+    Task<CelestialAssetObjectStatus?> GetObjectAsync(string objectKey, CancellationToken cancellationToken);
+}
+
 public interface ICelestialAssetProvider
 {
     Task<CelestialAsset> GetAssetAsync(CelestialAssetRequest request, CancellationToken cancellationToken);
