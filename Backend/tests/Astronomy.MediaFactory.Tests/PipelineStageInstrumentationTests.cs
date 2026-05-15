@@ -41,7 +41,6 @@ public sealed class PipelineStageInstrumentationTests
         Assert.All(recorder.Stages, s => Assert.True(s.DurationMs >= 0));
     }
 
-
     [Fact]
     public async Task RunAsync_PublishesStageAlerts_ForSlowAndFailedStages()
     {
@@ -76,6 +75,38 @@ public sealed class PipelineStageInstrumentationTests
         Assert.Contains(alerts.Failures, x => x.StageName == "BlobUpload" && x.Status == PipelineStageStatuses.FailedWithFallback);
     }
 
+    [Fact]
+    public async Task RunAsync_ContinuesFallback_WhenFailureRecordingIsCanceled()
+    {
+        var repository = new FakePipelineRepository();
+        var recorder = new CancelingFailStageRecorder();
+        var orchestrator = new PipelineOrchestrator(
+            new FakeContextProvider(),
+            new FakeTopicRankingService(),
+            new FakeVisualProvider(),
+            new FakeScriptService(),
+            new FakeSpeechService(),
+            new FakeRenderService(),
+            new ThrowingBlobService(),
+            new SuccessfulYouTubeService(),
+            new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new FakeThumbnailGenerationService(),
+            new PassThroughSeoMetadataGeneratorService(),
+            repository,
+            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
+            Options.Create(new PublishingValidationOptions()),
+            NullLogger<PipelineOrchestrator>.Instance,
+            pipelineStageRecorder: recorder);
+
+        var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: true), CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
+        Assert.Equal(1, recorder.FailAttempts);
+        Assert.Contains(recorder.Stages, s => s.StageName == "BlobUpload");
+    }
+
     private sealed class RecordingStageRecorder : IPipelineStageRecorder
     {
         public List<PipelineStageExecution> Stages { get; } = [];
@@ -104,6 +135,32 @@ public sealed class PipelineStageInstrumentationTests
         }
     }
 
+    private sealed class CancelingFailStageRecorder : IPipelineStageRecorder
+    {
+        public List<PipelineStageExecution> Stages { get; } = [];
+        public int FailAttempts { get; private set; }
+
+        public Task<PipelineStageExecution> StartStageAsync(Guid pipelineRunId, string stageName, string? metadataJson, CancellationToken cancellationToken)
+        {
+            var stage = new PipelineStageExecution { PipelineRunId = pipelineRunId, StageName = stageName, Status = PipelineStageStatuses.Running, StartedAt = DateTimeOffset.UtcNow, MetadataJson = metadataJson };
+            Stages.Add(stage);
+            return Task.FromResult(stage);
+        }
+
+        public Task CompleteStageAsync(PipelineStageExecution stageExecution, string? metadataJson, CancellationToken cancellationToken)
+        {
+            stageExecution.FinishedAt = DateTimeOffset.UtcNow;
+            stageExecution.DurationMs = (long)Math.Max(0, (stageExecution.FinishedAt.Value - stageExecution.StartedAt).TotalMilliseconds);
+            stageExecution.Status = PipelineStageStatuses.Succeeded;
+            return Task.CompletedTask;
+        }
+
+        public Task FailStageAsync(PipelineStageExecution stageExecution, string errorMessage, bool continuedWithFallback, string? metadataJson, CancellationToken cancellationToken)
+        {
+            FailAttempts++;
+            throw new OperationCanceledException("Simulated cancellation while recording stage failure.");
+        }
+    }
 
     private sealed class RecordingStageAlertPublisher : IStageAlertPublisher
     {
