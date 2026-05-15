@@ -320,7 +320,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IThumbnailStrategyService, ThumbnailStrategyService>();
         services.AddScoped<IThumbnailScoringService, ThumbnailScoringService>();
         services.AddScoped<IThumbnailHookService, ThumbnailHookService>();
-        services.AddScoped<IThumbnailGenerationService, ThumbnailGenerationService>();
+        services.AddScoped<IThumbnailCandidateSelector, ThumbnailCandidateSelector>();
+        services.AddScoped<IThumbnailCompositionService, ThumbnailCompositionService>();
+        services.AddScoped<ICinematicThumbnailService, CinematicThumbnailService>();
+        services.AddScoped<IThumbnailGenerationService, CinematicThumbnailService>();
         services.AddScoped<IThumbnailGeneratorService, ThumbnailGeneratorService>();
         services.AddScoped<ISeoMetadataGeneratorService, SeoMetadataGeneratorService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
