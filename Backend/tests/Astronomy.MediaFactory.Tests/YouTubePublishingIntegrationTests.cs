@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Publishing;
@@ -9,6 +10,9 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.PixelFormats;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -285,7 +289,7 @@ public sealed class YouTubePublishingIntegrationTests
     }
 
     [Fact]
-    public async Task ThumbnailOverTwoMb_IsSkippedWithWarning()
+    public async Task ThumbnailOverTwoMb_IsCompressedBeforeUpload()
     {
         using var workspace = new TempWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, largeThumbnail: true);
@@ -295,8 +299,51 @@ public sealed class YouTubePublishingIntegrationTests
         var result = (await service.PublishForPipelineRunAsync(run.Id, CancellationToken.None)).Single();
 
         Assert.True(result.Success);
+        Assert.Empty(result.Warnings);
+        Assert.Equal(1, api.ThumbnailUploadCalls);
+        Assert.EndsWith(".jpg", api.LastThumbnailPath);
+        Assert.True(new FileInfo(api.LastThumbnailPath!).Length <= 2 * 1024 * 1024);
+        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "youtube-thumbnail-upload-diagnostics.json")));
+        Assert.Equal("Completed", doc.RootElement.GetProperty("uploadStatus").GetString());
+        Assert.True(doc.RootElement.TryGetProperty("compressedThumbnailPath", out var compressedPath));
+        Assert.False(string.IsNullOrWhiteSpace(compressedPath.GetString()));
+    }
+
+    [Fact]
+    public async Task WrongThumbnailExtension_IsSkippedWithWarning()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, thumbnailExtension: ".gif");
+        var api = new TrackingYouTubeApiClient();
+        var service = CreateContentService(workspace, repository, api, new PublishingOptions { Enabled = true, Mode = "Private", UploadThumbnail = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
         Assert.Equal(0, api.ThumbnailUploadCalls);
-        Assert.Contains("larger than 2MB", result.Warnings.Single());
+        Assert.Equal("Video uploaded but thumbnail upload failed.", result.Warnings.Single());
+        Assert.Contains("PNG or JPG", result.Error!);
+        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "youtube-thumbnail-upload-diagnostics.json")));
+        Assert.Equal("Skipped", doc.RootElement.GetProperty("uploadStatus").GetString());
+    }
+
+    [Fact]
+    public async Task MissingThumbnail_IsSkippedWithWarning()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, createThumbnail: false);
+        var api = new TrackingYouTubeApiClient();
+        var service = CreateContentService(workspace, repository, api, new PublishingOptions { Enabled = true, Mode = "Private", UploadThumbnail = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal(0, api.ThumbnailUploadCalls);
+        Assert.Equal("Video uploaded but thumbnail upload failed.", result.Warnings.Single());
+        Assert.Contains("missing", result.Error!);
+        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "youtube-thumbnail-upload-diagnostics.json")));
+        Assert.False(doc.RootElement.GetProperty("fileExists").GetBoolean());
+        Assert.Equal("Skipped", doc.RootElement.GetProperty("uploadStatus").GetString());
     }
 
     [Fact]
@@ -311,7 +358,10 @@ public sealed class YouTubePublishingIntegrationTests
 
         Assert.True(result.Success);
         Assert.True(api.UploadCalled);
-        Assert.Contains("Video uploaded but thumbnail upload failed", result.Warnings.Single());
+        Assert.Equal("Video uploaded but thumbnail upload failed.", result.Warnings.Single());
+        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "youtube-thumbnail-upload-diagnostics.json")));
+        Assert.Equal("Failed", doc.RootElement.GetProperty("uploadStatus").GetString());
+        Assert.Contains("YouTube thumbnail upload did not complete successfully", doc.RootElement.GetProperty("error").GetString());
     }
 
     [Theory]
@@ -481,6 +531,7 @@ public sealed class YouTubePublishingIntegrationTests
         public PublishRequest? LastRequest { get; private set; }
         public string? ChannelFailure { get; init; }
         public string VideoId { get; init; } = "video-123";
+        public string? LastThumbnailPath { get; private set; }
 
         public Task<YouTubeChannelInfo> GetAuthenticatedChannelAsync(string accessToken, CancellationToken cancellationToken)
             => ChannelFailure is null
@@ -499,6 +550,7 @@ public sealed class YouTubePublishingIntegrationTests
         public Task UploadThumbnailAsync(string videoId, string thumbnailPath, string accessToken, CancellationToken cancellationToken)
         {
             ThumbnailUploadCalls++;
+            LastThumbnailPath = thumbnailPath;
             if (ThumbnailUploadCalls <= ThumbnailFailuresBeforeSuccess)
             {
                 throw new InvalidOperationException("YouTube thumbnail upload did not complete successfully. Status: Failed");
@@ -523,7 +575,7 @@ public sealed class YouTubePublishingIntegrationTests
         public void Dispose() { if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true); }
         public string OutputDirectory(PipelineRun run) => run.OutputFolder ?? Path.Combine(Root, run.ContentType.ToString(), run.RunDate.ToString("yyyy-MM-dd"), run.Id.ToString("N"));
 
-        public InMemoryRepository CreateRepositoryWithRun(out PipelineRun run, bool passedValidation, bool createThumbnail = true, bool createShort = false, bool largeThumbnail = false, bool createRootMetadata = true)
+        public InMemoryRepository CreateRepositoryWithRun(out PipelineRun run, bool passedValidation, bool createThumbnail = true, bool createShort = false, bool largeThumbnail = false, bool createRootMetadata = true, string thumbnailExtension = ".png")
         {
             run = new PipelineRun { ContentType = ContentType.DailySkyGuide, RunDate = DateOnly.FromDateTime(DateTime.UtcNow), LocationName = "Pune" };
             var output = OutputDirectory(run);
@@ -531,13 +583,12 @@ public sealed class YouTubePublishingIntegrationTests
             File.WriteAllText(Path.Combine(output, "final-video.mp4"), "video");
             if (createThumbnail)
             {
-                if (largeThumbnail)
+                var thumbnailName = thumbnailExtension.Equals(".png", StringComparison.OrdinalIgnoreCase) ? "thumbnail-1.png" : $"thumbnail-1{thumbnailExtension}";
+                var thumbnailPath = Path.Combine(output, thumbnailName);
+                WriteThumbnailImage(thumbnailPath, thumbnailExtension, largeThumbnail);
+                if (!thumbnailExtension.Equals(".png", StringComparison.OrdinalIgnoreCase))
                 {
-                    File.WriteAllBytes(Path.Combine(output, "thumbnail-1.png"), new byte[(2 * 1024 * 1024) + 1]);
-                }
-                else
-                {
-                    File.WriteAllText(Path.Combine(output, "thumbnail-1.png"), "thumb");
+                    File.WriteAllText(Path.Combine(output, "thumbnail-selection.json"), JsonSerializer.Serialize(new { thumbnailPath }));
                 }
             }
             if (createShort)
@@ -558,6 +609,35 @@ public sealed class YouTubePublishingIntegrationTests
                 ? "{\"passed\":true,\"errors\":[]}"
                 : "{\"passed\":false,\"errors\":[\"validation failed\"]}");
             return new InMemoryRepository(run);
+        }
+    }
+
+    private static void WriteThumbnailImage(string path, string extension, bool largeThumbnail)
+    {
+        using var image = new Image<Rgba32>(1280, 720, Color.DarkBlue);
+        if (largeThumbnail)
+        {
+            var random = new Random(42);
+            image.ProcessPixelRows(accessor =>
+            {
+                for (var y = 0; y < accessor.Height; y++)
+                {
+                    var row = accessor.GetRowSpan(y);
+                    for (var x = 0; x < row.Length; x++)
+                    {
+                        row[x] = new Rgba32((byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256));
+                    }
+                }
+            });
+        }
+
+        if (extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            image.SaveAsJpeg(path, new JpegEncoder { Quality = largeThumbnail ? 100 : 90 });
+        }
+        else
+        {
+            image.SaveAsPng(path);
         }
     }
 

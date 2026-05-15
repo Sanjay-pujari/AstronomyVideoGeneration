@@ -3,12 +3,14 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Processing;
 
 namespace Astronomy.MediaFactory.Publishing;
 
 public sealed class YouTubePublishService : IYouTubePublishService
 {
-    private const long MaxThumbnailBytes = 2 * 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly IYouTubeAuthService _authService;
@@ -75,11 +77,11 @@ public sealed class YouTubePublishService : IYouTubePublishService
             await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-channel-info.json"), channel, cancellationToken);
 
             var videoId = await _apiClient.UploadVideoAsync(normalizedRequest, accessToken, cancellationToken);
-            var thumbnailWarning = await TryUploadThumbnailAsync(normalizedRequest, videoId, accessToken, cancellationToken);
+            var thumbnailWarning = await TryUploadThumbnailAsync(normalizedRequest, videoId, accessToken, outputDirectory, cancellationToken);
             var warnings = new List<string>();
             if (!string.IsNullOrWhiteSpace(thumbnailWarning))
             {
-                warnings.Add($"Video uploaded but thumbnail upload failed: {thumbnailWarning}");
+                warnings.Add("Video uploaded but thumbnail upload failed.");
             }
             var result = new PublishResult
             {
@@ -91,7 +93,7 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 VideoUrl = $"https://www.youtube.com/watch?v={videoId}",
                 ChannelId = channel.ChannelId,
                 ChannelTitle = channel.ChannelTitle,
-                Error = thumbnailWarning is null ? null : warnings[0],
+                Error = thumbnailWarning is null ? null : $"{warnings[0]} {thumbnailWarning}",
                 Warnings = warnings,
                 Mode = mode,
                 PublishedUtc = DateTime.UtcNow
@@ -169,26 +171,40 @@ public sealed class YouTubePublishService : IYouTubePublishService
             : string.Equals(mode, "Disabled", StringComparison.OrdinalIgnoreCase) ? "Disabled"
             : "DryRun";
 
-    private async Task<string?> TryUploadThumbnailAsync(PublishRequest request, string videoId, string accessToken, CancellationToken cancellationToken)
+    private async Task<string?> TryUploadThumbnailAsync(PublishRequest request, string videoId, string accessToken, string outputDirectory, CancellationToken cancellationToken)
     {
         if (!request.UploadThumbnail)
         {
             return null;
         }
 
-        var validationError = ValidateThumbnail(request.ThumbnailPath);
-        if (validationError is not null)
+        var diagnostics = new YouTubeThumbnailUploadDiagnostics
         {
-            _logger.LogWarning("Skipping YouTube thumbnail upload for {VideoId}: {Reason}", videoId, validationError);
-            return validationError;
-        }
+            VideoId = videoId,
+            ThumbnailPath = request.ThumbnailPath,
+            FileExists = !string.IsNullOrWhiteSpace(request.ThumbnailPath) && File.Exists(request.ThumbnailPath),
+            MimeType = GetMimeType(request.ThumbnailPath)
+        };
 
+        string? uploadPath = null;
         try
         {
+            var validationError = await ValidateAndPrepareThumbnailAsync(request, diagnostics, outputDirectory, cancellationToken);
+            if (validationError is not null)
+            {
+                diagnostics.Error = validationError;
+                diagnostics.UploadStatus = "Skipped";
+                await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
+                _logger.LogWarning("Skipping YouTube thumbnail upload for {VideoId}: {Reason}", videoId, validationError);
+                return validationError;
+            }
+
+            uploadPath = diagnostics.CompressedThumbnailPath ?? request.ThumbnailPath;
+            diagnostics.MimeType = GetMimeType(uploadPath);
             await TransientRetryHelper.ExecuteAsync(
                 async ct =>
                 {
-                    await _apiClient.UploadThumbnailAsync(videoId, request.ThumbnailPath, accessToken, ct);
+                    await _apiClient.UploadThumbnailAsync(videoId, uploadPath, accessToken, ct);
                     return true;
                 },
                 _youTubeOptions.UploadRetryAttempts,
@@ -198,31 +214,183 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 "YouTube thumbnail upload",
                 videoId,
                 cancellationToken);
+            diagnostics.UploadStatus = "Completed";
+            await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
             return null;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "YouTube thumbnail upload failed for video {VideoId}.", videoId);
+            diagnostics.UploadStatus = GetUploadStatus(ex) ?? "Failed";
+            diagnostics.Error = BuildThumbnailError(ex);
+            LogThumbnailUploadDiagnostics(videoId, diagnostics.UploadStatus, ex);
+            await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
             return $"Thumbnail upload failed: {ex.Message}";
         }
     }
 
-    private static string? ValidateThumbnail(string path)
+    private async Task<string?> ValidateAndPrepareThumbnailAsync(PublishRequest request, YouTubeThumbnailUploadDiagnostics diagnostics, string outputDirectory, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        if (string.IsNullOrWhiteSpace(request.ThumbnailPath) || !File.Exists(request.ThumbnailPath))
         {
             return "Thumbnail file is missing.";
         }
 
-        var extension = Path.GetExtension(path);
-        if (!extension.Equals(".png", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+        var extension = Path.GetExtension(request.ThumbnailPath);
+        if (!IsSupportedThumbnailExtension(extension))
         {
             return "Thumbnail must be a PNG or JPG file.";
         }
 
-        var length = new FileInfo(path).Length;
-        return length > MaxThumbnailBytes ? "Thumbnail file is larger than 2MB." : null;
+        diagnostics.MimeType = GetMimeType(request.ThumbnailPath);
+        diagnostics.FileSizeBytes = new FileInfo(request.ThumbnailPath).Length;
+
+        try
+        {
+            var info = await Image.IdentifyAsync(request.ThumbnailPath, cancellationToken);
+            if (info is null || info.Width <= 0 || info.Height <= 0)
+            {
+                return "Thumbnail image dimensions are invalid.";
+            }
+
+            diagnostics.Width = info.Width;
+            diagnostics.Height = info.Height;
+            LogThumbnailDimensionRecommendation(request, info.Width, info.Height);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Skipping YouTube thumbnail upload because dimensions could not be read from {ThumbnailPath}.", request.ThumbnailPath);
+            return "Thumbnail image dimensions are invalid.";
+        }
+
+        var maxThumbnailSizeBytes = GetMaxThumbnailSizeBytes();
+        if (diagnostics.FileSizeBytes > maxThumbnailSizeBytes)
+        {
+            if (!_youTubeOptions.CompressThumbnailIfTooLarge)
+            {
+                return $"Thumbnail file is larger than {maxThumbnailSizeBytes} bytes.";
+            }
+
+            var compressedPath = await CompressThumbnailAsync(request.ThumbnailPath, outputDirectory, maxThumbnailSizeBytes, cancellationToken);
+            diagnostics.CompressedThumbnailPath = compressedPath;
+            diagnostics.FileSizeBytes = new FileInfo(compressedPath).Length;
+            diagnostics.MimeType = GetMimeType(compressedPath);
+            var compressedInfo = await Image.IdentifyAsync(compressedPath, cancellationToken);
+            diagnostics.Width = compressedInfo?.Width;
+            diagnostics.Height = compressedInfo?.Height;
+
+            if (diagnostics.FileSizeBytes > maxThumbnailSizeBytes)
+            {
+                return $"Compressed thumbnail file is larger than {maxThumbnailSizeBytes} bytes.";
+            }
+        }
+
+        return null;
     }
+
+    private async Task<string> CompressThumbnailAsync(string thumbnailPath, string outputDirectory, long maxThumbnailSizeBytes, CancellationToken cancellationToken)
+    {
+        var compressedPath = Path.Combine(outputDirectory, $"youtube-thumbnail-compressed-{Path.GetFileNameWithoutExtension(thumbnailPath)}.jpg");
+        var quality = Math.Clamp(_youTubeOptions.ThumbnailJpegQuality, 1, 100);
+
+        using var image = await Image.LoadAsync(thumbnailPath, cancellationToken);
+        await image.SaveAsJpegAsync(compressedPath, new JpegEncoder { Quality = quality }, cancellationToken);
+
+        while (new FileInfo(compressedPath).Length > maxThumbnailSizeBytes && image.Width > 320 && image.Height > 180)
+        {
+            var nextWidth = Math.Max(320, (int)Math.Round(image.Width * 0.9));
+            var nextHeight = Math.Max(180, (int)Math.Round(image.Height * 0.9));
+            image.Mutate(x => x.Resize(nextWidth, nextHeight));
+            await image.SaveAsJpegAsync(compressedPath, new JpegEncoder { Quality = quality }, cancellationToken);
+        }
+
+        _logger.LogInformation("Compressed YouTube thumbnail {ThumbnailPath} to {CompressedThumbnailPath} ({SizeBytes} bytes).", thumbnailPath, compressedPath, new FileInfo(compressedPath).Length);
+        return compressedPath;
+    }
+
+    private void LogThumbnailDimensionRecommendation(PublishRequest request, int width, int height)
+    {
+        var recommendedWidth = request.IsShort ? 1080 : 1280;
+        var recommendedHeight = request.IsShort ? 1920 : 720;
+        if (width != recommendedWidth || height != recommendedHeight)
+        {
+            _logger.LogWarning(
+                "YouTube {AssetType} thumbnail dimensions are {Width}x{Height}; recommended size is {RecommendedWidth}x{RecommendedHeight}.",
+                request.IsShort ? "Shorts" : "long video",
+                width,
+                height,
+                recommendedWidth,
+                recommendedHeight);
+        }
+    }
+
+    private void LogThumbnailUploadDiagnostics(string videoId, string? uploadStatus, Exception ex)
+    {
+        _logger.LogWarning(ex, "YouTube thumbnail upload failed for video {VideoId}. Status: {UploadStatus}. Exception: {Exception}", videoId, uploadStatus, ex.ToString());
+        if (ex is YouTubeThumbnailUploadException thumbnailException)
+        {
+            if (!string.IsNullOrWhiteSpace(thumbnailException.ResponseBody))
+            {
+                _logger.LogWarning("YouTube thumbnail upload response body for {VideoId}: {ResponseBody}", videoId, thumbnailException.ResponseBody);
+            }
+
+            if (!string.IsNullOrWhiteSpace(thumbnailException.HttpErrorDetails))
+            {
+                _logger.LogWarning("YouTube thumbnail upload HTTP error details for {VideoId}: {HttpErrorDetails}", videoId, thumbnailException.HttpErrorDetails);
+            }
+
+            if (thumbnailException.UploadException is not null)
+            {
+                _logger.LogWarning(thumbnailException.UploadException, "YouTube thumbnail upload progress exception for {VideoId}.", videoId);
+            }
+        }
+    }
+
+    private static string BuildThumbnailError(Exception ex)
+    {
+        if (ex is YouTubeThumbnailUploadException thumbnailException)
+        {
+            var parts = new List<string> { thumbnailException.Message };
+            if (thumbnailException.UploadException is not null)
+            {
+                parts.Add(thumbnailException.UploadException.Message);
+            }
+            if (!string.IsNullOrWhiteSpace(thumbnailException.HttpErrorDetails))
+            {
+                parts.Add(thumbnailException.HttpErrorDetails);
+            }
+            return string.Join(" | ", parts.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        return ex.Message;
+    }
+
+    private static string? GetUploadStatus(Exception ex)
+        => ex is YouTubeThumbnailUploadException thumbnailException ? thumbnailException.UploadStatus : null;
+
+    private long GetMaxThumbnailSizeBytes()
+        => _youTubeOptions.MaxThumbnailSizeBytes > 0 ? _youTubeOptions.MaxThumbnailSizeBytes : 2 * 1024 * 1024;
+
+    private static bool IsSupportedThumbnailExtension(string? extension)
+        => extension is not null && (extension.Equals(".png", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase));
+
+    private static string? GetMimeType(string? path)
+    {
+        var extension = Path.GetExtension(path ?? string.Empty);
+        if (extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            return "image/jpeg";
+        }
+
+        if (extension.Equals(".png", StringComparison.OrdinalIgnoreCase))
+        {
+            return "image/png";
+        }
+
+        return null;
+    }
+
+    private static Task WriteThumbnailDiagnosticsAsync(string outputDirectory, YouTubeThumbnailUploadDiagnostics diagnostics, CancellationToken cancellationToken)
+        => WriteJsonAsync(Path.Combine(outputDirectory, "youtube-thumbnail-upload-diagnostics.json"), diagnostics, cancellationToken);
 
     private async Task<string> ResolveOutputDirectoryAsync(Guid pipelineRunId, CancellationToken cancellationToken)
     {
@@ -290,4 +458,18 @@ public sealed class YouTubePublishService : IYouTubePublishService
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, JsonOptions), cancellationToken);
     }
+}
+
+internal sealed class YouTubeThumbnailUploadDiagnostics
+{
+    public string VideoId { get; init; } = string.Empty;
+    public string ThumbnailPath { get; init; } = string.Empty;
+    public bool FileExists { get; init; }
+    public long? FileSizeBytes { get; set; }
+    public int? Width { get; set; }
+    public int? Height { get; set; }
+    public string? MimeType { get; set; }
+    public string? UploadStatus { get; set; }
+    public string? Error { get; set; }
+    public string? CompressedThumbnailPath { get; set; }
 }
