@@ -391,6 +391,11 @@ public sealed class ContentPublishService : IContentPublishService
     {
         var shortsDirectory = Path.Combine(outputDirectory, "shorts");
         var selectionPath = Path.Combine(shortsDirectory, "thumbnail-selection.json");
+        if (!File.Exists(selectionPath))
+        {
+            selectionPath = Path.Combine(shortsDirectory, "thumbnails", "thumbnail-selection.json");
+        }
+
         if (File.Exists(selectionPath))
         {
             using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath, cancellationToken));
@@ -410,6 +415,7 @@ public sealed class ContentPublishService : IContentPublishService
         foreach (var candidate in new[]
         {
             Path.Combine(shortsDirectory, "thumbnail-short.jpg"),
+            Path.Combine(shortsDirectory, "thumbnails", "thumbnail-short.jpg"),
             Path.Combine(shortsDirectory, "thumbnail-1.png"),
             Path.Combine(shortsDirectory, "short-cover-1.png"),
             Path.Combine(shortsDirectory, "thumbnails", "thumbnail-1.png")

@@ -186,6 +186,23 @@ public sealed class ThumbnailGenerationRequest
     public FeedbackSignals? FeedbackSignals { get; init; }
 }
 
+
+public sealed class ThumbnailCandidateSelection
+{
+    public required ThumbnailCandidateScore SelectedCandidate { get; init; }
+    public required IReadOnlyCollection<ThumbnailCandidateScore> CandidateScores { get; init; }
+    public bool FallbackUsed { get; init; }
+    public IReadOnlyCollection<string> Errors { get; init; } = [];
+}
+
+public sealed class ThumbnailCompositionRequest
+{
+    public required ThumbnailGenerationRequest GenerationRequest { get; init; }
+    public required ThumbnailCandidateScore SelectedCandidate { get; init; }
+    public required string HookText { get; init; }
+    public required string OutputPath { get; init; }
+}
+
 public sealed class SeoMetadataRequest
 {
     public required IReadOnlyCollection<SceneObservationContext> SceneObservationContext { get; init; }

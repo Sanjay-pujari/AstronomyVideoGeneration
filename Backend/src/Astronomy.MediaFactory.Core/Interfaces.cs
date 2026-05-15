@@ -197,6 +197,20 @@ public interface IThumbnailGenerationService
     Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken);
 }
 
+public interface ICinematicThumbnailService : IThumbnailGenerationService
+{
+}
+
+public interface IThumbnailCompositionService
+{
+    Task<string> ComposeAsync(ThumbnailCompositionRequest request, CancellationToken cancellationToken);
+}
+
+public interface IThumbnailCandidateSelector
+{
+    Task<ThumbnailCandidateSelection> SelectAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken);
+}
+
 public interface IThumbnailScoringService
 {
     Task<ThumbnailCandidateScore> ScoreAsync(string candidatePath, ThumbnailScoringContext context, CancellationToken cancellationToken);

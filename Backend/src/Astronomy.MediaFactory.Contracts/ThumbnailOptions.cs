@@ -5,6 +5,8 @@ public sealed class ThumbnailOptions
     public const string SectionName = "ThumbnailGeneration";
 
     public bool Enabled { get; init; } = true;
+    public string Mode { get; init; } = "CinematicComposed";
+    public bool FallbackToExtractedFrame { get; init; } = true;
 
     public string LongThumbnailStyle { get; init; } = "CinematicPoster";
     public string ShortThumbnailStyle { get; init; } = "HighEnergyFrame";
@@ -21,8 +23,10 @@ public sealed class ThumbnailOptions
 
     public bool EnableContrastBoost { get; init; } = true;
     public bool EnableGlowEnhancement { get; init; } = true;
+    public bool EnableGlowEffect { get; init; } = true;
     public bool EnableVignette { get; init; } = true;
     public bool EnableSharpnessBoost { get; init; } = true;
+    public bool EnableGradientBackground { get; init; } = true;
 
     public bool EnableHookText { get; init; } = true;
     public int MaxHookWords { get; init; } = 5;
