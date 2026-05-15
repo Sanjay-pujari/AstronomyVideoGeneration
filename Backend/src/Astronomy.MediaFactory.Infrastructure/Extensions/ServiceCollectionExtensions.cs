@@ -422,6 +422,13 @@ public static class ServiceCollectionExtensions
             return;
         }
 
+        var serviceExecutablePath = YouTubeTokenResolver.ResolveTokenFilePath(options);
+        if (File.Exists(serviceExecutablePath))
+        {
+            options.TokenFilePath = serviceExecutablePath;
+            return;
+        }
+
         var configuredPath = Path.GetFullPath(options.TokenFilePath);
         if (File.Exists(configuredPath))
         {
@@ -440,7 +447,7 @@ public static class ServiceCollectionExtensions
             .ToArray();
 
         var existingTokenPath = workingDirectoryCandidates.FirstOrDefault(File.Exists);
-        options.TokenFilePath = existingTokenPath ?? workingDirectoryCandidates.FirstOrDefault() ?? configuredPath;
+        options.TokenFilePath = existingTokenPath ?? serviceExecutablePath;
     }
 
     private static void ApplySpeechSpeedOptions(SpeechOptions? speechOptions, AzureSpeechOptions azureSpeechOptions)
