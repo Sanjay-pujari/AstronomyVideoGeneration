@@ -6,6 +6,8 @@ using Google.Apis.Upload;
 using Google.Apis.YouTube.v3;
 using Google.Apis.YouTube.v3.Data;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
+using Google;
 
 namespace Astronomy.MediaFactory.Publishing;
 
@@ -76,11 +78,49 @@ public sealed class GoogleYouTubeApiClient : IYouTubeApiClient
                 ? "image/jpeg"
                 : "image/png";
         var upload = youtube.Thumbnails.Set(videoId, stream, mimeType);
-        await upload.UploadAsync(cancellationToken);
-        if (upload.GetProgress().Status != UploadStatus.Completed)
+        try
         {
-            throw new InvalidOperationException($"YouTube thumbnail upload did not complete successfully. Status: {upload.GetProgress().Status}");
+            await upload.UploadAsync(cancellationToken);
         }
+        catch (Exception ex)
+        {
+            ThrowThumbnailUploadException(upload, ex);
+        }
+
+        var progress = upload.GetProgress();
+        if (progress.Status != UploadStatus.Completed)
+        {
+            ThrowThumbnailUploadException(upload, progress.Exception);
+        }
+    }
+
+    private static void ThrowThumbnailUploadException(ThumbnailsResource.SetMediaUpload upload, Exception? exception)
+    {
+        var progress = upload.GetProgress();
+        var responseBody = upload.ResponseBody is null ? null : JsonSerializer.Serialize(upload.ResponseBody);
+        var httpErrorDetails = BuildHttpErrorDetails(exception ?? progress.Exception);
+        throw new YouTubeThumbnailUploadException(
+            $"YouTube thumbnail upload did not complete successfully. Status: {progress.Status}",
+            progress.Status.ToString(),
+            exception ?? progress.Exception,
+            responseBody,
+            httpErrorDetails);
+    }
+
+    private static string? BuildHttpErrorDetails(Exception? exception)
+    {
+        if (exception is null)
+        {
+            return null;
+        }
+
+        if (exception is GoogleApiException googleApiException)
+        {
+            var error = googleApiException.Error is null ? null : JsonSerializer.Serialize(googleApiException.Error);
+            return $"StatusCode={(int)googleApiException.HttpStatusCode} ({googleApiException.HttpStatusCode}); Error={error}; Message={googleApiException.Message}";
+        }
+
+        return exception.Message;
     }
 
     private YouTubeService CreateService(string accessToken)
