@@ -189,9 +189,12 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.True(api.UploadCalled);
         Assert.Equal(1, api.ThumbnailUploadCalls);
         Assert.Equal("Video uploaded but thumbnail upload failed.", result.Warnings.Single());
+        Assert.Contains("custom thumbnail upload is not permitted", result.Error);
         using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "youtube-thumbnail-upload-diagnostics.json")));
         Assert.Equal("Failed", doc.RootElement.GetProperty("uploadStatus").GetString());
-        Assert.Contains("StatusCode=403", doc.RootElement.GetProperty("error").GetString());
+        Assert.Equal("CustomThumbnailPermissionDenied", doc.RootElement.GetProperty("failureCategory").GetString());
+        Assert.Contains("Publishing:UploadThumbnail=false", doc.RootElement.GetProperty("recommendedAction").GetString());
+        Assert.Contains("custom thumbnail upload is not permitted", doc.RootElement.GetProperty("error").GetString());
     }
 
 

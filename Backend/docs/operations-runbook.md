@@ -78,6 +78,7 @@ Content-Type: application/json
 ### When to use it
 - YouTube upload failed but render succeeded.
 - The video uploaded but thumbnail upload failed.
+- For `CustomThumbnailPermissionDenied`, verify the authenticated channel can use custom thumbnails before retrying, or disable thumbnail uploads with `Publishing:UploadThumbnail=false` (or the YouTube per-asset thumbnail options) to avoid repeat warnings.
 - YouTube was disabled during the original run and is now intentionally being retried.
 
 ## Retry archive
@@ -186,8 +187,9 @@ Content-Type: application/json
 1. Confirm whether the failure is credential-related or an external YouTube outage.
 2. Verify `YouTube:PublishingEnabled=true` only if credentials are complete.
 3. If the run rendered successfully, use `retry-publish`.
-4. If only the thumbnail failed, set `retryThumbnailOnly=true`.
-5. Validate `YouTubeVideoId`, thumbnail upload state, and resulting publication record.
+4. If only the thumbnail failed, inspect `youtube-thumbnail-upload-diagnostics.json`; do not retry `CustomThumbnailPermissionDenied` until the channel is eligible for custom thumbnails.
+5. For retryable thumbnail failures, set `retryThumbnailOnly=true`.
+6. Validate `YouTubeVideoId`, thumbnail upload state, and resulting publication record.
 
 ## Handle Blob failures
 
