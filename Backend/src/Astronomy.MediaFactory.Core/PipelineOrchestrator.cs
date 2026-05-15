@@ -199,12 +199,70 @@ public sealed class PipelineOrchestrator
                 if (stage.DurationMs.HasValue && stage.DurationMs.Value >= _operationsOptions.SlowStageThresholdMs)
                 {
                     _logger.LogWarning("Slow stage detected: {StageName} took {DurationMs}ms for run {PipelineRunId}", stage.StageName, stage.DurationMs.Value, run.Id);
-                    await _stageAlertPublisher.PublishSlowStageAsync(BuildAlertContext(run, stage), cancellationToken);
+                    try
+                    {
+                        await _stageAlertPublisher.PublishSlowStageAsync(BuildAlertContext(run, stage), CancellationToken.None);
+                    }
+                    catch (Exception alertEx)
+                    {
+                        _logger.LogWarning(alertEx, "Failed to publish slow stage alert for {StageName} in pipeline run {PipelineRunId}", stage.StageName, run.Id);
+                    }
                 }
             }
 
             async Task PublishFailureAlertAsync(PipelineStageExecution stage)
-                => await _stageAlertPublisher.PublishStageFailureAsync(BuildAlertContext(run, stage), cancellationToken);
+            {
+                try
+                {
+                    await _stageAlertPublisher.PublishStageFailureAsync(BuildAlertContext(run, stage), CancellationToken.None);
+                }
+                catch (Exception alertEx)
+                {
+                    _logger.LogWarning(alertEx, "Failed to publish stage failure alert for {StageName} in pipeline run {PipelineRunId}", stage.StageName, run.Id);
+                }
+            }
+
+            async Task<PipelineStageExecution?> TryStartInstrumentedStageAsync(string stageName)
+            {
+                if (_pipelineStageRecorder is null)
+                    return null;
+
+                try
+                {
+                    return await _pipelineStageRecorder.StartStageAsync(run.Id, stageName, null, cancellationToken);
+                }
+                catch (Exception recordEx) when (recordEx is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogWarning(recordEx, "Failed to record start for stage {StageName} in pipeline run {PipelineRunId}; continuing without stage instrumentation", stageName, run.Id);
+                    return null;
+                }
+            }
+
+            async Task TryCompleteInstrumentedStageAsync(PipelineStageExecution stage)
+            {
+                try
+                {
+                    await _pipelineStageRecorder!.CompleteStageAsync(stage, null, CancellationToken.None);
+                    await PublishSlowStageAlertAsync(stage);
+                }
+                catch (Exception recordEx)
+                {
+                    _logger.LogWarning(recordEx, "Failed to record completion for stage {StageName} in pipeline run {PipelineRunId}; continuing pipeline execution", stage.StageName, run.Id);
+                }
+            }
+
+            async Task TryFailInstrumentedStageAsync(PipelineStageExecution stage, Exception stageException, bool continuedWithFallback)
+            {
+                try
+                {
+                    await _pipelineStageRecorder!.FailStageAsync(stage, stageException.Message, continuedWithFallback, null, CancellationToken.None);
+                    await PublishFailureAlertAsync(stage);
+                }
+                catch (Exception recordEx)
+                {
+                    _logger.LogWarning(recordEx, "Failed to record failure for stage {StageName} in pipeline run {PipelineRunId}; preserving original stage exception", stage.StageName, run.Id);
+                }
+            }
 
             async Task<T> RunStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null, string? outputPath = null)
             {
@@ -257,11 +315,7 @@ public sealed class PipelineOrchestrator
 
             async Task<T> RunInstrumentedStageAsync<T>(string stageName, Func<Task<T>> action, bool continueWithFallback = false, Func<Exception, Task<T>>? fallback = null)
             {
-                PipelineStageExecution? stage = null;
-                if (_pipelineStageRecorder is not null)
-                {
-                    stage = await _pipelineStageRecorder.StartStageAsync(run.Id, stageName, null, cancellationToken);
-                }
+                var stage = await TryStartInstrumentedStageAsync(stageName);
 
                 _logger.LogInformation("Stage {StageName} started for pipeline run {PipelineRunId}", stageName, run.Id);
                 try
@@ -269,8 +323,7 @@ public sealed class PipelineOrchestrator
                     var result = await action();
                     if (stage is not null)
                     {
-                        await _pipelineStageRecorder!.CompleteStageAsync(stage, null, cancellationToken);
-                        await PublishSlowStageAlertAsync(stage);
+                        await TryCompleteInstrumentedStageAsync(stage);
                     }
 
                     _logger.LogInformation("Stage {StageName} completed for pipeline run {PipelineRunId}", stageName, run.Id);
@@ -280,8 +333,7 @@ public sealed class PipelineOrchestrator
                 {
                     if (stage is not null)
                     {
-                        await _pipelineStageRecorder!.FailStageAsync(stage, ex.Message, continueWithFallback && fallback is not null, null, cancellationToken);
-                        await PublishFailureAlertAsync(stage);
+                        await TryFailInstrumentedStageAsync(stage, ex, continueWithFallback && fallback is not null);
                     }
 
                     _logger.LogError(ex, "Stage {StageName} failed for pipeline run {PipelineRunId}", stageName, run.Id);
