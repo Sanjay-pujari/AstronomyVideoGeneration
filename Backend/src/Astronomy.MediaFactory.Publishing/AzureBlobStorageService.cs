@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Azure.Core;
 using Azure.Identity;
+using Azure.Storage;
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -46,11 +49,17 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
             request.BasePath,
             cancellationToken);
 
+        var videoUploadTask = UploadIfExistsAsync(container, request.VideoPath, request.BasePath, cancellationToken);
+        var audioUploadTask = UploadIfExistsAsync(container, request.AudioPath, request.BasePath, cancellationToken);
+        var thumbnailUploadTask = UploadIfExistsAsync(container, request.ThumbnailPath, request.BasePath, cancellationToken);
+
+        await Task.WhenAll(videoUploadTask, audioUploadTask, thumbnailUploadTask);
+
         var result = new BlobUploadResult
         {
-            VideoUrl = await UploadIfExistsAsync(container, request.VideoPath, request.BasePath, cancellationToken),
-            AudioUrl = await UploadIfExistsAsync(container, request.AudioPath, request.BasePath, cancellationToken),
-            ThumbnailUrl = await UploadIfExistsAsync(container, request.ThumbnailPath, request.BasePath, cancellationToken)
+            VideoUrl = await videoUploadTask,
+            AudioUrl = await audioUploadTask,
+            ThumbnailUrl = await thumbnailUploadTask
         };
 
         _logger.LogInformation("Completed blob upload for base path {BasePath}. VideoUploaded={HasVideo} AudioUploaded={HasAudio} ThumbnailUploaded={HasThumbnail}. CorrelationId: {CorrelationId}", request.BasePath, result.VideoUrl is not null, result.AudioUrl is not null, result.ThumbnailUrl is not null, correlationId);
@@ -61,7 +70,7 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
     {
         if (!string.IsNullOrWhiteSpace(_options.ConnectionString))
         {
-            return new BlobContainerClient(_options.ConnectionString, _options.ContainerName);
+            return new BlobContainerClient(_options.ConnectionString, _options.ContainerName, CreateBlobClientOptions());
         }
 
         if (_options.UseManagedIdentity)
@@ -75,13 +84,37 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
                 var serviceClient = new BlobServiceClient(uri, new DefaultAzureCredential(new DefaultAzureCredentialOptions
                 {
                     ManagedIdentityClientId = string.IsNullOrWhiteSpace(_options.ManagedIdentityClientId) ? null : _options.ManagedIdentityClientId.Trim()
-                }));
+                }), CreateBlobClientOptions());
                 return serviceClient.GetBlobContainerClient(_options.ContainerName);
             }
         }
 
         return null;
     }
+
+    private BlobClientOptions CreateBlobClientOptions()
+        => new()
+        {
+            Retry =
+            {
+                Mode = RetryMode.Exponential,
+                Delay = TimeSpan.FromSeconds(Math.Max(1, _options.RetryBaseDelaySeconds)),
+                MaxDelay = TimeSpan.FromSeconds(Math.Max(_options.RetryBaseDelaySeconds, _options.MaxRetryDelaySeconds)),
+                MaxRetries = 1,
+                NetworkTimeout = TimeSpan.FromMinutes(2)
+            }
+        };
+
+    private StorageTransferOptions CreateTransferOptions()
+        => new()
+        {
+            MaximumConcurrency = Math.Clamp(_options.UploadMaximumConcurrency, 1, 16),
+            InitialTransferSize = MegabytesToBytes(_options.UploadInitialTransferSizeMegabytes, 8),
+            MaximumTransferSize = MegabytesToBytes(_options.UploadTransferChunkSizeMegabytes, 8)
+        };
+
+    private static long MegabytesToBytes(int megabytes, int fallbackMegabytes)
+        => Math.Max(1, megabytes > 0 ? megabytes : fallbackMegabytes) * 1024L * 1024L;
 
     private async Task<string?> UploadIfExistsAsync(BlobContainerClient container, string? localPath, string basePath, CancellationToken cancellationToken)
     {
@@ -96,14 +129,32 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
             return null;
         }
 
+        var fileInfo = new FileInfo(localPath);
         var blobName = $"{basePath.TrimEnd('/')}/{Path.GetFileName(localPath)}".Replace("\\", "/");
         var blobClient = container.GetBlobClient(blobName);
+        var transferOptions = CreateTransferOptions();
+        var stopwatch = Stopwatch.StartNew();
 
-        return await TransientRetryHelper.ExecuteAsync(
+        _logger.LogInformation(
+            "Uploading blob {BlobName} from {LocalPath}. SizeBytes={SizeBytes} MaximumConcurrency={MaximumConcurrency} InitialTransferSizeBytes={InitialTransferSizeBytes} MaximumTransferSizeBytes={MaximumTransferSizeBytes}",
+            blobName,
+            localPath,
+            fileInfo.Length,
+            transferOptions.MaximumConcurrency,
+            transferOptions.InitialTransferSize,
+            transferOptions.MaximumTransferSize);
+
+        var url = await TransientRetryHelper.ExecuteAsync(
             async ct =>
             {
                 await using var stream = File.OpenRead(localPath);
-                await blobClient.UploadAsync(stream, overwrite: true, cancellationToken: ct);
+                await blobClient.UploadAsync(
+                    stream,
+                    new BlobUploadOptions
+                    {
+                        TransferOptions = transferOptions
+                    },
+                    ct);
                 return blobClient.Uri.ToString();
             },
             _options.UploadRetryAttempts,
@@ -113,5 +164,18 @@ public sealed class AzureBlobStorageService : IAzureBlobStorageService
             "blob upload",
             blobName,
             cancellationToken);
+
+        stopwatch.Stop();
+        _logger.LogInformation(
+            "Completed blob {BlobName} upload. SizeBytes={SizeBytes} DurationMs={DurationMs} ThroughputMbps={ThroughputMbps:F2}",
+            blobName,
+            fileInfo.Length,
+            stopwatch.ElapsedMilliseconds,
+            CalculateThroughputMbps(fileInfo.Length, stopwatch.Elapsed));
+
+        return url;
     }
+
+    private static double CalculateThroughputMbps(long bytes, TimeSpan elapsed)
+        => elapsed.TotalSeconds <= 0 ? 0 : bytes * 8d / 1_000_000d / elapsed.TotalSeconds;
 }
