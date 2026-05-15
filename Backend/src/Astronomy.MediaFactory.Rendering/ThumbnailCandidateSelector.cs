@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Options;
+using IoPath = System.IO.Path;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing;
 using SixLabors.ImageSharp.Drawing.Processing;
@@ -66,7 +67,7 @@ public sealed class ThumbnailCandidateSelector : IThumbnailCandidateSelector
 
     private async Task<List<ThumbnailCandidate>> BuildCandidatesAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
     {
-        var candidatesDirectory = Path.Combine(request.OutputDirectory, "thumbnails", "candidates");
+        var candidatesDirectory = IoPath.Combine(request.OutputDirectory, "thumbnails", "candidates");
         Directory.CreateDirectory(candidatesDirectory);
         var visuals = request.AvailableVisuals.Where(File.Exists).ToArray();
         var candidates = new List<ThumbnailCandidate>();
@@ -83,7 +84,7 @@ public sealed class ThumbnailCandidateSelector : IThumbnailCandidateSelector
                     continue;
 
                 var suffix = Math.Round(safeTimestamp.Value / duration * 100).ToString("000");
-                var output = Path.Combine(candidatesDirectory, $"{SanitizeFileName(sceneId)}-{suffix}.jpg");
+                var output = IoPath.Combine(candidatesDirectory, $"{SanitizeFileName(sceneId)}-{suffix}.jpg");
                 await CopyAsCandidateAsync(visuals[i], output, cancellationToken);
                 candidates.Add(new ThumbnailCandidate(output, sceneId, safeTimestamp.Value));
             }
@@ -125,8 +126,8 @@ public sealed class ThumbnailCandidateSelector : IThumbnailCandidateSelector
 
     private async Task<ThumbnailCandidateScore> CreateFallbackCandidateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
     {
-        var path = Path.Combine(request.OutputDirectory, "thumbnails", "candidates", "fallback.jpg");
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var path = IoPath.Combine(request.OutputDirectory, "thumbnails", "candidates", "fallback.jpg");
+        Directory.CreateDirectory(IoPath.GetDirectoryName(path)!);
         using var image = new Image<Rgba32>(request.IsShortForm ? _options.PortraitWidth : _options.LandscapeWidth, request.IsShortForm ? _options.PortraitHeight : _options.LandscapeHeight, new Rgba32(6, 12, 32));
         image.Mutate(ctx =>
         {
@@ -141,7 +142,7 @@ public sealed class ThumbnailCandidateSelector : IThumbnailCandidateSelector
 
     private static string SanitizeFileName(string value)
     {
-        var invalid = Path.GetInvalidFileNameChars();
+        var invalid = IoPath.GetInvalidFileNameChars();
         var cleaned = new string(value.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray());
         return string.IsNullOrWhiteSpace(cleaned) ? "scene" : cleaned;
     }

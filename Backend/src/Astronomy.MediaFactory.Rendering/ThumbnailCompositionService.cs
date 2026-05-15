@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Options;
+using IoPath = System.IO.Path;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Advanced;
@@ -22,7 +23,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
 
     public async Task<string> ComposeAsync(ThumbnailCompositionRequest request, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(request.OutputPath)!);
+        Directory.CreateDirectory(IoPath.GetDirectoryName(request.OutputPath)!);
         if (request.GenerationRequest.IsShortForm)
             await RenderShortThumbnailAsync(request.SelectedCandidate.Path, request.OutputPath, request.HookText, cancellationToken);
         else
