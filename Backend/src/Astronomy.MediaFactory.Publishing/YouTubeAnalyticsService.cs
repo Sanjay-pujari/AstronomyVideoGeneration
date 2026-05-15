@@ -54,7 +54,10 @@ public sealed class YouTubeAnalyticsService : IYouTubeAnalyticsService
 
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
-            _logger.LogWarning("YouTube token details are missing for analytics fetch.");
+            _logger.LogWarning("YouTube token details are missing for analytics fetch. TokenFilePath={TokenFilePath}; TokenFileExists={TokenFileExists}; TokenSource={TokenSource}",
+                resolvedToken.TokenFilePath,
+                resolvedToken.TokenFileExists,
+                string.IsNullOrWhiteSpace(resolvedToken.TokenSource) ? "Missing" : resolvedToken.TokenSource);
             return null;
         }
 

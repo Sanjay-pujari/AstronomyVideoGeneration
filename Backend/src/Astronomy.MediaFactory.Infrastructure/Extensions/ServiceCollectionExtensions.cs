@@ -60,6 +60,7 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<YouTubeOptions>()
             .Bind(configuration.GetSection(YouTubeOptions.SectionName))
+            .PostConfigure(options => ResolveRelativeYouTubeTokenFilePath(configuration, options))
             .Validate(options => string.IsNullOrWhiteSpace(options.PrivacyStatus) || options.PrivacyStatus is "private" or "public" or "unlisted", "YouTube:PrivacyStatus must be private, public, or unlisted.")
             .Validate(options => string.IsNullOrWhiteSpace(options.DefaultPrivacyStatus) || options.DefaultPrivacyStatus is "private" or "public" or "unlisted", "YouTube:DefaultPrivacyStatus must be private, public, or unlisted.")
             .Validate(options => options.UploadRetryAttempts is > 0 and <= 5 && options.RetryBaseDelaySeconds > 0 && options.MaxRetryDelaySeconds >= options.RetryBaseDelaySeconds && options.PublishRetryCooldownSeconds > 0, "YouTube retry settings are invalid.")
@@ -407,6 +408,34 @@ public static class ServiceCollectionExtensions
             .AddCheck<OperationsConfigHealthCheck>("config", tags: ["ready"]);
 
         return services;
+    }
+
+    private static void ResolveRelativeYouTubeTokenFilePath(IConfiguration configuration, YouTubeOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.TokenFilePath) || Path.IsPathRooted(options.TokenFilePath))
+        {
+            return;
+        }
+
+        var configuredPath = Path.GetFullPath(options.TokenFilePath);
+        if (File.Exists(configuredPath))
+        {
+            options.TokenFilePath = configuredPath;
+            return;
+        }
+
+        var workingDirectoryCandidates = new[]
+            {
+                configuration.GetSection(MaintenanceOptions.SectionName).Get<MaintenanceOptions>()?.WorkingDirectory,
+                configuration.GetSection(RenderingOptions.SectionName).Get<RenderingOptions>()?.WorkingDirectory
+            }
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => Path.Combine(Path.GetFullPath(path!), options.TokenFilePath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var existingTokenPath = workingDirectoryCandidates.FirstOrDefault(File.Exists);
+        options.TokenFilePath = existingTokenPath ?? workingDirectoryCandidates.FirstOrDefault() ?? configuredPath;
     }
 
     private static void ApplySpeechSpeedOptions(SpeechOptions? speechOptions, AzureSpeechOptions azureSpeechOptions)

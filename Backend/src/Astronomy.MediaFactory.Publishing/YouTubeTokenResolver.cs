@@ -1,7 +1,5 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
-using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Publishing;
@@ -19,11 +17,9 @@ public static class YouTubeTokenResolver
     {
         var tokenFilePath = ResolveTokenFilePath(options);
         var tokenFileExists = File.Exists(tokenFilePath);
-        YouTubeOAuthTokenFile? tokenFile = null;
-        if (tokenFileExists)
-        {
-            tokenFile = JsonSerializer.Deserialize<YouTubeOAuthTokenFile>(await File.ReadAllTextAsync(tokenFilePath, cancellationToken), JsonOptions);
-        }
+        var tokenFile = tokenFileExists
+            ? await ReadTokenFileAsync(tokenFilePath, logger, cancellationToken)
+            : null;
 
         var configuredRefreshToken = string.IsNullOrWhiteSpace(options.RefreshToken) ? null : options.RefreshToken.Trim();
         var configuredSource = DetermineConfiguredTokenSource(configuredRefreshToken);
@@ -56,6 +52,39 @@ public static class YouTubeTokenResolver
 
         await WriteDiagnosticsAsync(options, resolved, cancellationToken);
         return resolved;
+    }
+
+    private static async Task<YouTubeTokenFileDetails?> ReadTokenFileAsync(string tokenFilePath, ILogger logger, CancellationToken cancellationToken)
+    {
+        var json = await File.ReadAllTextAsync(tokenFilePath, cancellationToken);
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            var refreshToken = GetStringProperty(root, "refreshToken", "refresh_token");
+            return new YouTubeTokenFileDetails(
+                RefreshToken: refreshToken,
+                ChannelId: GetStringProperty(root, "channelId", "channel_id"),
+                ChannelTitle: GetStringProperty(root, "channelTitle", "channel_title"));
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Unable to parse YouTube token file at {TokenFilePath}.", tokenFilePath);
+            return null;
+        }
+    }
+
+    private static string GetStringProperty(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (root.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String)
+            {
+                return property.GetString() ?? string.Empty;
+            }
+        }
+
+        return string.Empty;
     }
 
     public static string ResolveTokenFilePath(YouTubeOptions options)
@@ -126,6 +155,11 @@ public static class YouTubeTokenResolver
         await using var stream = File.Create(diagnosticsPath);
         await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
     }
+
+    private sealed record YouTubeTokenFileDetails(
+        string RefreshToken,
+        string ChannelId,
+        string ChannelTitle);
 
     private sealed record YouTubeTokenSourceDiagnostics(
         string TokenSource,
