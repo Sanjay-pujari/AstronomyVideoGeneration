@@ -20,6 +20,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
     private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IAnalyticsFeedbackProvider? _analyticsFeedbackProvider;
     private readonly IPromptFeedbackService? _promptFeedbackService;
+    private readonly IThumbnailGenerationService? _thumbnailGenerationService;
     private readonly RenderingOptions _renderingOptions;
     private readonly GrowthOptions _growthOptions;
 
@@ -38,7 +39,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         IContentMonetizationService? contentMonetizationService = null,
         IAnalyticsFeedbackProvider? analyticsFeedbackProvider = null,
         IPromptFeedbackService? promptFeedbackService = null,
-        IOptions<GrowthOptions>? growthOptions = null)
+        IOptions<GrowthOptions>? growthOptions = null,
+        IThumbnailGenerationService? thumbnailGenerationService = null)
     {
         _shortsScriptGenerationService = shortsScriptGenerationService;
         _speechSynthesisService = speechSynthesisService;
@@ -52,6 +54,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         _contentMonetizationService = contentMonetizationService;
         _analyticsFeedbackProvider = analyticsFeedbackProvider;
         _promptFeedbackService = promptFeedbackService;
+        _thumbnailGenerationService = thumbnailGenerationService;
         _growthOptions = growthOptions?.Value ?? new GrowthOptions();
     }
 
@@ -204,6 +207,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         };
 
         await ValidateShortSequenceBeforeRenderAsync(shortSequence, shortScenesOrdered, context.Localization.ResolvedLanguage, outputDirectory, cancellationToken);
+        var thumbnailPath = await GenerateShortThumbnailAsync(contentType, context, optimizedMetadata, visualCandidates, manifest.Scenes, outputDirectory, cancellationToken);
         var videoPath = await _videoRenderService.RenderAsync(manifest, cancellationToken);
 
         string? blobUrl = null;
@@ -214,7 +218,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
                 BasePath = $"shorts/{contentType}/{context.Date:yyyy-MM-dd}",
                 VideoPath = videoPath,
                 AudioPath = finalNarrationPath,
-                ThumbnailPath = visualCandidates.FirstOrDefault()
+                ThumbnailPath = thumbnailPath ?? visualCandidates.FirstOrDefault()
             }, cancellationToken);
             blobUrl = blobResult.VideoUrl;
         }
@@ -228,9 +232,37 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             Script = shortScript,
             AudioPath = finalNarrationPath,
             VideoPath = videoPath,
+            ThumbnailPath = thumbnailPath,
             BlobUrl = blobUrl,
             PublishStatus = publishToYouTube ? "ReadyToPublish" : "Skipped"
         };
+    }
+
+    private async Task<string?> GenerateShortThumbnailAsync(ContentType contentType, AstronomyContext context, OptimizedVideoMetadata optimizedMetadata, IReadOnlyCollection<string> visualCandidates, IReadOnlyCollection<RenderScene> scenes, string outputDirectory, CancellationToken cancellationToken)
+    {
+        if (_thumbnailGenerationService is null)
+            return null;
+
+        try
+        {
+            var plan = await _thumbnailGenerationService.GenerateAsync(new ThumbnailGenerationRequest
+            {
+                ContentType = contentType,
+                Context = context,
+                Metadata = optimizedMetadata,
+                AvailableVisuals = visualCandidates,
+                OutputDirectory = outputDirectory,
+                IsShortForm = true,
+                Scenes = scenes
+            }, cancellationToken);
+
+            return plan.ShortThumbnailPath ?? plan.ThumbnailPath;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Short thumbnail generation failed. Continuing with best available short frame.");
+            return visualCandidates.FirstOrDefault(File.Exists);
+        }
     }
 
     private static OptimizedVideoMetadata ApplyGrowthMetadata(OptimizedVideoMetadata source, GrowthOptions growthOptions, string language, string? region)

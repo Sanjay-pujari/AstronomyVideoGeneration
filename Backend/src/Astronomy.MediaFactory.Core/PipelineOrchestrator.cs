@@ -608,6 +608,7 @@ public sealed class PipelineOrchestrator
                     Metadata = optimizedMetadata,
                     AvailableVisuals = visuals,
                     OutputDirectory = outputDir,
+                    Scenes = manifest.Scenes,
                     FeedbackSignals = feedbackSignals
                 }, cancellationToken));
             }
@@ -917,7 +918,7 @@ public sealed class PipelineOrchestrator
                         Tags = shortResult.Script.OptimizedMetadata?.Tags ?? shortResult.Script.Tags,
                         Hashtags = shortResult.Script.OptimizedMetadata?.Hashtags ?? [],
                         VideoPath = shortResult.VideoPath,
-                        ThumbnailPath = thumbnailPath,
+                        ThumbnailPath = shortResult.ThumbnailPath ?? thumbnailPath,
                         Language = context.Localization.ResolvedLanguage
                     }, cancellationToken);
 
@@ -1451,6 +1452,8 @@ public sealed class PipelineOrchestrator
             thumbnailPlan.AlternateThumbnailTexts,
             thumbnailPlan.SelectedVisualPath,
             thumbnailPlan.ThumbnailPath,
+            thumbnailPlan.LongThumbnailPath,
+            thumbnailPlan.ShortThumbnailPath,
             thumbnailPlan.ThumbnailVariantPaths,
             LayoutType = thumbnailPlan.LayoutType.ToString()
         };
