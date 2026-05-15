@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -27,6 +28,11 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<AlertNotification> AlertNotifications => Set<AlertNotification>();
     public DbSet<AstronomyEvent> AstronomyEvents => Set<AstronomyEvent>();
     public DbSet<AstronomyEventGenerationHistory> AstronomyEventGenerationHistory => Set<AstronomyEventGenerationHistory>();
+
+    private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
+        (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
+        values => values == null ? 0 : values.Aggregate(0, (hashCode, value) => HashCode.Combine(hashCode, value == null ? 0 : StringComparer.Ordinal.GetHashCode(value))),
+        values => values == null ? Array.Empty<string>() : values.ToArray());
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -90,8 +96,16 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<AstronomyEvent>().Property(x => x.LocationName).HasColumnName("locationName");
         modelBuilder.Entity<AstronomyEvent>().Property(x => x.Timezone).HasColumnName("timezone");
         modelBuilder.Entity<AstronomyEvent>().Property(x => x.GlobalVisibility).HasColumnName("globalVisibility");
-        modelBuilder.Entity<AstronomyEvent>().Property(x => x.VisibilityRegions).HasColumnName("visibilityRegions").HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null), v => JsonSerializer.Deserialize<string[]>(v, (JsonSerializerOptions?)null) ?? Array.Empty<string>());
-        modelBuilder.Entity<AstronomyEvent>().Property(x => x.RelatedObjects).HasColumnName("relatedObjects").HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null), v => JsonSerializer.Deserialize<string[]>(v, (JsonSerializerOptions?)null) ?? Array.Empty<string>());
+        modelBuilder.Entity<AstronomyEvent>()
+            .Property(x => x.VisibilityRegions)
+            .HasColumnName("visibilityRegions")
+            .HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null), v => JsonSerializer.Deserialize<string[]>(v, (JsonSerializerOptions?)null) ?? Array.Empty<string>())
+            .Metadata.SetValueComparer(StringArrayValueComparer);
+        modelBuilder.Entity<AstronomyEvent>()
+            .Property(x => x.RelatedObjects)
+            .HasColumnName("relatedObjects")
+            .HasConversion(v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null), v => JsonSerializer.Deserialize<string[]>(v, (JsonSerializerOptions?)null) ?? Array.Empty<string>())
+            .Metadata.SetValueComparer(StringArrayValueComparer);
         modelBuilder.Entity<AstronomyEvent>().Property(x => x.Source).HasColumnName("source");
         modelBuilder.Entity<AstronomyEvent>().Property(x => x.Status).HasColumnName("status");
         modelBuilder.Entity<AstronomyEvent>().Property(x => x.ConfidenceScore).HasColumnName("confidenceScore");
