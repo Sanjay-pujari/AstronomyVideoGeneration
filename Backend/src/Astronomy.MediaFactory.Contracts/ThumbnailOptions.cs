@@ -18,8 +18,9 @@ public sealed class ThumbnailOptions
     public int PortraitHeight { get; init; } = 1920;
 
     public bool RejectDarkFrames { get; init; } = true;
-    public double MaxBlackPixelPercentage { get; init; } = 0.40;
-    public double MinimumBrightnessScore { get; init; } = 0.35;
+    public double MaxBlackPixelPercentage { get; init; } = 0.85;
+    public double MinimumBrightnessScore { get; init; } = 0.08;
+    public bool EnableAstronomySceneMode { get; init; } = true;
 
     public bool EnableContrastBoost { get; init; } = true;
     public bool EnableGlowEnhancement { get; init; } = true;
@@ -35,9 +36,14 @@ public sealed class ThumbnailOptions
     public string BrandText { get; init; } = "AstroPulse";
 
     public bool AvoidFadeFrames { get; init; } = true;
-    public double FadeAvoidanceSeconds { get; init; } = 1.0;
+    public double FadeAvoidanceSeconds { get; init; } = 1.5;
 
-    public int CandidateFramesPerScene { get; init; } = 3;
+    public int CandidateFramesPerScene { get; init; } = 5;
+
+    public string PrimaryFont { get; init; } = "";
+    public string HindiFont { get; init; } = "";
+    public string FallbackFont { get; init; } = "";
+    public bool GenerateComparisonSheet { get; init; }
 
     public string LongThumbnailOutputName { get; init; } = "thumbnail-long.jpg";
     public string ShortThumbnailOutputName { get; init; } = "thumbnail-short.jpg";

@@ -22,7 +22,7 @@ public sealed class ThumbnailCtrScoringService : IThumbnailCtrScoringService
 
     public ThumbnailHookScore Score(string hook, ThumbnailAiOptimizationRequest request)
     {
-        var normalized = Normalize(hook);
+        var normalized = ThumbnailAiOptimizationService.NormalizeDirectionalHook(Normalize(hook));
         var words = CountWords(normalized);
         var emotion = DetectEmotion(normalized);
         var readability = ScoreReadability(normalized, words);
@@ -63,6 +63,8 @@ public sealed class ThumbnailCtrScoringService : IThumbnailCtrScoringService
             return "empty hook";
         if (words > _options.MaxHookWords)
             return $"exceeds {_options.MaxHookWords} words";
+        if (Regex.IsMatch(hook, @"\bLook\s+[NESW]\s+Tonight\b", RegexOptions.IgnoreCase))
+            return "single-letter direction abbreviation";
         if (_options.DisallowedPatterns.Any(pattern => ContainsToken(hook, pattern)))
             return "contains disallowed pattern";
         if (_options.PreventScientificHallucinations && ContainsHallucination(hook))

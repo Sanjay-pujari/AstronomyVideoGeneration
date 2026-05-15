@@ -1245,7 +1245,7 @@ public sealed class PipelineOrchestrator
             _logger.LogInformation("Cinematic short thumbnail created: {ThumbnailPath}", shortPath);
 
         var fallbackUsed = longPlan.FallbackUsed || shortPlan.FallbackUsed || string.IsNullOrWhiteSpace(longPath) || string.IsNullOrWhiteSpace(shortPath);
-        return new ThumbnailPlan
+        var plan = new ThumbnailPlan
         {
             PrimaryThumbnailText = string.IsNullOrWhiteSpace(longPlan.PrimaryThumbnailText) ? shortPlan.PrimaryThumbnailText : longPlan.PrimaryThumbnailText,
             AlternateThumbnailTexts = longPlan.AlternateThumbnailTexts.Length > 0 ? longPlan.AlternateThumbnailTexts : shortPlan.AlternateThumbnailTexts,
@@ -1261,6 +1261,29 @@ public sealed class PipelineOrchestrator
             FallbackUsed = fallbackUsed,
             Mode = fallbackUsed ? "FallbackExtractedFrame" : "CinematicComposed"
         };
+        await WriteCombinedThumbnailAnalysisAsync(outputDirectory, plan, cancellationToken);
+        return plan;
+    }
+
+
+    private static async Task WriteCombinedThumbnailAnalysisAsync(string outputDirectory, ThumbnailPlan plan, CancellationToken cancellationToken)
+    {
+        var thumbnailsDirectory = Path.Combine(outputDirectory, "thumbnails");
+        Directory.CreateDirectory(thumbnailsDirectory);
+        var payload = new
+        {
+            mode = plan.Mode,
+            allCandidates = plan.CandidateScores,
+            rejectedCandidates = plan.CandidateScores.Where(x => x.IsRejected),
+            scoringWeights = new { focalObjectScore = 0.35, contrastScore = 0.20, glowScore = 0.15, starRichnessScore = 0.10, textReadabilityScore = 0.10, compositionBalanceScore = 0.10 },
+            astronomySceneMode = true,
+            selectedBaseCandidate = plan.CandidateScores.Where(x => !x.IsRejected).OrderByDescending(x => x.Score).FirstOrDefault(),
+            finalThumbnailPaths = new[] { plan.LongThumbnailPath, plan.ShortThumbnailPath }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray(),
+            longThumbnailPath = plan.LongThumbnailPath,
+            shortThumbnailPath = plan.ShortThumbnailPath,
+            fallbackUsed = plan.FallbackUsed
+        };
+        await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-analysis-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private async Task<ThumbnailPlan> GenerateFallbackThumbnailPlanAsync(
@@ -1617,7 +1640,7 @@ public sealed class PipelineOrchestrator
             thumbnailPath = longThumbnailPath ?? thumbnailPlan.ThumbnailPath,
             thumbnailPlan.PrimaryThumbnailText,
             thumbnailPlan.AlternateThumbnailTexts,
-            thumbnailPlan.SelectedVisualPath,
+            selectedVisualPath = thumbnailPlan.SelectedVisualPath,
             originalThumbnailPath = thumbnailPlan.ThumbnailPath,
             originalLongThumbnailPath = thumbnailPlan.LongThumbnailPath,
             originalShortThumbnailPath = thumbnailPlan.ShortThumbnailPath,

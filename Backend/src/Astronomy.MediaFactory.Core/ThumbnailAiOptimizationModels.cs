@@ -16,6 +16,8 @@ public sealed class ThumbnailAiOptimizationResult
     public IReadOnlyCollection<string> CandidateHooks { get; init; } = [];
     public IReadOnlyCollection<ThumbnailHookScore> Scores { get; init; } = [];
     public string SelectedHook { get; init; } = "";
+    public string NormalizedHook { get; init; } = "";
+    public double CtrScore { get; init; }
     public IReadOnlyCollection<string> RejectedHooks { get; init; } = [];
     public string EmotionType { get; init; } = "wonder";
     public string Language { get; init; } = "en";

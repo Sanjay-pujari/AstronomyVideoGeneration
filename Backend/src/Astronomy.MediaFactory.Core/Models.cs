@@ -168,6 +168,10 @@ public sealed class ThumbnailCandidateScore
     public double Contrast { get; init; }
     public bool ObjectDetected { get; init; }
     public double ObjectVisibility { get; init; }
+    public double FocalObjectScore { get; init; }
+    public double GlowScore { get; init; }
+    public double StarRichnessScore { get; init; }
+    public double CompositionBalanceScore { get; init; }
     public double CelestialFocalSize { get; init; }
     public double ColorRichness { get; init; }
     public double TextSafeCompositionArea { get; init; }
@@ -175,6 +179,18 @@ public sealed class ThumbnailCandidateScore
     public string? RejectionReason { get; init; }
     public bool IsRejected => !string.IsNullOrWhiteSpace(RejectionReason);
 }
+
+public sealed class ThumbnailProductionQualityResult
+{
+    public bool IsProductionReady { get; init; }
+    public IReadOnlyCollection<string> Warnings { get; init; } = [];
+    public double QualityScore { get; init; }
+    public double FocalObjectScore { get; init; }
+    public double TextReadabilityScore { get; init; }
+    public double BlackFrameRisk { get; init; }
+    public double MobileReadabilityScore { get; init; }
+}
+
 
 public sealed class ThumbnailGenerationRequest
 {

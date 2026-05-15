@@ -236,6 +236,7 @@ public sealed class ThumbnailScoringContext
     public double MaxBlackPixelPercentage { get; init; } = 0.40;
     public double MinimumBrightnessScore { get; init; } = 0.35;
     public bool RejectDarkFrames { get; init; } = true;
+    public bool EnableAstronomySceneMode { get; init; } = true;
     public string? SceneId { get; init; }
     public double TimestampSeconds { get; init; }
 }

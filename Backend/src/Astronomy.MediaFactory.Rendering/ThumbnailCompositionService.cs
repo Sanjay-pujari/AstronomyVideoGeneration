@@ -25,7 +25,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
     private readonly IThumbnailMoodGradingService? _moodGradingService;
 
     public ThumbnailCompositionService(IOptions<ThumbnailOptions> options)
-        : this(options, Options.Create(new ThumbnailCinematicAIOptions { Enabled = false }), null, null, null)
+        : this(options, Options.Create(new ThumbnailCinematicAIOptions()), null, null, null)
     {
     }
 
@@ -71,6 +71,9 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             AstronomyIntegrityValidation = integrity,
             PortraitSafe = recommendation.PortraitSafe,
             FinalThumbnailPath = request.OutputPath,
+            OverlaysApplied = BuildOverlayList(request.SelectedCandidate),
+            ObjectScaleBoost = recommendation.ScaleBoost,
+            FinalPaths = [request.OutputPath],
             Diagnostics = hierarchy.Recommendations.Concat([recommendation.Rationale]).ToArray()
         };
         await WriteCinematicAiReportAsync(request.GenerationRequest.OutputDirectory, report, cancellationToken);
@@ -103,7 +106,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             CropStrategy = request.GenerationRequest.IsShortForm ? "portrait-center-crop" : "center-crop",
             EnhancementApplied = true,
             PortraitSafe = request.GenerationRequest.IsShortForm,
-            ScaleBoost = 1
+            ScaleBoost = request.SelectedCandidate.FocalObjectScore < 0.70 ? 1.18 : 1
         };
     }
 
@@ -136,6 +139,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         var objectPoint = FindBrightestPoint(canvas);
         canvas.Mutate(ctx =>
         {
+            ApplyAstronomyRichness(ctx, canvas.Width, canvas.Height, request.Context.Date.DayNumber);
             ApplyEnhancements(ctx, canvas.Width, canvas.Height, objectPoint, recommendation, mood);
             if (_options.EnableGradientBackground)
             {
@@ -161,13 +165,14 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         var objectPoint = FindBrightestPoint(canvas);
         canvas.Mutate(ctx =>
         {
+            ApplyAstronomyRichness(ctx, canvas.Width, canvas.Height, request.GenerationRequest.Context.Date.DayNumber + 17);
             ApplyEnhancements(ctx, canvas.Width, canvas.Height, objectPoint, recommendation, mood);
             if (_options.EnableGradientBackground)
                 ApplyBottomGradient(ctx, canvas.Width, canvas.Height, 0.72f, 0.64f);
 
             if (_options.EnableHookText && !string.IsNullOrWhiteSpace(hook))
             {
-                var font = CreateFont(72, FontStyle.Bold);
+                var font = CreateFont(72, FontStyle.Bold, LocalizationResolver.IsHindi(request.GenerationRequest.Context.Localization.ResolvedLanguage));
                 var text = LimitWords(hook, Math.Min(4, _options.MaxHookWords));
                 DrawTextWithShadow(ctx, new RichTextOptions(font)
                 {
@@ -216,6 +221,29 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             ApplyMoodOverlay(ctx, width, height, mood.MoodProfile);
         if (_options.EnableVignette)
             ApplyVignette(ctx, width, height);
+    }
+
+
+    private static void ApplyAstronomyRichness(IImageProcessingContext ctx, int width, int height, int seed)
+    {
+        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None,
+            new ColorStop(0, Color.FromRgb(5, 9, 28).WithAlpha(0.22f)),
+            new ColorStop(0.55f, Color.FromRgb(34, 22, 68).WithAlpha(0.16f)),
+            new ColorStop(1, Color.FromRgb(3, 7, 18).WithAlpha(0.28f))), new RectangleF(0, 0, width, height));
+
+        var random = new Random(seed);
+        var starCount = Math.Clamp(width * height / 9500, 90, 260);
+        for (var i = 0; i < starCount; i++)
+        {
+            var x = random.NextSingle() * width;
+            var y = random.NextSingle() * height * 0.82f;
+            var radius = 0.7f + random.NextSingle() * 1.5f;
+            var alpha = 0.16f + random.NextSingle() * 0.38f;
+            ctx.Fill(Color.White.WithAlpha(alpha), new EllipsePolygon(x, y, radius));
+        }
+
+        ctx.Fill(Color.DeepSkyBlue.WithAlpha(0.055f), new EllipsePolygon(width * 0.22f, height * 0.25f, width * 0.32f, height * 0.22f));
+        ctx.Fill(Color.MediumPurple.WithAlpha(0.05f), new EllipsePolygon(width * 0.78f, height * 0.42f, width * 0.34f, height * 0.26f));
     }
 
     private static Color ResolveGlowColor(ThumbnailMoodGradingResult mood)
@@ -293,7 +321,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
     private void DrawHeadline(IImageProcessingContext ctx, string hook, int width, int height)
     {
         var displayText = LimitWords(hook, _options.MaxHookWords);
-        var font = CreateFont(92, FontStyle.Bold);
+        var font = CreateFont(92, FontStyle.Bold, ContainsDevanagari(displayText));
         DrawTextWithShadow(ctx, new RichTextOptions(font)
         {
             Origin = new PointF(width / 2f, height - 68),
@@ -303,9 +331,9 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         }, displayText, displayText.Length % 2 == 0 ? Color.FromPixel(WarmYellow) : Color.White);
     }
 
-    private static void DrawLabel(IImageProcessingContext ctx, string text, float size, PointF origin, Color color, HorizontalAlignment alignment)
+    private void DrawLabel(IImageProcessingContext ctx, string text, float size, PointF origin, Color color, HorizontalAlignment alignment)
     {
-        var font = CreateFont(size, FontStyle.Bold);
+        var font = CreateFont(size, FontStyle.Bold, ContainsDevanagari(text));
         DrawTextWithShadow(ctx, new RichTextOptions(font) { Origin = origin, HorizontalAlignment = alignment, VerticalAlignment = VerticalAlignment.Top }, text, color);
     }
 
@@ -314,7 +342,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         if (!_options.EnableBranding || string.IsNullOrWhiteSpace(_options.BrandText))
             return;
 
-        var font = CreateFont(width > height ? 30 : 34, FontStyle.Bold);
+        var font = CreateFont(width > height ? 30 : 34, FontStyle.Bold, false);
         DrawTextWithShadow(ctx, new RichTextOptions(font)
         {
             Origin = new PointF(width - 42, height - 42),
@@ -330,13 +358,47 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         ctx.DrawText(options, text, color);
     }
 
-    private static Font CreateFont(float size, FontStyle style)
+    private Font CreateFont(float size, FontStyle style, bool preferHindi)
     {
-        var family = SystemFonts.Collection.Families.FirstOrDefault(f => f.Name.Equals("Arial", StringComparison.OrdinalIgnoreCase));
-        if (string.IsNullOrWhiteSpace(family.Name))
-            family = SystemFonts.Collection.Families.First();
+        foreach (var configured in BuildConfiguredFontCandidates(preferHindi))
+        {
+            try
+            {
+                if (File.Exists(configured))
+                {
+                    var collection = new FontCollection();
+                    var family = collection.Add(configured);
+                    return family.CreateFont(size, style);
+                }
 
-        return family.CreateFont(size, style);
+                var configuredFamily = SystemFonts.Collection.Families.FirstOrDefault(f => f.Name.Equals(configured, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrWhiteSpace(configuredFamily.Name))
+                    return configuredFamily.CreateFont(size, style);
+            }
+            catch
+            {
+                // Font configuration must never fail thumbnail generation.
+            }
+        }
+
+        var preferredNames = preferHindi
+            ? new[] { "Noto Sans Devanagari", "Mangal", "Nirmala UI", "Arial Unicode MS", "DejaVu Sans", "Arial" }
+            : new[] { "Inter", "Arial", "DejaVu Sans", "Liberation Sans" };
+        foreach (var name in preferredNames)
+        {
+            var family = SystemFonts.Collection.Families.FirstOrDefault(f => f.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(family.Name))
+                return family.CreateFont(size, style);
+        }
+
+        return SystemFonts.Collection.Families.First().CreateFont(size, style);
+    }
+
+    private IEnumerable<string> BuildConfiguredFontCandidates(bool preferHindi)
+    {
+        if (preferHindi && !string.IsNullOrWhiteSpace(_options.HindiFont)) yield return _options.HindiFont;
+        if (!string.IsNullOrWhiteSpace(_options.PrimaryFont)) yield return _options.PrimaryFont;
+        if (!string.IsNullOrWhiteSpace(_options.FallbackFont)) yield return _options.FallbackFont;
     }
 
     private static PointF FindBrightestPoint(Image<Rgba32> image)
@@ -366,13 +428,46 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             return;
 
         using var image = await Image.LoadAsync(outputPath, cancellationToken);
-        for (var quality = 88; quality >= 50; quality -= 8)
+        foreach (var quality in new[] { 85, 80, 75 })
         {
             await image.SaveAsJpegAsync(outputPath, new JpegEncoder { Quality = quality }, cancellationToken);
             if (new FileInfo(outputPath).Length <= MaxThumbnailSizeBytes)
                 return;
         }
     }
+
+    public async Task<ThumbnailProductionQualityResult> ValidateThumbnailQualityAsync(string thumbnailPath, string hookText, CancellationToken cancellationToken)
+    {
+        var score = await new ThumbnailScoringService().ScoreAsync(thumbnailPath, new ThumbnailScoringContext { EnableAstronomySceneMode = true, RejectDarkFrames = true }, cancellationToken);
+        var textReadability = string.IsNullOrWhiteSpace(hookText) ? 0.35 : Math.Clamp(score.TextSafeCompositionArea + (hookText.Length <= 32 ? 0.18 : 0), 0, 1);
+        var mobile = string.IsNullOrWhiteSpace(hookText) ? 0.45 : Math.Clamp(1 - Math.Max(0, hookText.Length - 28) / 40d, 0.35, 1);
+        var quality = Math.Clamp((score.Score * 0.68) + (textReadability * 0.17) + (mobile * 0.15), 0, 1);
+        var warnings = new List<string>();
+        if (score.BlackPixelPercentage > _options.MaxBlackPixelPercentage && !score.ObjectDetected) warnings.Add("black-frame-risk");
+        if (score.FocalObjectScore < 0.35) warnings.Add("weak-focal-object");
+        if (textReadability < 0.55) warnings.Add("weak-text-readability");
+        if (new FileInfo(thumbnailPath).Length > MaxThumbnailSizeBytes) warnings.Add("file-too-large");
+        return new ThumbnailProductionQualityResult
+        {
+            IsProductionReady = quality >= 0.70 && warnings.All(w => w != "black-frame-risk"),
+            Warnings = warnings,
+            QualityScore = Math.Round(quality, 3),
+            FocalObjectScore = score.FocalObjectScore,
+            TextReadabilityScore = Math.Round(textReadability, 3),
+            BlackFrameRisk = Math.Round(score.BlackPixelPercentage > 0.85 && !score.ObjectDetected ? 1 : score.BlackPixelPercentage * (score.ObjectDetected ? 0.35 : 1), 3),
+            MobileReadabilityScore = Math.Round(mobile, 3)
+        };
+    }
+
+    private static IReadOnlyCollection<string> BuildOverlayList(ThumbnailCandidateScore score)
+    {
+        var overlays = new List<string> { "sky-gradient", "vignette", "contrast-curves", "object-glow" };
+        if (score.StarRichnessScore < 0.45) overlays.Add("subtle-starfield-density-enhancement");
+        if (score.ColorRichness < 0.35) overlays.Add("nebula-like-atmospheric-color-haze");
+        return overlays;
+    }
+
+    private static bool ContainsDevanagari(string text) => text.Any(ch => ch >= '\u0900' && ch <= '\u097F');
 
     private static string LimitWords(string text, int maxWords)
     {
