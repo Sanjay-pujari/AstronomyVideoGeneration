@@ -17,7 +17,10 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
     private readonly IThumbnailCompositionService _thumbnailCompositionService;
     private readonly IThumbnailHookService _thumbnailHookService;
     private readonly IThumbnailAiOptimizationService _thumbnailAiOptimizationService;
+    private readonly ICelestialAssetProvider _celestialAssetProvider;
+    private readonly ICinematicCollageComposer _cinematicCollageComposer;
     private readonly ThumbnailOptions _options;
+    private readonly ThumbnailCinematicAIOptions _cinematicOptions;
     private readonly ILogger<CinematicThumbnailService> _logger;
 
     public CinematicThumbnailService(
@@ -26,7 +29,10 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
         IThumbnailCompositionService thumbnailCompositionService,
         IThumbnailHookService thumbnailHookService,
         IThumbnailAiOptimizationService thumbnailAiOptimizationService,
+        ICelestialAssetProvider celestialAssetProvider,
+        ICinematicCollageComposer cinematicCollageComposer,
         IOptions<ThumbnailOptions> options,
+        IOptions<ThumbnailCinematicAIOptions> cinematicOptions,
         ILogger<CinematicThumbnailService> logger)
     {
         _thumbnailStrategyService = thumbnailStrategyService;
@@ -34,7 +40,10 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
         _thumbnailCompositionService = thumbnailCompositionService;
         _thumbnailHookService = thumbnailHookService;
         _thumbnailAiOptimizationService = thumbnailAiOptimizationService;
+        _celestialAssetProvider = celestialAssetProvider;
+        _cinematicCollageComposer = cinematicCollageComposer;
         _options = options.Value;
+        _cinematicOptions = cinematicOptions.Value;
         _logger = logger;
     }
 
@@ -56,11 +65,29 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             var hook = _options.EnableHookText ? ThumbnailAiOptimizationService.NormalizeDirectionalHook(await GenerateOptimizedHookAsync(request, cancellationToken)) : string.Empty;
             var outputPath = Path.Combine(thumbnailsDirectory, request.IsShortForm ? _options.ShortThumbnailOutputName : _options.LongThumbnailOutputName);
 
-            var selectedCandidate = await ComposeProductionReadyAsync(request, selection, hook, outputPath, cancellationToken);
+            var selectedCandidate = selection.SelectedCandidate;
+            var celestialSelection = await BuildCelestialSelectionAsync(request, hook, cancellationToken);
+            try
+            {
+                await _cinematicCollageComposer.ComposeAsync(new CinematicCollageRequest
+                {
+                    GenerationRequest = request,
+                    Selection = celestialSelection,
+                    BackgroundPath = selectedCandidate.Path,
+                    OutputPath = outputPath
+                }, cancellationToken);
+            }
+            catch (Exception collageEx)
+            {
+                errors.Add(collageEx.Message);
+                _logger.LogWarning(collageEx, "Hybrid celestial collage failed; falling back to existing cinematic screenshot composition.");
+                selectedCandidate = await ComposeProductionReadyAsync(request, selection, hook, outputPath, cancellationToken);
+                celestialSelection = MarkFallback(celestialSelection);
+            }
 
             var plan = new ThumbnailPlan
             {
-                PrimaryThumbnailText = string.IsNullOrWhiteSpace(hook) ? strategyPlan.PrimaryThumbnailText : hook,
+                PrimaryThumbnailText = string.IsNullOrWhiteSpace(celestialSelection.SelectedHook) ? strategyPlan.PrimaryThumbnailText : celestialSelection.SelectedHook,
                 AlternateThumbnailTexts = strategyPlan.AlternateThumbnailTexts,
                 LayoutType = strategyPlan.LayoutType,
                 LayoutCandidates = strategyPlan.LayoutCandidates,
@@ -71,14 +98,15 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
                 ThumbnailVariantPaths = [outputPath],
                 CandidateScores = selection.CandidateScores,
                 Variants = strategyPlan.Variants,
-                FallbackUsed = false,
-                Mode = "CinematicComposed"
+                FallbackUsed = celestialSelection.FallbackUsed,
+                Mode = "HybridCinematicCollage",
+                CelestialSelection = celestialSelection
             };
 
-            await WriteSelectionAsync(plan, thumbnailsDirectory, cancellationToken);
-            await WriteAnalysisReportAsync(request, outputPath, selection, selectedCandidate, hook, false, errors, cancellationToken);
-            if (_options.GenerateComparisonSheet)
-                await WriteComparisonSheetAsync(request, outputPath, selection, cancellationToken);
+            await WriteSelectionAsync(plan, thumbnailsDirectory, celestialSelection, cancellationToken);
+            await WriteHybridCinematicReportAsync(request, outputPath, celestialSelection, cancellationToken);
+            await WriteAnalysisReportAsync(request, outputPath, selection, selectedCandidate, celestialSelection.SelectedHook, celestialSelection.FallbackUsed, errors, cancellationToken);
+            await WriteComparisonSheetAsync(request, outputPath, selection, cancellationToken);
             return plan;
         }
         catch (Exception ex)
@@ -90,6 +118,163 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             return fallback;
         }
     }
+
+    private async Task<CelestialThumbnailSelection> BuildCelestialSelectionAsync(ThumbnailGenerationRequest request, string hook, CancellationToken cancellationToken)
+    {
+        var scenes = request.Context.SceneObservationContexts
+            .Where(s => s.IsVisible || s.AltitudeDegrees.HasValue || IsSpecialEventObject(request, s))
+            .Where(s => !string.IsNullOrWhiteSpace(s.ObjectName) && !s.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        var specialEventMode = IsSpecialEventMode(request);
+        var ordered = scenes
+            .Select(s => new { Scene = s, Score = ScoreHeroCandidate(request, s) })
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Scene.SceneIndex)
+            .Select(x => x.Scene)
+            .ToList();
+
+        if (ordered.Count == 0 && request.Context.Events.Count > 0)
+        {
+            ordered.AddRange(request.Context.Events.OrderByDescending(e => e.Score).Take(3).Select((e, i) => new SceneObservationContext
+            {
+                SceneId = $"event-{i + 1}",
+                SceneIndex = i + 1,
+                ObjectName = e.ObjectName,
+                ObjectType = e.Category,
+                IsVisible = true,
+                VisibilityReason = e.VisibilityWindow,
+                DirectionLabel = e.Direction,
+                AltitudeDegrees = null
+            }));
+        }
+
+        var maxObjects = specialEventMode ? 1 : request.IsShortForm ? 2 : 3;
+        var selected = ordered
+            .Where(s => !string.IsNullOrWhiteSpace(s.ObjectName))
+            .DistinctBy(s => NormalizeObjectKey(s.ObjectName))
+            .Take(maxObjects)
+            .ToArray();
+
+        if (selected.Length == 0)
+        {
+            selected = [new SceneObservationContext { SceneId = "fallback-milky-way", ObjectName = "Milky Way", ObjectType = "MilkyWay", IsVisible = true, VisibilityReason = "Fallback cinematic starfield." }];
+        }
+
+        var assets = new List<CelestialAsset>();
+        foreach (var scene in selected)
+        {
+            assets.Add(await _celestialAssetProvider.GetAssetAsync(new CelestialAssetRequest
+            {
+                ObjectName = scene.ObjectName,
+                ObjectType = scene.ObjectType,
+                PreferPortraitSafe = request.IsShortForm,
+                RefreshCache = false
+            }, cancellationToken));
+        }
+
+        var hero = selected[0];
+        return new CelestialThumbnailSelection
+        {
+            HeroObject = hero.ObjectName,
+            SupportObjects = selected.Skip(1).Select(s => s.ObjectName).ToArray(),
+            SelectedHook = RefineHook(hook, hero, request),
+            SelectedLayout = request.IsShortForm ? "PortraitObjectFirst" : specialEventMode ? "SpecialEventHero" : "LandscapeHeroRightTextLeft",
+            AssetSources = assets,
+            VisibilityDataUsed = selected.Select(s => new
+            {
+                s.SceneId,
+                s.ObjectName,
+                s.ObjectType,
+                s.IsVisible,
+                s.AltitudeDegrees,
+                s.DirectionLabel,
+                s.VisibilityReason,
+                s.LocalObservationTime
+            }).Cast<object>().ToArray(),
+            FallbackUsed = assets.Any(a => a.FallbackUsed),
+            SpecialEventMode = specialEventMode
+        };
+    }
+
+    private static CelestialThumbnailSelection MarkFallback(CelestialThumbnailSelection selection) => new()
+    {
+        HeroObject = selection.HeroObject,
+        SupportObjects = selection.SupportObjects,
+        SelectedHook = selection.SelectedHook,
+        SelectedLayout = selection.SelectedLayout,
+        AssetSources = selection.AssetSources,
+        VisibilityDataUsed = selection.VisibilityDataUsed,
+        FallbackUsed = true,
+        SpecialEventMode = selection.SpecialEventMode
+    };
+
+    private static bool IsSpecialEventMode(ThumbnailGenerationRequest request)
+    {
+        var eventText = $"{request.Context.SpecialEvent?.EventType} {request.Context.SpecialEvent?.EventTitle} {request.ContentType}";
+        return eventText.Contains("eclipse", StringComparison.OrdinalIgnoreCase)
+            || eventText.Contains("meteor", StringComparison.OrdinalIgnoreCase)
+            || eventText.Contains("conjunction", StringComparison.OrdinalIgnoreCase)
+            || eventText.Contains("comet", StringComparison.OrdinalIgnoreCase)
+            || eventText.Contains("alignment", StringComparison.OrdinalIgnoreCase)
+            || request.ContentType == ContentType.SpecialEventGuide;
+    }
+
+    private static bool IsSpecialEventObject(ThumbnailGenerationRequest request, SceneObservationContext scene)
+        => IsSpecialEventMode(request) && !string.IsNullOrWhiteSpace(scene.ObjectName);
+
+    private static double ScoreHeroCandidate(ThumbnailGenerationRequest request, SceneObservationContext scene)
+    {
+        var text = $"{scene.ObjectName} {scene.ObjectType}";
+        var score = 0d;
+        if (IsSpecialEventMode(request) && (text.Contains("eclipse", StringComparison.OrdinalIgnoreCase) || text.Contains("meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("comet", StringComparison.OrdinalIgnoreCase))) score += 10;
+        score += ResolveBrightnessWeight(scene.ObjectName, scene.ObjectType) * 4;
+        score += Math.Clamp((scene.AltitudeDegrees ?? 0) / 90d, 0, 1) * 2;
+        score += scene.IsVisible ? 1.5 : 0;
+        score += ResolveRarityWeight(scene.ObjectName, scene.ObjectType);
+        return score;
+    }
+
+    private static double ResolveBrightnessWeight(string objectName, string objectType)
+    {
+        var text = $"{objectName} {objectType}".ToLowerInvariant();
+        if (text.Contains("moon")) return 1.0;
+        if (text.Contains("venus")) return 0.97;
+        if (text.Contains("jupiter")) return 0.92;
+        if (text.Contains("saturn")) return 0.82;
+        if (text.Contains("mars")) return 0.76;
+        if (text.Contains("mercury")) return 0.68;
+        if (text.Contains("sirius")) return 0.72;
+        return 0.50;
+    }
+
+    private static double ResolveRarityWeight(string objectName, string objectType)
+    {
+        var text = $"{objectName} {objectType}".ToLowerInvariant();
+        if (text.Contains("eclipse") || text.Contains("meteor") || text.Contains("comet") || text.Contains("conjunction")) return 2.2;
+        if (text.Contains("galaxy") || text.Contains("nebula")) return 0.8;
+        return 0.2;
+    }
+
+    private static string RefineHook(string hook, SceneObservationContext hero, ThumbnailGenerationRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(hook) && !hook.Contains("Tonight's Sky", StringComparison.OrdinalIgnoreCase) && !hook.Contains("Planets Visible", StringComparison.OrdinalIgnoreCase))
+            return hook;
+        if (IsSpecialEventMode(request))
+        {
+            var text = $"{request.Context.SpecialEvent?.EventTitle} {hero.ObjectName}";
+            if (text.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "Meteor Peak Tonight";
+            if (text.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return "Rare Sky Event";
+            if (text.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return $"Moon Meets {hero.ObjectName}";
+            return "Rare Sky Event";
+        }
+        if (hero.ObjectName.Contains("venus", StringComparison.OrdinalIgnoreCase)) return "Venus After Sunset";
+        if (hero.ObjectName.Contains("saturn", StringComparison.OrdinalIgnoreCase)) return "Saturn Before Sunrise";
+        if (hero.ObjectName.Contains("moon", StringComparison.OrdinalIgnoreCase)) return "Moon Tonight";
+        return $"{hero.ObjectName} Tonight";
+    }
+
+    private static string NormalizeObjectKey(string value) => value.Trim().ToLowerInvariant();
 
     private async Task<ThumbnailCandidateScore> ComposeProductionReadyAsync(ThumbnailGenerationRequest request, ThumbnailCandidateSelection selection, string hook, string outputPath, CancellationToken cancellationToken)
     {
@@ -185,7 +370,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
         };
     }
 
-    private static async Task WriteSelectionAsync(ThumbnailPlan plan, string thumbnailsDirectory, CancellationToken cancellationToken)
+    private static async Task WriteSelectionAsync(ThumbnailPlan plan, string thumbnailsDirectory, CelestialThumbnailSelection selection, CancellationToken cancellationToken)
     {
         var payload = new
         {
@@ -204,9 +389,45 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             fallbackUsed = plan.FallbackUsed,
             mode = plan.Mode,
             visualPolishPassApplied = true,
-            LayoutType = plan.LayoutType.ToString()
+            LayoutType = plan.LayoutType.ToString(),
+            heroObject = selection.HeroObject,
+            supportObjects = selection.SupportObjects,
+            selectedHook = selection.SelectedHook,
+            selectedLayout = selection.SelectedLayout,
+            assetSources = selection.AssetSources,
+            visibilityDataUsed = selection.VisibilityDataUsed,
+            specialEventThumbnailMode = selection.SpecialEventMode
         };
         await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private async Task WriteHybridCinematicReportAsync(ThumbnailGenerationRequest request, string outputPath, CelestialThumbnailSelection selection, CancellationToken cancellationToken)
+    {
+        var payload = new
+        {
+            mode = "HybridCinematicCollage",
+            finalThumbnailPath = outputPath,
+            dominantObject = selection.HeroObject,
+            supportObjects = selection.SupportObjects,
+            selectedLayout = selection.SelectedLayout,
+            selectedHook = selection.SelectedHook,
+            specialEventThumbnailMode = selection.SpecialEventMode,
+            assetSources = selection.AssetSources,
+            visibilityDrivenSelection = selection.VisibilityDataUsed,
+            aiOptimizationUse = new[] { "hook-selection", "title-scoring", "layout-preference", "object-emphasis-scoring" },
+            fakeImageGenerationUsed = false,
+            fallbackUsed = selection.FallbackUsed,
+            mobileFirstValidation = request.IsShortForm ? "portrait object-first composition" : "landscape feed composition with left text-safe negative space",
+            diagnostics = new[]
+            {
+                "Stellarium/visibility data used for object ranking and background context.",
+                "NASA/local cached celestial assets used for visual hero imagery.",
+                "Composition limits support objects to avoid collage clutter.",
+                "Documentary color grade, restrained glow, and reduced text hierarchy applied."
+            }
+        };
+        var outputName = string.IsNullOrWhiteSpace(_cinematicOptions.OutputFileName) ? "thumbnail-cinematic-ai-report.json" : _cinematicOptions.OutputFileName;
+        await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnails", outputName), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private async Task WriteAnalysisReportAsync(ThumbnailGenerationRequest request, string outputPath, ThumbnailCandidateSelection selection, ThumbnailCandidateScore selected, string hook, bool fallbackUsed, IReadOnlyCollection<string> errors, CancellationToken cancellationToken)

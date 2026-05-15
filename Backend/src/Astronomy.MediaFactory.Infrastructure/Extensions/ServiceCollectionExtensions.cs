@@ -269,6 +269,7 @@ public static class ServiceCollectionExtensions
 
         services.AddHttpClient<NasaApodClient>();
         services.AddHttpClient<NasaNeoWsClient>();
+        services.AddHttpClient<ICelestialAssetProvider, CelestialAssetProvider>();
         services.AddHttpClient<MinorPlanetCenterClient>();
         services.AddHttpClient<ISkyfieldSidecarClient, SkyfieldSidecarClient>((sp, client) =>
         {
@@ -341,6 +342,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IThumbnailHookService, ThumbnailHookService>();
         services.AddScoped<IThumbnailCandidateSelector, ThumbnailCandidateSelector>();
         services.AddScoped<IThumbnailCompositionService, ThumbnailCompositionService>();
+        services.AddScoped<ICinematicCollageComposer, CinematicCollageComposer>();
         services.AddScoped<ICinematicThumbnailService, CinematicThumbnailService>();
         services.AddScoped<IThumbnailGenerationService, CinematicThumbnailService>();
         services.AddScoped<IThumbnailGeneratorService, ThumbnailGeneratorService>();

@@ -155,6 +155,7 @@ public sealed class ThumbnailPlan
     public IReadOnlyCollection<ThumbnailVariantOption> Variants { get; init; } = [];
     public bool FallbackUsed { get; init; }
     public string Mode { get; init; } = "CinematicComposed";
+    public CelestialThumbnailSelection? CelestialSelection { get; init; }
 }
 
 public sealed class ThumbnailCandidateScore
@@ -178,6 +179,48 @@ public sealed class ThumbnailCandidateScore
     public double Sharpness { get; init; }
     public string? RejectionReason { get; init; }
     public bool IsRejected => !string.IsNullOrWhiteSpace(RejectionReason);
+}
+
+
+public sealed class CelestialThumbnailSelection
+{
+    public string HeroObject { get; init; } = "";
+    public IReadOnlyCollection<string> SupportObjects { get; init; } = [];
+    public string SelectedHook { get; init; } = "";
+    public string SelectedLayout { get; init; } = "";
+    public IReadOnlyCollection<CelestialAsset> AssetSources { get; init; } = [];
+    public IReadOnlyCollection<object> VisibilityDataUsed { get; init; } = [];
+    public bool FallbackUsed { get; init; }
+    public bool SpecialEventMode { get; init; }
+}
+
+public sealed class CelestialAsset
+{
+    public string ObjectName { get; init; } = "";
+    public string ObjectType { get; init; } = "";
+    public string Category { get; init; } = "milky-way";
+    public string LocalPath { get; init; } = "";
+    public string Source { get; init; } = "LocalCache";
+    public string Title { get; init; } = "";
+    public string Copyright { get; init; } = "";
+    public string OriginalUrl { get; init; } = "";
+    public bool FallbackUsed { get; init; }
+}
+
+public sealed class CelestialAssetRequest
+{
+    public required string ObjectName { get; init; }
+    public required string ObjectType { get; init; }
+    public bool PreferPortraitSafe { get; init; }
+    public bool RefreshCache { get; init; }
+}
+
+public sealed class CinematicCollageRequest
+{
+    public required ThumbnailGenerationRequest GenerationRequest { get; init; }
+    public required CelestialThumbnailSelection Selection { get; init; }
+    public required string BackgroundPath { get; init; }
+    public required string OutputPath { get; init; }
 }
 
 public sealed class ThumbnailProductionQualityResult
