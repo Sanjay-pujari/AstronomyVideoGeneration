@@ -197,6 +197,25 @@ public interface IThumbnailGenerationService
     Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken);
 }
 
+public interface IThumbnailScoringService
+{
+    Task<ThumbnailCandidateScore> ScoreAsync(string candidatePath, ThumbnailScoringContext context, CancellationToken cancellationToken);
+}
+
+public sealed class ThumbnailScoringContext
+{
+    public double MaxBlackPixelPercentage { get; init; } = 0.40;
+    public double MinimumBrightnessScore { get; init; } = 0.35;
+    public bool RejectDarkFrames { get; init; } = true;
+    public string? SceneId { get; init; }
+    public double TimestampSeconds { get; init; }
+}
+
+public interface IThumbnailHookService
+{
+    string GenerateHook(ThumbnailGenerationRequest request, int maxWords);
+}
+
 public interface IThumbnailGeneratorService
 {
     Task<IReadOnlyCollection<string>> GenerateAsync(AstronomyContext context, IReadOnlyCollection<string> screenshots, string outputDirectory, string narrationContext, CancellationToken cancellationToken);

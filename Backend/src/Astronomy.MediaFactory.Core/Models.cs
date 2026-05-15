@@ -146,10 +146,32 @@ public sealed class ThumbnailPlan
     public string[] AlternateThumbnailTexts { get; init; } = [];
     public string? SelectedVisualPath { get; init; }
     public string? ThumbnailPath { get; init; }
+    public string? LongThumbnailPath { get; init; }
+    public string? ShortThumbnailPath { get; init; }
     public IReadOnlyCollection<string> ThumbnailVariantPaths { get; init; } = [];
+    public IReadOnlyCollection<ThumbnailCandidateScore> CandidateScores { get; init; } = [];
     public ThumbnailLayoutType LayoutType { get; init; } = ThumbnailLayoutType.CenteredTitleOverlay;
     public IReadOnlyCollection<ThumbnailLayoutType> LayoutCandidates { get; init; } = [ThumbnailLayoutType.CenteredTitleOverlay];
     public IReadOnlyCollection<ThumbnailVariantOption> Variants { get; init; } = [];
+}
+
+public sealed class ThumbnailCandidateScore
+{
+    public string Path { get; init; } = "";
+    public string? SceneId { get; init; }
+    public double TimestampSeconds { get; init; }
+    public double Score { get; init; }
+    public double Brightness { get; init; }
+    public double BlackPixelPercentage { get; init; }
+    public double Contrast { get; init; }
+    public bool ObjectDetected { get; init; }
+    public double ObjectVisibility { get; init; }
+    public double CelestialFocalSize { get; init; }
+    public double ColorRichness { get; init; }
+    public double TextSafeCompositionArea { get; init; }
+    public double Sharpness { get; init; }
+    public string? RejectionReason { get; init; }
+    public bool IsRejected => !string.IsNullOrWhiteSpace(RejectionReason);
 }
 
 public sealed class ThumbnailGenerationRequest
@@ -160,6 +182,7 @@ public sealed class ThumbnailGenerationRequest
     public required IReadOnlyCollection<string> AvailableVisuals { get; init; }
     public required string OutputDirectory { get; init; }
     public bool IsShortForm { get; init; }
+    public IReadOnlyCollection<RenderScene> Scenes { get; init; } = [];
     public FeedbackSignals? FeedbackSignals { get; init; }
 }
 
@@ -322,6 +345,7 @@ public sealed class ShortVideoRenderResult
     public required string VideoPath { get; init; }
     public string? BlobUrl { get; init; }
     public string? YouTubeVideoId { get; init; }
+    public string? ThumbnailPath { get; init; }
     public string PublishStatus { get; init; } = "Draft";
 }
 

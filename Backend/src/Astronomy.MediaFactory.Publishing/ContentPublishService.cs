@@ -358,7 +358,7 @@ public sealed class ContentPublishService : IContentPublishService
         if (File.Exists(selectionPath))
         {
             using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath, cancellationToken));
-            foreach (var propertyName in new[] { "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath" })
+            foreach (var propertyName in new[] { "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath", "ThumbnailPath", "LongThumbnailPath" })
             {
                 if (doc.RootElement.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String)
                 {
@@ -371,8 +371,20 @@ public sealed class ContentPublishService : IContentPublishService
             }
         }
 
-        var fallback = Path.Combine(outputDirectory, "thumbnail-1.png");
-        return File.Exists(fallback) ? fallback : Path.Combine(outputDirectory, "thumbnails", "thumbnail-1.png");
+        foreach (var fallback in new[]
+        {
+            Path.Combine(outputDirectory, "thumbnail-long.jpg"),
+            Path.Combine(outputDirectory, "thumbnail-1.png"),
+            Path.Combine(outputDirectory, "thumbnails", "thumbnail-1.png")
+        })
+        {
+            if (File.Exists(fallback))
+            {
+                return fallback;
+            }
+        }
+
+        return Path.Combine(outputDirectory, "thumbnail-long.jpg");
     }
 
     private async Task<string> ResolveShortThumbnailPathAsync(string outputDirectory, CancellationToken cancellationToken)
@@ -382,7 +394,7 @@ public sealed class ContentPublishService : IContentPublishService
         if (File.Exists(selectionPath))
         {
             using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath, cancellationToken));
-            foreach (var propertyName in new[] { "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath" })
+            foreach (var propertyName in new[] { "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath", "ThumbnailPath", "ShortThumbnailPath" })
             {
                 if (doc.RootElement.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String)
                 {
@@ -397,6 +409,7 @@ public sealed class ContentPublishService : IContentPublishService
 
         foreach (var candidate in new[]
         {
+            Path.Combine(shortsDirectory, "thumbnail-short.jpg"),
             Path.Combine(shortsDirectory, "thumbnail-1.png"),
             Path.Combine(shortsDirectory, "short-cover-1.png"),
             Path.Combine(shortsDirectory, "thumbnails", "thumbnail-1.png")

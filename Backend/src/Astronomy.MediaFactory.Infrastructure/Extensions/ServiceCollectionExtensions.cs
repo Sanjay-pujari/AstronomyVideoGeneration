@@ -221,7 +221,10 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<ThumbnailOptions>()
             .Bind(configuration.GetSection(ThumbnailOptions.SectionName))
-            .Validate(opt => opt.Width > 0 && opt.Height > 0, "Thumbnail dimensions must be > 0.")
+            .Validate(opt => opt.LandscapeWidth > 0 && opt.LandscapeHeight > 0 && opt.PortraitWidth > 0 && opt.PortraitHeight > 0, "Thumbnail dimensions must be > 0.")
+            .Validate(opt => opt.MaxBlackPixelPercentage is >= 0 and <= 1, "ThumbnailGeneration:MaxBlackPixelPercentage must be between 0 and 1.")
+            .Validate(opt => opt.MinimumBrightnessScore is >= 0 and <= 1, "ThumbnailGeneration:MinimumBrightnessScore must be between 0 and 1.")
+            .Validate(opt => opt.CandidateFramesPerScene > 0, "ThumbnailGeneration:CandidateFramesPerScene must be > 0.")
             .ValidateOnStart();
 
         services.AddOptions<StellariumOptions>()
@@ -315,6 +318,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISpeechSynthesisService, AzureSpeechSynthesisService>();
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
         services.AddScoped<IThumbnailStrategyService, ThumbnailStrategyService>();
+        services.AddScoped<IThumbnailScoringService, ThumbnailScoringService>();
+        services.AddScoped<IThumbnailHookService, ThumbnailHookService>();
         services.AddScoped<IThumbnailGenerationService, ThumbnailGenerationService>();
         services.AddScoped<IThumbnailGeneratorService, ThumbnailGeneratorService>();
         services.AddScoped<ISeoMetadataGeneratorService, SeoMetadataGeneratorService>();
