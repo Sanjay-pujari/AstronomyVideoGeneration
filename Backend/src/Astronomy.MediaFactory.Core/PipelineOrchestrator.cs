@@ -1259,7 +1259,8 @@ public sealed class PipelineOrchestrator
             LayoutCandidates = longPlan.LayoutCandidates,
             Variants = longPlan.Variants,
             FallbackUsed = fallbackUsed,
-            Mode = fallbackUsed ? "FallbackExtractedFrame" : "CinematicComposed"
+            Mode = longPlan.Mode == "HybridCinematicCollage" || shortPlan.Mode == "HybridCinematicCollage" ? "HybridCinematicCollage" : fallbackUsed ? "FallbackExtractedFrame" : "CinematicComposed",
+            CelestialSelection = longPlan.CelestialSelection ?? shortPlan.CelestialSelection
         };
         await WriteCombinedThumbnailAnalysisAsync(outputDirectory, plan, cancellationToken);
         return plan;
@@ -1645,7 +1646,14 @@ public sealed class PipelineOrchestrator
             originalLongThumbnailPath = thumbnailPlan.LongThumbnailPath,
             originalShortThumbnailPath = thumbnailPlan.ShortThumbnailPath,
             thumbnailPlan.ThumbnailVariantPaths,
-            LayoutType = thumbnailPlan.LayoutType.ToString()
+            LayoutType = thumbnailPlan.LayoutType.ToString(),
+            heroObject = thumbnailPlan.CelestialSelection?.HeroObject,
+            supportObjects = thumbnailPlan.CelestialSelection?.SupportObjects ?? Array.Empty<string>(),
+            selectedHook = thumbnailPlan.CelestialSelection?.SelectedHook ?? thumbnailPlan.PrimaryThumbnailText,
+            selectedLayout = thumbnailPlan.CelestialSelection?.SelectedLayout ?? thumbnailPlan.LayoutType.ToString(),
+            assetSources = thumbnailPlan.CelestialSelection?.AssetSources ?? Array.Empty<CelestialAsset>(),
+            visibilityDataUsed = thumbnailPlan.CelestialSelection?.VisibilityDataUsed ?? Array.Empty<object>(),
+            specialEventThumbnailMode = thumbnailPlan.CelestialSelection?.SpecialEventMode ?? false
         };
         await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }

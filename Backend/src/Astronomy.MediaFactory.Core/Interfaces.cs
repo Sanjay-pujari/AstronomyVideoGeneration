@@ -206,6 +206,17 @@ public interface IThumbnailCompositionService
     Task<string> ComposeAsync(ThumbnailCompositionRequest request, CancellationToken cancellationToken);
 }
 
+public interface ICelestialAssetProvider
+{
+    Task<CelestialAsset> GetAssetAsync(CelestialAssetRequest request, CancellationToken cancellationToken);
+}
+
+public interface ICinematicCollageComposer
+{
+    Task<string> ComposeAsync(CinematicCollageRequest request, CancellationToken cancellationToken);
+}
+
+
 public interface ICinematicThumbnailAiService
 {
     Task<CinematicThumbnailAiRecommendation> RecommendAsync(CinematicThumbnailAiRequest request, CancellationToken cancellationToken);

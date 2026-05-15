@@ -29,6 +29,20 @@ public sealed class StellariumScriptBuilder
             : BuildObjectScript(scene, utcDate, screenshotPrefix, screenshotDir, escapedLocationName, escapedObjectName, zoomLevel);
     }
 
+    private static string BuildUiCleanupScript() => """
+// Production thumbnail cleanup: remove debug/user-interface overlays before any capture.
+try { core.setGuiVisible(false); } catch (e) { }
+try { StelGui.setVisible(false); } catch (e) { }
+try { StelMainView.setFlagCursorTimeout(true); } catch (e) { }
+try { GridLinesMgr.setFlagEquatorGrid(false); } catch (e) { }
+try { GridLinesMgr.setFlagAzimuthalGrid(false); } catch (e) { }
+try { GridLinesMgr.setFlagEquatorJ2000Grid(false); } catch (e) { }
+try { GridLinesMgr.setFlagEclipticLine(false); } catch (e) { }
+try { LandscapeMgr.setFlagCardinalsPoints(false); } catch (e) { }
+try { StelSkyDrawer.setFlagLuminanceAdaptation(true); } catch (e) { }
+try { LabelMgr.deleteAllLabels(); } catch (e) { }
+""";
+
     private string BuildObjectScript(StellariumScene scene, string utcDate, string screenshotPrefix, string screenshotDir, string escapedLocationName, string escapedObjectName, double zoomLevel)
     {
         var cinematicZoomStart = GetCinematicZoomStart(scene.ObservationContext, _options.CinematicZoomStart);
@@ -36,6 +50,8 @@ public sealed class StellariumScriptBuilder
 
         return $$"""
 core.clear("natural");
+
+{{BuildUiCleanupScript()}}
 
 // Disable landscape for object scenes
 LandscapeMgr.setFlagLandscape(false);
@@ -79,6 +95,10 @@ StelMovementMgr.setFlagTracking(true);
 
 {{BuildObjectZoomBlock(zoomLevel, cinematicZoomStart, cinematicZoomEnd)}}
 
+// Final capture hygiene: hide selection/info panels and custom labels while preserving the sky frame.
+try { LabelMgr.deleteAllLabels(); } catch (e) { }
+try { core.selectObjectByName("", false); } catch (e) { }
+
 // Screenshot
 core.screenshot("{{screenshotPrefix}}", false, "{{screenshotDir}}", true, "png");
 
@@ -115,6 +135,8 @@ core.wait({{_options.CinematicWaitBeforeScreenshotSeconds.ToString(System.Global
         return $$"""
 core.clear("natural");
 
+{{BuildUiCleanupScript()}}
+
 LandscapeMgr.setCurrentLandscapeName("guereins");
 LandscapeMgr.setFlagLandscape(true);
 LandscapeMgr.setFlagAtmosphere(false);
@@ -144,6 +166,8 @@ core.quitStellarium();
     {
         return $$"""
 core.clear("natural");
+
+{{BuildUiCleanupScript()}}
 
 LandscapeMgr.setCurrentLandscapeName("guereins");
 LandscapeMgr.setFlagLandscape(true);
