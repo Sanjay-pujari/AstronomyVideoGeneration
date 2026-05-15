@@ -219,6 +219,13 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.Overview.Mode is "AttractiveOnly" or "PolarisOnly" or "Hybrid", "Observation:Overview:Mode must be AttractiveOnly, PolarisOnly, or Hybrid.")
             .ValidateOnStart();
 
+        services.AddOptions<ThumbnailAIOptimizationOptions>()
+            .Bind(configuration.GetSection(ThumbnailAIOptimizationOptions.SectionName))
+            .Validate(opt => opt.MaxHookWords is > 0 and <= 5, "ThumbnailAIOptimization:MaxHookWords must be between 1 and 5.")
+            .Validate(opt => opt.MinimumConfidence is >= 0 and <= 1, "ThumbnailAIOptimization:MinimumConfidence must be between 0 and 1.")
+            .Validate(opt => !string.IsNullOrWhiteSpace(opt.OutputFileName), "ThumbnailAIOptimization:OutputFileName is required.")
+            .ValidateOnStart();
+
         services.AddOptions<ThumbnailOptions>()
             .Bind(configuration.GetSection(ThumbnailOptions.SectionName))
             .Validate(opt => opt.LandscapeWidth > 0 && opt.LandscapeHeight > 0 && opt.PortraitWidth > 0 && opt.PortraitHeight > 0, "Thumbnail dimensions must be > 0.")
@@ -319,6 +326,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IVideoRenderService, FfmpegVideoRenderService>();
         services.AddScoped<IThumbnailStrategyService, ThumbnailStrategyService>();
         services.AddScoped<IThumbnailScoringService, ThumbnailScoringService>();
+        services.AddScoped<IThumbnailCtrScoringService, ThumbnailCtrScoringService>();
+        services.AddScoped<IThumbnailAiOptimizationService, ThumbnailAiOptimizationService>();
         services.AddScoped<IThumbnailHookService, ThumbnailHookService>();
         services.AddScoped<IThumbnailCandidateSelector, ThumbnailCandidateSelector>();
         services.AddScoped<IThumbnailCompositionService, ThumbnailCompositionService>();

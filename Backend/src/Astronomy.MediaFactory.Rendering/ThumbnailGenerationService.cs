@@ -20,6 +20,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
     private readonly IThumbnailStrategyService _thumbnailStrategyService;
     private readonly IThumbnailScoringService _thumbnailScoringService;
     private readonly IThumbnailHookService _thumbnailHookService;
+    private readonly IThumbnailAiOptimizationService? _thumbnailAiOptimizationService;
     private readonly ThumbnailOptions _options;
     private readonly ILogger<ThumbnailGenerationService> _logger;
 
@@ -35,11 +36,13 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
         IThumbnailScoringService thumbnailScoringService,
         IThumbnailHookService thumbnailHookService,
         IOptions<ThumbnailOptions> options,
-        ILogger<ThumbnailGenerationService> logger)
+        ILogger<ThumbnailGenerationService> logger,
+        IThumbnailAiOptimizationService? thumbnailAiOptimizationService = null)
     {
         _thumbnailStrategyService = thumbnailStrategyService;
         _thumbnailScoringService = thumbnailScoringService;
         _thumbnailHookService = thumbnailHookService;
+        _thumbnailAiOptimizationService = thumbnailAiOptimizationService;
         _options = options.Value;
         _logger = logger;
     }
@@ -77,7 +80,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
             }
 
             var hook = _options.EnableHookText
-                ? _thumbnailHookService.GenerateHook(request, _options.MaxHookWords)
+                ? await GenerateOptimizedHookAsync(request, cancellationToken)
                 : string.Empty;
 
             var outputPath = System.IO.Path.Combine(request.OutputDirectory, request.IsShortForm ? _options.ShortThumbnailOutputName : _options.LongThumbnailOutputName);
@@ -108,6 +111,26 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
             _logger.LogError(ex, "Production thumbnail generation failed. Falling back to source visual when possible.");
             return BuildFallbackPlan(strategyPlan);
         }
+    }
+
+    private async Task<string> GenerateOptimizedHookAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
+    {
+        if (_thumbnailAiOptimizationService is not null)
+        {
+            var optimization = await _thumbnailAiOptimizationService.OptimizeAsync(new ThumbnailAiOptimizationRequest
+            {
+                GenerationRequest = request,
+                SeoTitle = request.Metadata.PrimaryTitle,
+                Language = request.Context.Localization.ResolvedLanguage,
+                Region = request.Context.LocationName,
+                TopPerformingHooks = request.FeedbackSignals?.BestHooks ?? []
+            }, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(optimization.SelectedHook))
+                return optimization.SelectedHook;
+        }
+
+        return _thumbnailHookService.GenerateHook(request, _options.MaxHookWords);
     }
 
     private async Task<List<ThumbnailCandidate>> BuildCandidatesAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)

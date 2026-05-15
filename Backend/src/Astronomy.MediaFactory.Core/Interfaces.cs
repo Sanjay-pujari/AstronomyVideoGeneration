@@ -230,6 +230,16 @@ public interface IThumbnailHookService
     string GenerateHook(ThumbnailGenerationRequest request, int maxWords);
 }
 
+public interface IThumbnailAiOptimizationService
+{
+    Task<ThumbnailAiOptimizationResult> OptimizeAsync(ThumbnailAiOptimizationRequest request, CancellationToken cancellationToken);
+}
+
+public interface IThumbnailCtrScoringService
+{
+    ThumbnailHookScore Score(string hook, ThumbnailAiOptimizationRequest request);
+}
+
 public interface IThumbnailGeneratorService
 {
     Task<IReadOnlyCollection<string>> GenerateAsync(AstronomyContext context, IReadOnlyCollection<string> screenshots, string outputDirectory, string narrationContext, CancellationToken cancellationToken);
