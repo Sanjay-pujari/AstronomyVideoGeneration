@@ -12,4 +12,7 @@ public sealed class AzureBlobOptions
     public int UploadRetryAttempts { get; set; } = 3;
     public int RetryBaseDelaySeconds { get; set; } = 2;
     public int MaxRetryDelaySeconds { get; set; } = 20;
+    public int UploadMaximumConcurrency { get; set; } = 4;
+    public int UploadTransferChunkSizeMegabytes { get; set; } = 8;
+    public int UploadInitialTransferSizeMegabytes { get; set; } = 8;
 }
