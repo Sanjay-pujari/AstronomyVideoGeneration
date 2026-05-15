@@ -9,6 +9,8 @@ using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 
+using IOPath = System.IO.Path;
+
 namespace Astronomy.MediaFactory.Rendering;
 
 public sealed class CinematicCollageComposer : ICinematicCollageComposer
@@ -19,7 +21,7 @@ public sealed class CinematicCollageComposer : ICinematicCollageComposer
 
     public async Task<string> ComposeAsync(CinematicCollageRequest request, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(request.OutputPath)!);
+        Directory.CreateDirectory(IOPath.GetDirectoryName(request.OutputPath)!);
         var width = request.GenerationRequest.IsShortForm ? _options.PortraitWidth : _options.LandscapeWidth;
         var height = request.GenerationRequest.IsShortForm ? _options.PortraitHeight : _options.LandscapeHeight;
         using var canvas = await BuildBackgroundAsync(request.BackgroundPath, width, height, request.Selection, cancellationToken);
@@ -188,9 +190,17 @@ public sealed class CinematicCollageComposer : ICinematicCollageComposer
 
     private static Font CreateFont(float size, FontStyle style, bool preferHindi)
     {
-        var family = SystemFonts.Collection.Families.FirstOrDefault(f => preferHindi && (f.Name.Contains("Noto", StringComparison.OrdinalIgnoreCase) || f.Name.Contains("Devanagari", StringComparison.OrdinalIgnoreCase)))
-            ?? SystemFonts.Collection.Families.FirstOrDefault(f => f.Name.Equals("Arial", StringComparison.OrdinalIgnoreCase))
-            ?? SystemFonts.Collection.Families.First();
+        var families = SystemFonts.Collection.Families;
+        var family = preferHindi
+            ? families.FirstOrDefault(f => f.Name.Contains("Noto", StringComparison.OrdinalIgnoreCase) || f.Name.Contains("Devanagari", StringComparison.OrdinalIgnoreCase))
+            : default;
+
+        if (string.IsNullOrWhiteSpace(family.Name))
+            family = families.FirstOrDefault(f => f.Name.Equals("Arial", StringComparison.OrdinalIgnoreCase));
+
+        if (string.IsNullOrWhiteSpace(family.Name))
+            family = families.First();
+
         return family.CreateFont(size, style);
     }
 }
