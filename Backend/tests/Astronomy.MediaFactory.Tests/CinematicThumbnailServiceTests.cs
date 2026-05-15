@@ -114,8 +114,15 @@ public sealed class CinematicThumbnailServiceTests
             new ThumbnailCandidateSelector(new ThumbnailScoringService(), Options.Create(options)),
             compositionService ?? new ThumbnailCompositionService(Options.Create(options)),
             new ThumbnailHookService(),
+            CreateAiOptimizationService(),
             Options.Create(options),
             NullLogger<CinematicThumbnailService>.Instance);
+
+    private static ThumbnailAiOptimizationService CreateAiOptimizationService()
+    {
+        var options = Options.Create(new ThumbnailAIOptimizationOptions());
+        return new ThumbnailAiOptimizationService(new ThumbnailCtrScoringService(options), options);
+    }
 
     private static ThumbnailGenerationRequest BuildRequest(string outputDir, string visualPath, string language, bool isShort)
         => new()
