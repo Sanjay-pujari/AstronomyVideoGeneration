@@ -42,7 +42,7 @@ public sealed class CinematicThumbnailServiceTests
         Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-ai-optimization.json")));
         Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-ai-report.json")));
         using var selection = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath));
-        Assert.Equal("CinematicComposed", selection.RootElement.GetProperty("mode").GetString());
+        Assert.Equal("HybridCinematicCollage", selection.RootElement.GetProperty("mode").GetString());
     }
 
     [Theory]
@@ -115,7 +115,7 @@ public sealed class CinematicThumbnailServiceTests
         var plan = await service.GenerateAsync(BuildRequest(outputDir, black, "en", isShort: false), CancellationToken.None);
 
         Assert.False(plan.FallbackUsed);
-        Assert.Equal("CinematicComposed", plan.Mode);
+        Assert.Equal("HybridCinematicCollage", plan.Mode);
         using var selection = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-selection.json")));
         Assert.False(selection.RootElement.GetProperty("fallbackUsed").GetBoolean());
     }
@@ -211,14 +211,48 @@ public sealed class CinematicThumbnailServiceTests
     }
 
     private static CinematicThumbnailService CreateService(ThumbnailOptions options, IThumbnailCompositionService? compositionService = null)
-        => new(
+    {
+        var composition = compositionService ?? new ThumbnailCompositionService(Options.Create(options));
+        return new CinematicThumbnailService(
             new ThumbnailStrategyService(),
             new ThumbnailCandidateSelector(new ThumbnailScoringService(), Options.Create(options)),
-            compositionService ?? new ThumbnailCompositionService(Options.Create(options)),
+            composition,
             new ThumbnailHookService(),
             CreateAiOptimizationService(),
+            new StubCelestialAssetProvider(),
+            new StubCinematicCollageComposer(composition),
             Options.Create(options),
+            Options.Create(new ThumbnailCinematicAIOptions()),
             NullLogger<CinematicThumbnailService>.Instance);
+    }
+
+
+    private sealed class StubCelestialAssetProvider : ICelestialAssetProvider
+    {
+        public Task<CelestialAsset> GetAssetAsync(CelestialAssetRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(new CelestialAsset
+            {
+                ObjectName = request.ObjectName,
+                ObjectType = request.ObjectType,
+                Category = request.ObjectType,
+                Source = "TestStub",
+                Title = request.ObjectName,
+                LocalPath = string.Empty
+            });
+    }
+
+
+    private sealed class StubCinematicCollageComposer(IThumbnailCompositionService compositionService) : ICinematicCollageComposer
+    {
+        public Task<string> ComposeAsync(CinematicCollageRequest request, CancellationToken cancellationToken)
+            => compositionService.ComposeAsync(new ThumbnailCompositionRequest
+            {
+                GenerationRequest = request.GenerationRequest,
+                SelectedCandidate = new ThumbnailCandidateScore { Path = request.BackgroundPath, ObjectDetected = true, Score = 1 },
+                HookText = request.Selection.SelectedHook,
+                OutputPath = request.OutputPath
+            }, cancellationToken);
+    }
 
     private static ThumbnailAiOptimizationService CreateAiOptimizationService()
     {
