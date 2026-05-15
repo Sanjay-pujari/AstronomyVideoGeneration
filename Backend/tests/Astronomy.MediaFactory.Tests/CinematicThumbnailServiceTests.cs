@@ -77,6 +77,63 @@ public sealed class CinematicThumbnailServiceTests
         Assert.True(selection.FallbackUsed);
     }
 
+
+    [Fact]
+    public async Task AstronomyDarkFrame_WithBrightObject_IsNotRejected()
+    {
+        var outputDir = CreateTempDirectory();
+        var dark = Path.Combine(outputDir, "dark-object.jpg");
+        using (var image = new Image<Rgba32>(1280, 720, new Rgba32(0, 0, 3)))
+        {
+            image.Mutate(ctx => ctx.Fill(Color.White, new SixLabors.ImageSharp.Drawing.EllipsePolygon(760, 260, 36)));
+            await image.SaveAsJpegAsync(dark);
+        }
+
+        var score = await new ThumbnailScoringService().ScoreAsync(dark, new ThumbnailScoringContext { EnableAstronomySceneMode = true, MaxBlackPixelPercentage = 0.85, MinimumBrightnessScore = 0.08 }, CancellationToken.None);
+
+        Assert.False(score.IsRejected);
+        Assert.True(score.FocalObjectScore > 0);
+    }
+
+    [Fact]
+    public void ThumbnailAiOptimization_NormalizesSingleLetterDirection()
+    {
+        Assert.Equal("Look West Tonight", ThumbnailAiOptimizationService.NormalizeDirectionalHook("Look W Tonight"));
+    }
+
+    [Fact]
+    public async Task CinematicThumbnail_SetsFallbackFalse_WhenComposedFromFallbackCandidate()
+    {
+        var outputDir = CreateTempDirectory();
+        var black = Path.Combine(outputDir, "black.jpg");
+        using (var image = new Image<Rgba32>(1280, 720, Color.Black))
+        {
+            await image.SaveAsJpegAsync(black);
+        }
+        var service = CreateService(new ThumbnailOptions());
+
+        var plan = await service.GenerateAsync(BuildRequest(outputDir, black, "en", isShort: false), CancellationToken.None);
+
+        Assert.False(plan.FallbackUsed);
+        Assert.Equal("CinematicComposed", plan.Mode);
+        using var selection = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-selection.json")));
+        Assert.False(selection.RootElement.GetProperty("fallbackUsed").GetBoolean());
+    }
+
+    [Fact]
+    public async Task HindiHook_ComposesThumbnailWithoutTofuFailure()
+    {
+        var outputDir = CreateTempDirectory();
+        var source = Path.Combine(outputDir, "source-hi.jpg");
+        await WriteAstronomyImageAsync(source, 1280, 720);
+        var service = CreateService(new ThumbnailOptions());
+
+        var plan = await service.GenerateAsync(BuildRequest(outputDir, source, "hi", isShort: false), CancellationToken.None);
+
+        Assert.True(File.Exists(plan.ThumbnailPath));
+        Assert.Contains("आज", plan.PrimaryThumbnailText);
+    }
+
     [Fact]
     public async Task CinematicThumbnail_FallsBackToExtractedFrame_WhenCompositionFails()
     {

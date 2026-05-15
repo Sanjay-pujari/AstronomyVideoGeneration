@@ -19,6 +19,7 @@ public sealed class ThumbnailAiOptimizationService : IThumbnailAiOptimizationSer
     {
         var effectiveRequest = NormalizeRequest(request);
         var candidates = BuildCandidates(effectiveRequest)
+            .Select(NormalizeDirectionalHook)
             .Select(hook => LimitWords(hook, _options.MaxHookWords))
             .Where(hook => !string.IsNullOrWhiteSpace(hook))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -42,6 +43,8 @@ public sealed class ThumbnailAiOptimizationService : IThumbnailAiOptimizationSer
             CandidateHooks = candidates,
             Scores = scores,
             SelectedHook = selected.Hook,
+            NormalizedHook = NormalizeDirectionalHook(selected.Hook),
+            CtrScore = selected.Score,
             RejectedHooks = scores.Where(score => score.IsRejected).Select(score => score.Hook).ToArray(),
             EmotionType = selected.EmotionType,
             Language = effectiveRequest.Language ?? effectiveRequest.GenerationRequest.Context.Localization.ResolvedLanguage,
@@ -170,6 +173,19 @@ public sealed class ThumbnailAiOptimizationService : IThumbnailAiOptimizationSer
 
     private static string FallbackHook(ThumbnailAiOptimizationRequest request)
         => LocalizationResolver.IsHindi(request.Language ?? string.Empty) ? "आज रात देखें" : "Look West Tonight";
+
+    public static string NormalizeDirectionalHook(string text)
+    {
+        var normalized = string.Join(' ', (text ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        var replacements = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Look W Tonight"] = "Look West Tonight",
+            ["Look E Tonight"] = "Look East Tonight",
+            ["Look N Tonight"] = "Look North Tonight",
+            ["Look S Tonight"] = "Look South Tonight"
+        };
+        return replacements.TryGetValue(normalized, out var expanded) ? expanded : normalized;
+    }
 
     private string LimitWords(string text, int maxWords)
     {

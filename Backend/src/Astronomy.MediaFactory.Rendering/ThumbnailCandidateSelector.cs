@@ -38,7 +38,8 @@ public sealed class ThumbnailCandidateSelector : IThumbnailCandidateSelector
                     MinimumBrightnessScore = _options.MinimumBrightnessScore,
                     RejectDarkFrames = _options.RejectDarkFrames,
                     SceneId = candidate.SceneId,
-                    TimestampSeconds = candidate.TimestampSeconds
+                    TimestampSeconds = candidate.TimestampSeconds,
+                    EnableAstronomySceneMode = _options.EnableAstronomySceneMode
                 }, cancellationToken));
             }
             catch (Exception ex)
@@ -95,9 +96,9 @@ public sealed class ThumbnailCandidateSelector : IThumbnailCandidateSelector
 
     private IEnumerable<double> BuildSampleTimes(double durationSeconds)
     {
-        var ratios = durationSeconds > 8 && _options.CandidateFramesPerScene >= 3
-            ? new[] { 0.25, 0.50, 0.75 }
-            : new[] { 0.50 };
+        var ratios = durationSeconds > 20
+            ? new[] { 0.20, 0.35, 0.50, 0.65, 0.80 }
+            : new[] { 0.30, 0.50, 0.70 };
 
         foreach (var ratio in ratios.Take(Math.Max(1, _options.CandidateFramesPerScene)))
             yield return durationSeconds * ratio;
@@ -137,7 +138,7 @@ public sealed class ThumbnailCandidateSelector : IThumbnailCandidateSelector
             ctx.Fill(Color.White.WithAlpha(0.85f), new EllipsePolygon(image.Width * 0.58f, image.Height * 0.38f, image.Width * 0.08f));
         });
         await image.SaveAsJpegAsync(path, new JpegEncoder { Quality = 92 }, cancellationToken);
-        return await _thumbnailScoringService.ScoreAsync(path, new ThumbnailScoringContext { RejectDarkFrames = false }, cancellationToken);
+        return await _thumbnailScoringService.ScoreAsync(path, new ThumbnailScoringContext { RejectDarkFrames = false, EnableAstronomySceneMode = _options.EnableAstronomySceneMode }, cancellationToken);
     }
 
     private static string SanitizeFileName(string value)

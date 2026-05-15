@@ -73,6 +73,9 @@ public sealed class CinematicThumbnailAiReport
     public string CropStrategy { get; init; } = "center-crop";
     public bool EnhancementApplied { get; init; }
     public double ScaleBoost { get; init; } = 1;
+    public IReadOnlyCollection<string> OverlaysApplied { get; init; } = [];
+    public double ObjectScaleBoost { get; init; } = 1;
+    public IReadOnlyCollection<string> FinalPaths { get; init; } = [];
     public double VisualHierarchyScore { get; init; }
     public double ReadabilityScore { get; init; }
     public AstronomyIntegrityValidation AstronomyIntegrityValidation { get; init; } = new();
