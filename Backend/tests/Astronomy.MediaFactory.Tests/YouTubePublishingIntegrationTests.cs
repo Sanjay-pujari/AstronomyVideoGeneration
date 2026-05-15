@@ -3,6 +3,7 @@ using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Publishing;
+using Google;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -158,6 +159,41 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.Null(result.Error);
         Assert.Equal(2, api.ThumbnailUploadCalls);
     }
+
+    [Fact]
+    public async Task ThumbnailForbiddenFailure_IsNotRetried_AndStillSucceedsWithWarning()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true);
+        var api = new TrackingYouTubeApiClient
+        {
+            ThumbnailExceptionFactory = () => new YouTubeThumbnailUploadException(
+                "YouTube thumbnail upload did not complete successfully. Status: Failed",
+                "Failed",
+                new GoogleApiException("youtube", "The authenticated user doesn't have permissions to upload and set custom video thumbnails.")
+                {
+                    HttpStatusCode = HttpStatusCode.Forbidden
+                },
+                httpErrorDetails: "StatusCode=403 (Forbidden)")
+        };
+        var service = CreateContentService(
+            workspace,
+            repository,
+            api,
+            new PublishingOptions { Enabled = true, Mode = "Private", UploadThumbnail = true },
+            new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28", UploadRetryAttempts = 3, RetryBaseDelaySeconds = 0, MaxRetryDelaySeconds = 1 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.True(api.UploadCalled);
+        Assert.Equal(1, api.ThumbnailUploadCalls);
+        Assert.Equal("Video uploaded but thumbnail upload failed.", result.Warnings.Single());
+        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "youtube-thumbnail-upload-diagnostics.json")));
+        Assert.Equal("Failed", doc.RootElement.GetProperty("uploadStatus").GetString());
+        Assert.Contains("StatusCode=403", doc.RootElement.GetProperty("error").GetString());
+    }
+
 
     [Fact]
     public async Task SuccessfulRealMode_SavesYouTubeVideoId()
@@ -532,6 +568,7 @@ public sealed class YouTubePublishingIntegrationTests
         public string? ChannelFailure { get; init; }
         public string VideoId { get; init; } = "video-123";
         public string? LastThumbnailPath { get; private set; }
+        public Func<Exception>? ThumbnailExceptionFactory { get; init; }
 
         public Task<YouTubeChannelInfo> GetAuthenticatedChannelAsync(string accessToken, CancellationToken cancellationToken)
             => ChannelFailure is null
@@ -551,6 +588,11 @@ public sealed class YouTubePublishingIntegrationTests
         {
             ThumbnailUploadCalls++;
             LastThumbnailPath = thumbnailPath;
+            if (ThumbnailExceptionFactory is not null)
+            {
+                throw ThumbnailExceptionFactory();
+            }
+
             if (ThumbnailUploadCalls <= ThumbnailFailuresBeforeSuccess)
             {
                 throw new InvalidOperationException("YouTube thumbnail upload did not complete successfully. Status: Failed");
