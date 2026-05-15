@@ -111,6 +111,27 @@ public sealed class TokenHealthServiceTests
         Assert.Contains("refresh_token=file-refresh-token", handler.RequestBodies.Single(body => body.Contains("grant_type=refresh_token", StringComparison.Ordinal)), StringComparison.Ordinal);
     }
 
+
+    [Fact]
+    public async Task YouTubeTokenFileAcceptsGoogleSnakeCaseRefreshToken()
+    {
+        using var workspace = new TempTokenHealthWorkspace();
+        workspace.WriteGoogleStyleYouTubeToken("google-style-refresh-token");
+        using var handler = new TokenHealthHandler();
+        var service = CreateService(handler, youtube: new YouTubeOptions
+        {
+            ClientId = "client-id",
+            ClientSecret = "client-secret",
+            TokenFilePath = workspace.YouTubeTokenPath
+        });
+
+        var result = await service.CheckYouTubeAsync(CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal("TokenFile", result.TokenSource);
+        Assert.Contains("refresh_token=google-style-refresh-token", handler.RequestBodies.Single(body => body.Contains("grant_type=refresh_token", StringComparison.Ordinal)), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task YouTubeAppSettingsFallbackWorksIfTokenFileMissing()
     {
@@ -498,6 +519,14 @@ public sealed class TempTokenHealthWorkspace : IDisposable
 
     public void WriteYouTubeToken(string refreshToken, string channelId = "channel-1", string channelTitle = "Astronomy Channel")
         => File.WriteAllText(YouTubeTokenPath, JsonSerializer.Serialize(new YouTubeOAuthTokenFile(channelId, channelTitle, refreshToken, DateTimeOffset.UtcNow)));
+
+    public void WriteGoogleStyleYouTubeToken(string refreshToken)
+        => File.WriteAllText(YouTubeTokenPath, JsonSerializer.Serialize(new Dictionary<string, string>
+        {
+            ["refresh_token"] = refreshToken,
+            ["access_token"] = "access-token",
+            ["token_type"] = "Bearer"
+        }));
 
     public void Dispose()
     {

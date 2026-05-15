@@ -58,7 +58,7 @@ Used for long-form and YouTube Shorts publishing.
 | `PrivacyStatus` | Optional | Must be `private`, `public`, or `unlisted`. | `private` |
 | `RefreshToken` | Required when publishing and not using token file | Preferred for secret-store injection. | Empty |
 | `AccessToken` | Optional | Runtime convenience only; not required for startup validation. | Empty |
-| `TokenFilePath` | Required when publishing and no refresh token is set | Alternative to direct token injection. | Empty |
+| `TokenFilePath` | Required when publishing and no refresh token is set | Alternative to direct token injection. Relative paths are resolved from the current process if that file exists, otherwise from `Maintenance:WorkingDirectory`/`Rendering:WorkingDirectory`. | Empty |
 | `PublishingEnabled` | Optional | Master enable switch for YouTube publishing. | `false` |
 | `UploadRetryAttempts` | Optional | Retry count for publish operations. | `3` |
 | `RetryBaseDelaySeconds` | Optional | Retry base delay. | `2` |
