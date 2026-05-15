@@ -97,7 +97,7 @@ public sealed class ThumbnailAiOptimizationTests
             TopPerformingHooks = ["Moon Tonight"]
         }, CancellationToken.None);
 
-        var path = Path.Combine(outputDir, "thumbnail-ai-optimization.json");
+        var path = Path.Combine(outputDir, "thumbnails", "thumbnail-ai-optimization.json");
         Assert.True(File.Exists(path));
         using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path));
         Assert.True(document.RootElement.TryGetProperty("candidateHooks", out _));

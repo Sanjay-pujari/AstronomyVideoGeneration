@@ -144,9 +144,39 @@ public sealed class PipelineStageExecutor : IPipelineStageExecutor
             stages = stages.Select(s => new PipelineStageStatusDto(s.StageName, s.Status, s.AttemptCount, s.MaxAttempts, s.StartedUtc, s.CompletedUtc, s.LastError, s.OutputPath, s.DiagnosticPath)),
             currentStage,
             failedStage = failed?.StageName,
+            ThumbnailMode = ResolveThumbnailMode(run.OutputFolder),
             retryable,
             resumeCommandSuggestion = $"POST /api/pipeline/resume/{pipelineRunId}"
         };
         await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "pipeline-state.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
+
+    private static string? ResolveThumbnailMode(string outputFolder)
+    {
+        var selectionPath = Path.Combine(outputFolder, "thumbnails", "thumbnail-selection.json");
+        if (!File.Exists(selectionPath))
+        {
+            selectionPath = Path.Combine(outputFolder, "thumbnail-selection.json");
+        }
+
+        if (!File.Exists(selectionPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(selectionPath));
+            return TryGetString(doc.RootElement, "mode") ?? TryGetString(doc.RootElement, "Mode");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? TryGetString(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
 }

@@ -72,7 +72,9 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
                 ShortThumbnailPath = request.IsShortForm ? outputPath : null,
                 ThumbnailVariantPaths = [outputPath],
                 CandidateScores = selection.CandidateScores,
-                Variants = strategyPlan.Variants
+                Variants = strategyPlan.Variants,
+                FallbackUsed = selection.FallbackUsed,
+                Mode = selection.FallbackUsed ? "FallbackExtractedFrame" : _options.Mode
             };
 
             await WriteSelectionAsync(plan, thumbnailsDirectory, cancellationToken);
@@ -137,6 +139,8 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             plan.PrimaryThumbnailText,
             plan.AlternateThumbnailTexts,
             plan.ThumbnailVariantPaths,
+            fallbackUsed = plan.FallbackUsed,
+            mode = plan.Mode,
             LayoutType = plan.LayoutType.ToString()
         };
         await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);

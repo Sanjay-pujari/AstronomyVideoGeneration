@@ -152,8 +152,9 @@ public sealed class ThumbnailAiOptimizationService : IThumbnailAiOptimizationSer
 
     private async Task WriteDiagnosticsAsync(string outputDirectory, ThumbnailAiOptimizationResult result, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(outputDirectory);
-        var path = Path.Combine(outputDirectory, _options.OutputFileName);
+        var thumbnailsDirectory = Path.Combine(outputDirectory, "thumbnails");
+        Directory.CreateDirectory(thumbnailsDirectory);
+        var path = Path.Combine(thumbnailsDirectory, _options.OutputFileName);
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase }), cancellationToken);
     }
 

@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
 using System.Reflection;
+using System.Text.Json;
 using Astronomy.MediaFactory.Publishing;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -24,8 +25,7 @@ public sealed class CinematicThumbnailServiceTests
         var service = CreateService(new ThumbnailOptions());
 
         var longPlan = await service.GenerateAsync(BuildRequest(outputDir, source, "en", isShort: false), CancellationToken.None);
-        var shortOutput = Path.Combine(outputDir, "shorts");
-        var shortPlan = await service.GenerateAsync(BuildRequest(shortOutput, source, "en", isShort: true), CancellationToken.None);
+        var shortPlan = await service.GenerateAsync(BuildRequest(outputDir, source, "en", isShort: true), CancellationToken.None);
 
         Assert.EndsWith(Path.Combine("thumbnails", "thumbnail-long.jpg"), longPlan.ThumbnailPath);
         Assert.EndsWith(Path.Combine("thumbnails", "thumbnail-short.jpg"), shortPlan.ThumbnailPath);
@@ -36,8 +36,13 @@ public sealed class CinematicThumbnailServiceTests
         Assert.Equal(1080, shortImage.Width);
         Assert.Equal(1920, shortImage.Height);
         Assert.True(new FileInfo(longPlan.ThumbnailPath!).Length <= 2 * 1024 * 1024);
-        Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-selection.json")));
+        var selectionPath = Path.Combine(outputDir, "thumbnails", "thumbnail-selection.json");
+        Assert.True(File.Exists(selectionPath));
         Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-analysis-report.json")));
+        Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-ai-optimization.json")));
+        Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-ai-report.json")));
+        using var selection = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath));
+        Assert.Equal("CinematicComposed", selection.RootElement.GetProperty("mode").GetString());
     }
 
     [Theory]
@@ -93,9 +98,9 @@ public sealed class CinematicThumbnailServiceTests
     public async Task PublishingFlow_ResolvesCinematicShortThumbnailFromThumbnailsDirectory()
     {
         var outputDir = CreateTempDirectory();
-        var shortsThumbs = Path.Combine(outputDir, "shorts", "thumbnails");
-        Directory.CreateDirectory(shortsThumbs);
-        var thumbnail = Path.Combine(shortsThumbs, "thumbnail-short.jpg");
+        var rootThumbs = Path.Combine(outputDir, "thumbnails");
+        Directory.CreateDirectory(rootThumbs);
+        var thumbnail = Path.Combine(rootThumbs, "thumbnail-short.jpg");
         await WriteAstronomyImageAsync(thumbnail, 1080, 1920);
 
         var service = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ContentPublishService));
@@ -106,6 +111,46 @@ public sealed class CinematicThumbnailServiceTests
         var resolved = await task;
 
         Assert.Equal(thumbnail, resolved);
+    }
+
+    [Fact]
+    public async Task PublishingFlow_ResolvesCinematicLongThumbnailFromThumbnailsDirectory()
+    {
+        var outputDir = CreateTempDirectory();
+        var thumbs = Path.Combine(outputDir, "thumbnails");
+        Directory.CreateDirectory(thumbs);
+        var thumbnail = Path.Combine(thumbs, "thumbnail-long.jpg");
+        await WriteAstronomyImageAsync(thumbnail, 1280, 720);
+        await File.WriteAllTextAsync(Path.Combine(thumbs, "thumbnail-selection.json"), JsonSerializer.Serialize(new { longThumbnailPath = thumbnail }));
+
+        var service = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ContentPublishService));
+        var method = typeof(ContentPublishService).GetMethod("ResolveThumbnailPathAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        Assert.NotNull(method);
+        var task = (Task<string>)method!.Invoke(service, [outputDir, CancellationToken.None])!;
+        var resolved = await task;
+
+        Assert.Equal(thumbnail, resolved);
+    }
+
+    [Fact]
+    public async Task PublishingFlow_FallsBackToLegacyThumbnailWhenCinematicSelectionIsMissingFile()
+    {
+        var outputDir = CreateTempDirectory();
+        var thumbs = Path.Combine(outputDir, "thumbnails");
+        Directory.CreateDirectory(thumbs);
+        var legacy = Path.Combine(outputDir, "thumbnail-1.png");
+        await WriteAstronomyImageAsync(legacy, 1280, 720);
+        await File.WriteAllTextAsync(Path.Combine(thumbs, "thumbnail-selection.json"), JsonSerializer.Serialize(new { longThumbnailPath = Path.Combine(thumbs, "missing.jpg") }));
+
+        var service = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ContentPublishService));
+        var method = typeof(ContentPublishService).GetMethod("ResolveThumbnailPathAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        Assert.NotNull(method);
+        var task = (Task<string>)method!.Invoke(service, [outputDir, CancellationToken.None])!;
+        var resolved = await task;
+
+        Assert.Equal(legacy, resolved);
     }
 
     private static CinematicThumbnailService CreateService(ThumbnailOptions options, IThumbnailCompositionService? compositionService = null)

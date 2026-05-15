@@ -22,6 +22,7 @@ public sealed class PipelineOrchestrator
     private readonly IMetadataOptimizationService _metadataOptimizationService;
     private readonly IContentMonetizationService? _contentMonetizationService;
     private readonly IThumbnailGenerationService _thumbnailGenerationService;
+    private readonly ICinematicThumbnailService? _cinematicThumbnailService;
     private readonly ISeoMetadataGeneratorService _seoMetadataGeneratorService;
     private readonly IThumbnailGeneratorService? _thumbnailGeneratorService;
     private readonly IPipelineRepository _repository;
@@ -93,7 +94,8 @@ public sealed class PipelineOrchestrator
         IOptions<GrowthOptions>? growthOptions = null,
         IOptions<SchedulerOptions>? schedulerOptions = null,
         IAstronomyEventDecisionService? eventDecisionService = null,
-        IAstronomyEventStore? eventStore = null)
+        IAstronomyEventStore? eventStore = null,
+        ICinematicThumbnailService? cinematicThumbnailService = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -106,6 +108,7 @@ public sealed class PipelineOrchestrator
         _shortsVideoRenderService = shortsVideoRenderService;
         _metadataOptimizationService = metadataOptimizationService;
         _thumbnailGenerationService = thumbnailGenerationService;
+        _cinematicThumbnailService = cinematicThumbnailService;
         _seoMetadataGeneratorService = seoMetadataGeneratorService;
         _thumbnailGeneratorService = thumbnailGeneratorService;
         _repository = repository;
@@ -598,33 +601,21 @@ public sealed class PipelineOrchestrator
 
             var videoPath = await RunStageAsync("Rendering", () => _videoRenderService.RenderAsync(manifest, cancellationToken));
 
-            ThumbnailPlan? thumbnailPlan;
-            try
-            {
-                thumbnailPlan = await RunStageAsync("ThumbnailGeneration", () => _thumbnailGenerationService.GenerateAsync(new ThumbnailGenerationRequest
-                {
-                    ContentType = request.ContentType,
-                    Context = context,
-                    Metadata = optimizedMetadata,
-                    AvailableVisuals = visuals,
-                    OutputDirectory = outputDir,
-                    Scenes = manifest.Scenes,
-                    FeedbackSignals = feedbackSignals
-                }, cancellationToken));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Thumbnail generation failed for run {PipelineRunId}. Continuing without a generated thumbnail.", run.Id);
-                thumbnailPlan = BuildFallbackThumbnailPlan(optimizedMetadata, visuals);
-            }
+            _logger.LogInformation("Running cinematic thumbnail generation...");
+            var thumbnailPlan = await RunStageAsync("ThumbnailGeneration", () => GenerateCinematicThumbnailPlanAsync(
+                request,
+                context,
+                optimizedMetadata,
+                visuals,
+                outputDir,
+                manifest.Scenes,
+                feedbackSignals,
+                cancellationToken),
+                continueWithFallback: true,
+                fallback: ex => GenerateFallbackThumbnailPlanAsync(optimizedMetadata, context, visuals, outputDir, ex, cancellationToken));
 
-            if (thumbnailPlan is null)
-            {
-                _logger.LogWarning("Thumbnail generation returned no plan for run {PipelineRunId}. Continuing with a source visual fallback.", run.Id);
-                thumbnailPlan = BuildFallbackThumbnailPlan(optimizedMetadata, visuals);
-            }
-
-            var thumbnailPath = thumbnailPlan.ThumbnailPath;
+            var thumbnailPath = ResolveExistingThumbnailPath(thumbnailPlan.LongThumbnailPath, thumbnailPlan.ThumbnailPath, thumbnailPlan.SelectedVisualPath);
+            var shortThumbnailPath = ResolveExistingThumbnailPath(thumbnailPlan.ShortThumbnailPath);
             await WriteThumbnailSelectionAsync(thumbnailPlan, outputDir, cancellationToken);
             var selectedObjects = context.SceneObservationContexts
                 .Where(s => !string.IsNullOrWhiteSpace(s.ObjectName) && !s.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase))
@@ -918,7 +909,7 @@ public sealed class PipelineOrchestrator
                         Tags = shortResult.Script.OptimizedMetadata?.Tags ?? shortResult.Script.Tags,
                         Hashtags = shortResult.Script.OptimizedMetadata?.Hashtags ?? [],
                         VideoPath = shortResult.VideoPath,
-                        ThumbnailPath = shortResult.ThumbnailPath ?? thumbnailPath,
+                        ThumbnailPath = ResolveExistingThumbnailPath(shortThumbnailPath, shortResult.ThumbnailPath, thumbnailPath),
                         Language = context.Localization.ResolvedLanguage
                     }, cancellationToken);
 
@@ -1159,6 +1150,116 @@ public sealed class PipelineOrchestrator
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "publish-idempotency-check.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
+    private async Task<ThumbnailPlan> GenerateCinematicThumbnailPlanAsync(
+        RunPipelineRequest request,
+        AstronomyContext context,
+        OptimizedVideoMetadata optimizedMetadata,
+        IReadOnlyCollection<string> visuals,
+        string outputDirectory,
+        IReadOnlyCollection<RenderScene> scenes,
+        FeedbackSignals? feedbackSignals,
+        CancellationToken cancellationToken)
+    {
+        var service = _cinematicThumbnailService ?? _thumbnailGenerationService;
+        var longPlan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = request.ContentType,
+            Context = context,
+            Metadata = optimizedMetadata,
+            AvailableVisuals = visuals,
+            OutputDirectory = outputDirectory,
+            IsShortForm = false,
+            Scenes = scenes,
+            FeedbackSignals = feedbackSignals
+        }, cancellationToken);
+
+        var shortPlan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = request.ContentType,
+            Context = context,
+            Metadata = optimizedMetadata,
+            AvailableVisuals = visuals,
+            OutputDirectory = outputDirectory,
+            IsShortForm = true,
+            Scenes = scenes,
+            FeedbackSignals = feedbackSignals
+        }, cancellationToken);
+
+        var longPath = ResolveExistingThumbnailPath(longPlan.LongThumbnailPath, longPlan.ThumbnailPath);
+        var shortPath = ResolveExistingThumbnailPath(shortPlan.ShortThumbnailPath, shortPlan.ThumbnailPath);
+        if (!string.IsNullOrWhiteSpace(longPath))
+            _logger.LogInformation("Cinematic long thumbnail created: {ThumbnailPath}", longPath);
+        if (!string.IsNullOrWhiteSpace(shortPath))
+            _logger.LogInformation("Cinematic short thumbnail created: {ThumbnailPath}", shortPath);
+
+        var fallbackUsed = longPlan.FallbackUsed || shortPlan.FallbackUsed || string.IsNullOrWhiteSpace(longPath) || string.IsNullOrWhiteSpace(shortPath);
+        return new ThumbnailPlan
+        {
+            PrimaryThumbnailText = string.IsNullOrWhiteSpace(longPlan.PrimaryThumbnailText) ? shortPlan.PrimaryThumbnailText : longPlan.PrimaryThumbnailText,
+            AlternateThumbnailTexts = longPlan.AlternateThumbnailTexts.Length > 0 ? longPlan.AlternateThumbnailTexts : shortPlan.AlternateThumbnailTexts,
+            SelectedVisualPath = longPlan.SelectedVisualPath ?? shortPlan.SelectedVisualPath,
+            ThumbnailPath = longPath ?? longPlan.ThumbnailPath ?? shortPlan.ThumbnailPath,
+            LongThumbnailPath = longPath,
+            ShortThumbnailPath = shortPath,
+            ThumbnailVariantPaths = new[] { longPath, shortPath }.Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            CandidateScores = longPlan.CandidateScores.Count > 0 ? longPlan.CandidateScores : shortPlan.CandidateScores,
+            LayoutType = longPlan.LayoutType,
+            LayoutCandidates = longPlan.LayoutCandidates,
+            Variants = longPlan.Variants,
+            FallbackUsed = fallbackUsed,
+            Mode = fallbackUsed ? "FallbackExtractedFrame" : "CinematicComposed"
+        };
+    }
+
+    private async Task<ThumbnailPlan> GenerateFallbackThumbnailPlanAsync(
+        OptimizedVideoMetadata optimizedMetadata,
+        AstronomyContext context,
+        IReadOnlyCollection<string> visuals,
+        string outputDirectory,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(exception, "Cinematic thumbnail generation failed for pipeline. Falling back to legacy thumbnail extraction.");
+
+        if (_thumbnailGeneratorService is not null)
+        {
+            try
+            {
+                var legacyThumbnails = await _thumbnailGeneratorService.GenerateAsync(
+                    context,
+                    visuals,
+                    outputDirectory,
+                    string.Join(' ', optimizedMetadata.ThumbnailTextSuggestions),
+                    cancellationToken);
+                var selected = legacyThumbnails.FirstOrDefault(File.Exists);
+                if (!string.IsNullOrWhiteSpace(selected))
+                {
+                    return new ThumbnailPlan
+                    {
+                        PrimaryThumbnailText = optimizedMetadata.ThumbnailTextSuggestions.FirstOrDefault() ?? "ASTRONOMY UPDATE",
+                        AlternateThumbnailTexts = optimizedMetadata.ThumbnailTextSuggestions,
+                        SelectedVisualPath = selected,
+                        ThumbnailPath = selected,
+                        LongThumbnailPath = selected,
+                        ThumbnailVariantPaths = legacyThumbnails,
+                        LayoutType = ThumbnailLayoutType.CenteredTitleOverlay,
+                        FallbackUsed = true,
+                        Mode = "FallbackExtractedFrame"
+                    };
+                }
+            }
+            catch (Exception legacyException)
+            {
+                _logger.LogWarning(legacyException, "Legacy thumbnail extraction fallback also failed. Using source visual fallback.");
+            }
+        }
+
+        return BuildFallbackThumbnailPlan(optimizedMetadata, visuals);
+    }
+
+    private static string? ResolveExistingThumbnailPath(params string?[] candidates)
+        => candidates.FirstOrDefault(candidate => !string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate));
+
     private static ThumbnailPlan BuildFallbackThumbnailPlan(OptimizedVideoMetadata optimizedMetadata, IReadOnlyCollection<string> visuals)
     {
         var fallbackVisual = visuals.FirstOrDefault(File.Exists);
@@ -1168,8 +1269,11 @@ public sealed class PipelineOrchestrator
             AlternateThumbnailTexts = optimizedMetadata.ThumbnailTextSuggestions,
             SelectedVisualPath = fallbackVisual,
             ThumbnailPath = fallbackVisual,
+            LongThumbnailPath = fallbackVisual,
             ThumbnailVariantPaths = fallbackVisual is null ? [] : [fallbackVisual],
-            LayoutType = ThumbnailLayoutType.CenteredTitleOverlay
+            LayoutType = ThumbnailLayoutType.CenteredTitleOverlay,
+            FallbackUsed = true,
+            Mode = "FallbackExtractedFrame"
         };
     }
 
@@ -1186,7 +1290,7 @@ public sealed class PipelineOrchestrator
             PipelineStageNames.SpeechCompleted => Path.Combine(outputDirectory, "narration.mp3"),
             PipelineStageNames.StellariumCompleted => outputDirectory,
             PipelineStageNames.RenderingCompleted => Path.Combine(outputDirectory, "final-video.mp4"),
-            PipelineStageNames.ThumbnailCompleted => Path.Combine(outputDirectory, "thumbnail-selection.json"),
+            PipelineStageNames.ThumbnailCompleted => Path.Combine(outputDirectory, "thumbnails", "thumbnail-selection.json"),
             PipelineStageNames.SeoCompleted => Path.Combine(outputDirectory, "seo-metadata.json"),
             "BlobUpload" => Path.Combine(outputDirectory, "public-media-upload-result.json"),
             PipelineStageNames.ValidationCompleted => Path.Combine(outputDirectory, "pre-publish-validation-report.json"),
@@ -1446,8 +1550,19 @@ public sealed class PipelineOrchestrator
 
     private static async Task WriteThumbnailSelectionAsync(ThumbnailPlan thumbnailPlan, string outputDirectory, CancellationToken cancellationToken)
     {
+        var thumbnailsDirectory = Path.Combine(outputDirectory, "thumbnails");
+        Directory.CreateDirectory(thumbnailsDirectory);
+        var longThumbnailPath = ResolveExistingThumbnailPath(thumbnailPlan.LongThumbnailPath, thumbnailPlan.ThumbnailPath);
+        var shortThumbnailPath = ResolveExistingThumbnailPath(thumbnailPlan.ShortThumbnailPath);
         var payload = new
         {
+            longThumbnailPath,
+            shortThumbnailPath,
+            fallbackUsed = thumbnailPlan.FallbackUsed,
+            mode = thumbnailPlan.Mode,
+            preferredThumbnailPath = longThumbnailPath ?? thumbnailPlan.ThumbnailPath,
+            selectedThumbnailPath = longThumbnailPath ?? thumbnailPlan.ThumbnailPath,
+            thumbnailPath = longThumbnailPath ?? thumbnailPlan.ThumbnailPath,
             thumbnailPlan.PrimaryThumbnailText,
             thumbnailPlan.AlternateThumbnailTexts,
             thumbnailPlan.SelectedVisualPath,
@@ -1457,7 +1572,7 @@ public sealed class PipelineOrchestrator
             thumbnailPlan.ThumbnailVariantPaths,
             LayoutType = thumbnailPlan.LayoutType.ToString()
         };
-        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private static async Task WritePrimaryContextArtifactsAsync(AstronomyContext context, string outputDirectory, CancellationToken cancellationToken)
