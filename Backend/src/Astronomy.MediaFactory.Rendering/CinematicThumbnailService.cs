@@ -12,6 +12,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
     private readonly IThumbnailCandidateSelector _thumbnailCandidateSelector;
     private readonly IThumbnailCompositionService _thumbnailCompositionService;
     private readonly IThumbnailHookService _thumbnailHookService;
+    private readonly IThumbnailAiOptimizationService _thumbnailAiOptimizationService;
     private readonly ThumbnailOptions _options;
     private readonly ILogger<CinematicThumbnailService> _logger;
 
@@ -20,6 +21,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
         IThumbnailCandidateSelector thumbnailCandidateSelector,
         IThumbnailCompositionService thumbnailCompositionService,
         IThumbnailHookService thumbnailHookService,
+        IThumbnailAiOptimizationService thumbnailAiOptimizationService,
         IOptions<ThumbnailOptions> options,
         ILogger<CinematicThumbnailService> logger)
     {
@@ -27,6 +29,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
         _thumbnailCandidateSelector = thumbnailCandidateSelector;
         _thumbnailCompositionService = thumbnailCompositionService;
         _thumbnailHookService = thumbnailHookService;
+        _thumbnailAiOptimizationService = thumbnailAiOptimizationService;
         _options = options.Value;
         _logger = logger;
     }
@@ -46,7 +49,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
         {
             var selection = await _thumbnailCandidateSelector.SelectAsync(request, cancellationToken);
             errors.AddRange(selection.Errors);
-            var hook = _options.EnableHookText ? _thumbnailHookService.GenerateHook(request, _options.MaxHookWords) : string.Empty;
+            var hook = _options.EnableHookText ? await GenerateOptimizedHookAsync(request, cancellationToken) : string.Empty;
             var outputPath = Path.Combine(thumbnailsDirectory, request.IsShortForm ? _options.ShortThumbnailOutputName : _options.LongThumbnailOutputName);
 
             await _thumbnailCompositionService.ComposeAsync(new ThumbnailCompositionRequest
@@ -84,6 +87,22 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             await WriteFallbackDiagnosticsAsync(request, fallback, errors, cancellationToken);
             return fallback;
         }
+    }
+
+    private async Task<string> GenerateOptimizedHookAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var optimization = await _thumbnailAiOptimizationService.OptimizeAsync(new ThumbnailAiOptimizationRequest
+        {
+            GenerationRequest = request,
+            SeoTitle = request.Metadata.PrimaryTitle,
+            Language = request.Context.Localization.ResolvedLanguage,
+            Region = request.Context.LocationName,
+            TopPerformingHooks = request.FeedbackSignals?.BestHooks ?? []
+        }, cancellationToken);
+
+        return string.IsNullOrWhiteSpace(optimization.SelectedHook)
+            ? _thumbnailHookService.GenerateHook(request, _options.MaxHookWords)
+            : optimization.SelectedHook;
     }
 
     private static ThumbnailPlan BuildDisabledPlan(ThumbnailPlan strategyPlan) => strategyPlan;
