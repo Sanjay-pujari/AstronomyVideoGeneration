@@ -23,6 +23,7 @@ public sealed class ThumbnailAiOptimizationResult
     public string Language { get; init; } = "en";
     public double AnalyticsInfluence { get; init; }
     public bool HallucinationDetected { get; init; }
+    public bool VisualPolishPassApplied { get; init; }
 }
 
 public sealed class ThumbnailHookScore

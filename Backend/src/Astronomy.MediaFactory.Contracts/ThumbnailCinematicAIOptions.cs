@@ -22,6 +22,6 @@ public sealed class ThumbnailCinematicAIOptions
         "warmGlow"
     ];
     public bool PreventFakeAstronomy { get; set; } = true;
-    public double MaximumObjectScaleBoost { get; set; } = 1.35;
+    public double MaximumObjectScaleBoost { get; set; } = 1.30;
     public string OutputFileName { get; set; } = "thumbnail-cinematic-ai-report.json";
 }

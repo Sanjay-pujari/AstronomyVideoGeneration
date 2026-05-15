@@ -74,7 +74,11 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             OverlaysApplied = BuildOverlayList(request.SelectedCandidate),
             ObjectScaleBoost = recommendation.ScaleBoost,
             FinalPaths = [request.OutputPath],
-            Diagnostics = hierarchy.Recommendations.Concat([recommendation.Rationale]).ToArray()
+            VisualPolishPassApplied = true,
+            Diagnostics = hierarchy.Recommendations.Concat([
+                recommendation.Rationale,
+                "Final visual polish pass applied: debug-edge cleanup, restrained text hierarchy, subtle object emphasis, softened overlays, and mobile readability validation."
+            ]).ToArray()
         };
         await WriteCinematicAiReportAsync(request.GenerationRequest.OutputDirectory, report, cancellationToken);
 
@@ -106,7 +110,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             CropStrategy = request.GenerationRequest.IsShortForm ? "portrait-center-crop" : "center-crop",
             EnhancementApplied = true,
             PortraitSafe = request.GenerationRequest.IsShortForm,
-            ScaleBoost = request.SelectedCandidate.FocalObjectScore < 0.70 ? 1.18 : 1
+            ScaleBoost = request.SelectedCandidate.FocalObjectScore < 0.70 ? 1.24 : 1.08
         };
     }
 
@@ -139,16 +143,17 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         var objectPoint = FindBrightestPoint(canvas);
         canvas.Mutate(ctx =>
         {
+            ApplyStellariumOverlayCleanup(ctx, canvas.Width, canvas.Height, objectPoint, false);
             ApplyAstronomyRichness(ctx, canvas.Width, canvas.Height, request.Context.Date.DayNumber);
             ApplyEnhancements(ctx, canvas.Width, canvas.Height, objectPoint, recommendation, mood);
             if (_options.EnableGradientBackground)
             {
-                ApplyBottomGradient(ctx, canvas.Width, canvas.Height, 0.54f, 0.82f);
+                ApplyBottomGradient(ctx, canvas.Width, canvas.Height, 0.58f, 0.74f);
                 ApplyTopGradient(ctx, canvas.Width, canvas.Height);
             }
 
             var topText = $"{request.Context.Date:MMM d} • {request.Context.LocationName}";
-            DrawLabel(ctx, topText, 36, new PointF(46, 36), Color.White.WithAlpha(0.88f), HorizontalAlignment.Left);
+            DrawLabel(ctx, topText, 31, new PointF(46, 36), Color.White.WithAlpha(0.82f), HorizontalAlignment.Left);
 
             if (_options.EnableHookText && !string.IsNullOrWhiteSpace(hook))
                 DrawHeadline(ctx, hook, canvas.Width, canvas.Height);
@@ -165,19 +170,20 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         var objectPoint = FindBrightestPoint(canvas);
         canvas.Mutate(ctx =>
         {
+            ApplyStellariumOverlayCleanup(ctx, canvas.Width, canvas.Height, objectPoint, true);
             ApplyAstronomyRichness(ctx, canvas.Width, canvas.Height, request.GenerationRequest.Context.Date.DayNumber + 17);
             ApplyEnhancements(ctx, canvas.Width, canvas.Height, objectPoint, recommendation, mood);
             if (_options.EnableGradientBackground)
-                ApplyBottomGradient(ctx, canvas.Width, canvas.Height, 0.72f, 0.64f);
+                ApplyBottomGradient(ctx, canvas.Width, canvas.Height, 0.68f, 0.68f);
 
             if (_options.EnableHookText && !string.IsNullOrWhiteSpace(hook))
             {
-                var font = CreateFont(72, FontStyle.Bold, LocalizationResolver.IsHindi(request.GenerationRequest.Context.Localization.ResolvedLanguage));
+                var font = CreateFont(63, FontStyle.Bold, LocalizationResolver.IsHindi(request.GenerationRequest.Context.Localization.ResolvedLanguage));
                 var text = LimitWords(hook, Math.Min(4, _options.MaxHookWords));
                 DrawTextWithShadow(ctx, new RichTextOptions(font)
                 {
-                    Origin = new PointF(canvas.Width / 2f, canvas.Height - 220),
-                    WrappingLength = canvas.Width - 140,
+                    Origin = new PointF(canvas.Width / 2f, canvas.Height - 250),
+                    WrappingLength = canvas.Width - 170,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Bottom
                 }, text, Color.White);
@@ -192,7 +198,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
     private static async Task<Image<Rgba32>> LoadCanvasAsync(string sourcePath, int width, int height, CinematicThumbnailAiRecommendation recommendation, CancellationToken cancellationToken)
     {
         using var source = await Image.LoadAsync<Rgba32>(sourcePath, cancellationToken);
-        var scale = Math.Clamp(recommendation.ScaleBoost, 1, 1.35);
+        var scale = Math.Clamp(recommendation.ScaleBoost, 1, 1.30);
         var resizeWidth = Math.Max(width, (int)Math.Round(width * scale));
         var resizeHeight = Math.Max(height, (int)Math.Round(height * scale));
         var crop = CalculateCropRectangle(resizeWidth, resizeHeight, width, height, recommendation.FocusX, recommendation.FocusY);
@@ -214,9 +220,12 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         if (_options.EnableContrastBoost)
             ctx.Contrast((float)mood.Contrast).Saturate((float)mood.Saturation).Brightness((float)mood.Brightness);
         if (_options.EnableSharpnessBoost)
-            ctx.GaussianSharpen(0.65f);
+            ctx.GaussianSharpen(0.48f);
         if (_options.EnableGlowEnhancement && _options.EnableGlowEffect && _cinematicOptions.EnableObjectFocusEnhancement)
-            ctx.Fill(ResolveGlowColor(mood).WithAlpha(0.14f), new EllipsePolygon(brightPoint.X, brightPoint.Y, width * 0.16f, height * 0.16f));
+        {
+            ctx.Fill(ResolveGlowColor(mood).WithAlpha(0.075f), new EllipsePolygon(brightPoint.X, brightPoint.Y, width * 0.13f, height * 0.13f));
+            ctx.Fill(Color.White.WithAlpha(0.025f), new EllipsePolygon(brightPoint.X, brightPoint.Y, width * 0.055f, height * 0.055f));
+        }
         if (_cinematicOptions.EnableColorMoodGrading)
             ApplyMoodOverlay(ctx, width, height, mood.MoodProfile);
         if (_options.EnableVignette)
@@ -227,23 +236,23 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
     private static void ApplyAstronomyRichness(IImageProcessingContext ctx, int width, int height, int seed)
     {
         ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None,
-            new ColorStop(0, Color.FromRgb(5, 9, 28).WithAlpha(0.22f)),
-            new ColorStop(0.55f, Color.FromRgb(34, 22, 68).WithAlpha(0.16f)),
-            new ColorStop(1, Color.FromRgb(3, 7, 18).WithAlpha(0.28f))), new RectangleF(0, 0, width, height));
+            new ColorStop(0, Color.FromRgb(4, 10, 31).WithAlpha(0.18f)),
+            new ColorStop(0.55f, Color.FromRgb(22, 23, 54).WithAlpha(0.11f)),
+            new ColorStop(1, Color.FromRgb(2, 6, 18).WithAlpha(0.24f))), new RectangleF(0, 0, width, height));
 
         var random = new Random(seed);
-        var starCount = Math.Clamp(width * height / 9500, 90, 260);
+        var starCount = Math.Clamp(width * height / 10500, 80, 230);
         for (var i = 0; i < starCount; i++)
         {
             var x = random.NextSingle() * width;
             var y = random.NextSingle() * height * 0.82f;
             var radius = 0.7f + random.NextSingle() * 1.5f;
-            var alpha = 0.16f + random.NextSingle() * 0.38f;
+            var alpha = 0.13f + random.NextSingle() * 0.32f;
             ctx.Fill(Color.White.WithAlpha(alpha), new EllipsePolygon(x, y, radius));
         }
 
-        ctx.Fill(Color.DeepSkyBlue.WithAlpha(0.055f), new EllipsePolygon(width * 0.22f, height * 0.25f, width * 0.32f, height * 0.22f));
-        ctx.Fill(Color.MediumPurple.WithAlpha(0.05f), new EllipsePolygon(width * 0.78f, height * 0.42f, width * 0.34f, height * 0.26f));
+        ctx.Fill(Color.DeepSkyBlue.WithAlpha(0.022f), new EllipsePolygon(width * 0.22f, height * 0.25f, width * 0.30f, height * 0.20f));
+        ctx.Fill(Color.MediumPurple.WithAlpha(0.020f), new EllipsePolygon(width * 0.78f, height * 0.42f, width * 0.31f, height * 0.23f));
     }
 
     private static Color ResolveGlowColor(ThumbnailMoodGradingResult mood)
@@ -259,11 +268,11 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
     {
         var color = moodProfile switch
         {
-            "deepSpace" => Color.MidnightBlue.WithAlpha(0.10f),
-            "cinematicBlue" => Color.RoyalBlue.WithAlpha(0.09f),
-            "warmGlow" => Color.Orange.WithAlpha(0.08f),
-            "sunset" => Color.OrangeRed.WithAlpha(0.08f),
-            _ => Color.Purple.WithAlpha(0.06f)
+            "deepSpace" => Color.MidnightBlue.WithAlpha(0.065f),
+            "cinematicBlue" => Color.RoyalBlue.WithAlpha(0.055f),
+            "warmGlow" => Color.Orange.WithAlpha(0.050f),
+            "sunset" => Color.OrangeRed.WithAlpha(0.055f),
+            _ => Color.Purple.WithAlpha(0.040f)
         };
         ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None,
             new ColorStop(0, color),
@@ -277,8 +286,8 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             "Composition uses crop, contrast, glow, gradients, text, and scale emphasis only.",
             "No generated astronomy pixels or new celestial objects are introduced."
         };
-        var noSyntheticObjects = !_cinematicOptions.Enabled || (recommendation.ScaleBoost <= 1.35 && request.SelectedCandidate.ObjectDetected);
-        var relationshipsPreserved = !recommendation.DominantObjectType.Equals("constellation", StringComparison.OrdinalIgnoreCase) || recommendation.ScaleBoost <= 1.35;
+        var noSyntheticObjects = !_cinematicOptions.Enabled || (recommendation.ScaleBoost <= 1.30 && request.SelectedCandidate.ObjectDetected);
+        var relationshipsPreserved = !recommendation.DominantObjectType.Equals("constellation", StringComparison.OrdinalIgnoreCase) || recommendation.ScaleBoost <= 1.30;
         return new AstronomyIntegrityValidation
         {
             NoSyntheticObjectsAdded = noSyntheticObjects,
@@ -301,11 +310,51 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
 
     private static void ApplyVignette(IImageProcessingContext ctx, int width, int height)
     {
-        var edge = Color.Black.WithAlpha(0.18f);
+        var edge = Color.Black.WithAlpha(0.21f);
         ctx.Fill(edge, new RectangleF(0, 0, width, height * 0.10f));
         ctx.Fill(edge, new RectangleF(0, height * 0.90f, width, height * 0.10f));
         ctx.Fill(edge, new RectangleF(0, 0, width * 0.08f, height));
         ctx.Fill(edge, new RectangleF(width * 0.92f, 0, width * 0.08f, height));
+    }
+
+
+    private static void ApplyStellariumOverlayCleanup(IImageProcessingContext ctx, int width, int height, PointF focalPoint, bool portrait)
+    {
+        var protectedRadius = Math.Min(width, height) * (portrait ? 0.20f : 0.16f);
+        var leftColumn = new RectangleF(0, 0, width * (portrait ? 0.24f : 0.22f), height);
+        var bottomBar = new RectangleF(0, height * (portrait ? 0.90f : 0.86f), width, height * (portrait ? 0.10f : 0.14f));
+        var topLeft = new RectangleF(0, 0, width * 0.34f, height * (portrait ? 0.08f : 0.12f));
+        var topRight = new RectangleF(width * 0.78f, 0, width * 0.22f, height * 0.10f);
+
+        if (!IntersectsProtectedFocus(leftColumn, focalPoint, protectedRadius))
+        {
+            ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(leftColumn.Width, 0), GradientRepetitionMode.None,
+                new ColorStop(0, Color.Black.WithAlpha(0.72f)),
+                new ColorStop(0.68f, Color.Black.WithAlpha(0.34f)),
+                new ColorStop(1, Color.Transparent)), leftColumn);
+        }
+
+        if (!IntersectsProtectedFocus(bottomBar, focalPoint, protectedRadius))
+        {
+            ctx.Fill(new LinearGradientBrush(new PointF(0, bottomBar.Y), new PointF(0, height), GradientRepetitionMode.None,
+                new ColorStop(0, Color.Transparent),
+                new ColorStop(0.38f, Color.Black.WithAlpha(0.44f)),
+                new ColorStop(1, Color.Black.WithAlpha(0.76f))), bottomBar);
+        }
+
+        if (!IntersectsProtectedFocus(topLeft, focalPoint, protectedRadius))
+            ctx.Fill(Color.Black.WithAlpha(0.34f), topLeft);
+        if (!IntersectsProtectedFocus(topRight, focalPoint, protectedRadius))
+            ctx.Fill(Color.Black.WithAlpha(0.30f), topRight);
+    }
+
+    private static bool IntersectsProtectedFocus(RectangleF region, PointF focalPoint, float radius)
+    {
+        var nearestX = Math.Clamp(focalPoint.X, region.X, region.X + region.Width);
+        var nearestY = Math.Clamp(focalPoint.Y, region.Y, region.Y + region.Height);
+        var dx = focalPoint.X - nearestX;
+        var dy = focalPoint.Y - nearestY;
+        return (dx * dx) + (dy * dy) <= radius * radius;
     }
 
     private static void ApplyBottomGradient(IImageProcessingContext ctx, int width, int height, float startRatio, float alpha)
@@ -321,11 +370,11 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
     private void DrawHeadline(IImageProcessingContext ctx, string hook, int width, int height)
     {
         var displayText = LimitWords(hook, _options.MaxHookWords);
-        var font = CreateFont(92, FontStyle.Bold, ContainsDevanagari(displayText));
+        var font = CreateFont(78, FontStyle.Bold, ContainsDevanagari(displayText));
         DrawTextWithShadow(ctx, new RichTextOptions(font)
         {
-            Origin = new PointF(width / 2f, height - 68),
-            WrappingLength = width - 110,
+            Origin = new PointF(width / 2f, height - 76),
+            WrappingLength = width - 150,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Bottom
         }, displayText, displayText.Length % 2 == 0 ? Color.FromPixel(WarmYellow) : Color.White);
@@ -353,8 +402,11 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
 
     private static void DrawTextWithShadow(IImageProcessingContext ctx, RichTextOptions options, string text, Color color)
     {
-        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 4, options.Origin.Y + 4) }, text, Color.Black.WithAlpha(0.82f));
-        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 1, options.Origin.Y + 1) }, text, color.WithAlpha(0.35f));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 5, options.Origin.Y + 5) }, text, Color.Black.WithAlpha(0.86f));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X - 2, options.Origin.Y) }, text, Color.Black.WithAlpha(0.42f));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 2, options.Origin.Y) }, text, Color.Black.WithAlpha(0.42f));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X, options.Origin.Y + 2) }, text, Color.Black.WithAlpha(0.42f));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 1, options.Origin.Y + 1) }, text, color.WithAlpha(0.32f));
         ctx.DrawText(options, text, color);
     }
 
@@ -446,10 +498,11 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         if (score.BlackPixelPercentage > _options.MaxBlackPixelPercentage && !score.ObjectDetected) warnings.Add("black-frame-risk");
         if (score.FocalObjectScore < 0.35) warnings.Add("weak-focal-object");
         if (textReadability < 0.55) warnings.Add("weak-text-readability");
+        if (quality < 0.80) warnings.Add("below-preferred-polish-score");
         if (new FileInfo(thumbnailPath).Length > MaxThumbnailSizeBytes) warnings.Add("file-too-large");
         return new ThumbnailProductionQualityResult
         {
-            IsProductionReady = quality >= 0.70 && warnings.All(w => w != "black-frame-risk"),
+            IsProductionReady = quality >= 0.80 && warnings.All(w => w is not "black-frame-risk" and not "weak-focal-object" and not "weak-text-readability"),
             Warnings = warnings,
             QualityScore = Math.Round(quality, 3),
             FocalObjectScore = score.FocalObjectScore,
@@ -461,9 +514,9 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
 
     private static IReadOnlyCollection<string> BuildOverlayList(ThumbnailCandidateScore score)
     {
-        var overlays = new List<string> { "sky-gradient", "vignette", "contrast-curves", "object-glow" };
-        if (score.StarRichnessScore < 0.45) overlays.Add("subtle-starfield-density-enhancement");
-        if (score.ColorRichness < 0.35) overlays.Add("nebula-like-atmospheric-color-haze");
+        var overlays = new List<string> { "stellarium-debug-edge-cleanup", "sky-depth-gradient", "soft-vignette", "contrast-curves", "restrained-object-glow" };
+        if (score.StarRichnessScore < 0.45) overlays.Add("subtle-star-clarity-enhancement");
+        if (score.ColorRichness < 0.35) overlays.Add("subtle-cinematic-sky-depth-grade");
         return overlays;
     }
 

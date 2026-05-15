@@ -35,7 +35,8 @@ public sealed class ThumbnailCinematicAiPhase3Tests
         Assert.Equal("moon", report.RootElement.GetProperty("dominantObject").GetString());
         Assert.Equal("warmGlow", report.RootElement.GetProperty("moodProfile").GetString());
         Assert.True(report.RootElement.GetProperty("enhancementApplied").GetBoolean());
-        Assert.True(report.RootElement.GetProperty("scaleBoost").GetDouble() <= 1.35);
+        Assert.True(report.RootElement.GetProperty("scaleBoost").GetDouble() <= 1.30);
+        Assert.True(report.RootElement.GetProperty("visualPolishPassApplied").GetBoolean());
         Assert.True(report.RootElement.GetProperty("astronomyIntegrityValidation").GetProperty("noSyntheticObjectsAdded").GetBoolean());
         Assert.True(new FileInfo(Path.Combine(outputDir, "thumbnails", "thumbnail-long.jpg")).Length <= 2 * 1024 * 1024);
     }

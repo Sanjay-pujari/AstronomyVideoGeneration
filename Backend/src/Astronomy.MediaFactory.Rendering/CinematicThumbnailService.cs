@@ -203,6 +203,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             plan.ThumbnailVariantPaths,
             fallbackUsed = plan.FallbackUsed,
             mode = plan.Mode,
+            visualPolishPassApplied = true,
             LayoutType = plan.LayoutType.ToString()
         };
         await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
@@ -223,6 +224,8 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             fallbackUsed,
             errors,
             fileSizeBytes = File.Exists(outputPath) ? new FileInfo(outputPath).Length : 0,
+            visualPolishPassApplied = true,
+            polishDiagnostics = new[] { "debug-edge-cleanup", "restrained-text-hierarchy", "subtle-object-emphasis", "softened-procedural-overlays", "mobile-readability-gate" },
             scoringWeights = new { focalObjectScore = 0.35, contrastScore = 0.20, glowScore = 0.15, starRichnessScore = 0.10, textReadabilityScore = 0.10, compositionBalanceScore = 0.10 },
             astronomySceneMode = _options.EnableAstronomySceneMode,
             selectedBaseCandidate = selected,
@@ -275,6 +278,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             blackPixelPercentage = (double?)null,
             fallbackUsed = true,
             errors,
+            visualPolishPassApplied = false,
             fileSizeBytes = !string.IsNullOrWhiteSpace(fallback.ThumbnailPath) && File.Exists(fallback.ThumbnailPath) ? new FileInfo(fallback.ThumbnailPath).Length : 0
         };
         var thumbnailsDirectory = Path.Combine(request.OutputDirectory, "thumbnails");

@@ -236,7 +236,7 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<ThumbnailCinematicAIOptions>()
             .Bind(configuration.GetSection(ThumbnailCinematicAIOptions.SectionName))
-            .Validate(opt => opt.MaximumObjectScaleBoost is >= 1 and <= 1.35, "ThumbnailCinematicAI:MaximumObjectScaleBoost must be between 1 and 1.35.")
+            .Validate(opt => opt.MaximumObjectScaleBoost is >= 1 and <= 1.30, "ThumbnailCinematicAI:MaximumObjectScaleBoost must be between 1 and 1.30.")
             .Validate(opt => opt.AllowedMoodProfiles.Count > 0, "ThumbnailCinematicAI:AllowedMoodProfiles must contain at least one profile.")
             .Validate(opt => !string.IsNullOrWhiteSpace(opt.OutputFileName), "ThumbnailCinematicAI:OutputFileName is required.")
             .ValidateOnStart();

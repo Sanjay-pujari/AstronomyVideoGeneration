@@ -82,5 +82,6 @@ public sealed class CinematicThumbnailAiReport
     public bool PortraitSafe { get; init; }
     public string FinalThumbnailPath { get; init; } = "";
     public bool FallbackUsed { get; init; }
+    public bool VisualPolishPassApplied { get; init; }
     public IReadOnlyCollection<string> Diagnostics { get; init; } = [];
 }
