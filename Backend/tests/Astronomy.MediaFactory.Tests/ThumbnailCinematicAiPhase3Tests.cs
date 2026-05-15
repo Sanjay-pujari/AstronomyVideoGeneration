@@ -74,13 +74,17 @@ public sealed class ThumbnailCinematicAiPhase3Tests
         var source = Path.Combine(outputDir, "empty-sky.jpg");
         await WriteAstronomyImageAsync(source, 1280, 720, "empty");
         var selector = new StubCandidateSelector(BuildScore(source, objectDetected: false));
+        var options = new ThumbnailOptions();
         var service = new CinematicThumbnailService(
             new ThumbnailStrategyService(),
             selector,
             CreateCompositionService(),
             new ThumbnailHookService(),
             CreateAiOptimizationService(),
-            Options.Create(new ThumbnailOptions()),
+            new StubCelestialAssetProvider(source),
+            new StubCinematicCollageComposer(CreateCompositionService()),
+            Options.Create(options),
+            Options.Create(new ThumbnailCinematicAIOptions()),
             NullLogger<CinematicThumbnailService>.Instance);
 
         var plan = await service.GenerateAsync(BuildRequest(outputDir, source, isShort: false, objectType: "Moon"), CancellationToken.None);
@@ -212,6 +216,42 @@ public sealed class ThumbnailCinematicAiPhase3Tests
         var path = Path.Combine(Path.GetTempPath(), $"cinematic-ai-phase3-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         return path;
+    }
+
+
+    private sealed class StubCelestialAssetProvider(string assetPath) : ICelestialAssetProvider
+    {
+        public Task<CelestialAsset> GetAssetAsync(CelestialAssetRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(new CelestialAsset
+            {
+                ObjectName = request.ObjectName,
+                ObjectType = request.ObjectType,
+                Category = request.ObjectType,
+                Source = "TestStub",
+                Title = request.ObjectName,
+                LocalPath = assetPath
+            });
+    }
+
+
+    private sealed class StubCinematicCollageComposer(IThumbnailCompositionService compositionService) : ICinematicCollageComposer
+    {
+        public Task<string> ComposeAsync(CinematicCollageRequest request, CancellationToken cancellationToken)
+            => compositionService.ComposeAsync(new ThumbnailCompositionRequest
+            {
+                GenerationRequest = request.GenerationRequest,
+                SelectedCandidate = new ThumbnailCandidateScore
+                {
+                    Path = request.BackgroundPath,
+                    ObjectDetected = false,
+                    Score = 0.15,
+                    BlackPixelPercentage = 0.18,
+                    Brightness = 0.48,
+                    Contrast = 0.72
+                },
+                HookText = request.Selection.SelectedHook,
+                OutputPath = request.OutputPath
+            }, cancellationToken);
     }
 
     private sealed class StubCandidateSelector : IThumbnailCandidateSelector
