@@ -5,13 +5,15 @@ using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 
+using IOPath = System.IO.Path;
+
 namespace Astronomy.MediaFactory.Rendering;
 
 internal static class ProceduralCelestialFallback
 {
     public static async Task CreateAsync(string outputPath, string objectName, string category, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        Directory.CreateDirectory(IOPath.GetDirectoryName(outputPath)!);
         using var image = new Image<Rgba32>(1600, 1000, Color.FromRgb(2, 5, 18));
         var seed = Math.Abs(HashCode.Combine(objectName.ToLowerInvariant(), category));
         var random = new Random(seed);
