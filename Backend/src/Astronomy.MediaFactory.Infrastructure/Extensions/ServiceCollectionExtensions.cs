@@ -234,6 +234,13 @@ public static class ServiceCollectionExtensions
             .Validate(opt => opt.CandidateFramesPerScene > 0, "ThumbnailGeneration:CandidateFramesPerScene must be > 0.")
             .ValidateOnStart();
 
+        services.AddOptions<ThumbnailCinematicAIOptions>()
+            .Bind(configuration.GetSection(ThumbnailCinematicAIOptions.SectionName))
+            .Validate(opt => opt.MaximumObjectScaleBoost is >= 1 and <= 1.35, "ThumbnailCinematicAI:MaximumObjectScaleBoost must be between 1 and 1.35.")
+            .Validate(opt => opt.AllowedMoodProfiles.Count > 0, "ThumbnailCinematicAI:AllowedMoodProfiles must contain at least one profile.")
+            .Validate(opt => !string.IsNullOrWhiteSpace(opt.OutputFileName), "ThumbnailCinematicAI:OutputFileName is required.")
+            .ValidateOnStart();
+
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
             .ValidateDataAnnotations()
@@ -328,6 +335,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IThumbnailScoringService, ThumbnailScoringService>();
         services.AddScoped<IThumbnailCtrScoringService, ThumbnailCtrScoringService>();
         services.AddScoped<IThumbnailAiOptimizationService, ThumbnailAiOptimizationService>();
+        services.AddScoped<IThumbnailMoodGradingService, ThumbnailMoodGradingService>();
+        services.AddScoped<IThumbnailVisualHierarchyService, ThumbnailVisualHierarchyService>();
+        services.AddScoped<ICinematicThumbnailAiService, CinematicThumbnailAiService>();
         services.AddScoped<IThumbnailHookService, ThumbnailHookService>();
         services.AddScoped<IThumbnailCandidateSelector, ThumbnailCandidateSelector>();
         services.AddScoped<IThumbnailCompositionService, ThumbnailCompositionService>();
