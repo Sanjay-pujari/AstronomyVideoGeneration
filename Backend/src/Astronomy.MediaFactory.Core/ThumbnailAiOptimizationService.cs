@@ -21,7 +21,7 @@ public sealed class ThumbnailAiOptimizationService : IThumbnailAiOptimizationSer
         var candidates = BuildCandidates(effectiveRequest)
             .Select(NormalizeDirectionalHook)
             .Select(hook => LimitWords(hook, _options.MaxHookWords))
-            .Where(hook => !string.IsNullOrWhiteSpace(hook))
+            .Where(hook => !string.IsNullOrWhiteSpace(hook) && !IsWeakGenericHook(hook) && !HasRepetitiveWords(hook))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(5)
             .ToArray();
@@ -49,7 +49,8 @@ public sealed class ThumbnailAiOptimizationService : IThumbnailAiOptimizationSer
             EmotionType = selected.EmotionType,
             Language = effectiveRequest.Language ?? effectiveRequest.GenerationRequest.Context.Localization.ResolvedLanguage,
             AnalyticsInfluence = CalculateAnalyticsInfluence(selected.Hook, effectiveRequest.TopPerformingHooks),
-            HallucinationDetected = scores.Any(score => score.RejectionReason?.Contains("hallucination", StringComparison.OrdinalIgnoreCase) == true || score.RejectionReason?.Contains("disallowed", StringComparison.OrdinalIgnoreCase) == true)
+            HallucinationDetected = scores.Any(score => score.RejectionReason?.Contains("hallucination", StringComparison.OrdinalIgnoreCase) == true || score.RejectionReason?.Contains("disallowed", StringComparison.OrdinalIgnoreCase) == true),
+            VisualPolishPassApplied = true
         };
 
         await WriteDiagnosticsAsync(effectiveRequest.GenerationRequest.OutputDirectory, result, cancellationToken);
@@ -112,11 +113,11 @@ public sealed class ThumbnailAiOptimizationService : IThumbnailAiOptimizationSer
         }
         else
         {
-            if (!string.IsNullOrWhiteSpace(direction)) yield return $"Look {direction} Tonight";
             if (!string.IsNullOrWhiteSpace(eventTitle)) yield return MentionsMoon(eventTitle) ? "Biggest Moon Tonight" : "Rare Sky Event";
             if (MentionsMoon(primaryObject) && MentionsJupiter(eventTitle)) yield return "Moon Meets Jupiter";
             if (!string.IsNullOrWhiteSpace(primaryObject)) yield return $"{primaryObject} Tonight";
-            yield return "Visible After Sunset";
+            if (!string.IsNullOrWhiteSpace(direction)) yield return $"Look {direction} Tonight";
+            yield return "Venus After Sunset";
         }
 
         foreach (var hook in request.TopPerformingHooks)
@@ -197,6 +198,21 @@ public sealed class ThumbnailAiOptimizationService : IThumbnailAiOptimizationSer
 
     private static bool MentionsMoon(string? value) => value?.Contains("moon", StringComparison.OrdinalIgnoreCase) == true || value?.Contains("चांद", StringComparison.OrdinalIgnoreCase) == true;
     private static bool MentionsJupiter(string? value) => value?.Contains("jupiter", StringComparison.OrdinalIgnoreCase) == true || value?.Contains("बृहस्पति", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsWeakGenericHook(string hook)
+    {
+        var normalized = string.Join(' ', hook.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return normalized.Equals("Visible Tonight", StringComparison.OrdinalIgnoreCase)
+               || normalized.Equals("Tonight's Sky", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("Beginner", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("Guide", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasRepetitiveWords(string hook)
+    {
+        var words = hook.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return words.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
+    }
 
     private static string? FirstNonEmpty(params string?[] values)
         => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));

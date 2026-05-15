@@ -7,15 +7,20 @@ public sealed class ThumbnailHookService : IThumbnailHookService
         "death", "dead", "kill", "killed", "blood", "war", "attack", "disaster"
     };
 
+    private static readonly HashSet<string> WeakGenericHooks = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Tonight Sky", "Visible Tonight", "Beginners Guide", "Beginner Guide", "Sky Guide", "Night Sky", "Look Tonight"
+    };
+
     public string GenerateHook(ThumbnailGenerationRequest request, int maxWords)
     {
         var isHindi = LocalizationResolver.IsHindi(request.Context.Localization.ResolvedLanguage);
         var candidates = BuildCandidates(request, isHindi)
             .Select(x => Sanitize(x, maxWords))
-            .Where(x => !string.IsNullOrWhiteSpace(x) && !ContainsUnsafeWord(x))
+            .Where(x => !string.IsNullOrWhiteSpace(x) && !ContainsUnsafeWord(x) && !IsWeakGenericHook(x) && !HasRepetitiveWords(x))
             .ToArray();
 
-        return candidates.FirstOrDefault() ?? (isHindi ? "आज दिखेगा आसमान" : "Visible Tonight");
+        return candidates.FirstOrDefault() ?? (isHindi ? "दुर्लभ आकाश घटना" : "Rare Sky Event");
     }
 
     private static IEnumerable<string> BuildCandidates(ThumbnailGenerationRequest request, bool isHindi)
@@ -26,6 +31,17 @@ public sealed class ThumbnailHookService : IThumbnailHookService
         foreach (var suggestion in request.Metadata.ThumbnailTextSuggestions)
             yield return suggestion;
 
+        var namedObjects = request.Context.SceneObservationContexts
+            .Select(x => x.ObjectName)
+            .Where(x => !string.IsNullOrWhiteSpace(x) && !x.Equals("Sky", StringComparison.OrdinalIgnoreCase))
+            .Select(x => x!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2)
+            .ToArray();
+
+        if (!isHindi && namedObjects.Length >= 2 && namedObjects.Any(ContainsMoon))
+            yield return $"Moon Meets {namedObjects.First(x => !ContainsMoon(x))}";
+
         if (!string.IsNullOrWhiteSpace(request.Context.SpecialEvent?.EventTitle))
         {
             var eventTitle = request.Context.SpecialEvent.EventTitle;
@@ -35,9 +51,7 @@ public sealed class ThumbnailHookService : IThumbnailHookService
                 yield return ContainsMoon(eventTitle) ? "Biggest Moon Tonight" : "Rare Sky Event";
         }
 
-        var objectName = request.Context.SceneObservationContexts
-            .Select(x => x.ObjectName)
-            .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x) && !x.Equals("Sky", StringComparison.OrdinalIgnoreCase));
+        var objectName = namedObjects.FirstOrDefault();
 
         if (!string.IsNullOrWhiteSpace(objectName))
         {
@@ -57,8 +71,8 @@ public sealed class ThumbnailHookService : IThumbnailHookService
         if (!string.IsNullOrWhiteSpace(direction) && !isHindi)
             yield return $"Look {direction} Tonight";
 
-        yield return isHindi ? "आज दिखेगा आसमान" : "Visible Tonight";
         yield return isHindi ? "दुर्लभ आकाश घटना" : "Rare Sky Event";
+        yield return isHindi ? "आज दिखेगा आसमान" : "Jupiter Tonight";
     }
 
     private static string Sanitize(string text, int maxWords)
@@ -81,4 +95,19 @@ public sealed class ThumbnailHookService : IThumbnailHookService
 
     private static bool ContainsUnsafeWord(string text)
         => text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Any(UnsafeWords.Contains);
+
+    private static bool IsWeakGenericHook(string text)
+    {
+        var normalized = string.Join(' ', text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return WeakGenericHooks.Contains(normalized)
+               || normalized.Contains("Beginner", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains("Guide", StringComparison.OrdinalIgnoreCase)
+               || normalized.Equals("Tonight's Sky", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasRepetitiveWords(string text)
+    {
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return words.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1);
+    }
 }

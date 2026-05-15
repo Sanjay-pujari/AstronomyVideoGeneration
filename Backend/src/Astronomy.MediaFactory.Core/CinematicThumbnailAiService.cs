@@ -27,9 +27,11 @@ public sealed class CinematicThumbnailAiService : ICinematicThumbnailAiService
 
         var objectVisibility = request.SelectedCandidate.ObjectVisibility;
         var focalSize = request.SelectedCandidate.CelestialFocalSize;
-        var needsBoost = _options.EnableObjectFocusEnhancement && objectVisibility < 0.46 || focalSize < 0.30;
+        var needsBoost = (_options.EnableObjectFocusEnhancement && objectVisibility < 0.50) || focalSize < 0.34;
         var analyticsBoost = CalculateAnalyticsInfluence(request.GenerationRequest.FeedbackSignals, dominant.Type);
-        var requestedBoost = needsBoost ? 1.18 + Math.Max(0, 0.30 - focalSize) + analyticsBoost * 0.06 : 1.04 + analyticsBoost * 0.03;
+        var requestedBoost = needsBoost
+            ? 1.22 + Math.Max(0, 0.34 - focalSize) * 0.55 + analyticsBoost * 0.04
+            : 1.08 + analyticsBoost * 0.02;
         var scaleBoost = Math.Round(Math.Clamp(requestedBoost, 1, Math.Max(1, _options.MaximumObjectScaleBoost)), 3);
         var focus = ResolveFocus(request.GenerationRequest, request.TargetWidth, request.TargetHeight);
         var cropStrategy = request.GenerationRequest.IsShortForm && _options.EnablePortraitSafeCropping

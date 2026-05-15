@@ -277,6 +277,8 @@ public sealed class ThumbnailGenerationTests
         }, 5);
 
         Assert.InRange(english.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length, 2, 5);
+        Assert.DoesNotContain("Guide", english, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual("Visible Tonight", english);
         Assert.InRange(hindi.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length, 2, 5);
         Assert.Contains("आज", hindi);
     }
