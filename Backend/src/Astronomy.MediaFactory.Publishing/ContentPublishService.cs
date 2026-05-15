@@ -349,30 +349,23 @@ public sealed class ContentPublishService : IContentPublishService
 
     private async Task<string> ResolveThumbnailPathAsync(string outputDirectory, CancellationToken cancellationToken)
     {
-        var selectionPath = Path.Combine(outputDirectory, "thumbnail-selection.json");
-        if (!File.Exists(selectionPath))
-        {
-            selectionPath = Path.Combine(outputDirectory, "thumbnails", "thumbnail-selection.json");
-        }
+        var selectionPath = ResolveSelectionPath(outputDirectory, preferRootThumbnails: true);
 
         if (File.Exists(selectionPath))
         {
             using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath, cancellationToken));
-            foreach (var propertyName in new[] { "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath", "ThumbnailPath", "LongThumbnailPath" })
+            foreach (var propertyName in new[] { "longThumbnailPath", "LongThumbnailPath", "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath", "ThumbnailPath" })
             {
-                if (doc.RootElement.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String)
+                if (TryResolveSelectionPath(doc.RootElement, propertyName, outputDirectory, selectionPath, out var candidate))
                 {
-                    var candidate = property.GetString();
-                    if (!string.IsNullOrWhiteSpace(candidate))
-                    {
-                        return Path.IsPathRooted(candidate) ? candidate : Path.Combine(outputDirectory, candidate);
-                    }
+                    return candidate;
                 }
             }
         }
 
         foreach (var fallback in new[]
         {
+            Path.Combine(outputDirectory, "thumbnails", "thumbnail-long.jpg"),
             Path.Combine(outputDirectory, "thumbnail-long.jpg"),
             Path.Combine(outputDirectory, "thumbnail-1.png"),
             Path.Combine(outputDirectory, "thumbnails", "thumbnail-1.png")
@@ -390,30 +383,31 @@ public sealed class ContentPublishService : IContentPublishService
     private async Task<string> ResolveShortThumbnailPathAsync(string outputDirectory, CancellationToken cancellationToken)
     {
         var shortsDirectory = Path.Combine(outputDirectory, "shorts");
-        var selectionPath = Path.Combine(shortsDirectory, "thumbnail-selection.json");
-        if (!File.Exists(selectionPath))
+        foreach (var selectionPath in new[]
         {
-            selectionPath = Path.Combine(shortsDirectory, "thumbnails", "thumbnail-selection.json");
-        }
-
-        if (File.Exists(selectionPath))
+            ResolveSelectionPath(outputDirectory, preferRootThumbnails: true),
+            Path.Combine(shortsDirectory, "thumbnails", "thumbnail-selection.json"),
+            Path.Combine(shortsDirectory, "thumbnail-selection.json")
+        }.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath, cancellationToken));
-            foreach (var propertyName in new[] { "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath", "ThumbnailPath", "ShortThumbnailPath" })
+            if (!File.Exists(selectionPath))
             {
-                if (doc.RootElement.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String)
+                continue;
+            }
+
+            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath, cancellationToken));
+            foreach (var propertyName in new[] { "shortThumbnailPath", "ShortThumbnailPath", "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath", "ThumbnailPath" })
+            {
+                if (TryResolveSelectionPath(doc.RootElement, propertyName, outputDirectory, selectionPath, out var candidate))
                 {
-                    var candidate = property.GetString();
-                    if (!string.IsNullOrWhiteSpace(candidate))
-                    {
-                        return Path.IsPathRooted(candidate) ? candidate : Path.Combine(shortsDirectory, candidate);
-                    }
+                    return candidate;
                 }
             }
         }
 
         foreach (var candidate in new[]
         {
+            Path.Combine(outputDirectory, "thumbnails", "thumbnail-short.jpg"),
             Path.Combine(shortsDirectory, "thumbnail-short.jpg"),
             Path.Combine(shortsDirectory, "thumbnails", "thumbnail-short.jpg"),
             Path.Combine(shortsDirectory, "thumbnail-1.png"),
@@ -428,6 +422,44 @@ public sealed class ContentPublishService : IContentPublishService
         }
 
         return string.Empty;
+    }
+
+    private static string ResolveSelectionPath(string outputDirectory, bool preferRootThumbnails)
+    {
+        var primary = preferRootThumbnails
+            ? Path.Combine(outputDirectory, "thumbnails", "thumbnail-selection.json")
+            : Path.Combine(outputDirectory, "thumbnail-selection.json");
+        if (File.Exists(primary))
+        {
+            return primary;
+        }
+
+        var fallback = preferRootThumbnails
+            ? Path.Combine(outputDirectory, "thumbnail-selection.json")
+            : Path.Combine(outputDirectory, "thumbnails", "thumbnail-selection.json");
+        return fallback;
+    }
+
+    private static bool TryResolveSelectionPath(JsonElement element, string propertyName, string outputDirectory, string selectionPath, out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var candidate = property.GetString();
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        resolvedPath = Path.IsPathRooted(candidate)
+            ? candidate
+            : Path.GetDirectoryName(selectionPath) is { } selectionDirectory && File.Exists(Path.Combine(selectionDirectory, candidate))
+                ? Path.Combine(selectionDirectory, candidate)
+                : Path.Combine(outputDirectory, candidate);
+        return File.Exists(resolvedPath);
     }
 
     private string ResolveOutputDirectory(PipelineRun run)

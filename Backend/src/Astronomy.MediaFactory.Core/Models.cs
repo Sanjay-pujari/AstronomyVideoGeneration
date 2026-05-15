@@ -153,6 +153,8 @@ public sealed class ThumbnailPlan
     public ThumbnailLayoutType LayoutType { get; init; } = ThumbnailLayoutType.CenteredTitleOverlay;
     public IReadOnlyCollection<ThumbnailLayoutType> LayoutCandidates { get; init; } = [ThumbnailLayoutType.CenteredTitleOverlay];
     public IReadOnlyCollection<ThumbnailVariantOption> Variants { get; init; } = [];
+    public bool FallbackUsed { get; init; }
+    public string Mode { get; init; } = "CinematicComposed";
 }
 
 public sealed class ThumbnailCandidateScore

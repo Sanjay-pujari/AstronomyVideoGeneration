@@ -557,10 +557,30 @@ public sealed class PipelineRecoveryService : IPipelineRecoveryService
             stages = stages.Select(ToDto),
             currentStage,
             failedStage = failed?.StageName,
+            ThumbnailMode = ResolveThumbnailMode(run.OutputFolder),
             retryable = failed is not null && failed.AttemptCount < failed.MaxAttempts,
             resumeCommandSuggestion = $"POST /api/pipeline/resume/{run.Id}"
         };
         await File.WriteAllTextAsync(Path.Combine(run.OutputFolder, "pipeline-state.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private static string? ResolveThumbnailMode(string outputFolder)
+    {
+        var selectionPath = Path.Combine(outputFolder, "thumbnails", "thumbnail-selection.json");
+        if (!File.Exists(selectionPath)) selectionPath = Path.Combine(outputFolder, "thumbnail-selection.json");
+        if (!File.Exists(selectionPath)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(selectionPath));
+            if (doc.RootElement.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String) return mode.GetString();
+            if (doc.RootElement.TryGetProperty("Mode", out var pascalMode) && pascalMode.ValueKind == JsonValueKind.String) return pascalMode.GetString();
+        }
+        catch
+        {
+            return null;
+        }
+
+        return null;
     }
 
     private async Task WritePublishIdempotencyAsync(PipelineRun run, CancellationToken cancellationToken)

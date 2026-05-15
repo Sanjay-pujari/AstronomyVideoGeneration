@@ -280,7 +280,7 @@ public sealed class PipelineRecoveryEngineTests
             [PipelineStageNames.SpeechCompleted] = "narration.mp3",
             [PipelineStageNames.StellariumCompleted] = "stellarium",
             [PipelineStageNames.RenderingCompleted] = "final-video.mp4",
-            [PipelineStageNames.ThumbnailCompleted] = "thumbnail-selection.json",
+            [PipelineStageNames.ThumbnailCompleted] = Path.Combine("thumbnails", "thumbnail-selection.json"),
             [PipelineStageNames.SeoCompleted] = "seo-metadata.json",
             ["BlobUpload"] = "public-media-upload-result.json",
             [PipelineStageNames.ValidationCompleted] = "pre-publish-validation-report.json",

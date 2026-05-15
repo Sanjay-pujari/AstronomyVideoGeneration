@@ -103,7 +103,9 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
                 ShortThumbnailPath = request.IsShortForm ? outputPath : null,
                 ThumbnailVariantPaths = [outputPath],
                 CandidateScores = scores,
-                Variants = strategyPlan.Variants
+                Variants = strategyPlan.Variants,
+                FallbackUsed = selected.RejectionReason is not null,
+                Mode = "CinematicComposed"
             };
         }
         catch (Exception ex)
@@ -416,7 +418,9 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
             SelectedVisualPath = fallback,
             ThumbnailPath = fallback,
             ThumbnailVariantPaths = fallback is null ? [] : [fallback],
-            Variants = strategyPlan.Variants
+            Variants = strategyPlan.Variants,
+            FallbackUsed = true,
+            Mode = "FallbackExtractedFrame"
         };
     }
 
