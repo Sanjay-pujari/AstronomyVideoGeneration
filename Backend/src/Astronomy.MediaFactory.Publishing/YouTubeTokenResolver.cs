@@ -88,7 +88,12 @@ public static class YouTubeTokenResolver
     }
 
     public static string ResolveTokenFilePath(YouTubeOptions options)
-        => Path.GetFullPath(string.IsNullOrWhiteSpace(options.TokenFilePath) ? "youtube-oauth-token.json" : options.TokenFilePath);
+    {
+        var tokenFilePath = string.IsNullOrWhiteSpace(options.TokenFilePath) ? "youtube-oauth-token.json" : options.TokenFilePath;
+        return Path.IsPathRooted(tokenFilePath)
+            ? Path.GetFullPath(tokenFilePath)
+            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, tokenFilePath));
+    }
 
     public static string ResolveDiagnosticsPath(YouTubeOptions options)
         => Path.Combine(Path.GetDirectoryName(ResolveTokenFilePath(options))!, "youtube-token-source-diagnostics.json");
