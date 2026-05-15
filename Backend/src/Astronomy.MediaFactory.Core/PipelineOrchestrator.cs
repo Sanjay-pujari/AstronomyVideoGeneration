@@ -1566,9 +1566,9 @@ public sealed class PipelineOrchestrator
             thumbnailPlan.PrimaryThumbnailText,
             thumbnailPlan.AlternateThumbnailTexts,
             thumbnailPlan.SelectedVisualPath,
-            thumbnailPlan.ThumbnailPath,
-            thumbnailPlan.LongThumbnailPath,
-            thumbnailPlan.ShortThumbnailPath,
+            originalThumbnailPath = thumbnailPlan.ThumbnailPath,
+            originalLongThumbnailPath = thumbnailPlan.LongThumbnailPath,
+            originalShortThumbnailPath = thumbnailPlan.ShortThumbnailPath,
             thumbnailPlan.ThumbnailVariantPaths,
             LayoutType = thumbnailPlan.LayoutType.ToString()
         };
