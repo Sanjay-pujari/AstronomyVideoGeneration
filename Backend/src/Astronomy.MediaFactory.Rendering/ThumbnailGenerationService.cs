@@ -80,7 +80,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
                 ? _thumbnailHookService.GenerateHook(request, _options.MaxHookWords)
                 : string.Empty;
 
-            var outputPath = Path.Combine(request.OutputDirectory, request.IsShortForm ? _options.ShortThumbnailOutputName : _options.LongThumbnailOutputName);
+            var outputPath = System.IO.Path.Combine(request.OutputDirectory, request.IsShortForm ? _options.ShortThumbnailOutputName : _options.LongThumbnailOutputName);
             if (request.IsShortForm)
                 await RenderShortThumbnailAsync(selected.Path, outputPath, hook, cancellationToken);
             else
@@ -112,7 +112,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
 
     private async Task<List<ThumbnailCandidate>> BuildCandidatesAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
     {
-        var candidatesDirectory = Path.Combine(request.OutputDirectory, "thumbnails", "candidates");
+        var candidatesDirectory = System.IO.Path.Combine(request.OutputDirectory, "thumbnails", "candidates");
         Directory.CreateDirectory(candidatesDirectory);
         var visuals = request.AvailableVisuals.Where(File.Exists).ToArray();
         var candidates = new List<ThumbnailCandidate>();
@@ -129,7 +129,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
                     continue;
 
                 var suffix = Math.Round(safeTimestamp.Value / duration * 100).ToString("000");
-                var output = Path.Combine(candidatesDirectory, $"{SanitizeFileName(sceneId)}-{suffix}.jpg");
+                var output = System.IO.Path.Combine(candidatesDirectory, $"{SanitizeFileName(sceneId)}-{suffix}.jpg");
                 await CopyAsCandidateAsync(visuals[i], output, cancellationToken);
                 candidates.Add(new ThumbnailCandidate(output, sceneId, safeTimestamp.Value));
             }
@@ -176,8 +176,8 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
 
     private async Task<ThumbnailCandidateScore> CreateFallbackCandidateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
     {
-        var path = Path.Combine(request.OutputDirectory, "thumbnails", "candidates", "fallback.jpg");
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var path = System.IO.Path.Combine(request.OutputDirectory, "thumbnails", "candidates", "fallback.jpg");
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
         using var image = new Image<Rgba32>(request.IsShortForm ? _options.PortraitWidth : _options.LandscapeWidth, request.IsShortForm ? _options.PortraitHeight : _options.LandscapeHeight, new Rgba32(6, 12, 32));
         image.Mutate(ctx =>
         {
@@ -332,8 +332,10 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
 
     private static Font CreateFont(float size, FontStyle style)
     {
-        var family = SystemFonts.Collection.Families.FirstOrDefault(f => f.Name.Equals("Arial", StringComparison.OrdinalIgnoreCase))
-            ?? SystemFonts.Collection.Families.First();
+        var family = SystemFonts.Collection.Families.FirstOrDefault(f => f.Name.Equals("Arial", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(family.Name))
+            family = SystemFonts.Collection.Families.First();
+
         return family.CreateFont(size, style);
     }
 
@@ -374,7 +376,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
             localizationLanguage = request.Context.Localization.ResolvedLanguage
         };
 
-        await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnail-analysis-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await File.WriteAllTextAsync(System.IO.Path.Combine(request.OutputDirectory, "thumbnail-analysis-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private static ThumbnailPlan BuildDisabledPlan(ThumbnailPlan strategyPlan) => strategyPlan;
@@ -407,7 +409,7 @@ public sealed class ThumbnailGenerationService : IThumbnailGenerationService
 
     private static string SanitizeFileName(string value)
     {
-        var invalid = Path.GetInvalidFileNameChars();
+        var invalid = System.IO.Path.GetInvalidFileNameChars();
         var cleaned = new string(value.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray());
         return string.IsNullOrWhiteSpace(cleaned) ? "scene" : cleaned;
     }
