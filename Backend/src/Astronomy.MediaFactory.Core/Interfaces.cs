@@ -206,6 +206,21 @@ public interface IThumbnailCompositionService
     Task<string> ComposeAsync(ThumbnailCompositionRequest request, CancellationToken cancellationToken);
 }
 
+public interface ICinematicThumbnailAiService
+{
+    Task<CinematicThumbnailAiRecommendation> RecommendAsync(CinematicThumbnailAiRequest request, CancellationToken cancellationToken);
+}
+
+public interface IThumbnailVisualHierarchyService
+{
+    ThumbnailVisualHierarchyResult Evaluate(ThumbnailVisualHierarchyRequest request);
+}
+
+public interface IThumbnailMoodGradingService
+{
+    ThumbnailMoodGradingResult SelectMood(ThumbnailMoodGradingRequest request);
+}
+
 public interface IThumbnailCandidateSelector
 {
     Task<ThumbnailCandidateSelection> SelectAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken);

@@ -45,4 +45,37 @@ public sealed class RenderingOptionsBindingTests
         Assert.True(options.KenBurnsUseEasing);
         Assert.False(options.EnableDirectionalMotion);
     }
+    [Fact]
+    public void ThumbnailCinematicAIOptions_BindsPhase3Configuration()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{ThumbnailCinematicAIOptions.SectionName}:Enabled"] = "true",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:EnableSmartCropping"] = "true",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:EnableObjectFocusEnhancement"] = "true",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:EnableColorMoodGrading"] = "true",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:EnableVisualHierarchyOptimization"] = "true",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:EnablePlanetMoonEnhancement"] = "true",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:EnableConjunctionFraming"] = "true",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:EnablePortraitSafeCropping"] = "true",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:AllowedMoodProfiles:0"] = "dramatic",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:AllowedMoodProfiles:1"] = "warmGlow",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:PreventFakeAstronomy"] = "true",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:MaximumObjectScaleBoost"] = "1.35",
+                [$"{ThumbnailCinematicAIOptions.SectionName}:OutputFileName"] = "thumbnail-cinematic-ai-report.json"
+            })
+            .Build();
+
+        var options = new ThumbnailCinematicAIOptions();
+        config.GetSection(ThumbnailCinematicAIOptions.SectionName).Bind(options);
+
+        Assert.True(options.Enabled);
+        Assert.True(options.EnablePortraitSafeCropping);
+        Assert.True(options.PreventFakeAstronomy);
+        Assert.Equal(1.35d, options.MaximumObjectScaleBoost);
+        Assert.Contains("warmGlow", options.AllowedMoodProfiles);
+        Assert.Equal("thumbnail-cinematic-ai-report.json", options.OutputFileName);
+    }
+
 }
