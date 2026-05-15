@@ -61,11 +61,17 @@ internal static class TransientRetryHelper
             IOException => true,
             HttpRequestException => true,
             TaskCanceledException => true,
+            YouTubeThumbnailUploadException thumbnailUploadException => IsThumbnailUploadFailureTransient(thumbnailUploadException, cancellationToken),
             InvalidOperationException invalidOperationException when IsIncompleteUploadFailure(invalidOperationException) => IsIncompleteUploadFailureTransient(invalidOperationException, cancellationToken),
             RequestFailedException requestFailedException => requestFailedException.Status is 408 or 429 or 500 or 502 or 503 or 504,
             GoogleApiException googleApiException => (int?)googleApiException.HttpStatusCode is 408 or 429 or 500 or 502 or 503 or 504,
             _ => false
         };
+
+    private static bool IsThumbnailUploadFailureTransient(YouTubeThumbnailUploadException exception, CancellationToken cancellationToken)
+        => !YouTubeThumbnailUploadFailureClassifier.IsPermanentPermissionFailure(exception)
+            && IsIncompleteUploadFailure(exception)
+            && IsIncompleteUploadFailureTransient(exception, cancellationToken);
 
     private static bool IsIncompleteUploadFailure(InvalidOperationException exception)
         => exception.Message.Contains("did not complete successfully", StringComparison.OrdinalIgnoreCase)

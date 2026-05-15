@@ -221,10 +221,16 @@ public sealed class YouTubePublishService : IYouTubePublishService
         catch (Exception ex)
         {
             diagnostics.UploadStatus = GetUploadStatus(ex) ?? "Failed";
-            diagnostics.Error = BuildThumbnailError(ex);
+            diagnostics.Error = BuildThumbnailError(videoId, ex);
+            if (YouTubeThumbnailUploadFailureClassifier.IsPermanentPermissionFailure(ex))
+            {
+                diagnostics.FailureCategory = YouTubeThumbnailUploadFailureClassifier.ThumbnailPermissionFailureCategory;
+                diagnostics.RecommendedAction = YouTubeThumbnailUploadFailureClassifier.ThumbnailPermissionRecommendedAction;
+            }
+
             LogThumbnailUploadDiagnostics(videoId, diagnostics.UploadStatus, ex);
             await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
-            return $"Thumbnail upload failed: {ex.Message}";
+            return $"Thumbnail upload failed: {diagnostics.Error}";
         }
     }
 
@@ -325,6 +331,16 @@ public sealed class YouTubePublishService : IYouTubePublishService
 
     private void LogThumbnailUploadDiagnostics(string videoId, string? uploadStatus, Exception ex)
     {
+        if (YouTubeThumbnailUploadFailureClassifier.IsPermanentPermissionFailure(ex))
+        {
+            _logger.LogWarning(
+                "YouTube thumbnail upload skipped for video {VideoId} because the authenticated channel is not permitted to upload custom thumbnails. Status: {UploadStatus}. RecommendedAction: {RecommendedAction}",
+                videoId,
+                uploadStatus,
+                YouTubeThumbnailUploadFailureClassifier.ThumbnailPermissionRecommendedAction);
+            return;
+        }
+
         _logger.LogWarning(ex, "YouTube thumbnail upload failed for video {VideoId}. Status: {UploadStatus}. Exception: {Exception}", videoId, uploadStatus, ex.ToString());
         if (ex is YouTubeThumbnailUploadException thumbnailException)
         {
@@ -345,8 +361,13 @@ public sealed class YouTubePublishService : IYouTubePublishService
         }
     }
 
-    private static string BuildThumbnailError(Exception ex)
+    private static string BuildThumbnailError(string videoId, Exception ex)
     {
+        if (YouTubeThumbnailUploadFailureClassifier.IsPermanentPermissionFailure(ex))
+        {
+            return YouTubeThumbnailUploadFailureClassifier.BuildPermissionFailureMessage(videoId);
+        }
+
         if (ex is YouTubeThumbnailUploadException thumbnailException)
         {
             var parts = new List<string> { thumbnailException.Message };
@@ -472,4 +493,6 @@ internal sealed class YouTubeThumbnailUploadDiagnostics
     public string? UploadStatus { get; set; }
     public string? Error { get; set; }
     public string? CompressedThumbnailPath { get; set; }
+    public string? FailureCategory { get; set; }
+    public string? RecommendedAction { get; set; }
 }
