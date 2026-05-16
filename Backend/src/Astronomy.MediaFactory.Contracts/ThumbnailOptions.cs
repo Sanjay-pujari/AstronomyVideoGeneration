@@ -6,6 +6,7 @@ public sealed class ThumbnailOptions
 
     public bool Enabled { get; init; } = true;
     public string Mode { get; init; } = "LocalAssetCollage";
+    public string VisualPreset { get; init; } = "Premium Documentary";
     public string AssetRootPath { get; init; } = "assets/celestial";
     public string[] PreferredAssetFileNames { get; init; } = ["hero-transparent.png", "hero.png", "cinematic.png", "closeup.png"];
     public bool PreferPngAssets { get; init; } = true;
