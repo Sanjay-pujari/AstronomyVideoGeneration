@@ -1,0 +1,17 @@
+# Generated thumbnail outputs
+media-output/
+**/thumbnails/
+**/thumbnail-*.jpg
+**/thumbnail-*.png
+**/thumbnail-*.json
+**/thumbnail-comparison.jpg
+
+# Generated celestial assets from asset-pack extractor
+Backend/src/Astronomy.MediaFactory.Api/assets/celestial/*/hero.png
+Backend/src/Astronomy.MediaFactory.Api/assets/celestial/*/hero-transparent.png
+Backend/src/Astronomy.MediaFactory.Api/assets/celestial/*/cinematic.png
+Backend/src/Astronomy.MediaFactory.Api/assets/celestial/*/closeup.png
+Backend/src/Astronomy.MediaFactory.Api/assets/celestial/asset-pack-extraction-report.json
+
+# Source sheet is placed manually on the production/local machine.
+Backend/src/Astronomy.MediaFactory.Api/assets/celestial/source/celestial-object-sheet.png
