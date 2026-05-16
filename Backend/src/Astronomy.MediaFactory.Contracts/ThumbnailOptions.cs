@@ -12,6 +12,7 @@ public sealed class ThumbnailOptions
     public bool PreferPngAssets { get; init; } = true;
     public bool PreferAssetPackImages { get; init; } = true;
     public double DeepSpaceHeroPenalty { get; init; } = 0.45;
+    public ThumbnailAtmosphereOptions Atmosphere { get; init; } = new();
 
     public int LongThumbnailWidth { get; init; } = 1280;
     public int LongThumbnailHeight { get; init; } = 720;
@@ -65,4 +66,11 @@ public sealed class ThumbnailOptions
 
     public int Width => LongThumbnailWidth;
     public int Height => LongThumbnailHeight;
+}
+
+public sealed class ThumbnailAtmosphereOptions
+{
+    public double ProceduralShapeOpacity { get; init; } = 0.06;
+    public double ProceduralShapeBlur { get; init; } = 120;
+    public double ProceduralShapeContrast { get; init; } = 0.35;
 }

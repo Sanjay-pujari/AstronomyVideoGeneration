@@ -88,6 +88,11 @@ public sealed class CinematicThumbnailAiReport
     public double AtmosphereContinuityScore { get; init; }
     public double EnvironmentalDepthScore { get; init; }
     public double SupportObjectDepthScore { get; init; }
+    public double AtmosphereDepthScore { get; init; }
+    public double FogBlendScore { get; init; }
+    public double ProceduralArtifactPenalty { get; init; }
+    public double CinematicSoftnessScore { get; init; }
+    public double AtmosphericRealismScore { get; init; }
     public double CinematicSubtletyScore { get; init; }
     public AstronomyIntegrityValidation AstronomyIntegrityValidation { get; init; } = new();
     public bool PortraitSafe { get; init; }

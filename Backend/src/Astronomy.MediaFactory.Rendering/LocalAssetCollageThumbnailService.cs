@@ -225,12 +225,18 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             DrawEnvironmentalDepthTexture(ctx, width, height, portrait, selection.CinematicMode, random);
             DrawStars(ctx, width, height, StableSeedText(request, selection.CinematicMode));
         });
-        ProceduralAtmosphereBuffer.BlendIntoScene(canvas, StableHash(StableSeedText(request, selection.CinematicMode)), selection.CinematicMode, 0.88f);
 
         var textBox = CalculateTextSafeRect(hook, width, height, portrait, request.Context.Localization.ResolvedLanguage);
         var hero = assets[0];
         var heroRect = ResolveHeroRect(width, height, portrait, selection.CinematicMode, random);
         heroRect = AvoidCollision(heroRect, textBox, width, height, preferRight: !portrait);
+        var dateBox = CalculateDateLocationRect(width, height, portrait);
+        var brandBox = CalculateBrandRect(width, height, portrait);
+        var seed = StableHash(StableSeedText(request, selection.CinematicMode));
+        ProceduralAtmosphereBuffer.BlendIntoScene(canvas, seed, selection.CinematicMode, 0.62f, _options.Atmosphere, InflateRect(textBox, 32));
+        SpaceFogRenderer.RenderMicroStarfield(canvas, textBox, dateBox, brandBox, seed, portrait);
+        var fogResult = SpaceFogRenderer.Render(canvas, heroRect, textBox, dateBox, brandBox, seed, portrait, selection.CinematicMode);
+
         await DrawObjectAsync(canvas, hero, heroRect, true, selection.CinematicMode, 0, cancellationToken);
 
         var supports = assets.Skip(1).Where(a => !BackgroundDeepSpaceKeys.Contains(a.Category)).Take(portrait ? 1 : 2).ToArray();
@@ -255,6 +261,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             DrawBrand(ctx, width, height, portrait);
             DrawVignette(ctx, width, height);
         });
+        SpaceFogRenderer.ApplyCinematicColorGrade(canvas);
 
         var safeZoneWarnings = BuildSafeZoneWarnings(textBox, objectRects, width, height, portrait).ToArray();
         var layoutWarnings = BuildLayoutWarnings(portrait, heroRect.Width / width, supportScales)
@@ -284,6 +291,11 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var environmentalDepthScore = ScoreEnvironmentalDepth(selection.CinematicMode, supports.Length, organicAtmosphereScore, atmosphereContinuityScore);
         var supportObjectDepthScore = ScoreSupportObjectDepth(supportScales, depthScore, atmosphericBlendScore, supports.Length);
         var cinematicSubtletyScore = ScoreCinematicSubtlety(organicAtmosphereScore, naturalLightingScore, visualArtifactPenalty, compositingVisibilityPenalty, readabilityScore, edgeIntegrationScore, atmosphereContinuityScore);
+        var atmosphereDepthScore = ScoreAtmosphereDepth(depthScore, environmentalDepthScore, atmosphereContinuityScore, fogResult.FogBlendScore);
+        var fogBlendScore = ScoreFogBlend(fogResult.FogBlendScore, readabilityScore, heroIsolationScore);
+        var proceduralArtifactPenalty = ScoreProceduralArtifactPenalty(rectangularAtmosphereRisk, _options.Atmosphere.ProceduralShapeOpacity, _options.Atmosphere.ProceduralShapeContrast);
+        var cinematicSoftnessScore = ScoreCinematicSoftness(cinematicSubtletyScore, fogBlendScore, edgeIntegrationScore, proceduralArtifactPenalty);
+        var atmosphericRealismScore = ScoreAtmosphericRealism(atmosphereDepthScore, fogBlendScore, edgeIntegrationScore, cinematicSoftnessScore, proceduralArtifactPenalty, readabilityScore);
         var cinematicRealismScore = ScoreCinematicRealism(depthScore, atmosphericBlendScore, negativeSpaceScore, heroIsolationScore, compositionBalanceScore, readabilityScore, cinematicSubtletyScore, edgeIntegrationScore, environmentalDepthScore, supportObjectDepthScore, compositingSeamPenalty);
 
         await canvas.SaveAsJpegAsync(outputPath, new JpegEncoder { Quality = Math.Clamp(_options.JpegQuality, 1, 100) }, cancellationToken);
@@ -323,7 +335,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             CompositingSeamPenalty: compositingSeamPenalty,
             AtmosphereContinuityScore: atmosphereContinuityScore,
             EnvironmentalDepthScore: environmentalDepthScore,
-            SupportObjectDepthScore: supportObjectDepthScore);
+            SupportObjectDepthScore: supportObjectDepthScore,
+            AtmosphereDepthScore: atmosphereDepthScore,
+            FogBlendScore: fogBlendScore,
+            ProceduralArtifactPenalty: proceduralArtifactPenalty,
+            CinematicSoftnessScore: cinematicSoftnessScore,
+            AtmosphericRealismScore: atmosphericRealismScore);
     }
 
     private async Task DrawBackgroundAsync(Image<Rgba32> canvas, ThumbnailGenerationRequest request, int width, int height, List<string> warnings, CancellationToken cancellationToken)
@@ -365,6 +382,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             else ctx.GaussianBlur(0.16f).Contrast(1.04f).Brightness(1.0f).Saturate(0.94f);
         });
         ApplyOrganicObjectAlpha(obj, asset.Category, hero, depth);
+        ObjectEdgeIntegrationService.ApplyEdgeFeather(obj, asset.Category, hero, depth);
         var x = (int)(rect.X + (rect.Width - obj.Width) / 2f);
         var y = (int)(rect.Y + (rect.Height - obj.Height) / 2f);
         canvas.Mutate(ctx =>
@@ -378,9 +396,15 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             }
             DrawOrganicDepthHaze(ctx, rect, depth, hero);
             if (hero)
+            {
                 DrawEdgeLightWrap(ctx, obj, new Point(x, y), asset.Category, cinematicMode);
+                ObjectEdgeIntegrationService.DrawAtmosphericIntegration(ctx, obj, new Point(x, y), rect, asset.Category, true, cinematicMode);
+            }
             else
+            {
+                ObjectEdgeIntegrationService.DrawAtmosphericIntegration(ctx, obj, new Point(x, y), rect, asset.Category, false, cinematicMode);
                 DrawSupportAtmosphericShadow(ctx, rect, depth);
+            }
             if (IsTransparentAsset(asset.LocalPath))
                 ctx.DrawImage(obj, new Point(x + (hero ? 4 : 2), y + (hero ? 6 : 3)), hero ? 0.035f : 0.020f);
             var objectOpacity = DeepSpaceKeys.Contains(asset.Category) ? (hero ? 0.62f : supportOpacity * 0.40f) : supportOpacity;
@@ -1075,9 +1099,20 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var lineCount = Math.Max(1, text.Split('\n').Length);
         var boxHeight = Math.Min(height * (portrait ? 0.22f : 0.26f), fontSize * lineCount * 1.08f + 24f);
         return portrait
-            ? new RectangleF(margin, height * 0.68f, width - margin * 2, boxHeight)
+            ? new RectangleF(margin, height * 0.625f, width - margin * 2, boxHeight)
             : new RectangleF(margin, height * 0.62f, width * 0.43f, boxHeight);
     }
+
+    private static RectangleF CalculateDateLocationRect(int width, int height, bool portrait)
+        => new(portrait ? 38 : 44, portrait ? 46 : 32, portrait ? width * 0.56f : width * 0.40f, portrait ? 48 : 40);
+
+    private RectangleF CalculateBrandRect(int width, int height, bool portrait)
+        => !_options.EnableBranding || string.IsNullOrWhiteSpace(_options.BrandText)
+            ? new RectangleF(0, 0, 0, 0)
+            : new RectangleF(width - (portrait ? 360 : 300), height - (portrait ? 96 : 64), portrait ? 320 : 260, portrait ? 58 : 48);
+
+    private static RectangleF InflateRect(RectangleF rect, float amount)
+        => new(rect.X - amount, rect.Y - amount, rect.Width + amount * 2, rect.Height + amount * 2);
 
     private static float ResolveFontSize(string text, bool portrait)
     {
@@ -1228,6 +1263,25 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var overlapScore = overlapPenaltyApplied ? 0.70d : 1d;
         return Math.Round((textClearance * 0.26d) + (supportClearance * 0.26d) + (dominance * 0.22d) + (cropSafety * 0.16d) + (overlapScore * 0.10d), 3);
     }
+
+    private static double ScoreAtmosphereDepth(double depthScore, double environmentalDepthScore, double atmosphereContinuityScore, double fogSignal)
+        => Math.Round(Math.Clamp(depthScore * 0.32d + environmentalDepthScore * 0.30d + atmosphereContinuityScore * 0.24d + fogSignal * 0.14d, 0, 1), 3);
+
+    private static double ScoreFogBlend(double fogSignal, double readabilityScore, double heroIsolationScore)
+        => Math.Round(Math.Clamp(0.44d + fogSignal * 0.22d + readabilityScore * 0.18d + heroIsolationScore * 0.16d, 0, 1), 3);
+
+    private static double ScoreProceduralArtifactPenalty(double rectangularAtmosphereRisk, double configuredOpacity, double configuredContrast)
+    {
+        var opacityRisk = Math.Max(0d, configuredOpacity - 0.06d) * 2.8d;
+        var contrastRisk = Math.Max(0d, configuredContrast - 0.35d) * 0.55d;
+        return Math.Round(Math.Clamp(rectangularAtmosphereRisk * 0.55d + opacityRisk + contrastRisk, 0, 1), 3);
+    }
+
+    private static double ScoreCinematicSoftness(double cinematicSubtletyScore, double fogBlendScore, double edgeIntegrationScore, double proceduralArtifactPenalty)
+        => Math.Round(Math.Clamp(cinematicSubtletyScore * 0.34d + fogBlendScore * 0.28d + edgeIntegrationScore * 0.26d + (1d - proceduralArtifactPenalty) * 0.12d, 0, 1), 3);
+
+    private static double ScoreAtmosphericRealism(double atmosphereDepthScore, double fogBlendScore, double edgeIntegrationScore, double cinematicSoftnessScore, double proceduralArtifactPenalty, double readabilityScore)
+        => Math.Round(Math.Clamp(atmosphereDepthScore * 0.26d + fogBlendScore * 0.20d + edgeIntegrationScore * 0.20d + cinematicSoftnessScore * 0.18d + (1d - proceduralArtifactPenalty) * 0.10d + readabilityScore * 0.06d, 0, 1), 3);
 
     private static double ScoreCinematicRealism(double depthScore, double atmosphericBlendScore, double negativeSpaceScore, double heroIsolationScore, double compositionBalanceScore, double readabilityScore, double cinematicSubtletyScore, double edgeIntegrationScore, double environmentalDepthScore, double supportObjectDepthScore, double compositingSeamPenalty)
         => Math.Round(Math.Clamp((depthScore * 0.15d) + (atmosphericBlendScore * 0.15d) + (negativeSpaceScore * 0.12d) + (heroIsolationScore * 0.13d) + (compositionBalanceScore * 0.09d) + (readabilityScore * 0.05d) + (cinematicSubtletyScore * 0.11d) + (edgeIntegrationScore * 0.08d) + (environmentalDepthScore * 0.07d) + (supportObjectDepthScore * 0.05d) - (compositingSeamPenalty * 0.10d), 0, 1), 3);
@@ -1418,6 +1472,11 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             atmosphereContinuityScore = composition.AtmosphereContinuityScore,
             environmentalDepthScore = composition.EnvironmentalDepthScore,
             supportObjectDepthScore = composition.SupportObjectDepthScore,
+            atmosphereDepthScore = composition.AtmosphereDepthScore,
+            fogBlendScore = composition.FogBlendScore,
+            proceduralArtifactPenalty = composition.ProceduralArtifactPenalty,
+            cinematicSoftnessScore = composition.CinematicSoftnessScore,
+            atmosphericRealismScore = composition.AtmosphericRealismScore,
             cinematicSubtletyScore = composition.CinematicSubtletyScore,
             visualPreset = composition.VisualPreset,
             readabilityScore = composition.ReadabilityScore,
@@ -1469,6 +1528,11 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             atmosphereContinuityScore = composition.AtmosphereContinuityScore,
             environmentalDepthScore = composition.EnvironmentalDepthScore,
             supportObjectDepthScore = composition.SupportObjectDepthScore,
+            atmosphereDepthScore = composition.AtmosphereDepthScore,
+            fogBlendScore = composition.FogBlendScore,
+            proceduralArtifactPenalty = composition.ProceduralArtifactPenalty,
+            cinematicSoftnessScore = composition.CinematicSoftnessScore,
+            atmosphericRealismScore = composition.AtmosphericRealismScore,
             cinematicSubtletyScore = composition.CinematicSubtletyScore,
             visualPreset = composition.VisualPreset,
             readabilityScore = composition.ReadabilityScore,
@@ -1522,6 +1586,11 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             atmosphereContinuityScore = 0d,
             environmentalDepthScore = 0d,
             supportObjectDepthScore = 0d,
+            atmosphereDepthScore = 0d,
+            fogBlendScore = 0d,
+            proceduralArtifactPenalty = 0d,
+            cinematicSoftnessScore = 0d,
+            atmosphericRealismScore = 0d,
             cinematicSubtletyScore = 0d,
             visualPreset = "Premium Documentary",
             readabilityScore = 0d,
@@ -1561,6 +1630,11 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             atmosphereContinuityScore = composition.AtmosphereContinuityScore,
             environmentalDepthScore = composition.EnvironmentalDepthScore,
             supportObjectDepthScore = composition.SupportObjectDepthScore,
+            atmosphereDepthScore = composition.AtmosphereDepthScore,
+            fogBlendScore = composition.FogBlendScore,
+            proceduralArtifactPenalty = composition.ProceduralArtifactPenalty,
+            cinematicSoftnessScore = composition.CinematicSoftnessScore,
+            atmosphericRealismScore = composition.AtmosphericRealismScore,
             cinematicSubtletyScore = composition.CinematicSubtletyScore,
             visualPreset = composition.VisualPreset,
             readabilityScore = composition.ReadabilityScore,
@@ -1593,7 +1667,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
 
-    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double ProceduralAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore);
+    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double ProceduralAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore, double AtmosphereDepthScore, double FogBlendScore, double ProceduralArtifactPenalty, double CinematicSoftnessScore, double AtmosphericRealismScore);
     private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
     private sealed record Selection(SelectedObject Hero, IReadOnlyCollection<SelectedObject> Support, IReadOnlyCollection<object> VisibilityData, bool IsSpecialEvent, string CinematicMode, IReadOnlyCollection<HeroObjectScore> HeroScores, bool HasConjunction)
