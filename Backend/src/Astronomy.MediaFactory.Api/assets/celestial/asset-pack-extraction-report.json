@@ -1,0 +1,261 @@
+{
+  "Enabled": true,
+  "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+  "OutputRootPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial",
+  "Objects": [
+    {
+      "ObjectKey": "mercury",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\mercury\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 10,
+        "Y": 80,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "venus",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\venus\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 255,
+        "Y": 80,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "earth",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\earth\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 500,
+        "Y": 80,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "mars",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\mars\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 745,
+        "Y": 80,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "jupiter",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\jupiter\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 990,
+        "Y": 80,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "saturn",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\saturn\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 1235,
+        "Y": 80,
+        "Width": 275,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "uranus",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\uranus\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 10,
+        "Y": 375,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "neptune",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\neptune\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 255,
+        "Y": 375,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "sun",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\sun\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 500,
+        "Y": 375,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "moon",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 745,
+        "Y": 375,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "moon",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\gibbous.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 990,
+        "Y": 375,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "moon",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\crescent.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 1235,
+        "Y": 375,
+        "Width": 275,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "milky-way",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 10,
+        "Y": 670,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "orion-nebula",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\orion-nebula\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 255,
+        "Y": 670,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "andromeda-galaxy",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\andromeda-galaxy\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 500,
+        "Y": 670,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "orion-nebula",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\orion-nebula\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 745,
+        "Y": 670,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "milky-way",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 990,
+        "Y": 670,
+        "Width": 230,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    },
+    {
+      "ObjectKey": "milky-way",
+      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero.png",
+      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "CropBox": {
+        "X": 1235,
+        "Y": 670,
+        "Width": 275,
+        "Height": 285
+      },
+      "Success": true,
+      "Warning": ""
+    }
+  ],
+  "ExtractedObjects": [
+    "mercury/hero.png",
+    "venus/hero.png",
+    "earth/hero.png",
+    "mars/hero.png",
+    "jupiter/hero.png",
+    "saturn/hero.png",
+    "uranus/hero.png",
+    "neptune/hero.png",
+    "sun/hero.png",
+    "moon/hero.png",
+    "moon/gibbous.png",
+    "moon/crescent.png",
+    "milky-way/hero.png",
+    "orion-nebula/hero.png",
+    "andromeda-galaxy/hero.png"
+  ],
+  "SkippedObjects": [],
+  "Warnings": [],
+  "ReportPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\asset-pack-extraction-report.json"
+}
