@@ -111,11 +111,16 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
         var symmetryPenalty = EstimateSymmetryPenalty(symmetryDelta, symmetrySamples);
         var centeredBiasPenalty = EstimateCenteredBiasPenalty(image, focalWeight, focalWeightX, focalWeightY);
         var geometricMaskPenalty = EstimateGeometricMaskPenalty(midTone, edgeMidTone, radialRing, radialSamples);
-        var compositingVisibilityPenalty = Math.Clamp((geometricMaskPenalty * 0.52) + (symmetryPenalty * 0.24) + (centeredBiasPenalty * 0.24), 0, 1);
-        var visualArtifactPenalty = Math.Clamp((blackPixelPercentage > 0.94 ? 0.22 : 0) + Math.Max(0, sharpnessScore - 0.88) * 0.32 + geometricMaskPenalty * 0.46, 0, 1);
-        var naturalLightingScore = Math.Clamp((contrast * 0.30) + ((1 - symmetryPenalty) * 0.30) + ((1 - centeredBiasPenalty) * 0.22) + ((1 - glowScore) * 0.18), 0, 1);
-        var cinematicSubtletyScore = Math.Clamp((organicAtmosphereScore * 0.34) + (naturalLightingScore * 0.34) + ((1 - visualArtifactPenalty) * 0.16) + ((1 - compositingVisibilityPenalty) * 0.16), 0, 1);
-        var naturalCompositionPenalty = Math.Clamp((visualArtifactPenalty * 0.45) + (compositingVisibilityPenalty * 0.55), 0, 0.32);
+        var compositingSeamPenalty = EstimateCompositingSeamPenalty(image, xStep, yStep);
+        var atmosphereContinuityScore = Math.Clamp((organicAtmosphereScore * 0.48) + ((1 - compositingSeamPenalty) * 0.32) + ((1 - geometricMaskPenalty) * 0.20), 0, 1);
+        var environmentalDepthScore = Math.Clamp((starRichness * 0.28) + (colorRichness * 0.22) + (organicAtmosphereScore * 0.34) + (contrast * 0.16), 0, 1);
+        var supportObjectDepthScore = Math.Clamp((1 - centeredBiasPenalty) * 0.34 + (1 - symmetryPenalty) * 0.28 + atmosphereContinuityScore * 0.38, 0, 1);
+        var edgeIntegrationScore = Math.Clamp((glowScore * 0.34) + (NaturalLightingScoreFromInputs(contrast, symmetryPenalty, centeredBiasPenalty, glowScore) * 0.24) + ((1 - compositingSeamPenalty) * 0.24) + (atmosphereContinuityScore * 0.18), 0, 1);
+        var compositingVisibilityPenalty = Math.Clamp((geometricMaskPenalty * 0.40) + (compositingSeamPenalty * 0.30) + (symmetryPenalty * 0.16) + (centeredBiasPenalty * 0.14), 0, 1);
+        var visualArtifactPenalty = Math.Clamp((blackPixelPercentage > 0.94 ? 0.22 : 0) + Math.Max(0, sharpnessScore - 0.88) * 0.32 + geometricMaskPenalty * 0.30 + compositingSeamPenalty * 0.28, 0, 1);
+        var naturalLightingScore = NaturalLightingScoreFromInputs(contrast, symmetryPenalty, centeredBiasPenalty, glowScore);
+        var cinematicSubtletyScore = Math.Clamp((organicAtmosphereScore * 0.28) + (naturalLightingScore * 0.26) + (edgeIntegrationScore * 0.16) + (atmosphereContinuityScore * 0.14) + ((1 - visualArtifactPenalty) * 0.08) + ((1 - compositingVisibilityPenalty) * 0.08), 0, 1);
+        var naturalCompositionPenalty = Math.Clamp((visualArtifactPenalty * 0.38) + (compositingVisibilityPenalty * 0.46) + (compositingSeamPenalty * 0.16), 0, 0.32);
         var transitionFade = brightness < 0.025 && contrast < 0.035 && brightRatio < 0.0005;
 
         string? rejectionReason = null;
@@ -167,6 +172,11 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
             VisualArtifactPenalty = Math.Round(visualArtifactPenalty, 4),
             CompositingVisibilityPenalty = Math.Round(compositingVisibilityPenalty, 4),
             CinematicSubtletyScore = Math.Round(cinematicSubtletyScore, 4),
+            EdgeIntegrationScore = Math.Round(edgeIntegrationScore, 4),
+            CompositingSeamPenalty = Math.Round(compositingSeamPenalty, 4),
+            AtmosphereContinuityScore = Math.Round(atmosphereContinuityScore, 4),
+            EnvironmentalDepthScore = Math.Round(environmentalDepthScore, 4),
+            SupportObjectDepthScore = Math.Round(supportObjectDepthScore, 4),
             CelestialFocalSize = Math.Round(celestialFocalSize, 4),
             ColorRichness = Math.Round(colorRichness, 4),
             TextSafeCompositionArea = Math.Round(textSafe, 4),
@@ -220,6 +230,35 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
         var y = focalWeightY / focalWeight / image.Height;
         var distanceFromCenter = Math.Sqrt(Math.Pow(x - 0.5, 2) + Math.Pow(y - 0.5, 2));
         return Math.Clamp(1 - (distanceFromCenter / 0.26), 0, 1);
+    }
+
+    private static double NaturalLightingScoreFromInputs(double contrast, double symmetryPenalty, double centeredBiasPenalty, double glowScore)
+        => Math.Clamp((contrast * 0.30) + ((1 - symmetryPenalty) * 0.30) + ((1 - centeredBiasPenalty) * 0.22) + ((1 - glowScore) * 0.18), 0, 1);
+
+    private static double EstimateCompositingSeamPenalty(Image<Rgba32> image, int xStep, int yStep)
+    {
+        var vertical = 0d;
+        var horizontal = 0d;
+        var samples = 0;
+        for (var y = Math.Max(yStep, image.Height / 12); y < image.Height - yStep; y += Math.Max(yStep, image.Height / 72))
+        {
+            var row = image.DangerousGetPixelRowMemory(y).Span;
+            for (var x = Math.Max(xStep, image.Width / 12); x < image.Width - xStep; x += Math.Max(xStep, image.Width / 96))
+            {
+                var center = Luminance(row[x]) / 255d;
+                var dx = Math.Abs(center - (Luminance(row[Math.Clamp(x + xStep * 2, 0, image.Width - 1)]) / 255d));
+                var dyRow = image.DangerousGetPixelRowMemory(Math.Clamp(y + yStep * 2, 0, image.Height - 1)).Span;
+                var dy = Math.Abs(center - (Luminance(dyRow[x]) / 255d));
+                if (dx > 0.16) vertical += dx;
+                if (dy > 0.16) horizontal += dy;
+                samples++;
+            }
+        }
+
+        if (samples == 0) return 0;
+        var directionalSeamSignal = Math.Max(vertical, horizontal) / samples;
+        var rectangularLayerSignal = Math.Max(0, Math.Abs(vertical - horizontal) / samples - 0.006) * 8.5;
+        return Math.Clamp(directionalSeamSignal * 1.8 + rectangularLayerSignal, 0, 1);
     }
 
     private static double EstimateGeometricMaskPenalty(int midTone, int edgeMidTone, int radialRing, int radialSamples)

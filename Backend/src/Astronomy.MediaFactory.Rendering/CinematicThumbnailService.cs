@@ -423,6 +423,11 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             naturalLightingScore = selectedCandidate.NaturalLightingScore,
             visualArtifactPenalty = selectedCandidate.VisualArtifactPenalty,
             compositingVisibilityPenalty = selectedCandidate.CompositingVisibilityPenalty,
+            edgeIntegrationScore = selectedCandidate.EdgeIntegrationScore,
+            compositingSeamPenalty = selectedCandidate.CompositingSeamPenalty,
+            atmosphereContinuityScore = selectedCandidate.AtmosphereContinuityScore,
+            environmentalDepthScore = selectedCandidate.EnvironmentalDepthScore,
+            supportObjectDepthScore = selectedCandidate.SupportObjectDepthScore,
             cinematicSubtletyScore = selectedCandidate.CinematicSubtletyScore,
             diagnostics = new[]
             {

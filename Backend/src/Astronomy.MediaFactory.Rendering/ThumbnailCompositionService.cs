@@ -72,6 +72,11 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             NaturalLightingScore = request.SelectedCandidate.NaturalLightingScore,
             VisualArtifactPenalty = request.SelectedCandidate.VisualArtifactPenalty,
             CompositingVisibilityPenalty = request.SelectedCandidate.CompositingVisibilityPenalty,
+            EdgeIntegrationScore = request.SelectedCandidate.EdgeIntegrationScore,
+            CompositingSeamPenalty = request.SelectedCandidate.CompositingSeamPenalty,
+            AtmosphereContinuityScore = request.SelectedCandidate.AtmosphereContinuityScore,
+            EnvironmentalDepthScore = request.SelectedCandidate.EnvironmentalDepthScore,
+            SupportObjectDepthScore = request.SelectedCandidate.SupportObjectDepthScore,
             CinematicSubtletyScore = request.SelectedCandidate.CinematicSubtletyScore,
             AstronomyIntegrityValidation = integrity,
             PortraitSafe = recommendation.PortraitSafe,
@@ -555,16 +560,19 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         var score = await new ThumbnailScoringService().ScoreAsync(thumbnailPath, new ThumbnailScoringContext { EnableAstronomySceneMode = true, RejectDarkFrames = true }, cancellationToken);
         var textReadability = string.IsNullOrWhiteSpace(hookText) ? 0.35 : Math.Clamp(score.TextSafeCompositionArea + (hookText.Length <= 32 ? 0.18 : 0), 0, 1);
         var mobile = string.IsNullOrWhiteSpace(hookText) ? 0.45 : Math.Clamp(1 - Math.Max(0, hookText.Length - 28) / 40d, 0.35, 1);
-        var quality = Math.Clamp((score.Score * 0.68) + (textReadability * 0.17) + (mobile * 0.15), 0, 1);
+        var compositingRealism = Math.Clamp((score.EdgeIntegrationScore * 0.24) + (score.AtmosphereContinuityScore * 0.24) + (score.EnvironmentalDepthScore * 0.18) + (score.SupportObjectDepthScore * 0.14) + ((1 - score.CompositingSeamPenalty) * 0.20), 0, 1);
+        var quality = Math.Clamp((score.Score * 0.56) + (textReadability * 0.15) + (mobile * 0.13) + (compositingRealism * 0.16) - (score.CompositingSeamPenalty * 0.08), 0, 1);
         var warnings = new List<string>();
         if (score.BlackPixelPercentage > _options.MaxBlackPixelPercentage && !score.ObjectDetected) warnings.Add("black-frame-risk");
         if (score.FocalObjectScore < 0.35) warnings.Add("weak-focal-object");
         if (textReadability < 0.55) warnings.Add("weak-text-readability");
         if (quality < 0.80) warnings.Add("below-preferred-polish-score");
+        if (score.CompositingSeamPenalty > 0.32) warnings.Add("visible-compositing-seam-risk");
+        if (score.EdgeIntegrationScore < 0.42) warnings.Add("hard-alpha-edge-risk");
         if (new FileInfo(thumbnailPath).Length > MaxThumbnailSizeBytes) warnings.Add("file-too-large");
         return new ThumbnailProductionQualityResult
         {
-            IsProductionReady = quality >= 0.80 && warnings.All(w => w is not "black-frame-risk" and not "weak-focal-object" and not "weak-text-readability"),
+            IsProductionReady = quality >= 0.80 && warnings.All(w => w is not "black-frame-risk" and not "weak-focal-object" and not "weak-text-readability" and not "visible-compositing-seam-risk" and not "hard-alpha-edge-risk"),
             Warnings = warnings,
             QualityScore = Math.Round(quality, 3),
             FocalObjectScore = score.FocalObjectScore,
@@ -579,6 +587,8 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         var overlays = new List<string> { "stellarium-debug-edge-cleanup", "sky-depth-gradient", "soft-vignette", "contrast-curves", "restrained-object-glow" };
         if (score.StarRichnessScore < 0.45) overlays.Add("subtle-star-clarity-enhancement");
         if (score.ColorRichness < 0.35) overlays.Add("subtle-cinematic-sky-depth-grade");
+        if (score.CompositingSeamPenalty > 0.20) overlays.Add("organic-seam-feathering-required");
+        if (score.EdgeIntegrationScore < 0.50) overlays.Add("directional-edge-wrap-required");
         return overlays;
     }
 

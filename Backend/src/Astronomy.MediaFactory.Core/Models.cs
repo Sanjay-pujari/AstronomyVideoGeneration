@@ -180,6 +180,11 @@ public sealed class ThumbnailCandidateScore
     public double VisualArtifactPenalty { get; init; }
     public double CompositingVisibilityPenalty { get; init; }
     public double CinematicSubtletyScore { get; init; }
+    public double EdgeIntegrationScore { get; init; }
+    public double CompositingSeamPenalty { get; init; }
+    public double AtmosphereContinuityScore { get; init; }
+    public double EnvironmentalDepthScore { get; init; }
+    public double SupportObjectDepthScore { get; init; }
     public double CelestialFocalSize { get; init; }
     public double ColorRichness { get; init; }
     public double TextSafeCompositionArea { get; init; }
