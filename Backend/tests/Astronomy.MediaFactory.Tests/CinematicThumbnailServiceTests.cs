@@ -40,7 +40,15 @@ public sealed class CinematicThumbnailServiceTests
         Assert.True(File.Exists(selectionPath));
         Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-analysis-report.json")));
         Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-ai-optimization.json")));
+        var cinematicReportPath = Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-report.json");
         Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-ai-report.json")));
+        Assert.True(File.Exists(cinematicReportPath));
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(cinematicReportPath));
+        Assert.True(report.RootElement.TryGetProperty("organicAtmosphereScore", out _));
+        Assert.True(report.RootElement.TryGetProperty("naturalLightingScore", out _));
+        Assert.True(report.RootElement.TryGetProperty("visualArtifactPenalty", out _));
+        Assert.True(report.RootElement.TryGetProperty("compositingVisibilityPenalty", out _));
+        Assert.True(report.RootElement.TryGetProperty("cinematicSubtletyScore", out _));
         using var selection = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath));
         Assert.Equal("HybridCinematicCollage", selection.RootElement.GetProperty("mode").GetString());
     }

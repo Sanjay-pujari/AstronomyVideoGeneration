@@ -105,7 +105,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             };
 
             await WriteSelectionAsync(plan, thumbnailsDirectory, celestialSelection, cancellationToken);
-            await WriteHybridCinematicReportAsync(request, outputPath, celestialSelection, cancellationToken);
+            await WriteHybridCinematicReportAsync(request, outputPath, celestialSelection, selectedCandidate, cancellationToken);
             await WriteAnalysisReportAsync(request, outputPath, selection, selectedCandidate, celestialSelection.SelectedHook, celestialSelection.FallbackUsed, errors, cancellationToken);
             await WriteComparisonSheetAsync(request, outputPath, selection, cancellationToken);
             return plan;
@@ -402,7 +402,7 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
         await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
-    private async Task WriteHybridCinematicReportAsync(ThumbnailGenerationRequest request, string outputPath, CelestialThumbnailSelection selection, CancellationToken cancellationToken)
+    private async Task WriteHybridCinematicReportAsync(ThumbnailGenerationRequest request, string outputPath, CelestialThumbnailSelection selection, ThumbnailCandidateScore selectedCandidate, CancellationToken cancellationToken)
     {
         var payload = new
         {
@@ -419,16 +419,23 @@ public sealed class CinematicThumbnailService : ICinematicThumbnailService
             fakeImageGenerationUsed = false,
             fallbackUsed = selection.FallbackUsed,
             mobileFirstValidation = request.IsShortForm ? "portrait object-first composition" : "landscape feed composition with left text-safe negative space",
+            organicAtmosphereScore = selectedCandidate.OrganicAtmosphereScore,
+            naturalLightingScore = selectedCandidate.NaturalLightingScore,
+            visualArtifactPenalty = selectedCandidate.VisualArtifactPenalty,
+            compositingVisibilityPenalty = selectedCandidate.CompositingVisibilityPenalty,
+            cinematicSubtletyScore = selectedCandidate.CinematicSubtletyScore,
             diagnostics = new[]
             {
                 "Stellarium/visibility data used for object ranking and background context.",
                 "NASA/local cached celestial assets used for visual hero imagery.",
                 "Composition limits support objects to avoid collage clutter.",
-                "Documentary color grade, restrained glow, and reduced text hierarchy applied."
+                "Documentary color grade, directional rim lighting, organic atmospheric haze, subdued support objects, and reduced text hierarchy applied."
             }
         };
+        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
         var outputName = string.IsNullOrWhiteSpace(_cinematicOptions.OutputFileName) ? "thumbnail-cinematic-ai-report.json" : _cinematicOptions.OutputFileName;
-        await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnails", outputName), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnails", outputName), json, cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnails", "thumbnail-cinematic-report.json"), json, cancellationToken);
     }
 
     private async Task WriteAnalysisReportAsync(ThumbnailGenerationRequest request, string outputPath, ThumbnailCandidateSelection selection, ThumbnailCandidateScore selected, string hook, bool fallbackUsed, IReadOnlyCollection<string> errors, CancellationToken cancellationToken)

@@ -68,6 +68,11 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             ScaleBoost = recommendation.ScaleBoost,
             VisualHierarchyScore = hierarchy.VisualHierarchyScore,
             ReadabilityScore = hierarchy.ReadabilityScore,
+            OrganicAtmosphereScore = request.SelectedCandidate.OrganicAtmosphereScore,
+            NaturalLightingScore = request.SelectedCandidate.NaturalLightingScore,
+            VisualArtifactPenalty = request.SelectedCandidate.VisualArtifactPenalty,
+            CompositingVisibilityPenalty = request.SelectedCandidate.CompositingVisibilityPenalty,
+            CinematicSubtletyScore = request.SelectedCandidate.CinematicSubtletyScore,
             AstronomyIntegrityValidation = integrity,
             PortraitSafe = recommendation.PortraitSafe,
             FinalThumbnailPath = request.OutputPath,
@@ -77,7 +82,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             VisualPolishPassApplied = true,
             Diagnostics = hierarchy.Recommendations.Concat([
                 recommendation.Rationale,
-                "Final visual polish pass applied: debug-edge cleanup, restrained text hierarchy, subtle object emphasis, softened overlays, and mobile readability validation."
+                "Final realism polish applied: organic atmospheric texture, directional lighting bias, subdued support objects, natural composition validation, and mobile-safe text restraint."
             ]).ToArray()
         };
         await WriteCinematicAiReportAsync(request.GenerationRequest.OutputDirectory, report, cancellationToken);
@@ -174,19 +179,19 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             ApplyAstronomyRichness(ctx, canvas.Width, canvas.Height, request.GenerationRequest.Context.Date.DayNumber + 17);
             ApplyEnhancements(ctx, canvas.Width, canvas.Height, objectPoint, recommendation, mood);
             if (_options.EnableGradientBackground)
-                ApplyBottomGradient(ctx, canvas.Width, canvas.Height, 0.68f, 0.68f);
+                ApplyBottomGradient(ctx, canvas.Width, canvas.Height, 0.70f, 0.62f);
 
             if (_options.EnableHookText && !string.IsNullOrWhiteSpace(hook))
             {
-                var font = CreateFont(63, FontStyle.Bold, LocalizationResolver.IsHindi(request.GenerationRequest.Context.Localization.ResolvedLanguage));
+                var font = CreateFont(55, FontStyle.Regular, LocalizationResolver.IsHindi(request.GenerationRequest.Context.Localization.ResolvedLanguage));
                 var text = LimitWords(hook, Math.Min(4, _options.MaxHookWords));
                 DrawTextWithShadow(ctx, new RichTextOptions(font)
                 {
-                    Origin = new PointF(canvas.Width / 2f, canvas.Height - 250),
-                    WrappingLength = canvas.Width - 170,
+                    Origin = new PointF(canvas.Width / 2f, canvas.Height - 310),
+                    WrappingLength = canvas.Width - 220,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Bottom
-                }, text, Color.White);
+                }, text, Color.White.WithAlpha(0.94f), 0.62f);
             }
 
             DrawBrand(ctx, canvas.Width, canvas.Height);
@@ -223,8 +228,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             ctx.GaussianSharpen(0.48f);
         if (_options.EnableGlowEnhancement && _options.EnableGlowEffect && _cinematicOptions.EnableObjectFocusEnhancement)
         {
-            ctx.Fill(ResolveGlowColor(mood).WithAlpha(0.075f), new EllipsePolygon(brightPoint.X, brightPoint.Y, width * 0.13f, height * 0.13f));
-            ctx.Fill(Color.White.WithAlpha(0.025f), new EllipsePolygon(brightPoint.X, brightPoint.Y, width * 0.055f, height * 0.055f));
+            ApplyDirectionalRimLight(ctx, width, height, brightPoint, ResolveGlowColor(mood));
         }
         if (_cinematicOptions.EnableColorMoodGrading)
             ApplyMoodOverlay(ctx, width, height, mood.MoodProfile);
@@ -241,18 +245,74 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             new ColorStop(1, Color.FromRgb(2, 6, 18).WithAlpha(0.24f))), new RectangleF(0, 0, width, height));
 
         var random = new Random(seed);
-        var starCount = Math.Clamp(width * height / 10500, 80, 230);
-        for (var i = 0; i < starCount; i++)
-        {
-            var x = random.NextSingle() * width;
-            var y = random.NextSingle() * height * 0.82f;
-            var radius = 0.7f + random.NextSingle() * 1.5f;
-            var alpha = 0.13f + random.NextSingle() * 0.32f;
-            ctx.Fill(Color.White.WithAlpha(alpha), new EllipsePolygon(x, y, radius));
-        }
+        DrawNaturalStarfield(ctx, width, height, random);
+        DrawOrganicNebulaFog(ctx, width, height, random);
+    }
 
-        ctx.Fill(Color.DeepSkyBlue.WithAlpha(0.022f), new EllipsePolygon(width * 0.22f, height * 0.25f, width * 0.30f, height * 0.20f));
-        ctx.Fill(Color.MediumPurple.WithAlpha(0.020f), new EllipsePolygon(width * 0.78f, height * 0.42f, width * 0.31f, height * 0.23f));
+
+    private static void ApplyDirectionalRimLight(IImageProcessingContext ctx, int width, int height, PointF brightPoint, Color highlight)
+    {
+        var rimWidth = Math.Max(width, height) * 0.20f;
+        var lightFrom = new PointF(brightPoint.X - rimWidth * 0.45f, brightPoint.Y - rimWidth * 0.62f);
+        var falloffTo = new PointF(brightPoint.X + rimWidth * 0.52f, brightPoint.Y + rimWidth * 0.44f);
+        var bounds = new RectangleF(Math.Max(0, brightPoint.X - rimWidth), Math.Max(0, brightPoint.Y - rimWidth), Math.Min(width, rimWidth * 2), Math.Min(height, rimWidth * 2));
+        ctx.Fill(new LinearGradientBrush(lightFrom, falloffTo, GradientRepetitionMode.None,
+            new ColorStop(0, highlight.WithAlpha(0.052f)),
+            new ColorStop(0.38f, Color.White.WithAlpha(0.018f)),
+            new ColorStop(1, Color.Transparent)), bounds);
+        ctx.Fill(new LinearGradientBrush(new PointF(0, brightPoint.Y - rimWidth * 0.30f), new PointF(width, brightPoint.Y + rimWidth * 0.22f), GradientRepetitionMode.None,
+            new ColorStop(0, Color.Transparent),
+            new ColorStop(0.64f, highlight.WithAlpha(0.026f)),
+            new ColorStop(1, Color.Transparent)), new RectangleF(0, Math.Max(0, brightPoint.Y - rimWidth * 0.50f), width, Math.Min(height, rimWidth)));
+    }
+
+    private static void DrawNaturalStarfield(IImageProcessingContext ctx, int width, int height, Random random)
+    {
+        var clusters = 3 + random.Next(3);
+        var starCount = Math.Clamp(width * height / 12800, 72, 210);
+        for (var c = 0; c < clusters; c++)
+        {
+            var clusterX = random.NextSingle() * width;
+            var clusterY = random.NextSingle() * height * 0.78f;
+            var clusterSpread = Math.Min(width, height) * (0.12f + random.NextSingle() * 0.18f);
+            var clusterStars = starCount / clusters;
+            for (var i = 0; i < clusterStars; i++)
+            {
+                var useCluster = random.NextSingle() < 0.58f;
+                var x = useCluster ? clusterX + (random.NextSingle() - 0.5f) * clusterSpread : random.NextSingle() * width;
+                var y = useCluster ? clusterY + (random.NextSingle() - 0.5f) * clusterSpread : random.NextSingle() * height * 0.84f;
+                if (x < 0 || x >= width || y < 0 || y >= height) continue;
+                var radius = 0.42f + MathF.Pow(random.NextSingle(), 2.2f) * 1.35f;
+                var alpha = 0.08f + MathF.Pow(random.NextSingle(), 1.7f) * 0.28f;
+                var tint = random.Next(4) switch
+                {
+                    0 => Color.FromRgb(190, 215, 255),
+                    1 => Color.FromRgb(255, 226, 178),
+                    2 => Color.FromRgb(218, 232, 255),
+                    _ => Color.White
+                };
+                ctx.Fill(tint.WithAlpha(alpha), new EllipsePolygon(x, y, radius));
+            }
+        }
+    }
+
+    private static void DrawOrganicNebulaFog(IImageProcessingContext ctx, int width, int height, Random random)
+    {
+        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.04f, height * 0.10f), new PointF(width * 0.95f, height * 0.78f), GradientRepetitionMode.None,
+            new ColorStop(0, Color.FromRgb(42, 70, 118).WithAlpha(0.035f)),
+            new ColorStop(0.46f, Color.FromRgb(95, 66, 122).WithAlpha(0.020f)),
+            new ColorStop(1, Color.Transparent)), new RectangleF(0, 0, width, height));
+
+        var wisps = 26;
+        for (var i = 0; i < wisps; i++)
+        {
+            var x = (i / (float)wisps) * width + (random.NextSingle() - 0.5f) * width * 0.18f;
+            var y = height * (0.18f + random.NextSingle() * 0.46f) + MathF.Sin(i * 0.73f) * height * 0.10f;
+            var w = width * (0.045f + random.NextSingle() * 0.080f);
+            var h = height * (0.014f + random.NextSingle() * 0.030f);
+            var color = i % 3 == 0 ? Color.FromRgb(90, 116, 165) : Color.FromRgb(88, 70, 118);
+            ctx.Fill(color.WithAlpha(0.010f + random.NextSingle() * 0.018f), new EllipsePolygon(x, y, w, h));
+        }
     }
 
     private static Color ResolveGlowColor(ThumbnailMoodGradingResult mood)
@@ -283,7 +343,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
     {
         var notes = new List<string>
         {
-            "Composition uses crop, contrast, glow, gradients, text, and scale emphasis only.",
+            "Composition uses crop, contrast, directional rim light, organic atmospheric texture, gradients, text, and scale emphasis only.",
             "No generated astronomy pixels or new celestial objects are introduced."
         };
         var noSyntheticObjects = !_cinematicOptions.Enabled || (recommendation.ScaleBoost <= 1.30 && request.SelectedCandidate.ObjectDetected);
@@ -305,7 +365,9 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         var thumbnailsDirectory = IoPath.Combine(outputDirectory, "thumbnails");
         Directory.CreateDirectory(thumbnailsDirectory);
         var path = IoPath.Combine(thumbnailsDirectory, _cinematicOptions.OutputFileName);
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase }), cancellationToken);
+        var json = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        await File.WriteAllTextAsync(path, json, cancellationToken);
+        await File.WriteAllTextAsync(IoPath.Combine(thumbnailsDirectory, "thumbnail-cinematic-report.json"), json, cancellationToken);
     }
 
     private static void ApplyVignette(IImageProcessingContext ctx, int width, int height)
@@ -400,13 +462,13 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         }, _options.BrandText, Color.White.WithAlpha(0.56f));
     }
 
-    private static void DrawTextWithShadow(IImageProcessingContext ctx, RichTextOptions options, string text, Color color)
+    private static void DrawTextWithShadow(IImageProcessingContext ctx, RichTextOptions options, string text, Color color, float shadowScale = 1f)
     {
-        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 5, options.Origin.Y + 5) }, text, Color.Black.WithAlpha(0.86f));
-        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X - 2, options.Origin.Y) }, text, Color.Black.WithAlpha(0.42f));
-        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 2, options.Origin.Y) }, text, Color.Black.WithAlpha(0.42f));
-        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X, options.Origin.Y + 2) }, text, Color.Black.WithAlpha(0.42f));
-        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 1, options.Origin.Y + 1) }, text, color.WithAlpha(0.32f));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 4, options.Origin.Y + 4) }, text, Color.Black.WithAlpha(0.68f * shadowScale));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X - 2, options.Origin.Y) }, text, Color.Black.WithAlpha(0.28f * shadowScale));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 2, options.Origin.Y) }, text, Color.Black.WithAlpha(0.28f * shadowScale));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X, options.Origin.Y + 2) }, text, Color.Black.WithAlpha(0.28f * shadowScale));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(options.Origin.X + 1, options.Origin.Y + 1) }, text, color.WithAlpha(0.22f * shadowScale));
         ctx.DrawText(options, text, color);
     }
 
