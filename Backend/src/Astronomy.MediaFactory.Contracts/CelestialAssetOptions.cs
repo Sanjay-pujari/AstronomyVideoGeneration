@@ -7,7 +7,7 @@ public sealed class CelestialAssetsOptions
     public bool Enabled { get; set; } = true;
     public string RootPath { get; set; } = "assets/celestial";
     public bool PreferLocalCache { get; set; } = true;
-    public bool DownloadIfMissing { get; set; } = true;
+    public bool DownloadIfMissing { get; set; } = false;
     public int MaxImagesPerObject { get; set; } = 5;
     public bool RefreshExistingAssets { get; set; }
     public List<string> AllowedExtensions { get; set; } = [".jpg", ".jpeg", ".png"];
@@ -21,12 +21,15 @@ public sealed class CelestialAssetsOptions
         "mercury",
         "uranus",
         "neptune",
-        "meteor-showers",
+        "meteor-shower",
         "lunar-eclipse",
         "solar-eclipse",
-        "nebula",
-        "galaxy",
-        "milky-way"
+        "orion-nebula",
+        "andromeda-galaxy",
+        "ring-nebula",
+        "milky-way",
+        "earth",
+        "sun"
     ];
 }
 

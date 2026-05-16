@@ -234,26 +234,22 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
 
         services.AddOptions<ThumbnailAIOptimizationOptions>()
-            .Bind(configuration.GetSection(ThumbnailAIOptimizationOptions.SectionName))
-            .Validate(opt => opt.MaxHookWords is > 0 and <= 5, "ThumbnailAIOptimization:MaxHookWords must be between 1 and 5.")
-            .Validate(opt => opt.MinimumConfidence is >= 0 and <= 1, "ThumbnailAIOptimization:MinimumConfidence must be between 0 and 1.")
-            .Validate(opt => !string.IsNullOrWhiteSpace(opt.OutputFileName), "ThumbnailAIOptimization:OutputFileName is required.")
-            .ValidateOnStart();
+            .Bind(configuration.GetSection(ThumbnailAIOptimizationOptions.SectionName));
 
         services.AddOptions<ThumbnailOptions>()
             .Bind(configuration.GetSection(ThumbnailOptions.SectionName))
-            .Validate(opt => opt.LandscapeWidth > 0 && opt.LandscapeHeight > 0 && opt.PortraitWidth > 0 && opt.PortraitHeight > 0, "Thumbnail dimensions must be > 0.")
-            .Validate(opt => opt.MaxBlackPixelPercentage is >= 0 and <= 1, "ThumbnailGeneration:MaxBlackPixelPercentage must be between 0 and 1.")
-            .Validate(opt => opt.MinimumBrightnessScore is >= 0 and <= 1, "ThumbnailGeneration:MinimumBrightnessScore must be between 0 and 1.")
-            .Validate(opt => opt.CandidateFramesPerScene > 0, "ThumbnailGeneration:CandidateFramesPerScene must be > 0.")
+            .Validate(opt => opt.LongThumbnailWidth > 0 && opt.LongThumbnailHeight > 0 && opt.ShortThumbnailWidth > 0 && opt.ShortThumbnailHeight > 0, "Thumbnail dimensions must be > 0.")
+            .Validate(opt => opt.MaxSupportObjectsLong is >= 0 and <= 2, "ThumbnailGeneration:MaxSupportObjectsLong must be between 0 and 2.")
+            .Validate(opt => opt.MaxSupportObjectsShort is >= 0 and <= 1, "ThumbnailGeneration:MaxSupportObjectsShort must be between 0 and 1.")
+            .Validate(opt => opt.JpegQuality is > 0 and <= 100, "ThumbnailGeneration:JpegQuality must be between 1 and 100.")
+            .ValidateOnStart();
+
+        services.AddOptions<CelestialAssetPackOptions>()
+            .Bind(configuration.GetSection(CelestialAssetPackOptions.SectionName))
             .ValidateOnStart();
 
         services.AddOptions<ThumbnailCinematicAIOptions>()
-            .Bind(configuration.GetSection(ThumbnailCinematicAIOptions.SectionName))
-            .Validate(opt => opt.MaximumObjectScaleBoost is >= 1 and <= 1.30, "ThumbnailCinematicAI:MaximumObjectScaleBoost must be between 1 and 1.30.")
-            .Validate(opt => opt.AllowedMoodProfiles.Count > 0, "ThumbnailCinematicAI:AllowedMoodProfiles must contain at least one profile.")
-            .Validate(opt => !string.IsNullOrWhiteSpace(opt.OutputFileName), "ThumbnailCinematicAI:OutputFileName is required.")
-            .ValidateOnStart();
+            .Bind(configuration.GetSection(ThumbnailCinematicAIOptions.SectionName));
 
         services.AddOptions<StellariumOptions>()
             .Bind(configuration.GetSection(StellariumOptions.SectionName))
@@ -359,8 +355,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IThumbnailCandidateSelector, ThumbnailCandidateSelector>();
         services.AddScoped<IThumbnailCompositionService, ThumbnailCompositionService>();
         services.AddScoped<ICinematicCollageComposer, CinematicCollageComposer>();
-        services.AddScoped<ICinematicThumbnailService, CinematicThumbnailService>();
-        services.AddScoped<IThumbnailGenerationService, CinematicThumbnailService>();
+        services.AddScoped<ICelestialAssetPackExtractor, CelestialAssetPackExtractor>();
+        services.AddScoped<ICinematicThumbnailService, LocalAssetCollageThumbnailService>();
+        services.AddScoped<IThumbnailGenerationService, LocalAssetCollageThumbnailService>();
         services.AddScoped<IThumbnailGeneratorService, ThumbnailGeneratorService>();
         services.AddScoped<ISeoMetadataGeneratorService, SeoMetadataGeneratorService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();

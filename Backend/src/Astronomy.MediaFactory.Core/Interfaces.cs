@@ -201,6 +201,11 @@ public interface ICinematicThumbnailService : IThumbnailGenerationService
 {
 }
 
+public interface ICelestialAssetPackExtractor
+{
+    Task<CelestialAssetPackExtractionReport> ExtractAsync(CancellationToken cancellationToken);
+}
+
 public interface IThumbnailCompositionService
 {
     Task<string> ComposeAsync(ThumbnailCompositionRequest request, CancellationToken cancellationToken);

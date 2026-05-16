@@ -6,7 +6,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Configuration;
 
 public sealed class ObsoleteConfigurationWarningHostedService : IHostedService
 {
-    private static readonly string[] ObsoleteSections = ["InstagramPublishing", "FacebookPublishing"];
+    private static readonly string[] ObsoleteSections = ["InstagramPublishing", "FacebookPublishing", "ThumbnailAIOptimization", "ThumbnailCinematicAI"];
 
     private readonly IConfiguration _configuration;
     private readonly ILogger<ObsoleteConfigurationWarningHostedService> _logger;
@@ -25,9 +25,13 @@ public sealed class ObsoleteConfigurationWarningHostedService : IHostedService
         {
             if (_configuration.GetSection(sectionName).Exists())
             {
+                var guidance = sectionName.StartsWith("Thumbnail", StringComparison.OrdinalIgnoreCase)
+                    ? "Thumbnail generation now uses ThumbnailGeneration:Mode=LocalAssetCollage; this section is deprecated and ignored by the active thumbnail flow."
+                    : "Configure Meta publishing only under MetaPublishing.";
                 _logger.LogWarning(
-                    "Obsolete configuration section {SectionName} is present and ignored. Configure Meta publishing only under MetaPublishing.",
-                    sectionName);
+                    "Obsolete configuration section {SectionName} is present and ignored. {Guidance}",
+                    sectionName,
+                    guidance);
             }
         }
 

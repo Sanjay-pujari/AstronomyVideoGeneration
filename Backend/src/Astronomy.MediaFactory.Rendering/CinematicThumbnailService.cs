@@ -10,6 +10,7 @@ using SixLabors.ImageSharp.Processing;
 
 namespace Astronomy.MediaFactory.Rendering;
 
+[Obsolete("Deprecated: active production thumbnails use LocalAssetCollageThumbnailService with curated local assets.")]
 public sealed class CinematicThumbnailService : ICinematicThumbnailService
 {
     private readonly IThumbnailStrategyService _thumbnailStrategyService;
