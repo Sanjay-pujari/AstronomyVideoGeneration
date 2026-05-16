@@ -374,6 +374,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITokenHealthReportWriter, TokenHealthReportWriter>();
         services.AddHostedService<TokenHealthStartupHostedService>();
         services.AddScoped<IYouTubeApiClient, GoogleYouTubeApiClient>();
+        services.AddScoped<IPlatformThumbnailResolver, PlatformThumbnailResolver>();
         services.AddScoped<IYouTubePublishService, YouTubePublishService>();
         services.AddScoped<IContentPublishService, ContentPublishService>();
         services.AddScoped<IYouTubeAnalyticsService, YouTubeAnalyticsService>();

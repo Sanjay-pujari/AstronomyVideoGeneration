@@ -55,8 +55,13 @@ public sealed class YouTubePublishService : IYouTubePublishService
             {
                 Success = true,
                 Platform = PlatformName,
+                ContentType = normalizedRequest.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
                 AssetType = normalizedRequest.AssetType,
                 IsShort = normalizedRequest.IsShort,
+                UploadedThumbnailPath = normalizedRequest.PlatformThumbnailPath,
+                ThumbnailSource = normalizedRequest.ThumbnailSource,
+                ThumbnailUploadAttempted = false,
+                ThumbnailUploadSuccess = false,
                 Mode = mode,
                 PublishedUtc = DateTime.UtcNow
             };
@@ -78,6 +83,7 @@ public sealed class YouTubePublishService : IYouTubePublishService
 
             var videoId = await _apiClient.UploadVideoAsync(normalizedRequest, accessToken, cancellationToken);
             var thumbnailWarning = await TryUploadThumbnailAsync(normalizedRequest, videoId, accessToken, outputDirectory, cancellationToken);
+            var thumbnailUploadAttempted = normalizedRequest.UploadThumbnail && !string.IsNullOrWhiteSpace(normalizedRequest.PlatformThumbnailPath);
             var warnings = new List<string>();
             if (!string.IsNullOrWhiteSpace(thumbnailWarning))
             {
@@ -87,8 +93,14 @@ public sealed class YouTubePublishService : IYouTubePublishService
             {
                 Success = true,
                 Platform = PlatformName,
+                ContentType = normalizedRequest.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
                 AssetType = normalizedRequest.AssetType,
                 IsShort = normalizedRequest.IsShort,
+                UploadedThumbnailPath = normalizedRequest.PlatformThumbnailPath,
+                ThumbnailSource = normalizedRequest.ThumbnailSource,
+                ThumbnailUploadAttempted = thumbnailUploadAttempted,
+                ThumbnailUploadSuccess = thumbnailUploadAttempted && thumbnailWarning is null,
+                ThumbnailWarning = thumbnailWarning,
                 VideoId = videoId,
                 VideoUrl = $"https://www.youtube.com/watch?v={videoId}",
                 ChannelId = channel.ChannelId,
@@ -107,8 +119,12 @@ public sealed class YouTubePublishService : IYouTubePublishService
             {
                 Success = false,
                 Platform = PlatformName,
+                ContentType = normalizedRequest.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
                 AssetType = normalizedRequest.AssetType,
                 IsShort = normalizedRequest.IsShort,
+                UploadedThumbnailPath = normalizedRequest.PlatformThumbnailPath,
+                ThumbnailSource = normalizedRequest.ThumbnailSource,
+                ThumbnailWarning = ex.Message,
                 Error = ex.Message,
                 Mode = mode,
                 PublishedUtc = DateTime.UtcNow
@@ -126,6 +142,10 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 ? "private"
                 : NormalizePrivacy(request.PrivacyStatus, _publishingOptions.DefaultPrivacyStatus, _youTubeOptions.DefaultPrivacyStatus);
 
+        var selectedThumbnailPath = request.IsShort
+            ? FirstNonBlank(request.ShortThumbnailPath, request.PlatformThumbnailPath, request.ThumbnailPath)
+            : FirstNonBlank(request.LongThumbnailPath, request.PlatformThumbnailPath, request.ThumbnailPath);
+
         return new PublishRequest
         {
             PipelineRunId = request.PipelineRunId,
@@ -133,14 +153,22 @@ public sealed class YouTubePublishService : IYouTubePublishService
             AssetType = string.IsNullOrWhiteSpace(request.AssetType) ? "LongVideo" : request.AssetType,
             IsShort = request.IsShort,
             VideoPath = request.VideoPath,
-            ThumbnailPath = request.ThumbnailPath,
+            ThumbnailPath = selectedThumbnailPath,
+            LongThumbnailPath = request.LongThumbnailPath,
+            ShortThumbnailPath = request.ShortThumbnailPath,
+            PlatformThumbnailPath = selectedThumbnailPath,
+            ThumbnailSource = string.IsNullOrWhiteSpace(request.ThumbnailSource) ? ThumbnailSources.GeneratedThumbnail : request.ThumbnailSource,
             Title = string.IsNullOrWhiteSpace(request.Title) ? "Astronomy update" : request.Title.Trim(),
             Description = string.IsNullOrWhiteSpace(request.Description) ? request.Title.Trim() : request.Description.Trim(),
             Tags = request.Tags.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Take(15).ToList(),
             PrivacyStatus = privacyStatus,
-            UploadThumbnail = request.UploadThumbnail
+            UploadThumbnail = request.UploadThumbnail,
+            YouTubeShortEligible = request.YouTubeShortEligible
         };
     }
+
+    private static string FirstNonBlank(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
 
     private static string NormalizePrivacy(params string?[] values)
     {
@@ -449,6 +477,10 @@ public sealed class YouTubePublishService : IYouTubePublishService
             isShort = request.IsShort,
             videoPath = request.VideoPath,
             thumbnailPath = request.ThumbnailPath,
+            longThumbnailPath = request.LongThumbnailPath,
+            shortThumbnailPath = request.ShortThumbnailPath,
+            platformThumbnailPath = request.PlatformThumbnailPath,
+            thumbnailSource = request.ThumbnailSource,
             title = request.Title,
             description = request.Description,
             tags = request.Tags,

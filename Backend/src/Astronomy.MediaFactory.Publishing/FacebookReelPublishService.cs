@@ -57,7 +57,22 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             }
             else if (mode == "DryRun")
             {
-                result = new MetaPublishResult { Success = true, Platform = "Facebook", Mode = mode, PublishedUtc = DateTime.UtcNow };
+                var thumbnailWarning = BuildUnsupportedThumbnailWarning(request);
+                result = new MetaPublishResult
+                {
+                    Success = true,
+                    Platform = "Facebook",
+                    ContentType = PlatformThumbnailContentTypes.Reel,
+                    Mode = mode,
+                    UploadedThumbnailPath = request.PlatformThumbnailPath,
+                    ThumbnailSource = request.ThumbnailSource,
+                    ThumbnailUploadAttempted = false,
+                    ThumbnailUploadSuccess = false,
+                    ThumbnailWarning = thumbnailWarning,
+                    Warning = thumbnailWarning,
+                    Warnings = string.IsNullOrWhiteSpace(thumbnailWarning) ? [] : [thumbnailWarning],
+                    PublishedUtc = DateTime.UtcNow
+                };
             }
             else
             {
@@ -118,6 +133,11 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             cancellationToken);
 
         var warnings = new List<string>();
+        var thumbnailWarning = BuildUnsupportedThumbnailWarning(request);
+        if (!string.IsNullOrWhiteSpace(thumbnailWarning))
+        {
+            warnings.Add(thumbnailWarning);
+        }
         var verification = await VerifyPublishedAsync(pageId, pageAccessToken, start.VideoId, cancellationToken);
         if (!verification.PublishedVerified)
         {
@@ -146,7 +166,13 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
         {
             Success = true,
             Platform = "Facebook",
+            ContentType = PlatformThumbnailContentTypes.Reel,
             Mode = mode,
+            UploadedThumbnailPath = request.PlatformThumbnailPath,
+            ThumbnailSource = request.ThumbnailSource,
+            ThumbnailUploadAttempted = false,
+            ThumbnailUploadSuccess = false,
+            ThumbnailWarning = thumbnailWarning,
             VideoId = start.VideoId,
             PostId = postId,
             Url = permalinkUrl,
@@ -297,6 +323,10 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             pageId,
             pageName,
             videoPath = request.VideoPath,
+            longThumbnailPath = request.LongThumbnailPath,
+            shortThumbnailPath = request.ShortThumbnailPath,
+            platformThumbnailPath = request.PlatformThumbnailPath,
+            thumbnailSource = request.ThumbnailSource,
             caption = request.Caption,
             shortTitle = request.ShortTitle,
             mode,
@@ -312,7 +342,19 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
     }
 
     private static MetaPublishResult Failed(string mode, string error)
-        => new() { Success = false, Platform = "Facebook", Mode = mode, Error = error, PublishedUtc = DateTime.UtcNow };
+        => new() { Success = false, Platform = "Facebook", ContentType = PlatformThumbnailContentTypes.Reel, Mode = mode, Error = error, ThumbnailWarning = error, PublishedUtc = DateTime.UtcNow };
+
+    private string? BuildUnsupportedThumbnailWarning(MetaPublishRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.PlatformThumbnailPath))
+        {
+            return null;
+        }
+
+        const string warning = "Meta endpoint does not support custom reel thumbnail; platform will choose frame automatically.";
+        _logger.LogWarning(warning);
+        return warning;
+    }
 
     private static string NormalizeMode(string? mode)
         => string.Equals(mode, "Public", StringComparison.OrdinalIgnoreCase) ? "Public"
