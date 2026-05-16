@@ -10,6 +10,7 @@ using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Rendering;
 
