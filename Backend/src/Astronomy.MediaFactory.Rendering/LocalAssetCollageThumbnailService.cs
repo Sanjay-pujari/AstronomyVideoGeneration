@@ -18,8 +18,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 {
     private static readonly string[] DefaultPreferredAssetNames = ["hero-transparent.png", "hero.png", "cinematic.png", "closeup.png"];
     private static readonly HashSet<string> PlanetKeys = new(StringComparer.OrdinalIgnoreCase) { "mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune" };
+    private static readonly string[] PlanetHeroPriority = ["jupiter", "venus", "saturn", "moon", "mars"];
     private static readonly HashSet<string> GenericHookPhrases = new(StringComparer.OrdinalIgnoreCase) { "TONIGHT'S SKY", "LOOK W TONIGHT", "PLANETS VISIBLE", "SKY WATCH", "VISIBLE TONIGHT" };
     private static readonly HashSet<string> DeepSpaceKeys = new(StringComparer.OrdinalIgnoreCase) { "milky-way", "andromeda-galaxy", "orion-nebula", "pleiades" };
+    private static readonly HashSet<string> BackgroundDeepSpaceKeys = new(StringComparer.OrdinalIgnoreCase) { "milky-way", "andromeda-galaxy" };
 
     private readonly IThumbnailStrategyService _strategyService;
     private readonly ThumbnailOptions _options;
@@ -132,19 +134,22 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var candidates = visible.Concat(events).DistinctBy(o => o.Key).ToList();
         var isSpecial = IsSpecialEvent(request);
         var conjunction = DetectConjunction(candidates, request);
+        var allowDeepSpaceHero = IsDeepSpaceHeroAllowed(request);
         var scores = candidates
-            .Select(o => ScoreHeroCandidate(o, request, duplicatedKeys, conjunction))
+            .Select(o => ScoreHeroCandidate(o, request, duplicatedKeys, conjunction, allowDeepSpaceHero, _options.DeepSpaceHeroPenalty))
             .OrderByDescending(s => s.TotalScore)
+            .ThenBy(s => PlanetPriorityRank(s.Object.Key))
             .ThenBy(s => s.Object.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        var hero = scores.FirstOrDefault()?.Object;
+        var hero = SelectHeroObject(scores, allowDeepSpaceHero);
         hero ??= new SelectedObject("Milky Way", "MilkyWay", "milky-way", true);
         var mode = SelectCinematicMode(hero, candidates, request, conjunction);
-        var supportsAllowed = mode is "EclipseMode" or "MeteorShowerMode" ? Math.Min(maxSupport, 1) : maxSupport;
+        var supportsAllowed = mode is "EclipseMode" or "MeteorShowerMode" ? Math.Min(maxSupport, 1) : Math.Min(maxSupport, 2);
         var support = candidates
             .Where(o => !o.Key.Equals(hero.Key, StringComparison.OrdinalIgnoreCase))
             .Where(o => HasAsset(o.Key))
+            .Where(o => !BackgroundDeepSpaceKeys.Contains(o.Key))
             .OrderByDescending(o => SupportScore(o, hero, mode))
             .Take(supportsAllowed)
             .ToArray();
@@ -187,12 +192,33 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         return assets;
     }
 
+    private CelestialAsset? ResolveDeepSpaceBackgroundAsset(ThumbnailGenerationRequest request, IReadOnlyCollection<CelestialAsset> assets, string heroKey)
+    {
+        var existing = assets.FirstOrDefault(a => BackgroundDeepSpaceKeys.Contains(a.Category) && !a.Category.Equals(heroKey, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+            return existing;
+
+        var candidate = request.Context.SceneObservationContexts
+            .Where(s => s.IsVisible || s.AltitudeDegrees.HasValue)
+            .Select(s => new SelectedObject(s.ObjectName, s.ObjectType, CelestialObjectKeyMapper.Map(s.ObjectName, s.ObjectType), false, s))
+            .Where(o => BackgroundDeepSpaceKeys.Contains(o.Key) && !o.Key.Equals(heroKey, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(o => o.Key.Equals("milky-way", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .FirstOrDefault();
+        if (candidate is null)
+            return null;
+
+        var resolved = FindAsset(candidate.Key);
+        return resolved is null ? null : ToAsset(candidate, resolved, false);
+    }
+
     private async Task<CompositionDiagnostics> ComposeAsync(ThumbnailGenerationRequest request, string outputPath, int width, int height, IReadOnlyList<CelestialAsset> assets, Selection selection, string hook, List<string> warnings, CancellationToken cancellationToken)
     {
         var portrait = request.IsShortForm;
         var random = CreateDeterministicRandom(request, selection.CinematicMode);
         using var canvas = new Image<Rgba32>(width, height, Color.FromRgb(3, 8, 22));
         await DrawBackgroundAsync(canvas, request, width, height, warnings, cancellationToken);
+        if (ResolveDeepSpaceBackgroundAsset(request, assets, selection.Hero.Key) is { } backgroundAsset)
+            await DrawDeepSpaceBackgroundLayerAsync(canvas, backgroundAsset, width, height, random, cancellationToken);
         canvas.Mutate(ctx =>
         {
             DrawCinematicGradient(ctx, width, height, portrait, selection.CinematicMode);
@@ -206,7 +232,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         heroRect = AvoidCollision(heroRect, textBox, width, height, preferRight: !portrait);
         await DrawObjectAsync(canvas, hero, heroRect, true, selection.CinematicMode, cancellationToken);
 
-        var supports = assets.Skip(1).Take(portrait ? 1 : 2).ToArray();
+        var supports = assets.Skip(1).Where(a => !BackgroundDeepSpaceKeys.Contains(a.Category)).Take(portrait ? 1 : 2).ToArray();
         var supportScales = new List<double>();
         var objectRects = new List<RectangleF> { heroRect };
         var overlapWarnings = new List<string>();
@@ -234,9 +260,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             .Concat(overlapWarnings)
             .Concat(safeZoneWarnings)
             .ToArray();
-        var compositionScore = ScoreComposition(heroRect, textBox, objectRects.Skip(1), width, height, layoutWarnings);
+        var foregroundObjectAreaPercent = Math.Round(objectRects.Sum(r => (r.Width * r.Height) / (width * (double)height)) * 100d, 2);
+        var overlapPenaltyApplied = layoutWarnings.Any(w => w.Contains("overlap", StringComparison.OrdinalIgnoreCase) || w.Contains("near-hero", StringComparison.OrdinalIgnoreCase));
+        var oversizedGlowPenaltyApplied = GlowRadiusScale(hero.Category, true) > 0.40f;
+        var compositionScore = ScoreComposition(heroRect, textBox, objectRects.Skip(1), width, height, layoutWarnings, hero, foregroundObjectAreaPercent, oversizedGlowPenaltyApplied);
         var readabilityScore = ScoreReadability(hook, textBox, width, height, portrait);
         var clickabilityScore = ScoreClickability(hook, selection.CinematicMode, selection.HeroScore?.TotalScore ?? 0, readabilityScore);
+        var compositionBalanceScore = ScoreCompositionBalance(heroRect, textBox, objectRects.Skip(1), width, height, foregroundObjectAreaPercent, overlapPenaltyApplied);
 
         await canvas.SaveAsJpegAsync(outputPath, new JpegEncoder { Quality = Math.Clamp(_options.JpegQuality, 1, 100) }, cancellationToken);
         return new CompositionDiagnostics(
@@ -253,7 +283,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             ClickabilityScore: clickabilityScore,
             ObjectOverlapWarnings: overlapWarnings.ToArray(),
             SafeZoneWarnings: safeZoneWarnings,
-            TextBounds: ToBounds(textBox));
+            TextBounds: ToBounds(textBox),
+            GlowIntensity: Math.Round(GlowAlpha(hero.Category, true, selection.CinematicMode), 3),
+            DeepSpacePenaltyApplied: selection.HeroScore?.DeepSpacePenalty < 0 || selection.HeroScores.Any(s => s.DeepSpacePenalty < 0),
+            ForegroundObjectAreaPercent: foregroundObjectAreaPercent,
+            OverlapPenaltyApplied: overlapPenaltyApplied,
+            CompositionBalanceScore: compositionBalanceScore);
     }
 
     private async Task DrawBackgroundAsync(Image<Rgba32> canvas, ThumbnailGenerationRequest request, int width, int height, List<string> warnings, CancellationToken cancellationToken)
@@ -269,8 +304,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         try
         {
             using var image = await Image.LoadAsync<Rgba32>(background, cancellationToken);
-            image.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop }).GaussianBlur(1.3f).Brightness(0.45f).Contrast(1.04f));
-            canvas.Mutate(ctx => ctx.DrawImage(image, new Point(0, 0), 1f));
+            var deepSpaceBackground = background.Contains($"{Path.DirectorySeparatorChar}milky-way{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                || background.Contains($"{Path.AltDirectorySeparatorChar}milky-way{Path.AltDirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+            image.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop }).GaussianBlur(deepSpaceBackground ? 2.2f : 1.3f).Brightness(deepSpaceBackground ? 0.58f : 0.45f).Contrast(1.04f));
+            canvas.Mutate(ctx => ctx.DrawImage(image, new Point(0, 0), deepSpaceBackground ? 0.16f : 1f));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -281,9 +318,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static async Task DrawObjectAsync(Image<Rgba32> canvas, CelestialAsset asset, RectangleF rect, bool hero, string cinematicMode, CancellationToken cancellationToken)
     {
         using var obj = await Image.LoadAsync<Rgba32>(asset.LocalPath, cancellationToken);
+        if (DeepSpaceKeys.Contains(asset.Category) && IsTransparentAsset(asset.LocalPath))
+            CleanDeepSpaceAlpha(obj);
         obj.Mutate(ctx =>
         {
             ctx.Resize(new ResizeOptions { Size = new Size((int)rect.Width, (int)rect.Height), Mode = ResizeMode.Max });
+            if (DeepSpaceKeys.Contains(asset.Category)) ctx.GaussianBlur(hero ? 0.45f : 0.70f).Brightness(0.90f).Contrast(0.95f);
             if (!hero) ctx.GaussianBlur(0.85f).Brightness(0.82f).Saturate(0.88f);
             else ctx.Contrast(1.12f).Brightness(1.05f);
         });
@@ -291,15 +331,60 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var y = (int)(rect.Y + (rect.Height - obj.Height) / 2f);
         canvas.Mutate(ctx =>
         {
-            var glowColor = ResolveGlow(asset.Category).WithAlpha(hero ? ResolveHeroGlowAlpha(asset.Category, cinematicMode) : 0.14f);
+            var glowColor = ResolveGlow(asset.Category).WithAlpha(GlowAlpha(asset.Category, hero, cinematicMode));
             if (asset.Category.Equals("meteor-shower", StringComparison.OrdinalIgnoreCase))
-                ctx.DrawLine(glowColor, Math.Max(8, rect.Width * 0.045f), new PointF(rect.Left + rect.Width * 0.12f, rect.Top + rect.Height * 0.25f), new PointF(rect.Right - rect.Width * 0.08f, rect.Bottom - rect.Height * 0.22f));
-            var glow = new EllipsePolygon(rect.X + rect.Width / 2f, rect.Y + rect.Height / 2f, Math.Max(rect.Width, rect.Height) * (hero ? 0.62f : 0.38f));
-            ctx.Fill(glowColor, glow);
+                ctx.DrawLine(glowColor, Math.Max(4, rect.Width * 0.024f), new PointF(rect.Left + rect.Width * 0.12f, rect.Top + rect.Height * 0.25f), new PointF(rect.Right - rect.Width * 0.08f, rect.Bottom - rect.Height * 0.22f));
+            if (!asset.Category.Equals("meteor-shower", StringComparison.OrdinalIgnoreCase))
+            {
+                var glow = new EllipsePolygon(rect.X + rect.Width / 2f, rect.Y + rect.Height / 2f, Math.Max(rect.Width, rect.Height) * GlowRadiusScale(asset.Category, hero));
+                ctx.Fill(glowColor, glow);
+            }
             if (IsTransparentAsset(asset.LocalPath))
-                ctx.DrawImage(obj, new Point(x + (hero ? 9 : 5), y + (hero ? 12 : 7)), hero ? 0.22f : 0.14f);
-            ctx.DrawImage(obj, new Point(x, y), hero ? 1f : 0.62f);
+                ctx.DrawImage(obj, new Point(x + (hero ? 5 : 3), y + (hero ? 7 : 4)), hero ? 0.09f : 0.06f);
+            ctx.DrawImage(obj, new Point(x, y), DeepSpaceKeys.Contains(asset.Category) ? (hero ? 0.72f : 0.34f) : hero ? 1f : 0.62f);
         });
+    }
+
+    private static async Task DrawDeepSpaceBackgroundLayerAsync(Image<Rgba32> canvas, CelestialAsset asset, int width, int height, Random random, CancellationToken cancellationToken)
+    {
+        using var layer = await Image.LoadAsync<Rgba32>(asset.LocalPath, cancellationToken);
+        if (IsTransparentAsset(asset.LocalPath))
+            CleanDeepSpaceAlpha(layer);
+        layer.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop }).GaussianBlur(2.6f).Brightness(0.58f).Saturate(0.86f));
+        var opacity = 0.08f + random.NextSingle() * 0.10f;
+        canvas.Mutate(ctx => ctx.DrawImage(layer, new Point(0, 0), opacity));
+    }
+
+    private static void CleanDeepSpaceAlpha(Image<Rgba32> image)
+    {
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < row.Length; x++)
+                {
+                    var p = row[x];
+                    var max = Math.Max(p.R, Math.Max(p.G, p.B));
+                    var avg = (p.R + p.G + p.B) / 3;
+                    if (p.A < 10 || (max < 30 && p.A < 235))
+                    {
+                        p.A = 0;
+                        row[x] = p;
+                        continue;
+                    }
+
+                    if (avg < 42)
+                        p.A = (byte)Math.Clamp(p.A * 0.34f, 0, 255);
+                    else if (p.A is > 0 and < 90)
+                        p.A = (byte)Math.Clamp(p.A * 0.55f, 0, 255);
+                    else if (p.A is > 90 and < 210)
+                        p.A = (byte)Math.Clamp((p.A + 210) / 2, 0, 255);
+                    row[x] = p;
+                }
+            }
+        });
+        image.Mutate(ctx => ctx.GaussianBlur(0.35f));
     }
 
     private async Task EnsureJpegSizeAsync(string outputPath, int width, int height, CancellationToken cancellationToken)
@@ -410,9 +495,9 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static IEnumerable<string> BuildLayoutWarnings(bool portrait, double heroScale, IReadOnlyCollection<double> supportScales)
     {
-        if (portrait && (heroScale < 0.55d || heroScale > 0.75d))
+        if (portrait && (heroScale < 0.40d || heroScale > 0.45d))
             yield return "portrait-hero-scale-outside-target";
-        if (!portrait && (heroScale < 0.38d || heroScale > 0.55d))
+        if (!portrait && (heroScale < 0.32d || heroScale > 0.45d))
             yield return "landscape-hero-scale-outside-target";
         if (supportScales.Any(s => s < 0.12d || s > 0.22d))
             yield return "support-scale-outside-target";
@@ -457,7 +542,29 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         FallbackUsed = fallback
     };
 
-    private static HeroObjectScore ScoreHeroCandidate(SelectedObject obj, ThumbnailGenerationRequest request, IReadOnlySet<string> duplicatedKeys, bool conjunction)
+    private static SelectedObject? SelectHeroObject(IReadOnlyCollection<HeroObjectScore> scores, bool allowDeepSpaceHero)
+    {
+        var preferredPlanet = scores
+            .Where(s => !DeepSpaceKeys.Contains(s.Object.Key))
+            .Where(s => PlanetHeroPriority.Contains(s.Object.Key, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(s => PlanetPriorityRank(s.Object.Key))
+            .ThenByDescending(s => s.TotalScore)
+            .FirstOrDefault();
+
+        var top = scores.FirstOrDefault();
+        if (preferredPlanet is not null && top is not null && DeepSpaceKeys.Contains(top.Object.Key) && !allowDeepSpaceHero)
+            return preferredPlanet.Object;
+
+        return top?.Object;
+    }
+
+    private static int PlanetPriorityRank(string key)
+    {
+        var index = Array.FindIndex(PlanetHeroPriority, p => p.Equals(key, StringComparison.OrdinalIgnoreCase));
+        return index < 0 ? 99 : index;
+    }
+
+    private static HeroObjectScore ScoreHeroCandidate(SelectedObject obj, ThumbnailGenerationRequest request, IReadOnlySet<string> duplicatedKeys, bool conjunction, bool allowDeepSpaceHero, double configuredDeepSpacePenalty)
     {
         var visibilityWeight = obj.Scene is { IsVisible: true } ? 1.00d : obj.Scene?.AltitudeDegrees.HasValue == true ? 0.65d : obj.Event is not null ? 0.72d : 0.35d;
         if (obj.Scene?.AltitudeDegrees is double altitude)
@@ -497,8 +604,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
         var moonPenalty = obj.Key == "moon" && !IsMoonMajor(request) ? -0.46d : 0d;
         var duplicationPenalty = duplicatedKeys.Contains(obj.Key) ? -0.18d : 0d;
-        var total = visibilityWeight + brightnessWeight + rarityWeight + astronomyEventWeight + moonPenalty + duplicationPenalty;
-        return new HeroObjectScore(obj, Math.Round(total, 3), Math.Round(visibilityWeight, 3), Math.Round(brightnessWeight, 3), Math.Round(rarityWeight, 3), Math.Round(astronomyEventWeight, 3), moonPenalty, duplicationPenalty);
+        var planetPreferenceBoost = obj.Key switch { "jupiter" => 0.70d, "venus" => 0.62d, "saturn" => 0.58d, "moon" => 0.36d, "mars" => 0.34d, _ => 0d };
+        var deepSpacePenalty = DeepSpaceKeys.Contains(obj.Key) && !allowDeepSpaceHero ? -Math.Abs(configuredDeepSpacePenalty) : 0d;
+        var total = visibilityWeight + brightnessWeight + rarityWeight + astronomyEventWeight + moonPenalty + duplicationPenalty + planetPreferenceBoost + deepSpacePenalty;
+        return new HeroObjectScore(obj, Math.Round(total, 3), Math.Round(visibilityWeight, 3), Math.Round(brightnessWeight, 3), Math.Round(rarityWeight, 3), Math.Round(astronomyEventWeight, 3), moonPenalty, duplicationPenalty, Math.Round(deepSpacePenalty, 3));
     }
 
     private static double SupportScore(SelectedObject obj, SelectedObject hero, string mode)
@@ -534,6 +643,20 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     {
         var text = $"{request.Context.SpecialEvent?.EventType} {request.Context.SpecialEvent?.EventTitle} {request.ContentType} {string.Join(' ', request.Context.Events.Select(e => e.Category + ' ' + e.ObjectName))}";
         return request.ContentType == ContentType.SpecialEventGuide || text.Contains("eclipse", StringComparison.OrdinalIgnoreCase) || text.Contains("meteor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDeepSpaceHeroAllowed(ThumbnailGenerationRequest request)
+    {
+        var text = $"{request.Context.SpecialEvent?.EventType} {request.Context.SpecialEvent?.EventTitle} {request.ContentType} {string.Join(' ', request.Context.Events.Select(e => e.Category + ' ' + e.ObjectName + ' ' + e.Details))}";
+        if (text.Contains("eclipse", StringComparison.OrdinalIgnoreCase) || text.Contains("meteor", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return text.Contains("deep-space", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("deep space", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("deep sky", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("milky way", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("andromeda", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("galaxy", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("nebula", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsSpecialKey(string key) => key is "meteor-shower" or "solar-eclipse" or "lunar-eclipse";
@@ -662,18 +785,30 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     };
 
 
+    private static float GlowAlpha(string key, bool hero, string cinematicMode)
+        => hero ? ResolveHeroGlowAlpha(key, cinematicMode) : DeepSpaceKeys.Contains(key) ? 0.035f : 0.056f;
+
+    private static float GlowRadiusScale(string key, bool hero)
+    {
+        if (key.Equals("meteor-shower", StringComparison.OrdinalIgnoreCase)) return 0f;
+        if (DeepSpaceKeys.Contains(key)) return hero ? 0.24f : 0.18f;
+        if (key.Equals("moon", StringComparison.OrdinalIgnoreCase)) return hero ? 0.35f : 0.22f;
+        return hero ? 0.32f : 0.21f;
+    }
+
     private static float ResolveHeroGlowAlpha(string key, string cinematicMode)
     {
         var baseAlpha = key switch
         {
-            "moon" => 0.30f,
-            "mars" => 0.36f,
-            "jupiter" => 0.40f,
-            "neptune" or "uranus" => 0.34f,
-            "meteor-shower" => 0.44f,
-            _ => 0.32f
+            "moon" => 0.12f,
+            "mars" => 0.14f,
+            "jupiter" or "saturn" or "venus" => 0.13f,
+            "neptune" or "uranus" => 0.12f,
+            "meteor-shower" => 0.18f,
+            _ when DeepSpaceKeys.Contains(key) => 0.05f,
+            _ => 0.11f
         };
-        return cinematicMode is "EclipseMode" or "MeteorShowerMode" ? Math.Min(0.50f, baseAlpha + 0.08f) : baseAlpha;
+        return cinematicMode is "EclipseMode" or "MeteorShowerMode" ? Math.Min(0.20f, baseAlpha + 0.03f) : baseAlpha;
     }
 
     private static RectangleF ResolveHeroRect(int width, int height, bool portrait, string mode, Random random)
@@ -681,12 +816,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var jitterX = (random.NextSingle() - 0.5f) * width * (portrait ? 0.035f : 0.045f);
         var jitterY = (random.NextSingle() - 0.5f) * height * 0.035f;
         RectangleF rect = portrait
-            ? new RectangleF(width * 0.15f + jitterX, height * 0.10f + jitterY, width * 0.70f, width * 0.70f)
+            ? new RectangleF(width * 0.27f + jitterX, height * 0.12f + jitterY, width * 0.45f, width * 0.45f)
             : mode switch
             {
-                "MoonDominant" => new RectangleF(width * 0.55f + jitterX, height * 0.02f + jitterY, width * 0.52f, height * 0.86f),
-                "WideSkyMode" or "DeepSpaceMode" => new RectangleF(width * 0.57f + jitterX, height * 0.11f + jitterY, width * 0.38f, height * 0.66f),
-                _ => new RectangleF(width * 0.50f + jitterX, height * 0.07f + jitterY, width * 0.46f, height * 0.78f)
+                "MoonDominant" => new RectangleF(width * 0.50f + jitterX, height * 0.10f + jitterY, width * 0.43f, height * 0.68f),
+                "WideSkyMode" or "DeepSpaceMode" => new RectangleF(width * 0.58f + jitterX, height * 0.14f + jitterY, width * 0.34f, height * 0.58f),
+                _ => new RectangleF(width * 0.48f + jitterX, height * 0.12f + jitterY, width * 0.45f, height * 0.66f)
             };
         return ClampRect(rect, width, height, 24);
     }
@@ -733,15 +868,15 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static void DrawCinematicOverlays(IImageProcessingContext ctx, int width, int height, bool portrait, string mode, Random random)
     {
-        var haze = mode switch { "DeepSpaceMode" => 0.13f, "EclipseMode" => 0.10f, _ => 0.07f };
-        ctx.Fill(Color.FromRgb(54, 83, 140).WithAlpha(haze), new EllipsePolygon(width * (0.70f + random.NextSingle() * 0.08f), height * 0.28f, width * 0.44f));
+        var haze = mode switch { "DeepSpaceMode" => 0.052f, "EclipseMode" => 0.040f, _ => 0.028f };
+        ctx.Fill(Color.FromRgb(54, 83, 140).WithAlpha(haze), new EllipsePolygon(width * (0.70f + random.NextSingle() * 0.08f), height * 0.28f, width * 0.26f));
         if (mode is "DeepSpaceMode" or "WideSkyMode")
-            ctx.Fill(Color.FromRgb(119, 74, 180).WithAlpha(0.08f), new EllipsePolygon(width * 0.40f, height * 0.34f, width * 0.34f));
+            ctx.Fill(Color.FromRgb(119, 74, 180).WithAlpha(0.032f), new EllipsePolygon(width * 0.40f, height * 0.34f, width * 0.20f));
     }
 
     private static RectangleF AvoidCollision(RectangleF objectRect, RectangleF textRect, int width, int height, bool preferRight)
     {
-        if (!Intersects(objectRect, textRect, 0.04f))
+        if (!Intersects(objectRect, textRect, 0f))
             return objectRect;
         var shifted = preferRight ? objectRect with { X = Math.Max(textRect.Right + width * 0.05f, objectRect.X) } : objectRect with { Y = Math.Max(40, textRect.Y - objectRect.Height - 24) };
         return ClampRect(shifted, width, height, 24);
@@ -787,15 +922,33 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         }
     }
 
-    private static double ScoreComposition(RectangleF heroRect, RectangleF textBox, IEnumerable<RectangleF> supports, int width, int height, IReadOnlyCollection<string> warnings)
+    private static double ScoreComposition(RectangleF heroRect, RectangleF textBox, IEnumerable<RectangleF> supports, int width, int height, IReadOnlyCollection<string> warnings, CelestialAsset hero, double foregroundObjectAreaPercent, bool oversizedGlowPenaltyApplied)
     {
         var thirdX = width * 2d / 3d;
         var heroCenter = heroRect.Left + heroRect.Width / 2d;
         var thirdScore = 1d - Math.Min(1d, Math.Abs(heroCenter - thirdX) / (width * 0.5d));
         var textObjectClearance = Intersects(heroRect, textBox, 0.02f) ? 0.55d : 1d;
-        var supportPenalty = supports.Count(r => Intersects(r, heroRect, 0.02f)) * 0.08d;
+        var supportList = supports.ToArray();
+        var supportPenalty = supportList.Count(r => Intersects(r, heroRect, 0.02f)) * 0.10d;
         var warningPenalty = warnings.Count * 0.05d;
-        return Math.Round(Math.Clamp(0.52d + thirdScore * 0.30d + textObjectClearance * 0.18d - supportPenalty - warningPenalty, 0, 1), 3);
+        var oversizedHeroPenalty = heroRect.Width / width > 0.45d ? 0.12d : 0d;
+        var deepSpaceForegroundPenalty = DeepSpaceKeys.Contains(hero.Category) && foregroundObjectAreaPercent > 18d ? 0.12d : 0d;
+        var focalHierarchyPenalty = supportList.Any(r => r.Width > heroRect.Width * 0.55f) ? 0.08d : 0d;
+        var glowPenalty = oversizedGlowPenaltyApplied ? 0.05d : 0d;
+        return Math.Round(Math.Clamp(0.52d + thirdScore * 0.30d + textObjectClearance * 0.18d - supportPenalty - warningPenalty - oversizedHeroPenalty - deepSpaceForegroundPenalty - focalHierarchyPenalty - glowPenalty, 0, 1), 3);
+    }
+
+    private static double ScoreCompositionBalance(RectangleF heroRect, RectangleF textBox, IEnumerable<RectangleF> supports, int width, int height, double foregroundObjectAreaPercent, bool overlapPenaltyApplied)
+    {
+        var focalZone = new RectangleF(width * 0.48f, height * 0.08f, width * 0.48f, height * 0.78f);
+        var focalScore = Intersects(heroRect, focalZone, 0f) ? 1d : 0.72d;
+        var scaleScore = heroRect.Width / width <= 0.45f ? 1d : 0.68d;
+        var supportCount = supports.Count();
+        var supportScore = supportCount <= 2 ? 1d : 0.62d;
+        var textClearance = Intersects(heroRect, textBox, 0.03f) ? 0.62d : 1d;
+        var areaScore = foregroundObjectAreaPercent <= 30d ? 1d : Math.Max(0.55d, 1d - (foregroundObjectAreaPercent - 30d) / 55d);
+        var overlapScore = overlapPenaltyApplied ? 0.70d : 1d;
+        return Math.Round((focalScore * 0.22d) + (scaleScore * 0.20d) + (supportScore * 0.16d) + (textClearance * 0.20d) + (areaScore * 0.12d) + (overlapScore * 0.10d), 3);
     }
 
     private static double ScoreReadability(string hook, RectangleF textBox, int width, int height, bool portrait)
@@ -864,8 +1017,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             heroObjectScale = composition.HeroObjectScale,
             supportObjectScales = composition.SupportObjectScales,
             compositionScore = composition.CompositionScore,
+            compositionBalanceScore = composition.CompositionBalanceScore,
             readabilityScore = composition.ReadabilityScore,
             clickabilityScore = composition.ClickabilityScore,
+            glowIntensity = composition.GlowIntensity,
+            deepSpacePenaltyApplied = composition.DeepSpacePenaltyApplied,
+            foregroundObjectAreaPercent = composition.ForegroundObjectAreaPercent,
+            overlapPenaltyApplied = composition.OverlapPenaltyApplied,
             objectOverlapWarnings = composition.ObjectOverlapWarnings,
             safeZoneWarnings = composition.SafeZoneWarnings
         };
@@ -893,8 +1051,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             layoutUsed = composition.LayoutUsed,
             cinematicMode = composition.CinematicMode,
             compositionScore = composition.CompositionScore,
+            compositionBalanceScore = composition.CompositionBalanceScore,
             readabilityScore = composition.ReadabilityScore,
             clickabilityScore = composition.ClickabilityScore,
+            glowIntensity = composition.GlowIntensity,
+            deepSpacePenaltyApplied = composition.DeepSpacePenaltyApplied,
+            foregroundObjectAreaPercent = composition.ForegroundObjectAreaPercent,
+            overlapPenaltyApplied = composition.OverlapPenaltyApplied,
             objectOverlapWarnings = composition.ObjectOverlapWarnings,
             safeZoneWarnings = composition.SafeZoneWarnings,
             textBounds = composition.TextBounds,
@@ -908,7 +1071,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static async Task WriteFallbackAnalysisAsync(ThumbnailGenerationRequest request, ThumbnailPlan fallback, IReadOnlyCollection<string> warnings, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.Combine(request.OutputDirectory, "thumbnails"));
-        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), assetPriorityUsed = Array.Empty<string>(), selectedAssetFileName = string.Empty, selectedAssetSource = string.Empty, oldAssetIgnoredBecauseHeroExists = false, transparentAssetUsed = false, transparentAssetsUsed = 0, cardStyleRemoved = true, objectCount = 0, layoutWarnings = new[] { "fallback-plan" }, heroObjectScale = 0, supportObjectScales = Array.Empty<double>(), layoutUsed = "FallbackToStellariumFrame", language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
+        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), assetPriorityUsed = Array.Empty<string>(), selectedAssetFileName = string.Empty, selectedAssetSource = string.Empty, oldAssetIgnoredBecauseHeroExists = false, transparentAssetUsed = false, transparentAssetsUsed = 0, cardStyleRemoved = true, objectCount = 0, layoutWarnings = new[] { "fallback-plan" }, heroObjectScale = 0, supportObjectScales = Array.Empty<double>(), layoutUsed = "FallbackToStellariumFrame", compositionBalanceScore = 0d, glowIntensity = 0d, deepSpacePenaltyApplied = false, foregroundObjectAreaPercent = 0d, overlapPenaltyApplied = false, language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
         await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnails", "thumbnail-analysis-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
@@ -925,8 +1088,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             supportObjects = Array.Empty<string>(),
             hookText = fallback.PrimaryThumbnailText,
             compositionScore = 0d,
+            compositionBalanceScore = 0d,
             readabilityScore = 0d,
             clickabilityScore = 0d,
+            glowIntensity = 0d,
+            deepSpacePenaltyApplied = false,
+            foregroundObjectAreaPercent = 0d,
+            overlapPenaltyApplied = false,
             objectOverlapWarnings = Array.Empty<string>(),
             safeZoneWarnings = warnings.ToArray()
         };
@@ -942,8 +1110,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             supportObjects = plan.CelestialSelection?.SupportObjects ?? selection.Support.Select(s => s.Name).ToArray(),
             hookText = plan.CelestialSelection?.SelectedHook ?? plan.PrimaryThumbnailText,
             compositionScore = composition.CompositionScore,
+            compositionBalanceScore = composition.CompositionBalanceScore,
             readabilityScore = composition.ReadabilityScore,
             clickabilityScore = composition.ClickabilityScore,
+            glowIntensity = composition.GlowIntensity,
+            deepSpacePenaltyApplied = composition.DeepSpacePenaltyApplied,
+            foregroundObjectAreaPercent = composition.ForegroundObjectAreaPercent,
+            overlapPenaltyApplied = composition.OverlapPenaltyApplied,
             objectOverlapWarnings = composition.ObjectOverlapWarnings,
             safeZoneWarnings = composition.SafeZoneWarnings,
             heroScore = selection.HeroScore,
@@ -957,7 +1130,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 s.RarityWeight,
                 s.AstronomyEventWeight,
                 s.MoonPenalty,
-                s.DuplicationPenalty
+                s.DuplicationPenalty,
+                s.DeepSpacePenalty
             }).ToArray(),
             textBounds = composition.TextBounds,
             layoutUsed = composition.LayoutUsed
@@ -967,12 +1141,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
 
-    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds);
+    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore);
     private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
     private sealed record Selection(SelectedObject Hero, IReadOnlyCollection<SelectedObject> Support, IReadOnlyCollection<object> VisibilityData, bool IsSpecialEvent, string CinematicMode, IReadOnlyCollection<HeroObjectScore> HeroScores, bool HasConjunction)
     {
         public HeroObjectScore? HeroScore => HeroScores.FirstOrDefault(s => s.Object.Key.Equals(Hero.Key, StringComparison.OrdinalIgnoreCase));
     }
-    private sealed record HeroObjectScore(SelectedObject Object, double TotalScore, double VisibilityWeight, double BrightnessWeight, double RarityWeight, double AstronomyEventWeight, double MoonPenalty, double DuplicationPenalty);
+    private sealed record HeroObjectScore(SelectedObject Object, double TotalScore, double VisibilityWeight, double BrightnessWeight, double RarityWeight, double AstronomyEventWeight, double MoonPenalty, double DuplicationPenalty, double DeepSpacePenalty);
 }
