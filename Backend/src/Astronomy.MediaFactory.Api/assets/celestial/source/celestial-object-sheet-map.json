@@ -1,19 +1,56 @@
 {
-  "jupiter": { "x": 0, "y": 0, "width": 512, "height": 512 },
-  "saturn": { "x": 512, "y": 0, "width": 512, "height": 512 },
-  "mars": { "x": 1024, "y": 0, "width": 512, "height": 512 },
-  "venus": { "x": 1536, "y": 0, "width": 512, "height": 512 },
-  "moon": { "x": 0, "y": 512, "width": 512, "height": 512 },
-  "mercury": { "x": 512, "y": 512, "width": 512, "height": 512 },
-  "uranus": { "x": 1024, "y": 512, "width": 512, "height": 512 },
-  "neptune": { "x": 1536, "y": 512, "width": 512, "height": 512 },
-  "meteor-shower": { "x": 0, "y": 1024, "width": 512, "height": 512 },
-  "lunar-eclipse": { "x": 512, "y": 1024, "width": 512, "height": 512 },
-  "solar-eclipse": { "x": 1024, "y": 1024, "width": 512, "height": 512 },
-  "orion-nebula": { "x": 1536, "y": 1024, "width": 512, "height": 512 },
-  "andromeda-galaxy": { "x": 0, "y": 1536, "width": 512, "height": 512 },
-  "ring-nebula": { "x": 512, "y": 1536, "width": 512, "height": 512 },
-  "milky-way": { "x": 1024, "y": 1536, "width": 512, "height": 512 },
-  "earth": { "x": 1536, "y": 1536, "width": 512, "height": 512 },
-  "sun": { "x": 0, "y": 2048, "width": 512, "height": 512 }
+  "mercury": {
+    "x": 95,
+    "y": 95,
+    "width": 140,
+    "height": 200
+  },
+  "venus": {
+    "x": 495,
+    "y": 95,
+    "width": 170,
+    "height": 230
+  },
+  "earth": {
+    "x": 955,
+    "y": 95,
+    "width": 180,
+    "height": 240
+  },
+  "mars": {
+    "x": 1425,
+    "y": 95,
+    "width": 160,
+    "height": 220
+  },
+  "jupiter": {
+    "x": 1825,
+    "y": 55,
+    "width": 350,
+    "height": 410
+  },
+  "saturn": {
+    "x": 225,
+    "y": 675,
+    "width": 270,
+    "height": 330
+  },
+  "uranus": {
+    "x": 875,
+    "y": 675,
+    "width": 180,
+    "height": 240
+  },
+  "neptune": {
+    "x": 1425,
+    "y": 675,
+    "width": 180,
+    "height": 240
+  },
+  "moon": {
+    "x": 1925,
+    "y": 675,
+    "width": 170,
+    "height": 230
+  }
 }
