@@ -51,7 +51,7 @@ try { LabelMgr.deleteAllLabels(); } catch (e) { }
         return $$"""
 core.clear("natural");
 
-{{BuildUiCleanupScript()}}
+
 
 // Disable landscape for object scenes
 LandscapeMgr.setFlagLandscape(false);
@@ -95,9 +95,6 @@ StelMovementMgr.setFlagTracking(true);
 
 {{BuildObjectZoomBlock(zoomLevel, cinematicZoomStart, cinematicZoomEnd)}}
 
-// Final capture hygiene: hide selection/info panels and custom labels while preserving the sky frame.
-try { LabelMgr.deleteAllLabels(); } catch (e) { }
-try { core.selectObjectByName("", false); } catch (e) { }
 
 // Screenshot
 core.screenshot("{{screenshotPrefix}}", false, "{{screenshotDir}}", true, "png");
@@ -135,7 +132,6 @@ core.wait({{_options.CinematicWaitBeforeScreenshotSeconds.ToString(System.Global
         return $$"""
 core.clear("natural");
 
-{{BuildUiCleanupScript()}}
 
 LandscapeMgr.setCurrentLandscapeName("guereins");
 LandscapeMgr.setFlagLandscape(true);
@@ -166,8 +162,6 @@ core.quitStellarium();
     {
         return $$"""
 core.clear("natural");
-
-{{BuildUiCleanupScript()}}
 
 LandscapeMgr.setCurrentLandscapeName("guereins");
 LandscapeMgr.setFlagLandscape(true);
