@@ -204,6 +204,7 @@ public sealed class CelestialAsset
     public string Title { get; init; } = "";
     public string Copyright { get; init; } = "";
     public string OriginalUrl { get; init; } = "";
+    public bool OldAssetIgnoredBecauseHeroExists { get; init; }
     public bool FallbackUsed { get; init; }
 }
 
@@ -213,10 +214,21 @@ public sealed class CelestialAssetPackExtractionReport
     public bool Enabled { get; init; }
     public string SourceSheetPath { get; init; } = "";
     public string OutputRootPath { get; init; } = "";
+    public IReadOnlyCollection<CelestialAssetPackExtractionItem> Objects { get; init; } = [];
     public IReadOnlyCollection<string> ExtractedObjects { get; init; } = [];
     public IReadOnlyCollection<string> SkippedObjects { get; init; } = [];
     public IReadOnlyCollection<string> Warnings { get; init; } = [];
     public string ReportPath { get; init; } = "";
+}
+
+public sealed class CelestialAssetPackExtractionItem
+{
+    public string ObjectKey { get; init; } = "";
+    public string OutputPath { get; init; } = "";
+    public string SourceSheetPath { get; init; } = "";
+    public CelestialAssetTileMapEntry? CropBox { get; init; }
+    public bool Success { get; init; }
+    public string Warning { get; init; } = "";
 }
 
 public sealed class CelestialAssetTileMapEntry

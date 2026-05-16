@@ -432,6 +432,104 @@ public sealed class ThumbnailGenerationTests
         Assert.Equal("आज रात बृहस्पति", hindi.CelestialSelection?.SelectedHook);
     }
 
+
+
+    [Fact]
+    public async Task LocalAssetCollage_PrefersExtractedHeroPngOverLegacyJpg()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "jupiter", "hero.png"), Color.Orange);
+        await WriteLegacyAssetAsync(Path.Combine(assetRoot, "jupiter", "jupiter-gsfc.jpg"), Color.Brown);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        var selected = Assert.Single(plan.CelestialSelection!.AssetSources.Where(a => a.Category == "jupiter"));
+        Assert.Equal("hero.png", Path.GetFileName(selected.LocalPath));
+        Assert.Equal("AssetPack", selected.Source);
+        var report = await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-analysis-report.json"));
+        Assert.Contains("\"selectedAssetFileName\": \"hero.png\"", report);
+        Assert.Contains("\"selectedAssetSource\": \"AssetPack\"", report);
+        Assert.Contains("\"oldAssetIgnoredBecauseHeroExists\": true", report);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_UsesHeroPngAsSelectedVisual()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        var heroPath = Path.Combine(assetRoot, "jupiter", "hero.png");
+        await WriteCuratedAssetAsync(heroPath, Color.Orange);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}")
+        }, CancellationToken.None);
+
+        Assert.Equal(heroPath, plan.SelectedVisualPath);
+        Assert.Equal("LocalAssetCollage", plan.Mode);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_FallsBackToLegacyJpg_WhenHeroPngMissing()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        var legacyPath = Path.Combine(assetRoot, "jupiter", "jupiter-gsfc.jpg");
+        await WriteLegacyAssetAsync(legacyPath, Color.Brown);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}")
+        }, CancellationToken.None);
+
+        var selected = Assert.Single(plan.CelestialSelection!.AssetSources.Where(a => a.Category == "jupiter"));
+        Assert.Equal(legacyPath, selected.LocalPath);
+        Assert.Equal("LegacyJpgAsset", selected.Source);
+        Assert.True(File.Exists(plan.ThumbnailPath));
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_Succeeds_WhenExtractionHasNotRun()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        var stellariumFrame = Path.Combine(Path.GetTempPath(), $"stellarium-{Guid.NewGuid():N}.jpg");
+        await WriteLegacyAssetAsync(stellariumFrame, Color.DarkBlue, 1280, 720);
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [stellariumFrame],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}")
+        }, CancellationToken.None);
+
+        Assert.Equal("LocalAssetCollage", plan.Mode);
+        Assert.True(plan.FallbackUsed);
+        Assert.True(File.Exists(plan.ThumbnailPath));
+    }
+
     private static ThumbnailGenerationService CreateProductionService(ThumbnailOptions options)
         => new(new ThumbnailStrategyService(), new ThumbnailScoringService(), new ThumbnailHookService(), Options.Create(options), NullLogger<ThumbnailGenerationService>.Instance);
 
@@ -460,6 +558,13 @@ public sealed class ThumbnailGenerationTests
         using var image = new Image<Rgba32>(width, height, Color.Transparent);
         image.Mutate(ctx => ctx.Fill(color, new SixLabors.ImageSharp.Drawing.EllipsePolygon(width / 2f, height / 2f, Math.Min(width, height) * 0.38f)));
         await image.SaveAsPngAsync(path);
+    }
+
+    private static async Task WriteLegacyAssetAsync(string path, Color color, int width = 1000, int height = 1000)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var image = new Image<Rgba32>(width, height, color);
+        await image.SaveAsJpegAsync(path);
     }
 
     private static AstronomyContext BuildContext(string language)
