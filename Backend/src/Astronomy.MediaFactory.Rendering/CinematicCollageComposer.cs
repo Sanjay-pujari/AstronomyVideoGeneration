@@ -69,14 +69,109 @@ public sealed class CinematicCollageComposer : ICinematicCollageComposer
     private static async Task DrawAssetAsync(Image<Rgba32> canvas, CelestialAsset asset, RectangleF target, bool hero, CancellationToken cancellationToken)
     {
         using var source = await Image.LoadAsync<Rgba32>(asset.LocalPath, cancellationToken);
-        source.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size((int)target.Width, (int)target.Height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center }));
+        source.Mutate(ctx =>
+        {
+            ctx.Resize(new ResizeOptions { Size = new Size((int)target.Width, (int)target.Height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
+            if (hero)
+                ApplyLocalDirectionalGrade(ctx, target.Width, target.Height, ResolveGlow(asset.Category));
+            else
+                ctx.GaussianBlur(1.1f).Brightness(0.78f).Saturate(0.70f);
+        });
+
         canvas.Mutate(ctx =>
         {
-            var glow = ResolveGlow(asset.Category).WithAlpha(hero ? 0.22f : 0.13f);
-            ctx.Fill(glow, new EllipsePolygon(target.X + target.Width / 2, target.Y + target.Height / 2, target.Width * (hero ? 0.60f : 0.54f), target.Height * (hero ? 0.60f : 0.54f)));
-            ctx.DrawImage(source, new Point((int)target.X, (int)target.Y), hero ? 0.96f : 0.86f);
-            ctx.Fill(Color.White.WithAlpha(hero ? 0.035f : 0.02f), new EllipsePolygon(target.X + target.Width * 0.38f, target.Y + target.Height * 0.34f, target.Width * 0.20f, target.Height * 0.18f));
+            if (hero)
+                DrawDirectionalEdgeScatter(ctx, target, ResolveGlow(asset.Category));
+            else
+                DrawDepthHaze(ctx, target);
+
+            ctx.DrawImage(source, new Point((int)target.X, (int)target.Y), hero ? 0.94f : 0.64f);
+            if (hero)
+                DrawSubtleRimSpecular(ctx, target);
         });
+    }
+
+
+    private static void ApplyLocalDirectionalGrade(IImageProcessingContext ctx, float width, float height, Color rimColor)
+    {
+        ctx.Contrast(1.02f).Saturate(0.96f);
+        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None,
+            new ColorStop(0, rimColor.WithAlpha(0.070f)),
+            new ColorStop(0.42f, Color.Transparent),
+            new ColorStop(1, Color.Black.WithAlpha(0.16f))), new RectangleF(0, 0, width, height));
+    }
+
+    private static void DrawDirectionalEdgeScatter(IImageProcessingContext ctx, RectangleF target, Color rimColor)
+    {
+        var lightStart = new PointF(target.Left - target.Width * 0.16f, target.Top + target.Height * 0.08f);
+        var lightEnd = new PointF(target.Right + target.Width * 0.08f, target.Bottom + target.Height * 0.22f);
+        ctx.Fill(new LinearGradientBrush(lightStart, lightEnd, GradientRepetitionMode.None,
+            new ColorStop(0, rimColor.WithAlpha(0.050f)),
+            new ColorStop(0.36f, Color.White.WithAlpha(0.016f)),
+            new ColorStop(1, Color.Transparent)), new RectangleF(
+                Math.Max(0, target.X - target.Width * 0.12f),
+                Math.Max(0, target.Y - target.Height * 0.12f),
+                target.Width * 1.26f,
+                target.Height * 1.26f));
+    }
+
+    private static void DrawDepthHaze(IImageProcessingContext ctx, RectangleF target)
+    {
+        ctx.Fill(new LinearGradientBrush(new PointF(target.Left, target.Top), new PointF(target.Right, target.Bottom), GradientRepetitionMode.None,
+            new ColorStop(0, Color.FromRgb(96, 116, 150).WithAlpha(0.035f)),
+            new ColorStop(1, Color.FromRgb(10, 20, 42).WithAlpha(0.070f))), target);
+    }
+
+    private static void DrawSubtleRimSpecular(IImageProcessingContext ctx, RectangleF target)
+    {
+        ctx.Fill(new LinearGradientBrush(new PointF(target.Left, target.Top), new PointF(target.Left + target.Width * 0.42f, target.Top + target.Height * 0.36f), GradientRepetitionMode.None,
+            new ColorStop(0, Color.White.WithAlpha(0.030f)),
+            new ColorStop(1, Color.Transparent)), new RectangleF(target.Left, target.Top, target.Width * 0.48f, target.Height * 0.42f));
+    }
+
+    private static void DrawClusteredStars(IImageProcessingContext ctx, int width, int height, Random random)
+    {
+        var stars = Math.Clamp(width * height / 15000, 65, 190);
+        var clusters = 3 + random.Next(3);
+        for (var c = 0; c < clusters; c++)
+        {
+            var cx = random.NextSingle() * width;
+            var cy = random.NextSingle() * height;
+            var spread = Math.Min(width, height) * (0.16f + random.NextSingle() * 0.18f);
+            for (var i = 0; i < stars / clusters; i++)
+            {
+                var clustered = random.NextSingle() < 0.55f;
+                var x = clustered ? cx + (random.NextSingle() - 0.5f) * spread : random.NextSingle() * width;
+                var y = clustered ? cy + (random.NextSingle() - 0.5f) * spread : random.NextSingle() * height;
+                if (x < 0 || x >= width || y < 0 || y >= height) continue;
+                var r = 0.42f + MathF.Pow(random.NextSingle(), 2.1f) * 1.10f;
+                var starColor = random.Next(5) switch
+                {
+                    0 => Color.FromRgb(184, 210, 255),
+                    1 => Color.FromRgb(255, 226, 184),
+                    2 => Color.FromRgb(218, 235, 255),
+                    _ => Color.White
+                };
+                ctx.Fill(starColor.WithAlpha(0.07f + random.NextSingle() * 0.24f), new EllipsePolygon(x, y, r));
+            }
+        }
+    }
+
+    private static void DrawGalacticDust(IImageProcessingContext ctx, int width, int height, Random random)
+    {
+        ctx.Fill(new LinearGradientBrush(new PointF(0, height * 0.18f), new PointF(width, height * 0.74f), GradientRepetitionMode.None,
+            new ColorStop(0, Color.FromRgb(25, 42, 76).WithAlpha(0.030f)),
+            new ColorStop(0.52f, Color.FromRgb(86, 62, 105).WithAlpha(0.022f)),
+            new ColorStop(1, Color.Transparent)), new RectangleF(0, 0, width, height));
+
+        for (var i = 0; i < 20; i++)
+        {
+            var x = random.NextSingle() * width;
+            var y = height * (0.14f + random.NextSingle() * 0.62f);
+            var w = width * (0.035f + random.NextSingle() * 0.070f);
+            var h = height * (0.012f + random.NextSingle() * 0.028f);
+            ctx.Fill(Color.FromRgb(78, 96, 132).WithAlpha(0.010f + random.NextSingle() * 0.014f), new EllipsePolygon(x, y, w, h));
+        }
     }
 
     private static RectangleF HeroLandscapeRect(int width, int height, bool specialEvent)
@@ -99,8 +194,8 @@ public sealed class CinematicCollageComposer : ICinematicCollageComposer
 
     private static RectangleF SupportPortraitRect(int width, int height, int index)
     {
-        var size = width * 0.30f;
-        return new RectangleF(width * 0.62f, height * 0.42f, size, size);
+        var size = width * 0.26f;
+        return new RectangleF(width * 0.64f, height * 0.44f, size, size);
     }
 
     private static void DrawTitle(IImageProcessingContext ctx, string title, int width, int height, bool portrait, string language)
@@ -110,8 +205,8 @@ public sealed class CinematicCollageComposer : ICinematicCollageComposer
 
         var maxWords = portrait ? 4 : 5;
         var text = string.Join(' ', title.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(maxWords));
-        var font = CreateFont(portrait ? 74 : 70, FontStyle.Bold, LocalizationResolver.IsHindi(language));
-        var origin = portrait ? new PointF(width / 2f, height - 420) : new PointF(74, height - 182);
+        var font = CreateFont(portrait ? 64 : 70, portrait ? FontStyle.Regular : FontStyle.Bold, LocalizationResolver.IsHindi(language));
+        var origin = portrait ? new PointF(width / 2f, height - 480) : new PointF(74, height - 182);
         var options = new RichTextOptions(font)
         {
             Origin = origin,
@@ -119,9 +214,9 @@ public sealed class CinematicCollageComposer : ICinematicCollageComposer
             HorizontalAlignment = portrait ? HorizontalAlignment.Center : HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Bottom
         };
-        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(origin.X + 5, origin.Y + 5) }, text, Color.Black.WithAlpha(0.86f));
-        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(origin.X + 2, origin.Y + 2) }, text, Color.FromRgb(255, 222, 130).WithAlpha(0.45f));
-        ctx.DrawText(options, text, Color.White);
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(origin.X + 4, origin.Y + 4) }, text, Color.Black.WithAlpha(portrait ? 0.48f : 0.72f));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(origin.X + 1, origin.Y + 1) }, text, Color.FromRgb(255, 222, 130).WithAlpha(portrait ? 0.22f : 0.36f));
+        ctx.DrawText(options, text, Color.White.WithAlpha(portrait ? 0.94f : 1f));
     }
 
     private void DrawBrand(IImageProcessingContext ctx, int width, int height)
@@ -161,14 +256,8 @@ public sealed class CinematicCollageComposer : ICinematicCollageComposer
     private static void DrawProceduralStarfield(IImageProcessingContext ctx, int width, int height, string seedText)
     {
         var random = new Random(Math.Abs(seedText.GetHashCode()));
-        var stars = Math.Clamp(width * height / 13000, 80, 230);
-        for (var i = 0; i < stars; i++)
-        {
-            var x = random.NextSingle() * width;
-            var y = random.NextSingle() * height;
-            var r = 0.55f + random.NextSingle() * 1.25f;
-            ctx.Fill(Color.White.WithAlpha(0.10f + random.NextSingle() * 0.32f), new EllipsePolygon(x, y, r));
-        }
+        DrawClusteredStars(ctx, width, height, random);
+        DrawGalacticDust(ctx, width, height, random);
     }
 
     private static void ApplyVignette(IImageProcessingContext ctx, int width, int height)

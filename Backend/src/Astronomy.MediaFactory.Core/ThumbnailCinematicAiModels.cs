@@ -78,6 +78,11 @@ public sealed class CinematicThumbnailAiReport
     public IReadOnlyCollection<string> FinalPaths { get; init; } = [];
     public double VisualHierarchyScore { get; init; }
     public double ReadabilityScore { get; init; }
+    public double OrganicAtmosphereScore { get; init; }
+    public double NaturalLightingScore { get; init; }
+    public double VisualArtifactPenalty { get; init; }
+    public double CompositingVisibilityPenalty { get; init; }
+    public double CinematicSubtletyScore { get; init; }
     public AstronomyIntegrityValidation AstronomyIntegrityValidation { get; init; } = new();
     public bool PortraitSafe { get; init; }
     public string FinalThumbnailPath { get; init; } = "";

@@ -175,6 +175,11 @@ public sealed class ThumbnailCandidateScore
     public double GlowScore { get; init; }
     public double StarRichnessScore { get; init; }
     public double CompositionBalanceScore { get; init; }
+    public double OrganicAtmosphereScore { get; init; }
+    public double NaturalLightingScore { get; init; }
+    public double VisualArtifactPenalty { get; init; }
+    public double CompositingVisibilityPenalty { get; init; }
+    public double CinematicSubtletyScore { get; init; }
     public double CelestialFocalSize { get; init; }
     public double ColorRichness { get; init; }
     public double TextSafeCompositionArea { get; init; }

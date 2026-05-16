@@ -38,6 +38,12 @@ public sealed class ThumbnailCinematicAiPhase3Tests
         Assert.True(report.RootElement.GetProperty("scaleBoost").GetDouble() <= 1.30);
         Assert.True(report.RootElement.GetProperty("visualPolishPassApplied").GetBoolean());
         Assert.True(report.RootElement.GetProperty("astronomyIntegrityValidation").GetProperty("noSyntheticObjectsAdded").GetBoolean());
+        Assert.True(report.RootElement.TryGetProperty("organicAtmosphereScore", out _));
+        Assert.True(report.RootElement.TryGetProperty("naturalLightingScore", out _));
+        Assert.True(report.RootElement.TryGetProperty("visualArtifactPenalty", out _));
+        Assert.True(report.RootElement.TryGetProperty("compositingVisibilityPenalty", out _));
+        Assert.True(report.RootElement.TryGetProperty("cinematicSubtletyScore", out _));
+        Assert.True(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-report.json")));
         Assert.True(new FileInfo(Path.Combine(outputDir, "thumbnails", "thumbnail-long.jpg")).Length <= 2 * 1024 * 1024);
     }
 
@@ -190,7 +196,12 @@ public sealed class ThumbnailCinematicAiPhase3Tests
             CelestialFocalSize = objectDetected ? 0.18 : 0,
             ColorRichness = 0.42,
             TextSafeCompositionArea = textSafe,
-            Sharpness = 0.66
+            Sharpness = 0.66,
+            OrganicAtmosphereScore = 0.74,
+            NaturalLightingScore = 0.71,
+            VisualArtifactPenalty = 0.05,
+            CompositingVisibilityPenalty = 0.04,
+            CinematicSubtletyScore = 0.78
         };
 
     private static async Task<JsonDocument> ReadReportAsync(string outputDir)

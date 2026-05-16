@@ -580,6 +580,11 @@ public sealed class ThumbnailGenerationTests
         Assert.True(report.RootElement.GetProperty("negativeSpaceScore").GetDouble() > 0);
         Assert.True(report.RootElement.GetProperty("heroIsolationScore").GetDouble() > 0);
         Assert.True(report.RootElement.GetProperty("cinematicRealismScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("organicAtmosphereScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("naturalLightingScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("visualArtifactPenalty").GetDouble() >= 0);
+        Assert.True(report.RootElement.GetProperty("compositingVisibilityPenalty").GetDouble() >= 0);
+        Assert.True(report.RootElement.GetProperty("cinematicSubtletyScore").GetDouble() > 0);
         Assert.Equal("Premium Documentary", report.RootElement.GetProperty("visualPreset").GetString());
         Assert.Contains(report.RootElement.GetProperty("candidateScores").EnumerateArray(), score => score.GetProperty("objectKey").GetString() == "andromeda-galaxy" && score.GetProperty("DeepSpacePenalty").GetDouble() < 0);
     }

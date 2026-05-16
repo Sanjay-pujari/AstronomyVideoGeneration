@@ -24,6 +24,14 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
         var focalWeightX = 0d;
         var focalWeightY = 0d;
         var focalWeight = 0d;
+        var edgeMidTone = 0;
+        var midTone = 0;
+        var radialRing = 0;
+        var radialSamples = 0;
+        var symmetryDelta = 0d;
+        var symmetrySamples = 0;
+        var cells = new double[4, 6];
+        var cellCounts = new int[4, 6];
         Rgba32? previous = null;
 
         for (var y = 0; y < image.Height; y += yStep)
@@ -45,6 +53,32 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
                     focalWeightY += y * luminance;
                 }
                 if (luminance is > 0.22 and < 0.82 && IsSmallStarLike(px)) starPixels++;
+                if (luminance is > 0.10 and < 0.58)
+                {
+                    midTone++;
+                    var edgeDistance = Math.Min(Math.Min(x / (double)image.Width, 1 - (x / (double)image.Width)), Math.Min(y / (double)image.Height, 1 - (y / (double)image.Height)));
+                    if (edgeDistance < 0.14) edgeMidTone++;
+                }
+
+                var normalizedRadius = Math.Sqrt(Math.Pow((x - image.Width / 2d) / image.Width, 2) + Math.Pow((y - image.Height / 2d) / image.Height, 2));
+                if (normalizedRadius is > 0.18 and < 0.34)
+                {
+                    radialSamples++;
+                    if (luminance is > 0.12 and < 0.64) radialRing++;
+                }
+
+                var cellX = Math.Clamp((int)(x / (double)image.Width * 6), 0, 5);
+                var cellY = Math.Clamp((int)(y / (double)image.Height * 4), 0, 3);
+                cells[cellY, cellX] += luminance;
+                cellCounts[cellY, cellX]++;
+
+                var mirrorX = image.Width - 1 - x;
+                if (mirrorX >= 0 && mirrorX < row.Length)
+                {
+                    symmetryDelta += Math.Abs(luminance - (Luminance(row[mirrorX]) / 255d));
+                    symmetrySamples++;
+                }
+
                 colorRich += (Math.Max(px.R, Math.Max(px.G, px.B)) - Math.Min(px.R, Math.Min(px.G, px.B))) / 255d;
 
                 if (previous is { } p)
@@ -73,6 +107,15 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
         var textSafe = EstimateTextSafeArea(image);
         var sharpnessScore = Math.Min(1, sharpness / total * 11);
         var compositionBalance = EstimateCompositionBalance(image, focalWeight, focalWeightX, focalWeightY);
+        var organicAtmosphereScore = EstimateOrganicAtmosphereScore(cells, cellCounts, colorRichness, starRichness);
+        var symmetryPenalty = EstimateSymmetryPenalty(symmetryDelta, symmetrySamples);
+        var centeredBiasPenalty = EstimateCenteredBiasPenalty(image, focalWeight, focalWeightX, focalWeightY);
+        var geometricMaskPenalty = EstimateGeometricMaskPenalty(midTone, edgeMidTone, radialRing, radialSamples);
+        var compositingVisibilityPenalty = Math.Clamp((geometricMaskPenalty * 0.52) + (symmetryPenalty * 0.24) + (centeredBiasPenalty * 0.24), 0, 1);
+        var visualArtifactPenalty = Math.Clamp((blackPixelPercentage > 0.94 ? 0.22 : 0) + Math.Max(0, sharpnessScore - 0.88) * 0.32 + geometricMaskPenalty * 0.46, 0, 1);
+        var naturalLightingScore = Math.Clamp((contrast * 0.30) + ((1 - symmetryPenalty) * 0.30) + ((1 - centeredBiasPenalty) * 0.22) + ((1 - glowScore) * 0.18), 0, 1);
+        var cinematicSubtletyScore = Math.Clamp((organicAtmosphereScore * 0.34) + (naturalLightingScore * 0.34) + ((1 - visualArtifactPenalty) * 0.16) + ((1 - compositingVisibilityPenalty) * 0.16), 0, 1);
+        var naturalCompositionPenalty = Math.Clamp((visualArtifactPenalty * 0.45) + (compositingVisibilityPenalty * 0.55), 0, 0.32);
         var transitionFade = brightness < 0.025 && contrast < 0.035 && brightRatio < 0.0005;
 
         string? rejectionReason = null;
@@ -96,8 +139,12 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
                   + (contrast * 0.20)
                   + (glowScore * 0.15)
                   + (starRichness * 0.10)
-                  + (textSafe * 0.10)
-                  + (compositionBalance * 0.10)
+                  + (textSafe * 0.08)
+                  + (compositionBalance * 0.08)
+                  + (organicAtmosphereScore * 0.07)
+                  + (naturalLightingScore * 0.07)
+                  + (cinematicSubtletyScore * 0.05)
+                  - naturalCompositionPenalty
                 : (brightness * 0.16) + (contrast * 0.16) + ((1 - blackPixelPercentage) * 0.14) + (objectVisibility * 0.16) + (celestialFocalSize * 0.12) + (colorRichness * 0.10) + (textSafe * 0.08) + (sharpnessScore * 0.08);
 
         return new ThumbnailCandidateScore
@@ -105,7 +152,7 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
             Path = candidatePath,
             SceneId = context.SceneId,
             TimestampSeconds = context.TimestampSeconds,
-            Score = Math.Round(score, 4),
+            Score = Math.Round(Math.Clamp(score, 0, 1), 4),
             Brightness = Math.Round(brightness, 4),
             BlackPixelPercentage = Math.Round(blackPixelPercentage, 4),
             Contrast = Math.Round(contrast, 4),
@@ -115,6 +162,11 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
             GlowScore = Math.Round(glowScore, 4),
             StarRichnessScore = Math.Round(starRichness, 4),
             CompositionBalanceScore = Math.Round(compositionBalance, 4),
+            OrganicAtmosphereScore = Math.Round(organicAtmosphereScore, 4),
+            NaturalLightingScore = Math.Round(naturalLightingScore, 4),
+            VisualArtifactPenalty = Math.Round(visualArtifactPenalty, 4),
+            CompositingVisibilityPenalty = Math.Round(compositingVisibilityPenalty, 4),
+            CinematicSubtletyScore = Math.Round(cinematicSubtletyScore, 4),
             CelestialFocalSize = Math.Round(celestialFocalSize, 4),
             ColorRichness = Math.Round(colorRichness, 4),
             TextSafeCompositionArea = Math.Round(textSafe, 4),
@@ -132,6 +184,52 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
         var y = focalWeightY / focalWeight / image.Height;
         var ruleOfThirds = new[] { 1d / 3d, 2d / 3d }.Min(t => Math.Abs(x - t)) + new[] { 0.38d, 0.50d, 0.62d }.Min(t => Math.Abs(y - t));
         return Math.Clamp(1 - ruleOfThirds * 1.7, 0, 1);
+    }
+
+
+    private static double EstimateOrganicAtmosphereScore(double[,] cells, int[,] cellCounts, double colorRichness, double starRichness)
+    {
+        var averages = new List<double>();
+        for (var y = 0; y < 4; y++)
+        {
+            for (var x = 0; x < 6; x++)
+            {
+                if (cellCounts[y, x] > 0) averages.Add(cells[y, x] / cellCounts[y, x]);
+            }
+        }
+
+        if (averages.Count == 0) return 0.45;
+        var mean = averages.Average();
+        var variance = averages.Sum(v => Math.Pow(v - mean, 2)) / averages.Count;
+        var nonUniformity = Math.Clamp(Math.Sqrt(variance) * 6.0, 0, 1);
+        var dustTone = Math.Clamp(mean * 2.4, 0, 1);
+        return Math.Clamp((nonUniformity * 0.42) + (dustTone * 0.20) + (colorRichness * 0.20) + (starRichness * 0.18), 0, 1);
+    }
+
+    private static double EstimateSymmetryPenalty(double symmetryDelta, int symmetrySamples)
+    {
+        if (symmetrySamples == 0) return 0;
+        var averageDelta = symmetryDelta / symmetrySamples;
+        return Math.Clamp(1 - (averageDelta * 5.5), 0, 1);
+    }
+
+    private static double EstimateCenteredBiasPenalty(Image<Rgba32> image, double focalWeight, double focalWeightX, double focalWeightY)
+    {
+        if (focalWeight <= 0) return 0.20;
+        var x = focalWeightX / focalWeight / image.Width;
+        var y = focalWeightY / focalWeight / image.Height;
+        var distanceFromCenter = Math.Sqrt(Math.Pow(x - 0.5, 2) + Math.Pow(y - 0.5, 2));
+        return Math.Clamp(1 - (distanceFromCenter / 0.26), 0, 1);
+    }
+
+    private static double EstimateGeometricMaskPenalty(int midTone, int edgeMidTone, int radialRing, int radialSamples)
+    {
+        if (midTone == 0 || radialSamples == 0) return 0;
+        var edgeRatio = edgeMidTone / (double)midTone;
+        var ringRatio = radialRing / (double)radialSamples;
+        var circularOverlaySignal = Math.Max(0, ringRatio - 0.42) * 1.8;
+        var hardEdgeSignal = Math.Max(0, edgeRatio - 0.36) * 1.4;
+        return Math.Clamp((circularOverlaySignal * 0.62) + (hardEdgeSignal * 0.38), 0, 1);
     }
 
     private static double EstimateTextSafeArea(Image<Rgba32> image)
