@@ -654,7 +654,7 @@ public sealed class PipelineOrchestrator
             var videoPath = await RunStageAsync("Rendering", () => _videoRenderService.RenderAsync(manifest, cancellationToken));
 
             _logger.LogInformation("Running cinematic thumbnail generation...");
-            var thumbnailPlan = await RunStageAsync("ThumbnailGeneration", () => GenerateCinematicThumbnailPlanAsync(
+            var thumbnailPlan = await RunStageAsync("ThumbnailGeneration", () => GenerateThumbnailPlanAsync(
                 request,
                 context,
                 optimizedMetadata,
@@ -1202,7 +1202,7 @@ public sealed class PipelineOrchestrator
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "publish-idempotency-check.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
-    private async Task<ThumbnailPlan> GenerateCinematicThumbnailPlanAsync(
+    private async Task<ThumbnailPlan> GenerateThumbnailPlanAsync(
         RunPipelineRequest request,
         AstronomyContext context,
         OptimizedVideoMetadata optimizedMetadata,
@@ -1240,9 +1240,9 @@ public sealed class PipelineOrchestrator
         var longPath = ResolveExistingThumbnailPath(longPlan.LongThumbnailPath, longPlan.ThumbnailPath);
         var shortPath = ResolveExistingThumbnailPath(shortPlan.ShortThumbnailPath, shortPlan.ThumbnailPath);
         if (!string.IsNullOrWhiteSpace(longPath))
-            _logger.LogInformation("Cinematic long thumbnail created: {ThumbnailPath}", longPath);
+            _logger.LogInformation("Long thumbnail created: {ThumbnailPath}", longPath);
         if (!string.IsNullOrWhiteSpace(shortPath))
-            _logger.LogInformation("Cinematic short thumbnail created: {ThumbnailPath}", shortPath);
+            _logger.LogInformation("Short thumbnail created: {ThumbnailPath}", shortPath);
 
         var fallbackUsed = longPlan.FallbackUsed || shortPlan.FallbackUsed || string.IsNullOrWhiteSpace(longPath) || string.IsNullOrWhiteSpace(shortPath);
         var plan = new ThumbnailPlan
@@ -1259,7 +1259,7 @@ public sealed class PipelineOrchestrator
             LayoutCandidates = longPlan.LayoutCandidates,
             Variants = longPlan.Variants,
             FallbackUsed = fallbackUsed,
-            Mode = longPlan.Mode == "HybridCinematicCollage" || shortPlan.Mode == "HybridCinematicCollage" ? "HybridCinematicCollage" : fallbackUsed ? "FallbackExtractedFrame" : "CinematicComposed",
+            Mode = string.Equals(longPlan.Mode, "LocalAssetCollage", StringComparison.OrdinalIgnoreCase) || string.Equals(shortPlan.Mode, "LocalAssetCollage", StringComparison.OrdinalIgnoreCase) ? "LocalAssetCollage" : fallbackUsed ? "FallbackExtractedFrame" : longPlan.Mode,
             CelestialSelection = longPlan.CelestialSelection ?? shortPlan.CelestialSelection
         };
         await WriteCombinedThumbnailAnalysisAsync(outputDirectory, plan, cancellationToken);
@@ -1271,17 +1271,22 @@ public sealed class PipelineOrchestrator
     {
         var thumbnailsDirectory = Path.Combine(outputDirectory, "thumbnails");
         Directory.CreateDirectory(thumbnailsDirectory);
+        var outputPaths = new[] { plan.LongThumbnailPath, plan.ShortThumbnailPath }.Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().ToArray();
         var payload = new
         {
-            mode = plan.Mode,
-            allCandidates = plan.CandidateScores,
-            rejectedCandidates = plan.CandidateScores.Where(x => x.IsRejected),
-            scoringWeights = new { focalObjectScore = 0.35, contrastScore = 0.20, glowScore = 0.15, starRichnessScore = 0.10, textReadabilityScore = 0.10, compositionBalanceScore = 0.10 },
-            astronomySceneMode = true,
-            selectedBaseCandidate = plan.CandidateScores.Where(x => !x.IsRejected).OrderByDescending(x => x.Score).FirstOrDefault(),
-            finalThumbnailPaths = new[] { plan.LongThumbnailPath, plan.ShortThumbnailPath }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray(),
-            longThumbnailPath = plan.LongThumbnailPath,
-            shortThumbnailPath = plan.ShortThumbnailPath,
+            assetsFound = plan.CelestialSelection?.AssetSources.Where(a => File.Exists(a.LocalPath)).Select(a => a.LocalPath).ToArray() ?? Array.Empty<string>(),
+            assetsMissing = plan.CelestialSelection?.AssetSources.Where(a => !File.Exists(a.LocalPath)).Select(a => a.Category).ToArray() ?? Array.Empty<string>(),
+            layoutUsed = plan.CelestialSelection?.SelectedLayout ?? plan.LayoutType.ToString(),
+            language = "",
+            dimensions = new
+            {
+                longThumbnailPath = plan.LongThumbnailPath,
+                shortThumbnailPath = plan.ShortThumbnailPath,
+                longFileSizeBytes = !string.IsNullOrWhiteSpace(plan.LongThumbnailPath) && File.Exists(plan.LongThumbnailPath) ? new FileInfo(plan.LongThumbnailPath).Length : 0,
+                shortFileSizeBytes = !string.IsNullOrWhiteSpace(plan.ShortThumbnailPath) && File.Exists(plan.ShortThumbnailPath) ? new FileInfo(plan.ShortThumbnailPath).Length : 0
+            },
+            warnings = plan.FallbackUsed ? new[] { "fallback-used" } : Array.Empty<string>(),
+            finalThumbnailPaths = outputPaths,
             fallbackUsed = plan.FallbackUsed
         };
         await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-analysis-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
@@ -1632,28 +1637,16 @@ public sealed class PipelineOrchestrator
         var shortThumbnailPath = ResolveExistingThumbnailPath(thumbnailPlan.ShortThumbnailPath);
         var payload = new
         {
-            longThumbnailPath,
-            shortThumbnailPath,
-            fallbackUsed = thumbnailPlan.FallbackUsed,
             mode = thumbnailPlan.Mode,
-            preferredThumbnailPath = longThumbnailPath ?? thumbnailPlan.ThumbnailPath,
-            selectedThumbnailPath = longThumbnailPath ?? thumbnailPlan.ThumbnailPath,
-            thumbnailPath = longThumbnailPath ?? thumbnailPlan.ThumbnailPath,
-            thumbnailPlan.PrimaryThumbnailText,
-            thumbnailPlan.AlternateThumbnailTexts,
-            selectedVisualPath = thumbnailPlan.SelectedVisualPath,
-            originalThumbnailPath = thumbnailPlan.ThumbnailPath,
-            originalLongThumbnailPath = thumbnailPlan.LongThumbnailPath,
-            originalShortThumbnailPath = thumbnailPlan.ShortThumbnailPath,
-            thumbnailPlan.ThumbnailVariantPaths,
-            LayoutType = thumbnailPlan.LayoutType.ToString(),
-            heroObject = thumbnailPlan.CelestialSelection?.HeroObject,
+            heroObject = thumbnailPlan.CelestialSelection?.HeroObject ?? "",
             supportObjects = thumbnailPlan.CelestialSelection?.SupportObjects ?? Array.Empty<string>(),
             selectedHook = thumbnailPlan.CelestialSelection?.SelectedHook ?? thumbnailPlan.PrimaryThumbnailText,
-            selectedLayout = thumbnailPlan.CelestialSelection?.SelectedLayout ?? thumbnailPlan.LayoutType.ToString(),
+            longThumbnailPath,
+            shortThumbnailPath,
             assetSources = thumbnailPlan.CelestialSelection?.AssetSources ?? Array.Empty<CelestialAsset>(),
-            visibilityDataUsed = thumbnailPlan.CelestialSelection?.VisibilityDataUsed ?? Array.Empty<object>(),
-            specialEventThumbnailMode = thumbnailPlan.CelestialSelection?.SpecialEventMode ?? false
+            fallbackUsed = thumbnailPlan.FallbackUsed,
+            selectedLayout = thumbnailPlan.CelestialSelection?.SelectedLayout ?? thumbnailPlan.LayoutType.ToString(),
+            visibilityDataUsed = thumbnailPlan.CelestialSelection?.VisibilityDataUsed ?? Array.Empty<object>()
         };
         await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }

@@ -24,11 +24,14 @@ public sealed class CelestialAssetIngestionService : ICelestialAssetIngestionSer
         ["uranus"] = "Uranus planet",
         ["neptune"] = "Neptune planet",
         ["moon"] = "Moon lunar surface",
-        ["meteor-showers"] = "meteor shower night sky",
+        ["meteor-shower"] = "meteor shower night sky",
         ["lunar-eclipse"] = "lunar eclipse moon",
         ["solar-eclipse"] = "solar eclipse",
-        ["nebula"] = "nebula Hubble",
-        ["galaxy"] = "galaxy Hubble",
+        ["orion-nebula"] = "Orion Nebula Hubble",
+        ["andromeda-galaxy"] = "Andromeda Galaxy",
+        ["ring-nebula"] = "Ring Nebula Hubble",
+        ["earth"] = "Earth planet",
+        ["sun"] = "Sun solar disk",
         ["milky-way"] = "Milky Way night sky"
     };
 
@@ -192,7 +195,7 @@ public sealed class CelestialAssetIngestionService : ICelestialAssetIngestionSer
     public string ResolveObjectKey(string objectName, string objectType)
     {
         var value = NormalizeObjectKey($"{objectName} {objectType}");
-        if (value.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "meteor-showers";
+        if (value.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "meteor-shower";
         if (value.Contains("solar-eclipse", StringComparison.OrdinalIgnoreCase)) return "solar-eclipse";
         if (value.Contains("lunar-eclipse", StringComparison.OrdinalIgnoreCase)) return "lunar-eclipse";
         if (value.Contains("eclipse", StringComparison.OrdinalIgnoreCase)) return value.Contains("moon", StringComparison.OrdinalIgnoreCase) || value.Contains("lunar", StringComparison.OrdinalIgnoreCase) ? "lunar-eclipse" : "solar-eclipse";
@@ -202,9 +205,10 @@ public sealed class CelestialAssetIngestionService : ICelestialAssetIngestionSer
                 return key;
         }
 
-        if (value.Contains("andromeda", StringComparison.OrdinalIgnoreCase)) return "galaxy";
-        if (value.Contains("nebula", StringComparison.OrdinalIgnoreCase)) return "nebula";
-        if (value.Contains("galaxy", StringComparison.OrdinalIgnoreCase)) return "galaxy";
+        if (value.Contains("andromeda", StringComparison.OrdinalIgnoreCase)) return "andromeda-galaxy";
+        if (value.Contains("ring", StringComparison.OrdinalIgnoreCase) && value.Contains("nebula", StringComparison.OrdinalIgnoreCase)) return "ring-nebula";
+        if (value.Contains("nebula", StringComparison.OrdinalIgnoreCase)) return "orion-nebula";
+        if (value.Contains("galaxy", StringComparison.OrdinalIgnoreCase)) return "andromeda-galaxy";
         return "milky-way";
     }
 

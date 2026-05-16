@@ -86,7 +86,7 @@ public sealed class CelestialAssetProvider : ICelestialAssetProvider
     private static string ResolveCategory(string objectName, string objectType)
     {
         var value = $"{objectName} {objectType}".ToLowerInvariant();
-        if (value.Contains("meteor")) return "meteor-showers";
+        if (value.Contains("meteor")) return "meteor-shower";
         if (value.Contains("solar") && value.Contains("eclipse")) return "solar-eclipse";
         if (value.Contains("lunar") && value.Contains("eclipse")) return "lunar-eclipse";
         if (value.Contains("eclipse")) return value.Contains("moon") || value.Contains("lunar") ? "lunar-eclipse" : "solar-eclipse";
@@ -94,8 +94,10 @@ public sealed class CelestialAssetProvider : ICelestialAssetProvider
         {
             if (value.Contains(planet)) return planet;
         }
-        if (value.Contains("nebula")) return "nebula";
-        if (value.Contains("galaxy") || value.Contains("andromeda")) return "galaxy";
+        if (value.Contains("orion") && value.Contains("nebula")) return "orion-nebula";
+        if (value.Contains("ring") && value.Contains("nebula")) return "ring-nebula";
+        if (value.Contains("nebula")) return "orion-nebula";
+        if (value.Contains("andromeda") || value.Contains("galaxy")) return "andromeda-galaxy";
         return "milky-way";
     }
 

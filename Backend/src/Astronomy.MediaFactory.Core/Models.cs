@@ -207,6 +207,26 @@ public sealed class CelestialAsset
     public bool FallbackUsed { get; init; }
 }
 
+
+public sealed class CelestialAssetPackExtractionReport
+{
+    public bool Enabled { get; init; }
+    public string SourceSheetPath { get; init; } = "";
+    public string OutputRootPath { get; init; } = "";
+    public IReadOnlyCollection<string> ExtractedObjects { get; init; } = [];
+    public IReadOnlyCollection<string> SkippedObjects { get; init; } = [];
+    public IReadOnlyCollection<string> Warnings { get; init; } = [];
+    public string ReportPath { get; init; } = "";
+}
+
+public sealed class CelestialAssetTileMapEntry
+{
+    public int X { get; init; }
+    public int Y { get; init; }
+    public int Width { get; init; }
+    public int Height { get; init; }
+}
+
 public sealed class CelestialAssetRequest
 {
     public required string ObjectName { get; init; }

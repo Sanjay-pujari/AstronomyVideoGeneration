@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
@@ -308,8 +309,158 @@ public sealed class ThumbnailGenerationTests
         Assert.Contains("candidateScores", report);
     }
 
+
+    [Fact]
+    public async Task LocalAssetCollage_CreatesLongAndShortThumbnails_FromCuratedAssets()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "jupiter", "hero.png"), Color.Orange);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "venus", "hero.png"), Color.Gold);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot });
+
+        var longPlan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+        var shortPlan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir,
+            IsShortForm = true
+        }, CancellationToken.None);
+
+        Assert.EndsWith("thumbnail-long.jpg", longPlan.LongThumbnailPath);
+        Assert.EndsWith("thumbnail-short.jpg", shortPlan.ShortThumbnailPath);
+        Assert.True(File.Exists(longPlan.LongThumbnailPath));
+        Assert.True(File.Exists(shortPlan.ShortThumbnailPath));
+        using var longImage = await Image.LoadAsync(longPlan.LongThumbnailPath!);
+        using var shortImage = await Image.LoadAsync(shortPlan.ShortThumbnailPath!);
+        Assert.Equal(1280, longImage.Width);
+        Assert.Equal(720, longImage.Height);
+        Assert.Equal(1080, shortImage.Width);
+        Assert.Equal(1920, shortImage.Height);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_SelectsHeroAndCapsSupportObjects()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        foreach (var key in new[] { "jupiter", "venus", "mars", "saturn", "milky-way" })
+            await WriteCuratedAssetAsync(Path.Combine(assetRoot, key, "hero.png"), Color.White);
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, MaxSupportObjectsLong = 2, MaxSupportObjectsShort = 1 });
+
+        var longPlan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}")
+        }, CancellationToken.None);
+        var shortPlan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}"),
+            IsShortForm = true
+        }, CancellationToken.None);
+
+        Assert.Equal("Jupiter", longPlan.CelestialSelection?.HeroObject);
+        Assert.Equal(2, longPlan.CelestialSelection?.SupportObjects.Count);
+        Assert.Single(shortPlan.CelestialSelection!.SupportObjects);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_FallsBackSafely_WhenHeroAssetMissing()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot });
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        Assert.True(File.Exists(plan.ThumbnailPath));
+        Assert.True(plan.FallbackUsed);
+        Assert.True(new FileInfo(plan.ThumbnailPath!).Length <= 2_097_152);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_GeneratesEnglishAndHindiHooks()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "jupiter", "hero.png"), Color.Orange);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot });
+
+        var english = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}")
+        }, CancellationToken.None);
+        var hindi = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("hi"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}")
+        }, CancellationToken.None);
+
+        Assert.Equal("Jupiter Tonight", english.CelestialSelection?.SelectedHook);
+        Assert.Equal("आज रात बृहस्पति", hindi.CelestialSelection?.SelectedHook);
+    }
+
     private static ThumbnailGenerationService CreateProductionService(ThumbnailOptions options)
         => new(new ThumbnailStrategyService(), new ThumbnailScoringService(), new ThumbnailHookService(), Options.Create(options), NullLogger<ThumbnailGenerationService>.Instance);
+
+
+    private static LocalAssetCollageThumbnailService CreateLocalAssetService(ThumbnailOptions options)
+        => new(new ThumbnailStrategyService(), Options.Create(options), NullLogger<LocalAssetCollageThumbnailService>.Instance);
+
+    private static AstronomyContext BuildVisiblePlanetContext(string language)
+        => new()
+        {
+            Date = new DateOnly(2026, 5, 14),
+            LocationName = "Udaipur, India",
+            Localization = new LocalizationContext(language, string.Empty, language, false),
+            SceneObservationContexts =
+            [
+                new SceneObservationContext { SceneId = "jupiter", ObjectName = "Jupiter", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 70, DirectionLabel = "South" },
+                new SceneObservationContext { SceneId = "venus", ObjectName = "Venus", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 35, DirectionLabel = "West" },
+                new SceneObservationContext { SceneId = "mars", ObjectName = "Mars", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 25, DirectionLabel = "East" },
+                new SceneObservationContext { SceneId = "saturn", ObjectName = "Saturn", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 18, DirectionLabel = "East" }
+            ]
+        };
+
+    private static async Task WriteCuratedAssetAsync(string path, Color color, int width = 1000, int height = 1000)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var image = new Image<Rgba32>(width, height, Color.Transparent);
+        image.Mutate(ctx => ctx.Fill(color, new SixLabors.ImageSharp.Drawing.EllipsePolygon(width / 2f, height / 2f, Math.Min(width, height) * 0.38f)));
+        await image.SaveAsPngAsync(path);
+    }
 
     private static AstronomyContext BuildContext(string language)
         => new()

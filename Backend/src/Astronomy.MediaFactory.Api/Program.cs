@@ -86,6 +86,12 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
     }
 });
 
+app.MapPost("/api/assets/celestial/extract-pack", async (ICelestialAssetPackExtractor extractor, CancellationToken ct) =>
+{
+    var report = await extractor.ExtractAsync(ct);
+    return Results.Ok(report);
+});
+
 app.MapGet("/api/events/upcoming", async (int? days, string? regionId, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
 {
     var upcoming = await events.GetUpcomingAsync(days, ct);

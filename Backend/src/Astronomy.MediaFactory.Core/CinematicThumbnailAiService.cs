@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Core;
 
+[Obsolete("Deprecated: active production thumbnails use LocalAssetCollageThumbnailService with curated local assets.")]
 public sealed class CinematicThumbnailAiService : ICinematicThumbnailAiService
 {
     private readonly IThumbnailMoodGradingService _moodGradingService;
