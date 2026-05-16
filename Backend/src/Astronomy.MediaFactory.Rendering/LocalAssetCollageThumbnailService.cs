@@ -230,7 +230,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var hero = assets[0];
         var heroRect = ResolveHeroRect(width, height, portrait, selection.CinematicMode, random);
         heroRect = AvoidCollision(heroRect, textBox, width, height, preferRight: !portrait);
-        await DrawObjectAsync(canvas, hero, heroRect, true, selection.CinematicMode, cancellationToken);
+        await DrawObjectAsync(canvas, hero, heroRect, true, selection.CinematicMode, 0, cancellationToken);
 
         var supports = assets.Skip(1).Where(a => !BackgroundDeepSpaceKeys.Contains(a.Category)).Take(portrait ? 1 : 2).ToArray();
         var supportScales = new List<double>();
@@ -244,7 +244,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 overlapWarnings.Add($"support-{i}-near-hero");
             supportScales.Add(Math.Round(supportRect.Width / width, 3));
             objectRects.Add(supportRect);
-            await DrawObjectAsync(canvas, supports[i], supportRect, false, selection.CinematicMode, cancellationToken);
+            await DrawObjectAsync(canvas, supports[i], supportRect, false, selection.CinematicMode, i + 1, cancellationToken);
         }
 
         canvas.Mutate(ctx =>
@@ -267,6 +267,11 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var readabilityScore = ScoreReadability(hook, textBox, width, height, portrait);
         var clickabilityScore = ScoreClickability(hook, selection.CinematicMode, selection.HeroScore?.TotalScore ?? 0, readabilityScore);
         var compositionBalanceScore = ScoreCompositionBalance(heroRect, textBox, objectRects.Skip(1), width, height, foregroundObjectAreaPercent, overlapPenaltyApplied);
+        var depthScore = ScoreDepthSeparation(heroRect, objectRects.Skip(1), width, height, foregroundObjectAreaPercent, overlapPenaltyApplied);
+        var atmosphericBlendScore = ScoreAtmosphericBlend(selection.CinematicMode, supports.Length, compositionBalanceScore, oversizedGlowPenaltyApplied);
+        var negativeSpaceScore = ScoreNegativeSpace(heroRect, textBox, objectRects.Skip(1), width, height, foregroundObjectAreaPercent);
+        var heroIsolationScore = ScoreHeroIsolation(heroRect, textBox, objectRects.Skip(1), width, height, overlapPenaltyApplied);
+        var cinematicRealismScore = ScoreCinematicRealism(depthScore, atmosphericBlendScore, negativeSpaceScore, heroIsolationScore, compositionBalanceScore, readabilityScore);
 
         await canvas.SaveAsJpegAsync(outputPath, new JpegEncoder { Quality = Math.Clamp(_options.JpegQuality, 1, 100) }, cancellationToken);
         return new CompositionDiagnostics(
@@ -288,7 +293,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             DeepSpacePenaltyApplied: selection.HeroScore?.DeepSpacePenalty < 0 || selection.HeroScores.Any(s => s.DeepSpacePenalty < 0),
             ForegroundObjectAreaPercent: foregroundObjectAreaPercent,
             OverlapPenaltyApplied: overlapPenaltyApplied,
-            CompositionBalanceScore: compositionBalanceScore);
+            CompositionBalanceScore: compositionBalanceScore,
+            DepthScore: depthScore,
+            AtmosphericBlendScore: atmosphericBlendScore,
+            NegativeSpaceScore: negativeSpaceScore,
+            HeroIsolationScore: heroIsolationScore,
+            CinematicRealismScore: cinematicRealismScore,
+            VisualPreset: string.IsNullOrWhiteSpace(_options.VisualPreset) ? "Premium Documentary" : _options.VisualPreset);
     }
 
     private async Task DrawBackgroundAsync(Image<Rgba32> canvas, ThumbnailGenerationRequest request, int width, int height, List<string> warnings, CancellationToken cancellationToken)
@@ -315,34 +326,56 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         }
     }
 
-    private static async Task DrawObjectAsync(Image<Rgba32> canvas, CelestialAsset asset, RectangleF rect, bool hero, string cinematicMode, CancellationToken cancellationToken)
+    private static async Task DrawObjectAsync(Image<Rgba32> canvas, CelestialAsset asset, RectangleF rect, bool hero, string cinematicMode, int depthRank, CancellationToken cancellationToken)
     {
         using var obj = await Image.LoadAsync<Rgba32>(asset.LocalPath, cancellationToken);
         if (DeepSpaceKeys.Contains(asset.Category) && IsTransparentAsset(asset.LocalPath))
             CleanDeepSpaceAlpha(obj);
+        var depth = Math.Clamp(depthRank, 0, 3);
+        var supportOpacity = hero ? 1f : Math.Max(0.38f, 0.62f - depth * 0.09f);
         obj.Mutate(ctx =>
         {
             ctx.Resize(new ResizeOptions { Size = new Size((int)rect.Width, (int)rect.Height), Mode = ResizeMode.Max });
-            if (DeepSpaceKeys.Contains(asset.Category)) ctx.GaussianBlur(hero ? 0.45f : 0.70f).Brightness(0.90f).Contrast(0.95f);
-            if (!hero) ctx.GaussianBlur(0.85f).Brightness(0.82f).Saturate(0.88f);
-            else ctx.Contrast(1.12f).Brightness(1.05f);
+            if (DeepSpaceKeys.Contains(asset.Category)) ctx.GaussianBlur(hero ? 0.45f : 1.05f + depth * 0.25f).Brightness(hero ? 0.90f : 0.72f).Contrast(0.92f);
+            if (!hero) ctx.GaussianBlur(1.00f + depth * 0.34f).Brightness(0.76f - depth * 0.04f).Saturate(0.78f);
+            else ctx.Contrast(1.10f).Brightness(1.03f);
         });
         var x = (int)(rect.X + (rect.Width - obj.Width) / 2f);
         var y = (int)(rect.Y + (rect.Height - obj.Height) / 2f);
         canvas.Mutate(ctx =>
         {
-            var glowColor = ResolveGlow(asset.Category).WithAlpha(GlowAlpha(asset.Category, hero, cinematicMode));
+            var glowColor = ResolveGlow(asset.Category).WithAlpha(GlowAlpha(asset.Category, hero, cinematicMode) * (hero ? 1f : 0.72f));
             if (asset.Category.Equals("meteor-shower", StringComparison.OrdinalIgnoreCase))
                 ctx.DrawLine(glowColor, Math.Max(4, rect.Width * 0.024f), new PointF(rect.Left + rect.Width * 0.12f, rect.Top + rect.Height * 0.25f), new PointF(rect.Right - rect.Width * 0.08f, rect.Bottom - rect.Height * 0.22f));
             if (!asset.Category.Equals("meteor-shower", StringComparison.OrdinalIgnoreCase))
             {
                 var glow = new EllipsePolygon(rect.X + rect.Width / 2f, rect.Y + rect.Height / 2f, Math.Max(rect.Width, rect.Height) * GlowRadiusScale(asset.Category, hero));
                 ctx.Fill(glowColor, glow);
+                DrawRimLight(ctx, rect, asset.Category, hero);
             }
+            if (!hero)
+                DrawDepthHaze(ctx, rect, depth);
             if (IsTransparentAsset(asset.LocalPath))
-                ctx.DrawImage(obj, new Point(x + (hero ? 5 : 3), y + (hero ? 7 : 4)), hero ? 0.09f : 0.06f);
-            ctx.DrawImage(obj, new Point(x, y), DeepSpaceKeys.Contains(asset.Category) ? (hero ? 0.72f : 0.34f) : hero ? 1f : 0.62f);
+                ctx.DrawImage(obj, new Point(x + (hero ? 4 : 2), y + (hero ? 6 : 3)), hero ? 0.055f : 0.035f);
+            var objectOpacity = DeepSpaceKeys.Contains(asset.Category) ? (hero ? 0.66f : supportOpacity * 0.52f) : supportOpacity;
+            ctx.DrawImage(obj, new Point(x, y), objectOpacity);
         });
+    }
+
+
+    private static void DrawRimLight(IImageProcessingContext ctx, RectangleF rect, string category, bool hero)
+    {
+        var alpha = hero ? 0.18f : 0.065f;
+        var rimColor = ResolveGlow(category).WithAlpha(alpha);
+        var rim = new EllipsePolygon(rect.X + rect.Width * 0.47f, rect.Y + rect.Height * 0.48f, Math.Max(rect.Width, rect.Height) * (hero ? 0.505f : 0.49f));
+        ctx.Draw(rimColor, Math.Max(1.1f, rect.Width * (hero ? 0.010f : 0.006f)), rim);
+        ctx.Fill(Color.FromRgb(210, 226, 255).WithAlpha(hero ? 0.030f : 0.014f), new EllipsePolygon(rect.Left + rect.Width * 0.31f, rect.Top + rect.Height * 0.28f, rect.Width * 0.19f));
+    }
+
+    private static void DrawDepthHaze(IImageProcessingContext ctx, RectangleF rect, int depth)
+    {
+        var hazeAlpha = 0.045f + Math.Clamp(depth, 1, 3) * 0.026f;
+        ctx.Fill(Color.FromRgb(125, 155, 205).WithAlpha(hazeAlpha), new EllipsePolygon(rect.X + rect.Width / 2f, rect.Y + rect.Height / 2f, Math.Max(rect.Width, rect.Height) * 0.58f));
     }
 
     private static async Task DrawDeepSpaceBackgroundLayerAsync(Image<Rgba32> canvas, CelestialAsset asset, int width, int height, Random random, CancellationToken cancellationToken)
@@ -734,9 +767,26 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static void DrawStars(IImageProcessingContext ctx, int width, int height, string seedText)
     {
         var random = new Random(StableHash(seedText));
-        var stars = Math.Clamp(width * height / 15000, 70, 240);
+        var stars = Math.Clamp(width * height / 11800, 95, 315);
+        var clusterA = new PointF(width * (0.22f + random.NextSingle() * 0.12f), height * (0.20f + random.NextSingle() * 0.22f));
+        var clusterB = new PointF(width * (0.66f + random.NextSingle() * 0.14f), height * (0.58f + random.NextSingle() * 0.16f));
         for (var i = 0; i < stars; i++)
-            ctx.Fill(Color.White.WithAlpha(0.12f + random.NextSingle() * 0.42f), new EllipsePolygon(random.NextSingle() * width, random.NextSingle() * height, 0.7f + random.NextSingle() * 1.4f));
+        {
+            var clustered = random.NextSingle() < 0.38f;
+            var center = random.NextSingle() < 0.56f ? clusterA : clusterB;
+            var x = clustered ? center.X + NextGaussian(random) * width * 0.16f : random.NextSingle() * width;
+            var y = clustered ? center.Y + NextGaussian(random) * height * 0.14f : random.NextSingle() * height;
+            if (x < 0 || x >= width || y < 0 || y >= height)
+                continue;
+
+            var rareBright = random.NextSingle() > 0.92f;
+            var radius = rareBright ? 1.55f + random.NextSingle() * 1.15f : 0.42f + random.NextSingle() * 1.08f;
+            var twinkle = 0.72f + random.NextSingle() * 0.42f;
+            var alpha = Math.Clamp((rareBright ? 0.48f : 0.16f + random.NextSingle() * 0.26f) * twinkle, 0.08f, 0.64f);
+            ctx.Fill(Color.White.WithAlpha(alpha), new EllipsePolygon(x, y, radius));
+            if (rareBright)
+                ctx.Fill(Color.FromRgb(160, 190, 255).WithAlpha(0.045f), new EllipsePolygon(x, y, radius * 2.8f));
+        }
     }
 
     private static void DrawDateLocation(IImageProcessingContext ctx, ThumbnailGenerationRequest request, int width, int height, bool portrait)
@@ -755,9 +805,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var font = CreateFont(fontSize, FontStyle.Bold, LocalizationResolver.IsHindi(language));
         var origin = new PointF(portrait ? bounds.X + bounds.Width / 2f : bounds.X, bounds.Y);
         var opts = new RichTextOptions(font) { Origin = origin, WrappingLength = bounds.Width, HorizontalAlignment = portrait ? HorizontalAlignment.Center : HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, LineSpacing = 0.84f };
-        ctx.DrawText(new RichTextOptions(opts) { Origin = new PointF(origin.X + 5, origin.Y + 6) }, text, Color.Black.WithAlpha(0.92f));
-        ctx.DrawText(new RichTextOptions(opts) { Origin = new PointF(origin.X + 2, origin.Y + 2) }, text, Color.FromRgb(255, 214, 122).WithAlpha(0.34f));
-        ctx.DrawText(opts, text, Color.White);
+        ctx.DrawText(new RichTextOptions(opts) { Origin = new PointF(origin.X + 7, origin.Y + 9) }, text, Color.Black.WithAlpha(0.34f));
+        ctx.DrawText(new RichTextOptions(opts) { Origin = new PointF(origin.X + 4, origin.Y + 5) }, text, Color.Black.WithAlpha(0.26f));
+        ctx.DrawText(new RichTextOptions(opts) { Origin = new PointF(origin.X + 1.5f, origin.Y + 1.5f) }, text, Color.FromRgb(255, 220, 148).WithAlpha(0.22f));
+        ctx.DrawText(opts, text, Color.White.WithAlpha(0.97f));
     }
 
     private void DrawBrand(IImageProcessingContext ctx, int width, int height, bool portrait)
@@ -816,12 +867,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var jitterX = (random.NextSingle() - 0.5f) * width * (portrait ? 0.035f : 0.045f);
         var jitterY = (random.NextSingle() - 0.5f) * height * 0.035f;
         RectangleF rect = portrait
-            ? new RectangleF(width * 0.27f + jitterX, height * 0.12f + jitterY, width * 0.45f, width * 0.45f)
+            ? new RectangleF(width * 0.30f + jitterX, height * 0.12f + jitterY, width * 0.405f, width * 0.405f)
             : mode switch
             {
-                "MoonDominant" => new RectangleF(width * 0.50f + jitterX, height * 0.10f + jitterY, width * 0.43f, height * 0.68f),
-                "WideSkyMode" or "DeepSpaceMode" => new RectangleF(width * 0.58f + jitterX, height * 0.14f + jitterY, width * 0.34f, height * 0.58f),
-                _ => new RectangleF(width * 0.48f + jitterX, height * 0.12f + jitterY, width * 0.45f, height * 0.66f)
+                "MoonDominant" => new RectangleF(width * 0.54f + jitterX, height * 0.11f + jitterY, width * 0.37f, height * 0.61f),
+                "WideSkyMode" or "DeepSpaceMode" => new RectangleF(width * 0.61f + jitterX, height * 0.16f + jitterY, width * 0.30f, height * 0.52f),
+                _ => new RectangleF(width * 0.52f + jitterX, height * 0.14f + jitterY, width * 0.39f, height * 0.58f)
             };
         return ClampRect(rect, width, height, 24);
     }
@@ -830,10 +881,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     {
         var offset = (random.NextSingle() - 0.5f) * width * 0.035f;
         if (portrait)
-            return ClampRect(new RectangleF(width * 0.67f + offset, height * 0.39f, width * 0.18f, width * 0.18f), width, height, 28);
-        var size = mode is "ConjunctionMode" or "RareAlignment" ? width * 0.18f : width * 0.15f;
-        var x = index == 0 ? width * 0.36f : width * 0.44f;
-        var y = index == 0 ? height * 0.13f : height * 0.57f;
+            return ClampRect(new RectangleF(width * 0.69f + offset, height * 0.38f, width * 0.145f, width * 0.145f), width, height, 28);
+        var size = mode is "ConjunctionMode" or "RareAlignment" ? width * 0.155f : width * 0.128f;
+        var x = index == 0 ? width * 0.38f : width * 0.45f;
+        var y = index == 0 ? height * 0.14f : height * 0.59f;
         return ClampRect(new RectangleF(x + offset, y, size, size), width, height, 28);
     }
 
@@ -868,10 +919,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static void DrawCinematicOverlays(IImageProcessingContext ctx, int width, int height, bool portrait, string mode, Random random)
     {
-        var haze = mode switch { "DeepSpaceMode" => 0.052f, "EclipseMode" => 0.040f, _ => 0.028f };
-        ctx.Fill(Color.FromRgb(54, 83, 140).WithAlpha(haze), new EllipsePolygon(width * (0.70f + random.NextSingle() * 0.08f), height * 0.28f, width * 0.26f));
+        var haze = mode switch { "DeepSpaceMode" => 0.050f, "EclipseMode" => 0.040f, _ => 0.030f };
+        ctx.Fill(Color.FromRgb(54, 83, 140).WithAlpha(haze), new EllipsePolygon(width * (0.68f + random.NextSingle() * 0.10f), height * 0.27f, width * 0.30f));
+        ctx.Fill(Color.FromRgb(120, 146, 190).WithAlpha(0.020f), new EllipsePolygon(width * 0.46f, height * 0.52f, width * (portrait ? 0.30f : 0.42f)));
+        ctx.Fill(Color.FromRgb(76, 104, 160).WithAlpha(0.026f), new RectangleF(0, height * 0.38f, width, height * 0.30f));
+        ctx.Fill(Color.FromRgb(220, 232, 255).WithAlpha(0.030f), new EllipsePolygon(width * 0.86f, height * 0.12f, width * 0.18f));
         if (mode is "DeepSpaceMode" or "WideSkyMode")
-            ctx.Fill(Color.FromRgb(119, 74, 180).WithAlpha(0.032f), new EllipsePolygon(width * 0.40f, height * 0.34f, width * 0.20f));
+            ctx.Fill(Color.FromRgb(119, 74, 180).WithAlpha(0.026f), new EllipsePolygon(width * 0.40f, height * 0.34f, width * 0.22f));
     }
 
     private static RectangleF AvoidCollision(RectangleF objectRect, RectangleF textRect, int width, int height, bool preferRight)
@@ -951,6 +1005,50 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         return Math.Round((focalScore * 0.22d) + (scaleScore * 0.20d) + (supportScore * 0.16d) + (textClearance * 0.20d) + (areaScore * 0.12d) + (overlapScore * 0.10d), 3);
     }
 
+
+    private static double ScoreDepthSeparation(RectangleF heroRect, IEnumerable<RectangleF> supports, int width, int height, double foregroundObjectAreaPercent, bool overlapPenaltyApplied)
+    {
+        var supportList = supports.ToArray();
+        var scaleLadder = supportList.Length == 0 ? 0.88d : supportList.Average(r => r.Width <= heroRect.Width * 0.46f ? 1d : Math.Max(0.55d, 1d - ((r.Width / heroRect.Width) - 0.46d)));
+        var verticalSeparation = supportList.Length == 0 ? 0.86d : supportList.Average(r => Math.Clamp(Math.Abs((r.Top + r.Height / 2d) - (heroRect.Top + heroRect.Height / 2d)) / (height * 0.38d), 0.58d, 1d));
+        var areaScore = foregroundObjectAreaPercent <= 24d ? 1d : Math.Max(0.58d, 1d - (foregroundObjectAreaPercent - 24d) / 50d);
+        var overlapScore = overlapPenaltyApplied ? 0.62d : 1d;
+        return Math.Round((scaleLadder * 0.34d) + (verticalSeparation * 0.26d) + (areaScore * 0.22d) + (overlapScore * 0.18d), 3);
+    }
+
+    private static double ScoreAtmosphericBlend(string mode, int supportCount, double compositionBalanceScore, bool oversizedGlowPenaltyApplied)
+    {
+        var modeScore = mode is "DeepSpaceMode" or "WideSkyMode" or "EpicPlanetFocus" ? 0.96d : 0.90d;
+        var supportScore = supportCount <= 2 ? 0.96d : 0.74d;
+        var glowScore = oversizedGlowPenaltyApplied ? 0.78d : 1d;
+        return Math.Round((modeScore * 0.30d) + (supportScore * 0.22d) + (compositionBalanceScore * 0.28d) + (glowScore * 0.20d), 3);
+    }
+
+    private static double ScoreNegativeSpace(RectangleF heroRect, RectangleF textBox, IEnumerable<RectangleF> supports, int width, int height, double foregroundObjectAreaPercent)
+    {
+        var occupied = foregroundObjectAreaPercent / 100d + (textBox.Width * textBox.Height) / (width * (double)height);
+        var targetEmpty = 0.68d;
+        var empty = Math.Clamp(1d - occupied, 0d, 1d);
+        var emptyScore = 1d - Math.Min(1d, Math.Abs(empty - targetEmpty) / 0.34d);
+        var rightEdgeBreathing = Math.Clamp((width - heroRect.Right) / (width * 0.08d), 0.45d, 1d);
+        var supportBreathing = supports.Any() ? supports.Average(r => Intersects(r, textBox, 0.06f) ? 0.62d : 1d) : 0.92d;
+        return Math.Round((emptyScore * 0.46d) + (rightEdgeBreathing * 0.22d) + (supportBreathing * 0.18d) + (Math.Min(empty / targetEmpty, 1d) * 0.14d), 3);
+    }
+
+    private static double ScoreHeroIsolation(RectangleF heroRect, RectangleF textBox, IEnumerable<RectangleF> supports, int width, int height, bool overlapPenaltyApplied)
+    {
+        var textClearance = Intersects(heroRect, textBox, 0.04f) ? 0.58d : 1d;
+        var supportList = supports.ToArray();
+        var supportClearance = supportList.Length == 0 ? 0.94d : supportList.Average(r => Intersects(heroRect, r, 0.10f) ? 0.56d : 1d);
+        var dominance = supportList.Length == 0 ? 0.92d : supportList.Average(r => heroRect.Width >= r.Width * 2.15f ? 1d : 0.68d);
+        var cropSafety = heroRect.Left >= width * 0.045f && heroRect.Right <= width * 0.955f && heroRect.Top >= height * 0.045f && heroRect.Bottom <= height * 0.90f ? 1d : 0.72d;
+        var overlapScore = overlapPenaltyApplied ? 0.70d : 1d;
+        return Math.Round((textClearance * 0.26d) + (supportClearance * 0.26d) + (dominance * 0.22d) + (cropSafety * 0.16d) + (overlapScore * 0.10d), 3);
+    }
+
+    private static double ScoreCinematicRealism(double depthScore, double atmosphericBlendScore, double negativeSpaceScore, double heroIsolationScore, double compositionBalanceScore, double readabilityScore)
+        => Math.Round((depthScore * 0.22d) + (atmosphericBlendScore * 0.20d) + (negativeSpaceScore * 0.18d) + (heroIsolationScore * 0.18d) + (compositionBalanceScore * 0.14d) + (readabilityScore * 0.08d), 3);
+
     private static double ScoreReadability(string hook, RectangleF textBox, int width, int height, bool portrait)
     {
         if (string.IsNullOrWhiteSpace(hook))
@@ -969,6 +1067,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     }
 
     private static object ToBounds(RectangleF rect) => new { x = Math.Round(rect.X, 1), y = Math.Round(rect.Y, 1), width = Math.Round(rect.Width, 1), height = Math.Round(rect.Height, 1) };
+
+    private static float NextGaussian(Random random)
+    {
+        var u1 = 1.0 - random.NextDouble();
+        var u2 = 1.0 - random.NextDouble();
+        return (float)(Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2));
+    }
 
     private static Random CreateDeterministicRandom(ThumbnailGenerationRequest request, string mode)
         => new(StableHash(StableSeedText(request, mode)));
@@ -1018,6 +1123,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             supportObjectScales = composition.SupportObjectScales,
             compositionScore = composition.CompositionScore,
             compositionBalanceScore = composition.CompositionBalanceScore,
+            depthScore = composition.DepthScore,
+            atmosphericBlendScore = composition.AtmosphericBlendScore,
+            negativeSpaceScore = composition.NegativeSpaceScore,
+            heroIsolationScore = composition.HeroIsolationScore,
+            cinematicRealismScore = composition.CinematicRealismScore,
+            visualPreset = composition.VisualPreset,
             readabilityScore = composition.ReadabilityScore,
             clickabilityScore = composition.ClickabilityScore,
             glowIntensity = composition.GlowIntensity,
@@ -1052,6 +1163,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             cinematicMode = composition.CinematicMode,
             compositionScore = composition.CompositionScore,
             compositionBalanceScore = composition.CompositionBalanceScore,
+            depthScore = composition.DepthScore,
+            atmosphericBlendScore = composition.AtmosphericBlendScore,
+            negativeSpaceScore = composition.NegativeSpaceScore,
+            heroIsolationScore = composition.HeroIsolationScore,
+            cinematicRealismScore = composition.CinematicRealismScore,
+            visualPreset = composition.VisualPreset,
             readabilityScore = composition.ReadabilityScore,
             clickabilityScore = composition.ClickabilityScore,
             glowIntensity = composition.GlowIntensity,
@@ -1071,7 +1188,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static async Task WriteFallbackAnalysisAsync(ThumbnailGenerationRequest request, ThumbnailPlan fallback, IReadOnlyCollection<string> warnings, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.Combine(request.OutputDirectory, "thumbnails"));
-        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), assetPriorityUsed = Array.Empty<string>(), selectedAssetFileName = string.Empty, selectedAssetSource = string.Empty, oldAssetIgnoredBecauseHeroExists = false, transparentAssetUsed = false, transparentAssetsUsed = 0, cardStyleRemoved = true, objectCount = 0, layoutWarnings = new[] { "fallback-plan" }, heroObjectScale = 0, supportObjectScales = Array.Empty<double>(), layoutUsed = "FallbackToStellariumFrame", compositionBalanceScore = 0d, glowIntensity = 0d, deepSpacePenaltyApplied = false, foregroundObjectAreaPercent = 0d, overlapPenaltyApplied = false, language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
+        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), assetPriorityUsed = Array.Empty<string>(), selectedAssetFileName = string.Empty, selectedAssetSource = string.Empty, oldAssetIgnoredBecauseHeroExists = false, transparentAssetUsed = false, transparentAssetsUsed = 0, cardStyleRemoved = true, objectCount = 0, layoutWarnings = new[] { "fallback-plan" }, heroObjectScale = 0, supportObjectScales = Array.Empty<double>(), layoutUsed = "FallbackToStellariumFrame", compositionBalanceScore = 0d, depthScore = 0d, atmosphericBlendScore = 0d, negativeSpaceScore = 0d, heroIsolationScore = 0d, cinematicRealismScore = 0d, visualPreset = "Premium Documentary", glowIntensity = 0d, deepSpacePenaltyApplied = false, foregroundObjectAreaPercent = 0d, overlapPenaltyApplied = false, language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
         await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnails", "thumbnail-analysis-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
@@ -1089,6 +1206,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             hookText = fallback.PrimaryThumbnailText,
             compositionScore = 0d,
             compositionBalanceScore = 0d,
+            depthScore = 0d,
+            atmosphericBlendScore = 0d,
+            negativeSpaceScore = 0d,
+            heroIsolationScore = 0d,
+            cinematicRealismScore = 0d,
+            visualPreset = "Premium Documentary",
             readabilityScore = 0d,
             clickabilityScore = 0d,
             glowIntensity = 0d,
@@ -1111,6 +1234,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             hookText = plan.CelestialSelection?.SelectedHook ?? plan.PrimaryThumbnailText,
             compositionScore = composition.CompositionScore,
             compositionBalanceScore = composition.CompositionBalanceScore,
+            depthScore = composition.DepthScore,
+            atmosphericBlendScore = composition.AtmosphericBlendScore,
+            negativeSpaceScore = composition.NegativeSpaceScore,
+            heroIsolationScore = composition.HeroIsolationScore,
+            cinematicRealismScore = composition.CinematicRealismScore,
+            visualPreset = composition.VisualPreset,
             readabilityScore = composition.ReadabilityScore,
             clickabilityScore = composition.ClickabilityScore,
             glowIntensity = composition.GlowIntensity,
@@ -1141,7 +1270,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
 
-    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore);
+    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset);
     private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
     private sealed record Selection(SelectedObject Hero, IReadOnlyCollection<SelectedObject> Support, IReadOnlyCollection<object> VisibilityData, bool IsSpecialEvent, string CinematicMode, IReadOnlyCollection<HeroObjectScore> HeroScores, bool HasConjunction)

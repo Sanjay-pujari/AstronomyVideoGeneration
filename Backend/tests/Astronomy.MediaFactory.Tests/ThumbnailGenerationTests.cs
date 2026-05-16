@@ -544,7 +544,7 @@ public sealed class ThumbnailGenerationTests
         Assert.Single(plan.CelestialSelection!.SupportObjects);
         using var selection = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-selection.json")));
         Assert.Equal("PortraitObjectUpperTextLowerThird", selection.RootElement.GetProperty("layoutUsed").GetString());
-        Assert.InRange(selection.RootElement.GetProperty("heroObjectScale").GetDouble(), 0.40, 0.45);
+        Assert.InRange(selection.RootElement.GetProperty("heroObjectScale").GetDouble(), 0.38, 0.42);
         Assert.Single(selection.RootElement.GetProperty("supportObjectScales").EnumerateArray());
     }
 
@@ -575,6 +575,12 @@ public sealed class ThumbnailGenerationTests
         Assert.True(report.RootElement.GetProperty("foregroundObjectAreaPercent").GetDouble() <= 30);
         Assert.False(report.RootElement.GetProperty("overlapPenaltyApplied").GetBoolean());
         Assert.True(report.RootElement.GetProperty("compositionBalanceScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("depthScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("atmosphericBlendScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("negativeSpaceScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("heroIsolationScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("cinematicRealismScore").GetDouble() > 0);
+        Assert.Equal("Premium Documentary", report.RootElement.GetProperty("visualPreset").GetString());
         Assert.Contains(report.RootElement.GetProperty("candidateScores").EnumerateArray(), score => score.GetProperty("objectKey").GetString() == "andromeda-galaxy" && score.GetProperty("DeepSpacePenalty").GetDouble() < 0);
     }
 
@@ -726,6 +732,7 @@ public sealed class ThumbnailGenerationTests
         Assert.True(report.RootElement.GetProperty("compositionScore").GetDouble() > 0);
         Assert.True(report.RootElement.GetProperty("readabilityScore").GetDouble() > 0);
         Assert.True(report.RootElement.GetProperty("clickabilityScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("cinematicRealismScore").GetDouble() > 0);
     }
 
     [Fact]

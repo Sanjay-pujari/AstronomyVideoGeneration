@@ -78,4 +78,20 @@ public sealed class RenderingOptionsBindingTests
         Assert.Equal("thumbnail-cinematic-ai-report.json", options.OutputFileName);
     }
 
+    [Fact]
+    public void ThumbnailOptions_DefaultsToPremiumDocumentaryPreset()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{ThumbnailOptions.SectionName}:VisualPreset"] = "Premium Documentary"
+            })
+            .Build();
+
+        var options = new ThumbnailOptions();
+        config.GetSection(ThumbnailOptions.SectionName).Bind(options);
+
+        Assert.Equal("Premium Documentary", options.VisualPreset);
+    }
+
 }
