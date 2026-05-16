@@ -668,6 +668,103 @@ public sealed class ThumbnailGenerationTests
         Assert.True(File.Exists(plan.ThumbnailPath));
     }
 
+
+    [Fact]
+    public async Task LocalAssetCollage_CinematicIntelligence_SelectsHeroModeAndDiagnostics()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        foreach (var key in new[] { "jupiter", "neptune", "milky-way" })
+            await WriteCuratedAssetAsync(Path.Combine(assetRoot, key, "hero-transparent.png"), key == "jupiter" ? Color.Orange : Color.Blue);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, MaxSupportObjectsLong = 2 });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildJupiterNeptuneContext(),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        Assert.Equal("Jupiter", plan.CelestialSelection?.HeroObject);
+        foreach (var generic in new[] { "TONIGHT'S SKY", "LOOK W TONIGHT", "PLANETS VISIBLE" })
+            Assert.NotEqual(generic, plan.PrimaryThumbnailText, StringComparer.OrdinalIgnoreCase);
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-report.json")));
+        Assert.Equal("EpicPlanetFocus", report.RootElement.GetProperty("cinematicMode").GetString());
+        Assert.Equal("Jupiter", report.RootElement.GetProperty("heroObject").GetString());
+        Assert.True(report.RootElement.GetProperty("compositionScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("readabilityScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("clickabilityScore").GetDouble() > 0);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_CinematicIntelligence_DetectsConjunctionAndSafeTextBounds()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        foreach (var key in new[] { "moon", "venus", "milky-way" })
+            await WriteCuratedAssetAsync(Path.Combine(assetRoot, key, "hero-transparent.png"), key == "moon" ? Color.White : Color.Gold);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, MaxSupportObjectsLong = 4 });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildConjunctionContext(),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        Assert.True(plan.CelestialSelection!.SupportObjects.Count <= 4);
+        Assert.True(plan.PrimaryThumbnailText.Length <= 28);
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-report.json")));
+        Assert.Equal("ConjunctionMode", report.RootElement.GetProperty("cinematicMode").GetString());
+        Assert.Contains("Near", report.RootElement.GetProperty("hookText").GetString(), StringComparison.OrdinalIgnoreCase);
+        var bounds = report.RootElement.GetProperty("textBounds");
+        Assert.True(bounds.GetProperty("x").GetDouble() >= 0);
+        Assert.True(bounds.GetProperty("y").GetDouble() >= 0);
+        Assert.True(bounds.GetProperty("x").GetDouble() + bounds.GetProperty("width").GetDouble() <= 1280);
+        Assert.True(bounds.GetProperty("y").GetDouble() + bounds.GetProperty("height").GetDouble() <= 720);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_CinematicIntelligence_EventModesAndDeterministicReport()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        foreach (var key in new[] { "meteor-shower", "jupiter", "venus", "mars", "milky-way" })
+            await WriteCuratedAssetAsync(Path.Combine(assetRoot, key, "hero-transparent.png"), Color.White);
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, MaxSupportObjectsLong = 2 });
+        var outputA = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var outputB = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var requestContext = BuildMeteorContext();
+
+        var first = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.SpecialEventGuide,
+            Context = requestContext,
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputA
+        }, CancellationToken.None);
+        await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.SpecialEventGuide,
+            Context = requestContext,
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputB
+        }, CancellationToken.None);
+
+        Assert.Equal("Meteor Shower Peaks", first.PrimaryThumbnailText);
+        Assert.True(first.CelestialSelection!.SupportObjects.Count <= 2);
+        var reportA = await File.ReadAllTextAsync(Path.Combine(outputA, "thumbnails", "thumbnail-cinematic-report.json"));
+        var reportB = await File.ReadAllTextAsync(Path.Combine(outputB, "thumbnails", "thumbnail-cinematic-report.json"));
+        using var parsed = JsonDocument.Parse(reportA);
+        Assert.Equal("MeteorShowerMode", parsed.RootElement.GetProperty("cinematicMode").GetString());
+        Assert.Equal(reportA, reportB);
+    }
+
     private static ThumbnailGenerationService CreateProductionService(ThumbnailOptions options)
         => new(new ThumbnailStrategyService(), new ThumbnailScoringService(), new ThumbnailHookService(), Options.Create(options), NullLogger<ThumbnailGenerationService>.Instance);
 
@@ -687,6 +784,50 @@ public sealed class ThumbnailGenerationTests
                 new SceneObservationContext { SceneId = "venus", ObjectName = "Venus", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 35, DirectionLabel = "West" },
                 new SceneObservationContext { SceneId = "mars", ObjectName = "Mars", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 25, DirectionLabel = "East" },
                 new SceneObservationContext { SceneId = "saturn", ObjectName = "Saturn", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 18, DirectionLabel = "East" }
+            ]
+        };
+
+
+    private static AstronomyContext BuildJupiterNeptuneContext()
+        => new()
+        {
+            Date = new DateOnly(2026, 5, 14),
+            LocationName = "Udaipur, India",
+            Localization = LocalizationContext.English,
+            SceneObservationContexts =
+            [
+                new SceneObservationContext { SceneId = "jupiter", ObjectName = "Jupiter", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 62, DirectionLabel = "South" },
+                new SceneObservationContext { SceneId = "neptune", ObjectName = "Neptune", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 72, DirectionLabel = "East" }
+            ]
+        };
+
+    private static AstronomyContext BuildConjunctionContext()
+        => new()
+        {
+            Date = new DateOnly(2026, 5, 14),
+            LocationName = "Udaipur, India",
+            Localization = LocalizationContext.English,
+            SceneObservationContexts =
+            [
+                new SceneObservationContext { SceneId = "moon", ObjectName = "Moon", ObjectType = "Moon", IsVisible = true, AltitudeDegrees = 50, VisibilityReason = "Moon near Venus after sunset" },
+                new SceneObservationContext { SceneId = "venus", ObjectName = "Venus", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 46, VisibilityReason = "Close conjunction with Moon" }
+            ],
+            Events = [new AstronomyEventModel { Category = "Conjunction", ObjectName = "Venus", Details = "Moon near Venus", Score = 0.96 }]
+        };
+
+    private static AstronomyContext BuildMeteorContext()
+        => new()
+        {
+            Date = new DateOnly(2026, 5, 14),
+            LocationName = "Udaipur, India",
+            Localization = LocalizationContext.English,
+            SpecialEvent = new SpecialEventContext { EventType = "Meteor shower", EventTitle = "Meteor shower peaks tonight", ContentOpportunityScore = 1 },
+            Events = [new AstronomyEventModel { Category = "Meteor Shower", ObjectName = "Meteor Shower", Details = "Meteor shower peaks tonight", Score = 0.99 }],
+            SceneObservationContexts =
+            [
+                new SceneObservationContext { SceneId = "jupiter", ObjectName = "Jupiter", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 65 },
+                new SceneObservationContext { SceneId = "venus", ObjectName = "Venus", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 42 },
+                new SceneObservationContext { SceneId = "mars", ObjectName = "Mars", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 38 }
             ]
         };
 
