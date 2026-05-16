@@ -1,0 +1,30 @@
+[
+  {
+    "objectKey": "saturn",
+    "source": "LocalCache",
+    "title": "saturn-pia01940",
+    "description": "",
+    "nasaId": "",
+    "originalUrl": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\saturn\\saturn-pia01940.jpg",
+    "localPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\saturn\\saturn-pia01940.jpg",
+    "downloadedAtUtc": "2026-05-16T06:21:58.8123655+00:00",
+    "licenseNote": "Local curated asset; verify local rights metadata before publishing.",
+    "width": 718,
+    "height": 415,
+    "qualityScore": 0.687
+  },
+  {
+    "objectKey": "saturn",
+    "source": "LocalCache",
+    "title": "saturn-nasa",
+    "description": "",
+    "nasaId": "",
+    "originalUrl": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\saturn\\saturn-nasa.jpg",
+    "localPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\saturn\\saturn-nasa.jpg",
+    "downloadedAtUtc": "2026-05-16T06:15:58.2840518+00:00",
+    "licenseNote": "Local curated asset; verify local rights metadata before publishing.",
+    "width": 640,
+    "height": 401,
+    "qualityScore": 0.682
+  }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "objectKey": "venus",
+    "source": "LocalCache",
+    "title": "venus-nasa",
+    "description": "",
+    "nasaId": "",
+    "originalUrl": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\venus\\venus-nasa.jpg",
+    "localPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\venus\\venus-nasa.jpg",
+    "downloadedAtUtc": "2026-05-16T06:16:08.5454943+00:00",
+    "licenseNote": "Local curated asset; verify local rights metadata before publishing.",
+    "width": 1280,
+    "height": 1280,
+    "qualityScore": 0.855
+  },
+  {
+    "objectKey": "venus",
+    "source": "LocalCache",
+    "title": "venus-pia01544",
+    "description": "",
+    "nasaId": "",
+    "originalUrl": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\venus\\venus-pia01544.jpg",
+    "localPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\venus\\venus-pia01544.jpg",
+    "downloadedAtUtc": "2026-05-16T06:21:58.8080795+00:00",
+    "licenseNote": "Local curated asset; verify local rights metadata before publishing.",
+    "width": 170,
+    "height": 248,
+    "qualityScore": 0.655
+  }
+]
