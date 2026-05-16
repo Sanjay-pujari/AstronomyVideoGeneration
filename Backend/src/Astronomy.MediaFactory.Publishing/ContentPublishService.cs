@@ -16,6 +16,7 @@ public sealed class ContentPublishService : IContentPublishService
     private readonly TokenHealthOptions _tokenHealthOptions;
     private readonly MaintenanceOptions _maintenanceOptions;
     private readonly ITokenHealthService _tokenHealthService;
+    private readonly IPlatformThumbnailResolver _thumbnailResolver;
     private readonly ILogger<ContentPublishService> _logger;
 
     public ContentPublishService(
@@ -26,7 +27,8 @@ public sealed class ContentPublishService : IContentPublishService
         IOptions<YouTubeOptions> youTubeOptions,
         IOptions<TokenHealthOptions> tokenHealthOptions,
         IOptions<MaintenanceOptions> maintenanceOptions,
-        ILogger<ContentPublishService> logger)
+        ILogger<ContentPublishService> logger,
+        IPlatformThumbnailResolver? thumbnailResolver = null)
     {
         _repository = repository;
         _youTubePublishService = youTubePublishService;
@@ -36,6 +38,7 @@ public sealed class ContentPublishService : IContentPublishService
         _tokenHealthOptions = tokenHealthOptions.Value;
         _maintenanceOptions = maintenanceOptions.Value;
         _logger = logger;
+        _thumbnailResolver = thumbnailResolver ?? new PlatformThumbnailResolver(Microsoft.Extensions.Logging.Abstractions.NullLogger<PlatformThumbnailResolver>.Instance);
     }
 
     public Task<IReadOnlyList<PublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
@@ -119,6 +122,10 @@ public sealed class ContentPublishService : IContentPublishService
                 IsShort = publishAsset.IsShort,
                 VideoPath = publishAsset.VideoPath,
                 ThumbnailPath = publishAsset.ThumbnailPath,
+                LongThumbnailPath = publishAsset.LongThumbnailPath,
+                ShortThumbnailPath = publishAsset.ShortThumbnailPath,
+                PlatformThumbnailPath = publishAsset.PlatformThumbnailPath,
+                ThumbnailSource = publishAsset.ThumbnailSource,
                 Title = publishAsset.Title,
                 Description = publishAsset.Description,
                 Tags = publishAsset.Tags,
@@ -149,11 +156,16 @@ public sealed class ContentPublishService : IContentPublishService
         }
 
         var metadata = await ReadRequiredJsonAsync<SeoMetadataResult>(Path.Combine(outputDirectory, "seo-metadata.json"), cancellationToken);
+        var longThumbnail = await _thumbnailResolver.ResolveAsync(outputDirectory, "YouTube", PlatformThumbnailContentTypes.LongVideo, cancellationToken);
         var longAsset = new PublishAsset
         {
             AssetType = "LongVideo",
             VideoPath = Path.Combine(outputDirectory, "final-video.mp4"),
-            ThumbnailPath = await ResolveThumbnailPathAsync(outputDirectory, cancellationToken),
+            ThumbnailPath = longThumbnail.PlatformThumbnailPath,
+            LongThumbnailPath = longThumbnail.LongThumbnailPath,
+            ShortThumbnailPath = longThumbnail.ShortThumbnailPath,
+            PlatformThumbnailPath = longThumbnail.PlatformThumbnailPath,
+            ThumbnailSource = longThumbnail.ThumbnailSource,
             Title = metadata.Title,
             Description = metadata.Description,
             Tags = SplitCsv(metadata.TagsCsv),
@@ -189,11 +201,17 @@ public sealed class ContentPublishService : IContentPublishService
                 : await DeriveShortMetadataFromRootIfPresentAsync(outputDirectory, run, cancellationToken);
         var marker = EnsureShortsMarker(ShortenTitle(shortMetadata.Title), shortMetadata.Description);
 
+        var shortThumbnail = await _thumbnailResolver.ResolveAsync(outputDirectory, "YouTube", PlatformThumbnailContentTypes.ShortVideo, cancellationToken);
+
         return new PublishAsset
         {
             AssetType = "ShortVideo",
             VideoPath = shortVideoPath,
-            ThumbnailPath = await ResolveShortThumbnailPathAsync(outputDirectory, cancellationToken),
+            ThumbnailPath = shortThumbnail.PlatformThumbnailPath,
+            LongThumbnailPath = shortThumbnail.LongThumbnailPath,
+            ShortThumbnailPath = shortThumbnail.ShortThumbnailPath,
+            PlatformThumbnailPath = shortThumbnail.PlatformThumbnailPath,
+            ThumbnailSource = shortThumbnail.ThumbnailSource,
             Title = marker.Title,
             Description = marker.Description,
             Tags = SplitCsv(shortMetadata.TagsCsv),
@@ -234,6 +252,10 @@ public sealed class ContentPublishService : IContentPublishService
                 AssetType = asset.AssetType,
                 VideoPath = asset.VideoPath,
                 ThumbnailPath = string.IsNullOrWhiteSpace(asset.ThumbnailPath) ? null : asset.ThumbnailPath,
+                LongThumbnailPath = string.IsNullOrWhiteSpace(asset.LongThumbnailPath) ? null : asset.LongThumbnailPath,
+                ShortThumbnailPath = string.IsNullOrWhiteSpace(asset.ShortThumbnailPath) ? null : asset.ShortThumbnailPath,
+                PlatformThumbnailPath = string.IsNullOrWhiteSpace(asset.PlatformThumbnailPath) ? null : asset.PlatformThumbnailPath,
+                ThumbnailSource = asset.ThumbnailSource,
                 WillUpload = skipReason is null,
                 SkipReason = skipReason
             };
@@ -329,10 +351,14 @@ public sealed class ContentPublishService : IContentPublishService
         {
             Success = false,
             Platform = "YouTube",
+            ContentType = asset.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
             AssetType = asset.AssetType,
             IsShort = asset.IsShort,
             Mode = mode,
             Error = reason,
+            UploadedThumbnailPath = asset.PlatformThumbnailPath,
+            ThumbnailSource = asset.ThumbnailSource,
+            ThumbnailWarning = reason,
             PublishedUtc = DateTime.UtcNow
         };
 
@@ -627,6 +653,10 @@ public sealed class ContentPublishService : IContentPublishService
         public string AssetType { get; init; } = string.Empty;
         public string VideoPath { get; init; } = string.Empty;
         public string? ThumbnailPath { get; init; }
+        public string? LongThumbnailPath { get; init; }
+        public string? ShortThumbnailPath { get; init; }
+        public string? PlatformThumbnailPath { get; init; }
+        public string? ThumbnailSource { get; init; }
         public bool WillUpload { get; set; }
         public string? SkipReason { get; set; }
         public bool? YouTubeShortEligible { get; set; }

@@ -289,6 +289,9 @@ public sealed class InstagramReelsPlatformPublisher : IShortFormPlatformPublishe
         {
             Platform = platform,
             VideoPath = target.VideoPath,
+            ShortThumbnailPath = target.ThumbnailPath ?? string.Empty,
+            PlatformThumbnailPath = target.ThumbnailPath ?? string.Empty,
+            ThumbnailSource = string.IsNullOrWhiteSpace(target.ThumbnailPath) ? ThumbnailSources.None : ThumbnailSources.GeneratedThumbnail,
             Caption = target.Caption,
             ShortTitle = target.Title,
             IsReel = true
@@ -350,6 +353,9 @@ public sealed class FacebookPlatformPublisher : IShortFormPlatformPublisher
         {
             Platform = platform,
             VideoPath = target.VideoPath,
+            ShortThumbnailPath = target.ThumbnailPath ?? string.Empty,
+            PlatformThumbnailPath = target.ThumbnailPath ?? string.Empty,
+            ThumbnailSource = string.IsNullOrWhiteSpace(target.ThumbnailPath) ? ThumbnailSources.None : ThumbnailSources.GeneratedThumbnail,
             Caption = target.Caption,
             ShortTitle = target.Title,
             IsReel = true

@@ -61,6 +61,16 @@ public interface IShortFormPlatformMetadataFormatter { PlatformPublicationTarget
 public interface IShortFormPlatformPublisher { ShortFormPlatform Platform { get; } Task<PlatformPublicationTarget> PublishAsync(PlatformPublicationTarget target, CancellationToken cancellationToken); }
 public interface IShortFormPublishingService { Task<IReadOnlyCollection<PlatformPublicationTarget>> PublishAsync(ShortFormPublicationRequest request, CancellationToken cancellationToken); }
 
+
+public interface IPlatformThumbnailResolver
+{
+    Task<PlatformThumbnailResolution> ResolveAsync(
+        string outputDirectory,
+        string platform,
+        string contentType,
+        CancellationToken cancellationToken);
+}
+
 public interface IPlatformPublishService
 {
     string PlatformName { get; }

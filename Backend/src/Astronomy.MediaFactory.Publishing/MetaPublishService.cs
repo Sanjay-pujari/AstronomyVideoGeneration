@@ -17,6 +17,7 @@ public sealed class MetaPublishService : IMetaPublishService
     private readonly TokenHealthOptions _tokenHealthOptions;
     private readonly MaintenanceOptions _maintenanceOptions;
     private readonly ITokenHealthService _tokenHealthService;
+    private readonly IPlatformThumbnailResolver _thumbnailResolver;
     private readonly ILogger<MetaPublishService> _logger;
 
     public MetaPublishService(
@@ -27,7 +28,8 @@ public sealed class MetaPublishService : IMetaPublishService
         IOptions<MetaPublishingOptions> options,
         IOptions<TokenHealthOptions> tokenHealthOptions,
         IOptions<MaintenanceOptions> maintenanceOptions,
-        ILogger<MetaPublishService> logger)
+        ILogger<MetaPublishService> logger,
+        IPlatformThumbnailResolver? thumbnailResolver = null)
     {
         _repository = repository;
         _facebookReelPublishService = facebookReelPublishService;
@@ -37,6 +39,7 @@ public sealed class MetaPublishService : IMetaPublishService
         _tokenHealthOptions = tokenHealthOptions.Value;
         _maintenanceOptions = maintenanceOptions.Value;
         _logger = logger;
+        _thumbnailResolver = thumbnailResolver ?? new PlatformThumbnailResolver(Microsoft.Extensions.Logging.Abstractions.NullLogger<PlatformThumbnailResolver>.Instance);
     }
 
     public async Task<IReadOnlyList<MetaPublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset = "all", CancellationToken cancellationToken = default)
@@ -92,6 +95,8 @@ public sealed class MetaPublishService : IMetaPublishService
         var outputDirectory = ResolveOutputDirectory(run);
         Directory.CreateDirectory(outputDirectory);
         var videoPath = Path.Combine(outputDirectory, "shorts", "short-video.mp4");
+        var facebookThumbnail = await _thumbnailResolver.ResolveAsync(outputDirectory, "Facebook", PlatformThumbnailContentTypes.Reel, cancellationToken);
+        var instagramThumbnail = await _thumbnailResolver.ResolveAsync(outputDirectory, "Instagram", PlatformThumbnailContentTypes.Reel, cancellationToken);
         var results = new List<MetaPublishResult>();
 
         if (publishFacebook)
@@ -105,6 +110,10 @@ public sealed class MetaPublishService : IMetaPublishService
                 PipelineRunId = pipelineRunId,
                 Platform = "Facebook",
                 VideoPath = videoPath,
+                LongThumbnailPath = facebookThumbnail.LongThumbnailPath,
+                ShortThumbnailPath = facebookThumbnail.ShortThumbnailPath,
+                PlatformThumbnailPath = facebookThumbnail.PlatformThumbnailPath,
+                ThumbnailSource = facebookThumbnail.ThumbnailSource,
                 Caption = caption,
                 ShortTitle = BuildFacebookShortTitle(metadata?.Title, caption),
                 IsReel = true
@@ -126,6 +135,10 @@ public sealed class MetaPublishService : IMetaPublishService
                 PipelineRunId = pipelineRunId,
                 Platform = "Instagram",
                 VideoPath = videoPath,
+                LongThumbnailPath = instagramThumbnail.LongThumbnailPath,
+                ShortThumbnailPath = instagramThumbnail.ShortThumbnailPath,
+                PlatformThumbnailPath = instagramThumbnail.PlatformThumbnailPath,
+                ThumbnailSource = instagramThumbnail.ThumbnailSource,
                 Caption = caption,
                 ShortTitle = BuildFacebookShortTitle(metadata?.Title, caption),
                 IsReel = true
