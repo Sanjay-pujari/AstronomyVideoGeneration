@@ -57,7 +57,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             }
 
             var hook = _options.EnableHookText ? BuildHook(selection.Hero, request) : string.Empty;
-            await ComposeAsync(request, outputPath, width, height, assets, hook, warnings, cancellationToken);
+            var composition = await ComposeAsync(request, outputPath, width, height, assets, hook, warnings, cancellationToken);
             await EnsureJpegSizeAsync(outputPath, width, height, cancellationToken);
 
             var celestialSelection = new CelestialThumbnailSelection
@@ -65,7 +65,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 HeroObject = selection.Hero.Name,
                 SupportObjects = selection.Support.Select(s => s.Name).ToArray(),
                 SelectedHook = hook,
-                SelectedLayout = request.IsShortForm ? "PortraitObjectFirst" : selection.IsSpecialEvent ? "SpecialEventHero" : "LandscapeHeroRightTextLeft",
+                SelectedLayout = composition.LayoutUsed,
                 AssetSources = assets,
                 VisibilityDataUsed = selection.VisibilityData,
                 FallbackUsed = assets.Any(a => a.FallbackUsed) || warnings.Any(w => w.Contains("fallback", StringComparison.OrdinalIgnoreCase)),
@@ -89,8 +89,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 CelestialSelection = celestialSelection
             };
 
-            await WriteSelectionAsync(plan, thumbnailsDirectory, cancellationToken);
-            await WriteAnalysisAsync(plan, request, width, height, assets, warnings, cancellationToken);
+            await WriteSelectionAsync(plan, thumbnailsDirectory, composition, cancellationToken);
+            await WriteAnalysisAsync(plan, request, width, height, assets, warnings, composition, cancellationToken);
             return plan;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -170,7 +170,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         return assets;
     }
 
-    private async Task ComposeAsync(ThumbnailGenerationRequest request, string outputPath, int width, int height, IReadOnlyList<CelestialAsset> assets, string hook, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<CompositionDiagnostics> ComposeAsync(ThumbnailGenerationRequest request, string outputPath, int width, int height, IReadOnlyList<CelestialAsset> assets, string hook, List<string> warnings, CancellationToken cancellationToken)
     {
         var portrait = request.IsShortForm;
         using var canvas = new Image<Rgba32>(width, height, Color.FromRgb(3, 8, 22));
@@ -182,10 +182,16 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         });
 
         var hero = assets[0];
-        await DrawObjectAsync(canvas, hero, portrait ? HeroPortraitRect(width, height) : HeroLandscapeRect(width, height), true, cancellationToken);
+        var heroRect = portrait ? HeroPortraitRect(width, height) : HeroLandscapeRect(width, height);
+        await DrawObjectAsync(canvas, hero, heroRect, true, cancellationToken);
         var supports = assets.Skip(1).Take(portrait ? 1 : 2).ToArray();
+        var supportScales = new List<double>();
         for (var i = 0; i < supports.Length; i++)
-            await DrawObjectAsync(canvas, supports[i], portrait ? SupportPortraitRect(width, height, i) : SupportLandscapeRect(width, height, i), false, cancellationToken);
+        {
+            var supportRect = portrait ? SupportPortraitRect(width, height, i) : SupportLandscapeRect(width, height, i);
+            supportScales.Add(Math.Round(supportRect.Width / width, 3));
+            await DrawObjectAsync(canvas, supports[i], supportRect, false, cancellationToken);
+        }
 
         canvas.Mutate(ctx =>
         {
@@ -196,11 +202,19 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         });
 
         await canvas.SaveAsJpegAsync(outputPath, new JpegEncoder { Quality = Math.Clamp(_options.JpegQuality, 1, 100) }, cancellationToken);
+        return new CompositionDiagnostics(
+            LayoutUsed: portrait ? "PortraitObjectUpperTextLowerThird" : "LandscapeHeroRightTextLeft",
+            HeroObjectScale: Math.Round(heroRect.Width / width, 3),
+            SupportObjectScales: supportScales.ToArray(),
+            TransparentAssetsUsed: assets.Count(a => IsTransparentAsset(a.LocalPath)),
+            CardStyleRemoved: true,
+            ObjectCount: 1 + supports.Length,
+            LayoutWarnings: BuildLayoutWarnings(portrait, heroRect.Width / width, supportScales).ToArray());
     }
 
     private async Task DrawBackgroundAsync(Image<Rgba32> canvas, ThumbnailGenerationRequest request, int width, int height, List<string> warnings, CancellationToken cancellationToken)
     {
-        var background = FindAsset("milky-way")?.Path;
+        var background = FindMilkyWayBackground();
         background ??= _options.EnableStellariumBackground ? request.AvailableVisuals.FirstOrDefault(File.Exists) : null;
         if (background is null)
         {
@@ -211,7 +225,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         try
         {
             using var image = await Image.LoadAsync<Rgba32>(background, cancellationToken);
-            image.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop }).GaussianBlur(1.3f).Brightness(0.55f).Contrast(1.08f));
+            image.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop }).GaussianBlur(1.3f).Brightness(0.45f).Contrast(1.04f));
             canvas.Mutate(ctx => ctx.DrawImage(image, new Point(0, 0), 1f));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -223,7 +237,11 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static async Task DrawObjectAsync(Image<Rgba32> canvas, CelestialAsset asset, RectangleF rect, bool hero, CancellationToken cancellationToken)
     {
         using var obj = await Image.LoadAsync<Rgba32>(asset.LocalPath, cancellationToken);
-        obj.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size((int)rect.Width, (int)rect.Height), Mode = ResizeMode.Max }));
+        obj.Mutate(ctx =>
+        {
+            ctx.Resize(new ResizeOptions { Size = new Size((int)rect.Width, (int)rect.Height), Mode = ResizeMode.Max });
+            if (!hero) ctx.GaussianBlur(0.65f);
+        });
         var x = (int)(rect.X + (rect.Width - obj.Width) / 2f);
         var y = (int)(rect.Y + (rect.Height - obj.Height) / 2f);
         canvas.Mutate(ctx =>
@@ -231,8 +249,9 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             var glowColor = ResolveGlow(asset.Category).WithAlpha(hero ? 0.32f : 0.18f);
             var glow = new EllipsePolygon(rect.X + rect.Width / 2f, rect.Y + rect.Height / 2f, Math.Max(rect.Width, rect.Height) * (hero ? 0.56f : 0.42f));
             ctx.Fill(glowColor, glow);
-            ctx.DrawImage(obj, new Point(x + (hero ? 9 : 5), y + (hero ? 12 : 7)), hero ? 0.26f : 0.18f);
-            ctx.DrawImage(obj, new Point(x, y), hero ? 1f : 0.82f);
+            if (IsTransparentAsset(asset.LocalPath))
+                ctx.DrawImage(obj, new Point(x + (hero ? 9 : 5), y + (hero ? 12 : 7)), hero ? 0.22f : 0.14f);
+            ctx.DrawImage(obj, new Point(x, y), hero ? 1f : 0.78f);
         });
     }
 
@@ -293,8 +312,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         if (files.Length == 0)
             return null;
 
-        var preferredNames = (_options.PreferredAssetFileNames.Length > 0 ? _options.PreferredAssetFileNames : DefaultPreferredAssetNames)
+        var configuredPreferredNames = _options.PreferredAssetFileNames.Length > 0 ? _options.PreferredAssetFileNames : DefaultPreferredAssetNames;
+        var preferredNames = new[] { "hero-transparent.png" }
+            .Concat(configuredPreferredNames)
+            .Concat(DefaultPreferredAssetNames)
             .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var legacyExists = files.Any(IsLegacyJpgAsset);
 
@@ -323,6 +346,33 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             .ThenBy(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
         return any is null ? null : CreateResolvedAsset(any, key, false);
+    }
+
+
+    private string? FindMilkyWayBackground()
+    {
+        var directory = Path.Combine(ResolveAssetRoot(), "milky-way");
+        var hero = Path.Combine(directory, "hero.png");
+        if (File.Exists(hero))
+            return hero;
+        return FindAsset("milky-way")?.Path;
+    }
+
+    private static bool IsTransparentAsset(string path)
+        => Path.GetFileName(path).Equals("hero-transparent.png", StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> BuildLayoutWarnings(bool portrait, double heroScale, IReadOnlyCollection<double> supportScales)
+    {
+        if (portrait && (heroScale < 0.55d || heroScale > 0.75d))
+            yield return "portrait-hero-scale-outside-target";
+        if (!portrait && (heroScale < 0.38d || heroScale > 0.55d))
+            yield return "landscape-hero-scale-outside-target";
+        if (supportScales.Any(s => s < 0.12d || s > 0.22d))
+            yield return "support-scale-outside-target";
+        if (portrait && supportScales.Count > 1)
+            yield return "portrait-support-count-exceeds-cap";
+        if (!portrait && supportScales.Count > 2)
+            yield return "landscape-support-count-exceeds-cap";
     }
 
     private bool HasAsset(string key) => FindAsset(key) is not null;
@@ -397,7 +447,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         "meteor-shower" => "Meteor Peak",
         "solar-eclipse" or "lunar-eclipse" => "Eclipse Tonight",
         "jupiter" => "Jupiter Tonight",
-        _ => "Tonight’s Sky"
+        _ => "Sky Watch"
     };
 
     private static string HindiHook(string key) => key switch
@@ -412,10 +462,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string LimitWords(string value, int maxWords) => string.Join(' ', value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(Math.Max(1, maxWords)));
 
-    private static RectangleF HeroLandscapeRect(int width, int height) => new(width * 0.54f, height * 0.07f, width * 0.40f, height * 0.78f);
-    private static RectangleF SupportLandscapeRect(int width, int height, int index) => new(width * 0.40f, height * (index == 0 ? 0.12f : 0.50f), width * 0.13f, width * 0.13f);
-    private static RectangleF HeroPortraitRect(int width, int height) => new(width * 0.08f, height * 0.08f, width * 0.84f, width * 0.84f);
-    private static RectangleF SupportPortraitRect(int width, int height, int index) => new(width * 0.66f, height * 0.48f, width * 0.22f, width * 0.22f);
+    private static RectangleF HeroLandscapeRect(int width, int height) => new(width * 0.50f, height * 0.07f, width * 0.46f, height * 0.78f);
+    private static RectangleF SupportLandscapeRect(int width, int height, int index) => new(width * (index == 0 ? 0.37f : 0.44f), height * (index == 0 ? 0.14f : 0.56f), width * 0.16f, width * 0.16f);
+    private static RectangleF HeroPortraitRect(int width, int height) => new(width * 0.15f, height * 0.10f, width * 0.70f, width * 0.70f);
+    private static RectangleF SupportPortraitRect(int width, int height, int index) => new(width * 0.67f, height * 0.39f, width * 0.18f, width * 0.18f);
 
     private static void DrawCinematicGradient(IImageProcessingContext ctx, int width, int height, bool portrait)
     {
@@ -483,7 +533,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         return family.CreateFont(size, style);
     }
 
-    private static async Task WriteSelectionAsync(ThumbnailPlan plan, string thumbnailsDirectory, CancellationToken cancellationToken)
+    private static async Task WriteSelectionAsync(ThumbnailPlan plan, string thumbnailsDirectory, CompositionDiagnostics composition, CancellationToken cancellationToken)
     {
         var payload = new
         {
@@ -495,12 +545,18 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             longThumbnailPath = plan.LongThumbnailPath,
             shortThumbnailPath = plan.ShortThumbnailPath,
             assetSources = plan.CelestialSelection?.AssetSources ?? Array.Empty<CelestialAsset>(),
-            fallbackUsed = plan.FallbackUsed
+            fallbackUsed = plan.FallbackUsed,
+            selectedAssetFileName = plan.CelestialSelection?.AssetSources.FirstOrDefault() is { } selected ? Path.GetFileName(selected.LocalPath) : string.Empty,
+            selectedAssetSource = plan.CelestialSelection?.AssetSources.FirstOrDefault()?.Source ?? string.Empty,
+            transparentAssetUsed = plan.CelestialSelection?.AssetSources.FirstOrDefault() is { } first && IsTransparentAsset(first.LocalPath),
+            layoutUsed = composition.LayoutUsed,
+            heroObjectScale = composition.HeroObjectScale,
+            supportObjectScales = composition.SupportObjectScales
         };
         await File.WriteAllTextAsync(Path.Combine(thumbnailsDirectory, "thumbnail-selection.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
-    private static async Task WriteAnalysisAsync(ThumbnailPlan plan, ThumbnailGenerationRequest request, int width, int height, IReadOnlyCollection<CelestialAsset> assets, IReadOnlyCollection<string> warnings, CancellationToken cancellationToken)
+    private static async Task WriteAnalysisAsync(ThumbnailPlan plan, ThumbnailGenerationRequest request, int width, int height, IReadOnlyCollection<CelestialAsset> assets, IReadOnlyCollection<string> warnings, CompositionDiagnostics composition, CancellationToken cancellationToken)
     {
         var outputPath = plan.ThumbnailPath ?? string.Empty;
         var payload = new
@@ -511,7 +567,14 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             selectedAssetFileName = assets.FirstOrDefault() is { } selected ? Path.GetFileName(selected.LocalPath) : string.Empty,
             selectedAssetSource = assets.FirstOrDefault()?.Source ?? string.Empty,
             oldAssetIgnoredBecauseHeroExists = assets.Any(a => a.OldAssetIgnoredBecauseHeroExists),
-            layoutUsed = plan.CelestialSelection?.SelectedLayout ?? "LocalAssetCollage",
+            transparentAssetUsed = assets.FirstOrDefault() is { } first && IsTransparentAsset(first.LocalPath),
+            transparentAssetsUsed = composition.TransparentAssetsUsed,
+            cardStyleRemoved = composition.CardStyleRemoved,
+            objectCount = composition.ObjectCount,
+            layoutWarnings = composition.LayoutWarnings,
+            heroObjectScale = composition.HeroObjectScale,
+            supportObjectScales = composition.SupportObjectScales,
+            layoutUsed = composition.LayoutUsed,
             language = request.Context.Localization.ResolvedLanguage,
             dimensions = new { width, height, fileSizeBytes = File.Exists(outputPath) ? new FileInfo(outputPath).Length : 0 },
             warnings
@@ -522,12 +585,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static async Task WriteFallbackAnalysisAsync(ThumbnailGenerationRequest request, ThumbnailPlan fallback, IReadOnlyCollection<string> warnings, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.Combine(request.OutputDirectory, "thumbnails"));
-        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), assetPriorityUsed = Array.Empty<string>(), selectedAssetFileName = string.Empty, selectedAssetSource = string.Empty, oldAssetIgnoredBecauseHeroExists = false, layoutUsed = "FallbackToStellariumFrame", language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
+        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), assetPriorityUsed = Array.Empty<string>(), selectedAssetFileName = string.Empty, selectedAssetSource = string.Empty, oldAssetIgnoredBecauseHeroExists = false, transparentAssetUsed = false, transparentAssetsUsed = 0, cardStyleRemoved = true, objectCount = 0, layoutWarnings = new[] { "fallback-plan" }, heroObjectScale = 0, supportObjectScales = Array.Empty<double>(), layoutUsed = "FallbackToStellariumFrame", language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
         await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnails", "thumbnail-analysis-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
 
+    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings);
     private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
     private sealed record Selection(SelectedObject Hero, IReadOnlyCollection<SelectedObject> Support, IReadOnlyCollection<object> VisibilityData, bool IsSpecialEvent);

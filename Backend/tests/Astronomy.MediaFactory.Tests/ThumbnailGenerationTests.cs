@@ -467,6 +467,88 @@ public sealed class ThumbnailGenerationTests
     }
 
     [Fact]
+    public async Task LocalAssetCollage_WritesTransparentAssetSelectionDiagnostics()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        var transparentPath = Path.Combine(assetRoot, "jupiter", "hero-transparent.png");
+        await WriteCuratedAssetAsync(transparentPath, Color.Orange);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "jupiter", "hero.png"), Color.Brown);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "venus", "hero-transparent.png"), Color.Gold);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, PreferredAssetFileNames = ["hero.png"] });
+
+        await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        using var selection = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-selection.json")));
+        Assert.Equal("hero-transparent.png", selection.RootElement.GetProperty("selectedAssetFileName").GetString());
+        Assert.Equal("AssetPack", selection.RootElement.GetProperty("selectedAssetSource").GetString());
+        Assert.True(selection.RootElement.GetProperty("transparentAssetUsed").GetBoolean());
+        Assert.Equal("LandscapeHeroRightTextLeft", selection.RootElement.GetProperty("layoutUsed").GetString());
+        Assert.InRange(selection.RootElement.GetProperty("heroObjectScale").GetDouble(), 0.38, 0.55);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_RemovesCardStyleAndReportsCinematicObjectAnalysis()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        foreach (var key in new[] { "jupiter", "venus", "mars" })
+            await WriteCuratedAssetAsync(Path.Combine(assetRoot, key, "hero-transparent.png"), Color.White);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, MaxSupportObjectsLong = 2 });
+
+        await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-analysis-report.json")));
+        Assert.True(report.RootElement.GetProperty("cardStyleRemoved").GetBoolean());
+        Assert.Equal(3, report.RootElement.GetProperty("objectCount").GetInt32());
+        Assert.Empty(report.RootElement.GetProperty("layoutWarnings").EnumerateArray());
+        Assert.GreaterOrEqual(report.RootElement.GetProperty("transparentAssetsUsed").GetInt32(), 1);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_UsesPortraitLayoutAndCapsSupportObjectForShorts()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        foreach (var key in new[] { "jupiter", "venus", "mars", "saturn" })
+            await WriteCuratedAssetAsync(Path.Combine(assetRoot, key, "hero-transparent.png"), Color.White);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, MaxSupportObjectsShort = 1 });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir,
+            IsShortForm = true
+        }, CancellationToken.None);
+
+        Assert.Single(plan.CelestialSelection!.SupportObjects);
+        using var selection = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-selection.json")));
+        Assert.Equal("PortraitObjectUpperTextLowerThird", selection.RootElement.GetProperty("layoutUsed").GetString());
+        Assert.InRange(selection.RootElement.GetProperty("heroObjectScale").GetDouble(), 0.55, 0.75);
+        Assert.Single(selection.RootElement.GetProperty("supportObjectScales").EnumerateArray());
+    }
+
+    [Fact]
     public async Task LocalAssetCollage_FallsBackToHeroPng_WhenTransparentHeroMissing()
     {
         var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
