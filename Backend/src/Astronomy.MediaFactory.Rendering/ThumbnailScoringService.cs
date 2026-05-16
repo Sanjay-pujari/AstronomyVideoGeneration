@@ -112,12 +112,14 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
         var centeredBiasPenalty = EstimateCenteredBiasPenalty(image, focalWeight, focalWeightX, focalWeightY);
         var geometricMaskPenalty = EstimateGeometricMaskPenalty(midTone, edgeMidTone, radialRing, radialSamples);
         var compositingSeamPenalty = EstimateCompositingSeamPenalty(image, xStep, yStep);
-        var atmosphereContinuityScore = Math.Clamp((organicAtmosphereScore * 0.48) + ((1 - compositingSeamPenalty) * 0.32) + ((1 - geometricMaskPenalty) * 0.20), 0, 1);
+        var rectangularAtmosphereRisk = ProceduralAtmosphereBuffer.EstimateRectangularGeometryRisk(image, xStep, yStep);
+        var atmosphereContinuityScore = Math.Clamp((organicAtmosphereScore * 0.44) + ((1 - compositingSeamPenalty) * 0.28) + ((1 - geometricMaskPenalty) * 0.16) + ((1 - rectangularAtmosphereRisk) * 0.12), 0, 1);
+        var proceduralAtmosphereScore = ProceduralAtmosphereBuffer.ScoreProceduralAtmosphere(organicAtmosphereScore, atmosphereContinuityScore, compositingSeamPenalty, rectangularAtmosphereRisk);
         var environmentalDepthScore = Math.Clamp((starRichness * 0.28) + (colorRichness * 0.22) + (organicAtmosphereScore * 0.34) + (contrast * 0.16), 0, 1);
         var supportObjectDepthScore = Math.Clamp((1 - centeredBiasPenalty) * 0.34 + (1 - symmetryPenalty) * 0.28 + atmosphereContinuityScore * 0.38, 0, 1);
         var edgeIntegrationScore = Math.Clamp((glowScore * 0.34) + (NaturalLightingScoreFromInputs(contrast, symmetryPenalty, centeredBiasPenalty, glowScore) * 0.24) + ((1 - compositingSeamPenalty) * 0.24) + (atmosphereContinuityScore * 0.18), 0, 1);
-        var compositingVisibilityPenalty = Math.Clamp((geometricMaskPenalty * 0.40) + (compositingSeamPenalty * 0.30) + (symmetryPenalty * 0.16) + (centeredBiasPenalty * 0.14), 0, 1);
-        var visualArtifactPenalty = Math.Clamp((blackPixelPercentage > 0.94 ? 0.22 : 0) + Math.Max(0, sharpnessScore - 0.88) * 0.32 + geometricMaskPenalty * 0.30 + compositingSeamPenalty * 0.28, 0, 1);
+        var compositingVisibilityPenalty = Math.Clamp((geometricMaskPenalty * 0.32) + (compositingSeamPenalty * 0.26) + (rectangularAtmosphereRisk * 0.24) + (symmetryPenalty * 0.10) + (centeredBiasPenalty * 0.08), 0, 1);
+        var visualArtifactPenalty = Math.Clamp((blackPixelPercentage > 0.94 ? 0.22 : 0) + Math.Max(0, sharpnessScore - 0.88) * 0.32 + geometricMaskPenalty * 0.24 + compositingSeamPenalty * 0.24 + rectangularAtmosphereRisk * 0.22, 0, 1);
         var naturalLightingScore = NaturalLightingScoreFromInputs(contrast, symmetryPenalty, centeredBiasPenalty, glowScore);
         var cinematicSubtletyScore = Math.Clamp((organicAtmosphereScore * 0.28) + (naturalLightingScore * 0.26) + (edgeIntegrationScore * 0.16) + (atmosphereContinuityScore * 0.14) + ((1 - visualArtifactPenalty) * 0.08) + ((1 - compositingVisibilityPenalty) * 0.08), 0, 1);
         var naturalCompositionPenalty = Math.Clamp((visualArtifactPenalty * 0.38) + (compositingVisibilityPenalty * 0.46) + (compositingSeamPenalty * 0.16), 0, 0.32);
@@ -146,7 +148,8 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
                   + (starRichness * 0.10)
                   + (textSafe * 0.08)
                   + (compositionBalance * 0.08)
-                  + (organicAtmosphereScore * 0.07)
+                  + (organicAtmosphereScore * 0.05)
+                  + (proceduralAtmosphereScore * 0.05)
                   + (naturalLightingScore * 0.07)
                   + (cinematicSubtletyScore * 0.05)
                   - naturalCompositionPenalty
@@ -168,6 +171,7 @@ public sealed class ThumbnailScoringService : IThumbnailScoringService
             StarRichnessScore = Math.Round(starRichness, 4),
             CompositionBalanceScore = Math.Round(compositionBalance, 4),
             OrganicAtmosphereScore = Math.Round(organicAtmosphereScore, 4),
+            ProceduralAtmosphereScore = Math.Round(proceduralAtmosphereScore, 4),
             NaturalLightingScore = Math.Round(naturalLightingScore, 4),
             VisualArtifactPenalty = Math.Round(visualArtifactPenalty, 4),
             CompositingVisibilityPenalty = Math.Round(compositingVisibilityPenalty, 4),

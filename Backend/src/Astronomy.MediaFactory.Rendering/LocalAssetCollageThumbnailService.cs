@@ -224,8 +224,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             DrawCinematicGradient(ctx, width, height, portrait, selection.CinematicMode);
             DrawEnvironmentalDepthTexture(ctx, width, height, portrait, selection.CinematicMode, random);
             DrawStars(ctx, width, height, StableSeedText(request, selection.CinematicMode));
-            DrawCinematicOverlays(ctx, width, height, portrait, selection.CinematicMode, random);
         });
+        ProceduralAtmosphereBuffer.BlendIntoScene(canvas, StableHash(StableSeedText(request, selection.CinematicMode)), selection.CinematicMode, 0.88f);
 
         var textBox = CalculateTextSafeRect(hook, width, height, portrait, request.Context.Localization.ResolvedLanguage);
         var hero = assets[0];
@@ -273,12 +273,14 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var negativeSpaceScore = ScoreNegativeSpace(heroRect, textBox, objectRects.Skip(1), width, height, foregroundObjectAreaPercent);
         var heroIsolationScore = ScoreHeroIsolation(heroRect, textBox, objectRects.Skip(1), width, height, overlapPenaltyApplied);
         var visualArtifactPenalty = ScoreVisualArtifactPenalty(oversizedGlowPenaltyApplied, overlapPenaltyApplied, foregroundObjectAreaPercent);
-        var compositingVisibilityPenalty = ScoreCompositingVisibilityPenalty(heroRect, width, height, compositionBalanceScore, oversizedGlowPenaltyApplied);
+        var rectangularAtmosphereRisk = ProceduralAtmosphereBuffer.EstimateRectangularGeometryRisk(canvas, Math.Max(1, width / 240), Math.Max(1, height / 180));
+        var compositingVisibilityPenalty = ScoreCompositingVisibilityPenalty(heroRect, width, height, compositionBalanceScore, oversizedGlowPenaltyApplied, rectangularAtmosphereRisk);
         var organicAtmosphereScore = ScoreOrganicAtmosphere(atmosphericBlendScore, depthScore, selection.CinematicMode);
         var naturalLightingScore = ScoreNaturalLighting(heroRect, width, height, oversizedGlowPenaltyApplied);
         var edgeIntegrationScore = ScoreEdgeIntegration(hero.Category, compositingVisibilityPenalty, atmosphericBlendScore, naturalLightingScore, oversizedGlowPenaltyApplied);
         var compositingSeamPenalty = ScoreCompositingSeamPenalty(visualArtifactPenalty, compositingVisibilityPenalty, edgeIntegrationScore);
-        var atmosphereContinuityScore = ScoreAtmosphereContinuity(organicAtmosphereScore, atmosphericBlendScore, compositingSeamPenalty);
+        var atmosphereContinuityScore = ScoreAtmosphereContinuity(organicAtmosphereScore, atmosphericBlendScore, compositingSeamPenalty, rectangularAtmosphereRisk);
+        var proceduralAtmosphereScore = ProceduralAtmosphereBuffer.ScoreProceduralAtmosphere(organicAtmosphereScore, atmosphereContinuityScore, compositingSeamPenalty, rectangularAtmosphereRisk);
         var environmentalDepthScore = ScoreEnvironmentalDepth(selection.CinematicMode, supports.Length, organicAtmosphereScore, atmosphereContinuityScore);
         var supportObjectDepthScore = ScoreSupportObjectDepth(supportScales, depthScore, atmosphericBlendScore, supports.Length);
         var cinematicSubtletyScore = ScoreCinematicSubtlety(organicAtmosphereScore, naturalLightingScore, visualArtifactPenalty, compositingVisibilityPenalty, readabilityScore, edgeIntegrationScore, atmosphereContinuityScore);
@@ -312,6 +314,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             CinematicRealismScore: cinematicRealismScore,
             VisualPreset: string.IsNullOrWhiteSpace(_options.VisualPreset) ? "Premium Documentary" : _options.VisualPreset,
             OrganicAtmosphereScore: organicAtmosphereScore,
+            ProceduralAtmosphereScore: proceduralAtmosphereScore,
             NaturalLightingScore: naturalLightingScore,
             VisualArtifactPenalty: visualArtifactPenalty,
             CompositingVisibilityPenalty: compositingVisibilityPenalty,
@@ -487,14 +490,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static void DrawDirectionalLight(IImageProcessingContext ctx, RectangleF rect, string category, bool hero)
     {
         var rimColor = ResolveGlow(category);
-        var bounds = new RectangleF(rect.Left - rect.Width * 0.10f, rect.Top - rect.Height * 0.08f, rect.Width * 1.22f, rect.Height * 1.16f);
-        ctx.Fill(new LinearGradientBrush(new PointF(rect.Left, rect.Top), new PointF(rect.Right, rect.Bottom), GradientRepetitionMode.None,
-            new ColorStop(0, rimColor.WithAlpha(hero ? 0.052f : 0.016f)),
-            new ColorStop(0.40f, Color.White.WithAlpha(hero ? 0.014f : 0.006f)),
-            new ColorStop(1, Color.Transparent)), bounds);
-        ctx.Fill(new LinearGradientBrush(new PointF(rect.Left, rect.Top + rect.Height * 0.10f), new PointF(rect.Left + rect.Width * 0.46f, rect.Top + rect.Height * 0.44f), GradientRepetitionMode.None,
-            new ColorStop(0, Color.FromRgb(220, 232, 255).WithAlpha(hero ? 0.022f : 0.008f)),
-            new ColorStop(1, Color.Transparent)), new RectangleF(rect.Left, rect.Top, rect.Width * 0.56f, rect.Height * 0.50f));
+        FillSoftEllipse(ctx, new PointF(rect.Left + rect.Width * 0.44f, rect.Top + rect.Height * 0.40f), rect.Width * 0.72f, rect.Height * 0.56f, rimColor, hero ? 0.030f : 0.010f, 7);
+        FillSoftEllipse(ctx, new PointF(rect.Left + rect.Width * 0.24f, rect.Top + rect.Height * 0.22f), rect.Width * 0.38f, rect.Height * 0.28f, Color.FromRgb(220, 232, 255), hero ? 0.010f : 0.004f, 5);
     }
 
     private static void DrawOrganicDepthHaze(IImageProcessingContext ctx, RectangleF rect, int depth, bool hero)
@@ -1101,24 +1098,16 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static void DrawCinematicOverlays(IImageProcessingContext ctx, int width, int height, bool portrait, string mode, Random random)
     {
-        var haze = mode switch { "DeepSpaceMode" => 0.042f, "EclipseMode" => 0.034f, _ => 0.026f };
-        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.06f, height * 0.14f), new PointF(width * 0.94f, height * 0.72f), GradientRepetitionMode.None,
-            new ColorStop(0, Color.FromRgb(54, 83, 140).WithAlpha(haze)),
-            new ColorStop(0.45f, Color.FromRgb(92, 78, 128).WithAlpha(0.018f)),
-            new ColorStop(1, Color.Transparent)), new RectangleF(0, 0, width, height));
-        ctx.Fill(new LinearGradientBrush(new PointF(0, height * 0.20f), new PointF(width, height * 0.80f), GradientRepetitionMode.None,
-            new ColorStop(0, Color.Transparent),
-            new ColorStop(0.52f, Color.FromRgb(76, 104, 160).WithAlpha(0.018f)),
-            new ColorStop(1, Color.Transparent)), new RectangleF(0, 0, width, height));
-        var wisps = portrait ? 22 : 28;
+        var haze = mode switch { "DeepSpaceMode" => 0.030f, "EclipseMode" => 0.026f, _ => 0.020f };
+        var wisps = portrait ? 30 : 38;
         for (var i = 0; i < wisps; i++)
         {
-            var x = width * (i / (float)wisps) + (random.NextSingle() - 0.5f) * width * 0.14f;
-            var y = height * (0.18f + random.NextSingle() * 0.52f) + MathF.Sin(i * 0.66f) * height * 0.08f;
-            var w = width * (0.030f + random.NextSingle() * 0.066f);
-            var h = height * (0.010f + random.NextSingle() * 0.024f);
+            var x = width * (i / (float)wisps) + (random.NextSingle() - 0.5f) * width * 0.18f;
+            var y = height * (0.16f + random.NextSingle() * 0.56f) + MathF.Sin(i * 0.66f) * height * 0.08f;
+            var w = width * (0.040f + random.NextSingle() * 0.080f);
+            var h = height * (0.012f + random.NextSingle() * 0.028f);
             var color = mode is "DeepSpaceMode" or "WideSkyMode" && i % 3 == 0 ? Color.FromRgb(119, 74, 180) : Color.FromRgb(110, 132, 176);
-            ctx.Fill(color.WithAlpha(0.008f + random.NextSingle() * 0.014f), new EllipsePolygon(x, y, w, h));
+            ctx.Fill(color.WithAlpha(haze * (0.22f + random.NextSingle() * 0.46f)), new EllipsePolygon(x, y, w, h));
         }
     }
 
@@ -1264,13 +1253,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         return Math.Round(Math.Clamp((oversizedGlowPenaltyApplied ? 0.16d : 0.03d) + (overlapPenaltyApplied ? 0.12d : 0d) + crowdedPenalty, 0, 1), 3);
     }
 
-    private static double ScoreCompositingVisibilityPenalty(RectangleF heroRect, int width, int height, double compositionBalanceScore, bool oversizedGlowPenaltyApplied)
+    private static double ScoreCompositingVisibilityPenalty(RectangleF heroRect, int width, int height, double compositionBalanceScore, bool oversizedGlowPenaltyApplied, double rectangularAtmosphereRisk)
     {
         var centerX = (heroRect.Left + heroRect.Width / 2d) / width;
         var centerY = (heroRect.Top + heroRect.Height / 2d) / height;
         var centeredBias = Math.Max(0, 1d - Math.Sqrt(Math.Pow(centerX - 0.5d, 2) + Math.Pow(centerY - 0.5d, 2)) / 0.25d);
         var symmetryPenalty = Math.Max(0, 0.84d - compositionBalanceScore) * 0.55d;
-        return Math.Round(Math.Clamp(centeredBias * 0.20d + symmetryPenalty + (oversizedGlowPenaltyApplied ? 0.12d : 0.02d), 0, 1), 3);
+        return Math.Round(Math.Clamp(centeredBias * 0.20d + symmetryPenalty + rectangularAtmosphereRisk * 0.34d + (oversizedGlowPenaltyApplied ? 0.12d : 0.02d), 0, 1), 3);
     }
 
     private static double ScoreEdgeIntegration(string category, double compositingVisibilityPenalty, double atmosphericBlendScore, double naturalLightingScore, bool oversizedGlowPenaltyApplied)
@@ -1283,8 +1272,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static double ScoreCompositingSeamPenalty(double visualArtifactPenalty, double compositingVisibilityPenalty, double edgeIntegrationScore)
         => Math.Round(Math.Clamp(visualArtifactPenalty * 0.36d + compositingVisibilityPenalty * 0.42d + (1d - edgeIntegrationScore) * 0.22d, 0, 1), 3);
 
-    private static double ScoreAtmosphereContinuity(double organicAtmosphereScore, double atmosphericBlendScore, double compositingSeamPenalty)
-        => Math.Round(Math.Clamp(organicAtmosphereScore * 0.46d + atmosphericBlendScore * 0.40d + (1d - compositingSeamPenalty) * 0.14d, 0, 1), 3);
+    private static double ScoreAtmosphereContinuity(double organicAtmosphereScore, double atmosphericBlendScore, double compositingSeamPenalty, double rectangularAtmosphereRisk)
+        => Math.Round(Math.Clamp(organicAtmosphereScore * 0.44d + atmosphericBlendScore * 0.38d + (1d - compositingSeamPenalty) * 0.12d + (1d - rectangularAtmosphereRisk) * 0.06d, 0, 1), 3);
 
     private static double ScoreEnvironmentalDepth(string mode, int supportCount, double organicAtmosphereScore, double atmosphereContinuityScore)
     {
@@ -1420,6 +1409,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             heroIsolationScore = composition.HeroIsolationScore,
             cinematicRealismScore = composition.CinematicRealismScore,
             organicAtmosphereScore = composition.OrganicAtmosphereScore,
+            proceduralAtmosphereScore = composition.ProceduralAtmosphereScore,
             naturalLightingScore = composition.NaturalLightingScore,
             visualArtifactPenalty = composition.VisualArtifactPenalty,
             compositingVisibilityPenalty = composition.CompositingVisibilityPenalty,
@@ -1470,6 +1460,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             heroIsolationScore = composition.HeroIsolationScore,
             cinematicRealismScore = composition.CinematicRealismScore,
             organicAtmosphereScore = composition.OrganicAtmosphereScore,
+            proceduralAtmosphereScore = composition.ProceduralAtmosphereScore,
             naturalLightingScore = composition.NaturalLightingScore,
             visualArtifactPenalty = composition.VisualArtifactPenalty,
             compositingVisibilityPenalty = composition.CompositingVisibilityPenalty,
@@ -1561,6 +1552,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             heroIsolationScore = composition.HeroIsolationScore,
             cinematicRealismScore = composition.CinematicRealismScore,
             organicAtmosphereScore = composition.OrganicAtmosphereScore,
+            proceduralAtmosphereScore = composition.ProceduralAtmosphereScore,
             naturalLightingScore = composition.NaturalLightingScore,
             visualArtifactPenalty = composition.VisualArtifactPenalty,
             compositingVisibilityPenalty = composition.CompositingVisibilityPenalty,
@@ -1601,7 +1593,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
 
-    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore);
+    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double ProceduralAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore);
     private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
     private sealed record Selection(SelectedObject Hero, IReadOnlyCollection<SelectedObject> Support, IReadOnlyCollection<object> VisibilityData, bool IsSpecialEvent, string CinematicMode, IReadOnlyCollection<HeroObjectScore> HeroScores, bool HasConjunction)

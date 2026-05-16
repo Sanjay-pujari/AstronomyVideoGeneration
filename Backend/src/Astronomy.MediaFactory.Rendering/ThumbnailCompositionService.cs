@@ -69,6 +69,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             VisualHierarchyScore = hierarchy.VisualHierarchyScore,
             ReadabilityScore = hierarchy.ReadabilityScore,
             OrganicAtmosphereScore = request.SelectedCandidate.OrganicAtmosphereScore,
+            ProceduralAtmosphereScore = request.SelectedCandidate.ProceduralAtmosphereScore,
             NaturalLightingScore = request.SelectedCandidate.NaturalLightingScore,
             VisualArtifactPenalty = request.SelectedCandidate.VisualArtifactPenalty,
             CompositingVisibilityPenalty = request.SelectedCandidate.CompositingVisibilityPenalty,
@@ -154,7 +155,10 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         canvas.Mutate(ctx =>
         {
             ApplyStellariumOverlayCleanup(ctx, canvas.Width, canvas.Height, objectPoint, false);
-            ApplyAstronomyRichness(ctx, canvas.Width, canvas.Height, request.Context.Date.DayNumber);
+        });
+        ApplyAstronomyRichness(canvas, request.Context.Date.DayNumber, mood.MoodProfile);
+        canvas.Mutate(ctx =>
+        {
             ApplyEnhancements(ctx, canvas.Width, canvas.Height, objectPoint, recommendation, mood);
             if (_options.EnableGradientBackground)
             {
@@ -181,7 +185,10 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         canvas.Mutate(ctx =>
         {
             ApplyStellariumOverlayCleanup(ctx, canvas.Width, canvas.Height, objectPoint, true);
-            ApplyAstronomyRichness(ctx, canvas.Width, canvas.Height, request.GenerationRequest.Context.Date.DayNumber + 17);
+        });
+        ApplyAstronomyRichness(canvas, request.GenerationRequest.Context.Date.DayNumber + 17, mood.MoodProfile);
+        canvas.Mutate(ctx =>
+        {
             ApplyEnhancements(ctx, canvas.Width, canvas.Height, objectPoint, recommendation, mood);
             if (_options.EnableGradientBackground)
                 ApplyBottomGradient(ctx, canvas.Width, canvas.Height, 0.70f, 0.62f);
@@ -242,16 +249,15 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
     }
 
 
-    private static void ApplyAstronomyRichness(IImageProcessingContext ctx, int width, int height, int seed)
+    private static void ApplyAstronomyRichness(Image<Rgba32> canvas, int seed, string moodProfile)
     {
-        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None,
-            new ColorStop(0, Color.FromRgb(4, 10, 31).WithAlpha(0.18f)),
-            new ColorStop(0.55f, Color.FromRgb(22, 23, 54).WithAlpha(0.11f)),
-            new ColorStop(1, Color.FromRgb(2, 6, 18).WithAlpha(0.24f))), new RectangleF(0, 0, width, height));
-
-        var random = new Random(seed);
-        DrawNaturalStarfield(ctx, width, height, random);
-        DrawOrganicNebulaFog(ctx, width, height, random);
+        ProceduralAtmosphereBuffer.BlendIntoScene(canvas, seed, moodProfile, 1f);
+        canvas.Mutate(ctx =>
+        {
+            var random = new Random(seed);
+            DrawNaturalStarfield(ctx, canvas.Width, canvas.Height, random);
+            DrawOrganicNebulaFog(ctx, canvas.Width, canvas.Height, random);
+        });
     }
 
 
@@ -260,15 +266,9 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         var rimWidth = Math.Max(width, height) * 0.20f;
         var lightFrom = new PointF(brightPoint.X - rimWidth * 0.45f, brightPoint.Y - rimWidth * 0.62f);
         var falloffTo = new PointF(brightPoint.X + rimWidth * 0.52f, brightPoint.Y + rimWidth * 0.44f);
-        var bounds = new RectangleF(Math.Max(0, brightPoint.X - rimWidth), Math.Max(0, brightPoint.Y - rimWidth), Math.Min(width, rimWidth * 2), Math.Min(height, rimWidth * 2));
-        ctx.Fill(new LinearGradientBrush(lightFrom, falloffTo, GradientRepetitionMode.None,
-            new ColorStop(0, highlight.WithAlpha(0.052f)),
-            new ColorStop(0.38f, Color.White.WithAlpha(0.018f)),
-            new ColorStop(1, Color.Transparent)), bounds);
-        ctx.Fill(new LinearGradientBrush(new PointF(0, brightPoint.Y - rimWidth * 0.30f), new PointF(width, brightPoint.Y + rimWidth * 0.22f), GradientRepetitionMode.None,
-            new ColorStop(0, Color.Transparent),
-            new ColorStop(0.64f, highlight.WithAlpha(0.026f)),
-            new ColorStop(1, Color.Transparent)), new RectangleF(0, Math.Max(0, brightPoint.Y - rimWidth * 0.50f), width, Math.Min(height, rimWidth)));
+        ctx.Fill(highlight.WithAlpha(0.038f), new EllipsePolygon(lightFrom.X, lightFrom.Y, rimWidth * 0.88f, rimWidth * 0.62f));
+        ctx.Fill(Color.White.WithAlpha(0.012f), new EllipsePolygon(brightPoint.X, brightPoint.Y, rimWidth * 0.46f, rimWidth * 0.34f));
+        ctx.Fill(highlight.WithAlpha(0.018f), new EllipsePolygon(falloffTo.X, falloffTo.Y, width * 0.38f, rimWidth * 0.28f));
     }
 
     private static void DrawNaturalStarfield(IImageProcessingContext ctx, int width, int height, Random random)
@@ -303,18 +303,13 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
 
     private static void DrawOrganicNebulaFog(IImageProcessingContext ctx, int width, int height, Random random)
     {
-        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.04f, height * 0.10f), new PointF(width * 0.95f, height * 0.78f), GradientRepetitionMode.None,
-            new ColorStop(0, Color.FromRgb(42, 70, 118).WithAlpha(0.035f)),
-            new ColorStop(0.46f, Color.FromRgb(95, 66, 122).WithAlpha(0.020f)),
-            new ColorStop(1, Color.Transparent)), new RectangleF(0, 0, width, height));
-
-        var wisps = 26;
+        var wisps = 34;
         for (var i = 0; i < wisps; i++)
         {
             var x = (i / (float)wisps) * width + (random.NextSingle() - 0.5f) * width * 0.18f;
             var y = height * (0.18f + random.NextSingle() * 0.46f) + MathF.Sin(i * 0.73f) * height * 0.10f;
-            var w = width * (0.045f + random.NextSingle() * 0.080f);
-            var h = height * (0.014f + random.NextSingle() * 0.030f);
+            var w = width * (0.040f + random.NextSingle() * 0.092f);
+            var h = height * (0.012f + random.NextSingle() * 0.034f);
             var color = i % 3 == 0 ? Color.FromRgb(90, 116, 165) : Color.FromRgb(88, 70, 118);
             ctx.Fill(color.WithAlpha(0.010f + random.NextSingle() * 0.018f), new EllipsePolygon(x, y, w, h));
         }
@@ -339,9 +334,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
             "sunset" => Color.OrangeRed.WithAlpha(0.055f),
             _ => Color.Purple.WithAlpha(0.040f)
         };
-        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None,
-            new ColorStop(0, color),
-            new ColorStop(1, Color.Transparent)), new RectangleF(0, 0, width, height));
+        ctx.Fill(color, new EllipsePolygon(width * 0.42f, height * 0.34f, width * 0.62f, height * 0.48f));
     }
 
     private AstronomyIntegrityValidation ValidateAstronomyIntegrity(ThumbnailCompositionRequest request, CinematicThumbnailAiRecommendation recommendation)
@@ -560,7 +553,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         var score = await new ThumbnailScoringService().ScoreAsync(thumbnailPath, new ThumbnailScoringContext { EnableAstronomySceneMode = true, RejectDarkFrames = true }, cancellationToken);
         var textReadability = string.IsNullOrWhiteSpace(hookText) ? 0.35 : Math.Clamp(score.TextSafeCompositionArea + (hookText.Length <= 32 ? 0.18 : 0), 0, 1);
         var mobile = string.IsNullOrWhiteSpace(hookText) ? 0.45 : Math.Clamp(1 - Math.Max(0, hookText.Length - 28) / 40d, 0.35, 1);
-        var compositingRealism = Math.Clamp((score.EdgeIntegrationScore * 0.24) + (score.AtmosphereContinuityScore * 0.24) + (score.EnvironmentalDepthScore * 0.18) + (score.SupportObjectDepthScore * 0.14) + ((1 - score.CompositingSeamPenalty) * 0.20), 0, 1);
+        var compositingRealism = Math.Clamp((score.EdgeIntegrationScore * 0.20) + (score.AtmosphereContinuityScore * 0.22) + (score.ProceduralAtmosphereScore * 0.16) + (score.EnvironmentalDepthScore * 0.16) + (score.SupportObjectDepthScore * 0.12) + ((1 - score.CompositingSeamPenalty) * 0.14), 0, 1);
         var quality = Math.Clamp((score.Score * 0.56) + (textReadability * 0.15) + (mobile * 0.13) + (compositingRealism * 0.16) - (score.CompositingSeamPenalty * 0.08), 0, 1);
         var warnings = new List<string>();
         if (score.BlackPixelPercentage > _options.MaxBlackPixelPercentage && !score.ObjectDetected) warnings.Add("black-frame-risk");
@@ -568,11 +561,12 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
         if (textReadability < 0.55) warnings.Add("weak-text-readability");
         if (quality < 0.80) warnings.Add("below-preferred-polish-score");
         if (score.CompositingSeamPenalty > 0.32) warnings.Add("visible-compositing-seam-risk");
+        if (score.ProceduralAtmosphereScore < 0.55) warnings.Add("rectangular-atmosphere-risk");
         if (score.EdgeIntegrationScore < 0.42) warnings.Add("hard-alpha-edge-risk");
         if (new FileInfo(thumbnailPath).Length > MaxThumbnailSizeBytes) warnings.Add("file-too-large");
         return new ThumbnailProductionQualityResult
         {
-            IsProductionReady = quality >= 0.80 && warnings.All(w => w is not "black-frame-risk" and not "weak-focal-object" and not "weak-text-readability" and not "visible-compositing-seam-risk" and not "hard-alpha-edge-risk"),
+            IsProductionReady = quality >= 0.80 && warnings.All(w => w is not "black-frame-risk" and not "weak-focal-object" and not "weak-text-readability" and not "visible-compositing-seam-risk" and not "rectangular-atmosphere-risk" and not "hard-alpha-edge-risk"),
             Warnings = warnings,
             QualityScore = Math.Round(quality, 3),
             FocalObjectScore = score.FocalObjectScore,
@@ -584,7 +578,7 @@ public sealed class ThumbnailCompositionService : IThumbnailCompositionService
 
     private static IReadOnlyCollection<string> BuildOverlayList(ThumbnailCandidateScore score)
     {
-        var overlays = new List<string> { "stellarium-debug-edge-cleanup", "sky-depth-gradient", "soft-vignette", "contrast-curves", "restrained-object-glow" };
+        var overlays = new List<string> { "stellarium-debug-edge-cleanup", "procedural-radial-atmosphere-buffer", "noise-feathered-haze", "soft-vignette", "contrast-curves", "restrained-object-glow" };
         if (score.StarRichnessScore < 0.45) overlays.Add("subtle-star-clarity-enhancement");
         if (score.ColorRichness < 0.35) overlays.Add("subtle-cinematic-sky-depth-grade");
         if (score.CompositingSeamPenalty > 0.20) overlays.Add("organic-seam-feathering-required");
