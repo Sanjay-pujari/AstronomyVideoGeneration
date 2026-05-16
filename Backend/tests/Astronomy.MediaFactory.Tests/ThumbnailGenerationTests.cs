@@ -518,7 +518,7 @@ public sealed class ThumbnailGenerationTests
         Assert.True(report.RootElement.GetProperty("cardStyleRemoved").GetBoolean());
         Assert.Equal(3, report.RootElement.GetProperty("objectCount").GetInt32());
         Assert.Empty(report.RootElement.GetProperty("layoutWarnings").EnumerateArray());
-        Assert.GreaterOrEqual(report.RootElement.GetProperty("transparentAssetsUsed").GetInt32(), 1);
+        Assert.True(report.RootElement.GetProperty("transparentAssetsUsed").GetInt32() >= 1);
     }
 
     [Fact]
