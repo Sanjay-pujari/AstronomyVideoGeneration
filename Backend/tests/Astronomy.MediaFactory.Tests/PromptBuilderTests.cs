@@ -55,6 +55,27 @@ public sealed class PromptBuilderTests
     }
 
     [Fact]
+    public void Build_UsesFinalSceneListOrder_NotStaleSceneIndex_ForSceneScriptOrder()
+    {
+        var context = new AstronomyContext { Date = new DateOnly(2026, 5, 16), LocationName = "Seattle, USA", TimeZone = "America/Los_Angeles" };
+        context.SceneObservationContexts =
+        [
+            new SceneObservationContext { SceneId = "sky-overview", SceneTitle = "Sky overview", SceneType = "Overview", SceneIndex = 1, ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = new DateTime(2026,5,16,20,0,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "object-1", SceneTitle = "Jupiter focus", SceneType = "Object", SceneIndex = 2, ObjectName = "Jupiter", ObjectType = "Planet", LocalObservationTime = new DateTime(2026,5,16,20,30,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "object-2", SceneTitle = "Venus focus", SceneType = "Object", SceneIndex = 5, ObjectName = "Venus", ObjectType = "Planet", LocalObservationTime = new DateTime(2026,5,16,20,45,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "object-3", SceneTitle = "Neptune focus", SceneType = "Object", SceneIndex = 3, ObjectName = "Neptune", ObjectType = "Planet", LocalObservationTime = new DateTime(2026,5,16,21,0,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "object-4", SceneTitle = "Saturn focus", SceneType = "Object", SceneIndex = 4, ObjectName = "Saturn", ObjectType = "Planet", LocalObservationTime = new DateTime(2026,5,16,21,15,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "object-5", SceneTitle = "Mars focus", SceneType = "Object", SceneIndex = 6, ObjectName = "Mars", ObjectType = "Planet", LocalObservationTime = new DateTime(2026,5,16,21,30,0), UtcObservationTime = DateTimeOffset.UtcNow },
+            new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing sky", SceneType = "Closing", SceneIndex = 7, ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = new DateTime(2026,5,16,22,0,0), UtcObservationTime = DateTimeOffset.UtcNow }
+        ];
+
+        var prompt = new PromptBuilder().Build(ContentType.DailySkyGuide, context);
+
+        Assert.Contains("Required sceneScript order: sky-overview -> object-1 -> object-2 -> object-3 -> object-4 -> object-5 -> closing", prompt);
+        Assert.True(prompt.IndexOf("\"objectName\": \"Venus\"", StringComparison.Ordinal) < prompt.IndexOf("\"objectName\": \"Neptune\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Build_IncludesBoundedFeedbackContext_WhenProvided()
     {
         var builder = new PromptBuilder();
