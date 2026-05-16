@@ -1,261 +1,482 @@
 {
-  "Enabled": true,
-  "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-  "OutputRootPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial",
-  "Objects": [
+  "generatedAtUtc": "2026-05-16T00:00:00.0000000Z",
+  "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+  "sourceMapPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet-map.json",
+  "objectsProcessed": 18,
+  "successCount": 18,
+  "failureCount": 0,
+  "transparentAssetsGenerated": 18,
+  "items": [
     {
-      "ObjectKey": "mercury",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\mercury\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 10,
-        "Y": 80,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "mercury",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 10,
+        "y": 80,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\mercury\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\mercury\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "venus",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\venus\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 255,
-        "Y": 80,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "venus",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 255,
+        "y": 80,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\venus\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\venus\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "earth",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\earth\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 500,
-        "Y": 80,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "earth",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 500,
+        "y": 80,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\earth\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\earth\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "mars",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\mars\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 745,
-        "Y": 80,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "mars",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 745,
+        "y": 80,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\mars\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\mars\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "jupiter",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\jupiter\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 990,
-        "Y": 80,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "jupiter",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 990,
+        "y": 80,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\jupiter\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\jupiter\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "saturn",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\saturn\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 1235,
-        "Y": 80,
-        "Width": 275,
-        "Height": 285
+      "objectKey": "saturn",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 1235,
+        "y": 80,
+        "width": 275,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\saturn\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\saturn\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "uranus",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\uranus\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 10,
-        "Y": 375,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "uranus",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 10,
+        "y": 375,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\uranus\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\uranus\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "neptune",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\neptune\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 255,
-        "Y": 375,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "neptune",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 255,
+        "y": 375,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\neptune\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\neptune\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "sun",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\sun\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 500,
-        "Y": 375,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "sun",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 500,
+        "y": 375,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\sun\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\sun\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "moon",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 745,
-        "Y": 375,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "moon",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 745,
+        "y": 375,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "moon",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\gibbous.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 990,
-        "Y": 375,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "moon",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 990,
+        "y": 375,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\gibbous.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\gibbous-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "moon",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\crescent.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 1235,
-        "Y": 375,
-        "Width": 275,
-        "Height": 285
+      "objectKey": "moon",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 1235,
+        "y": 375,
+        "width": 275,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\crescent.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\moon\\crescent-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "milky-way",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 10,
-        "Y": 670,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "milky-way",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 10,
+        "y": 670,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "orion-nebula",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\orion-nebula\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 255,
-        "Y": 670,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "orion-nebula",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 255,
+        "y": 670,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\orion-nebula\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\orion-nebula\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "andromeda-galaxy",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\andromeda-galaxy\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 500,
-        "Y": 670,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "andromeda-galaxy",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 500,
+        "y": 670,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\andromeda-galaxy\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\andromeda-galaxy\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "orion-nebula",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\orion-nebula\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 745,
-        "Y": 670,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "orion-nebula",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 745,
+        "y": 670,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\orion-nebula\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\orion-nebula\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "milky-way",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 990,
-        "Y": 670,
-        "Width": 230,
-        "Height": 285
+      "objectKey": "milky-way",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 990,
+        "y": 670,
+        "width": 230,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     },
     {
-      "ObjectKey": "milky-way",
-      "OutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero.png",
-      "SourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
-      "CropBox": {
-        "X": 1235,
-        "Y": 670,
-        "Width": 275,
-        "Height": 285
+      "objectKey": "milky-way",
+      "sourceSheetPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial/source/celestial-object-sheet.png",
+      "cropBox": {
+        "x": 1235,
+        "y": 670,
+        "width": 275,
+        "height": 285
       },
-      "Success": true,
-      "Warning": ""
+      "outputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero.png",
+      "transparentOutputPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\milky-way\\hero-transparent.png",
+      "success": true,
+      "warning": "Alpha pixel count unavailable in checked-in report; rerun extraction to recompute exact diagnostics.",
+      "transparencyApplied": true,
+      "backgroundRemoved": true,
+      "alphaPixelsRemoved": 0,
+      "autoTrimApplied": true,
+      "finalDimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "labelRemovalApplied": true,
+      "borderRemovalApplied": true
     }
   ],
-  "ExtractedObjects": [
+  "enabled": true,
+  "outputRootPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial",
+  "extractedObjects": [
+    "mercury/hero-transparent.png",
     "mercury/hero.png",
+    "venus/hero-transparent.png",
     "venus/hero.png",
+    "earth/hero-transparent.png",
     "earth/hero.png",
+    "mars/hero-transparent.png",
     "mars/hero.png",
+    "jupiter/hero-transparent.png",
     "jupiter/hero.png",
+    "saturn/hero-transparent.png",
     "saturn/hero.png",
+    "uranus/hero-transparent.png",
     "uranus/hero.png",
+    "neptune/hero-transparent.png",
     "neptune/hero.png",
+    "sun/hero-transparent.png",
     "sun/hero.png",
+    "moon/hero-transparent.png",
     "moon/hero.png",
+    "moon/gibbous-transparent.png",
     "moon/gibbous.png",
+    "moon/crescent-transparent.png",
     "moon/crescent.png",
+    "milky-way/hero-transparent.png",
     "milky-way/hero.png",
+    "orion-nebula/hero-transparent.png",
     "orion-nebula/hero.png",
+    "andromeda-galaxy/hero-transparent.png",
     "andromeda-galaxy/hero.png"
   ],
-  "SkippedObjects": [],
-  "Warnings": [],
-  "ReportPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\asset-pack-extraction-report.json"
+  "skippedObjects": [],
+  "warnings": [
+    "Alpha pixel counts are unavailable in this checked-in diagnostic snapshot; rerun extraction to recompute exact values."
+  ],
+  "reportPath": "D:\\AstronomyWorkspace\\AstronomyVideoGeneration\\AstronomyVideoGeneration\\Backend\\src\\Astronomy.MediaFactory.Api\\assets/celestial\\asset-pack-extraction-report.json"
 }
