@@ -1,56 +1,110 @@
 {
   "mercury": {
-    "x": 95,
-    "y": 95,
-    "width": 140,
-    "height": 200
+    "x": 10,
+    "y": 80,
+    "width": 230,
+    "height": 285
   },
   "venus": {
-    "x": 495,
-    "y": 95,
-    "width": 170,
-    "height": 230
+    "x": 255,
+    "y": 80,
+    "width": 230,
+    "height": 285
   },
   "earth": {
-    "x": 955,
-    "y": 95,
-    "width": 180,
-    "height": 240
+    "x": 500,
+    "y": 80,
+    "width": 230,
+    "height": 285
   },
   "mars": {
-    "x": 1425,
-    "y": 95,
-    "width": 160,
-    "height": 220
+    "x": 745,
+    "y": 80,
+    "width": 230,
+    "height": 285
   },
   "jupiter": {
-    "x": 1825,
-    "y": 55,
-    "width": 350,
-    "height": 410
+    "x": 990,
+    "y": 80,
+    "width": 230,
+    "height": 285
   },
   "saturn": {
-    "x": 225,
-    "y": 675,
-    "width": 270,
-    "height": 330
+    "x": 1235,
+    "y": 80,
+    "width": 275,
+    "height": 285
   },
   "uranus": {
-    "x": 875,
-    "y": 675,
-    "width": 180,
-    "height": 240
+    "x": 10,
+    "y": 375,
+    "width": 230,
+    "height": 285
   },
   "neptune": {
-    "x": 1425,
-    "y": 675,
-    "width": 180,
-    "height": 240
+    "x": 255,
+    "y": 375,
+    "width": 230,
+    "height": 285
+  },
+  "sun": {
+    "x": 500,
+    "y": 375,
+    "width": 230,
+    "height": 285
   },
   "moon": {
-    "x": 1925,
-    "y": 675,
-    "width": 170,
-    "height": 230
+    "x": 745,
+    "y": 375,
+    "width": 230,
+    "height": 285
+  },
+  "gibbous-moon": {
+    "x": 990,
+    "y": 375,
+    "width": 230,
+    "height": 285
+  },
+  "crescent-moon": {
+    "x": 1235,
+    "y": 375,
+    "width": 275,
+    "height": 285
+  },
+  "milky-way": {
+    "x": 10,
+    "y": 670,
+    "width": 230,
+    "height": 285
+  },
+  "orion-nebula": {
+    "x": 255,
+    "y": 670,
+    "width": 230,
+    "height": 285
+  },
+  "andromeda-galaxy": {
+    "x": 500,
+    "y": 670,
+    "width": 230,
+    "height": 285
+  },
+  "ring-nebula": {
+    "x": 745,
+    "y": 670,
+    "width": 230,
+    "height": 285
+  },
+  "meteor-shower": {
+    "x": 990,
+    "y": 670,
+    "width": 230,
+    "height": 285
+  },
+  "solar-eclipse": {
+    "x": 1235,
+    "y": 670,
+    "width": 275,
+    "height": 285
   }
 }
