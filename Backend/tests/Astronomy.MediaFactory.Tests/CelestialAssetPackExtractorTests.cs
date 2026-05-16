@@ -24,7 +24,8 @@ public sealed class CelestialAssetPackExtractorTests
         await File.WriteAllTextAsync(mapPath, """
         {
           "jupiter": { "x": 10, "y": 10, "width": 100, "height": 100 },
-          "saturn": { "x": 120, "y": 10, "width": 100, "height": 100 }
+          "saturn": { "x": 120, "y": 10, "width": 100, "height": 100 },
+          "moon-full": { "x": 220, "y": 10, "width": 50, "height": 50 }
         }
         """);
 
@@ -38,9 +39,11 @@ public sealed class CelestialAssetPackExtractorTests
 
         var report = await extractor.ExtractAsync(CancellationToken.None);
 
-        Assert.Contains("jupiter", report.ExtractedObjects);
+        Assert.Contains("jupiter/hero.png", report.ExtractedObjects);
         Assert.True(File.Exists(Path.Combine(root, "jupiter", "hero.png")));
         Assert.True(File.Exists(Path.Combine(root, "saturn", "hero.png")));
+        Assert.True(File.Exists(Path.Combine(root, "moon", "full.png")));
+        Assert.Contains(report.Objects, item => item.ObjectKey == "jupiter" && item.Success && item.OutputPath.EndsWith(Path.Combine("jupiter", "hero.png")));
         Assert.True(File.Exists(Path.Combine(root, "asset-pack-extraction-report.json")));
     }
 }

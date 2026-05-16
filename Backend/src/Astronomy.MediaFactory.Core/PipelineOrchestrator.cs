@@ -1276,6 +1276,10 @@ public sealed class PipelineOrchestrator
         {
             assetsFound = plan.CelestialSelection?.AssetSources.Where(a => File.Exists(a.LocalPath)).Select(a => a.LocalPath).ToArray() ?? Array.Empty<string>(),
             assetsMissing = plan.CelestialSelection?.AssetSources.Where(a => !File.Exists(a.LocalPath)).Select(a => a.Category).ToArray() ?? Array.Empty<string>(),
+            assetPriorityUsed = plan.CelestialSelection?.AssetSources.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray() ?? Array.Empty<string>(),
+            selectedAssetFileName = plan.CelestialSelection?.AssetSources.FirstOrDefault() is { } selected ? Path.GetFileName(selected.LocalPath) : string.Empty,
+            selectedAssetSource = plan.CelestialSelection?.AssetSources.FirstOrDefault()?.Source ?? string.Empty,
+            oldAssetIgnoredBecauseHeroExists = plan.CelestialSelection?.AssetSources.Any(a => a.OldAssetIgnoredBecauseHeroExists) ?? false,
             layoutUsed = plan.CelestialSelection?.SelectedLayout ?? plan.LayoutType.ToString(),
             language = "",
             dimensions = new

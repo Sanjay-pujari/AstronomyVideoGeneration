@@ -16,7 +16,7 @@ namespace Astronomy.MediaFactory.Rendering;
 
 public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailService
 {
-    private static readonly string[] AssetNames = ["hero.png", "hero.jpg", "hero.jpeg", "full.png", "crescent.png", "gibbous.png"];
+    private static readonly string[] DefaultPreferredAssetNames = ["hero-transparent.png", "hero.png", "cinematic.png", "closeup.png"];
     private static readonly HashSet<string> PlanetKeys = new(StringComparer.OrdinalIgnoreCase) { "mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune" };
 
     private readonly IThumbnailStrategyService _strategyService;
@@ -149,8 +149,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var assets = new List<CelestialAsset>();
         foreach (var obj in new[] { selection.Hero }.Concat(selection.Support))
         {
-            var path = FindAsset(obj.Key);
-            if (path is null)
+            var resolved = FindAsset(obj.Key);
+            if (resolved is null)
             {
                 warnings.Add($"Missing local curated asset for {obj.Name} ({obj.Key}).");
                 if (obj == selection.Hero)
@@ -162,7 +162,9 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 continue;
             }
 
-            assets.Add(ToAsset(obj, path, false));
+            if (resolved.OldAssetIgnoredBecauseHeroExists)
+                warnings.Add($"Ignored legacy JPG/NASA asset for {obj.Name} because an extracted hero asset exists.");
+            assets.Add(ToAsset(obj, resolved, false));
         }
 
         return assets;
@@ -198,7 +200,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private async Task DrawBackgroundAsync(Image<Rgba32> canvas, ThumbnailGenerationRequest request, int width, int height, List<string> warnings, CancellationToken cancellationToken)
     {
-        var background = FindAsset("milky-way");
+        var background = FindAsset("milky-way")?.Path;
         background ??= _options.EnableStellariumBackground ? request.AvailableVisuals.FirstOrDefault(File.Exists) : null;
         if (background is null)
         {
@@ -278,19 +280,49 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         return new CelestialAsset { ObjectName = name, ObjectType = key, Category = key, LocalPath = path, Source = "GeneratedFallback", Title = name, FallbackUsed = true };
     }
 
-    private string? FindAsset(string key)
+    private ResolvedAsset? FindAsset(string key)
     {
         var root = ResolveAssetRoot();
         var directory = Path.Combine(root, key);
         if (!Directory.Exists(directory))
             return null;
-        foreach (var name in AssetNames)
+
+        var files = Directory.EnumerateFiles(directory)
+            .Where(p => IsImage(p) && !Path.GetFileName(p).Contains("metadata", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (files.Length == 0)
+            return null;
+
+        var preferredNames = (_options.PreferredAssetFileNames.Length > 0 ? _options.PreferredAssetFileNames : DefaultPreferredAssetNames)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToArray();
+        var legacyExists = files.Any(IsLegacyJpgAsset);
+
+        if (_options.PreferAssetPackImages)
         {
-            var path = Path.Combine(directory, name);
-            if (File.Exists(path))
-                return path;
+            foreach (var name in preferredNames)
+            {
+                var path = Path.Combine(directory, name);
+                if (File.Exists(path))
+                    return CreateResolvedAsset(path, key, legacyExists && IsAssetPackFileName(Path.GetFileName(path)));
+            }
         }
-        return Directory.EnumerateFiles(directory).FirstOrDefault(p => IsImage(p) && !Path.GetFileName(p).Contains("metadata", StringComparison.OrdinalIgnoreCase));
+
+        if (_options.PreferPngAssets)
+        {
+            var png = files
+                .Where(p => Path.GetExtension(p).Equals(".png", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (png is not null)
+                return CreateResolvedAsset(png, key, false);
+        }
+
+        var any = files
+            .OrderBy(p => IsLegacyJpgAsset(p) ? 1 : 0)
+            .ThenBy(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        return any is null ? null : CreateResolvedAsset(any, key, false);
     }
 
     private bool HasAsset(string key) => FindAsset(key) is not null;
@@ -299,15 +331,32 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static bool IsImage(string path) => Path.GetExtension(path).Equals(".png", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(path).Equals(".jpg", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(path).Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
 
-    private static CelestialAsset ToAsset(SelectedObject obj, string path, bool fallback) => new()
+    private static bool IsLegacyJpgAsset(string path) => Path.GetExtension(path).Equals(".jpg", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(path).Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAssetPackFileName(string fileName) => fileName.Equals("hero-transparent.png", StringComparison.OrdinalIgnoreCase)
+        || fileName.Equals("hero.png", StringComparison.OrdinalIgnoreCase)
+        || fileName.Equals("cinematic.png", StringComparison.OrdinalIgnoreCase)
+        || fileName.Equals("closeup.png", StringComparison.OrdinalIgnoreCase);
+
+    private static ResolvedAsset CreateResolvedAsset(string path, string key, bool oldAssetIgnoredBecauseHeroExists)
+    {
+        var fileName = Path.GetFileName(path);
+        var source = IsAssetPackFileName(fileName)
+            ? "AssetPack"
+            : IsLegacyJpgAsset(path) ? "LegacyJpgAsset" : "LocalCuratedAsset";
+        return new ResolvedAsset(path, fileName, source, oldAssetIgnoredBecauseHeroExists);
+    }
+
+    private static CelestialAsset ToAsset(SelectedObject obj, ResolvedAsset resolved, bool fallback) => new()
     {
         ObjectName = obj.Name,
         ObjectType = obj.Type,
         Category = obj.Key,
-        LocalPath = path,
-        Source = "LocalCuratedAsset",
-        Title = $"{obj.Name} curated asset",
-        OriginalUrl = string.Empty,
+        LocalPath = resolved.Path,
+        Source = resolved.Source,
+        Title = $"{obj.Name} {resolved.Source} asset",
+        OriginalUrl = resolved.FileName,
+        OldAssetIgnoredBecauseHeroExists = resolved.OldAssetIgnoredBecauseHeroExists,
         FallbackUsed = fallback
     };
 
@@ -363,10 +412,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string LimitWords(string value, int maxWords) => string.Join(' ', value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(Math.Max(1, maxWords)));
 
-    private static RectangleF HeroLandscapeRect(int width, int height) => new(width * 0.48f, height * 0.06f, width * 0.48f, height * 0.82f);
-    private static RectangleF SupportLandscapeRect(int width, int height, int index) => new(width * (index == 0 ? 0.38f : 0.78f), height * (index == 0 ? 0.60f : 0.10f), width * 0.17f, width * 0.17f);
-    private static RectangleF HeroPortraitRect(int width, int height) => new(width * 0.05f, height * 0.09f, width * 0.90f, width * 0.90f);
-    private static RectangleF SupportPortraitRect(int width, int height, int index) => new(width * 0.63f, height * 0.42f, width * 0.28f, width * 0.28f);
+    private static RectangleF HeroLandscapeRect(int width, int height) => new(width * 0.54f, height * 0.07f, width * 0.40f, height * 0.78f);
+    private static RectangleF SupportLandscapeRect(int width, int height, int index) => new(width * 0.40f, height * (index == 0 ? 0.12f : 0.50f), width * 0.13f, width * 0.13f);
+    private static RectangleF HeroPortraitRect(int width, int height) => new(width * 0.08f, height * 0.08f, width * 0.84f, width * 0.84f);
+    private static RectangleF SupportPortraitRect(int width, int height, int index) => new(width * 0.66f, height * 0.48f, width * 0.22f, width * 0.22f);
 
     private static void DrawCinematicGradient(IImageProcessingContext ctx, int width, int height, bool portrait)
     {
@@ -442,6 +491,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             heroObject = plan.CelestialSelection?.HeroObject ?? "",
             supportObjects = plan.CelestialSelection?.SupportObjects ?? Array.Empty<string>(),
             selectedHook = plan.CelestialSelection?.SelectedHook ?? plan.PrimaryThumbnailText,
+            assetPriorityUsed = BuildAssetPriorityUsed(plan.CelestialSelection?.AssetSources ?? Array.Empty<CelestialAsset>()),
             longThumbnailPath = plan.LongThumbnailPath,
             shortThumbnailPath = plan.ShortThumbnailPath,
             assetSources = plan.CelestialSelection?.AssetSources ?? Array.Empty<CelestialAsset>(),
@@ -457,6 +507,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         {
             assetsFound = assets.Where(a => File.Exists(a.LocalPath)).Select(a => a.LocalPath).ToArray(),
             assetsMissing = warnings.Where(w => w.StartsWith("Missing", StringComparison.OrdinalIgnoreCase)).ToArray(),
+            assetPriorityUsed = BuildAssetPriorityUsed(assets),
+            selectedAssetFileName = assets.FirstOrDefault() is { } selected ? Path.GetFileName(selected.LocalPath) : string.Empty,
+            selectedAssetSource = assets.FirstOrDefault()?.Source ?? string.Empty,
+            oldAssetIgnoredBecauseHeroExists = assets.Any(a => a.OldAssetIgnoredBecauseHeroExists),
             layoutUsed = plan.CelestialSelection?.SelectedLayout ?? "LocalAssetCollage",
             language = request.Context.Localization.ResolvedLanguage,
             dimensions = new { width, height, fileSizeBytes = File.Exists(outputPath) ? new FileInfo(outputPath).Length : 0 },
@@ -468,10 +522,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static async Task WriteFallbackAnalysisAsync(ThumbnailGenerationRequest request, ThumbnailPlan fallback, IReadOnlyCollection<string> warnings, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.Combine(request.OutputDirectory, "thumbnails"));
-        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), layoutUsed = "FallbackToStellariumFrame", language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
+        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), assetPriorityUsed = Array.Empty<string>(), selectedAssetFileName = string.Empty, selectedAssetSource = string.Empty, oldAssetIgnoredBecauseHeroExists = false, layoutUsed = "FallbackToStellariumFrame", language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
         await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnails", "thumbnail-analysis-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
+    private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
+
+    private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
     private sealed record Selection(SelectedObject Hero, IReadOnlyCollection<SelectedObject> Support, IReadOnlyCollection<object> VisibilityData, bool IsSpecialEvent);
 }
