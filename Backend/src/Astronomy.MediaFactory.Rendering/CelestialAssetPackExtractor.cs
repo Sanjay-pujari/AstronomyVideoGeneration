@@ -10,6 +10,11 @@ namespace Astronomy.MediaFactory.Rendering;
 
 public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
 {
+    private const byte TransparentAlphaThreshold = 8;
+    private const int BackgroundBlackThreshold = 18;
+    private const int ForegroundBlackThreshold = 30;
+    private const int ObjectPaddingPixels = 6;
+
     private readonly CelestialAssetPackOptions _options;
 
     public CelestialAssetPackExtractor(IOptions<CelestialAssetPackOptions> options) => _options = options.Value;
@@ -46,60 +51,166 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
             var target = ResolveTarget(rawKey);
             var outputDirectory = Path.Combine(outputRoot, target.ObjectKey);
             Directory.CreateDirectory(outputDirectory);
-            var outputPath = Path.Combine(outputDirectory, target.FileName);
+            var transparentPath = Path.Combine(outputDirectory, target.TransparentFileName);
+            var fallbackPath = Path.Combine(outputDirectory, target.FallbackFileName);
 
             if (tile.Width <= 0 || tile.Height <= 0 || tile.X < 0 || tile.Y < 0 || tile.X + tile.Width > sheet.Width || tile.Y + tile.Height > sheet.Height)
             {
                 var warning = $"Invalid crop rectangle for {rawKey}.";
                 warnings.Add(warning);
-                items.Add(CreateItem(target.ObjectKey, outputPath, sourcePath, tile, false, warning));
+                items.Add(CreateItem(target.ObjectKey, transparentPath, sourcePath, tile, false, warning));
                 continue;
             }
 
-            if (File.Exists(outputPath) && !_options.OverwriteExisting)
+            var transparentExists = File.Exists(transparentPath);
+            var fallbackExists = File.Exists(fallbackPath);
+            if (transparentExists && fallbackExists && !_options.OverwriteExisting)
             {
-                skipped.Add($"{target.ObjectKey}/{target.FileName}");
-                items.Add(CreateItem(target.ObjectKey, outputPath, sourcePath, tile, true, "Skipped because output already exists."));
+                skipped.Add($"{target.ObjectKey}/{target.TransparentFileName}");
+                skipped.Add($"{target.ObjectKey}/{target.FallbackFileName}");
+                items.Add(CreateItem(target.ObjectKey, transparentPath, sourcePath, tile, true, "Skipped because output already exists."));
                 continue;
             }
 
-            using var crop = sheet.Clone(ctx => ctx.Crop(new Rectangle(tile.X, tile.Y, tile.Width, tile.Height)));
-            TrimTransparentBounds(crop);
-            await crop.SaveAsPngAsync(outputPath, cancellationToken);
-            extracted.Add($"{target.ObjectKey}/{target.FileName}");
-            items.Add(CreateItem(target.ObjectKey, outputPath, sourcePath, tile, true, string.Empty));
+            using var mappedTile = sheet.Clone(ctx => ctx.Crop(new Rectangle(tile.X, tile.Y, tile.Width, tile.Height)));
+            var objectBounds = DetectDominantObjectBounds(mappedTile) ?? DetectNonBlackBounds(mappedTile) ?? new Rectangle(0, 0, mappedTile.Width, mappedTile.Height);
+            var autoTrimApplied = objectBounds.X > 0 || objectBounds.Y > 0 || objectBounds.Width < mappedTile.Width || objectBounds.Height < mappedTile.Height;
+            using var objectCrop = mappedTile.Clone(ctx => ctx.Crop(objectBounds));
+            var extractionStats = ApplyTransparentBlackBackground(objectCrop);
+            var finalTrimApplied = TrimTransparentBounds(objectCrop);
+            autoTrimApplied = autoTrimApplied || finalTrimApplied;
+
+            if (!transparentExists || _options.OverwriteExisting)
+                await objectCrop.SaveAsPngAsync(transparentPath, cancellationToken);
+
+            if (!fallbackExists || _options.OverwriteExisting)
+            {
+                using var fallback = objectCrop.Clone();
+                FlattenTransparencyToBlack(fallback);
+                await fallback.SaveAsPngAsync(fallbackPath, cancellationToken);
+            }
+
+            extracted.Add($"{target.ObjectKey}/{target.TransparentFileName}");
+            extracted.Add($"{target.ObjectKey}/{target.FallbackFileName}");
+            items.Add(CreateItem(
+                target.ObjectKey,
+                transparentPath,
+                sourcePath,
+                tile,
+                true,
+                string.Empty,
+                transparencyApplied: true,
+                alphaPixelsRemoved: extractionStats.AlphaPixelsRemoved,
+                autoTrimApplied: autoTrimApplied,
+                finalWidth: objectCrop.Width,
+                finalHeight: objectCrop.Height,
+                backgroundRemoved: extractionStats.BackgroundRemoved));
         }
 
         return await WriteReportAsync(true, sourcePath, outputRoot, items, extracted.Distinct().ToArray(), skipped.Distinct().ToArray(), warnings, reportPath, cancellationToken);
     }
 
-    private static (string ObjectKey, string FileName) ResolveTarget(string rawKey)
+    private static (string ObjectKey, string TransparentFileName, string FallbackFileName) ResolveTarget(string rawKey)
     {
         var normalized = CelestialObjectKeyMapper.Map(rawKey);
         var lower = rawKey.Trim().ToLowerInvariant().Replace('_', '-').Replace(' ', '-');
         var fileName = lower switch
         {
-            "moon-full" or "full-moon" or "moon/full" or "full" => "full.png",
-            "moon-gibbous" or "gibbous-moon" or "moon/gibbous" or "gibbous" => "gibbous.png",
-            "moon-crescent" or "crescent-moon" or "moon/crescent" or "crescent" => "crescent.png",
-            _ => "hero.png"
+            "moon-full" or "full-moon" or "moon/full" or "full" => "full",
+            "moon-gibbous" or "gibbous-moon" or "moon/gibbous" or "gibbous" => "gibbous",
+            "moon-crescent" or "crescent-moon" or "moon/crescent" or "crescent" => "crescent",
+            _ => "hero"
         };
 
-        var objectKey = fileName == "hero.png" ? normalized : "moon";
-        return (objectKey, fileName);
+        var objectKey = fileName == "hero" ? normalized : "moon";
+        return (objectKey, $"{fileName}-transparent.png", $"{fileName}.png");
     }
 
-    private static CelestialAssetPackExtractionItem CreateItem(string objectKey, string outputPath, string sourcePath, CelestialAssetTileMapEntry cropBox, bool success, string warning) => new()
+    private static CelestialAssetPackExtractionItem CreateItem(
+        string objectKey,
+        string outputPath,
+        string sourcePath,
+        CelestialAssetTileMapEntry cropBox,
+        bool success,
+        string warning,
+        bool transparencyApplied = false,
+        int alphaPixelsRemoved = 0,
+        bool autoTrimApplied = false,
+        int finalWidth = 0,
+        int finalHeight = 0,
+        bool backgroundRemoved = false) => new()
     {
         ObjectKey = objectKey,
         OutputPath = outputPath,
         SourceSheetPath = sourcePath,
         CropBox = cropBox,
         Success = success,
-        Warning = warning
+        Warning = warning,
+        TransparencyApplied = transparencyApplied,
+        AlphaPixelsRemoved = alphaPixelsRemoved,
+        AutoTrimApplied = autoTrimApplied,
+        FinalDimensions = new CelestialAssetPackImageDimensions { Width = finalWidth, Height = finalHeight },
+        BackgroundRemoved = backgroundRemoved
     };
 
-    private static void TrimTransparentBounds(Image<Rgba32> image)
+    private static Rectangle? DetectDominantObjectBounds(Image<Rgba32> image)
+    {
+        var width = image.Width;
+        var height = image.Height;
+        var visited = new bool[width * height];
+        Component? best = null;
+        var queue = new Queue<Point>();
+
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var index = y * width + x;
+                if (visited[index])
+                    continue;
+
+                visited[index] = true;
+                if (!IsObjectCandidate(image[x, y]))
+                    continue;
+
+                var component = new Component(x, y);
+                queue.Enqueue(new Point(x, y));
+                while (queue.Count > 0)
+                {
+                    var point = queue.Dequeue();
+                    component.Include(point.X, point.Y);
+                    Enqueue(point.X + 1, point.Y);
+                    Enqueue(point.X - 1, point.Y);
+                    Enqueue(point.X, point.Y + 1);
+                    Enqueue(point.X, point.Y - 1);
+                }
+
+                if (!component.IsUsable(width, height))
+                    continue;
+
+                if (best is null || component.Score(width, height) > best.Score(width, height))
+                    best = component;
+
+                void Enqueue(int nx, int ny)
+                {
+                    if (nx < 0 || ny < 0 || nx >= width || ny >= height)
+                        return;
+
+                    var nextIndex = ny * width + nx;
+                    if (visited[nextIndex])
+                        return;
+
+                    visited[nextIndex] = true;
+                    if (IsObjectCandidate(image[nx, ny]))
+                        queue.Enqueue(new Point(nx, ny));
+                }
+            }
+        }
+
+        return best?.ToPaddedRectangle(width, height, ObjectPaddingPixels);
+    }
+
+    private static Rectangle? DetectNonBlackBounds(Image<Rgba32> image)
     {
         var minX = image.Width;
         var minY = image.Height;
@@ -113,7 +224,7 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
                 var row = accessor.GetRowSpan(y);
                 for (var x = 0; x < row.Length; x++)
                 {
-                    if (row[x].A <= 8)
+                    if (!IsObjectCandidate(row[x]))
                         continue;
 
                     minX = Math.Min(minX, x);
@@ -125,15 +236,126 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
         });
 
         if (maxX < minX || maxY < minY)
-            return;
+            return null;
 
-        var padding = 4;
+        var cropX = Math.Max(0, minX - ObjectPaddingPixels);
+        var cropY = Math.Max(0, minY - ObjectPaddingPixels);
+        var cropRight = Math.Min(image.Width - 1, maxX + ObjectPaddingPixels);
+        var cropBottom = Math.Min(image.Height - 1, maxY + ObjectPaddingPixels);
+        return new Rectangle(cropX, cropY, cropRight - cropX + 1, cropBottom - cropY + 1);
+    }
+
+    private static ExtractionStats ApplyTransparentBlackBackground(Image<Rgba32> image)
+    {
+        var removed = 0;
+        var backgroundRemoved = false;
+
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < row.Length; x++)
+                {
+                    var pixel = row[x];
+                    if (pixel.A <= TransparentAlphaThreshold)
+                        continue;
+
+                    var blackDistance = Math.Max(pixel.R, Math.Max(pixel.G, pixel.B));
+                    if (blackDistance <= BackgroundBlackThreshold)
+                    {
+                        row[x] = new Rgba32(pixel.R, pixel.G, pixel.B, 0);
+                        removed++;
+                        backgroundRemoved = true;
+                        continue;
+                    }
+
+                    if (blackDistance < ForegroundBlackThreshold)
+                    {
+                        var alphaScale = (blackDistance - BackgroundBlackThreshold) / (double)(ForegroundBlackThreshold - BackgroundBlackThreshold);
+                        var alpha = (byte)Math.Clamp((int)Math.Round(pixel.A * alphaScale), 0, 255);
+                        if (alpha < pixel.A)
+                        {
+                            row[x] = new Rgba32(pixel.R, pixel.G, pixel.B, alpha);
+                            removed++;
+                            backgroundRemoved = true;
+                        }
+                    }
+                }
+            }
+        });
+
+        return new ExtractionStats(backgroundRemoved, removed);
+    }
+
+    private static void FlattenTransparencyToBlack(Image<Rgba32> image)
+    {
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < row.Length; x++)
+                {
+                    var pixel = row[x];
+                    if (pixel.A == 255)
+                        continue;
+
+                    var alpha = pixel.A / 255f;
+                    row[x] = new Rgba32((byte)Math.Round(pixel.R * alpha), (byte)Math.Round(pixel.G * alpha), (byte)Math.Round(pixel.B * alpha), 255);
+                }
+            }
+        });
+    }
+
+    private static bool TrimTransparentBounds(Image<Rgba32> image)
+    {
+        var minX = image.Width;
+        var minY = image.Height;
+        var maxX = -1;
+        var maxY = -1;
+
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < row.Length; x++)
+                {
+                    if (row[x].A <= TransparentAlphaThreshold)
+                        continue;
+
+                    minX = Math.Min(minX, x);
+                    minY = Math.Min(minY, y);
+                    maxX = Math.Max(maxX, x);
+                    maxY = Math.Max(maxY, y);
+                }
+            }
+        });
+
+        if (maxX < minX || maxY < minY)
+            return false;
+
+        var padding = 2;
         var cropX = Math.Max(0, minX - padding);
         var cropY = Math.Max(0, minY - padding);
         var cropWidth = Math.Min(image.Width - cropX, maxX - minX + 1 + padding * 2);
         var cropHeight = Math.Min(image.Height - cropY, maxY - minY + 1 + padding * 2);
-        if (cropWidth < image.Width || cropHeight < image.Height)
-            image.Mutate(ctx => ctx.Crop(new Rectangle(cropX, cropY, cropWidth, cropHeight)));
+        if (cropWidth >= image.Width && cropHeight >= image.Height)
+            return false;
+
+        image.Mutate(ctx => ctx.Crop(new Rectangle(cropX, cropY, cropWidth, cropHeight)));
+        return true;
+    }
+
+    private static bool IsObjectCandidate(Rgba32 pixel)
+    {
+        if (pixel.A <= TransparentAlphaThreshold)
+            return false;
+
+        var max = Math.Max(pixel.R, Math.Max(pixel.G, pixel.B));
+        var min = Math.Min(pixel.R, Math.Min(pixel.G, pixel.B));
+        return max > ForegroundBlackThreshold || max - min > 20;
     }
 
     private static async Task<CelestialAssetPackExtractionReport> WriteReportAsync(bool enabled, string sourcePath, string outputRoot, IReadOnlyCollection<CelestialAssetPackExtractionItem> items, IReadOnlyCollection<string> extracted, IReadOnlyCollection<string> skipped, IReadOnlyCollection<string> warnings, string reportPath, CancellationToken cancellationToken)
@@ -149,9 +371,69 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
             Warnings = warnings,
             ReportPath = reportPath
         };
-        await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase }), cancellationToken);
         return report;
     }
 
     private static string ResolvePath(string path) => Path.IsPathRooted(path) ? path : Path.Combine(Directory.GetCurrentDirectory(), path);
+
+    private sealed class Component
+    {
+        public Component(int x, int y)
+        {
+            MinX = MaxX = x;
+            MinY = MaxY = y;
+        }
+
+        public int MinX { get; private set; }
+        public int MinY { get; private set; }
+        public int MaxX { get; private set; }
+        public int MaxY { get; private set; }
+        public int Area { get; private set; }
+
+        public void Include(int x, int y)
+        {
+            Area++;
+            MinX = Math.Min(MinX, x);
+            MinY = Math.Min(MinY, y);
+            MaxX = Math.Max(MaxX, x);
+            MaxY = Math.Max(MaxY, y);
+        }
+
+        public bool IsUsable(int imageWidth, int imageHeight)
+        {
+            var width = MaxX - MinX + 1;
+            var height = MaxY - MinY + 1;
+            if (Area < Math.Max(16, imageWidth * imageHeight / 2500) || width < 8 || height < 8)
+                return false;
+
+            var density = Area / (double)(width * height);
+            var touchesMostEdges = MinX <= 2 && MinY <= 2 && MaxX >= imageWidth - 3 && MaxY >= imageHeight - 3;
+            if (touchesMostEdges && density < 0.18)
+                return false;
+
+            var centerY = (MinY + MaxY) / 2d;
+            var looksLikeHorizontalText = width > height * 2.8 && height < imageHeight * 0.22 && centerY > imageHeight * 0.62;
+            return !looksLikeHorizontalText;
+        }
+
+        public double Score(int imageWidth, int imageHeight)
+        {
+            var centerX = (MinX + MaxX) / 2d;
+            var centerY = (MinY + MaxY) / 2d;
+            var normalizedDistance = Math.Sqrt(Math.Pow((centerX - imageWidth / 2d) / imageWidth, 2) + Math.Pow((centerY - imageHeight / 2d) / imageHeight, 2));
+            return Area * (1.25 - Math.Min(0.75, normalizedDistance));
+        }
+
+        public Rectangle ToPaddedRectangle(int imageWidth, int imageHeight, int padding)
+        {
+            var x = Math.Max(0, MinX - padding);
+            var y = Math.Max(0, MinY - padding);
+            var right = Math.Min(imageWidth - 1, MaxX + padding);
+            var bottom = Math.Min(imageHeight - 1, MaxY + padding);
+            return new Rectangle(x, y, right - x + 1, bottom - y + 1);
+        }
+    }
+
+    private sealed record ExtractionStats(bool BackgroundRemoved, int AlphaPixelsRemoved);
 }

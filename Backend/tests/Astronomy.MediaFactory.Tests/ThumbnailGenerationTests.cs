@@ -435,6 +435,62 @@ public sealed class ThumbnailGenerationTests
 
 
     [Fact]
+    public async Task LocalAssetCollage_PrefersTransparentHeroPngOverOtherAssets()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        var transparentPath = Path.Combine(assetRoot, "jupiter", "hero-transparent.png");
+        await WriteCuratedAssetAsync(transparentPath, Color.Orange);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "jupiter", "hero.png"), Color.Brown);
+        await WriteLegacyAssetAsync(Path.Combine(assetRoot, "jupiter", "jupiter-gsfc.jpg"), Color.Brown);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        var selected = Assert.Single(plan.CelestialSelection!.AssetSources.Where(a => a.Category == "jupiter"));
+        Assert.Equal(transparentPath, selected.LocalPath);
+        Assert.Equal("hero-transparent.png", Path.GetFileName(selected.LocalPath));
+        Assert.Equal("AssetPack", selected.Source);
+        Assert.Equal(transparentPath, plan.SelectedVisualPath);
+        Assert.True(File.Exists(plan.ThumbnailPath));
+        using var thumbnail = await Image.LoadAsync<Rgba32>(plan.ThumbnailPath!);
+        Assert.Equal(1280, thumbnail.Width);
+        Assert.Equal(720, thumbnail.Height);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_FallsBackToHeroPng_WhenTransparentHeroMissing()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        var heroPath = Path.Combine(assetRoot, "jupiter", "hero.png");
+        await WriteCuratedAssetAsync(heroPath, Color.Orange);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}")
+        }, CancellationToken.None);
+
+        var selected = Assert.Single(plan.CelestialSelection!.AssetSources.Where(a => a.Category == "jupiter"));
+        Assert.Equal(heroPath, selected.LocalPath);
+        Assert.Equal("hero.png", Path.GetFileName(selected.LocalPath));
+        Assert.True(File.Exists(plan.ThumbnailPath));
+    }
+
+    [Fact]
     public async Task LocalAssetCollage_PrefersExtractedHeroPngOverLegacyJpg()
     {
         var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");

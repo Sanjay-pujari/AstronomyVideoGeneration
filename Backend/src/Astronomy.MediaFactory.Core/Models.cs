@@ -229,6 +229,17 @@ public sealed class CelestialAssetPackExtractionItem
     public CelestialAssetTileMapEntry? CropBox { get; init; }
     public bool Success { get; init; }
     public string Warning { get; init; } = "";
+    public bool TransparencyApplied { get; init; }
+    public int AlphaPixelsRemoved { get; init; }
+    public bool AutoTrimApplied { get; init; }
+    public CelestialAssetPackImageDimensions FinalDimensions { get; init; } = new();
+    public bool BackgroundRemoved { get; init; }
+}
+
+public sealed class CelestialAssetPackImageDimensions
+{
+    public int Width { get; init; }
+    public int Height { get; init; }
 }
 
 public sealed class CelestialAssetTileMapEntry
