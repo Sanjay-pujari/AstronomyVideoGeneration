@@ -208,6 +208,42 @@ public sealed class PipelineOrchestratorSceneNarrationTests
     }
 
     [Fact]
+    public async Task RunAsync_FullVideoWithStaleSceneIndex_UsesFinalVisualSceneOrderForNarration()
+    {
+        var scenes = new List<SceneObservationContext>
+        {
+            BuildScene("sky-overview", "Sky Overview", "Overview", "Sky", 1),
+            BuildScene("object-1", "Jupiter focus", "Object", "Jupiter", 2),
+            BuildScene("object-2", "Venus focus", "Object", "Venus", 5), // stale selected-object/ranking order would move Venus after Saturn
+            BuildScene("object-3", "Neptune focus", "Object", "Neptune", 3),
+            BuildScene("object-4", "Saturn focus", "Object", "Saturn", 4),
+            BuildScene("object-5", "Mars focus", "Object", "Mars", 6),
+            BuildScene("closing", "Closing overview", "Closing", "Sky", 7)
+        };
+
+        var result = await RunNarrationOrderingScenarioAsync(scenes, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["sky-overview"] = "Overview text",
+            ["object-1"] = "Jupiter text",
+            ["object-2"] = "Venus text",
+            ["object-3"] = "Neptune text",
+            ["object-4"] = "Saturn text",
+            ["object-5"] = "Mars text",
+            ["closing"] = "Closing text"
+        });
+
+        var narrationText = await File.ReadAllTextAsync(Path.Combine(result.RunDirectory, "narration.txt"));
+        Assert.True(narrationText.IndexOf("Jupiter text", StringComparison.Ordinal) < narrationText.IndexOf("Venus text", StringComparison.Ordinal));
+        Assert.True(narrationText.IndexOf("Venus text", StringComparison.Ordinal) < narrationText.IndexOf("Neptune text", StringComparison.Ordinal));
+        Assert.True(narrationText.IndexOf("Neptune text", StringComparison.Ordinal) < narrationText.IndexOf("Saturn text", StringComparison.Ordinal));
+        Assert.True(narrationText.IndexOf("Saturn text", StringComparison.Ordinal) < narrationText.IndexOf("Mars text", StringComparison.Ordinal));
+
+        AssertClosingLast(result.RunDirectory, result.Render.Manifest.Scenes);
+        AssertVisualAndNarrationOrderMatch(result.RunDirectory, scenes);
+        Assert.Equal(new[] { "Sky", "Jupiter", "Venus", "Neptune", "Saturn", "Mars", "Sky" }, result.Render.Manifest.Scenes.Select(scene => scene.ObjectName));
+    }
+
+    [Fact]
     public async Task RunAsync_ShortVideoSequenceInput_RemainsUnchanged()
     {
         var scenes = BuildSceneOrder("Moon", "Jupiter", "Saturn", "Venus", "Mars");
@@ -331,7 +367,9 @@ public sealed class PipelineOrchestratorSceneNarrationTests
         Assert.Equal(scenes.Count, entries.Length);
         Assert.Equal(scenes.Select(scene => scene.SceneId), entries.Select(entry => entry.GetProperty("sceneId").GetString()));
         Assert.Equal(Enumerable.Range(1, scenes.Count), entries.Select(entry => entry.GetProperty("narrationOrder").GetInt32()));
+        Assert.Equal(Enumerable.Range(1, scenes.Count), entries.Select(entry => entry.GetProperty("visualOrder").GetInt32()));
         Assert.Equal(Enumerable.Range(1, scenes.Count), entries.Select(entry => entry.GetProperty("renderOrder").GetInt32()));
+        Assert.All(entries, entry => Assert.Equal("FinalVisualSceneOrder", entry.GetProperty("sourceOrderUsed").GetString()));
     }
 
 

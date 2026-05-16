@@ -16,8 +16,7 @@ public sealed class PromptBuilder : IPromptBuilder
     {
         if (contentType == ContentType.SpecialEventGuide)
             return BuildSpecialEventPrompt(context, feedbackContext);
-        var finalSceneIds = context.SceneObservationContexts
-            .OrderBy(scene => scene.SceneIndex > 0 ? scene.SceneIndex : int.MaxValue)
+        var finalSceneIds = GetFinalVisualSceneOrder(context)
             .Select(scene => scene.SceneId)
             .Where(sceneId => !string.IsNullOrWhiteSpace(sceneId))
             .ToArray();
@@ -124,8 +123,7 @@ public sealed class PromptBuilder : IPromptBuilder
 
     private static string BuildSpecialEventPrompt(AstronomyContext context, PromptFeedbackContext? feedbackContext)
     {
-        var finalSceneIds = context.SceneObservationContexts
-            .OrderBy(scene => scene.SceneIndex > 0 ? scene.SceneIndex : int.MaxValue)
+        var finalSceneIds = GetFinalVisualSceneOrder(context)
             .Select(scene => scene.SceneId)
             .Where(sceneId => !string.IsNullOrWhiteSpace(sceneId))
             .ToArray();
@@ -191,6 +189,12 @@ public sealed class PromptBuilder : IPromptBuilder
     }
 
 
+    private static IReadOnlyList<SceneObservationContext> GetFinalVisualSceneOrder(AstronomyContext context)
+        // SceneObservationContexts is the finalized visual scene list handed to rendering.
+        // Preserve that order for full-video narration prompts instead of re-sorting by
+        // score, altitude, event priority, category, or stale sceneIndex values.
+        => context.SceneObservationContexts;
+
     private static IEnumerable<AstronomyEventModel> SelectAstronomyEvents(AstronomyContext context)
     {
         if (context.SceneObservationContexts.Count == 0)
@@ -198,7 +202,7 @@ public sealed class PromptBuilder : IPromptBuilder
             return context.Events.OrderByDescending(e => e.Score);
         }
 
-        var selectedSceneObjects = context.SceneObservationContexts
+        var selectedSceneObjects = GetFinalVisualSceneOrder(context)
             .Select(scene => scene.ObjectName)
             .Where(name => !string.IsNullOrWhiteSpace(name) && !name.Equals("Sky", StringComparison.OrdinalIgnoreCase))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -208,16 +212,18 @@ public sealed class PromptBuilder : IPromptBuilder
             return Enumerable.Empty<AstronomyEventModel>();
         }
 
-        return context.Events
-            .Where(e => selectedSceneObjects.Contains(e.ObjectName))
-            .OrderByDescending(e => e.Score);
+        return GetFinalVisualSceneOrder(context)
+            .Select(scene => context.Events.FirstOrDefault(e => selectedSceneObjects.Contains(e.ObjectName) && e.ObjectName.Equals(scene.ObjectName, StringComparison.OrdinalIgnoreCase)))
+            .Where(e => e is not null)
+            .Cast<AstronomyEventModel>()
+            .DistinctBy(e => e.ObjectName, StringComparer.OrdinalIgnoreCase);
     }
 
     private static object BuildSceneObservationContext(AstronomyContext context)
     {
         if (context.SceneObservationContexts.Count > 0)
         {
-            return context.SceneObservationContexts.Select(scene => new
+            return GetFinalVisualSceneOrder(context).Select(scene => new
             {
                 sceneId = scene.SceneId,
                 sceneTitle = scene.SceneTitle,
