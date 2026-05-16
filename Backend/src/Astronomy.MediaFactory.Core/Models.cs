@@ -1,4 +1,6 @@
 using Astronomy.MediaFactory.Contracts;
+using System.Text.Json.Serialization;
+
 namespace Astronomy.MediaFactory.Core;
 
 public sealed class AstronomyContext
@@ -211,10 +213,19 @@ public sealed class CelestialAsset
 
 public sealed class CelestialAssetPackExtractionReport
 {
-    public bool Enabled { get; init; }
+    public string GeneratedAtUtc { get; init; } = "";
     public string SourceSheetPath { get; init; } = "";
+    public string SourceMapPath { get; init; } = "";
+    public int ObjectsProcessed { get; init; }
+    public int SuccessCount { get; init; }
+    public int FailureCount { get; init; }
+    public int TransparentAssetsGenerated { get; init; }
+    public IReadOnlyCollection<CelestialAssetPackExtractionItem> Items { get; init; } = [];
+
+    public bool Enabled { get; init; }
     public string OutputRootPath { get; init; } = "";
-    public IReadOnlyCollection<CelestialAssetPackExtractionItem> Objects { get; init; } = [];
+    [JsonIgnore]
+    public IReadOnlyCollection<CelestialAssetPackExtractionItem> Objects => Items;
     public IReadOnlyCollection<string> ExtractedObjects { get; init; } = [];
     public IReadOnlyCollection<string> SkippedObjects { get; init; } = [];
     public IReadOnlyCollection<string> Warnings { get; init; } = [];
@@ -224,16 +235,19 @@ public sealed class CelestialAssetPackExtractionReport
 public sealed class CelestialAssetPackExtractionItem
 {
     public string ObjectKey { get; init; } = "";
-    public string OutputPath { get; init; } = "";
     public string SourceSheetPath { get; init; } = "";
     public CelestialAssetTileMapEntry? CropBox { get; init; }
+    public string OutputPath { get; init; } = "";
+    public string TransparentOutputPath { get; init; } = "";
     public bool Success { get; init; }
-    public string Warning { get; init; } = "";
+    public string? Warning { get; init; }
     public bool TransparencyApplied { get; init; }
+    public bool BackgroundRemoved { get; init; }
     public int AlphaPixelsRemoved { get; init; }
     public bool AutoTrimApplied { get; init; }
     public CelestialAssetPackImageDimensions FinalDimensions { get; init; } = new();
-    public bool BackgroundRemoved { get; init; }
+    public bool LabelRemovalApplied { get; init; }
+    public bool BorderRemovalApplied { get; init; }
 }
 
 public sealed class CelestialAssetPackImageDimensions

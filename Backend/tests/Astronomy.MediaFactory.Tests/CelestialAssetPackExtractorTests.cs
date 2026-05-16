@@ -65,8 +65,17 @@ public sealed class CelestialAssetPackExtractorTests
         Assert.True(item.BackgroundRemoved);
         Assert.True(item.AlphaPixelsRemoved > 0);
         Assert.True(item.AutoTrimApplied);
+        Assert.Equal(fallbackPath, item.OutputPath);
+        Assert.Equal(transparentPath, item.TransparentOutputPath);
         Assert.Equal(transparent.Width, item.FinalDimensions.Width);
         Assert.Equal(transparent.Height, item.FinalDimensions.Height);
+        Assert.True(item.LabelRemovalApplied);
+        Assert.True(item.BorderRemovalApplied);
+        Assert.Equal(2, report.ObjectsProcessed);
+        Assert.Equal(2, report.SuccessCount);
+        Assert.Equal(0, report.FailureCount);
+        Assert.Equal(2, report.TransparentAssetsGenerated);
+        Assert.Equal(mapPath, report.SourceMapPath);
 
         var reportJson = await File.ReadAllTextAsync(Path.Combine(root, "asset-pack-extraction-report.json"));
         Assert.Contains("transparencyApplied", reportJson);
@@ -74,6 +83,11 @@ public sealed class CelestialAssetPackExtractorTests
         Assert.Contains("autoTrimApplied", reportJson);
         Assert.Contains("finalDimensions", reportJson);
         Assert.Contains("backgroundRemoved", reportJson);
+        Assert.Contains("transparentOutputPath", reportJson);
+        Assert.Contains("labelRemovalApplied", reportJson);
+        Assert.Contains("borderRemovalApplied", reportJson);
+        Assert.Contains("items", reportJson);
+        Assert.Contains("objectsProcessed", reportJson);
     }
 
     private static void DrawSyntheticInfographicTile(Image<Rgba32> sheet, Rectangle tile, Color objectColor)

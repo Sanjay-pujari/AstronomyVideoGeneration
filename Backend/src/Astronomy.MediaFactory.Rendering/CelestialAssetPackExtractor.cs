@@ -29,16 +29,16 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
         var skipped = new List<string>();
         var items = new List<CelestialAssetPackExtractionItem>();
         var reportPath = Path.Combine(outputRoot, "asset-pack-extraction-report.json");
+        var mapPath = ResolvePath(string.IsNullOrWhiteSpace(_options.SheetMapPath) ? Path.Combine(Path.GetDirectoryName(sourcePath) ?? "", "celestial-object-sheet-map.json") : _options.SheetMapPath);
 
         if (!_options.Enabled)
-            return await WriteReportAsync(false, sourcePath, outputRoot, items, extracted, skipped, ["Celestial asset pack extraction is disabled."], reportPath, cancellationToken);
+            return await WriteReportAsync(false, sourcePath, mapPath, outputRoot, items, extracted, skipped, ["Celestial asset pack extraction is disabled."], reportPath, cancellationToken);
 
         if (!File.Exists(sourcePath))
-            return await WriteReportAsync(true, sourcePath, outputRoot, items, extracted, skipped, [$"Source sheet not found: {sourcePath}"], reportPath, cancellationToken);
+            return await WriteReportAsync(true, sourcePath, mapPath, outputRoot, items, extracted, skipped, [$"Source sheet not found: {sourcePath}"], reportPath, cancellationToken);
 
-        var mapPath = ResolvePath(string.IsNullOrWhiteSpace(_options.SheetMapPath) ? Path.Combine(Path.GetDirectoryName(sourcePath) ?? "", "celestial-object-sheet-map.json") : _options.SheetMapPath);
         if (!File.Exists(mapPath))
-            return await WriteReportAsync(true, sourcePath, outputRoot, items, extracted, skipped, [$"Manual crop map not found: {mapPath}"], reportPath, cancellationToken);
+            return await WriteReportAsync(true, sourcePath, mapPath, outputRoot, items, extracted, skipped, [$"Manual crop map not found: {mapPath}"], reportPath, cancellationToken);
 
         var json = await File.ReadAllTextAsync(mapPath, cancellationToken);
         var map = JsonSerializer.Deserialize<Dictionary<string, CelestialAssetTileMapEntry>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new Dictionary<string, CelestialAssetTileMapEntry>();
@@ -58,7 +58,7 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
             {
                 var warning = $"Invalid crop rectangle for {rawKey}.";
                 warnings.Add(warning);
-                items.Add(CreateItem(target.ObjectKey, transparentPath, sourcePath, tile, false, warning));
+                items.Add(CreateItem(target.ObjectKey, fallbackPath, transparentPath, sourcePath, tile, false, warning));
                 continue;
             }
 
@@ -68,13 +68,33 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
             {
                 skipped.Add($"{target.ObjectKey}/{target.TransparentFileName}");
                 skipped.Add($"{target.ObjectKey}/{target.FallbackFileName}");
-                items.Add(CreateItem(target.ObjectKey, transparentPath, sourcePath, tile, true, "Skipped because output already exists."));
+                var warning = "Skipped because output already exists; alpha pixel count unavailable without re-extraction.";
+                warnings.Add(warning);
+                var dimensions = await ReadImageDimensionsAsync(transparentPath, cancellationToken);
+                items.Add(CreateItem(
+                    target.ObjectKey,
+                    fallbackPath,
+                    transparentPath,
+                    sourcePath,
+                    tile,
+                    true,
+                    warning,
+                    transparencyApplied: true,
+                    alphaPixelsRemoved: 0,
+                    autoTrimApplied: false,
+                    finalWidth: dimensions.Width,
+                    finalHeight: dimensions.Height,
+                    backgroundRemoved: true,
+                    labelRemovalApplied: false,
+                    borderRemovalApplied: false));
                 continue;
             }
 
             using var mappedTile = sheet.Clone(ctx => ctx.Crop(new Rectangle(tile.X, tile.Y, tile.Width, tile.Height)));
             var objectBounds = DetectDominantObjectBounds(mappedTile) ?? DetectNonBlackBounds(mappedTile) ?? new Rectangle(0, 0, mappedTile.Width, mappedTile.Height);
             var autoTrimApplied = objectBounds.X > 0 || objectBounds.Y > 0 || objectBounds.Width < mappedTile.Width || objectBounds.Height < mappedTile.Height;
+            var labelRemovalApplied = objectBounds.Bottom < mappedTile.Height;
+            var borderRemovalApplied = autoTrimApplied;
             using var objectCrop = mappedTile.Clone(ctx => ctx.Crop(objectBounds));
             var extractionStats = ApplyTransparentBlackBackground(objectCrop);
             var finalTrimApplied = TrimTransparentBounds(objectCrop);
@@ -94,20 +114,23 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
             extracted.Add($"{target.ObjectKey}/{target.FallbackFileName}");
             items.Add(CreateItem(
                 target.ObjectKey,
+                fallbackPath,
                 transparentPath,
                 sourcePath,
                 tile,
                 true,
-                string.Empty,
+                null,
                 transparencyApplied: true,
                 alphaPixelsRemoved: extractionStats.AlphaPixelsRemoved,
                 autoTrimApplied: autoTrimApplied,
                 finalWidth: objectCrop.Width,
                 finalHeight: objectCrop.Height,
-                backgroundRemoved: extractionStats.BackgroundRemoved));
+                backgroundRemoved: extractionStats.BackgroundRemoved,
+                labelRemovalApplied: labelRemovalApplied,
+                borderRemovalApplied: borderRemovalApplied));
         }
 
-        return await WriteReportAsync(true, sourcePath, outputRoot, items, extracted.Distinct().ToArray(), skipped.Distinct().ToArray(), warnings, reportPath, cancellationToken);
+        return await WriteReportAsync(true, sourcePath, mapPath, outputRoot, items, extracted.Distinct().ToArray(), skipped.Distinct().ToArray(), warnings.Distinct().ToArray(), reportPath, cancellationToken);
     }
 
     private static (string ObjectKey, string TransparentFileName, string FallbackFileName) ResolveTarget(string rawKey)
@@ -129,28 +152,34 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
     private static CelestialAssetPackExtractionItem CreateItem(
         string objectKey,
         string outputPath,
+        string transparentOutputPath,
         string sourcePath,
         CelestialAssetTileMapEntry cropBox,
         bool success,
-        string warning,
+        string? warning,
         bool transparencyApplied = false,
         int alphaPixelsRemoved = 0,
         bool autoTrimApplied = false,
         int finalWidth = 0,
         int finalHeight = 0,
-        bool backgroundRemoved = false) => new()
+        bool backgroundRemoved = false,
+        bool labelRemovalApplied = false,
+        bool borderRemovalApplied = false) => new()
     {
         ObjectKey = objectKey,
-        OutputPath = outputPath,
         SourceSheetPath = sourcePath,
         CropBox = cropBox,
+        OutputPath = outputPath,
+        TransparentOutputPath = transparentOutputPath,
         Success = success,
         Warning = warning,
         TransparencyApplied = transparencyApplied,
+        BackgroundRemoved = backgroundRemoved,
         AlphaPixelsRemoved = alphaPixelsRemoved,
         AutoTrimApplied = autoTrimApplied,
         FinalDimensions = new CelestialAssetPackImageDimensions { Width = finalWidth, Height = finalHeight },
-        BackgroundRemoved = backgroundRemoved
+        LabelRemovalApplied = labelRemovalApplied,
+        BorderRemovalApplied = borderRemovalApplied
     };
 
     private static Rectangle? DetectDominantObjectBounds(Image<Rgba32> image)
@@ -358,14 +387,21 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
         return max > ForegroundBlackThreshold || max - min > 20;
     }
 
-    private static async Task<CelestialAssetPackExtractionReport> WriteReportAsync(bool enabled, string sourcePath, string outputRoot, IReadOnlyCollection<CelestialAssetPackExtractionItem> items, IReadOnlyCollection<string> extracted, IReadOnlyCollection<string> skipped, IReadOnlyCollection<string> warnings, string reportPath, CancellationToken cancellationToken)
+    private static async Task<CelestialAssetPackExtractionReport> WriteReportAsync(bool enabled, string sourcePath, string sourceMapPath, string outputRoot, IReadOnlyCollection<CelestialAssetPackExtractionItem> items, IReadOnlyCollection<string> extracted, IReadOnlyCollection<string> skipped, IReadOnlyCollection<string> warnings, string reportPath, CancellationToken cancellationToken)
     {
+        var successCount = items.Count(item => item.Success);
         var report = new CelestialAssetPackExtractionReport
         {
-            Enabled = enabled,
+            GeneratedAtUtc = DateTime.UtcNow.ToString("O"),
             SourceSheetPath = sourcePath,
+            SourceMapPath = sourceMapPath,
+            ObjectsProcessed = items.Count,
+            SuccessCount = successCount,
+            FailureCount = items.Count - successCount,
+            TransparentAssetsGenerated = items.Count(item => item.Success && !string.IsNullOrWhiteSpace(item.TransparentOutputPath)),
+            Items = items,
+            Enabled = enabled,
             OutputRootPath = outputRoot,
-            Objects = items,
             ExtractedObjects = extracted,
             SkippedObjects = skipped,
             Warnings = warnings,
@@ -373,6 +409,21 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
         };
         await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase }), cancellationToken);
         return report;
+    }
+
+    private static async Task<CelestialAssetPackImageDimensions> ReadImageDimensionsAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var info = await Image.IdentifyAsync(path, cancellationToken);
+            return info is null
+                ? new CelestialAssetPackImageDimensions()
+                : new CelestialAssetPackImageDimensions { Width = info.Width, Height = info.Height };
+        }
+        catch
+        {
+            return new CelestialAssetPackImageDimensions();
+        }
     }
 
     private static string ResolvePath(string path) => Path.IsPathRooted(path) ? path : Path.Combine(Directory.GetCurrentDirectory(), path);
