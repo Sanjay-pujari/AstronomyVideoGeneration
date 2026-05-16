@@ -16,6 +16,12 @@ public sealed class PromptBuilder : IPromptBuilder
     {
         if (contentType == ContentType.SpecialEventGuide)
             return BuildSpecialEventPrompt(context, feedbackContext);
+        var finalSceneIds = context.SceneObservationContexts
+            .OrderBy(scene => scene.SceneIndex > 0 ? scene.SceneIndex : int.MaxValue)
+            .Select(scene => scene.SceneId)
+            .Where(sceneId => !string.IsNullOrWhiteSpace(sceneId))
+            .ToArray();
+
         var astronomyInput = new
         {
             date = context.Date.ToString("yyyy-MM-dd"),
@@ -55,6 +61,8 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("3) Do not invent or hallucinate numeric values.");
         sb.AppendLine("4) Return ONLY valid JSON with no markdown, no code fences, and no commentary.");
         sb.AppendLine("5) Each sceneScript section must map exactly to provided sceneObservationContext sceneId values and include: object, local time, direction, approximate altitude, tool needed, and one beginner tip.");
+        sb.AppendLine($"   Required sceneScript order: {string.Join(" -> ", finalSceneIds)}.");
+        sb.AppendLine("   Do not place the closing scene before any selected object or tips scene; closing must be the final sceneScript key when a closing scene exists.");
         sb.AppendLine("6) Keep narration practical and specific to structured observation context, not generic sky facts.");
         sb.AppendLine("7) Keep object-scene narration chronological with explicit time progression language.");
         sb.AppendLine("8) Use natural transitions such as 'Later in the night...', 'As midnight approaches...', and 'In the early morning hours...' when they fit the local times.");
@@ -75,11 +83,18 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("  \"estimatedDurationSeconds\": 900,");
         sb.AppendLine("  \"scriptBody\": \"string\",");
         sb.AppendLine("  \"sceneScript\": {");
-        sb.AppendLine("    \"sky-overview\": \"string\",");
-        sb.AppendLine("    \"object-1\": \"string\",");
-        sb.AppendLine("    \"object-2\": \"string\",");
-        sb.AppendLine("    \"object-3\": \"string\",");
-        sb.AppendLine("    \"closing\": \"string\"");
+        if (finalSceneIds.Length > 0)
+        {
+            for (var i = 0; i < finalSceneIds.Length; i++)
+            {
+                var suffix = i == finalSceneIds.Length - 1 ? string.Empty : ",";
+                sb.AppendLine($"    \"{finalSceneIds[i]}\": \"string\"{suffix}");
+            }
+        }
+        else
+        {
+            sb.AppendLine("    \"scene-id\": \"string\"");
+        }
         sb.AppendLine("  }");
         sb.AppendLine("}");
         sb.AppendLine();
@@ -109,6 +124,12 @@ public sealed class PromptBuilder : IPromptBuilder
 
     private static string BuildSpecialEventPrompt(AstronomyContext context, PromptFeedbackContext? feedbackContext)
     {
+        var finalSceneIds = context.SceneObservationContexts
+            .OrderBy(scene => scene.SceneIndex > 0 ? scene.SceneIndex : int.MaxValue)
+            .Select(scene => scene.SceneId)
+            .Where(sceneId => !string.IsNullOrWhiteSpace(sceneId))
+            .ToArray();
+
         var astronomyInput = new
         {
             date = context.Date.ToString("yyyy-MM-dd"),
@@ -133,6 +154,8 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("5) Do not invent numeric values beyond supplied context.");
         sb.AppendLine("6) Return ONLY valid JSON with no markdown, no code fences, and no commentary.");
         sb.AppendLine("7) Each sceneScript section must map exactly to provided sceneObservationContext sceneId values.");
+        sb.AppendLine($"   Required sceneScript order: {string.Join(" -> ", finalSceneIds)}.");
+        sb.AppendLine("   Keep the closing scene as the final sceneScript key when a closing scene exists.");
         sb.AppendLine("8) SpecialEventGuide target is 7-9 minutes, naturally paced at 120-145 English words/minute or 110-130 Hindi words/minute. Do not pad with silence cues.");
         sb.AppendLine();
         sb.AppendLine(PromptFeedbackComposer.BuildFeedbackSection(feedbackContext, isShortForm: false));
@@ -144,7 +167,20 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("  \"tags\": [\"string\", \"string\"],");
         sb.AppendLine("  \"estimatedDurationSeconds\": 600,");
         sb.AppendLine("  \"scriptBody\": \"string\",");
-        sb.AppendLine("  \"sceneScript\": { \"scene-id\": \"string\" }");
+        sb.AppendLine("  \"sceneScript\": {");
+        if (finalSceneIds.Length > 0)
+        {
+            for (var i = 0; i < finalSceneIds.Length; i++)
+            {
+                var suffix = i == finalSceneIds.Length - 1 ? string.Empty : ",";
+                sb.AppendLine($"    \"{finalSceneIds[i]}\": \"string\"{suffix}");
+            }
+        }
+        else
+        {
+            sb.AppendLine("    \"scene-id\": \"string\"");
+        }
+        sb.AppendLine("  }");
         sb.AppendLine("}");
         sb.AppendLine();
         sb.AppendLine("Structured special event input (JSON data block):");
@@ -186,6 +222,7 @@ public sealed class PromptBuilder : IPromptBuilder
                 sceneId = scene.SceneId,
                 sceneTitle = scene.SceneTitle,
                 sceneType = scene.SceneType,
+                sceneIndex = scene.SceneIndex,
                 objectName = scene.ObjectName,
                 objectType = scene.ObjectType,
                 bestViewingLocalTime = scene.LocalObservationTime.ToString("yyyy-MM-dd HH:mm"),

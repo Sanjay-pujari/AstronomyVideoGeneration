@@ -518,13 +518,11 @@ public sealed class PipelineOrchestrator
             }
 
             var sceneAudioSegments = new List<string>();
-            var sceneSections = new List<(SceneObservationContext Scene, string SectionText)>();
+            var sceneSections = new List<FullVideoNarrationSection>();
             if (script.SceneScriptSections?.HasAllSections() == true)
             {
                 await WriteSceneObservationDiagnosticsAsync(context, outputDir, cancellationToken);
-                var visualSceneContexts = context.SceneObservationContexts
-                    .Take(Math.Min(context.SceneObservationContexts.Count, visuals.Count))
-                    .ToList();
+                var visualSceneContexts = BuildFinalVisualSceneOrder(context.SceneObservationContexts, visuals.Count);
                 var sectionsBySceneId = script.SceneScriptSections.SectionsBySceneId;
                 var expectedVisualObjects = NormalizeObjects(visualSceneContexts.Select(x => x.ObjectName));
                 var actualNarrationObjects = NormalizeObjects(sectionsBySceneId.Keys
@@ -533,19 +531,10 @@ public sealed class PipelineOrchestrator
                 var usedSceneIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var fallbackSceneIds = new List<string>();
                 var alignedSectionsBySceneId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var visualScene in visualSceneContexts)
+                for (var visualIndex = 0; visualIndex < visualSceneContexts.Count; visualIndex++)
                 {
-                    var matchedSceneId = sectionsBySceneId.Keys.FirstOrDefault(id => !usedSceneIds.Contains(id) && id.Equals(visualScene.SceneId, StringComparison.OrdinalIgnoreCase));
-                    if (matchedSceneId is null)
-                    {
-                        matchedSceneId = sectionsBySceneId.Keys
-                            .FirstOrDefault(id => !usedSceneIds.Contains(id) && id.Contains(visualScene.ObjectName, StringComparison.OrdinalIgnoreCase));
-                    }
-
-                    if (matchedSceneId is null)
-                    {
-                        matchedSceneId = sectionsBySceneId.Keys.FirstOrDefault(id => !usedSceneIds.Contains(id));
-                    }
+                    var visualScene = visualSceneContexts[visualIndex];
+                    var matchedSceneId = ResolveNarrationSectionId(visualScene, visualSceneContexts, sectionsBySceneId, usedSceneIds);
 
                     var sectionText = matchedSceneId is null
                         ? BuildFallbackSceneNarration(visualScene, context.Localization.ResolvedLanguage)
@@ -560,9 +549,19 @@ public sealed class PipelineOrchestrator
                         usedSceneIds.Add(matchedSceneId);
                     }
 
+                    var narrationOrder = sceneSections.Count + 1;
                     alignedSectionsBySceneId[visualScene.SceneId] = sectionText;
-                    sceneSections.Add((visualScene, sectionText));
+                    sceneSections.Add(new FullVideoNarrationSection(
+                        visualScene,
+                        sectionText,
+                        RenderOrder: ResolveRenderOrder(visualScene, visualIndex),
+                        NarrationOrder: narrationOrder,
+                        MatchedSceneId: matchedSceneId,
+                        UsedFallback: matchedSceneId is null));
                 }
+
+                sceneSections = EnsureClosingNarrationLast(sceneSections, _logger);
+                alignedSectionsBySceneId = sceneSections.ToDictionary(section => section.Scene.SceneId, section => section.SectionText, StringComparer.OrdinalIgnoreCase);
 
                 var missingFromNarration = expectedVisualObjects.Except(actualNarrationObjects, StringComparer.OrdinalIgnoreCase).ToList();
                 var extraInNarration = actualNarrationObjects.Except(expectedVisualObjects, StringComparer.OrdinalIgnoreCase).ToList();
@@ -618,7 +617,7 @@ public sealed class PipelineOrchestrator
 
                 if (sceneNarrationEntries.Count > 0)
                 {
-                    await WriteSceneNarrationArtifactsAsync(sceneNarrationEntries, outputDir, audioPath, cancellationToken);
+                    await WriteSceneNarrationArtifactsAsync(sceneNarrationEntries, sceneSections, outputDir, audioPath, cancellationToken);
                 }
             }
 
@@ -631,7 +630,7 @@ public sealed class PipelineOrchestrator
                 OutputPath = Path.Combine(outputDir, "final-video.mp4"),
                 Scenes = visuals.Select((v, i) =>
                 {
-                    var observation = i < context.SceneObservationContexts.Count ? context.SceneObservationContexts[i] : null;
+                    var observation = i < sceneSections.Count ? sceneSections[i].Scene : (i < context.SceneObservationContexts.Count ? context.SceneObservationContexts[i] : null);
                     return new RenderScene
                     {
                         Caption = i < sceneSections.Count ? sceneSections[i].SectionText : (i < context.VisualIdeas.Count ? context.VisualIdeas[i].Title : $"Scene {i + 1}"),
@@ -1808,6 +1807,124 @@ public sealed class PipelineOrchestrator
             }
         };
 
+    private static List<SceneObservationContext> BuildFinalVisualSceneOrder(IReadOnlyList<SceneObservationContext> scenes, int visualCount)
+    {
+        var count = Math.Min(scenes.Count, visualCount);
+        if (count <= 0)
+        {
+            return [];
+        }
+
+        return scenes
+            .Select((scene, index) => new { Scene = scene, OriginalIndex = index })
+            .Take(count)
+            .OrderBy(item => item.Scene.SceneIndex > 0 ? item.Scene.SceneIndex : item.OriginalIndex + 1)
+            .ThenBy(item => item.OriginalIndex)
+            .Select(item => item.Scene)
+            .ToList();
+    }
+
+    private static string? ResolveNarrationSectionId(
+        SceneObservationContext visualScene,
+        IReadOnlyList<SceneObservationContext> visualSceneContexts,
+        IReadOnlyDictionary<string, string> sectionsBySceneId,
+        ISet<string> usedSceneIds)
+    {
+        var availableIds = sectionsBySceneId.Keys.Where(id => !usedSceneIds.Contains(id)).ToList();
+        var exactSceneId = availableIds.FirstOrDefault(id => id.Equals(visualScene.SceneId, StringComparison.OrdinalIgnoreCase));
+        if (exactSceneId is not null)
+        {
+            return exactSceneId;
+        }
+
+        var isClosingScene = IsClosingScene(visualScene);
+        if (isClosingScene)
+        {
+            return availableIds.FirstOrDefault(IsClosingSceneId);
+        }
+
+        var objectNameMatch = availableIds.FirstOrDefault(id => !IsClosingSceneId(id) && id.Contains(visualScene.ObjectName, StringComparison.OrdinalIgnoreCase));
+        if (objectNameMatch is not null)
+        {
+            return objectNameMatch;
+        }
+
+        var objectOrdinal = GetObjectNarrationOrdinal(visualScene, visualSceneContexts);
+        if (objectOrdinal is not null)
+        {
+            var ordinalMatch = availableIds.FirstOrDefault(id => !IsClosingSceneId(id) && id.Equals($"object-{objectOrdinal.Value}", StringComparison.OrdinalIgnoreCase));
+            if (ordinalMatch is not null)
+            {
+                return ordinalMatch;
+            }
+        }
+
+        return availableIds.FirstOrDefault(id => !IsClosingSceneId(id));
+    }
+
+    private static int? GetObjectNarrationOrdinal(SceneObservationContext visualScene, IReadOnlyList<SceneObservationContext> visualSceneContexts)
+    {
+        if (IsOpeningScene(visualScene) || IsClosingScene(visualScene) || string.Equals(visualScene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var ordinal = 0;
+        foreach (var scene in visualSceneContexts)
+        {
+            if (IsOpeningScene(scene) || IsClosingScene(scene) || string.Equals(scene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            ordinal++;
+            if (ReferenceEquals(scene, visualScene) || scene.SceneId.Equals(visualScene.SceneId, StringComparison.OrdinalIgnoreCase))
+            {
+                return ordinal;
+            }
+        }
+
+        return null;
+    }
+
+    private static List<FullVideoNarrationSection> EnsureClosingNarrationLast(List<FullVideoNarrationSection> sections, ILogger logger)
+    {
+        if (sections.Count <= 1)
+        {
+            return sections;
+        }
+
+        var closingIndex = sections.FindIndex(section => IsClosingScene(section.Scene));
+        if (closingIndex < 0 || closingIndex == sections.Count - 1)
+        {
+            return sections.Select((section, index) => section with { NarrationOrder = index + 1 }).ToList();
+        }
+
+        logger.LogWarning(
+            "Full-video closing narration was assigned order {ClosingOrder} before max order {MaxOrder}; moving closing narration to the end before audio generation.",
+            sections[closingIndex].NarrationOrder,
+            sections.Count);
+
+        var reordered = sections.Where((_, index) => index != closingIndex).Append(sections[closingIndex]).ToList();
+        return reordered.Select((section, index) => section with { NarrationOrder = index + 1 }).ToList();
+    }
+
+    private static bool IsOpeningScene(SceneObservationContext scene)
+        => scene.SceneType.Equals("Overview", StringComparison.OrdinalIgnoreCase)
+           || scene.SceneId.Contains("overview", StringComparison.OrdinalIgnoreCase)
+           || scene.SceneId.Contains("opening", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsClosingScene(SceneObservationContext scene)
+        => IsClosingSceneId(scene.SceneId)
+           || scene.SceneType.Equals("Closing", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsClosingSceneId(string sceneId)
+        => sceneId.Equals("closing", StringComparison.OrdinalIgnoreCase)
+           || sceneId.Contains("closing", StringComparison.OrdinalIgnoreCase);
+
+    private static int ResolveRenderOrder(SceneObservationContext scene, int fallbackIndex)
+        => scene.SceneIndex > 0 ? scene.SceneIndex : fallbackIndex + 1;
+
     private static string BuildFallbackSceneNarration(SceneObservationContext scene, string resolvedLanguage)
     {
         if (LocalizationResolver.IsHindi(resolvedLanguage))
@@ -1852,6 +1969,14 @@ public sealed class PipelineOrchestrator
         whyInteresting = astronomyEvent?.Details ?? "A useful beginner observing target."
     };
 
+    private sealed record FullVideoNarrationSection(
+        SceneObservationContext Scene,
+        string SectionText,
+        int RenderOrder,
+        int NarrationOrder,
+        string? MatchedSceneId,
+        bool UsedFallback);
+
     private sealed class SceneObservationContextEntry
     {
         public required string sceneId { get; init; }
@@ -1871,6 +1996,7 @@ public sealed class PipelineOrchestrator
 
     private async Task WriteSceneNarrationArtifactsAsync(
         IReadOnlyList<(int Index, string Title, string TextPath, string AudioPath, string Text)> sceneNarrationEntries,
+        IReadOnlyList<FullVideoNarrationSection> narrationSections,
         string outputDirectory,
         string narrationAudioPath,
         CancellationToken cancellationToken)
@@ -1883,6 +2009,19 @@ public sealed class PipelineOrchestrator
         var segmentsDiagnosticsPath = Path.Combine(outputDirectory, "narration-segments.txt");
         var segmentLines = sceneNarrationEntries.Select(entry => $"{entry.Index:000}|{entry.Title}|{entry.TextPath}|{entry.AudioPath}");
         await File.WriteAllLinesAsync(segmentsDiagnosticsPath, segmentLines, cancellationToken);
+
+        var narrationReportPath = Path.Combine(outputDirectory, "narration-report.json");
+        var narrationReport = narrationSections.Select(section => new
+        {
+            segmentType = section.Scene.SceneType,
+            sceneId = section.Scene.SceneId,
+            objectName = section.Scene.ObjectName,
+            renderOrder = section.RenderOrder,
+            narrationOrder = section.NarrationOrder,
+            matchedSceneId = section.MatchedSceneId,
+            usedFallback = section.UsedFallback
+        });
+        await File.WriteAllTextAsync(narrationReportPath, JsonSerializer.Serialize(narrationReport, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 
         var concatListPath = Path.Combine(outputDirectory, "audio-concat-list.txt");
         var concatLines = sceneNarrationEntries.Select(entry => $"file '{entry.AudioPath.Replace("'", "'\\''")}'");
@@ -1913,6 +2052,7 @@ public sealed class PipelineOrchestrator
                 new { filePath = "scene-narration-###.txt", purpose = "Per-scene narration text used for diagnostics and short/long sequencing traceability.", usedBy = new[] { "narration-segments.txt", "short-sequence-map.json" }, requiredForFinalRender = false },
                 new { filePath = "scene-audio-###.mp3", purpose = "Per-scene narration audio segments used to build narration.mp3 and segmented video rendering.", usedBy = new[] { "audio-concat-list.txt", "render-manifest.json", "ffmpeg segmented flow" }, requiredForFinalRender = true },
                 new { filePath = "narration-segments.txt", purpose = "Narration segment diagnostics and scene-to-audio mapping.", usedBy = new[] { "diagnostics" }, requiredForFinalRender = false },
+                new { filePath = "narration-report.json", purpose = "Structured narration ordering report with segment type, scene ID, object name, render order, and narration order.", usedBy = new[] { "diagnostics" }, requiredForFinalRender = false },
                 new { filePath = "audio-concat-list.txt", purpose = "FFmpeg concat input list for final narration.mp3.", usedBy = new[] { "ffmpeg-audio-concat-command.txt", "ffmpeg" }, requiredForFinalRender = true },
                 new { filePath = "narration.mp3", purpose = "Final narration audio used by render manifest.", usedBy = new[] { "render-manifest.json", "ffmpeg final render" }, requiredForFinalRender = true },
                 new { filePath = "render-manifest.json", purpose = "Canonical render plan for final-video.mp4 generation.", usedBy = new[] { "FfmpegVideoRenderService" }, requiredForFinalRender = true }
