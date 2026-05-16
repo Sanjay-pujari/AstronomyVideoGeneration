@@ -807,6 +807,76 @@ public sealed class ThumbnailGenerationTests
         Assert.Equal(reportA, reportB);
     }
 
+
+    [Fact]
+    public async Task LocalAssetCollage_CinematicAtmosphereEngine_RendersLayersAndReportsMetrics()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        foreach (var key in new[] { "jupiter", "venus", "mars", "milky-way" })
+            await WriteCuratedAssetAsync(Path.Combine(assetRoot, key, "hero-transparent.png"), key == "jupiter" ? Color.Orange : Color.White);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions
+        {
+            AssetRootPath = assetRoot,
+            MaxSupportObjectsLong = 2,
+            Atmosphere = new ThumbnailAtmosphereOptions
+            {
+                ProceduralShapeOpacity = 0.06,
+                ProceduralShapeBlur = 120,
+                ProceduralShapeContrast = 0.35
+            }
+        });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        Assert.True(File.Exists(plan.ThumbnailPath));
+        Assert.True(plan.CelestialSelection!.SupportObjects.Count <= 2);
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-report.json")));
+        Assert.True(report.RootElement.GetProperty("atmosphereDepthScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("fogBlendScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("edgeIntegrationScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("proceduralArtifactPenalty").GetDouble() <= 0.35);
+        Assert.True(report.RootElement.GetProperty("cinematicSoftnessScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("atmosphericRealismScore").GetDouble() > 0);
+        Assert.True(report.RootElement.GetProperty("readabilityScore").GetDouble() >= 0.65);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_PortraitAtmosphere_KeepsTextReadableAndBalanced()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        foreach (var key in new[] { "jupiter", "venus", "mars", "saturn", "milky-way" })
+            await WriteCuratedAssetAsync(Path.Combine(assetRoot, key, "hero-transparent.png"), Color.White);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, MaxSupportObjectsShort = 1 });
+
+        await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir,
+            IsShortForm = true
+        }, CancellationToken.None);
+
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-report.json")));
+        Assert.Equal("PortraitObjectUpperTextLowerThird", report.RootElement.GetProperty("layoutUsed").GetString());
+        Assert.Single(report.RootElement.GetProperty("supportObjects").EnumerateArray());
+        Assert.True(report.RootElement.GetProperty("readabilityScore").GetDouble() >= 0.65);
+        var textBounds = report.RootElement.GetProperty("textBounds");
+        Assert.True(textBounds.GetProperty("y").GetDouble() < 1920 * 0.66);
+        Assert.True(textBounds.GetProperty("y").GetDouble() + textBounds.GetProperty("height").GetDouble() < 1920 * 0.86);
+        Assert.True(report.RootElement.GetProperty("fogBlendScore").GetDouble() > 0);
+    }
+
     private static ThumbnailGenerationService CreateProductionService(ThumbnailOptions options)
         => new(new ThumbnailStrategyService(), new ThumbnailScoringService(), new ThumbnailHookService(), Options.Create(options), NullLogger<ThumbnailGenerationService>.Instance);
 

@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Contracts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
@@ -6,8 +7,12 @@ namespace Astronomy.MediaFactory.Rendering;
 
 internal static class ProceduralAtmosphereBuffer
 {
-    public static void BlendIntoScene(Image<Rgba32> image, int seed, string moodProfile, float intensity = 1f)
+    public static void BlendIntoScene(Image<Rgba32> image, int seed, string moodProfile, float intensity = 1f, ThumbnailAtmosphereOptions? options = null, RectangleF? protectedRect = null)
     {
+        options ??= new ThumbnailAtmosphereOptions();
+        var configuredOpacity = (float)Math.Clamp(options.ProceduralShapeOpacity, 0.0, 0.14);
+        var configuredContrast = (float)Math.Clamp(options.ProceduralShapeContrast, 0.05, 1.0);
+        var configuredBlur = (float)Math.Clamp(options.ProceduralShapeBlur / 120d, 0.45, 1.85);
         var width = image.Width;
         var height = image.Height;
         var tintA = ResolveTintA(moodProfile);
@@ -15,15 +20,15 @@ internal static class ProceduralAtmosphereBuffer
         var fieldOne = new Field(
             X: 0.18f + Hash01(seed, 11) * 0.26f,
             Y: 0.16f + Hash01(seed, 17) * 0.30f,
-            RadiusX: 0.44f + Hash01(seed, 23) * 0.18f,
-            RadiusY: 0.24f + Hash01(seed, 29) * 0.16f,
-            Strength: 0.032f + Hash01(seed, 31) * 0.018f);
+            RadiusX: (0.44f + Hash01(seed, 23) * 0.18f) * configuredBlur,
+            RadiusY: (0.24f + Hash01(seed, 29) * 0.16f) * configuredBlur,
+            Strength: (0.032f + Hash01(seed, 31) * 0.018f) * configuredContrast);
         var fieldTwo = new Field(
             X: 0.58f + Hash01(seed, 37) * 0.30f,
             Y: 0.40f + Hash01(seed, 41) * 0.22f,
-            RadiusX: 0.36f + Hash01(seed, 43) * 0.16f,
-            RadiusY: 0.28f + Hash01(seed, 47) * 0.16f,
-            Strength: 0.018f + Hash01(seed, 53) * 0.014f);
+            RadiusX: (0.36f + Hash01(seed, 43) * 0.16f) * configuredBlur,
+            RadiusY: (0.28f + Hash01(seed, 47) * 0.16f) * configuredBlur,
+            Strength: (0.018f + Hash01(seed, 53) * 0.014f) * configuredContrast);
         var diagonalBias = -0.35f + Hash01(seed, 59) * 0.70f;
 
         image.ProcessPixelRows(accessor =>
@@ -37,10 +42,11 @@ internal static class ProceduralAtmosphereBuffer
                     var nx = width <= 1 ? 0f : x / (float)(width - 1);
                     var irregularEdgeMask = IrregularSceneFeather(nx, ny, seed);
                     var radial = Radial(fieldOne, nx, ny) + Radial(fieldTwo, nx, ny) * 0.82f;
-                    var filament = MathF.Pow(MathF.Max(0, 1f - MathF.Abs((ny - 0.18f) - (nx - 0.20f) * (0.48f + diagonalBias)) / 0.28f), 2.2f) * 0.30f;
+                    var filament = MathF.Pow(MathF.Max(0, 1f - MathF.Abs((ny - 0.18f) - (nx - 0.20f) * (0.48f + diagonalBias)) / (0.28f * configuredBlur)), 2.2f) * 0.30f;
                     var coarseNoise = ValueNoise(nx * 5.5f, ny * 5.5f, seed) * 0.52f + ValueNoise(nx * 13.0f, ny * 9.0f, seed + 101) * 0.28f;
                     var edgeBreakup = 0.76f + ValueNoise(nx * 31.0f, ny * 27.0f, seed + 211) * 0.24f;
-                    var opacity = Math.Clamp((radial + filament) * (0.72f + coarseNoise * 0.38f) * irregularEdgeMask * edgeBreakup * intensity, 0f, 0.060f);
+                    var safeReadabilityMultiplier = protectedRect.HasValue && protectedRect.Value.Contains(x, y) ? 0.24f : 1f;
+                    var opacity = Math.Clamp((radial + filament) * (0.72f + coarseNoise * 0.38f) * irregularEdgeMask * edgeBreakup * intensity * safeReadabilityMultiplier, 0f, configuredOpacity);
                     if (opacity <= 0.001f)
                         continue;
 
