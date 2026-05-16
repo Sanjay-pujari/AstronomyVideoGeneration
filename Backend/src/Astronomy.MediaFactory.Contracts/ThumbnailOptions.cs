@@ -10,6 +10,7 @@ public sealed class ThumbnailOptions
     public string[] PreferredAssetFileNames { get; init; } = ["hero-transparent.png", "hero.png", "cinematic.png", "closeup.png"];
     public bool PreferPngAssets { get; init; } = true;
     public bool PreferAssetPackImages { get; init; } = true;
+    public double DeepSpaceHeroPenalty { get; init; } = 0.45;
 
     public int LongThumbnailWidth { get; init; } = 1280;
     public int LongThumbnailHeight { get; init; } = 720;

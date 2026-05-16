@@ -544,8 +544,38 @@ public sealed class ThumbnailGenerationTests
         Assert.Single(plan.CelestialSelection!.SupportObjects);
         using var selection = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-selection.json")));
         Assert.Equal("PortraitObjectUpperTextLowerThird", selection.RootElement.GetProperty("layoutUsed").GetString());
-        Assert.InRange(selection.RootElement.GetProperty("heroObjectScale").GetDouble(), 0.55, 0.75);
+        Assert.InRange(selection.RootElement.GetProperty("heroObjectScale").GetDouble(), 0.40, 0.45);
         Assert.Single(selection.RootElement.GetProperty("supportObjectScales").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_PenalizesDeepSpaceHeroAndReportsCinematicCleanupMetrics()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "jupiter", "hero-transparent.png"), Color.Orange);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "andromeda-galaxy", "hero-transparent.png"), Color.DarkBlue, 1600, 900);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero-transparent.png"), Color.Navy, 1600, 900);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, MaxSupportObjectsLong = 2, DeepSpaceHeroPenalty = 0.45 });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildPlanetAndDeepSpaceContext(),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        Assert.Equal("Jupiter", plan.CelestialSelection?.HeroObject);
+        Assert.DoesNotContain(plan.CelestialSelection!.SupportObjects, s => s.Contains("Andromeda", StringComparison.OrdinalIgnoreCase) || s.Contains("Milky", StringComparison.OrdinalIgnoreCase));
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-report.json")));
+        Assert.True(report.RootElement.GetProperty("deepSpacePenaltyApplied").GetBoolean());
+        Assert.True(report.RootElement.GetProperty("glowIntensity").GetDouble() <= 0.13);
+        Assert.True(report.RootElement.GetProperty("foregroundObjectAreaPercent").GetDouble() <= 30);
+        Assert.False(report.RootElement.GetProperty("overlapPenaltyApplied").GetBoolean());
+        Assert.True(report.RootElement.GetProperty("compositionBalanceScore").GetDouble() > 0);
+        Assert.Contains(report.RootElement.GetProperty("candidateScores").EnumerateArray(), score => score.GetProperty("objectKey").GetString() == "andromeda-galaxy" && score.GetProperty("DeepSpacePenalty").GetDouble() < 0);
     }
 
     [Fact]
@@ -798,6 +828,20 @@ public sealed class ThumbnailGenerationTests
             [
                 new SceneObservationContext { SceneId = "jupiter", ObjectName = "Jupiter", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 62, DirectionLabel = "South" },
                 new SceneObservationContext { SceneId = "neptune", ObjectName = "Neptune", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 72, DirectionLabel = "East" }
+            ]
+        };
+
+    private static AstronomyContext BuildPlanetAndDeepSpaceContext()
+        => new()
+        {
+            Date = new DateOnly(2026, 5, 14),
+            LocationName = "Udaipur, India",
+            Localization = LocalizationContext.English,
+            SceneObservationContexts =
+            [
+                new SceneObservationContext { SceneId = "jupiter", ObjectName = "Jupiter", ObjectType = "Planet", IsVisible = true, AltitudeDegrees = 48, DirectionLabel = "South" },
+                new SceneObservationContext { SceneId = "andromeda", ObjectName = "Andromeda Galaxy", ObjectType = "Galaxy", IsVisible = true, AltitudeDegrees = 82, DirectionLabel = "North" },
+                new SceneObservationContext { SceneId = "milky-way", ObjectName = "Milky Way", ObjectType = "DeepSky", IsVisible = true, AltitudeDegrees = 88, DirectionLabel = "Overhead" }
             ]
         };
 
