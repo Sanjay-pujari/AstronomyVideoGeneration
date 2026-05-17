@@ -78,19 +78,21 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
         try
         {
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(10, _options.FfmpegTimeoutSeconds)));
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-            var (command, finalResult) = await RenderFromImageSegmentsAsync(manifest, plan, manifest.AudioPath, outputPath, outputDirectory, segmentConcatPath, commandPath, linkedCts.Token);
+            var (command, finalResult, finalDiagnostics) = await RenderFromImageSegmentsAsync(manifest, plan, manifest.AudioPath, outputPath, outputDirectory, segmentConcatPath, commandPath, cancellationToken);
             await _fileSystem.WriteAllTextAsync(commandPath, command, cancellationToken);
-            await _fileSystem.WriteAllTextAsync(ffmpegLogPath, BuildProcessDiagnostics(finalResult), cancellationToken);
+            await _fileSystem.WriteAllTextAsync(ffmpegLogPath, $"{BuildProcessDiagnostics(finalResult)}{Environment.NewLine}{finalDiagnostics}", cancellationToken);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("Final long render timed out", StringComparison.Ordinal))
         {
-            var timeoutMessage = $"FFmpeg timed out after {_options.FfmpegTimeoutSeconds} seconds while rendering image segments.";
-            _logger.LogWarning(timeoutMessage);
-            await _fileSystem.WriteAllTextAsync(ffmpegLogPath, timeoutMessage, cancellationToken);
-            throw new InvalidOperationException(timeoutMessage);
+            _logger.LogWarning(ex, "FFmpeg final long render timed out.");
+            await _fileSystem.WriteAllTextAsync(ffmpegLogPath, ex.Message, cancellationToken);
+            throw;
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(ex, "FFmpeg render timed out.");
+            await _fileSystem.WriteAllTextAsync(ffmpegLogPath, ex.ToString(), cancellationToken);
+            throw;
         }
         catch (Exception ex)
         {
@@ -146,7 +148,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             ProcessExecutionResult segmentResult;
             try
             {
-                var timeout = TimeSpan.FromSeconds(CalculateEffectiveSegmentTimeoutSeconds(_options.FfmpegSegmentTimeoutSeconds, lockedDurationSeconds));
+                var timeout = TimeSpan.FromSeconds(CalculateEffectiveSegmentTimeoutSeconds(_options.SegmentRenderTimeoutSeconds, lockedDurationSeconds));
                 segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken, timeout);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -203,7 +205,16 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var productionPreset = ResolveFinalEncodingPreset(manifest);
         var finalFilter = BuildFinalOutputFilter(productionPreset, IsShortManifest(manifest) || manifest.EnableVerticalCrop);
         var finalArguments = $"-y -i \"{NormalizePath(combinedPath)}\" -vf \"{finalFilter}\" {BuildVideoEncodeArguments(productionPreset)} -r {(IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate))} -c:a aac -b:a {productionPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(manifest.OutputPath)}\"";
-        var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken);
+        var inputDurationSeconds = await ProbeMediaDurationSecondsAsync(combinedPath, cancellationToken);
+        var timeoutSeconds = CalculateEffectiveFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest), GetConfiguredFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest)), inputDurationSeconds);
+        var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken, TimeSpan.FromSeconds(timeoutSeconds));
+        var finalDiagnostics = BuildFinalRenderDiagnostics(inputDurationSeconds, finalResult, productionPreset.Name, timeoutSeconds);
+        LogFinalRenderDiagnostics(finalDiagnostics);
+        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), $"{BuildProcessDiagnostics(finalResult)}{Environment.NewLine}{finalDiagnostics}", cancellationToken);
+        if (finalResult.TimedOut)
+        {
+            throw new InvalidOperationException($"Final long render timed out after {timeoutSeconds} seconds. Increase FinalLongRenderTimeoutSeconds or use faster preset.");
+        }
         if (finalResult.ExitCode != 0 || !File.Exists(manifest.OutputPath))
         {
             throw new InvalidOperationException("FFmpeg final render of segmented clips failed.");
@@ -211,7 +222,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     }
 
 
-    private async Task<(string Command, ProcessExecutionResult FinalResult)> RenderFromImageSegmentsAsync(
+    private async Task<(string Command, ProcessExecutionResult FinalResult, string FinalDiagnostics)> RenderFromImageSegmentsAsync(
         RenderManifest manifest,
         RenderPlan plan,
         string narrationAudioPath,
@@ -297,13 +308,13 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             await _fileSystem.WriteAllTextAsync(commandPath, segmentCommand, cancellationToken);
             var segmentCommandPath = Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt");
 
-            var effectiveSegmentTimeoutSeconds = CalculateEffectiveSegmentTimeoutSeconds(_options.FfmpegSegmentTimeoutSeconds, duration);
+            var effectiveSegmentTimeoutSeconds = CalculateEffectiveSegmentTimeoutSeconds(_options.SegmentRenderTimeoutSeconds, duration);
             var segmentDurationSeconds = (int)Math.Ceiling(duration);
             var segmentDiagnosticsEntry = string.Join(Environment.NewLine, new[]
             {
                 $"Segment #{i + 1} duration: {segmentDurationSeconds} seconds",
                 $"Segment #{i + 1} frameCount: {frameCount}",
-                $"Configured segment timeout: {_options.FfmpegSegmentTimeoutSeconds} seconds",
+                $"Configured segment timeout: {_options.SegmentRenderTimeoutSeconds} seconds",
                 $"Effective segment timeout: {effectiveSegmentTimeoutSeconds} seconds",
                 $"Command: {segmentCommand}"
             });
@@ -330,19 +341,16 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
                 "Segment #{SegmentIndex} duration: {SegmentDurationSeconds} seconds. Configured segment timeout: {ConfiguredTimeoutSeconds} seconds. Effective segment timeout: {EffectiveTimeoutSeconds} seconds",
                 i + 1,
                 segmentDurationSeconds,
-                _options.FfmpegSegmentTimeoutSeconds,
+                _options.SegmentRenderTimeoutSeconds,
                 effectiveSegmentTimeoutSeconds);
 
-            using var segmentTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(effectiveSegmentTimeoutSeconds));
-            using var segmentLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, segmentTimeoutCts.Token);
-            var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, segmentLinkedCts.Token);
+            var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken, TimeSpan.FromSeconds(effectiveSegmentTimeoutSeconds));
             AddSegmentRenderPerformanceReport(performanceReports, scene, i, duration, segmentPreset.Name, segmentArguments, segmentResult);
             var segmentExists = File.Exists(segmentPath);
             var segmentSize = segmentExists ? new FileInfo(segmentPath).Length : 0L;
             if (segmentResult.ExitCode != 0 || !segmentExists || segmentSize <= 0)
             {
-                var timedOut = segmentResult.ExceptionText?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true
-                    || (segmentTimeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested);
+                var timedOut = segmentResult.TimedOut || segmentResult.ExceptionText?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true;
                 var timeoutFailureMessage = $"FFmpeg segment #{i + 1} timed out after {effectiveSegmentTimeoutSeconds} seconds";
                 throw new InvalidOperationException(
                     $"{(timedOut ? timeoutFailureMessage : $"FFmpeg segment creation failed for scene #{i + 1}.")}{Environment.NewLine}" +
@@ -399,13 +407,20 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "directional-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
 
-        var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken);
+        var timeoutSeconds = CalculateEffectiveFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest), GetConfiguredFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest)), combinedDurationSeconds);
+        var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken, TimeSpan.FromSeconds(timeoutSeconds));
+        var finalDiagnostics = BuildFinalRenderDiagnostics(combinedDurationSeconds, finalResult, finalPreset.Name, timeoutSeconds);
+        LogFinalRenderDiagnostics(finalDiagnostics);
+        if (finalResult.TimedOut)
+        {
+            throw new InvalidOperationException($"Final long render timed out after {timeoutSeconds} seconds. Increase FinalLongRenderTimeoutSeconds or use faster preset.");
+        }
         if (finalResult.ExitCode != 0 || !File.Exists(outputPath))
         {
             throw new InvalidOperationException("FFmpeg final render with narration failed.");
         }
 
-        return (finalCommand, finalResult);
+        return (finalCommand, finalResult, finalDiagnostics);
     }
 
     private Task WriteRenderPerformanceReportAsync(string outputDirectory, IReadOnlyCollection<SegmentRenderPerformanceReportEntry> diagnostics, CancellationToken cancellationToken)
@@ -1142,6 +1157,46 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var effectiveSegmentTimeoutSeconds = Math.Max(configuredSegmentTimeoutSeconds, (int)Math.Ceiling(sceneDurationSeconds * 10d));
         effectiveSegmentTimeoutSeconds = Math.Max(effectiveSegmentTimeoutSeconds, 300);
         return effectiveSegmentTimeoutSeconds;
+    }
+
+    public static int CalculateEffectiveFinalLongRenderTimeoutSeconds(int configuredTimeoutSeconds, double videoDurationSeconds)
+        => CalculateEffectiveFinalRenderTimeoutSeconds(VideoRenderProfileKind.YouTubeLongFinal, isShortManifest: false, configuredTimeoutSeconds, videoDurationSeconds);
+
+    private static int CalculateEffectiveFinalRenderTimeoutSeconds(VideoRenderProfileKind profileKind, bool isShortManifest, int configuredTimeoutSeconds, double videoDurationSeconds)
+    {
+        var configured = Math.Max(1, configuredTimeoutSeconds);
+        if (profileKind == VideoRenderProfileKind.YouTubeLongFinal || (!isShortManifest && profileKind == VideoRenderProfileKind.Auto))
+        {
+            return Math.Max(configured, (int)Math.Ceiling(Math.Max(0d, videoDurationSeconds) * 4d));
+        }
+
+        return configured;
+    }
+
+    private int GetConfiguredFinalRenderTimeoutSeconds(VideoRenderProfileKind profileKind, bool isShortManifest)
+        => profileKind switch
+        {
+            VideoRenderProfileKind.MetaReelFinal => Math.Max(1, _options.FinalMetaRenderTimeoutSeconds),
+            VideoRenderProfileKind.ShortsFinal => Math.Max(1, _options.FinalShortRenderTimeoutSeconds),
+            VideoRenderProfileKind.YouTubeLongFinal => Math.Max(1, _options.FinalLongRenderTimeoutSeconds),
+            _ => isShortManifest ? Math.Max(1, _options.FinalShortRenderTimeoutSeconds) : Math.Max(1, _options.FinalLongRenderTimeoutSeconds)
+        };
+
+    private void LogFinalRenderDiagnostics(string diagnostics)
+        => _logger.LogInformation("Final FFmpeg encode diagnostics: {Diagnostics}", diagnostics);
+
+    private static string BuildFinalRenderDiagnostics(double inputDurationSeconds, ProcessExecutionResult result, string profileUsed, int timeoutSeconds)
+    {
+        var elapsedSeconds = Math.Max(0d, result.Duration.TotalSeconds);
+        var renderSpeedRatio = elapsedSeconds > 0d ? inputDurationSeconds / elapsedSeconds : 0d;
+        return string.Join(Environment.NewLine, new[]
+        {
+            $"inputDurationSeconds: {Math.Round(inputDurationSeconds, 3, MidpointRounding.AwayFromZero).ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"elapsedSeconds: {Math.Round(elapsedSeconds, 3, MidpointRounding.AwayFromZero).ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"renderSpeedRatio: {Math.Round(renderSpeedRatio, 3, MidpointRounding.AwayFromZero).ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"profileUsed: {profileUsed}",
+            $"timeoutSeconds: {timeoutSeconds}"
+        });
     }
 
     private static string NormalizePath(string path)
