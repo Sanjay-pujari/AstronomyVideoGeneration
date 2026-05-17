@@ -791,10 +791,20 @@ public sealed class PipelineOrchestrator
                     try
                     {
                         run.YouTubeVideoId = await _youTubePublishingService.UploadAsync(videoPath, script.OptimizedMetadata?.PrimaryTitle ?? script.Title, script.OptimizedMetadata?.OptimizedDescription ?? script.Description, script.OptimizedMetadata?.Tags ?? script.Tags, selectedPrivacyStatus, cancellationToken);
-                        if (!string.IsNullOrWhiteSpace(run.YouTubeVideoId) && _publishingOptions.UploadThumbnail && _youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+                        var thumbnailWarning = string.Empty;
+                        if (!string.IsNullOrWhiteSpace(run.YouTubeVideoId) && _publishingOptions.UploadThumbnail && _youTubeThumbnailPublisher is not null)
                         {
-                            youtubeThumbnailUploaded = await _youTubeThumbnailPublisher.UploadThumbnailAsync(run.YouTubeVideoId, thumbnailPath, cancellationToken);
+                            if (!string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+                            {
+                                youtubeThumbnailUploaded = await _youTubeThumbnailPublisher.UploadThumbnailAsync(run.YouTubeVideoId, thumbnailPath, cancellationToken);
+                            }
+                            else
+                            {
+                                thumbnailWarning = $"YouTube long video thumbnail file is missing: {thumbnailPath}";
+                                _logger.LogWarning("{Warning}", thumbnailWarning);
+                            }
                         }
+                        await WriteThumbnailPublishDiagnosticsAsync(outputDir, "YouTube", PlatformThumbnailContentTypes.LongVideo, videoPath, thumbnailPath, ThumbnailSources.GeneratedThumbnail, _publishingOptions.UploadThumbnail && _youTubeThumbnailPublisher is not null && !string.IsNullOrWhiteSpace(run.YouTubeVideoId) && !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath), youtubeThumbnailUploaded, run.YouTubeVideoId, null, thumbnailWarning, null, cancellationToken);
 
                         await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, string.IsNullOrWhiteSpace(run.YouTubeVideoId) ? PersistentStageStatuses.Failed : PersistentStageStatuses.Succeeded, reason: string.IsNullOrWhiteSpace(run.YouTubeVideoId) ? "YouTube upload did not return a video id." : null);
                         _logger.LogInformation("Uploaded/Skipped=Uploaded");
@@ -838,6 +848,7 @@ public sealed class PipelineOrchestrator
                     if (!youtubePublishResult.IsShort && !string.Equals(youtubePublishResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase))
                     {
                         run.YouTubeVideoId = youtubePublishResult.VideoId;
+                        youtubeThumbnailUploaded = youtubePublishResult.ThumbnailUploadSuccess;
                     }
                     await SetStageStatusAsync(PipelineStageNames.YouTubeLongPublished, string.Equals(youtubePublishResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase) || IsPublishSkip(youtubePublishResult) ? PersistentStageStatuses.Skipped : PersistentStageStatuses.Succeeded);
                     _logger.LogInformation("Uploaded/Skipped={UploadedOrSkipped}", string.Equals(youtubePublishResult.Mode, "DryRun", StringComparison.OrdinalIgnoreCase) ? "Skipped" : "Uploaded");
@@ -1196,6 +1207,39 @@ public sealed class PipelineOrchestrator
 
         var text = string.Join(" ", Directory.EnumerateFiles(shortsDirectory, "scene-narration-*.txt").Select(File.ReadAllText));
         return ContainsDevanagari(text) ? "hi" : string.IsNullOrWhiteSpace(text) ? null : "en";
+    }
+
+    private static async Task WriteThumbnailPublishDiagnosticsAsync(
+        string outputDirectory,
+        string platform,
+        string contentType,
+        string? videoPath,
+        string? thumbnailPath,
+        string thumbnailSource,
+        bool uploadAttempted,
+        bool uploadSuccess,
+        string? uploadedVideoId,
+        string? postId,
+        string? warning,
+        string? error,
+        CancellationToken cancellationToken)
+    {
+        var diagnostics = new ThumbnailPublishDiagnostics
+        {
+            Platform = platform,
+            ContentType = contentType,
+            VideoPath = videoPath,
+            ThumbnailPath = thumbnailPath,
+            ThumbnailSource = thumbnailSource,
+            UploadAttempted = uploadAttempted,
+            UploadSuccess = uploadSuccess,
+            UploadedVideoId = uploadedVideoId,
+            PostId = postId,
+            Warning = warning,
+            Error = error
+        };
+        var fileName = $"{platform.ToLowerInvariant()}-{contentType.Replace("LongVideo", "long-video", StringComparison.OrdinalIgnoreCase).Replace("ShortVideo", "short", StringComparison.OrdinalIgnoreCase).Replace("Reel", "reel", StringComparison.OrdinalIgnoreCase).ToLowerInvariant()}-thumbnail-diagnostics.json";
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, fileName), JsonSerializer.Serialize(diagnostics, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase }), cancellationToken);
     }
 
     private static async Task WritePublishIdempotencyCheckAsync(Guid runId, string outputDirectory, PublishedVideo? existingSuccessfulYouTube, CancellationToken cancellationToken)

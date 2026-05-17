@@ -105,6 +105,7 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
         }
 
         await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, result, request, cancellationToken);
+        await ThumbnailPublishDiagnosticsWriter.WriteFromMetaResultAsync(outputDirectory, result, cancellationToken);
         await WriteResultAsync(outputDirectory, diagnostics, result, cancellationToken);
         return result;
     }

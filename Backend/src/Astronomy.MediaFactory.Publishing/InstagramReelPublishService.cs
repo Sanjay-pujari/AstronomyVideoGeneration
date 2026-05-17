@@ -139,6 +139,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         await WriteContainerResultAsync(outputDirectory, containerDiagnostics, result, cancellationToken);
         await WritePublishResultAsync(outputDirectory, publishDiagnostics, result, cancellationToken);
         await WritePollingDiagnosticsAsync(outputDirectory, pollingDiagnostics, result, cancellationToken);
+        await ThumbnailPublishDiagnosticsWriter.WriteFromMetaResultAsync(outputDirectory, result, cancellationToken);
         return result;
     }
 

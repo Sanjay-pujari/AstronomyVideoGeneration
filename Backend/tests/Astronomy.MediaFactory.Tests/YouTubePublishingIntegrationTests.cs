@@ -309,6 +309,8 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.Contains("\"uploadSuccess\": true", diagnosticsJson);
         Assert.Contains("\"statusUploadStatus\": \"processed\"", diagnosticsJson);
         Assert.Contains("Shorts feed may display auto-selected frame", diagnosticsJson);
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-shorts-thumbnail-diagnostics.json")));
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-short-thumbnail-diagnostics.json")));
         Assert.DoesNotContain("thumbnail-long.jpg", diagnosticsJson);
     }
 
@@ -364,6 +366,8 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.True(File.Exists(diagnosticsPath));
         var diagnosticsJson = await File.ReadAllTextAsync(diagnosticsPath);
         Assert.Contains("UploadCustomThumbnailForShorts=false", diagnosticsJson);
+        Assert.Contains("YouTube Shorts custom thumbnail not uploaded by API/path missing/platform limitation", diagnosticsJson);
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-shorts-thumbnail-diagnostics.json")));
         Assert.Contains("\"uploadAttempted\": false", diagnosticsJson);
     }
 
@@ -410,9 +414,13 @@ public sealed class YouTubePublishingIntegrationTests
         var api = new TrackingYouTubeApiClient();
         var service = CreateContentService(workspace, repository, api, new PublishingOptions { Enabled = true, Mode = "Private", UploadThumbnail = true }, new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28", UploadThumbnailForLongVideos = true });
 
-        _ = await service.PublishForPipelineRunAsync(run.Id, CancellationToken.None);
+        var result = Assert.Single((await service.PublishForPipelineRunAsync(run.Id, "long", CancellationToken.None)).Where(x => x.AssetType == "LongVideo"));
 
         Assert.Equal(1, api.ThumbnailUploadCalls);
+        Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "thumbnails", "thumbnail-long.jpg"), api.LastThumbnailPath);
+        Assert.True(result.ThumbnailUploadAttempted);
+        Assert.True(result.ThumbnailUploadSuccess);
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-long-video-thumbnail-diagnostics.json")));
         Assert.Equal(0, api.VideoPostUploadStatusCalls);
     }
 
@@ -453,6 +461,7 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.Contains("PNG or JPG", result.Error!);
         using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "youtube-thumbnail-upload-diagnostics.json")));
         Assert.Equal("Skipped", doc.RootElement.GetProperty("uploadStatus").GetString());
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-long-video-thumbnail-diagnostics.json")));
     }
 
     [Fact]
@@ -472,6 +481,7 @@ public sealed class YouTubePublishingIntegrationTests
         using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "youtube-thumbnail-upload-diagnostics.json")));
         Assert.False(doc.RootElement.GetProperty("fileExists").GetBoolean());
         Assert.Equal("Skipped", doc.RootElement.GetProperty("uploadStatus").GetString());
+        Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-long-video-thumbnail-diagnostics.json")));
     }
 
     [Fact]
