@@ -260,6 +260,7 @@ app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrc
             .Where(s => s.Status.Equals(PersistentStageStatuses.Failed, StringComparison.OrdinalIgnoreCase)
                 && (s.StageName.Equals(PipelineStageNames.YouTubeLongPublished, StringComparison.OrdinalIgnoreCase)
                     || s.StageName.Equals(PipelineStageNames.YouTubeShortPublished, StringComparison.OrdinalIgnoreCase)
+                    || s.StageName.Equals(PipelineStageNames.FacebookLongPublished, StringComparison.OrdinalIgnoreCase)
                     || s.StageName.Equals(PipelineStageNames.FacebookReelPublished, StringComparison.OrdinalIgnoreCase)
                     || s.StageName.Equals(PipelineStageNames.InstagramReelPublished, StringComparison.OrdinalIgnoreCase)))
             .Select(s => s.StageName)
@@ -311,13 +312,16 @@ app.MapGet("/api/pipeline/{runId:guid}/thumbnail-publish-status", async (Guid ru
     }
 
     var report = await ReadJsonAsync("platform-thumbnail-resolution-report.json");
+    var assetsReport = await ReadJsonAsync("platform-publishing-assets-report.json");
     var youtubeLong = await ReadJsonAsync("youtube-publish-result-long.json");
     var youtubeShort = await ReadJsonAsync("youtube-publish-result-short.json");
+    var facebookLong = await ReadJsonAsync("facebook-long-publish-result.json");
     var facebook = await ReadJsonAsync("facebook-reel-publish-result.json");
     var instagram = await ReadJsonAsync("instagram-reel-publish-result.json");
     var facebookThumb = await ReadJsonAsync("facebook-thumbnail-upload-diagnostics.json");
     var instagramThumb = await ReadJsonAsync("instagram-thumbnail-upload-diagnostics.json");
     var youtubeThumb = await ReadJsonAsync("youtube-thumbnail-upload-diagnostics.json");
+    var youtubeShortThumb = await ReadJsonAsync("youtube-short-thumbnail-upload-diagnostics.json");
 
     return Results.Ok(new
     {
@@ -328,8 +332,9 @@ app.MapGet("/api/pipeline/{runId:guid}/thumbnail-publish-status", async (Guid ru
             shortPath = Path.Combine(outputDirectory, "thumbnails", "thumbnail-short.jpg")
         },
         perPlatformResolution = report,
-        publishResults = new { youtubeLong, youtubeShort, facebook, instagram },
-        thumbnailDiagnostics = new { youtube = youtubeThumb, facebook = facebookThumb, instagram = instagramThumb }
+        publishingAssets = assetsReport,
+        publishResults = new { youtubeLong, youtubeShort, facebookLong, facebook, instagram },
+        thumbnailDiagnostics = new { youtube = youtubeThumb, youtubeShort = youtubeShortThumb, facebook = facebookThumb, instagram = instagramThumb }
     });
 });
 app.MapPost("/api/pipeline/resume/{pipelineRunId:guid}", async (Guid pipelineRunId, string? forceStage, IPipelineRecoveryService recoveryService, CancellationToken ct) =>

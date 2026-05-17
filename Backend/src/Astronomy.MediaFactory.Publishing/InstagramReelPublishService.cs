@@ -83,9 +83,13 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
                     Success = true,
                     Platform = "Instagram",
                     ContentType = PlatformThumbnailContentTypes.Reel,
+                    ContentKind = PlatformThumbnailContentTypes.Reel,
                     Mode = mode,
                     UploadedThumbnailPath = request.PlatformThumbnailPath,
                     ThumbnailSource = request.ThumbnailSource,
+                    VideoPathUsed = request.VideoPath,
+                    ThumbnailPathUsed = request.PlatformThumbnailPath,
+                    ThumbnailStrategy = request.ThumbnailSource,
                     ThumbnailUploadAttempted = false,
                     ThumbnailUploadSuccess = false,
                     ThumbnailWarning = thumbnailWarning,
@@ -248,10 +252,14 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             Success = true,
             Platform = "Instagram",
             ContentType = PlatformThumbnailContentTypes.Reel,
+            ContentKind = PlatformThumbnailContentTypes.Reel,
             Mode = mode,
             UploadedThumbnailPath = request.PlatformThumbnailPath,
             UploadedThumbnailUrl = coverUrl,
             ThumbnailSource = request.ThumbnailSource,
+            VideoPathUsed = request.VideoPath,
+            ThumbnailPathUsed = request.PlatformThumbnailPath,
+            ThumbnailStrategy = request.ThumbnailSource,
             ThumbnailUploadAttempted = IsPublicHttpsUrl(coverUrl),
             ThumbnailUploadSuccess = IsPublicHttpsUrl(coverUrl) && string.IsNullOrWhiteSpace(thumbnailWarning),
             ThumbnailWarning = thumbnailWarning,
@@ -563,7 +571,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
     }
 
     private static MetaPublishResult Failed(string mode, string error)
-        => new() { Success = false, Platform = "Instagram", ContentType = PlatformThumbnailContentTypes.Reel, Mode = mode, Error = error, ThumbnailWarning = error, PublishedUtc = DateTime.UtcNow };
+        => new() { Success = false, Platform = "Instagram", ContentType = PlatformThumbnailContentTypes.Reel, ContentKind = PlatformThumbnailContentTypes.Reel, Mode = mode, Error = error, ThumbnailWarning = error, Warning = error, PublishedUtc = DateTime.UtcNow };
 
     private static List<string> BuildWarnings(string? thumbnailWarning, bool posterFrameApplied)
     {

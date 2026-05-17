@@ -66,9 +66,13 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
                     Success = true,
                     Platform = "Facebook",
                     ContentType = PlatformThumbnailContentTypes.Reel,
+                    ContentKind = PlatformThumbnailContentTypes.Reel,
                     Mode = mode,
                     UploadedThumbnailPath = request.PlatformThumbnailPath,
                     ThumbnailSource = request.ThumbnailSource,
+                    VideoPathUsed = request.VideoPath,
+                    ThumbnailPathUsed = request.PlatformThumbnailPath,
+                    ThumbnailStrategy = request.ThumbnailSource,
                     ThumbnailUploadAttempted = false,
                     ThumbnailUploadSuccess = false,
                     ThumbnailWarning = thumbnailWarning,
@@ -178,9 +182,13 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             Success = publishSuccess,
             Platform = "Facebook",
             ContentType = PlatformThumbnailContentTypes.Reel,
+            ContentKind = PlatformThumbnailContentTypes.Reel,
             Mode = mode,
             UploadedThumbnailPath = request.PlatformThumbnailPath,
             ThumbnailSource = request.ThumbnailSource,
+            VideoPathUsed = request.VideoPath,
+            ThumbnailPathUsed = request.PlatformThumbnailPath,
+            ThumbnailStrategy = request.ThumbnailSource,
             ThumbnailUploadAttempted = false,
             ThumbnailUploadSuccess = false,
             ThumbnailWarning = thumbnailWarning,
@@ -410,7 +418,7 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
     }
 
     private static MetaPublishResult Failed(string mode, string error)
-        => new() { Success = false, Platform = "Facebook", ContentType = PlatformThumbnailContentTypes.Reel, Mode = mode, Error = error, ThumbnailWarning = error, PublishedUtc = DateTime.UtcNow };
+        => new() { Success = false, Platform = "Facebook", ContentType = PlatformThumbnailContentTypes.Reel, ContentKind = PlatformThumbnailContentTypes.Reel, Mode = mode, Error = error, ThumbnailWarning = error, Warning = error, PublishedUtc = DateTime.UtcNow };
 
     private static List<string> BuildWarnings(string? thumbnailWarning, bool posterFrameApplied)
     {

@@ -91,6 +91,10 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.Mode is null || options.Mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("DryRun", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Private", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Public", StringComparison.OrdinalIgnoreCase), "MetaPublishing:Mode must be Disabled, DryRun, Private, or Public.")
             .ValidateOnStart();
 
+        services.AddOptions<PublishingTargetsOptions>()
+            .Bind(configuration.GetSection(PublishingTargetsOptions.SectionName))
+            .ValidateOnStart();
+
         services.AddOptions<PublicMediaStorageOptions>()
             .Bind(configuration.GetSection(PublicMediaStorageOptions.SectionName))
             .Validate(options => !options.Enabled || options.Provider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase), "PublicMediaStorage:Provider must be AzureBlob when public media storage is enabled.")
@@ -370,6 +374,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IYouTubeOAuthService, YouTubeOAuthService>();
         services.AddHttpClient<IMetaOAuthService, MetaOAuthService>();
         services.AddHttpClient<IFacebookReelPublishService, FacebookReelPublishService>();
+        services.AddHttpClient<IFacebookVideoPublishService, FacebookVideoPublishService>();
         services.AddHttpClient<IInstagramReelPublishService, InstagramReelPublishService>();
         services.AddScoped<IMetaPosterFrameFallbackService, MetaPosterFrameFallbackService>();
         services.AddScoped<IMetaPublishService, MetaPublishService>();

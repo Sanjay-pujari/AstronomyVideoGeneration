@@ -358,6 +358,7 @@ public sealed class TokenHealthServiceTests
         var meta = new MetaPublishService(
             repository,
             new FacebookReelPublishService(new HttpClient(new TrackingMetaHandler()), Options.Create(new MetaOptions { TokenFilePath = workspace.TokenPath }), Options.Create(new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookReel = true }), Options.Create(new RenderingOptions()), NullLogger<FacebookReelPublishService>.Instance),
+            new FakeFacebookVideoPublishService(),
             new InstagramReelPublishService(new HttpClient(new TrackingMetaHandler()), Options.Create(new MetaOptions { TokenFilePath = workspace.TokenPath }), Options.Create(new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookReel = true }), Options.Create(new RenderingOptions()), NullLogger<InstagramReelPublishService>.Instance, null),
             new FixedTokenHealthService(youtube: ValidYouTube(), meta: new TokenHealthResult { Platform = "Meta", IsValid = false, Error = "expired" }),
             Options.Create(new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookReel = true, PublishInstagramReel = false }),

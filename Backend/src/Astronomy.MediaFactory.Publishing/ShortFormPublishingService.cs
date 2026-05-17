@@ -299,7 +299,7 @@ public sealed class InstagramReelsPlatformPublisher : IShortFormPlatformPublishe
             ThumbnailSource = string.IsNullOrWhiteSpace(target.ThumbnailPath) ? ThumbnailSources.None : ThumbnailSources.GeneratedThumbnail,
             PosterFrameApplied = posterFrameApplied,
             PosterFrameImagePath = posterFrameApplied ? target.ThumbnailPath ?? string.Empty : string.Empty,
-            PosterFrameDurationSeconds = posterFrameApplied ? Math.Clamp(options.PosterFrameDurationSeconds, 0.5d, 1.0d) : 0d,
+            PosterFrameDurationSeconds = posterFrameApplied ? Math.Clamp(options.FacebookReelPosterFrameDurationSeconds > 0 ? options.FacebookReelPosterFrameDurationSeconds : options.PosterFrameDurationSeconds, 0.5d, 1.0d) : 0d,
             Caption = target.Caption,
             ShortTitle = target.Title,
             IsReel = true
@@ -308,12 +308,12 @@ public sealed class InstagramReelsPlatformPublisher : IShortFormPlatformPublishe
 
     private static string ResolveMetaVideoPath(string videoPath, MetaPublishingOptions options)
     {
-        if (!options.UsePosterFrameFallbackForReels || string.IsNullOrWhiteSpace(videoPath))
+        if (!(options.UsePosterFrameFallbackForFacebookReels || options.UsePosterFrameFallbackForReels) || string.IsNullOrWhiteSpace(videoPath))
         {
             return videoPath;
         }
 
-        var metaPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(videoPath)) ?? string.Empty, "short-video-meta.mp4");
+        var metaPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(videoPath)) ?? string.Empty, "short-video-facebook.mp4");
         return File.Exists(metaPath) ? metaPath : videoPath;
     }
 
@@ -383,7 +383,7 @@ public sealed class FacebookPlatformPublisher : IShortFormPlatformPublisher
             ThumbnailSource = string.IsNullOrWhiteSpace(target.ThumbnailPath) ? ThumbnailSources.None : ThumbnailSources.GeneratedThumbnail,
             PosterFrameApplied = posterFrameApplied,
             PosterFrameImagePath = posterFrameApplied ? target.ThumbnailPath ?? string.Empty : string.Empty,
-            PosterFrameDurationSeconds = posterFrameApplied ? Math.Clamp(options.PosterFrameDurationSeconds, 0.5d, 1.0d) : 0d,
+            PosterFrameDurationSeconds = posterFrameApplied ? Math.Clamp(options.FacebookReelPosterFrameDurationSeconds > 0 ? options.FacebookReelPosterFrameDurationSeconds : options.PosterFrameDurationSeconds, 0.5d, 1.0d) : 0d,
             Caption = target.Caption,
             ShortTitle = target.Title,
             IsReel = true
@@ -392,12 +392,12 @@ public sealed class FacebookPlatformPublisher : IShortFormPlatformPublisher
 
     private static string ResolveMetaVideoPath(string videoPath, MetaPublishingOptions options)
     {
-        if (!options.UsePosterFrameFallbackForReels || string.IsNullOrWhiteSpace(videoPath))
+        if (!(options.UsePosterFrameFallbackForFacebookReels || options.UsePosterFrameFallbackForReels) || string.IsNullOrWhiteSpace(videoPath))
         {
             return videoPath;
         }
 
-        var metaPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(videoPath)) ?? string.Empty, "short-video-meta.mp4");
+        var metaPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(videoPath)) ?? string.Empty, "short-video-facebook.mp4");
         return File.Exists(metaPath) ? metaPath : videoPath;
     }
 

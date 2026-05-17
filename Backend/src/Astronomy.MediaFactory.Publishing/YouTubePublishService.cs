@@ -56,10 +56,14 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 Success = true,
                 Platform = PlatformName,
                 ContentType = normalizedRequest.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
+                ContentKind = normalizedRequest.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
                 AssetType = normalizedRequest.AssetType,
                 IsShort = normalizedRequest.IsShort,
                 UploadedThumbnailPath = normalizedRequest.PlatformThumbnailPath,
                 ThumbnailSource = normalizedRequest.ThumbnailSource,
+                VideoPathUsed = normalizedRequest.VideoPath,
+                ThumbnailPathUsed = normalizedRequest.PlatformThumbnailPath,
+                ThumbnailStrategy = normalizedRequest.ThumbnailSource,
                 ThumbnailUploadAttempted = false,
                 ThumbnailUploadSuccess = false,
                 Mode = mode,
@@ -94,18 +98,24 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 Success = true,
                 Platform = PlatformName,
                 ContentType = normalizedRequest.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
+                ContentKind = normalizedRequest.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
                 AssetType = normalizedRequest.AssetType,
                 IsShort = normalizedRequest.IsShort,
                 UploadedThumbnailPath = normalizedRequest.PlatformThumbnailPath,
                 ThumbnailSource = normalizedRequest.ThumbnailSource,
+                VideoPathUsed = normalizedRequest.VideoPath,
+                ThumbnailPathUsed = normalizedRequest.PlatformThumbnailPath,
+                ThumbnailStrategy = normalizedRequest.ThumbnailSource,
                 ThumbnailUploadAttempted = thumbnailUploadAttempted,
                 ThumbnailUploadSuccess = thumbnailUploadAttempted && thumbnailWarning is null,
                 ThumbnailWarning = thumbnailWarning,
                 VideoId = videoId,
                 VideoUrl = $"https://www.youtube.com/watch?v={videoId}",
+                Url = $"https://www.youtube.com/watch?v={videoId}",
                 ChannelId = channel.ChannelId,
                 ChannelTitle = channel.ChannelTitle,
-                Error = thumbnailWarning is null ? null : $"{warnings[0]} {thumbnailWarning}",
+                Error = null,
+                Warning = thumbnailWarning,
                 Warnings = warnings,
                 Mode = mode,
                 PublishedUtc = DateTime.UtcNow
@@ -120,10 +130,15 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 Success = false,
                 Platform = PlatformName,
                 ContentType = normalizedRequest.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
+                ContentKind = normalizedRequest.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
                 AssetType = normalizedRequest.AssetType,
                 IsShort = normalizedRequest.IsShort,
                 UploadedThumbnailPath = normalizedRequest.PlatformThumbnailPath,
                 ThumbnailSource = normalizedRequest.ThumbnailSource,
+                VideoPathUsed = normalizedRequest.VideoPath,
+                ThumbnailPathUsed = normalizedRequest.PlatformThumbnailPath,
+                ThumbnailStrategy = normalizedRequest.ThumbnailSource,
+                Warning = ex.Message,
                 ThumbnailWarning = ex.Message,
                 Error = ex.Message,
                 Mode = mode,
@@ -265,7 +280,7 @@ public sealed class YouTubePublishService : IYouTubePublishService
             {
                 diagnostics.FailureCategory = YouTubeThumbnailUploadFailureClassifier.ThumbnailPermissionFailureCategory;
                 diagnostics.RecommendedAction = YouTubeThumbnailUploadFailureClassifier.ThumbnailPermissionRecommendedAction;
-                diagnostics.Warning = "YouTube custom thumbnail upload failed. Channel may require verification/intermediate/advanced features.";
+                diagnostics.Warning = $"YouTube custom thumbnail upload failed: {diagnostics.Error}";
             }
 
             LogThumbnailUploadDiagnostics(videoId, diagnostics.UploadStatus, ex);
@@ -450,8 +465,14 @@ public sealed class YouTubePublishService : IYouTubePublishService
         return null;
     }
 
-    private static Task WriteThumbnailDiagnosticsAsync(string outputDirectory, YouTubeThumbnailUploadDiagnostics diagnostics, CancellationToken cancellationToken)
-        => WriteJsonAsync(Path.Combine(outputDirectory, "youtube-thumbnail-upload-diagnostics.json"), diagnostics, cancellationToken);
+    private static async Task WriteThumbnailDiagnosticsAsync(string outputDirectory, YouTubeThumbnailUploadDiagnostics diagnostics, CancellationToken cancellationToken)
+    {
+        await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-thumbnail-upload-diagnostics.json"), diagnostics, cancellationToken);
+        if (string.Equals(diagnostics.ContentKind, PlatformThumbnailContentTypes.ShortVideo, StringComparison.OrdinalIgnoreCase))
+        {
+            await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-short-thumbnail-upload-diagnostics.json"), diagnostics, cancellationToken);
+        }
+    }
 
     private async Task<string> ResolveOutputDirectoryAsync(Guid pipelineRunId, CancellationToken cancellationToken)
     {
@@ -545,5 +566,6 @@ internal sealed class YouTubeThumbnailUploadDiagnostics
     public string? Error { get; set; }
     public string? CompressedThumbnailPath { get; set; }
     public string? FailureCategory { get; set; }
+    public object? SnippetThumbnailsAfterUpload { get; set; }
     public string? RecommendedAction { get; set; }
 }

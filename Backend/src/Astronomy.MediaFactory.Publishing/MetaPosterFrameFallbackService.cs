@@ -33,7 +33,7 @@ public sealed class MetaPosterFrameFallbackService : IMetaPosterFrameFallbackSer
         ArgumentException.ThrowIfNullOrWhiteSpace(posterFrameImagePath);
 
         var clampedDuration = Math.Clamp(durationSeconds, 0.5d, 1.0d);
-        var outputMetaVideoPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(inputShortVideoPath)) ?? outputDirectory, "short-video-meta.mp4");
+        var outputMetaVideoPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(inputShortVideoPath)) ?? outputDirectory, "short-video-facebook.mp4");
         var result = new MetaPosterFrameFallbackResult(
             PosterFrameApplied: true,
             PosterFrameImagePath: posterFrameImagePath,

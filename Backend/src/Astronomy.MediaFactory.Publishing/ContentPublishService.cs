@@ -67,6 +67,13 @@ public sealed class ContentPublishService : IContentPublishService
         {
             _logger.LogInformation("Platform thumbnail resolved: {@ThumbnailResolution}", new { Platform = "YouTube", ContentKind = publishAsset.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo, ResolvedThumbnailPath = publishAsset.PlatformThumbnailPath, ThumbnailSource = publishAsset.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(publishAsset.PlatformThumbnailPath) && File.Exists(publishAsset.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(publishAsset.PlatformThumbnailPath) && File.Exists(publishAsset.PlatformThumbnailPath) ? new FileInfo(publishAsset.PlatformThumbnailPath).Length : 0 });
         }
+        await WritePlatformPublishingAssetsReportAsync(outputDirectory, assets.Select(a => new PlatformPublishingAssetsReportEntry
+        {
+            Target = a.IsShort ? "YouTubeShort" : "YouTubeLong",
+            VideoPath = a.VideoPath,
+            ThumbnailPath = a.PlatformThumbnailPath,
+            ThumbnailSource = a.ThumbnailSource
+        }), cancellationToken);
         await WritePlatformThumbnailResolutionReportAsync(outputDirectory, assets.Select(a => new PlatformThumbnailResolutionReportEntry
         {
             Platform = "YouTube",
@@ -236,6 +243,12 @@ public sealed class ContentPublishService : IContentPublishService
 
     private string? ResolveShortVideoPath(string outputDirectory)
     {
+        var rootShortVideoPath = Path.Combine(outputDirectory, "short-video.mp4");
+        if (File.Exists(rootShortVideoPath))
+        {
+            return rootShortVideoPath;
+        }
+
         var shortVideoPath = Path.Combine(outputDirectory, "shorts", "short-video.mp4");
         if (File.Exists(shortVideoPath))
         {
@@ -365,12 +378,17 @@ public sealed class ContentPublishService : IContentPublishService
             Success = false,
             Platform = "YouTube",
             ContentType = asset.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
+            ContentKind = asset.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
             AssetType = asset.AssetType,
             IsShort = asset.IsShort,
             Mode = mode,
             Error = reason,
             UploadedThumbnailPath = asset.PlatformThumbnailPath,
             ThumbnailSource = asset.ThumbnailSource,
+            VideoPathUsed = asset.VideoPath,
+            ThumbnailPathUsed = asset.PlatformThumbnailPath,
+            ThumbnailStrategy = asset.ThumbnailSource,
+            Warning = reason,
             ThumbnailWarning = reason,
             PublishedUtc = DateTime.UtcNow
         };
@@ -546,6 +564,30 @@ public sealed class ContentPublishService : IContentPublishService
     private static Task WriteAssetsAsync(string outputDirectory, IReadOnlyCollection<PublishAssetDiagnostic> diagnostics, CancellationToken cancellationToken)
         => WriteJsonAsync(Path.Combine(outputDirectory, "youtube-publish-assets.json"), diagnostics, cancellationToken);
 
+    private static async Task WritePlatformPublishingAssetsReportAsync(string outputDirectory, IEnumerable<PlatformPublishingAssetsReportEntry> entries, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(outputDirectory, "platform-publishing-assets-report.json");
+        var combined = new List<PlatformPublishingAssetsReportEntry>();
+        if (File.Exists(path))
+        {
+            try
+            {
+                combined.AddRange(JsonSerializer.Deserialize<List<PlatformPublishingAssetsReportEntry>>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions) ?? []);
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        foreach (var entry in entries)
+        {
+            combined.RemoveAll(x => x.Target.Equals(entry.Target, StringComparison.OrdinalIgnoreCase));
+            combined.Add(entry);
+        }
+
+        await WriteJsonAsync(path, combined.OrderBy(x => x.Target).ToList(), cancellationToken);
+    }
+
     private static async Task WriteCombinedResultsAsync(string outputDirectory, IReadOnlyCollection<PublishResult> results, CancellationToken cancellationToken)
     {
         var combined = results.ToList();
@@ -584,6 +626,14 @@ public sealed class ContentPublishService : IContentPublishService
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, JsonOptions), cancellationToken);
+    }
+
+    private sealed class PlatformPublishingAssetsReportEntry
+    {
+        public string Target { get; init; } = string.Empty;
+        public string VideoPath { get; init; } = string.Empty;
+        public string ThumbnailPath { get; init; } = string.Empty;
+        public string ThumbnailSource { get; init; } = ThumbnailSources.None;
     }
 
     private sealed class PublishAssetDiagnostic
