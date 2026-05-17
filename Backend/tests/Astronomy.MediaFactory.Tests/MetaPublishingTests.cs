@@ -486,6 +486,105 @@ public sealed class MetaPublishingTests
         Assert.Equal("Instagram Reel container still processing when verification timeout occurred.", diagnostics.RootElement.GetProperty("warning").GetString());
     }
 
+
+    [Fact]
+    public async Task InstagramGetGraph_RetriesHttpRequestException_AndSucceeds()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        handler.InstagramPollExceptions.Enqueue(new HttpRequestException("socket reset while polling access_token=page-token-secret"));
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 1, GraphRetryMaxAttempts = 2, GraphRetryBaseDelaySeconds = 0 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal(2, handler.Requests.Count(x => x.Phase == "ig-poll"));
+        var diagnosticsJson = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-polling-diagnostics.json"));
+        using var diagnostics = JsonDocument.Parse(diagnosticsJson);
+        Assert.Equal(1, diagnostics.RootElement.GetProperty("transientFailureCount").GetInt32());
+        Assert.Equal(2, diagnostics.RootElement.GetProperty("graphRetryAttempts").GetInt32());
+        Assert.Contains("access_token=REDACTED", diagnostics.RootElement.GetProperty("lastGraphError").GetString());
+        Assert.DoesNotContain("page-token-secret", diagnosticsJson);
+    }
+
+    [Fact]
+    public async Task InstagramGetGraph_RetriesHttp503_AndSucceeds()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        handler.InstagramPollHttpStatuses.Enqueue(HttpStatusCode.ServiceUnavailable);
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 1, GraphRetryMaxAttempts = 2, GraphRetryBaseDelaySeconds = 0 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal(2, handler.Requests.Count(x => x.Phase == "ig-poll"));
+        var diagnosticsJson = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-polling-diagnostics.json"));
+        using var diagnostics = JsonDocument.Parse(diagnosticsJson);
+        Assert.Equal(503, diagnostics.RootElement.GetProperty("lastHttpStatusCode").GetInt32());
+    }
+
+    [Fact]
+    public async Task InstagramGetGraph_DoesNotRetryHttp400()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        handler.InstagramPollHttpStatuses.Enqueue(HttpStatusCode.BadRequest);
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 1, GraphRetryMaxAttempts = 4, GraphRetryBaseDelaySeconds = 0 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.False(result.Success);
+        Assert.Equal("Instagram Reel container status failed with status 400.", result.Error);
+        Assert.Equal(1, handler.Requests.Count(x => x.Phase == "ig-poll"));
+    }
+
+    [Fact]
+    public async Task InstagramPolling_SurvivesOneTransientPollFailure_AndContinues()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        handler.InstagramPollExceptions.Enqueue(new HttpRequestException("connection reset access_token=page-token-secret"));
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 2, GraphRetryMaxAttempts = 1, GraphRetryBaseDelaySeconds = 0 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal(2, handler.Requests.Count(x => x.Phase == "ig-poll"));
+        var diagnosticsJson = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-polling-diagnostics.json"));
+        using var diagnostics = JsonDocument.Parse(diagnosticsJson);
+        Assert.Equal(1, diagnostics.RootElement.GetProperty("transientFailureCount").GetInt32());
+        Assert.DoesNotContain("page-token-secret", diagnosticsJson);
+    }
+
+    [Fact]
+    public async Task InstagramPolling_AllTransientPollFailures_ReturnsTimedOutWarningDiagnostics()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        handler.InstagramPollExceptions.Enqueue(new HttpRequestException("first reset access_token=page-token-secret"));
+        handler.InstagramPollExceptions.Enqueue(new HttpRequestException("second reset access_token=page-token-secret"));
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 2, GraphRetryMaxAttempts = 1, GraphRetryBaseDelaySeconds = 0 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal("Instagram Reel container still processing when verification timeout occurred.", result.Warning);
+        Assert.DoesNotContain(handler.Requests, x => x.Phase == "ig-publish");
+        var diagnosticsJson = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-polling-diagnostics.json"));
+        using var diagnostics = JsonDocument.Parse(diagnosticsJson);
+        Assert.True(diagnostics.RootElement.GetProperty("timedOut").GetBoolean());
+        Assert.Equal(2, diagnostics.RootElement.GetProperty("transientFailureCount").GetInt32());
+        Assert.Equal(2, diagnostics.RootElement.GetProperty("graphRetryAttempts").GetInt32());
+        Assert.Contains("access_token=REDACTED", diagnostics.RootElement.GetProperty("lastGraphError").GetString());
+        Assert.DoesNotContain("page-token-secret", diagnosticsJson);
+    }
+
     [Fact]
     public async Task InstagramExplicitMetaContainerError_FailsProperly()
     {
@@ -868,6 +967,8 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
     public bool ThrowTaskCanceledDuringVerification { get; set; }
     public Queue<string> VerificationStatuses { get; set; } = new Queue<string>(new[] { "PUBLISHED" });
     public Queue<string> InstagramContainerStatuses { get; set; } = new Queue<string>(new[] { "FINISHED" });
+    public Queue<Exception> InstagramPollExceptions { get; } = new();
+    public Queue<HttpStatusCode> InstagramPollHttpStatuses { get; } = new();
     public List<(string Phase, Dictionary<string, string> Headers, Dictionary<string, string> ContentHeaders, string Body)> Requests { get; } = new();
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -896,6 +997,16 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
         if (request.RequestUri!.AbsolutePath.EndsWith("/creation-123", StringComparison.OrdinalIgnoreCase))
         {
             Requests.Add(("ig-poll", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+            if (InstagramPollExceptions.Count > 0)
+            {
+                throw InstagramPollExceptions.Dequeue();
+            }
+
+            if (InstagramPollHttpStatuses.Count > 0)
+            {
+                return new HttpResponseMessage(InstagramPollHttpStatuses.Dequeue()) { Content = JsonContent.Create(new { error = new { message = "temporary graph error access_token=page-token-secret" } }) };
+            }
+
             var status = InstagramContainerStatuses.Count > 0 ? InstagramContainerStatuses.Dequeue() : "IN_PROGRESS";
             return JsonResponse(new { status_code = status, status });
         }

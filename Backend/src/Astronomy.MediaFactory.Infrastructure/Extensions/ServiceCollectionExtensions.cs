@@ -90,6 +90,7 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(MetaPublishingOptions.SectionName))
             .Validate(options => options.Mode is null || options.Mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("DryRun", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Private", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Public", StringComparison.OrdinalIgnoreCase), "MetaPublishing:Mode must be Disabled, DryRun, Private, or Public.")
             .Validate(options => options.FacebookSimpleUploadMaxBytes >= 0 && options.FacebookUploadChunkSizeBytes > 0, "MetaPublishing Facebook full-video upload size settings are invalid.")
+            .Validate(options => options.GraphRetryMaxAttempts is > 0 and <= 10 && options.GraphRetryBaseDelaySeconds >= 0, "MetaPublishing Graph retry settings are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<PublishingTargetsOptions>()
@@ -376,7 +377,11 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IMetaOAuthService, MetaOAuthService>();
         services.AddHttpClient<IFacebookReelPublishService, FacebookReelPublishService>();
         services.AddHttpClient<IFacebookVideoPublishService, FacebookVideoPublishService>();
-        services.AddHttpClient<IInstagramReelPublishService, InstagramReelPublishService>();
+        services.AddHttpClient<IInstagramReelPublishService, InstagramReelPublishService>(client => client.Timeout = TimeSpan.FromSeconds(60))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            });
         services.AddScoped<IMetaPosterFrameFallbackService, MetaPosterFrameFallbackService>();
         services.AddScoped<IMetaPublishService, MetaPublishService>();
         services.AddHttpClient<ITokenHealthService, TokenHealthService>();
