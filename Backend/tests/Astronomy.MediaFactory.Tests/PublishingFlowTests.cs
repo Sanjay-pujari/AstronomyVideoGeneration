@@ -346,6 +346,42 @@ public sealed class PublishingFlowTests
         Assert.Contains(repository.StageExecutions, s => s.StageName == PipelineStageNames.InstagramReelPublished && s.Status == PersistentStageStatuses.Skipped && s.LastError == "Pre-publish validation blocked publishing.");
     }
 
+
+    [Fact]
+    public async Task PipelineOrchestrator_DoesNotFail_WhenInstagramVerificationTimesOutAfterUpload()
+    {
+        var repository = new FakePipelineRepository();
+        var stageExecutor = new PipelineStageExecutor(repository, NullLogger<PipelineStageExecutor>.Instance);
+        var orchestrator = new PipelineOrchestrator(
+            new FakeContextProvider(),
+            new FakeTopicRankingService(),
+            new FakeVisualProvider(),
+            new FakeScriptService(),
+            new FakeSpeechService(),
+            new FakeRenderService(),
+            new PassThroughBlobService(),
+            new SuccessfulYouTubeService(),
+            new FakeShortsVideoRenderService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new FakeThumbnailGenerationService(),
+            new PassThroughSeoMetadataGeneratorService(),
+            repository,
+            Options.Create(new YouTubeOptions { PrivacyStatus = "private" }),
+            Options.Create(new RenderingOptions()),
+            Options.Create(new PublishingValidationOptions { Enabled = true }),
+            NullLogger<PipelineOrchestrator>.Instance,
+            publishingOptions: Options.Create(new PublishingOptions { Enabled = true, Mode = "Private", PublishShortVideo = true }),
+            metaPublishingOptions: Options.Create(new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true }),
+            metaPublishService: new InstagramVerificationTimeoutMetaPublishService(),
+            pipelineStageExecutor: stageExecutor);
+
+        var result = await orchestrator.RunAsync(new RunPipelineRequest(DateOnly.FromDateTime(DateTime.UtcNow), ContentType.DailySkyGuide, "Pune", PublishToYouTube: true), CancellationToken.None);
+
+        Assert.Equal(PipelineRunStatus.Succeeded, result.Status);
+        Assert.Contains(repository.StageExecutions, s => s.StageName == PipelineStageNames.InstagramReelPublished && s.Status == PersistentStageStatuses.Succeeded);
+        Assert.DoesNotContain(repository.StageExecutions, s => s.StageName == PipelineStageNames.InstagramReelPublished && s.Status == PersistentStageStatuses.Failed);
+    }
+
     [Fact]
     public async Task PipelineOrchestrator_SkipsPublishStages_WhenPublishArtifactsAreMissing()
     {
@@ -417,6 +453,25 @@ public sealed class PublishingFlowTests
                 Mode = "Private",
                 Error = "Video file is missing: shorts/short-video.mp4"
             }]);
+    }
+
+
+    private sealed class InstagramVerificationTimeoutMetaPublishService : IMetaPublishService
+    {
+        public Task<IReadOnlyList<MetaPublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset = "all", CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<MetaPublishResult>>([
+                new MetaPublishResult
+                {
+                    Success = true,
+                    Platform = "Instagram",
+                    ContentType = PlatformThumbnailContentTypes.Reel,
+                    ContentKind = PlatformThumbnailContentTypes.Reel,
+                    Mode = "Public",
+                    VideoId = "creation-123",
+                    PublishedVerified = false,
+                    Warning = "Instagram Reel container still processing when verification timeout occurred."
+                }
+            ]);
     }
 
     private sealed class MissingVideoMetaPublishService : IMetaPublishService

@@ -51,6 +51,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         MetaPublishResult result;
         InstagramContainerDiagnostics? containerDiagnostics = null;
         InstagramPublishDiagnostics? publishDiagnostics = null;
+        InstagramPollingDiagnostics? pollingDiagnostics = null;
         PublicMediaUploadResult? publicMediaUpload = null;
         PublicMediaUploadResult? thumbnailMediaUpload = null;
         string? coverUrl = null;
@@ -115,6 +116,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
                     result = publishResult.Result;
                     containerDiagnostics = publishResult.ContainerDiagnostics with { VideoUrlUsedForInstagram = safePublicVideoUrl, CoverUrlUsedForInstagram = RedactSensitiveQuery(coverUrl) };
                     publishDiagnostics = publishResult.PublishDiagnostics;
+                    pollingDiagnostics = publishResult.PollingDiagnostics;
                     graphError = publishResult.GraphError;
                 }
             }
@@ -129,10 +131,11 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         await WriteInstagramThumbnailDiagnosticsAsync(outputDirectory, containerDiagnostics?.CreationId, publishDiagnostics?.MediaId, coverUrl, request, thumbnailMediaUpload, graphError, result.ThumbnailWarning, cancellationToken);
         await WriteContainerResultAsync(outputDirectory, containerDiagnostics, result, cancellationToken);
         await WritePublishResultAsync(outputDirectory, publishDiagnostics, result, cancellationToken);
+        await WritePollingDiagnosticsAsync(outputDirectory, pollingDiagnostics, result, cancellationToken);
         return result;
     }
 
-    private async Task<(MetaPublishResult Result, InstagramContainerDiagnostics ContainerDiagnostics, InstagramPublishDiagnostics PublishDiagnostics, string? GraphError)> PublishRealAsync(
+    private async Task<(MetaPublishResult Result, InstagramContainerDiagnostics ContainerDiagnostics, InstagramPublishDiagnostics PublishDiagnostics, InstagramPollingDiagnostics PollingDiagnostics, string? GraphError)> PublishRealAsync(
         string instagramBusinessAccountId,
         string instagramUsername,
         string accessToken,
@@ -193,9 +196,51 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             Attempts = poll.Attempts,
             Finished = poll.Finished
         };
+        var pollingDiagnostics = new InstagramPollingDiagnostics
+        {
+            CreationId = containerId,
+            PollingAttempts = poll.Attempts,
+            LastKnownStatus = FirstNonBlank(poll.StatusCode, poll.Status),
+            TimedOut = poll.TimedOut,
+            PublishedVerified = false
+        };
 
         if (!poll.Finished)
         {
+            if (poll.TimedOut && _publishingOptions.InstagramTreatProcessingTimeoutAsSuccess && !string.IsNullOrWhiteSpace(containerId))
+            {
+                const string warning = "Instagram Reel container still processing when verification timeout occurred.";
+                var warnings = BuildWarnings(thumbnailWarning, request.PosterFrameApplied);
+                warnings.Add(warning);
+                pollingDiagnostics = pollingDiagnostics with { Warning = warning };
+                _logger.LogWarning("Instagram Reel container {CreationId} is still processing after {Attempts} verification poll attempts; treating as upload success.", containerId, poll.Attempts);
+                return (new MetaPublishResult
+                {
+                    Success = true,
+                    Platform = "Instagram",
+                    ContentType = PlatformThumbnailContentTypes.Reel,
+                    ContentKind = PlatformThumbnailContentTypes.Reel,
+                    Mode = mode,
+                    UploadedThumbnailPath = request.PlatformThumbnailPath,
+                    UploadedThumbnailUrl = coverUrl,
+                    ThumbnailSource = request.ThumbnailSource,
+                    VideoPathUsed = request.VideoPath,
+                    ThumbnailPathUsed = request.PlatformThumbnailPath,
+                    ThumbnailStrategy = request.ThumbnailSource,
+                    ThumbnailUploadAttempted = IsPublicHttpsUrl(coverUrl),
+                    ThumbnailUploadSuccess = false,
+                    ThumbnailWarning = thumbnailWarning,
+                    Warning = warning,
+                    Warnings = warnings,
+                    PosterFrameApplied = request.PosterFrameApplied,
+                    PosterFrameVideoPath = request.PosterFrameApplied ? request.VideoPath : null,
+                    PostId = containerId,
+                    VideoId = containerId,
+                    PublishedVerified = false,
+                    PublishedUtc = DateTime.UtcNow
+                }, containerDiagnostics, new InstagramPublishDiagnostics { CreationId = containerId, InstagramBusinessAccountId = instagramBusinessAccountId, InstagramUsername = instagramUsername }, pollingDiagnostics, graphError);
+            }
+
             var error = string.Equals(poll.StatusCode, "ERROR", StringComparison.OrdinalIgnoreCase)
                 ? $"Instagram Reel media container failed: {poll.Status ?? poll.StatusCode}."
                 : $"Instagram Reel media container did not finish after {poll.Attempts} attempts.";
@@ -217,7 +262,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
                 PosterFrameApplied = request.PosterFrameApplied,
                 PosterFrameVideoPath = request.PosterFrameApplied ? request.VideoPath : null,
                 PublishedUtc = DateTime.UtcNow
-            }, containerDiagnostics, new InstagramPublishDiagnostics { CreationId = containerId, InstagramBusinessAccountId = instagramBusinessAccountId, InstagramUsername = instagramUsername }, graphError);
+            }, containerDiagnostics, new InstagramPublishDiagnostics { CreationId = containerId, InstagramBusinessAccountId = instagramBusinessAccountId, InstagramUsername = instagramUsername }, pollingDiagnostics, graphError);
         }
 
         var publish = await PostGraphAsync<PublishContainerResponse>(
@@ -246,6 +291,12 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             InstagramBusinessAccountId = instagramBusinessAccountId,
             InstagramUsername = instagramUsername
         };
+        pollingDiagnostics = pollingDiagnostics with
+        {
+            MediaId = publish.Id,
+            Permalink = details?.Permalink,
+            PublishedVerified = !string.IsNullOrWhiteSpace(details?.Permalink)
+        };
 
         return (new MetaPublishResult
         {
@@ -272,37 +323,52 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             Url = details?.Permalink,
             PublishedVerified = !string.IsNullOrWhiteSpace(details?.Permalink),
             PublishedUtc = DateTime.UtcNow
-        }, containerDiagnostics, diagnostics, graphError);
+        }, containerDiagnostics, diagnostics, pollingDiagnostics, graphError);
     }
 
-    private async Task<InstagramContainerPollResult> PollContainerAsync(string creationId, string accessToken, CancellationToken cancellationToken)
+    private async Task<InstagramContainerPollResult> PollContainerAsync(string creationId, string accessToken, CancellationToken externalCancellationToken)
     {
-        var maxAttempts = Math.Max(1, _publishingOptions.InstagramContainerMaxAttempts);
-        var pollDelay = TimeSpan.FromSeconds(Math.Max(0, _publishingOptions.InstagramContainerPollSeconds));
+        var useLegacyPollingSettings = _publishingOptions.InstagramContainerMaxAttempts != 18 || _publishingOptions.InstagramContainerPollSeconds != 10;
+        var configuredAttempts = useLegacyPollingSettings ? _publishingOptions.InstagramContainerMaxAttempts : _publishingOptions.InstagramPollAttempts;
+        var configuredDelaySeconds = useLegacyPollingSettings ? _publishingOptions.InstagramContainerPollSeconds : _publishingOptions.InstagramPollDelaySeconds;
+        var maxAttempts = Math.Max(1, configuredAttempts);
+        var pollDelay = TimeSpan.FromSeconds(Math.Max(0, configuredDelaySeconds));
         InstagramContainerStatus? latest = null;
+        var attempts = 0;
 
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        try
         {
-            if (attempt > 1 && pollDelay > TimeSpan.Zero)
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                await Task.Delay(pollDelay, cancellationToken);
-            }
+                externalCancellationToken.ThrowIfCancellationRequested();
+                if (attempt > 1 && pollDelay > TimeSpan.Zero)
+                {
+                    await Task.Delay(pollDelay, externalCancellationToken);
+                }
 
-            latest = await GetGraphAsync<InstagramContainerStatus>($"{GraphEndpoint}/{Uri.EscapeDataString(creationId)}?fields=status_code,status&access_token={Uri.EscapeDataString(accessToken)}", "Instagram Reel container status", cancellationToken);
-            _logger.LogInformation("Instagram Reel container poll {Attempt}/{MaxAttempts} for creation {CreationId}: status_code={StatusCode}.", attempt, maxAttempts, creationId, latest?.StatusCode ?? "unknown");
+                attempts = attempt;
+                latest = await GetGraphAsync<InstagramContainerStatus>($"{GraphEndpoint}/{Uri.EscapeDataString(creationId)}?fields=status_code,status&access_token={Uri.EscapeDataString(accessToken)}", "Instagram Reel container status", externalCancellationToken);
+                _logger.LogInformation("Instagram Reel container poll {Attempt}/{MaxAttempts} for creation {CreationId}: status_code={StatusCode}.", attempt, maxAttempts, creationId, latest?.StatusCode ?? "unknown");
 
-            if (string.Equals(latest?.StatusCode, "FINISHED", StringComparison.OrdinalIgnoreCase))
-            {
-                return new InstagramContainerPollResult(true, latest.StatusCode, latest.Status, attempt);
-            }
+                if (string.Equals(latest?.StatusCode, "FINISHED", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new InstagramContainerPollResult(true, latest.StatusCode, latest.Status, attempt, false);
+                }
 
-            if (string.Equals(latest?.StatusCode, "ERROR", StringComparison.OrdinalIgnoreCase))
-            {
-                return new InstagramContainerPollResult(false, latest.StatusCode, latest.Status, attempt);
+                if (string.Equals(latest?.StatusCode, "ERROR", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new InstagramContainerPollResult(false, latest.StatusCode, latest.Status, attempt, false);
+                }
             }
         }
+        catch (OperationCanceledException) when (!externalCancellationToken.IsCancellationRequested && IsProcessingStatus(latest))
+        {
+            _logger.LogWarning("Instagram Reel container polling timed out while creation {CreationId} was still processing.", creationId);
+            return new InstagramContainerPollResult(false, latest?.StatusCode, latest?.Status, Math.Max(1, attempts), true);
+        }
 
-        return new InstagramContainerPollResult(false, latest?.StatusCode, latest?.Status, maxAttempts);
+        var timedOut = IsProcessingStatus(latest);
+        return new InstagramContainerPollResult(false, latest?.StatusCode, latest?.Status, Math.Max(1, attempts == 0 ? maxAttempts : attempts), timedOut);
     }
 
     private async Task<(string? PublicUrl, PublicMediaUploadResult? UploadResult)> ResolvePublicVideoUrlAsync(MetaPublishRequest request, string mode, CancellationToken cancellationToken)
@@ -556,6 +622,18 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "instagram-reel-publish-result.json"), JsonSerializer.Serialize(output, JsonOptions), cancellationToken);
     }
 
+    private static async Task WritePollingDiagnosticsAsync(string outputDirectory, InstagramPollingDiagnostics? diagnostics, MetaPublishResult result, CancellationToken cancellationToken)
+    {
+        var output = diagnostics ?? new InstagramPollingDiagnostics
+        {
+            MediaId = result.VideoId,
+            Permalink = result.Url,
+            PublishedVerified = result.PublishedVerified,
+            Warning = result.Warning
+        };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "instagram-reel-polling-diagnostics.json"), JsonSerializer.Serialize(output, JsonOptions), cancellationToken);
+    }
+
     private static bool IsPublicHttpsUrl(string? value)
         => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps;
 
@@ -569,6 +647,17 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         var builder = new UriBuilder(uri) { Query = "REDACTED" };
         return builder.Uri.ToString();
     }
+
+
+    private static string? FirstNonBlank(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+    private static bool IsProcessingStatus(InstagramContainerStatus? status)
+        => IsProcessingStatus(status?.StatusCode) || IsProcessingStatus(status?.Status);
+
+    private static bool IsProcessingStatus(string? status)
+        => string.Equals(status, "IN_PROGRESS", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "PROCESSING", StringComparison.OrdinalIgnoreCase);
 
     private static MetaPublishResult Failed(string mode, string error)
         => new() { Success = false, Platform = "Instagram", ContentType = PlatformThumbnailContentTypes.Reel, ContentKind = PlatformThumbnailContentTypes.Reel, Mode = mode, Error = error, ThumbnailWarning = error, Warning = error, PublishedUtc = DateTime.UtcNow };
@@ -607,7 +696,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             : string.Equals(mode, "Disabled", StringComparison.OrdinalIgnoreCase) ? "Disabled"
             : "DryRun";
 
-    private sealed record InstagramContainerPollResult(bool Finished, string? StatusCode, string? Status, int Attempts);
+    private sealed record InstagramContainerPollResult(bool Finished, string? StatusCode, string? Status, int Attempts, bool TimedOut);
 
     private sealed record CreateContainerResponse(
         [property: JsonPropertyName("id")] string? Id,
@@ -628,6 +717,19 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         public bool Finished { get; init; }
         public string? VideoUrlUsedForInstagram { get; init; }
         public string? CoverUrlUsedForInstagram { get; init; }
+    }
+
+
+    private sealed record InstagramPollingDiagnostics
+    {
+        public string? CreationId { get; init; }
+        public string? MediaId { get; init; }
+        public int PollingAttempts { get; init; }
+        public string? LastKnownStatus { get; init; }
+        public bool TimedOut { get; init; }
+        public bool PublishedVerified { get; init; }
+        public string? Warning { get; init; }
+        public string? Permalink { get; init; }
     }
 
     private sealed record InstagramPublishDiagnostics
