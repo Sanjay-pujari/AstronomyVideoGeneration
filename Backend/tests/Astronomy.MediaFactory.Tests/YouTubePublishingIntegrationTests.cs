@@ -281,6 +281,27 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "shorts", "short-video.mp4"), api.Requests[0].VideoPath);
     }
 
+
+    [Fact]
+    public async Task YouTubeShort_UploadsGeneratedShortThumbnail_AndWritesDiagnostics()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, createShort: true);
+        var api = new TrackingYouTubeApiClient { VideoId = "short-123" };
+        var service = CreateContentService(workspace, repository, api, new PublishingOptions { Enabled = true, Mode = "Private", PublishLongVideo = false, PublishShortVideo = true, UploadThumbnail = true }, new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28", UploadThumbnailForShorts = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "short", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "thumbnails", "thumbnail-short.jpg"), api.LastThumbnailPath);
+        Assert.Equal(api.LastThumbnailPath, result.ThumbnailPathUsed);
+        var diagnosticsPath = Path.Combine(workspace.OutputDirectory(run), "youtube-short-thumbnail-upload-diagnostics.json");
+        Assert.True(File.Exists(diagnosticsPath));
+        var diagnosticsJson = await File.ReadAllTextAsync(diagnosticsPath);
+        Assert.Contains("thumbnail-short.jpg", diagnosticsJson);
+        Assert.DoesNotContain("thumbnail-long.jpg", diagnosticsJson);
+    }
+
     [Fact]
     public async Task BothAssetsUploaded_WhenEnabled()
     {
@@ -294,6 +315,8 @@ public sealed class YouTubePublishingIntegrationTests
         Assert.Equal(2, api.UploadCalls);
         Assert.Contains(results, x => x.AssetType == "LongVideo" && x.Success);
         Assert.Contains(results, x => x.AssetType == "ShortVideo" && x.Success);
+        Assert.Contains(api.Requests, x => x.AssetType == "LongVideo" && x.VideoPath.EndsWith("final-video.mp4", StringComparison.Ordinal) && x.PlatformThumbnailPath.EndsWith(Path.Combine("thumbnails", "thumbnail-long.jpg"), StringComparison.Ordinal));
+        Assert.Contains(api.Requests, x => x.AssetType == "ShortVideo" && x.VideoPath.EndsWith(Path.Combine("shorts", "short-video.mp4"), StringComparison.Ordinal) && x.PlatformThumbnailPath.EndsWith(Path.Combine("thumbnails", "thumbnail-short.jpg"), StringComparison.Ordinal));
         Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-publish-result-long.json")));
         Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-publish-result-short.json")));
         Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "youtube-publish-results.json")));
@@ -628,6 +651,9 @@ public sealed class YouTubePublishingIntegrationTests
             File.WriteAllText(Path.Combine(output, "final-video.mp4"), "video");
             if (createThumbnail)
             {
+                Directory.CreateDirectory(Path.Combine(output, "thumbnails"));
+                WriteThumbnailImage(Path.Combine(output, "thumbnails", "thumbnail-long.jpg"), ".jpg", largeThumbnail);
+                WriteThumbnailImage(Path.Combine(output, "thumbnails", "thumbnail-short.jpg"), ".jpg", false);
                 var thumbnailName = thumbnailExtension.Equals(".png", StringComparison.OrdinalIgnoreCase) ? "thumbnail-1.png" : $"thumbnail-1{thumbnailExtension}";
                 var thumbnailPath = Path.Combine(output, thumbnailName);
                 WriteThumbnailImage(thumbnailPath, thumbnailExtension, largeThumbnail);

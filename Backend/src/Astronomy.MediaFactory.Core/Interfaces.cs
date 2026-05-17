@@ -114,6 +114,11 @@ public sealed record MetaPosterFrameFallbackResult(
     string OutputMetaVideoPath,
     string Reason);
 
+public interface IFacebookVideoPublishService
+{
+    Task<MetaPublishResult> PublishVideoAsync(MetaPublishRequest request, CancellationToken cancellationToken);
+}
+
 public interface IFacebookReelPublishService
 {
     Task<MetaPublishResult> PublishReelAsync(

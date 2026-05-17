@@ -47,8 +47,8 @@ public sealed class MetaPublishingTests
 
         Assert.True(result.Success);
         Assert.True(result.PosterFrameApplied);
-        Assert.EndsWith(Path.Combine("shorts", "short-video-meta.mp4"), result.PosterFrameVideoPath);
-        Assert.True(File.Exists(Path.Combine(output, "shorts", "short-video-meta.mp4")));
+        Assert.EndsWith(Path.Combine("shorts", "short-video-facebook.mp4"), result.PosterFrameVideoPath);
+        Assert.True(File.Exists(Path.Combine(output, "shorts", "short-video-facebook.mp4")));
         var reportJson = await File.ReadAllTextAsync(Path.Combine(output, "meta-poster-frame-report.json"));
         Assert.Contains("\"posterFrameApplied\": true", reportJson);
         Assert.Contains("Custom cover unsupported/rejected by Meta endpoint", reportJson);
@@ -58,7 +58,7 @@ public sealed class MetaPublishingTests
     }
 
     [Fact]
-    public async Task MetaPublish_UsesMetaVideo_ForFacebookAndInstagramReels()
+    public async Task MetaPublish_UsesPosterFrameVideo_ForFacebookReelOnly()
     {
         using var workspace = new TempMetaWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
@@ -81,11 +81,59 @@ public sealed class MetaPublishingTests
 
         var results = await service.PublishForPipelineRunAsync(run.Id, "all", CancellationToken.None);
         var output = workspace.OutputDirectory(run);
-        var metaVideoPath = Path.Combine(output, "shorts", "short-video-meta.mp4");
+        var metaVideoPath = Path.Combine(output, "shorts", "short-video-facebook.mp4");
 
-        Assert.All(results, result => Assert.Equal(metaVideoPath, result.PosterFrameVideoPath));
-        Assert.Contains("short-video-meta.mp4", await File.ReadAllTextAsync(Path.Combine(output, "facebook-reel-publish-payload.json")));
-        Assert.Contains("short-video-meta.mp4", await File.ReadAllTextAsync(Path.Combine(output, "instagram-reel-publish-payload.json")));
+        var facebookResult = Assert.Single(results.Where(r => r.Platform == "Facebook" && r.ContentType == PlatformThumbnailContentTypes.Reel));
+        var instagramResult = Assert.Single(results.Where(r => r.Platform == "Instagram"));
+        Assert.Equal(metaVideoPath, facebookResult.PosterFrameVideoPath);
+        Assert.Null(instagramResult.PosterFrameVideoPath);
+        Assert.Contains("short-video-facebook.mp4", await File.ReadAllTextAsync(Path.Combine(output, "facebook-reel-publish-payload.json")));
+        Assert.DoesNotContain("short-video-facebook.mp4", await File.ReadAllTextAsync(Path.Combine(output, "instagram-reel-publish-payload.json")));
+    }
+
+
+    [Fact]
+    public async Task FacebookLong_UsesFinalVideoAndLongThumbnail_WithoutReelEndpoint()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookLong = true, PublishFacebookReel = false, PublishInstagramReel = false });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-long", CancellationToken.None)).Single();
+        var output = workspace.OutputDirectory(run);
+
+        Assert.True(result.Success);
+        Assert.Equal(PlatformThumbnailContentTypes.LongVideo, result.ContentType);
+        Assert.Equal(Path.Combine(output, "final-video.mp4"), result.VideoPathUsed);
+        Assert.Equal(Path.Combine(output, "thumbnails", "thumbnail-long.jpg"), result.ThumbnailPathUsed);
+        Assert.False(File.Exists(Path.Combine(output, "facebook-reel-publish-payload.json")));
+    }
+
+    [Fact]
+    public async Task PlatformPublishingAssetsReport_ContainsFinalProductionMatrix()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var service = MetaPublishingTestFactory.CreateMetaService(
+            workspace,
+            repository,
+            new TrackingMetaHandler(),
+            new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookLong = true, PublishFacebookReel = true, PublishInstagramReel = true, UsePosterFrameFallbackForFacebookReels = true },
+            posterFrameFallbackService: new FakePosterFrameFallbackService());
+
+        _ = await service.PublishForPipelineRunAsync(run.Id, "all", CancellationToken.None);
+        var reportJson = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "platform-publishing-assets-report.json"));
+
+        Assert.Contains("FacebookLong", reportJson);
+        Assert.Contains("final-video.mp4", reportJson);
+        Assert.Contains("thumbnail-long.jpg", reportJson);
+        Assert.Contains("FacebookReel", reportJson);
+        Assert.Contains("short-video-facebook.mp4", reportJson);
+        Assert.Contains("PosterFrameFallback", reportJson);
+        Assert.Contains("InstagramReel", reportJson);
+        Assert.Contains("short-video.mp4", reportJson);
+        Assert.Contains("thumbnail-short.jpg", reportJson);
     }
 
     [Fact]
@@ -591,6 +639,8 @@ internal static class MetaPublishingTestFactory
             Options.Create(new RenderingOptions { FfprobePath = "missing-ffprobe-for-tests" }),
             NullLogger<FacebookReelPublishService>.Instance);
 
+        var facebookLong = new FakeFacebookVideoPublishService();
+
         var instagram = new InstagramReelPublishService(
             new HttpClient(handler),
             Options.Create(new MetaOptions { TokenFilePath = workspace.TokenPath }),
@@ -603,6 +653,7 @@ internal static class MetaPublishingTestFactory
         return new MetaPublishService(
             repository,
             facebook,
+            facebookLong,
             instagram,
             new FixedTokenHealthService(),
             Options.Create(options),
@@ -610,6 +661,28 @@ internal static class MetaPublishingTestFactory
             Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }),
             NullLogger<MetaPublishService>.Instance,
             posterFrameFallbackService: posterFrameFallbackService);
+    }
+}
+
+internal sealed class FakeFacebookVideoPublishService : IFacebookVideoPublishService
+{
+    public List<MetaPublishRequest> Requests { get; } = [];
+
+    public Task<MetaPublishResult> PublishVideoAsync(MetaPublishRequest request, CancellationToken cancellationToken)
+    {
+        Requests.Add(request);
+        return Task.FromResult(new MetaPublishResult
+        {
+            Success = true,
+            Platform = "Facebook",
+            ContentType = PlatformThumbnailContentTypes.LongVideo,
+            ContentKind = PlatformThumbnailContentTypes.LongVideo,
+            Mode = "DryRun",
+            VideoPathUsed = request.VideoPath,
+            ThumbnailPathUsed = request.PlatformThumbnailPath,
+            ThumbnailStrategy = request.ThumbnailSource,
+            UploadedThumbnailPath = request.PlatformThumbnailPath
+        });
     }
 }
 
@@ -680,7 +753,7 @@ internal sealed class FakePosterFrameFallbackService : IMetaPosterFrameFallbackS
     {
         InputShortVideoPath = inputShortVideoPath;
         PosterFrameImagePath = posterFrameImagePath;
-        var outputMetaVideoPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(inputShortVideoPath))!, "short-video-meta.mp4");
+        var outputMetaVideoPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(inputShortVideoPath))!, "short-video-facebook.mp4");
         File.Copy(inputShortVideoPath, outputMetaVideoPath, overwrite: true);
         var result = new MetaPosterFrameFallbackResult(
             true,

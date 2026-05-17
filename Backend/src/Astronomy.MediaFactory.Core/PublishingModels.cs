@@ -51,6 +51,8 @@ public sealed class PublishResult
     public bool ThumbnailUploadSuccess { get; init; }
     public string? ThumbnailWarning { get; init; }
     public string? VideoId { get; init; }
+    public string? PostId { get; init; }
+    public string? Url { get; init; }
     public string? VideoUrl { get; init; }
     public string? ChannelId { get; init; }
     public string? ChannelTitle { get; init; }
@@ -59,6 +61,11 @@ public sealed class PublishResult
     public string AssetType { get; init; } = "LongVideo";
     public bool IsShort { get; init; }
     public string Mode { get; init; } = "DryRun";
+    public string? ContentKind { get; init; }
+    public string? VideoPathUsed { get; init; }
+    public string? ThumbnailPathUsed { get; init; }
+    public string? ThumbnailStrategy { get; init; }
+    public string? Warning { get; init; }
     public DateTime PublishedUtc { get; init; } = DateTime.UtcNow;
 }
 
@@ -91,6 +98,7 @@ public sealed class MetaPublishResult
     public bool Success { get; init; }
     public string Platform { get; init; } = "Facebook";
     public string ContentType { get; init; } = "Reel";
+    public string? ContentKind { get; init; }
     public string? UploadedThumbnailPath { get; init; }
     public string? UploadedThumbnailUrl { get; init; }
     public string? ThumbnailSource { get; init; }
@@ -103,6 +111,9 @@ public sealed class MetaPublishResult
     public string? Url { get; init; }
     public string? Error { get; init; }
     public bool PublishedVerified { get; init; }
+    public string? VideoPathUsed { get; init; }
+    public string? ThumbnailPathUsed { get; init; }
+    public string? ThumbnailStrategy { get; init; }
     public string? Warning { get; init; }
     public List<string> Warnings { get; init; } = [];
     public bool PosterFrameApplied { get; init; }
@@ -122,6 +133,7 @@ public static class ThumbnailSources
 {
     public const string GeneratedThumbnail = "GeneratedThumbnail";
     public const string FallbackThumbnail = "FallbackThumbnail";
+    public const string PosterFrameFallback = "PosterFrameFallback";
     public const string None = "None";
 }
 

@@ -18,6 +18,7 @@ public static class PipelineStageNames
     public const string ValidationCompleted = nameof(ValidationCompleted);
     public const string YouTubeLongPublished = nameof(YouTubeLongPublished);
     public const string YouTubeShortPublished = nameof(YouTubeShortPublished);
+    public const string FacebookLongPublished = nameof(FacebookLongPublished);
     public const string FacebookReelPublished = nameof(FacebookReelPublished);
     public const string InstagramReelPublished = nameof(InstagramReelPublished);
     public const string Completed = nameof(Completed);
@@ -38,6 +39,7 @@ public static class PipelineStageNames
         ValidationCompleted,
         YouTubeLongPublished,
         YouTubeShortPublished,
+        FacebookLongPublished,
         FacebookReelPublished,
         InstagramReelPublished,
         Completed,
@@ -140,6 +142,7 @@ public sealed record PipelineStatusResponse(
     [
         PipelineStageNames.YouTubeLongPublished,
         PipelineStageNames.YouTubeShortPublished,
+        PipelineStageNames.FacebookLongPublished,
         PipelineStageNames.FacebookReelPublished,
         PipelineStageNames.InstagramReelPublished
     ];

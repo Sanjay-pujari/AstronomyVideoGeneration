@@ -1031,26 +1031,32 @@ public sealed class PipelineOrchestrator
                     && publishingEnabled
                     && validationPassed
                     && _metaPublishingOptions.Enabled
-                    && (_metaPublishingOptions.PublishFacebookReel || _metaPublishingOptions.PublishInstagramReel)
+                    && (_metaPublishingOptions.PublishFacebookLong || _metaPublishingOptions.PublishFacebookFullVideo || _metaPublishingOptions.PublishFacebookReel || _metaPublishingOptions.PublishInstagramReel)
                     && !string.Equals(_metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase))
                 {
-                    var metaAsset = _metaPublishingOptions.PublishFacebookReel && _metaPublishingOptions.PublishInstagramReel
-                        ? "all"
-                        : _metaPublishingOptions.PublishInstagramReel ? "instagram-reel" : "facebook-reel";
+                    var publishFacebookLong = _metaPublishingOptions.PublishFacebookLong || _metaPublishingOptions.PublishFacebookFullVideo;
+                    var metaAsset = publishFacebookLong && !_metaPublishingOptions.PublishFacebookReel && !_metaPublishingOptions.PublishInstagramReel
+                        ? "facebook-long"
+                        : !publishFacebookLong && _metaPublishingOptions.PublishInstagramReel && !_metaPublishingOptions.PublishFacebookReel
+                            ? "instagram-reel"
+                            : !publishFacebookLong && _metaPublishingOptions.PublishFacebookReel && !_metaPublishingOptions.PublishInstagramReel
+                                ? "facebook-reel"
+                                : "all";
                     var metaResults = await RunStageAsync("MetaReelPublish-Internal", async () =>
                     {
                         return await _metaPublishService.PublishForPipelineRunAsync(run.Id, metaAsset, cancellationToken);
                     }, continueWithFallback: true, fallback: ex => Task.FromResult<IReadOnlyList<MetaPublishResult>>([new MetaPublishResult
                     {
                         Success = false,
-                        Platform = _metaPublishingOptions.PublishInstagramReel && !_metaPublishingOptions.PublishFacebookReel ? "Instagram" : "Facebook",
+                        Platform = _metaPublishingOptions.PublishInstagramReel && !_metaPublishingOptions.PublishFacebookReel && !publishFacebookLong ? "Instagram" : "Facebook",
                         Mode = _metaPublishingOptions.Mode,
                         Error = ex.Message,
                         PublishedUtc = DateTime.UtcNow
                     }]));
 
-                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", _metaPublishingOptions.PublishFacebookReel, metaResults, SetStageStatusAsync);
-                    await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", _metaPublishingOptions.PublishInstagramReel, metaResults, SetStageStatusAsync);
+                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookLongPublished, "Facebook", publishFacebookLong, metaResults, SetStageStatusAsync, contentKind: PlatformThumbnailContentTypes.LongVideo);
+                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", _metaPublishingOptions.PublishFacebookReel, metaResults, SetStageStatusAsync, contentKind: PlatformThumbnailContentTypes.Reel);
+                    await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", _metaPublishingOptions.PublishInstagramReel, metaResults, SetStageStatusAsync, contentKind: PlatformThumbnailContentTypes.Reel);
                 }
                 else
                 {
@@ -1059,15 +1065,17 @@ public sealed class PipelineOrchestrator
                         : !validationPassed
                             ? "Pre-publish validation blocked publishing."
                             : "Meta Reel publishing disabled.";
-                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", false, [], SetStageStatusAsync, metaSkipReason);
-                    await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", false, [], SetStageStatusAsync, metaSkipReason);
+                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookLongPublished, "Facebook", false, [], SetStageStatusAsync, metaSkipReason, PlatformThumbnailContentTypes.LongVideo);
+                    await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", false, [], SetStageStatusAsync, metaSkipReason, PlatformThumbnailContentTypes.Reel);
+                    await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", false, [], SetStageStatusAsync, metaSkipReason, PlatformThumbnailContentTypes.Reel);
                 }
             }
             else
             {
                 await SetStageStatusAsync(PipelineStageNames.YouTubeShortPublished, PersistentStageStatuses.Skipped, reason: "Short video generation did not produce a publishable result.");
-                await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", false, [], SetStageStatusAsync);
-                await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", false, [], SetStageStatusAsync);
+                await SetMetaPublishStageAsync(PipelineStageNames.FacebookLongPublished, "Facebook", false, [], SetStageStatusAsync, contentKind: PlatformThumbnailContentTypes.LongVideo);
+                await SetMetaPublishStageAsync(PipelineStageNames.FacebookReelPublished, "Facebook", false, [], SetStageStatusAsync, contentKind: PlatformThumbnailContentTypes.Reel);
+                await SetMetaPublishStageAsync(PipelineStageNames.InstagramReelPublished, "Instagram", false, [], SetStageStatusAsync, contentKind: PlatformThumbnailContentTypes.Reel);
             }
 
             var failedEnabledPublishStages = await GetFailedEnabledPublishStagesAsync(publishingEnabled, validationPassed);
@@ -1382,6 +1390,7 @@ public sealed class PipelineOrchestrator
             PipelineStageNames.ValidationCompleted => Path.Combine(outputDirectory, "pre-publish-validation-report.json"),
             PipelineStageNames.YouTubeLongPublished => Path.Combine(outputDirectory, "youtube-publish-result-long.json"),
             PipelineStageNames.YouTubeShortPublished => Path.Combine(outputDirectory, "youtube-publish-result-short.json"),
+            PipelineStageNames.FacebookLongPublished => Path.Combine(outputDirectory, "facebook-long-publish-result.json"),
             PipelineStageNames.FacebookReelPublished => Path.Combine(outputDirectory, "facebook-reel-publish-result.json"),
             PipelineStageNames.InstagramReelPublished => Path.Combine(outputDirectory, "instagram-reel-publish-result.json"),
             PipelineStageNames.Completed => outputDirectory,
@@ -1395,22 +1404,24 @@ public sealed class PipelineOrchestrator
         bool enabled,
         IReadOnlyList<MetaPublishResult> results,
         Func<string, string, string?, string?, Task> setStageStatusAsync,
-        string? disabledReason = null)
+        string? disabledReason = null,
+        string? contentKind = null)
     {
         if (!enabled)
         {
-            await setStageStatusAsync(stageName, PersistentStageStatuses.Skipped, null, disabledReason ?? $"{platform} Reel publishing disabled.");
+            await setStageStatusAsync(stageName, PersistentStageStatuses.Skipped, null, disabledReason ?? $"{platform} {contentKind ?? "Reel"} publishing disabled.");
             return;
         }
 
-        var result = results.FirstOrDefault(x => x.Platform.Equals(platform, StringComparison.OrdinalIgnoreCase));
+        var result = results.FirstOrDefault(x => x.Platform.Equals(platform, StringComparison.OrdinalIgnoreCase)
+            && (string.IsNullOrWhiteSpace(contentKind) || x.ContentType.Equals(contentKind, StringComparison.OrdinalIgnoreCase) || string.Equals(x.ContentKind, contentKind, StringComparison.OrdinalIgnoreCase)));
         if (result is { Success: true })
         {
             await setStageStatusAsync(stageName, PersistentStageStatuses.Succeeded, null, null);
             return;
         }
 
-        var error = result?.Error ?? $"{platform} Reel publishing did not produce a successful result.";
+        var error = result?.Error ?? $"{platform} {contentKind ?? "Reel"} publishing did not produce a successful result.";
         await setStageStatusAsync(stageName, IsPublishPrerequisiteSkip(error) ? PersistentStageStatuses.Skipped : PersistentStageStatuses.Failed, null, error);
     }
 
@@ -1425,6 +1436,7 @@ public sealed class PipelineOrchestrator
         {
             PipelineStageNames.YouTubeLongPublished => publishingEnabled && validationPassed && publishToYouTube,
             PipelineStageNames.YouTubeShortPublished => publishingEnabled && validationPassed && publishToYouTube && publishShortVideo,
+            PipelineStageNames.FacebookLongPublished => publishingEnabled && validationPassed && metaPublishingOptions.Enabled && (metaPublishingOptions.PublishFacebookLong || metaPublishingOptions.PublishFacebookFullVideo) && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
             PipelineStageNames.FacebookReelPublished => publishingEnabled && validationPassed && metaPublishingOptions.Enabled && metaPublishingOptions.PublishFacebookReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
             PipelineStageNames.InstagramReelPublished => publishingEnabled && validationPassed && metaPublishingOptions.Enabled && metaPublishingOptions.PublishInstagramReel && !string.Equals(metaPublishingOptions.Mode, "Disabled", StringComparison.OrdinalIgnoreCase),
             _ => false

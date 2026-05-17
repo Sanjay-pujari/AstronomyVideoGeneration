@@ -7,6 +7,7 @@ public sealed class MetaPublishingOptions
     public bool Enabled { get; set; }
     public bool PublishFacebookReel { get; set; } = true;
     public bool PublishInstagramReel { get; set; }
+    public bool PublishFacebookLong { get; set; }
     public bool PublishFacebookFullVideo { get; set; }
     public bool PublishInstagramFullVideo { get; set; }
     public string Mode { get; set; } = "DryRun";
@@ -22,6 +23,8 @@ public sealed class MetaPublishingOptions
     public string PublicMediaBaseUrl { get; set; } = "";
     public bool PublicMediaUploadEnabled { get; set; }
     public bool RequirePublishedState { get; set; } = true;
+    public bool UsePosterFrameFallbackForFacebookReels { get; set; } = true;
     public bool UsePosterFrameFallbackForReels { get; set; } = true;
+    public double FacebookReelPosterFrameDurationSeconds { get; set; } = 0.75d;
     public double PosterFrameDurationSeconds { get; set; } = 0.75d;
 }
