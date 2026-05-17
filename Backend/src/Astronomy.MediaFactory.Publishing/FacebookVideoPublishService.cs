@@ -449,6 +449,17 @@ public sealed class FacebookVideoPublishService : IFacebookVideoPublishService
     private static async Task<MetaPublishResult> WriteResultAsync(string outputDirectory, MetaPublishResult result, CancellationToken cancellationToken)
     {
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "facebook-long-publish-result.json"), JsonSerializer.Serialize(result, JsonOptions), cancellationToken);
+        await ThumbnailPublishDiagnosticsWriter.WriteFromMetaResultAsync(outputDirectory, result, cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "facebook-video-thumbnail-diagnostics.json"), JsonSerializer.Serialize(new
+        {
+            thumbnailPath = result.ThumbnailPathUsed ?? result.UploadedThumbnailPath,
+            exists = !string.IsNullOrWhiteSpace(result.ThumbnailPathUsed ?? result.UploadedThumbnailPath) && File.Exists(result.ThumbnailPathUsed ?? result.UploadedThumbnailPath!),
+            fileSizeBytes = !string.IsNullOrWhiteSpace(result.ThumbnailPathUsed ?? result.UploadedThumbnailPath) && File.Exists(result.ThumbnailPathUsed ?? result.UploadedThumbnailPath!) ? new FileInfo(result.ThumbnailPathUsed ?? result.UploadedThumbnailPath!).Length : 0,
+            uploadAttempted = result.ThumbnailUploadAttempted,
+            uploadSuccess = result.ThumbnailUploadSuccess,
+            graphResponse = result.PostId ?? result.VideoId,
+            error = result.Error ?? result.ThumbnailWarning ?? result.Warning
+        }, JsonOptions), cancellationToken);
         return result;
     }
 

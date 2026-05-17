@@ -111,6 +111,11 @@ public sealed class FacebookVideoPublishServiceTests
         var diagnostics = await ReadDiagnosticsAsync(request.VideoPath);
         Assert.True(diagnostics.RootElement.GetProperty("thumbnailAttempted").GetBoolean());
         Assert.False(diagnostics.RootElement.GetProperty("thumbnailSuccess").GetBoolean());
+        var thumbnailDiagnosticsPath = Path.Combine(Path.GetDirectoryName(request.VideoPath)!, "facebook-video-thumbnail-diagnostics.json");
+        Assert.True(File.Exists(thumbnailDiagnosticsPath));
+        var thumbnailDiagnostics = await File.ReadAllTextAsync(thumbnailDiagnosticsPath);
+        Assert.Contains("thumbnail-long.jpg", thumbnailDiagnostics);
+        Assert.Contains("uploadAttempted", thumbnailDiagnostics);
     }
 
     private static TempMetaWorkspace CreateWorkspace(out MetaPublishRequest request, int videoSizeBytes)

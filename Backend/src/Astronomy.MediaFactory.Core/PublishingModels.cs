@@ -69,6 +69,25 @@ public sealed class PublishResult
     public DateTime PublishedUtc { get; init; } = DateTime.UtcNow;
 }
 
+public sealed class ThumbnailPublishDiagnostics
+{
+    public string Platform { get; init; } = string.Empty;
+    public string ContentType { get; init; } = string.Empty;
+    public string? VideoPath { get; init; }
+    public string? ThumbnailPath { get; init; }
+    public bool ThumbnailExists => !string.IsNullOrWhiteSpace(ThumbnailPath) && File.Exists(ThumbnailPath);
+    public long ThumbnailFileSizeBytes => ThumbnailExists ? new FileInfo(ThumbnailPath!).Length : 0;
+    public string ThumbnailSource { get; init; } = ThumbnailSources.None;
+    public bool UploadAttempted { get; init; }
+    public bool UploadSuccess { get; init; }
+    public string? UploadedVideoId { get; init; }
+    public string? PostId { get; init; }
+    public string? Warning { get; init; }
+    public string? Error { get; init; }
+    public string? Reason { get; init; }
+    public DateTime CreatedUtc { get; init; } = DateTime.UtcNow;
+}
+
 public sealed class YouTubeChannelInfo
 {
     public string ChannelId { get; init; } = string.Empty;

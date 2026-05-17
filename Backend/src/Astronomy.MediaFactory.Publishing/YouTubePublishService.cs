@@ -71,6 +71,7 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 PublishedUtc = DateTime.UtcNow
             };
             await WriteResultAndPersistAsync(outputDirectory, request.PipelineRunId, normalizedRequest, result, cancellationToken);
+            await ThumbnailPublishDiagnosticsWriter.WriteFromPublishResultAsync(outputDirectory, result, cancellationToken);
             return result;
         }
 
@@ -126,6 +127,7 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 PublishedUtc = DateTime.UtcNow
             };
             await WriteResultAndPersistAsync(outputDirectory, request.PipelineRunId, normalizedRequest, result, cancellationToken);
+            await ThumbnailPublishDiagnosticsWriter.WriteFromPublishResultAsync(outputDirectory, result, cancellationToken);
             return result;
         }
         catch (Exception ex)
@@ -150,6 +152,7 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 PublishedUtc = DateTime.UtcNow
             };
             await WriteResultAndPersistAsync(outputDirectory, request.PipelineRunId, normalizedRequest, result, cancellationToken);
+            await ThumbnailPublishDiagnosticsWriter.WriteFromPublishResultAsync(outputDirectory, result, cancellationToken);
             return result;
         }
     }
@@ -241,7 +244,8 @@ public sealed class YouTubePublishService : IYouTubePublishService
             diagnostics.UploadStatus = "Skipped";
             if (request.IsShort && !_youTubeOptions.UploadCustomThumbnailForShorts)
             {
-                diagnostics.Warning = "YouTube Shorts custom thumbnail upload skipped because YouTube:UploadCustomThumbnailForShorts=false.";
+                diagnostics.Reason = "YouTube Shorts custom thumbnail not uploaded by API/path missing/platform limitation";
+                diagnostics.Warning = $"{diagnostics.Reason} (YouTube:UploadCustomThumbnailForShorts=false.)";
                 await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
                 _logger.LogWarning("{Warning}", diagnostics.Warning);
                 return ThumbnailUploadOutcome.Skipped(diagnostics.Warning);
@@ -258,9 +262,14 @@ public sealed class YouTubePublishService : IYouTubePublishService
             if (validationError is not null)
             {
                 diagnostics.Error = validationError;
+                if (request.IsShort)
+                {
+                    diagnostics.Reason = "YouTube Shorts custom thumbnail not uploaded by API/path missing/platform limitation";
+                    diagnostics.Warning = diagnostics.Reason;
+                }
                 diagnostics.UploadAttempted = false;
                 diagnostics.UploadSuccess = false;
-                diagnostics.Warning = validationError;
+                diagnostics.Warning = request.IsShort ? $"{diagnostics.Reason}: {validationError}" : validationError;
                 diagnostics.UploadStatus = "Skipped";
                 await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
                 _logger.LogWarning("Skipping YouTube thumbnail upload for {VideoId}: {Reason}", videoId, validationError);
@@ -564,6 +573,10 @@ public sealed class YouTubePublishService : IYouTubePublishService
 
     private static async Task WriteThumbnailDiagnosticsAsync(string outputDirectory, YouTubeThumbnailUploadDiagnostics diagnostics, CancellationToken cancellationToken)
     {
+        var fileName = string.Equals(diagnostics.ContentKind, PlatformThumbnailContentTypes.ShortVideo, StringComparison.OrdinalIgnoreCase)
+            ? "youtube-shorts-thumbnail-diagnostics.json"
+            : "youtube-long-video-thumbnail-diagnostics.json";
+        await WriteJsonAsync(Path.Combine(outputDirectory, fileName), diagnostics, cancellationToken);
         await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-thumbnail-upload-diagnostics.json"), diagnostics, cancellationToken);
         if (string.Equals(diagnostics.ContentKind, PlatformThumbnailContentTypes.ShortVideo, StringComparison.OrdinalIgnoreCase))
         {
@@ -684,4 +697,5 @@ internal sealed class YouTubeThumbnailUploadDiagnostics
     public bool? ThumbnailUploadSuccess { get; set; }
     public string? ThumbnailWarning { get; set; }
     public string? RecommendedAction { get; set; }
+    public string? Reason { get; set; }
 }
