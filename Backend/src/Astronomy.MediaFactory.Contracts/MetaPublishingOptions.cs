@@ -20,6 +20,9 @@ public sealed class MetaPublishingOptions
     public bool TreatProcessingTimeoutAsSuccess { get; set; } = true;
     public int InstagramContainerPollSeconds { get; set; } = 10;
     public int InstagramContainerMaxAttempts { get; set; } = 18;
+    public int InstagramPollAttempts { get; set; } = 20;
+    public int InstagramPollDelaySeconds { get; set; } = 15;
+    public bool InstagramTreatProcessingTimeoutAsSuccess { get; set; } = true;
     public string PublicMediaBaseUrl { get; set; } = "";
     public bool PublicMediaUploadEnabled { get; set; }
     public bool RequirePublishedState { get; set; } = true;

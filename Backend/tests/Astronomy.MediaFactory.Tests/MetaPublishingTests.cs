@@ -461,6 +461,59 @@ public sealed class MetaPublishingTests
         Assert.Equal(2, handler.Requests.Count(x => x.Phase == "ig-poll"));
     }
 
+
+    [Fact]
+    public async Task InstagramPollingTimeout_ReturnsSuccessWithWarningDiagnostics()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { InstagramContainerStatuses = new Queue<string>(new[] { "IN_PROGRESS" }) };
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramPollAttempts = 1, InstagramPollDelaySeconds = 0 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.False(result.PublishedVerified);
+        Assert.Equal("Instagram Reel container still processing when verification timeout occurred.", result.Warning);
+        Assert.DoesNotContain(handler.Requests, x => x.Phase == "ig-publish");
+        var diagnosticsJson = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "instagram-reel-polling-diagnostics.json"));
+        using var diagnostics = JsonDocument.Parse(diagnosticsJson);
+        Assert.Equal("creation-123", diagnostics.RootElement.GetProperty("creationId").GetString());
+        Assert.Equal(1, diagnostics.RootElement.GetProperty("pollingAttempts").GetInt32());
+        Assert.Equal("IN_PROGRESS", diagnostics.RootElement.GetProperty("lastKnownStatus").GetString());
+        Assert.True(diagnostics.RootElement.GetProperty("timedOut").GetBoolean());
+        Assert.False(diagnostics.RootElement.GetProperty("publishedVerified").GetBoolean());
+        Assert.Equal("Instagram Reel container still processing when verification timeout occurred.", diagnostics.RootElement.GetProperty("warning").GetString());
+    }
+
+    [Fact]
+    public async Task InstagramExplicitMetaContainerError_FailsProperly()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { InstagramContainerStatuses = new Queue<string>(new[] { "ERROR" }) };
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramPollAttempts = 1, InstagramPollDelaySeconds = 0 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.False(result.Success);
+        Assert.Equal("Instagram Reel media container failed: ERROR.", result.Error);
+        Assert.DoesNotContain(handler.Requests, x => x.Phase == "ig-publish");
+    }
+
+    [Fact]
+    public async Task InstagramExternalCancellation_StillCancelsPipeline()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4", InstagramPollAttempts = 1, InstagramPollDelaySeconds = 0 });
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.PublishForPipelineRunAsync(run.Id, "instagram-reel", cts.Token));
+    }
+
     [Fact]
     public async Task InstagramMediaPublish_IsCalledAfterFinished()
     {
