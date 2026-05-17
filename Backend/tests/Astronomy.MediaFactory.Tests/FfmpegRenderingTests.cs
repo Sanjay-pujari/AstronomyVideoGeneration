@@ -174,6 +174,7 @@ public sealed class FfmpegRenderingTests
             ProbeDurationsByPath =
             {
                 [audioPath] = 6d,
+                [sceneAudioPath] = 6d,
                 [Path.Combine(tempDir.FullName, "combined.mp4")] = 6d
             }
         };
@@ -226,14 +227,15 @@ public sealed class FfmpegRenderingTests
         }, CancellationToken.None));
 
         Assert.Contains("Scene #1 validation failed", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("missing visualPath", ex.Message, StringComparison.Ordinal);
+        Assert.Contains($"visual file not found: {Path.Combine(tempDir.FullName, "missing.png")}", ex.Message, StringComparison.Ordinal);
         Assert.Contains(Path.Combine(tempDir.FullName, "shorts-render-manifest-final.json"), fileSystem.TextWrites.Keys);
         var diagnosticJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "render-segment-failure-scene-0.json")];
         using var diagnostic = JsonDocument.Parse(diagnosticJson);
         Assert.Equal(0, diagnostic.RootElement.GetProperty("sceneIndexZeroBased").GetInt32());
         Assert.Equal(1, diagnostic.RootElement.GetProperty("sceneIndexOneBased").GetInt32());
+        Assert.Equal(1, diagnostic.RootElement.GetProperty("sceneIndex").GetInt32());
         Assert.Equal("scene-001", diagnostic.RootElement.GetProperty("sceneId").GetString());
-        Assert.Contains("missing visualPath", diagnostic.RootElement.GetProperty("validationError").GetString(), StringComparison.Ordinal);
+        Assert.Contains($"visual file not found: {Path.Combine(tempDir.FullName, "missing.png")}", diagnostic.RootElement.GetProperty("validationError").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -268,7 +270,7 @@ public sealed class FfmpegRenderingTests
         }, CancellationToken.None));
 
         Assert.Contains("Scene #2 validation failed", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("missing audioPath", ex.Message, StringComparison.Ordinal);
+        Assert.Contains($"audio file not found: {Path.Combine(tempDir.FullName, "missing.mp3")}", ex.Message, StringComparison.Ordinal);
         Assert.Contains(Path.Combine(tempDir.FullName, "render-segment-failure-scene-1.json"), fileSystem.TextWrites.Keys);
     }
 
@@ -300,8 +302,17 @@ public sealed class FfmpegRenderingTests
         }, CancellationToken.None));
 
         Assert.Contains("FFmpeg segmented clip generation failed for scene #1", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("segment encoder exploded", ex.Message, StringComparison.Ordinal);
         var diagnosticJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "render-segment-failure-scene-0.json")];
         using var diagnostic = JsonDocument.Parse(diagnosticJson);
+        Assert.Equal(1, diagnostic.RootElement.GetProperty("sceneIndex").GetInt32());
+        Assert.Equal("scene-001", diagnostic.RootElement.GetProperty("sceneId").GetString());
+        Assert.Equal("Mars", diagnostic.RootElement.GetProperty("objectName").GetString());
+        Assert.Equal(scenePath, diagnostic.RootElement.GetProperty("visualPath").GetString());
+        Assert.Equal(sceneAudioPath, diagnostic.RootElement.GetProperty("audioPath").GetString());
+        Assert.Equal(6d, diagnostic.RootElement.GetProperty("duration").GetDouble());
+        Assert.Equal(Path.Combine(tempDir.FullName, "segment-001.mp4"), diagnostic.RootElement.GetProperty("outputSegmentPath").GetString());
+        Assert.Equal("ffmpeg stdout", diagnostic.RootElement.GetProperty("stdout").GetString());
         Assert.Equal("segment encoder exploded", diagnostic.RootElement.GetProperty("stderr").GetString());
         Assert.Equal(1, diagnostic.RootElement.GetProperty("exitCode").GetInt32());
         Assert.False(diagnostic.RootElement.GetProperty("timedOut").GetBoolean());
