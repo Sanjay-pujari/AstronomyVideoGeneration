@@ -16,6 +16,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private readonly IFileSystem _fileSystem;
     private readonly ILogger<FfmpegVideoRenderService> _logger;
     private const string EncodingReportFileName = "video-encoding-report.json";
+    private static readonly JsonSerializerOptions DiagnosticJsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public FfmpegVideoRenderService(
         IOptions<RenderingOptions> options,
@@ -52,17 +53,20 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await _fileSystem.WriteAllTextAsync(concatPath, plan.ConcatInputContent, cancellationToken);
         await _fileSystem.WriteAllTextAsync(captionMetadataPath, plan.CaptionMetadataJson, cancellationToken);
         await _fileSystem.WriteAllTextAsync(subtitleScaffoldPath, plan.SubtitleScaffold, cancellationToken);
+        await WriteShortsRenderManifestFinalAsync(manifest, plan, outputDirectory, cancellationToken);
 
-        var missingAssets = FindMissingAssets(manifest, plan);
-        if (missingAssets.Count > 0)
+        var hasSegmentedAudio = plan.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.AudioPath));
+        if (!hasSegmentedAudio)
         {
-            var validationError = BuildMissingAssetMessage(missingAssets);
-            _logger.LogWarning("Skipping FFmpeg render because input validation failed: {Reason}", validationError);
-            await _fileSystem.WriteAllTextAsync(ffmpegLogPath, validationError, cancellationToken);
-            throw new InvalidOperationException($"Video render input validation failed: {validationError}");
+            var missingAssets = FindMissingAssets(manifest, plan);
+            if (missingAssets.Count > 0)
+            {
+                var validationError = BuildMissingAssetMessage(missingAssets);
+                _logger.LogWarning("Skipping FFmpeg render because input validation failed: {Reason}", validationError);
+                await _fileSystem.WriteAllTextAsync(ffmpegLogPath, validationError, cancellationToken);
+                throw new InvalidOperationException($"Video render input validation failed: {validationError}");
+            }
         }
-
-        var hasSegmentedAudio = plan.Scenes.Any(s => !string.IsNullOrWhiteSpace(s.AudioPath) && File.Exists(s.AudioPath));
         if (hasSegmentedAudio)
         {
             await RenderFromSegmentsAsync(manifest, plan, outputDirectory, segmentConcatPath, cancellationToken);
@@ -109,20 +113,23 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         {
             var scene = plan.Scenes[i];
             var sceneAudioPath = scene.AudioPath;
-            if (string.IsNullOrWhiteSpace(sceneAudioPath) || !File.Exists(sceneAudioPath))
+            var segmentOutputPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
+            var (outputWidth, outputHeight) = GetOutputSize(manifest);
+            var validationErrors = ValidateSegmentInputs(scene, i, outputDirectory, segmentOutputPath, outputWidth, outputHeight, requireAudio: true);
+            if (validationErrors.Count > 0)
             {
-                throw new InvalidOperationException($"Segmented narration requires audio for every scene; missing audio for scene #{i + 1} ({scene.SceneId ?? scene.Caption}).");
+                var message = $"Scene #{i + 1} validation failed: {string.Join("; ", validationErrors)}";
+                await WriteSegmentValidationFailureDiagnosticsAsync(scene, i, segmentOutputPath, outputDirectory, outputWidth, outputHeight, message, cancellationToken);
+                throw new InvalidOperationException(message);
             }
 
-            var segmentOutputPath = Path.Combine(outputDirectory, $"segment-{i + 1:000}.mp4");
-            var audioDurationSeconds = await ProbeMediaDurationSecondsAsync(sceneAudioPath, cancellationToken);
+            var audioDurationSeconds = await ProbeMediaDurationSecondsAsync(sceneAudioPath!, cancellationToken);
             if (audioDurationSeconds <= 0)
             {
                 audioDurationSeconds = Math.Max(1d, scene.DurationSeconds);
                 _logger.LogWarning("Could not determine audio duration for scene #{SceneIndex}; using manifest duration {DurationSeconds:F3}s.", i + 1, audioDurationSeconds);
             }
 
-            var (outputWidth, outputHeight) = GetOutputSize(manifest);
             var isShort = IsShortManifest(manifest);
             var fps = isShort ? GetShortSafeFps() : Math.Max(1, _options.KenBurnsFps > 0 ? _options.KenBurnsFps : _options.FrameRate);
             var lockedDurationSeconds = audioDurationSeconds;
@@ -131,12 +138,28 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var segmentFilter = BuildSegmentVisualFilter(outputWidth, outputHeight, fps, effects, motionProfile);
             var durationArgument = lockedDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             var encodingPreset = ResolveEncodingPreset(manifest);
-            var segmentArguments = $"-y -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -i \"{NormalizePath(sceneAudioPath)}\" -vf \"{segmentFilter}\" -t {durationArgument} {BuildVideoEncodeArguments(encodingPreset)} -r {fps} -c:a aac -b:a {encodingPreset.AudioBitrate} -f mp4 \"{NormalizePath(segmentOutputPath)}\"";
+            var segmentArguments = $"-y -loop 1 -i {QuoteFfmpegPath(scene.VisualPath)} -i {QuoteFfmpegPath(sceneAudioPath!)} -vf \"{segmentFilter}\" -t {durationArgument} {BuildVideoEncodeArguments(encodingPreset)} -r {fps} -c:a aac -b:a {encodingPreset.AudioBitrate} -f mp4 {QuoteFfmpegPath(segmentOutputPath)}";
             speechDiagnostics.Add(CreateSpeechSpeedDiagnostic(scene, i, audioDurationSeconds, lockedDurationSeconds));
-            var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
+            ProcessExecutionResult segmentResult;
+            try
+            {
+                var timeout = TimeSpan.FromSeconds(CalculateEffectiveSegmentTimeoutSeconds(_options.FfmpegSegmentTimeoutSeconds, lockedDurationSeconds));
+                segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken, timeout);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                segmentResult = new ProcessExecutionResult(-1, string.Empty, string.Empty, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, _options.FfmpegPath, segmentArguments, "FFmpeg segment render was canceled by timeout.", true);
+            }
+            catch (Exception ex)
+            {
+                segmentResult = new ProcessExecutionResult(-1, string.Empty, string.Empty, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, _options.FfmpegPath, segmentArguments, ex.ToString(), false);
+            }
+
             if (segmentResult.ExitCode != 0 || !File.Exists(segmentOutputPath))
             {
-                throw new InvalidOperationException($"FFmpeg segmented clip generation failed for scene #{i + 1}.");
+                await WriteSegmentFailureDiagnosticsAsync(scene, i, segmentOutputPath, outputDirectory, segmentArguments, segmentResult, cancellationToken);
+                var message = $"FFmpeg segmented clip generation failed for scene #{i + 1}. See {Path.Combine(outputDirectory, $"render-segment-failure-scene-{i}.json")} for details.";
+                throw new InvalidOperationException(message);
             }
 
             var visualDurationSeconds = await ProbeMediaDurationSecondsAsync(segmentOutputPath, cancellationToken);
@@ -572,6 +595,37 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         => isShort && _options.ShortKenBurnsZoomEnd > 0d ? _options.ShortKenBurnsZoomEnd : _options.KenBurnsZoomEnd;
 
 
+
+    private sealed record ShortRenderManifestEntry(
+        int RenderOrder,
+        int SceneIndex,
+        string? SceneId,
+        string? ObjectName,
+        string VisualPath,
+        string? AudioPath,
+        double Duration,
+        string OutputSegmentPath);
+
+    private sealed record SegmentFailureDiagnostics(
+        int SceneIndexZeroBased,
+        int SceneIndexOneBased,
+        string? SceneId,
+        string SceneTitle,
+        string? SceneType,
+        string? ObjectName,
+        string VisualPath,
+        string? AudioPath,
+        double DurationSeconds,
+        string OutputSegmentPath,
+        string FfmpegCommand,
+        string Stdout,
+        string Stderr,
+        int? ExitCode,
+        bool TimedOut,
+        int? OutputWidth,
+        int? OutputHeight,
+        string ValidationError);
+
     private sealed record VideoEncodingReport(
         string PresetName,
         string Resolution,
@@ -746,8 +800,14 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             return 0d;
         }
 
-        var probeArguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{NormalizePath(mediaPath)}\"";
+        var probeArguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 {QuoteFfmpegPath(mediaPath)}";
         var probeResult = await _processRunner.ExecuteAsync(ffprobePath, probeArguments, cancellationToken);
+        _logger.LogInformation(
+            "ffprobe duration probe completed for {MediaPath} in {DurationMs:F0}ms with exitCode={ExitCode} timedOut={TimedOut}.",
+            mediaPath,
+            probeResult.Duration.TotalMilliseconds,
+            probeResult.ExitCode,
+            probeResult.TimedOut);
         if (probeResult.ExitCode != 0)
         {
             return 0d;
@@ -760,6 +820,212 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             out var durationSeconds)
             ? Math.Max(0d, durationSeconds)
             : 0d;
+    }
+
+
+    private async Task WriteShortsRenderManifestFinalAsync(RenderManifest manifest, RenderPlan plan, string outputDirectory, CancellationToken cancellationToken)
+    {
+        if (!IsShortManifest(manifest))
+        {
+            return;
+        }
+
+        var entries = plan.Scenes.Select((scene, index) => new ShortRenderManifestEntry(
+            RenderOrder: scene.Order,
+            SceneIndex: index,
+            SceneId: scene.SceneId,
+            ObjectName: scene.ObjectName,
+            VisualPath: scene.VisualPath,
+            AudioPath: scene.AudioPath,
+            Duration: scene.DurationSeconds,
+            OutputSegmentPath: Path.Combine(outputDirectory, $"segment-{index + 1:000}.mp4"))).ToList();
+        var json = JsonSerializer.Serialize(entries, DiagnosticJsonOptions);
+        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "shorts-render-manifest-final.json"), json, cancellationToken);
+    }
+
+    private async Task WriteSegmentValidationFailureDiagnosticsAsync(
+        RenderPlanScene scene,
+        int sceneIndex,
+        string outputSegmentPath,
+        string outputDirectory,
+        int outputWidth,
+        int outputHeight,
+        string validationError,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.WriteSegmentDiagnostics)
+        {
+            return;
+        }
+
+        var diagnostics = new SegmentFailureDiagnostics(
+            SceneIndexZeroBased: sceneIndex,
+            SceneIndexOneBased: sceneIndex + 1,
+            SceneId: scene.SceneId,
+            SceneTitle: scene.Caption,
+            SceneType: scene.SceneType,
+            ObjectName: scene.ObjectName,
+            VisualPath: scene.VisualPath,
+            AudioPath: scene.AudioPath,
+            DurationSeconds: scene.DurationSeconds,
+            OutputSegmentPath: outputSegmentPath,
+            FfmpegCommand: string.Empty,
+            Stdout: string.Empty,
+            Stderr: validationError,
+            ExitCode: null,
+            TimedOut: false,
+            OutputWidth: outputWidth,
+            OutputHeight: outputHeight,
+            ValidationError: validationError);
+        LogSegmentFailureDiagnostics(diagnostics);
+        await WriteSegmentFailureDiagnosticsFileAsync(outputDirectory, sceneIndex, diagnostics, cancellationToken);
+    }
+
+    private async Task WriteSegmentFailureDiagnosticsAsync(
+        RenderPlanScene scene,
+        int sceneIndex,
+        string outputSegmentPath,
+        string outputDirectory,
+        string segmentArguments,
+        ProcessExecutionResult result,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.WriteSegmentDiagnostics)
+        {
+            return;
+        }
+
+        var diagnostics = new SegmentFailureDiagnostics(
+            SceneIndexZeroBased: sceneIndex,
+            SceneIndexOneBased: sceneIndex + 1,
+            SceneId: scene.SceneId,
+            SceneTitle: scene.Caption,
+            SceneType: scene.SceneType,
+            ObjectName: scene.ObjectName,
+            VisualPath: scene.VisualPath,
+            AudioPath: scene.AudioPath,
+            DurationSeconds: scene.DurationSeconds,
+            OutputSegmentPath: outputSegmentPath,
+            FfmpegCommand: $"{_options.FfmpegPath} {segmentArguments}".TrimEnd(),
+            Stdout: result.StandardOutput,
+            Stderr: string.IsNullOrWhiteSpace(result.StandardError) ? result.ExceptionText : result.StandardError,
+            ExitCode: result.ExitCode,
+            TimedOut: result.TimedOut,
+            OutputWidth: null,
+            OutputHeight: null,
+            ValidationError: string.Empty);
+
+        LogSegmentFailureDiagnostics(diagnostics);
+        await WriteSegmentFailureDiagnosticsFileAsync(outputDirectory, sceneIndex, diagnostics, cancellationToken);
+    }
+
+    private void LogSegmentFailureDiagnostics(SegmentFailureDiagnostics diagnostics)
+    {
+        _logger.LogError(
+            "FFmpeg segment render failed. sceneIndexZeroBased={SceneIndexZeroBased}; sceneIndexOneBased={SceneIndexOneBased}; sceneId={SceneId}; sceneTitle={SceneTitle}; sceneType={SceneType}; objectName={ObjectName}; visualPath={VisualPath}; audioPath={AudioPath}; durationSeconds={DurationSeconds}; outputSegmentPath={OutputSegmentPath}; command={Command}; stdout={Stdout}; stderr={Stderr}; exitCode={ExitCode}; timedOut={TimedOut}",
+            diagnostics.SceneIndexZeroBased,
+            diagnostics.SceneIndexOneBased,
+            diagnostics.SceneId,
+            diagnostics.SceneTitle,
+            diagnostics.SceneType,
+            diagnostics.ObjectName,
+            diagnostics.VisualPath,
+            diagnostics.AudioPath,
+            diagnostics.DurationSeconds,
+            diagnostics.OutputSegmentPath,
+            diagnostics.FfmpegCommand,
+            diagnostics.Stdout,
+            diagnostics.Stderr,
+            diagnostics.ExitCode,
+            diagnostics.TimedOut);
+    }
+
+    private async Task WriteSegmentFailureDiagnosticsFileAsync(string outputDirectory, int sceneIndex, SegmentFailureDiagnostics diagnostics, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(outputDirectory, $"render-segment-failure-scene-{sceneIndex}.json");
+        var json = JsonSerializer.Serialize(diagnostics, DiagnosticJsonOptions);
+        await _fileSystem.WriteAllTextAsync(path, json, cancellationToken.IsCancellationRequested ? CancellationToken.None : cancellationToken);
+    }
+
+    private static List<string> ValidateSegmentInputs(RenderPlanScene scene, int sceneIndex, string outputDirectory, string outputSegmentPath, int outputWidth, int outputHeight, bool requireAudio)
+    {
+        var errors = new List<string>();
+        if (string.IsNullOrWhiteSpace(scene.VisualPath))
+        {
+            errors.Add("missing visualPath");
+        }
+        else
+        {
+            ValidatePath(scene.VisualPath, "visualPath", mustExist: true, errors);
+        }
+
+        if (requireAudio && string.IsNullOrWhiteSpace(scene.AudioPath))
+        {
+            errors.Add("missing audioPath");
+        }
+        else if (!string.IsNullOrWhiteSpace(scene.AudioPath))
+        {
+            ValidatePath(scene.AudioPath, "audioPath", mustExist: true, errors);
+        }
+
+        if (scene.DurationSeconds <= 0.2d)
+        {
+            errors.Add($"durationSeconds must be greater than 0.2 for scene #{sceneIndex + 1}; actual {scene.DurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        }
+
+        if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
+        {
+            errors.Add($"output directory does not exist: '{outputDirectory}'");
+        }
+
+        if (outputWidth <= 0 || outputHeight <= 0)
+        {
+            errors.Add($"dimensions are invalid: {outputWidth}x{outputHeight}");
+        }
+
+        ValidatePath(outputSegmentPath, "outputSegmentPath", mustExist: false, errors);
+        return errors;
+    }
+
+    private static void ValidatePath(string path, string fieldName, bool mustExist, ICollection<string> errors)
+    {
+        if (path.IndexOfAny(['\0', '\r', '\n']) >= 0)
+        {
+            errors.Add($"{fieldName} is not safe to quote");
+            return;
+        }
+
+        try
+        {
+            _ = QuoteFfmpegPath(path);
+        }
+        catch (ArgumentException ex)
+        {
+            errors.Add($"{fieldName} is not safe to quote: {ex.Message}");
+            return;
+        }
+
+        if (mustExist && !File.Exists(path))
+        {
+            errors.Add($"missing {fieldName}: '{path}'");
+            return;
+        }
+
+        if (mustExist)
+        {
+            try
+            {
+                using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                if (!stream.CanRead)
+                {
+                    errors.Add($"{fieldName} is not readable: '{path}'");
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{fieldName} is not readable: '{path}' ({ex.GetType().Name}: {ex.Message})");
+            }
+        }
     }
 
     private string ResolveFfprobePath()
@@ -802,6 +1068,16 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     private static string NormalizePath(string path)
         => path.Replace('\\', '/');
+
+    private static string QuoteFfmpegPath(string path)
+    {
+        if (path.IndexOfAny(['\0', '\r', '\n']) >= 0)
+        {
+            throw new ArgumentException("Path contains control characters.", nameof(path));
+        }
+
+        return $"\"{NormalizePath(path).Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+    }
 
     private string BuildSegmentTransitionArguments(IReadOnlyList<string> segmentPaths, IReadOnlyList<double> segmentDurationsSeconds, string segmentConcatPath, string combinedPath, bool transitionsEnabled, double transitionDurationSeconds, VideoEncodingPreset preset)
     {
