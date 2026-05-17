@@ -81,6 +81,9 @@ public sealed class MetaPublishRequest
     public string Caption { get; init; } = string.Empty;
     public string ShortTitle { get; init; } = string.Empty;
     public bool IsReel { get; init; } = true;
+    public bool PosterFrameApplied { get; init; }
+    public string PosterFrameImagePath { get; init; } = string.Empty;
+    public double PosterFrameDurationSeconds { get; init; }
 }
 
 public sealed class MetaPublishResult
@@ -102,6 +105,8 @@ public sealed class MetaPublishResult
     public bool PublishedVerified { get; init; }
     public string? Warning { get; init; }
     public List<string> Warnings { get; init; } = [];
+    public bool PosterFrameApplied { get; init; }
+    public string? PosterFrameVideoPath { get; init; }
     public DateTime PublishedUtc { get; init; } = DateTime.UtcNow;
 }
 

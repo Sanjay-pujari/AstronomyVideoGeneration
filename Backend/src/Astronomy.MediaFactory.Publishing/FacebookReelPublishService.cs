@@ -16,6 +16,7 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
     public const string MetaAppDevelopmentModeWarning = "Meta app may be in Development mode. Content created by apps in development may not be publicly visible to users outside app roles. Move app to Live mode and complete App Review for required permissions.";
     private const string GraphEndpoint = "https://graph.facebook.com/v23.0";
     private const string VerificationTimeoutWarning = "Facebook Reel uploaded but public visibility could not be verified before processing timeout.";
+    private const string PosterFrameFallbackWarning = "Meta custom cover was not accepted. Poster-frame fallback video was uploaded.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     private readonly HttpClient _httpClient;
@@ -59,6 +60,7 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             else if (mode == "DryRun")
             {
                 var thumbnailWarning = BuildUnsupportedThumbnailWarning(request);
+                var warnings = BuildWarnings(thumbnailWarning, request.PosterFrameApplied);
                 result = new MetaPublishResult
                 {
                     Success = true,
@@ -70,8 +72,10 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
                     ThumbnailUploadAttempted = false,
                     ThumbnailUploadSuccess = false,
                     ThumbnailWarning = thumbnailWarning,
-                    Warning = thumbnailWarning,
-                    Warnings = string.IsNullOrWhiteSpace(thumbnailWarning) ? [] : [thumbnailWarning],
+                    Warning = warnings.FirstOrDefault(),
+                    Warnings = warnings,
+                    PosterFrameApplied = request.PosterFrameApplied,
+                    PosterFrameVideoPath = request.PosterFrameApplied ? request.VideoPath : null,
                     PublishedUtc = DateTime.UtcNow
                 };
             }
@@ -134,12 +138,8 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             "Facebook Reel publish finish",
             cancellationToken);
 
-        var warnings = new List<string>();
         var thumbnailWarning = BuildUnsupportedThumbnailWarning(request);
-        if (!string.IsNullOrWhiteSpace(thumbnailWarning))
-        {
-            warnings.Add(thumbnailWarning);
-        }
+        var warnings = BuildWarnings(thumbnailWarning, request.PosterFrameApplied);
         var verification = await VerifyPublishedAsync(pageId, pageAccessToken, start.VideoId, cancellationToken);
 
         var postId = FirstNonBlank(finish.PostId, finish.Id);
@@ -191,6 +191,8 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             PublishedVerified = verification.PublishedVerified,
             Warning = primaryWarning,
             Warnings = warnings,
+            PosterFrameApplied = request.PosterFrameApplied,
+            PosterFrameVideoPath = request.PosterFrameApplied ? request.VideoPath : null,
             PublishedUtc = DateTime.UtcNow
         }, diagnostics);
     }
@@ -409,6 +411,22 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
 
     private static MetaPublishResult Failed(string mode, string error)
         => new() { Success = false, Platform = "Facebook", ContentType = PlatformThumbnailContentTypes.Reel, Mode = mode, Error = error, ThumbnailWarning = error, PublishedUtc = DateTime.UtcNow };
+
+    private static List<string> BuildWarnings(string? thumbnailWarning, bool posterFrameApplied)
+    {
+        var warnings = new List<string>();
+        if (!string.IsNullOrWhiteSpace(thumbnailWarning))
+        {
+            warnings.Add(thumbnailWarning);
+        }
+
+        if (posterFrameApplied)
+        {
+            warnings.Add(PosterFrameFallbackWarning);
+        }
+
+        return warnings;
+    }
 
     private string? BuildUnsupportedThumbnailWarning(MetaPublishRequest request)
     {

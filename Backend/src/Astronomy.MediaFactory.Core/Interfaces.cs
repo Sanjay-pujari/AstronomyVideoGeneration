@@ -96,6 +96,24 @@ public interface IMetaPublishService
         CancellationToken cancellationToken = default);
 }
 
+public interface IMetaPosterFrameFallbackService
+{
+    Task<MetaPosterFrameFallbackResult> ApplyAsync(
+        string outputDirectory,
+        string inputShortVideoPath,
+        string posterFrameImagePath,
+        double durationSeconds,
+        CancellationToken cancellationToken);
+}
+
+public sealed record MetaPosterFrameFallbackResult(
+    bool PosterFrameApplied,
+    string PosterFrameImagePath,
+    double PosterFrameDurationSeconds,
+    string InputShortVideoPath,
+    string OutputMetaVideoPath,
+    string Reason);
+
 public interface IFacebookReelPublishService
 {
     Task<MetaPublishResult> PublishReelAsync(
