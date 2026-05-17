@@ -1,4 +1,7 @@
+using System.IO;
+using System.Net;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
@@ -23,6 +26,10 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
     private readonly IPublicMediaStorageService? _publicMediaStorageService;
     private readonly IMetaThumbnailAssetPublisher? _thumbnailAssetPublisher;
     private readonly ILogger<InstagramReelPublishService> _logger;
+    private int _graphRetryAttempts;
+    private int _graphTransientFailureCount;
+    private string? _lastGraphError;
+    private int? _lastGraphHttpStatusCode;
 
     public InstagramReelPublishService(
         HttpClient httpClient,
@@ -123,8 +130,8 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         }
         catch (Exception ex) when (ex is InvalidOperationException or FileNotFoundException or JsonException or HttpRequestException)
         {
-            _logger.LogWarning(ex, "Instagram Reel publish failed for pipeline run {PipelineRunId}.", request.PipelineRunId);
-            result = Failed(mode, ex.Message);
+            _logger.LogWarning("Instagram Reel publish failed for pipeline run {PipelineRunId}. Error={Error}", request.PipelineRunId, RedactAccessToken(ex.Message));
+            result = Failed(mode, RedactAccessToken(ex.Message) ?? ex.Message);
         }
 
         await WritePublicMediaUploadResultAsync(outputDirectory, request.VideoPath, publicMediaUpload, null, cancellationToken);
@@ -202,7 +209,11 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             PollingAttempts = poll.Attempts,
             LastKnownStatus = FirstNonBlank(poll.StatusCode, poll.Status),
             TimedOut = poll.TimedOut,
-            PublishedVerified = false
+            PublishedVerified = false,
+            LastGraphError = RedactAccessToken(poll.LastGraphError),
+            TransientFailureCount = poll.TransientFailureCount,
+            GraphRetryAttempts = poll.GraphRetryAttempts,
+            LastHttpStatusCode = poll.LastHttpStatusCode
         };
 
         if (!poll.Finished)
@@ -335,6 +346,10 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         var pollDelay = TimeSpan.FromSeconds(Math.Max(0, configuredDelaySeconds));
         InstagramContainerStatus? latest = null;
         var attempts = 0;
+        var startingGraphRetryAttempts = _graphRetryAttempts;
+        var startingTransientFailureCount = _graphTransientFailureCount;
+        string? lastTransientError = null;
+        int? lastTransientStatusCode = null;
 
         try
         {
@@ -347,28 +362,45 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
                 }
 
                 attempts = attempt;
-                latest = await GetGraphAsync<InstagramContainerStatus>($"{GraphEndpoint}/{Uri.EscapeDataString(creationId)}?fields=status_code,status&access_token={Uri.EscapeDataString(accessToken)}", "Instagram Reel container status", externalCancellationToken);
-                _logger.LogInformation("Instagram Reel container poll {Attempt}/{MaxAttempts} for creation {CreationId}: status_code={StatusCode}.", attempt, maxAttempts, creationId, latest?.StatusCode ?? "unknown");
+                try
+                {
+                    latest = await GetGraphAsync<InstagramContainerStatus>($"{GraphEndpoint}/{Uri.EscapeDataString(creationId)}?fields=status_code,status&access_token={Uri.EscapeDataString(accessToken)}", "Instagram Reel container status", externalCancellationToken);
+                    if (_graphTransientFailureCount > startingTransientFailureCount)
+                    {
+                        lastTransientError = _lastGraphError;
+                        lastTransientStatusCode = _lastGraphHttpStatusCode;
+                    }
+
+                    _logger.LogInformation("Instagram Reel container poll {Attempt}/{MaxAttempts} for creation {CreationId}: status_code={StatusCode}.", attempt, maxAttempts, creationId, latest?.StatusCode ?? "unknown");
+                }
+                catch (HttpRequestException ex) when (!externalCancellationToken.IsCancellationRequested)
+                {
+                    lastTransientError = ex.Message;
+                    lastTransientStatusCode = ex.StatusCode.HasValue ? (int)ex.StatusCode.Value : _lastGraphHttpStatusCode;
+                    _logger.LogWarning("Transient Instagram Reel container poll {Attempt}/{MaxAttempts} failed for creation {CreationId}; continuing to next poll attempt. Error={Error}", attempt, maxAttempts, creationId, RedactAccessToken(ex.Message));
+                    continue;
+                }
 
                 if (string.Equals(latest?.StatusCode, "FINISHED", StringComparison.OrdinalIgnoreCase))
                 {
-                    return new InstagramContainerPollResult(true, latest.StatusCode, latest.Status, attempt, false);
+                    return new InstagramContainerPollResult(true, latest.StatusCode, latest.Status, attempt, false, lastTransientError, _graphTransientFailureCount - startingTransientFailureCount, _graphRetryAttempts - startingGraphRetryAttempts, lastTransientStatusCode);
                 }
 
                 if (string.Equals(latest?.StatusCode, "ERROR", StringComparison.OrdinalIgnoreCase))
                 {
-                    return new InstagramContainerPollResult(false, latest.StatusCode, latest.Status, attempt, false);
+                    return new InstagramContainerPollResult(false, latest.StatusCode, latest.Status, attempt, false, lastTransientError, _graphTransientFailureCount - startingTransientFailureCount, _graphRetryAttempts - startingGraphRetryAttempts, lastTransientStatusCode);
                 }
             }
         }
         catch (OperationCanceledException) when (!externalCancellationToken.IsCancellationRequested && IsProcessingStatus(latest))
         {
             _logger.LogWarning("Instagram Reel container polling timed out while creation {CreationId} was still processing.", creationId);
-            return new InstagramContainerPollResult(false, latest?.StatusCode, latest?.Status, Math.Max(1, attempts), true);
+            return new InstagramContainerPollResult(false, latest?.StatusCode, latest?.Status, Math.Max(1, attempts), true, lastTransientError, _graphTransientFailureCount - startingTransientFailureCount, _graphRetryAttempts - startingGraphRetryAttempts, lastTransientStatusCode);
         }
 
-        var timedOut = IsProcessingStatus(latest);
-        return new InstagramContainerPollResult(false, latest?.StatusCode, latest?.Status, Math.Max(1, attempts == 0 ? maxAttempts : attempts), timedOut);
+        var timedOut = IsProcessingStatus(latest) || (latest is null && lastTransientError is not null);
+        var status = latest?.Status ?? lastTransientError;
+        return new InstagramContainerPollResult(false, latest?.StatusCode, status, Math.Max(1, attempts == 0 ? maxAttempts : attempts), timedOut, lastTransientError, _graphTransientFailureCount - startingTransientFailureCount, _graphRetryAttempts - startingGraphRetryAttempts, lastTransientStatusCode);
     }
 
     private async Task<(string? PublicUrl, PublicMediaUploadResult? UploadResult)> ResolvePublicVideoUrlAsync(MetaPublishRequest request, string mode, CancellationToken cancellationToken)
@@ -501,26 +533,136 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             ? Path.Combine(AppContext.BaseDirectory, "meta-oauth-token.json")
             : Path.GetFullPath(_metaOptions.TokenFilePath);
 
-    private async Task<T> PostGraphAsync<T>(string url, Dictionary<string, string> form, string operation, CancellationToken cancellationToken)
+    private Task<T> PostGraphAsync<T>(string url, Dictionary<string, string> form, string operation, CancellationToken cancellationToken)
+        => ExecuteGraphWithRetryAsync<T>(
+            () => new HttpRequestMessage(HttpMethod.Post, url) { Content = new FormUrlEncodedContent(form) },
+            operation,
+            url,
+            cancellationToken);
+
+    private Task<T> GetGraphAsync<T>(string url, string operation, CancellationToken cancellationToken)
+        => ExecuteGraphWithRetryAsync<T>(() => new HttpRequestMessage(HttpMethod.Get, url), operation, url, cancellationToken);
+
+    private async Task<T> ExecuteGraphWithRetryAsync<T>(Func<HttpRequestMessage> requestFactory, string operation, string url, CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.PostAsync(url, new FormUrlEncodedContent(form), cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        var maxAttempts = Math.Max(1, _publishingOptions.GraphRetryMaxAttempts);
+        Exception? lastException = null;
+        HttpStatusCode? lastStatusCode = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            throw new InvalidOperationException($"{operation} failed with status {(int)response.StatusCode}.");
+            cancellationToken.ThrowIfCancellationRequested();
+            if (attempt > 1)
+            {
+                await DelayGraphRetryAsync(attempt, cancellationToken);
+            }
+
+            _graphRetryAttempts++;
+            try
+            {
+                using var request = requestFactory();
+                using var response = await _httpClient.SendAsync(request, cancellationToken);
+                if (response.IsSuccessStatusCode)
+                {
+                    return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken)
+                        ?? throw new InvalidOperationException($"{operation} returned an empty response.");
+                }
+
+                lastStatusCode = response.StatusCode;
+                _lastGraphHttpStatusCode = (int)response.StatusCode;
+                if (!IsTransientStatusCode(response.StatusCode))
+                {
+                    throw new InvalidOperationException($"{operation} failed with status {(int)response.StatusCode}.");
+                }
+
+                var statusMessage = $"{operation} failed with transient status {(int)response.StatusCode}.";
+                RecordTransientGraphFailure(statusMessage, response.StatusCode);
+                if (attempt == maxAttempts)
+                {
+                    lastException = new HttpRequestException(statusMessage, null, response.StatusCode);
+                    break;
+                }
+
+                _logger.LogWarning("Transient Meta Graph API HTTP status {StatusCode} for {Operation} on attempt {Attempt}/{MaxAttempts}; retrying. Url={Url}", (int)response.StatusCode, operation, attempt, maxAttempts, RedactAccessToken(url));
+            }
+            catch (Exception ex) when (IsTransientGraphException(ex, cancellationToken))
+            {
+                lastException = ex;
+                RecordTransientGraphFailure(ex.Message, lastStatusCode);
+                if (attempt == maxAttempts)
+                {
+                    throw new HttpRequestException($"{operation} failed after {attempt} transient Meta Graph API attempts: {RedactAccessToken(ex.Message)}", ex, lastStatusCode);
+                }
+
+                _logger.LogWarning("Transient Meta Graph API exception for {Operation} on attempt {Attempt}/{MaxAttempts}; retrying. Url={Url}; Error={Error}", operation, attempt, maxAttempts, RedactAccessToken(url), RedactAccessToken(ex.Message));
+            }
         }
 
-        return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken) ?? throw new InvalidOperationException($"{operation} returned an empty response.");
+        throw new HttpRequestException($"{operation} failed after {maxAttempts} transient Meta Graph API attempts: {RedactAccessToken(lastException?.Message ?? _lastGraphError)}", lastException, lastStatusCode);
     }
 
-    private async Task<T> GetGraphAsync<T>(string url, string operation, CancellationToken cancellationToken)
+    private async Task DelayGraphRetryAsync(int attempt, CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(url, cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        var delay = GetGraphRetryDelay(attempt, Math.Max(0, _publishingOptions.GraphRetryBaseDelaySeconds));
+        if (delay > TimeSpan.Zero)
         {
-            throw new InvalidOperationException($"{operation} failed with status {(int)response.StatusCode}.");
+            await Task.Delay(delay, cancellationToken);
+        }
+    }
+
+    private static TimeSpan GetGraphRetryDelay(int attempt, int baseDelaySeconds)
+    {
+        if (baseDelaySeconds <= 0)
+        {
+            return TimeSpan.Zero;
         }
 
-        return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken) ?? throw new InvalidOperationException($"{operation} returned an empty response.");
+        var multiplier = attempt switch
+        {
+            2 => 1.0d,
+            3 => 2.5d,
+            _ => 5.0d
+        };
+        var jitter = Random.Shared.NextDouble() * 0.25d;
+        return TimeSpan.FromSeconds((baseDelaySeconds * multiplier) + jitter);
+    }
+
+    private void RecordTransientGraphFailure(string message, HttpStatusCode? statusCode = null)
+    {
+        _graphTransientFailureCount++;
+        _lastGraphError = RedactAccessToken(message);
+        if (statusCode.HasValue)
+        {
+            _lastGraphHttpStatusCode = (int)statusCode.Value;
+        }
+    }
+
+    private static bool IsTransientStatusCode(HttpStatusCode statusCode)
+        => statusCode is HttpStatusCode.RequestTimeout
+            or HttpStatusCode.TooManyRequests
+            or HttpStatusCode.InternalServerError
+            or HttpStatusCode.BadGateway
+            or HttpStatusCode.ServiceUnavailable
+            or HttpStatusCode.GatewayTimeout
+            || (int)statusCode == 425;
+
+    private static bool IsTransientGraphException(Exception ex, CancellationToken cancellationToken)
+        => ex is HttpRequestException
+            || ex is IOException
+            || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested)
+            || ContainsConnectionReset(ex);
+
+    private static bool ContainsConnectionReset(Exception ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is SocketException socketException && socketException.SocketErrorCode == SocketError.ConnectionReset)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task<T?> TryGetGraphObjectAsync<T>(string url, CancellationToken cancellationToken)
@@ -532,7 +674,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException)
         {
-            _logger.LogWarning(ex, "Instagram Reel media details GET failed.");
+            _logger.LogWarning("Instagram Reel media details GET failed. Error={Error}", RedactAccessToken(ex.Message));
             return default;
         }
     }
@@ -637,15 +779,16 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
     private static bool IsPublicHttpsUrl(string? value)
         => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps;
 
-    private static string? RedactSensitiveQuery(string? value)
+    private static string? RedactSensitiveQuery(string? value) => RedactAccessToken(value);
+
+    private static string? RedactAccessToken(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value, UriKind.Absolute, out var uri) || string.IsNullOrWhiteSpace(uri.Query))
+        if (string.IsNullOrWhiteSpace(value))
         {
             return value;
         }
 
-        var builder = new UriBuilder(uri) { Query = "REDACTED" };
-        return builder.Uri.ToString();
+        return System.Text.RegularExpressions.Regex.Replace(value, "(?i)(access_token=)[^&\s]+", "$1REDACTED");
     }
 
 
@@ -696,7 +839,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             : string.Equals(mode, "Disabled", StringComparison.OrdinalIgnoreCase) ? "Disabled"
             : "DryRun";
 
-    private sealed record InstagramContainerPollResult(bool Finished, string? StatusCode, string? Status, int Attempts, bool TimedOut);
+    private sealed record InstagramContainerPollResult(bool Finished, string? StatusCode, string? Status, int Attempts, bool TimedOut, string? LastGraphError = null, int TransientFailureCount = 0, int GraphRetryAttempts = 0, int? LastHttpStatusCode = null);
 
     private sealed record CreateContainerResponse(
         [property: JsonPropertyName("id")] string? Id,
@@ -730,6 +873,10 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         public bool PublishedVerified { get; init; }
         public string? Warning { get; init; }
         public string? Permalink { get; init; }
+        public string? LastGraphError { get; init; }
+        public int TransientFailureCount { get; init; }
+        public int GraphRetryAttempts { get; init; }
+        public int? LastHttpStatusCode { get; init; }
     }
 
     private sealed record InstagramPublishDiagnostics
