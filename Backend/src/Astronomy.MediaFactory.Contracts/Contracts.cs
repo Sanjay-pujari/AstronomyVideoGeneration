@@ -321,7 +321,8 @@ public sealed class RenderingOptions
     public double TransitionDurationSeconds { get; set; } = 0.5;
     public string TransitionType { get; set; } = "fade";
     public int FfmpegTimeoutSeconds { get; set; } = 600;
-    public int FfmpegSegmentTimeoutSeconds { get; set; } = 180;
+    public int FfmpegSegmentTimeoutSeconds { get; set; } = 120;
+    public bool WriteSegmentDiagnostics { get; set; } = true;
     public bool KeepIntermediateFiles { get; set; } = true;
     public bool EnableKenBurns { get; set; } = true;
     public double KenBurnsZoomStart { get; set; } = 1.0d;

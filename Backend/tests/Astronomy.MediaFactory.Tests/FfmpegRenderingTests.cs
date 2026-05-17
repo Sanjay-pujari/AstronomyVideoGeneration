@@ -201,6 +201,188 @@ public sealed class FfmpegRenderingTests
         Assert.DoesNotContain("-shortest", string.Join(" ", processRunner.Commands), StringComparison.Ordinal);
     }
 
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_MissingSegmentVisualPath_GivesSceneValidationError()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-segment-missing-visual");
+        var outputPath = Path.Combine(tempDir.FullName, "short-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var sceneAudioPath = Path.Combine(tempDir.FullName, "scene-1.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(sceneAudioPath, [7, 8, 9]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var sut = CreateService(fileSystem, new SegmentAwareProcessRunner());
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
+        {
+            Title = "Short missing visual",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            OutputWidth = 1080,
+            OutputHeight = 1920,
+            Scenes = [new RenderScene { Caption = "Scene", SceneId = "scene-001", ObjectName = "Moon", SceneType = "main", VisualPath = Path.Combine(tempDir.FullName, "missing.png"), AudioPath = sceneAudioPath, DurationSeconds = 6 }]
+        }, CancellationToken.None));
+
+        Assert.Contains("Scene #1 validation failed", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("missing visualPath", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(Path.Combine(tempDir.FullName, "shorts-render-manifest-final.json"), fileSystem.TextWrites.Keys);
+        var diagnosticJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "render-segment-failure-scene-0.json")];
+        using var diagnostic = JsonDocument.Parse(diagnosticJson);
+        Assert.Equal(0, diagnostic.RootElement.GetProperty("sceneIndexZeroBased").GetInt32());
+        Assert.Equal(1, diagnostic.RootElement.GetProperty("sceneIndexOneBased").GetInt32());
+        Assert.Equal("scene-001", diagnostic.RootElement.GetProperty("sceneId").GetString());
+        Assert.Contains("missing visualPath", diagnostic.RootElement.GetProperty("validationError").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_MissingSegmentAudioPath_GivesSceneValidationError()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-segment-missing-audio");
+        var outputPath = Path.Combine(tempDir.FullName, "short-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var firstVisualPath = Path.Combine(tempDir.FullName, "scene-1.png");
+        var secondVisualPath = Path.Combine(tempDir.FullName, "scene-2.png");
+        var firstSceneAudioPath = Path.Combine(tempDir.FullName, "scene-1.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(firstVisualPath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(secondVisualPath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(firstSceneAudioPath, [7, 8, 9]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var sut = CreateService(fileSystem, new SegmentAwareProcessRunner { ProbeDurationsByPath = { [firstSceneAudioPath] = 6d } });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
+        {
+            Title = "Short missing audio",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            OutputWidth = 1080,
+            OutputHeight = 1920,
+            Scenes =
+            [
+                new RenderScene { Caption = "Scene 1", SceneId = "scene-001", VisualPath = firstVisualPath, AudioPath = firstSceneAudioPath, DurationSeconds = 6 },
+                new RenderScene { Caption = "Scene 2", SceneId = "scene-002", VisualPath = secondVisualPath, AudioPath = Path.Combine(tempDir.FullName, "missing.mp3"), DurationSeconds = 6 }
+            ]
+        }, CancellationToken.None));
+
+        Assert.Contains("Scene #2 validation failed", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("missing audioPath", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(Path.Combine(tempDir.FullName, "render-segment-failure-scene-1.json"), fileSystem.TextWrites.Keys);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_SegmentFailureCapturesFfmpegStderrAndCommand()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-segment-stderr");
+        var outputPath = Path.Combine(tempDir.FullName, "short-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        var sceneAudioPath = Path.Combine(tempDir.FullName, "scene-1.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(sceneAudioPath, [7, 8, 9]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var logger = new TestLogger<FfmpegVideoRenderService>();
+        var processRunner = new FailingSegmentProcessRunner("segment encoder exploded") { ProbeDurationsByPath = { [sceneAudioPath] = 6d } };
+        var sut = CreateService(fileSystem, processRunner, logger: logger);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
+        {
+            Title = "Short failing segment",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            OutputWidth = 1080,
+            OutputHeight = 1920,
+            Scenes = [new RenderScene { Caption = "Scene", SceneId = "scene-001", ObjectName = "Mars", SceneType = "main", VisualPath = scenePath, AudioPath = sceneAudioPath, DurationSeconds = 6 }]
+        }, CancellationToken.None));
+
+        Assert.Contains("FFmpeg segmented clip generation failed for scene #1", ex.Message, StringComparison.Ordinal);
+        var diagnosticJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "render-segment-failure-scene-0.json")];
+        using var diagnostic = JsonDocument.Parse(diagnosticJson);
+        Assert.Equal("segment encoder exploded", diagnostic.RootElement.GetProperty("stderr").GetString());
+        Assert.Equal(1, diagnostic.RootElement.GetProperty("exitCode").GetInt32());
+        Assert.False(diagnostic.RootElement.GetProperty("timedOut").GetBoolean());
+        Assert.Contains("ffmpeg -y -loop 1", diagnostic.RootElement.GetProperty("ffmpegCommand").GetString(), StringComparison.Ordinal);
+        Assert.Contains("segment encoder exploded", string.Join(Environment.NewLine, logger.Messages), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_SceneIndexInSegmentErrorMapsToShortsManifest()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-segment-manifest-map");
+        var outputPath = Path.Combine(tempDir.FullName, "short-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+
+        var scenes = new List<RenderScene>();
+        var processRunner = new FailingSegmentProcessRunner("scene two failed");
+        for (var i = 0; i < 2; i++)
+        {
+            var visualPath = Path.Combine(tempDir.FullName, $"scene-{i + 1}.png");
+            var sceneAudioPath = Path.Combine(tempDir.FullName, $"scene-{i + 1}.mp3");
+            await File.WriteAllBytesAsync(visualPath, [4, 5, 6]);
+            await File.WriteAllBytesAsync(sceneAudioPath, [7, 8, 9]);
+            scenes.Add(new RenderScene { Caption = $"Scene {i + 1}", SceneId = $"scene-{i + 1:000}", ObjectName = i == 0 ? "Moon" : "Mars", VisualPath = visualPath, AudioPath = sceneAudioPath, DurationSeconds = 6 });
+            processRunner.ProbeDurationsByPath[sceneAudioPath] = 6d;
+        }
+        processRunner.FailOnFfmpegInvocation = 2;
+
+        var fileSystem = new InMemoryFileSystem();
+        var sut = CreateService(fileSystem, processRunner);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
+        {
+            Title = "Short manifest map",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            OutputWidth = 1080,
+            OutputHeight = 1920,
+            Scenes = scenes
+        }, CancellationToken.None));
+
+        using var manifestJson = JsonDocument.Parse(fileSystem.TextWrites[Path.Combine(tempDir.FullName, "shorts-render-manifest-final.json")]);
+        using var diagnosticJson = JsonDocument.Parse(fileSystem.TextWrites[Path.Combine(tempDir.FullName, "render-segment-failure-scene-1.json")]);
+        var manifestEntry = manifestJson.RootElement.EnumerateArray().Single(entry => entry.GetProperty("sceneIndex").GetInt32() == 1);
+        Assert.Equal("scene-002", manifestEntry.GetProperty("sceneId").GetString());
+        Assert.Equal("scene-002", diagnosticJson.RootElement.GetProperty("sceneId").GetString());
+        Assert.Equal(manifestEntry.GetProperty("outputSegmentPath").GetString(), diagnosticJson.RootElement.GetProperty("outputSegmentPath").GetString());
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_LogsFfprobeTimingSeparatelyFromSegmentRenderTiming()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-probe-timing");
+        var outputPath = Path.Combine(tempDir.FullName, "short-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        var sceneAudioPath = Path.Combine(tempDir.FullName, "scene-1.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+        await File.WriteAllBytesAsync(sceneAudioPath, [7, 8, 9]);
+
+        var logger = new TestLogger<FfmpegVideoRenderService>();
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new FailingSegmentProcessRunner("segment failed after probe") { ProbeDurationsByPath = { [sceneAudioPath] = 6d } };
+        var sut = CreateService(fileSystem, processRunner, logger: logger);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
+        {
+            Title = "Short probe timing",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            OutputWidth = 1080,
+            OutputHeight = 1920,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, AudioPath = sceneAudioPath, DurationSeconds = 6 }]
+        }, CancellationToken.None));
+
+        var messages = string.Join(Environment.NewLine, logger.Messages);
+        Assert.Contains("ffprobe duration probe completed", messages, StringComparison.Ordinal);
+        Assert.Contains("FFmpeg segment render failed", messages, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task FfmpegVideoRenderService_UsesNarrationDuration_ForSceneSegments()
     {
@@ -924,7 +1106,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true, bool enableDirectionalMotion = false, double directionalPanStrength = 0.04d, bool enableFadeInOut = true, bool enableYouTube1440pUpscale = true)
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true, bool enableDirectionalMotion = false, double directionalPanStrength = 0.04d, bool enableFadeInOut = true, bool enableYouTube1440pUpscale = true, Microsoft.Extensions.Logging.ILogger<FfmpegVideoRenderService>? logger = null)
     {
         var options = Options.Create(new RenderingOptions
         {
@@ -939,7 +1121,8 @@ public sealed class FfmpegRenderingTests
             TransitionType = transitionType,
             UseSegmentedNarration = useSegmentedNarration,
             FfmpegTimeoutSeconds = ffmpegTimeoutSeconds,
-            FfmpegSegmentTimeoutSeconds = 180,
+            FfmpegSegmentTimeoutSeconds = 120,
+            WriteSegmentDiagnostics = true,
             KeepIntermediateFiles = true,
             EnableKenBurns = enableKenBurns,
             EnableFadeInOut = enableFadeInOut,
@@ -961,7 +1144,7 @@ public sealed class FfmpegRenderingTests
             new FfmpegArgumentBuilder(),
             processRunner,
             fileSystem,
-            NullLogger<FfmpegVideoRenderService>.Instance);
+            logger ?? NullLogger<FfmpegVideoRenderService>.Instance);
     }
     private sealed class HangingProcessRunner : IProcessRunner
     {
@@ -1027,6 +1210,67 @@ public sealed class FfmpegRenderingTests
                 Arguments: arguments,
                 ExceptionText: string.Empty,
                 TimedOut: false));
+    }
+
+
+    private sealed class FailingSegmentProcessRunner(string stderr) : IProcessRunner
+    {
+        public Dictionary<string, double> ProbeDurationsByPath { get; } = [];
+        public int FailOnFfmpegInvocation { get; set; } = 1;
+        private int _ffmpegInvocations;
+
+        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
+        {
+            if (string.Equals(Path.GetFileName(fileName), "ffprobe", StringComparison.OrdinalIgnoreCase) || string.Equals(Path.GetFileName(fileName), "ffprobe.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                var probePath = ExtractLastQuotedPath(arguments);
+                var duration = probePath is not null && ProbeDurationsByPath.TryGetValue(probePath, out var value) ? value : 0d;
+                return Task.FromResult(new ProcessExecutionResult(duration > 0 ? 0 : 1, duration > 0 ? duration.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty, string.Empty, DateTimeOffset.UtcNow.AddMilliseconds(-120), DateTimeOffset.UtcNow, fileName, arguments, string.Empty, false));
+            }
+
+            _ffmpegInvocations++;
+            if (_ffmpegInvocations == FailOnFfmpegInvocation)
+            {
+                return Task.FromResult(new ProcessExecutionResult(1, "ffmpeg stdout", stderr, DateTimeOffset.UtcNow.AddSeconds(-1), DateTimeOffset.UtcNow, fileName, arguments, string.Empty, false));
+            }
+
+            var outputPath = ExtractOutputPath(arguments);
+            if (!string.IsNullOrWhiteSpace(outputPath))
+            {
+                File.WriteAllBytes(outputPath, [1, 2, 3]);
+            }
+
+            return Task.FromResult(new ProcessExecutionResult(0, string.Empty, string.Empty, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, fileName, arguments, string.Empty, false));
+        }
+
+        private static string? ExtractOutputPath(string arguments)
+        {
+            var parts = arguments.Split('"', StringSplitOptions.RemoveEmptyEntries);
+            return parts.LastOrDefault(static value => value.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string? ExtractLastQuotedPath(string arguments)
+        {
+            var parts = arguments.Split('"', StringSplitOptions.RemoveEmptyEntries);
+            return parts.LastOrDefault(static value => value.Contains('/') || value.Contains('\\'));
+        }
+    }
+
+    private sealed class TestLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            Messages.Add(formatter(state, exception));
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static NullScope Instance { get; } = new();
+            public void Dispose() { }
+        }
     }
 
     private sealed class SegmentAwareProcessRunner : IProcessRunner
