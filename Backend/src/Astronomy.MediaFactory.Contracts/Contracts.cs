@@ -304,6 +304,7 @@ public sealed class RenderingOptions
 {
     public const string SectionName = "Rendering";
     public const string VideoRenderSectionName = "VideoRender";
+    public const string VideoEncodingSectionName = "VideoEncoding";
     public string FfmpegPath { get; set; } = "ffmpeg";
     public string? FfprobePath { get; set; }
     public string WorkingDirectory { get; set; } = "./media-output";
@@ -330,7 +331,48 @@ public sealed class RenderingOptions
     public bool KenBurnsUseEasing { get; set; } = true;
     public bool EnableDirectionalMotion { get; set; } = false;
     public double DirectionalPanStrength { get; set; } = 0.04d;
+    public bool EnableYouTube1440pUpscale { get; set; } = true;
     public OutputCleanupOptions OutputCleanup { get; set; } = new();
+}
+
+public sealed record VideoEncodingPreset(
+    string Name,
+    int Width,
+    int Height,
+    string Codec,
+    string Preset,
+    int Crf,
+    string PixelFormat,
+    string VideoBitrate,
+    string MaxVideoBitrate,
+    string BufferSize,
+    string AudioBitrate)
+{
+    public static VideoEncodingPreset YouTubeLongProduction(bool enable1440pUpscale) => new(
+        Name: "YouTubeLongProduction",
+        Width: enable1440pUpscale ? 2560 : 1920,
+        Height: enable1440pUpscale ? 1440 : 1080,
+        Codec: "libx264",
+        Preset: "slow",
+        Crf: 18,
+        PixelFormat: "yuv420p",
+        VideoBitrate: enable1440pUpscale ? "20M" : "16M",
+        MaxVideoBitrate: enable1440pUpscale ? "24M" : "20M",
+        BufferSize: enable1440pUpscale ? "48M" : "40M",
+        AudioBitrate: "320k");
+
+    public static VideoEncodingPreset YouTubeShortProduction() => new(
+        Name: "YouTubeShortProduction",
+        Width: 1080,
+        Height: 1920,
+        Codec: "libx264",
+        Preset: "slow",
+        Crf: 18,
+        PixelFormat: "yuv420p",
+        VideoBitrate: "12M",
+        MaxVideoBitrate: "16M",
+        BufferSize: "32M",
+        AudioBitrate: "256k");
 }
 
 public sealed class OutputCleanupOptions

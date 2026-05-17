@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Google.Apis.Auth.OAuth2;
@@ -17,6 +18,9 @@ namespace Astronomy.MediaFactory.Publishing;
 public sealed class YouTubePublishingService : IYouTubePublishingService, IYouTubeThumbnailPublisher
 {
     private static readonly string[] Scopes = [YouTubeService.Scope.YoutubeUpload];
+
+    private const string EncodingReportFileName = "video-encoding-report.json";
+    private const string UploadQualityDiagnosticsFileName = "youtube-upload-quality-diagnostics.json";
 
     private readonly YouTubeOptions _options;
     private readonly ILogger<YouTubePublishingService> _logger;
@@ -69,6 +73,7 @@ public sealed class YouTubePublishingService : IYouTubePublishingService, IYouTu
             Path.GetFileName(videoPath),
             cancellationToken);
 
+        await WriteUploadQualityDiagnosticsAsync(videoPath, videoId, cancellationToken);
         _logger.LogInformation("Finished YouTube upload for {VideoPath} with video id {VideoId}. CorrelationId: {CorrelationId}", videoPath, videoId, correlationId);
         return videoId;
     }
@@ -102,6 +107,51 @@ public sealed class YouTubePublishingService : IYouTubePublishingService, IYouTu
 
         _logger.LogInformation("Finished YouTube thumbnail upload for {VideoId} with result {Result}. CorrelationId: {CorrelationId}", videoId, uploaded, correlationId);
         return uploaded;
+    }
+
+
+    private static async Task WriteUploadQualityDiagnosticsAsync(string videoPath, string videoId, CancellationToken cancellationToken)
+    {
+        var outputDirectory = Path.GetDirectoryName(videoPath);
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            return;
+        }
+
+        var encodingReportPath = Path.Combine(outputDirectory, EncodingReportFileName);
+        var encodingReport = File.Exists(encodingReportPath)
+            ? await ReadEncodingReportAsync(encodingReportPath, cancellationToken)
+            : null;
+        var fileInfo = new FileInfo(videoPath);
+        var diagnostics = new YouTubeUploadQualityDiagnostics(
+            VideoId: videoId,
+            UploadedResolution: encodingReport?.Resolution ?? string.Empty,
+            UploadedBitrate: encodingReport?.Bitrate ?? string.Empty,
+            UploadedFileSizeBytes: fileInfo.Exists ? fileInfo.Length : 0L,
+            UploadedCodec: encodingReport?.Codec ?? string.Empty,
+            UploadedPixelFormat: encodingReport?.PixelFormat ?? string.Empty,
+            UploadedAudioBitrate: encodingReport?.AudioBitrate ?? string.Empty,
+            SourceVideoPath: videoPath,
+            DiagnosticsCreatedUtc: DateTimeOffset.UtcNow);
+        var json = JsonSerializer.Serialize(diagnostics, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, UploadQualityDiagnosticsFileName), json, cancellationToken);
+    }
+
+    private static async Task<EncodingReportSnapshot?> ReadEncodingReportAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            return await JsonSerializer.DeserializeAsync<EncodingReportSnapshot>(stream, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, cancellationToken);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
     }
 
     private async Task<string> UploadCoreAsync(
@@ -215,5 +265,23 @@ public sealed class YouTubePublishingService : IYouTubePublishingService, IYouTu
             cancellationToken);
         return credential;
     }
+
+    private sealed record EncodingReportSnapshot(
+        string Resolution,
+        string Bitrate,
+        string Codec,
+        string PixelFormat,
+        string AudioBitrate);
+
+    private sealed record YouTubeUploadQualityDiagnostics(
+        string VideoId,
+        string UploadedResolution,
+        string UploadedBitrate,
+        long UploadedFileSizeBytes,
+        string UploadedCodec,
+        string UploadedPixelFormat,
+        string UploadedAudioBitrate,
+        string SourceVideoPath,
+        DateTimeOffset DiagnosticsCreatedUtc);
 
 }

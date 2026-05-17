@@ -46,6 +46,22 @@ public sealed class RenderingOptionsBindingTests
         Assert.False(options.EnableDirectionalMotion);
     }
     [Fact]
+    public void RenderingOptions_BindsVideoEncodingUpscaleConfiguration()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{RenderingOptions.VideoEncodingSectionName}:EnableYouTube1440pUpscale"] = "true"
+            })
+            .Build();
+
+        var options = new RenderingOptions();
+        config.GetSection(RenderingOptions.VideoEncodingSectionName).Bind(options);
+
+        Assert.True(options.EnableYouTube1440pUpscale);
+    }
+
+    [Fact]
     public void ThumbnailCinematicAIOptions_BindsPhase3Configuration()
     {
         var config = new ConfigurationBuilder()

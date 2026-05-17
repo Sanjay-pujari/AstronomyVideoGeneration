@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -47,7 +48,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("-f concat", args);
         Assert.Contains("-i \"/tmp/ffmpeg-input.txt\"", args);
         Assert.Contains("-i \"/tmp/narration.mp3\"", args);
-        Assert.Contains("scale=1280:720", args);
+        Assert.Contains("scale=2560:1440", args);
         Assert.Contains("\"/tmp/final-video.mp4\"", args);
         Assert.DoesNotContain("-shortest", args, StringComparison.Ordinal);
     }
@@ -73,6 +74,10 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("crop=1080:1920", args);
         Assert.Contains("pad=1080:1920", args);
         Assert.Contains("setsar=1", args);
+        Assert.Contains("-preset slow", args);
+        Assert.Contains("-b:v 12M", args);
+        Assert.Contains("-b:a 256k", args);
+        Assert.Contains("-movflags +faststart", args);
     }
 
     [Fact]
@@ -758,7 +763,7 @@ public sealed class FfmpegRenderingTests
         await sut.RenderAsync(new RenderManifest { Title = "Plain", AudioPath = audioPath, OutputPath = outputPath, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }] }, CancellationToken.None);
 
         var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
-        Assert.Contains("-vf \"fps=30,scale=1920:1080:flags=lanczos\"", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-vf \"fps=30,scale=2560:1440:flags=lanczos\"", segmentCommand, StringComparison.Ordinal);
         Assert.DoesNotContain("zoompan", segmentCommand, StringComparison.Ordinal);
         Assert.DoesNotContain("fade=t=", segmentCommand, StringComparison.Ordinal);
     }
@@ -785,6 +790,102 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("s=1080x1920", segmentCommand, StringComparison.Ordinal);
         Assert.Contains("(0.08)*pow", segmentCommand, StringComparison.Ordinal);
         Assert.Contains("fade=t=in:st=0:d=0.4", segmentCommand, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_LongVideoUses1440pProductionPreset_WhenEnabled()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-long-production");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 6d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 6d, [outputPath] = 6d } };
+        var sut = CreateService(fileSystem, processRunner, enableTransitions: false, enableYouTube1440pUpscale: true);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Long", AudioPath = audioPath, OutputPath = outputPath, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }] }, CancellationToken.None);
+
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
+        var finalCommand = processRunner.Commands.Last(command => command.Contains("-movflags +faststart", StringComparison.Ordinal) && command.Contains(outputPath, StringComparison.Ordinal));
+        Assert.Contains("scale=2560:1440:flags=lanczos", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-c:v libx264", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-preset slow", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-crf 18", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-b:v 20M", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-maxrate 24M", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-pix_fmt yuv420p", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-b:a 320k", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-movflags +faststart", finalCommand, StringComparison.Ordinal);
+        Assert.True(new FileInfo(outputPath).Length > 0);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_WritesEncodingReport_WithMinimumBitrateAndYuv420p()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-encoding-report");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 6d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 6d, [outputPath] = 6d } };
+        var sut = CreateService(fileSystem, processRunner, enableTransitions: false, enableYouTube1440pUpscale: true);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Long", AudioPath = audioPath, OutputPath = outputPath, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }] }, CancellationToken.None);
+
+        var reportJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "video-encoding-report.json")];
+        using var report = JsonDocument.Parse(reportJson);
+        var root = report.RootElement;
+        Assert.Equal("YouTubeLongProduction", root.GetProperty("presetName").GetString());
+        Assert.Equal("2560x1440", root.GetProperty("resolution").GetString());
+        Assert.Equal("20M", root.GetProperty("bitrate").GetString());
+        Assert.Equal("libx264", root.GetProperty("codec").GetString());
+        Assert.Equal(18, root.GetProperty("crf").GetInt32());
+        Assert.Equal("slow", root.GetProperty("preset").GetString());
+        Assert.Equal(30, root.GetProperty("fps").GetInt32());
+        Assert.Equal("yuv420p", root.GetProperty("pixelFormat").GetString());
+        Assert.Equal("320k", root.GetProperty("audioBitrate").GetString());
+        Assert.True(root.GetProperty("faststartEnabled").GetBoolean());
+        Assert.True(root.GetProperty("estimatedUploadSizeBytes").GetInt64() > 0);
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_ShortsUsePortraitProductionPreset()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-short-production");
+        var outputPath = Path.Combine(tempDir.FullName, "short-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 5d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 5d, [outputPath] = 5d } };
+        var sut = CreateService(fileSystem, processRunner, enableTransitions: false);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Short", AudioPath = audioPath, OutputPath = outputPath, OutputWidth = 1080, OutputHeight = 1920, EnableVerticalCrop = true, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 5 }] }, CancellationToken.None);
+
+        var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
+        var finalCommand = processRunner.Commands.Last(command => command.Contains("-movflags +faststart", StringComparison.Ordinal) && command.Contains(outputPath, StringComparison.Ordinal));
+        Assert.Contains("scale=1080:1920:force_original_aspect_ratio=increase", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-preset slow", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-crf 18", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-b:v 12M", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-maxrate 16M", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-pix_fmt yuv420p", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-b:a 256k", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-movflags +faststart", finalCommand, StringComparison.Ordinal);
+
+        var reportJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "video-encoding-report.json")];
+        using var report = JsonDocument.Parse(reportJson);
+        Assert.Equal("YouTubeShortProduction", report.RootElement.GetProperty("presetName").GetString());
+        Assert.Equal("1080x1920", report.RootElement.GetProperty("resolution").GetString());
     }
 
     [Theory]
@@ -823,7 +924,7 @@ public sealed class FfmpegRenderingTests
         Assert.Contains("ffmpeg", fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")], StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true, bool enableDirectionalMotion = false, double directionalPanStrength = 0.04d, bool enableFadeInOut = true)
+    private static FfmpegVideoRenderService CreateService(IFileSystem fileSystem, IProcessRunner processRunner, int ffmpegTimeoutSeconds = 120, bool useSegmentedNarration = false, string ffmpegPath = "ffmpeg", string? ffprobePath = null, bool enableTransitions = true, double transitionDurationSeconds = 0.5d, string transitionType = "fade", bool enableKenBurns = true, bool enableDirectionalMotion = false, double directionalPanStrength = 0.04d, bool enableFadeInOut = true, bool enableYouTube1440pUpscale = true)
     {
         var options = Options.Create(new RenderingOptions
         {
@@ -850,7 +951,8 @@ public sealed class FfmpegRenderingTests
             KenBurnsFps = 30,
             KenBurnsUseEasing = true,
             EnableDirectionalMotion = enableDirectionalMotion,
-            DirectionalPanStrength = directionalPanStrength
+            DirectionalPanStrength = directionalPanStrength,
+            EnableYouTube1440pUpscale = enableYouTube1440pUpscale
         });
 
         return new FfmpegVideoRenderService(

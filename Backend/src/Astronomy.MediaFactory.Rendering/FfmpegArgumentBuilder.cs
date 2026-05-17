@@ -7,9 +7,13 @@ public sealed class FfmpegArgumentBuilder
 {
     public string Build(RenderingOptions options, RenderManifest manifest, string concatInputPath, string audioPath, string outputPath)
     {
-        var width = manifest.OutputWidth ?? options.VideoWidth;
-        var height = manifest.OutputHeight ?? options.VideoHeight;
-        var filter = manifest.EnableVerticalCrop
+        var isShort = manifest.OutputHeight.GetValueOrDefault() > manifest.OutputWidth.GetValueOrDefault();
+        var preset = isShort
+            ? VideoEncodingPreset.YouTubeShortProduction()
+            : VideoEncodingPreset.YouTubeLongProduction(options.EnableYouTube1440pUpscale);
+        var width = preset.Width;
+        var height = preset.Height;
+        var filter = manifest.EnableVerticalCrop || isShort
             ? $"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
             : $"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2";
         var hasMusic = !string.IsNullOrWhiteSpace(options.BackgroundMusicPath) && File.Exists(options.BackgroundMusicPath);
@@ -22,13 +26,19 @@ public sealed class FfmpegArgumentBuilder
             $"-i \"{concatInputPath}\"",
             $"-i \"{audioPath}\"",
             hasMusic ? $"-stream_loop -1 -i \"{options.BackgroundMusicPath}\"" : string.Empty,
-            $"-r {options.FrameRate}",
+            $"-r {(isShort ? 30 : options.FrameRate)}",
             $"-vf \"{filter}\"",
             audioFilter,
-            "-c:v libx264",
-            "-pix_fmt yuv420p",
+            $"-c:v {preset.Codec}",
+            $"-preset {preset.Preset}",
+            $"-crf {preset.Crf}",
+            $"-b:v {preset.VideoBitrate}",
+            $"-maxrate {preset.MaxVideoBitrate}",
+            $"-bufsize {preset.BufferSize}",
+            $"-pix_fmt {preset.PixelFormat}",
             "-c:a aac",
-            "-b:a 192k",
+            $"-b:a {preset.AudioBitrate}",
+            "-movflags +faststart",
             hasMusic ? string.Empty : "-map 0:v:0 -map 1:a:0",
             $"\"{outputPath}\"");
     }
