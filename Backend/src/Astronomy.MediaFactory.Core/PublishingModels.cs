@@ -109,6 +109,7 @@ public sealed class MetaPublishResult
     public string? PostId { get; init; }
     public string? VideoId { get; init; }
     public string? Url { get; init; }
+    public string? UploadMode { get; init; }
     public string? Error { get; init; }
     public bool PublishedVerified { get; init; }
     public string? VideoPathUsed { get; init; }

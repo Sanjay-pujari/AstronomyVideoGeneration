@@ -89,6 +89,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<MetaPublishingOptions>()
             .Bind(configuration.GetSection(MetaPublishingOptions.SectionName))
             .Validate(options => options.Mode is null || options.Mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("DryRun", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Private", StringComparison.OrdinalIgnoreCase) || options.Mode.Equals("Public", StringComparison.OrdinalIgnoreCase), "MetaPublishing:Mode must be Disabled, DryRun, Private, or Public.")
+            .Validate(options => options.FacebookSimpleUploadMaxBytes >= 0 && options.FacebookUploadChunkSizeBytes > 0, "MetaPublishing Facebook full-video upload size settings are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<PublishingTargetsOptions>()

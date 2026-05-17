@@ -27,4 +27,7 @@ public sealed class MetaPublishingOptions
     public bool UsePosterFrameFallbackForReels { get; set; } = true;
     public double FacebookReelPosterFrameDurationSeconds { get; set; } = 0.75d;
     public double PosterFrameDurationSeconds { get; set; } = 0.75d;
+    public bool FacebookFullVideoUseResumableUpload { get; set; } = true;
+    public long FacebookSimpleUploadMaxBytes { get; set; } = 52_428_800;
+    public int FacebookUploadChunkSizeBytes { get; set; } = 8_388_608;
 }
