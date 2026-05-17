@@ -176,6 +176,64 @@ public sealed class MetaPublishingTests
         Assert.Contains(FacebookReelPublishService.MetaAppDevelopmentModeWarning, result.Warnings);
     }
 
+
+    [Fact]
+    public async Task FacebookProcessingUntilTimeout_ReturnsSuccessWithWarningAndDiagnostics()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] { "PROCESSING", "PROCESSING", "PROCESSING", "PROCESSING" }) };
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookVerificationPollDelaySeconds = 0, FacebookVerificationPollAttempts = 2 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal("Facebook", result.Platform);
+        Assert.Equal("video-123", result.VideoId);
+        Assert.Equal("https://facebook.example.test/reel/video-123", result.Url);
+        Assert.False(result.PublishedVerified);
+        Assert.Equal("Facebook Reel uploaded but public visibility could not be verified before processing timeout.", result.Warning);
+
+        var resultJson = await File.ReadAllTextAsync(Path.Combine(workspace.OutputDirectory(run), "facebook-reel-publish-result.json"));
+        Assert.Contains("facebookUploadStatus", resultJson);
+        Assert.Contains("facebookVideoId", resultJson);
+        Assert.Contains("facebookPermalink", resultJson);
+        Assert.Contains("verificationTimedOut", resultJson);
+        Assert.Contains("processingPollAttempts", resultJson);
+        Assert.Contains("publishedVerified", resultJson);
+    }
+
+    [Fact]
+    public async Task FacebookVerificationTaskCanceled_ReturnsSuccessWithWarning()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { ThrowTaskCanceledDuringVerification = true };
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookVerificationPollDelaySeconds = 0, FacebookVerificationPollAttempts = 1 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal("video-123", result.VideoId);
+        Assert.False(result.PublishedVerified);
+        Assert.Equal("Facebook Reel uploaded but public visibility could not be verified before processing timeout.", result.Warning);
+    }
+
+    [Fact]
+    public async Task FacebookStartMissingVideoId_FailsBeforeUpload()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { StartMissingVideoId = true };
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.False(result.Success);
+        Assert.Contains("did not return video_id and upload_url", result.Error);
+        Assert.DoesNotContain(handler.Requests, request => request.Phase == "upload");
+    }
+
     [Fact]
     public async Task UploadFailure_IncludesResponseBody()
     {
@@ -555,6 +613,8 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
 {
     public string BaseAddress { get; set; } = "https://upload.example.test";
     public bool FailUpload { get; set; }
+    public bool StartMissingVideoId { get; set; }
+    public bool ThrowTaskCanceledDuringVerification { get; set; }
     public Queue<string> VerificationStatuses { get; set; } = new Queue<string>(new[] { "PUBLISHED" });
     public Queue<string> InstagramContainerStatuses { get; set; } = new Queue<string>(new[] { "FINISHED" });
     public List<(string Phase, Dictionary<string, string> Headers, Dictionary<string, string> ContentHeaders, string Body)> Requests { get; } = new();
@@ -598,7 +658,9 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
         if (request.RequestUri!.AbsolutePath.EndsWith("/video_reels", StringComparison.OrdinalIgnoreCase) && body.Contains("upload_phase=start", StringComparison.Ordinal))
         {
             Requests.Add(("start", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
-            return JsonResponse(new { video_id = "video-123", upload_url = BaseAddress + "/upload/video-123" });
+            return StartMissingVideoId
+                ? JsonResponse(new { upload_url = BaseAddress + "/upload/video-123" })
+                : JsonResponse(new { video_id = "video-123", upload_url = BaseAddress + "/upload/video-123" });
         }
 
         if (request.RequestUri!.Host == "upload.example.test")
@@ -618,6 +680,11 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
         if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/video-123", StringComparison.OrdinalIgnoreCase))
         {
             Requests.Add(("verify-video", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+            if (ThrowTaskCanceledDuringVerification)
+            {
+                throw new TaskCanceledException("verification timeout");
+            }
+
             var status = VerificationStatuses.Count > 0 ? VerificationStatuses.Dequeue() : "PROCESSING";
             return JsonResponse(new { id = "video-123", permalink_url = "https://facebook.example.test/reel/video-123", status });
         }

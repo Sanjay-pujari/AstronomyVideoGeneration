@@ -100,7 +100,7 @@ public sealed class ShortFormPublishingService : IShortFormPublishingService
 
                 results.Add(result);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
                 _logger.LogError(ex, "Short-form publishing failed for {Platform} and short video {ShortVideoId}. CorrelationId: {CorrelationId}", platform, request.ParentShortVideoId, correlationId);
                 target.Status = PlatformPublicationStatus.Failed;
@@ -191,6 +191,8 @@ public sealed class ShortFormPublishingService : IShortFormPublishingService
             ExternalPostId = target.ExternalPostId,
             ExternalUrl = target.ExternalUrl,
             ErrorMessage = target.ErrorMessage,
+            PublishedVerified = target.PublishedVerified,
+            Warning = target.Warning,
             YouTubeShortEligible = target.YouTubeShortEligible
         };
 }
@@ -303,6 +305,8 @@ public sealed class InstagramReelsPlatformPublisher : IShortFormPlatformPublishe
         target.PublishedAt = result.PublishedUtc;
         target.ExternalPostId = string.IsNullOrWhiteSpace(result.PostId) ? result.VideoId : result.PostId;
         target.ExternalUrl = result.Url;
+        target.PublishedVerified = result.PublishedVerified;
+        target.Warning = result.Warning;
         target.ErrorMessage = result.Error ?? result.Warning;
 
         if (!result.Success)
@@ -367,7 +371,11 @@ public sealed class FacebookPlatformPublisher : IShortFormPlatformPublisher
         target.PublishedAt = result.PublishedUtc;
         target.ExternalPostId = string.IsNullOrWhiteSpace(result.PostId) ? result.VideoId : result.PostId;
         target.ExternalUrl = result.Url;
-        target.ErrorMessage = result.Error ?? result.Warning;
+        target.PublishedVerified = result.PublishedVerified;
+        target.Warning = result.Success && !result.PublishedVerified && !string.IsNullOrWhiteSpace(result.Warning)
+            ? "Processing not verified before timeout."
+            : result.Warning;
+        target.ErrorMessage = result.Error ?? target.Warning;
 
         if (!result.Success)
         {
