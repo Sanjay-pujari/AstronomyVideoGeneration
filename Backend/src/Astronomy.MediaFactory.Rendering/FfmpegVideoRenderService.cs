@@ -119,15 +119,16 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             if (validationErrors.Count > 0)
             {
                 var message = $"Scene #{i + 1} validation failed: {string.Join("; ", validationErrors)}";
-                await WriteSegmentValidationFailureDiagnosticsAsync(scene, i, segmentOutputPath, outputDirectory, outputWidth, outputHeight, message, cancellationToken);
+                await WriteSegmentValidationFailureDiagnosticsAsync(scene, i, segmentOutputPath, outputDirectory, outputWidth, outputHeight, message, scene.DurationSeconds, cancellationToken);
                 throw new InvalidOperationException(message);
             }
 
             var audioDurationSeconds = await ProbeMediaDurationSecondsAsync(sceneAudioPath!, cancellationToken);
             if (audioDurationSeconds <= 0)
             {
-                audioDurationSeconds = Math.Max(1d, scene.DurationSeconds);
-                _logger.LogWarning("Could not determine audio duration for scene #{SceneIndex}; using manifest duration {DurationSeconds:F3}s.", i + 1, audioDurationSeconds);
+                var message = $"Scene #{i + 1} validation failed: duration must be greater than 0; actual {audioDurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                await WriteSegmentValidationFailureDiagnosticsAsync(scene, i, segmentOutputPath, outputDirectory, outputWidth, outputHeight, message, audioDurationSeconds, cancellationToken);
+                throw new InvalidOperationException(message);
             }
 
             var isShort = IsShortManifest(manifest);
@@ -157,8 +158,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
             if (segmentResult.ExitCode != 0 || !File.Exists(segmentOutputPath))
             {
-                await WriteSegmentFailureDiagnosticsAsync(scene, i, segmentOutputPath, outputDirectory, segmentArguments, segmentResult, cancellationToken);
-                var message = $"FFmpeg segmented clip generation failed for scene #{i + 1}. See {Path.Combine(outputDirectory, $"render-segment-failure-scene-{i}.json")} for details.";
+                await WriteSegmentFailureDiagnosticsAsync(scene, i, segmentOutputPath, outputDirectory, lockedDurationSeconds, segmentArguments, segmentResult, cancellationToken);
+                var stderr = string.IsNullOrWhiteSpace(segmentResult.StandardError) ? segmentResult.ExceptionText : segmentResult.StandardError;
+                var message = $"FFmpeg segmented clip generation failed for scene #{i + 1}. See {Path.Combine(outputDirectory, $"render-segment-failure-scene-{i}.json")} for details. FFmpeg stderr: {stderr}";
                 throw new InvalidOperationException(message);
             }
 
@@ -609,6 +611,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private sealed record SegmentFailureDiagnostics(
         int SceneIndexZeroBased,
         int SceneIndexOneBased,
+        int SceneIndex,
         string? SceneId,
         string SceneTitle,
         string? SceneType,
@@ -616,6 +619,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         string VisualPath,
         string? AudioPath,
         double DurationSeconds,
+        double Duration,
         string OutputSegmentPath,
         string FfmpegCommand,
         string Stdout,
@@ -851,23 +855,21 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         int outputWidth,
         int outputHeight,
         string validationError,
+        double durationSeconds,
         CancellationToken cancellationToken)
     {
-        if (!_options.WriteSegmentDiagnostics)
-        {
-            return;
-        }
-
         var diagnostics = new SegmentFailureDiagnostics(
             SceneIndexZeroBased: sceneIndex,
             SceneIndexOneBased: sceneIndex + 1,
+            SceneIndex: sceneIndex + 1,
             SceneId: scene.SceneId,
             SceneTitle: scene.Caption,
             SceneType: scene.SceneType,
             ObjectName: scene.ObjectName,
             VisualPath: scene.VisualPath,
             AudioPath: scene.AudioPath,
-            DurationSeconds: scene.DurationSeconds,
+            DurationSeconds: durationSeconds,
+            Duration: durationSeconds,
             OutputSegmentPath: outputSegmentPath,
             FfmpegCommand: string.Empty,
             Stdout: string.Empty,
@@ -886,25 +888,23 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         int sceneIndex,
         string outputSegmentPath,
         string outputDirectory,
+        double durationSeconds,
         string segmentArguments,
         ProcessExecutionResult result,
         CancellationToken cancellationToken)
     {
-        if (!_options.WriteSegmentDiagnostics)
-        {
-            return;
-        }
-
         var diagnostics = new SegmentFailureDiagnostics(
             SceneIndexZeroBased: sceneIndex,
             SceneIndexOneBased: sceneIndex + 1,
+            SceneIndex: sceneIndex + 1,
             SceneId: scene.SceneId,
             SceneTitle: scene.Caption,
             SceneType: scene.SceneType,
             ObjectName: scene.ObjectName,
             VisualPath: scene.VisualPath,
             AudioPath: scene.AudioPath,
-            DurationSeconds: scene.DurationSeconds,
+            DurationSeconds: durationSeconds,
+            Duration: durationSeconds,
             OutputSegmentPath: outputSegmentPath,
             FfmpegCommand: $"{_options.FfmpegPath} {segmentArguments}".TrimEnd(),
             Stdout: result.StandardOutput,
@@ -968,9 +968,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             ValidatePath(scene.AudioPath, "audioPath", mustExist: true, errors);
         }
 
-        if (scene.DurationSeconds <= 0.2d)
+        if (scene.DurationSeconds <= 0d)
         {
-            errors.Add($"durationSeconds must be greater than 0.2 for scene #{sceneIndex + 1}; actual {scene.DurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            errors.Add($"duration must be greater than 0; actual {scene.DurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         }
 
         if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
@@ -1007,7 +1007,12 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
         if (mustExist && !File.Exists(path))
         {
-            errors.Add($"missing {fieldName}: '{path}'");
+            errors.Add(fieldName switch
+            {
+                "visualPath" => $"visual file not found: {path}",
+                "audioPath" => $"audio file not found: {path}",
+                _ => $"missing {fieldName}: '{path}'"
+            });
             return;
         }
 
