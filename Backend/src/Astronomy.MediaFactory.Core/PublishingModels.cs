@@ -75,6 +75,16 @@ public sealed class YouTubeChannelInfo
     public string ChannelTitle { get; init; } = string.Empty;
 }
 
+
+public sealed class YouTubeVideoPostUploadStatus
+{
+    public object? SnippetThumbnailDefault { get; init; }
+    public object? SnippetThumbnailMedium { get; init; }
+    public object? SnippetThumbnailHigh { get; init; }
+    public string? UploadStatus { get; init; }
+    public string? PrivacyStatus { get; init; }
+}
+
 public sealed class MetaPublishRequest
 {
     public Guid PipelineRunId { get; init; }

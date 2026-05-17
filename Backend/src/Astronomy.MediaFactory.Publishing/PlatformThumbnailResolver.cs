@@ -44,6 +44,30 @@ public sealed class PlatformThumbnailResolver : IPlatformThumbnailResolver
             };
         }
 
+        if (string.Equals(platform, "YouTube", StringComparison.OrdinalIgnoreCase)
+            && normalizedContentType == PlatformThumbnailContentTypes.ShortVideo)
+        {
+            _logger.LogWarning(
+                "Generated thumbnail {ThumbnailPath} for YouTube Shorts is missing or invalid: {Reason}. No fallback thumbnail will be used for YouTube Shorts.",
+                canonicalPath,
+                canonicalValidation.Warning);
+
+            return new PlatformThumbnailResolution
+            {
+                Platform = platform,
+                ContentType = normalizedContentType,
+                LongThumbnailPath = longThumbnailPath,
+                ShortThumbnailPath = shortThumbnailPath,
+                PlatformThumbnailPath = canonicalPath,
+                ThumbnailSource = ThumbnailSources.GeneratedThumbnail,
+                IsValid = false,
+                Width = canonicalValidation.Width,
+                Height = canonicalValidation.Height,
+                FileSizeBytes = canonicalValidation.FileSizeBytes,
+                Warning = canonicalValidation.Warning
+            };
+        }
+
         _logger.LogWarning(
             "Generated thumbnail {ThumbnailPath} for {Platform} {ContentType} is missing or invalid: {Reason}. Falling back to legacy thumbnail selection.",
             canonicalPath,

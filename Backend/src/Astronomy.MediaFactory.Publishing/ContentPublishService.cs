@@ -236,7 +236,7 @@ public sealed class ContentPublishService : IContentPublishService
             Description = marker.Description,
             Tags = SplitCsv(shortMetadata.TagsCsv),
             PrivacyStatus = privacyStatus,
-            UploadThumbnail = _youTubeOptions.UploadThumbnailForShorts,
+            UploadThumbnail = _publishingOptions.UploadThumbnail && _youTubeOptions.UploadCustomThumbnailForShorts,
             IsShort = true
         };
     }

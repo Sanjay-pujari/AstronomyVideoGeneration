@@ -264,6 +264,9 @@ public sealed class YouTubeOAuthSetupTests
 
         public Task UploadThumbnailAsync(string videoId, string thumbnailPath, string accessToken, CancellationToken cancellationToken)
             => throw new NotSupportedException();
+
+        public Task<YouTubeVideoPostUploadStatus?> GetVideoPostUploadStatusAsync(string videoId, string accessToken, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     private sealed class StaticJsonHandler : HttpMessageHandler

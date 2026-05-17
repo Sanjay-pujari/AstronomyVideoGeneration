@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Google;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -86,12 +87,16 @@ public sealed class YouTubePublishService : IYouTubePublishService
             await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-channel-info.json"), channel, cancellationToken);
 
             var videoId = await _apiClient.UploadVideoAsync(normalizedRequest, accessToken, cancellationToken);
-            var thumbnailWarning = await TryUploadThumbnailAsync(normalizedRequest, videoId, accessToken, outputDirectory, cancellationToken);
-            var thumbnailUploadAttempted = normalizedRequest.UploadThumbnail && !string.IsNullOrWhiteSpace(normalizedRequest.PlatformThumbnailPath);
+            var thumbnailOutcome = await TryUploadThumbnailAsync(normalizedRequest, videoId, accessToken, outputDirectory, cancellationToken);
+            var thumbnailUploadAttempted = thumbnailOutcome.UploadAttempted;
             var warnings = new List<string>();
-            if (!string.IsNullOrWhiteSpace(thumbnailWarning))
+            if (!string.IsNullOrWhiteSpace(thumbnailOutcome.FailureWarning))
             {
                 warnings.Add("Video uploaded but thumbnail upload failed.");
+            }
+            if (!string.IsNullOrWhiteSpace(thumbnailOutcome.NonFailureWarning))
+            {
+                warnings.Add(thumbnailOutcome.NonFailureWarning);
             }
             var result = new PublishResult
             {
@@ -107,15 +112,15 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 ThumbnailPathUsed = normalizedRequest.PlatformThumbnailPath,
                 ThumbnailStrategy = normalizedRequest.ThumbnailSource,
                 ThumbnailUploadAttempted = thumbnailUploadAttempted,
-                ThumbnailUploadSuccess = thumbnailUploadAttempted && thumbnailWarning is null,
-                ThumbnailWarning = thumbnailWarning,
+                ThumbnailUploadSuccess = thumbnailOutcome.UploadSuccess,
+                ThumbnailWarning = thumbnailOutcome.Warning,
                 VideoId = videoId,
                 VideoUrl = $"https://www.youtube.com/watch?v={videoId}",
                 Url = $"https://www.youtube.com/watch?v={videoId}",
                 ChannelId = channel.ChannelId,
                 ChannelTitle = channel.ChannelTitle,
-                Error = null,
-                Warning = thumbnailWarning,
+                Error = thumbnailOutcome.FailureWarning,
+                Warning = thumbnailOutcome.Warning,
                 Warnings = warnings,
                 Mode = mode,
                 PublishedUtc = DateTime.UtcNow
@@ -214,16 +219,13 @@ public sealed class YouTubePublishService : IYouTubePublishService
             : string.Equals(mode, "Disabled", StringComparison.OrdinalIgnoreCase) ? "Disabled"
             : "DryRun";
 
-    private async Task<string?> TryUploadThumbnailAsync(PublishRequest request, string videoId, string accessToken, string outputDirectory, CancellationToken cancellationToken)
+    private async Task<ThumbnailUploadOutcome> TryUploadThumbnailAsync(PublishRequest request, string videoId, string accessToken, string outputDirectory, CancellationToken cancellationToken)
     {
-        if (!request.UploadThumbnail)
-        {
-            return null;
-        }
-
         var diagnostics = new YouTubeThumbnailUploadDiagnostics
         {
             VideoId = videoId,
+            IsShortVideo = request.IsShort,
+            VideoPath = request.VideoPath,
             ContentKind = request.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
             UploadedThumbnailPath = request.PlatformThumbnailPath,
             ThumbnailSource = request.ThumbnailSource,
@@ -231,6 +233,23 @@ public sealed class YouTubePublishService : IYouTubePublishService
             FileExists = !string.IsNullOrWhiteSpace(request.ThumbnailPath) && File.Exists(request.ThumbnailPath),
             MimeType = GetMimeType(request.ThumbnailPath)
         };
+
+        if (!request.UploadThumbnail)
+        {
+            diagnostics.UploadAttempted = false;
+            diagnostics.UploadSuccess = false;
+            diagnostics.UploadStatus = "Skipped";
+            if (request.IsShort && !_youTubeOptions.UploadCustomThumbnailForShorts)
+            {
+                diagnostics.Warning = "YouTube Shorts custom thumbnail upload skipped because YouTube:UploadCustomThumbnailForShorts=false.";
+                await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
+                _logger.LogWarning("{Warning}", diagnostics.Warning);
+                return ThumbnailUploadOutcome.Skipped(diagnostics.Warning);
+            }
+
+            await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
+            return ThumbnailUploadOutcome.Skipped(null);
+        }
 
         string? uploadPath = null;
         try
@@ -245,7 +264,7 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 diagnostics.UploadStatus = "Skipped";
                 await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
                 _logger.LogWarning("Skipping YouTube thumbnail upload for {VideoId}: {Reason}", videoId, validationError);
-                return validationError;
+                return ThumbnailUploadOutcome.Failed(false, validationError);
             }
 
             uploadPath = diagnostics.CompressedThumbnailPath ?? request.ThumbnailPath;
@@ -266,14 +285,27 @@ public sealed class YouTubePublishService : IYouTubePublishService
             diagnostics.UploadAttempted = true;
             diagnostics.UploadSuccess = true;
             diagnostics.UploadStatus = "Completed";
+
+            if (request.IsShort)
+            {
+                await PopulatePostUploadStatusAsync(videoId, accessToken, diagnostics, cancellationToken);
+                diagnostics.ThumbnailUploadSuccess = true;
+                diagnostics.ThumbnailWarning = "YouTube accepted custom thumbnail, but Shorts feed may display auto-selected frame depending on YouTube processing/UI behavior.";
+            }
+
             await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
-            return null;
+            return request.IsShort
+                ? ThumbnailUploadOutcome.Succeeded(diagnostics.ThumbnailWarning)
+                : ThumbnailUploadOutcome.Succeeded(null);
         }
         catch (Exception ex)
         {
             diagnostics.UploadStatus = GetUploadStatus(ex) ?? "Failed";
             diagnostics.Error = BuildThumbnailError(videoId, ex);
             diagnostics.GoogleError = diagnostics.Error;
+            diagnostics.GoogleStatusCode = GetGoogleStatusCode(ex);
+            diagnostics.GoogleErrorReason = GetGoogleErrorReason(ex);
+            diagnostics.GoogleErrorMessage = GetGoogleErrorMessage(ex) ?? diagnostics.Error;
             diagnostics.UploadAttempted = true;
             diagnostics.UploadSuccess = false;
             if (YouTubeThumbnailUploadFailureClassifier.IsPermanentPermissionFailure(ex))
@@ -285,7 +317,41 @@ public sealed class YouTubePublishService : IYouTubePublishService
 
             LogThumbnailUploadDiagnostics(videoId, diagnostics.UploadStatus, ex);
             await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
-            return diagnostics.Warning ?? $"Thumbnail upload failed: {diagnostics.Error}";
+            return ThumbnailUploadOutcome.Failed(true, diagnostics.Warning ?? $"Thumbnail upload failed: {diagnostics.Error}");
+        }
+    }
+
+    private async Task PopulatePostUploadStatusAsync(string videoId, string accessToken, YouTubeThumbnailUploadDiagnostics diagnostics, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var status = await _apiClient.GetVideoPostUploadStatusAsync(videoId, accessToken, cancellationToken);
+            diagnostics.SnippetThumbnailsAfterUpload = status is null
+                ? null
+                : new
+                {
+                    Default = status.SnippetThumbnailDefault,
+                    Medium = status.SnippetThumbnailMedium,
+                    High = status.SnippetThumbnailHigh
+                };
+            diagnostics.SnippetThumbnailDefault = status?.SnippetThumbnailDefault;
+            diagnostics.SnippetThumbnailMedium = status?.SnippetThumbnailMedium;
+            diagnostics.SnippetThumbnailHigh = status?.SnippetThumbnailHigh;
+            diagnostics.StatusUploadStatus = status?.UploadStatus;
+            diagnostics.StatusPrivacyStatus = status?.PrivacyStatus;
+
+            _logger.LogInformation(
+                "YouTube post-thumbnail videos.list for {VideoId}: default={DefaultThumbnail}, medium={MediumThumbnail}, high={HighThumbnail}, uploadStatus={UploadStatus}, privacyStatus={PrivacyStatus}",
+                videoId,
+                status?.SnippetThumbnailDefault,
+                status?.SnippetThumbnailMedium,
+                status?.SnippetThumbnailHigh,
+                status?.UploadStatus,
+                status?.PrivacyStatus);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "YouTube videos.list after thumbnail upload failed for {VideoId}.", videoId);
         }
     }
 
@@ -443,6 +509,37 @@ public sealed class YouTubePublishService : IYouTubePublishService
     private static string? GetUploadStatus(Exception ex)
         => ex is YouTubeThumbnailUploadException thumbnailException ? thumbnailException.UploadStatus : null;
 
+    private static int? GetGoogleStatusCode(Exception ex)
+        => FindGoogleApiException(ex) is { } googleApiException ? (int)googleApiException.HttpStatusCode : null;
+
+    private static string? GetGoogleErrorReason(Exception ex)
+        => FindGoogleApiException(ex)?.Error?.Errors?.FirstOrDefault()?.Reason;
+
+    private static string? GetGoogleErrorMessage(Exception ex)
+        => FindGoogleApiException(ex)?.Error?.Message ?? FindGoogleApiException(ex)?.Message;
+
+    private static GoogleApiException? FindGoogleApiException(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is GoogleApiException googleApiException)
+            {
+                return googleApiException;
+            }
+
+            if (current is YouTubeThumbnailUploadException thumbnailException && thumbnailException.UploadException is not null)
+            {
+                var uploadException = FindGoogleApiException(thumbnailException.UploadException);
+                if (uploadException is not null)
+                {
+                    return uploadException;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private long GetMaxThumbnailSizeBytes()
         => _youTubeOptions.MaxThumbnailSizeBytes > 0 ? _youTubeOptions.MaxThumbnailSizeBytes : 2 * 1024 * 1024;
 
@@ -546,9 +643,18 @@ public sealed class YouTubePublishService : IYouTubePublishService
     }
 }
 
+internal sealed record ThumbnailUploadOutcome(bool UploadAttempted, bool UploadSuccess, string? Warning, string? FailureWarning, string? NonFailureWarning)
+{
+    public static ThumbnailUploadOutcome Succeeded(string? warning) => new(true, true, warning, null, warning);
+    public static ThumbnailUploadOutcome Failed(bool attempted, string warning) => new(attempted, false, warning, warning, null);
+    public static ThumbnailUploadOutcome Skipped(string? warning) => new(false, false, warning, null, warning);
+}
+
 internal sealed class YouTubeThumbnailUploadDiagnostics
 {
     public string VideoId { get; init; } = string.Empty;
+    public bool IsShortVideo { get; init; }
+    public string VideoPath { get; init; } = string.Empty;
     public string ContentKind { get; init; } = string.Empty;
     public string UploadedThumbnailPath { get; init; } = string.Empty;
     public string ThumbnailSource { get; init; } = ThumbnailSources.None;
@@ -562,10 +668,20 @@ internal sealed class YouTubeThumbnailUploadDiagnostics
     public bool UploadSuccess { get; set; }
     public string? UploadStatus { get; set; }
     public string? GoogleError { get; set; }
+    public int? GoogleStatusCode { get; set; }
+    public string? GoogleErrorReason { get; set; }
+    public string? GoogleErrorMessage { get; set; }
     public string? Warning { get; set; }
     public string? Error { get; set; }
     public string? CompressedThumbnailPath { get; set; }
     public string? FailureCategory { get; set; }
     public object? SnippetThumbnailsAfterUpload { get; set; }
+    public object? SnippetThumbnailDefault { get; set; }
+    public object? SnippetThumbnailMedium { get; set; }
+    public object? SnippetThumbnailHigh { get; set; }
+    public string? StatusUploadStatus { get; set; }
+    public string? StatusPrivacyStatus { get; set; }
+    public bool? ThumbnailUploadSuccess { get; set; }
+    public string? ThumbnailWarning { get; set; }
     public string? RecommendedAction { get; set; }
 }
