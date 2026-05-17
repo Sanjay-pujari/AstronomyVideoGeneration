@@ -61,6 +61,49 @@ public sealed class RenderingOptionsBindingTests
         Assert.True(options.EnableYouTube1440pUpscale);
     }
 
+
+    [Fact]
+    public void RenderingOptions_BindsVideoEncodingProfilesFromConfiguration()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{RenderingOptions.VideoEncodingSectionName}:IntermediatePreset"] = "fast",
+                [$"{RenderingOptions.VideoEncodingSectionName}:IntermediateCrf"] = "21",
+                [$"{RenderingOptions.VideoEncodingSectionName}:IntermediateScaleFlags"] = "bicubic",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongPreset"] = "medium",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongCrf"] = "18",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongWidth"] = "2560",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongHeight"] = "1440",
+                [$"{RenderingOptions.VideoEncodingSectionName}:EnableYouTube1440pUpscale"] = "true",
+                [$"{RenderingOptions.VideoEncodingSectionName}:ShortsPreset"] = "medium",
+                [$"{RenderingOptions.VideoEncodingSectionName}:ShortsCrf"] = "20",
+                [$"{RenderingOptions.VideoEncodingSectionName}:ShortsMaxRate"] = "12M",
+                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelPreset"] = "medium",
+                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelCrf"] = "21",
+                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelMaxRate"] = "10M"
+            })
+            .Build();
+
+        var options = new RenderingOptions();
+        config.GetSection(RenderingOptions.VideoEncodingSectionName).Bind(options);
+
+        Assert.Equal("fast", options.IntermediatePreset);
+        Assert.Equal(21, options.IntermediateCrf);
+        Assert.Equal("bicubic", options.IntermediateScaleFlags);
+        Assert.Equal("medium", options.YouTubeLongPreset);
+        Assert.Equal(18, options.YouTubeLongCrf);
+        Assert.Equal(2560, options.YouTubeLongWidth);
+        Assert.Equal(1440, options.YouTubeLongHeight);
+        Assert.True(options.EnableYouTube1440pUpscale);
+        Assert.Equal("medium", options.ShortsPreset);
+        Assert.Equal(20, options.ShortsCrf);
+        Assert.Equal("12M", options.ShortsMaxRate);
+        Assert.Equal("medium", options.MetaReelPreset);
+        Assert.Equal(21, options.MetaReelCrf);
+        Assert.Equal("10M", options.MetaReelMaxRate);
+    }
+
     [Fact]
     public void ThumbnailCinematicAIOptions_BindsPhase3Configuration()
     {

@@ -370,6 +370,7 @@ public sealed class RenderManifest
     public int? OutputWidth { get; set; }
     public int? OutputHeight { get; set; }
     public bool EnableVerticalCrop { get; set; }
+    public VideoRenderProfileKind EncodingProfile { get; set; } = VideoRenderProfileKind.Auto;
     public List<RenderScene> Scenes { get; set; } = new();
 }
 public sealed class RenderScene
