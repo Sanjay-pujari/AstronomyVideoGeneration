@@ -63,9 +63,9 @@ public sealed class ContentPublishService : IContentPublishService
         var selector = NormalizeAssetSelector(asset);
         var assets = await BuildAssetsAsync(run, outputDirectory, mode, selector, cancellationToken);
         var diagnostics = BuildAssetDiagnostics(assets, selector).ToList();
-        foreach (var asset in assets)
+        foreach (var publishAsset in assets)
         {
-            _logger.LogInformation("Platform thumbnail resolved: {@ThumbnailResolution}", new { Platform = "YouTube", ContentKind = asset.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo, ResolvedThumbnailPath = asset.PlatformThumbnailPath, ThumbnailSource = asset.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(asset.PlatformThumbnailPath) && File.Exists(asset.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(asset.PlatformThumbnailPath) && File.Exists(asset.PlatformThumbnailPath) ? new FileInfo(asset.PlatformThumbnailPath).Length : 0 });
+            _logger.LogInformation("Platform thumbnail resolved: {@ThumbnailResolution}", new { Platform = "YouTube", ContentKind = publishAsset.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo, ResolvedThumbnailPath = publishAsset.PlatformThumbnailPath, ThumbnailSource = publishAsset.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(publishAsset.PlatformThumbnailPath) && File.Exists(publishAsset.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(publishAsset.PlatformThumbnailPath) && File.Exists(publishAsset.PlatformThumbnailPath) ? new FileInfo(publishAsset.PlatformThumbnailPath).Length : 0 });
         }
         await WritePlatformThumbnailResolutionReportAsync(outputDirectory, assets.Select(a => new PlatformThumbnailResolutionReportEntry
         {
