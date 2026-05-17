@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
@@ -281,6 +283,54 @@ app.MapGet("/api/pipeline/status/{pipelineRunId:guid}", async (Guid pipelineRunI
 {
     var status = await recoveryService.GetStatusAsync(pipelineRunId, ct, includeInternal ?? false);
     return status is null ? Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." }) : Results.Ok(status);
+});
+
+app.MapGet("/api/pipeline/{runId:guid}/thumbnail-publish-status", async (Guid runId, IPipelineRepository repository, CancellationToken ct) =>
+{
+    var run = await repository.GetAsync(runId, ct);
+    if (run is null)
+    {
+        return Results.NotFound(new { message = $"Pipeline run {runId} was not found." });
+    }
+
+    var outputDirectory = run.OutputFolder;
+    if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
+    {
+        return Results.NotFound(new { message = $"Pipeline run {runId} output folder was not found.", outputDirectory });
+    }
+
+    async Task<JsonNode?> ReadJsonAsync(string fileName)
+    {
+        var path = Path.Combine(outputDirectory, fileName);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        return JsonNode.Parse(await File.ReadAllTextAsync(path, ct));
+    }
+
+    var report = await ReadJsonAsync("platform-thumbnail-resolution-report.json");
+    var youtubeLong = await ReadJsonAsync("youtube-publish-result-long.json");
+    var youtubeShort = await ReadJsonAsync("youtube-publish-result-short.json");
+    var facebook = await ReadJsonAsync("facebook-reel-publish-result.json");
+    var instagram = await ReadJsonAsync("instagram-reel-publish-result.json");
+    var facebookThumb = await ReadJsonAsync("facebook-thumbnail-upload-diagnostics.json");
+    var instagramThumb = await ReadJsonAsync("instagram-thumbnail-upload-diagnostics.json");
+    var youtubeThumb = await ReadJsonAsync("youtube-thumbnail-upload-diagnostics.json");
+
+    return Results.Ok(new
+    {
+        runId,
+        localGeneratedThumbnails = new
+        {
+            longPath = Path.Combine(outputDirectory, "thumbnails", "thumbnail-long.jpg"),
+            shortPath = Path.Combine(outputDirectory, "thumbnails", "thumbnail-short.jpg")
+        },
+        perPlatformResolution = report,
+        publishResults = new { youtubeLong, youtubeShort, facebook, instagram },
+        thumbnailDiagnostics = new { youtube = youtubeThumb, facebook = facebookThumb, instagram = instagramThumb }
+    });
 });
 app.MapPost("/api/pipeline/resume/{pipelineRunId:guid}", async (Guid pipelineRunId, string? forceStage, IPipelineRecoveryService recoveryService, CancellationToken ct) =>
 {

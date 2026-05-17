@@ -143,8 +143,8 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 : NormalizePrivacy(request.PrivacyStatus, _publishingOptions.DefaultPrivacyStatus, _youTubeOptions.DefaultPrivacyStatus);
 
         var selectedThumbnailPath = request.IsShort
-            ? FirstNonBlank(request.ShortThumbnailPath, request.PlatformThumbnailPath, request.ThumbnailPath)
-            : FirstNonBlank(request.LongThumbnailPath, request.PlatformThumbnailPath, request.ThumbnailPath);
+            ? FirstNonBlank(request.PlatformThumbnailPath, request.ShortThumbnailPath, request.ThumbnailPath)
+            : FirstNonBlank(request.PlatformThumbnailPath, request.LongThumbnailPath, request.ThumbnailPath);
 
         return new PublishRequest
         {
@@ -209,6 +209,9 @@ public sealed class YouTubePublishService : IYouTubePublishService
         var diagnostics = new YouTubeThumbnailUploadDiagnostics
         {
             VideoId = videoId,
+            ContentKind = request.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
+            UploadedThumbnailPath = request.PlatformThumbnailPath,
+            ThumbnailSource = request.ThumbnailSource,
             ThumbnailPath = request.ThumbnailPath,
             FileExists = !string.IsNullOrWhiteSpace(request.ThumbnailPath) && File.Exists(request.ThumbnailPath),
             MimeType = GetMimeType(request.ThumbnailPath)
@@ -221,6 +224,9 @@ public sealed class YouTubePublishService : IYouTubePublishService
             if (validationError is not null)
             {
                 diagnostics.Error = validationError;
+                diagnostics.UploadAttempted = false;
+                diagnostics.UploadSuccess = false;
+                diagnostics.Warning = validationError;
                 diagnostics.UploadStatus = "Skipped";
                 await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
                 _logger.LogWarning("Skipping YouTube thumbnail upload for {VideoId}: {Reason}", videoId, validationError);
@@ -242,6 +248,8 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 "YouTube thumbnail upload",
                 videoId,
                 cancellationToken);
+            diagnostics.UploadAttempted = true;
+            diagnostics.UploadSuccess = true;
             diagnostics.UploadStatus = "Completed";
             await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
             return null;
@@ -250,15 +258,19 @@ public sealed class YouTubePublishService : IYouTubePublishService
         {
             diagnostics.UploadStatus = GetUploadStatus(ex) ?? "Failed";
             diagnostics.Error = BuildThumbnailError(videoId, ex);
+            diagnostics.GoogleError = diagnostics.Error;
+            diagnostics.UploadAttempted = true;
+            diagnostics.UploadSuccess = false;
             if (YouTubeThumbnailUploadFailureClassifier.IsPermanentPermissionFailure(ex))
             {
                 diagnostics.FailureCategory = YouTubeThumbnailUploadFailureClassifier.ThumbnailPermissionFailureCategory;
                 diagnostics.RecommendedAction = YouTubeThumbnailUploadFailureClassifier.ThumbnailPermissionRecommendedAction;
+                diagnostics.Warning = "YouTube custom thumbnail upload failed. Channel may require verification/intermediate/advanced features.";
             }
 
             LogThumbnailUploadDiagnostics(videoId, diagnostics.UploadStatus, ex);
             await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
-            return $"Thumbnail upload failed: {diagnostics.Error}";
+            return diagnostics.Warning ?? $"Thumbnail upload failed: {diagnostics.Error}";
         }
     }
 
@@ -516,13 +528,20 @@ public sealed class YouTubePublishService : IYouTubePublishService
 internal sealed class YouTubeThumbnailUploadDiagnostics
 {
     public string VideoId { get; init; } = string.Empty;
+    public string ContentKind { get; init; } = string.Empty;
+    public string UploadedThumbnailPath { get; init; } = string.Empty;
+    public string ThumbnailSource { get; init; } = ThumbnailSources.None;
     public string ThumbnailPath { get; init; } = string.Empty;
     public bool FileExists { get; init; }
     public long? FileSizeBytes { get; set; }
     public int? Width { get; set; }
     public int? Height { get; set; }
     public string? MimeType { get; set; }
+    public bool UploadAttempted { get; set; }
+    public bool UploadSuccess { get; set; }
     public string? UploadStatus { get; set; }
+    public string? GoogleError { get; set; }
+    public string? Warning { get; set; }
     public string? Error { get; set; }
     public string? CompressedThumbnailPath { get; set; }
     public string? FailureCategory { get; set; }

@@ -362,6 +362,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISeoMetadataGeneratorService, SeoMetadataGeneratorService>();
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
         services.AddScoped<IPublicMediaStorageService, AzureBlobPublicMediaStorageService>();
+        services.AddScoped<IMetaThumbnailAssetPublisher, MetaThumbnailAssetPublisher>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());
         services.AddHttpClient<IYouTubeAuthService, YouTubeAuthService>();

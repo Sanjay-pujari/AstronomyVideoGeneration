@@ -8,6 +8,7 @@ public sealed class PublishAsset
     public string LongThumbnailPath { get; init; } = string.Empty;
     public string ShortThumbnailPath { get; init; } = string.Empty;
     public string PlatformThumbnailPath { get; init; } = string.Empty;
+    public string UploadedThumbnailUrl { get; init; } = string.Empty;
     public string ThumbnailSource { get; init; } = ThumbnailSources.GeneratedThumbnail;
     public string Title { get; init; } = string.Empty;
     public string Description { get; init; } = string.Empty;
@@ -44,6 +45,7 @@ public sealed class PublishResult
     public string Platform { get; init; } = "YouTube";
     public string ContentType { get; init; } = "LongVideo";
     public string? UploadedThumbnailPath { get; init; }
+    public string? UploadedThumbnailUrl { get; init; }
     public string? ThumbnailSource { get; init; }
     public bool ThumbnailUploadAttempted { get; init; }
     public bool ThumbnailUploadSuccess { get; init; }
@@ -74,6 +76,7 @@ public sealed class MetaPublishRequest
     public string LongThumbnailPath { get; init; } = string.Empty;
     public string ShortThumbnailPath { get; init; } = string.Empty;
     public string PlatformThumbnailPath { get; init; } = string.Empty;
+    public string UploadedThumbnailUrl { get; init; } = string.Empty;
     public string ThumbnailSource { get; init; } = ThumbnailSources.GeneratedThumbnail;
     public string Caption { get; init; } = string.Empty;
     public string ShortTitle { get; init; } = string.Empty;
@@ -86,6 +89,7 @@ public sealed class MetaPublishResult
     public string Platform { get; init; } = "Facebook";
     public string ContentType { get; init; } = "Reel";
     public string? UploadedThumbnailPath { get; init; }
+    public string? UploadedThumbnailUrl { get; init; }
     public string? ThumbnailSource { get; init; }
     public bool ThumbnailUploadAttempted { get; init; }
     public bool ThumbnailUploadSuccess { get; init; }

@@ -63,6 +63,19 @@ public sealed class ContentPublishService : IContentPublishService
         var selector = NormalizeAssetSelector(asset);
         var assets = await BuildAssetsAsync(run, outputDirectory, mode, selector, cancellationToken);
         var diagnostics = BuildAssetDiagnostics(assets, selector).ToList();
+        foreach (var asset in assets)
+        {
+            _logger.LogInformation("Platform thumbnail resolved: {@ThumbnailResolution}", new { Platform = "YouTube", ContentKind = asset.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo, ResolvedThumbnailPath = asset.PlatformThumbnailPath, ThumbnailSource = asset.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(asset.PlatformThumbnailPath) && File.Exists(asset.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(asset.PlatformThumbnailPath) && File.Exists(asset.PlatformThumbnailPath) ? new FileInfo(asset.PlatformThumbnailPath).Length : 0 });
+        }
+        await WritePlatformThumbnailResolutionReportAsync(outputDirectory, assets.Select(a => new PlatformThumbnailResolutionReportEntry
+        {
+            Platform = "YouTube",
+            ContentKind = a.IsShort ? PlatformThumbnailContentTypes.ShortVideo : PlatformThumbnailContentTypes.LongVideo,
+            ResolvedThumbnailPath = a.PlatformThumbnailPath,
+            ThumbnailSource = a.ThumbnailSource,
+            Exists = !string.IsNullOrWhiteSpace(a.PlatformThumbnailPath) && File.Exists(a.PlatformThumbnailPath),
+            Size = !string.IsNullOrWhiteSpace(a.PlatformThumbnailPath) && File.Exists(a.PlatformThumbnailPath) ? new FileInfo(a.PlatformThumbnailPath).Length : 0
+        }), cancellationToken);
         var results = new List<PublishResult>();
 
         if (mode == "Disabled")
@@ -373,119 +386,44 @@ public sealed class ContentPublishService : IContentPublishService
         return value ?? throw new InvalidOperationException($"Required publish artifact is invalid: {Path.GetFileName(path)}");
     }
 
+
+
     private async Task<string> ResolveThumbnailPathAsync(string outputDirectory, CancellationToken cancellationToken)
     {
-        var selectionPath = ResolveSelectionPath(outputDirectory, preferRootThumbnails: true);
-
-        if (File.Exists(selectionPath))
-        {
-            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath, cancellationToken));
-            foreach (var propertyName in new[] { "longThumbnailPath", "LongThumbnailPath", "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath", "ThumbnailPath" })
-            {
-                if (TryResolveSelectionPath(doc.RootElement, propertyName, outputDirectory, selectionPath, out var candidate))
-                {
-                    return candidate;
-                }
-            }
-        }
-
-        foreach (var fallback in new[]
-        {
-            Path.Combine(outputDirectory, "thumbnails", "thumbnail-long.jpg"),
-            Path.Combine(outputDirectory, "thumbnail-long.jpg"),
-            Path.Combine(outputDirectory, "thumbnail-1.png"),
-            Path.Combine(outputDirectory, "thumbnails", "thumbnail-1.png")
-        })
-        {
-            if (File.Exists(fallback))
-            {
-                return fallback;
-            }
-        }
-
-        return Path.Combine(outputDirectory, "thumbnail-long.jpg");
+        var resolver = _thumbnailResolver ?? new PlatformThumbnailResolver(Microsoft.Extensions.Logging.Abstractions.NullLogger<PlatformThumbnailResolver>.Instance);
+        var resolution = await resolver.ResolveAsync(outputDirectory, "YouTube", PlatformThumbnailContentTypes.LongVideo, cancellationToken);
+        return resolution.PlatformThumbnailPath;
     }
 
     private async Task<string> ResolveShortThumbnailPathAsync(string outputDirectory, CancellationToken cancellationToken)
     {
-        var shortsDirectory = Path.Combine(outputDirectory, "shorts");
-        foreach (var selectionPath in new[]
-        {
-            ResolveSelectionPath(outputDirectory, preferRootThumbnails: true),
-            Path.Combine(shortsDirectory, "thumbnails", "thumbnail-selection.json"),
-            Path.Combine(shortsDirectory, "thumbnail-selection.json")
-        }.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (!File.Exists(selectionPath))
-            {
-                continue;
-            }
-
-            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(selectionPath, cancellationToken));
-            foreach (var propertyName in new[] { "shortThumbnailPath", "ShortThumbnailPath", "preferredThumbnailPath", "selectedThumbnailPath", "thumbnailPath", "ThumbnailPath" })
-            {
-                if (TryResolveSelectionPath(doc.RootElement, propertyName, outputDirectory, selectionPath, out var candidate))
-                {
-                    return candidate;
-                }
-            }
-        }
-
-        foreach (var candidate in new[]
-        {
-            Path.Combine(outputDirectory, "thumbnails", "thumbnail-short.jpg"),
-            Path.Combine(shortsDirectory, "thumbnail-short.jpg"),
-            Path.Combine(shortsDirectory, "thumbnails", "thumbnail-short.jpg"),
-            Path.Combine(shortsDirectory, "thumbnail-1.png"),
-            Path.Combine(shortsDirectory, "short-cover-1.png"),
-            Path.Combine(shortsDirectory, "thumbnails", "thumbnail-1.png")
-        })
-        {
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return string.Empty;
+        var resolver = _thumbnailResolver ?? new PlatformThumbnailResolver(Microsoft.Extensions.Logging.Abstractions.NullLogger<PlatformThumbnailResolver>.Instance);
+        var resolution = await resolver.ResolveAsync(outputDirectory, "YouTube", PlatformThumbnailContentTypes.ShortVideo, cancellationToken);
+        return resolution.PlatformThumbnailPath;
     }
 
-    private static string ResolveSelectionPath(string outputDirectory, bool preferRootThumbnails)
+    private static async Task WritePlatformThumbnailResolutionReportAsync(string outputDirectory, IEnumerable<PlatformThumbnailResolutionReportEntry> entries, CancellationToken cancellationToken)
     {
-        var primary = preferRootThumbnails
-            ? Path.Combine(outputDirectory, "thumbnails", "thumbnail-selection.json")
-            : Path.Combine(outputDirectory, "thumbnail-selection.json");
-        if (File.Exists(primary))
+        var path = Path.Combine(outputDirectory, "platform-thumbnail-resolution-report.json");
+        var combined = new List<PlatformThumbnailResolutionReportEntry>();
+        if (File.Exists(path))
         {
-            return primary;
+            try
+            {
+                combined.AddRange(JsonSerializer.Deserialize<List<PlatformThumbnailResolutionReportEntry>>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions) ?? []);
+            }
+            catch (JsonException)
+            {
+            }
         }
 
-        var fallback = preferRootThumbnails
-            ? Path.Combine(outputDirectory, "thumbnail-selection.json")
-            : Path.Combine(outputDirectory, "thumbnails", "thumbnail-selection.json");
-        return fallback;
-    }
-
-    private static bool TryResolveSelectionPath(JsonElement element, string propertyName, string outputDirectory, string selectionPath, out string resolvedPath)
-    {
-        resolvedPath = string.Empty;
-        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String)
+        foreach (var entry in entries)
         {
-            return false;
+            combined.RemoveAll(x => x.Platform.Equals(entry.Platform, StringComparison.OrdinalIgnoreCase) && x.ContentKind.Equals(entry.ContentKind, StringComparison.OrdinalIgnoreCase));
+            combined.Add(entry);
         }
 
-        var candidate = property.GetString();
-        if (string.IsNullOrWhiteSpace(candidate))
-        {
-            return false;
-        }
-
-        resolvedPath = Path.IsPathRooted(candidate)
-            ? candidate
-            : Path.GetDirectoryName(selectionPath) is { } selectionDirectory && File.Exists(Path.Combine(selectionDirectory, candidate))
-                ? Path.Combine(selectionDirectory, candidate)
-                : Path.Combine(outputDirectory, candidate);
-        return File.Exists(resolvedPath);
+        await WriteJsonAsync(path, combined.OrderBy(x => x.Platform).ThenBy(x => x.ContentKind).ToList(), cancellationToken);
     }
 
     private string ResolveOutputDirectory(PipelineRun run)
@@ -661,4 +599,15 @@ public sealed class ContentPublishService : IContentPublishService
         public string? SkipReason { get; set; }
         public bool? YouTubeShortEligible { get; set; }
     }
+}
+
+
+internal sealed class PlatformThumbnailResolutionReportEntry
+{
+    public string Platform { get; init; } = string.Empty;
+    public string ContentKind { get; init; } = string.Empty;
+    public string ResolvedThumbnailPath { get; init; } = string.Empty;
+    public string ThumbnailSource { get; init; } = ThumbnailSources.None;
+    public bool Exists { get; init; }
+    public long Size { get; init; }
 }

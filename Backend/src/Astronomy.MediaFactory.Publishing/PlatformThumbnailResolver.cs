@@ -26,7 +26,7 @@ public sealed class PlatformThumbnailResolver : IPlatformThumbnailResolver
             ? longThumbnailPath
             : shortThumbnailPath;
 
-        var canonicalValidation = await ValidateImageAsync(canonicalPath, cancellationToken);
+        var canonicalValidation = await ValidateImageAsync(canonicalPath, platform, cancellationToken);
         if (canonicalValidation.IsValid)
         {
             return new PlatformThumbnailResolution
@@ -72,7 +72,7 @@ public sealed class PlatformThumbnailResolver : IPlatformThumbnailResolver
     {
         foreach (var candidate in GetFallbackCandidates(outputDirectory, contentType).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var validation = await ValidateImageAsync(candidate, cancellationToken);
+            var validation = await ValidateImageAsync(candidate, platform: null, cancellationToken);
             if (validation.IsValid)
             {
                 return (candidate, validation);
@@ -110,7 +110,7 @@ public sealed class PlatformThumbnailResolver : IPlatformThumbnailResolver
         yield return Path.Combine(shortsDirectory, "thumbnails", "thumbnail-1.jpeg");
     }
 
-    private static async Task<ThumbnailImageValidation> ValidateImageAsync(string path, CancellationToken cancellationToken)
+    private static async Task<ThumbnailImageValidation> ValidateImageAsync(string path, string? platform, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
@@ -126,6 +126,11 @@ public sealed class PlatformThumbnailResolver : IPlatformThumbnailResolver
         if (!IsSupportedImageExtension(Path.GetExtension(path)))
         {
             return new ThumbnailImageValidation(false, "Thumbnail must be a JPG or PNG file.", fileInfo.Length, null, null);
+        }
+
+        if (string.Equals(platform, "YouTube", StringComparison.OrdinalIgnoreCase) && fileInfo.Length > 2 * 1024 * 1024)
+        {
+            return new ThumbnailImageValidation(false, "YouTube thumbnail must be 2MB or smaller.", fileInfo.Length, null, null);
         }
 
         try
@@ -147,7 +152,9 @@ public sealed class PlatformThumbnailResolver : IPlatformThumbnailResolver
     private static string NormalizeContentType(string? contentType)
         => string.Equals(contentType, PlatformThumbnailContentTypes.LongVideo, StringComparison.OrdinalIgnoreCase)
             ? PlatformThumbnailContentTypes.LongVideo
-            : PlatformThumbnailContentTypes.ShortVideo;
+            : string.Equals(contentType, PlatformThumbnailContentTypes.Reel, StringComparison.OrdinalIgnoreCase)
+                ? PlatformThumbnailContentTypes.Reel
+                : PlatformThumbnailContentTypes.ShortVideo;
 
     private static bool IsSupportedImageExtension(string extension)
         => extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)

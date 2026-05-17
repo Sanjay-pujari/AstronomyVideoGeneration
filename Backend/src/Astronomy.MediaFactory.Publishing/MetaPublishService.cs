@@ -97,6 +97,13 @@ public sealed class MetaPublishService : IMetaPublishService
         var videoPath = Path.Combine(outputDirectory, "shorts", "short-video.mp4");
         var facebookThumbnail = await _thumbnailResolver.ResolveAsync(outputDirectory, "Facebook", PlatformThumbnailContentTypes.Reel, cancellationToken);
         var instagramThumbnail = await _thumbnailResolver.ResolveAsync(outputDirectory, "Instagram", PlatformThumbnailContentTypes.Reel, cancellationToken);
+        _logger.LogInformation("Platform thumbnail resolved: {@ThumbnailResolution}", new { Platform = "Facebook", ContentKind = PlatformThumbnailContentTypes.Reel, ResolvedThumbnailPath = facebookThumbnail.PlatformThumbnailPath, ThumbnailSource = facebookThumbnail.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(facebookThumbnail.PlatformThumbnailPath) && File.Exists(facebookThumbnail.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(facebookThumbnail.PlatformThumbnailPath) && File.Exists(facebookThumbnail.PlatformThumbnailPath) ? new FileInfo(facebookThumbnail.PlatformThumbnailPath).Length : 0 });
+        _logger.LogInformation("Platform thumbnail resolved: {@ThumbnailResolution}", new { Platform = "Instagram", ContentKind = PlatformThumbnailContentTypes.Reel, ResolvedThumbnailPath = instagramThumbnail.PlatformThumbnailPath, ThumbnailSource = instagramThumbnail.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(instagramThumbnail.PlatformThumbnailPath) && File.Exists(instagramThumbnail.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(instagramThumbnail.PlatformThumbnailPath) && File.Exists(instagramThumbnail.PlatformThumbnailPath) ? new FileInfo(instagramThumbnail.PlatformThumbnailPath).Length : 0 });
+        await WritePlatformThumbnailResolutionReportAsync(outputDirectory, new[]
+        {
+            new PlatformThumbnailResolutionReportEntry { Platform = "Facebook", ContentKind = PlatformThumbnailContentTypes.Reel, ResolvedThumbnailPath = facebookThumbnail.PlatformThumbnailPath, ThumbnailSource = facebookThumbnail.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(facebookThumbnail.PlatformThumbnailPath) && File.Exists(facebookThumbnail.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(facebookThumbnail.PlatformThumbnailPath) && File.Exists(facebookThumbnail.PlatformThumbnailPath) ? new FileInfo(facebookThumbnail.PlatformThumbnailPath).Length : 0 },
+            new PlatformThumbnailResolutionReportEntry { Platform = "Instagram", ContentKind = PlatformThumbnailContentTypes.Reel, ResolvedThumbnailPath = instagramThumbnail.PlatformThumbnailPath, ThumbnailSource = instagramThumbnail.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(instagramThumbnail.PlatformThumbnailPath) && File.Exists(instagramThumbnail.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(instagramThumbnail.PlatformThumbnailPath) && File.Exists(instagramThumbnail.PlatformThumbnailPath) ? new FileInfo(instagramThumbnail.PlatformThumbnailPath).Length : 0 }
+        }, cancellationToken);
         var results = new List<MetaPublishResult>();
 
         if (publishFacebook)
@@ -150,6 +157,32 @@ public sealed class MetaPublishService : IMetaPublishService
         }
 
         return results;
+    }
+
+
+    private static async Task WritePlatformThumbnailResolutionReportAsync(string outputDirectory, IEnumerable<PlatformThumbnailResolutionReportEntry> entries, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(outputDirectory, "platform-thumbnail-resolution-report.json");
+        var combined = new List<PlatformThumbnailResolutionReportEntry>();
+        if (File.Exists(path))
+        {
+            try
+            {
+                combined.AddRange(JsonSerializer.Deserialize<List<PlatformThumbnailResolutionReportEntry>>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions) ?? []);
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        foreach (var entry in entries)
+        {
+            combined.RemoveAll(x => x.Platform.Equals(entry.Platform, StringComparison.OrdinalIgnoreCase) && x.ContentKind.Equals(entry.ContentKind, StringComparison.OrdinalIgnoreCase));
+            combined.Add(entry);
+            // Structured pre-publish diagnostic is intentionally mirrored to the report file.
+        }
+
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(combined.OrderBy(x => x.Platform).ThenBy(x => x.ContentKind).ToList(), JsonOptions), cancellationToken);
     }
 
     private async Task<string?> GetTokenHealthBlockReasonAsync(CancellationToken cancellationToken)

@@ -147,6 +147,12 @@ public interface IAzureBlobStorageService { Task<BlobUploadResult> UploadAsync(B
 public interface IPublicMediaStorageService
 {
     Task<PublicMediaUploadResult> UploadForInstagramAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken);
+    Task<PublicMediaUploadResult> UploadPublicAssetAsync(string localFilePath, Guid pipelineRunId, string assetFileName, string contentType, CancellationToken cancellationToken);
+}
+
+public interface IMetaThumbnailAssetPublisher
+{
+    Task<PublicMediaUploadResult> UploadThumbnailAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken);
 }
 public interface IYouTubePublishingService { Task<string?> UploadAsync(string videoPath, string title, string description, IReadOnlyCollection<string> tags, string visibility, CancellationToken cancellationToken); }
 public interface IYouTubeThumbnailPublisher { Task<bool> UploadThumbnailAsync(string videoId, string thumbnailPath, CancellationToken cancellationToken); }

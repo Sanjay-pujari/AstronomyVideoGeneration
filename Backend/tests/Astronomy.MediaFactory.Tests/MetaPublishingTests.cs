@@ -443,6 +443,26 @@ public sealed class MetaPublishingTests
         Assert.Contains("%2Fshort-video.mp4%3Fsig%3Dsecret", container.Body);
     }
 
+
+    [Fact]
+    public async Task InstagramMediaCall_ReceivesPublicCoverUrl()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler();
+        var storage = new RecordingPublicMediaStorageService("https://storage.example.test/meta-media/astronomy/reels/" + run.Id + "/short-video.mp4?sig=secret");
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = false, PublishInstagramReel = true, InstagramContainerPollSeconds = 0, InstagramContainerMaxAttempts = 1 }, storage);
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "instagram-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "thumbnails", "thumbnail-short.jpg"), storage.ThumbnailLocalFilePath);
+        var container = handler.Requests.Single(x => x.Phase == "ig-container");
+        Assert.Contains("cover_url=https%3A%2F%2Fstorage.example.test%2Fmeta-media%2Fastronomy%2Freels%2F", container.Body);
+        Assert.Contains("%2Fthumbnail-short.jpg%3Fsig%3Dsecret", container.Body);
+        Assert.DoesNotContain("thumbnail-short.jpg&", container.Body);
+    }
+
     [Fact]
     public async Task InstagramRealMode_MissingStorageConfig_FailsClearly()
     {
@@ -517,7 +537,8 @@ internal static class MetaPublishingTestFactory
             Options.Create(options),
             Options.Create(new RenderingOptions { FfprobePath = "missing-ffprobe-for-tests" }),
             NullLogger<InstagramReelPublishService>.Instance,
-            publicMediaStorageService);
+            publicMediaStorageService,
+            publicMediaStorageService is null ? null : new MetaThumbnailAssetPublisher(publicMediaStorageService));
 
         return new MetaPublishService(
             repository,
@@ -538,7 +559,10 @@ internal sealed class FixedPublicMediaStorageService : IPublicMediaStorageServic
     public FixedPublicMediaStorageService(string publicUrl) => _publicUrl = publicUrl;
 
     public Task<PublicMediaUploadResult> UploadForInstagramAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken)
-        => Task.FromResult(new PublicMediaUploadResult { Success = true, PublicUrl = _publicUrl, BlobName = $"astronomy/reels/{pipelineRunId}/short-video.mp4", ExpiresUtc = DateTime.UtcNow.AddHours(24) });
+        => UploadPublicAssetAsync(localFilePath, pipelineRunId, "short-video.mp4", "video/mp4", cancellationToken);
+
+    public Task<PublicMediaUploadResult> UploadPublicAssetAsync(string localFilePath, Guid pipelineRunId, string assetFileName, string contentType, CancellationToken cancellationToken)
+        => Task.FromResult(new PublicMediaUploadResult { Success = true, PublicUrl = _publicUrl.Replace("short-video.mp4", assetFileName), BlobName = $"astronomy/reels/{pipelineRunId}/{assetFileName}", ExpiresUtc = DateTime.UtcNow.AddHours(24) });
 }
 
 internal sealed class RecordingPublicMediaStorageService : IPublicMediaStorageService
@@ -549,6 +573,7 @@ internal sealed class RecordingPublicMediaStorageService : IPublicMediaStorageSe
 
     public bool Called { get; private set; }
     public string? LocalFilePath { get; private set; }
+    public string? ThumbnailLocalFilePath { get; private set; }
     public Guid PipelineRunId { get; private set; }
 
     public RecordingPublicMediaStorageService(string publicUrl, bool success = true, string error = "")
@@ -559,15 +584,25 @@ internal sealed class RecordingPublicMediaStorageService : IPublicMediaStorageSe
     }
 
     public Task<PublicMediaUploadResult> UploadForInstagramAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken)
+        => UploadPublicAssetAsync(localFilePath, pipelineRunId, "short-video.mp4", "video/mp4", cancellationToken);
+
+    public Task<PublicMediaUploadResult> UploadPublicAssetAsync(string localFilePath, Guid pipelineRunId, string assetFileName, string contentType, CancellationToken cancellationToken)
     {
         Called = true;
-        LocalFilePath = localFilePath;
+        if (string.Equals(contentType, "image/jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            ThumbnailLocalFilePath = localFilePath;
+        }
+        else
+        {
+            LocalFilePath = localFilePath;
+        }
         PipelineRunId = pipelineRunId;
         return Task.FromResult(new PublicMediaUploadResult
         {
             Success = _success,
-            PublicUrl = _publicUrl,
-            BlobName = $"astronomy/reels/{pipelineRunId}/short-video.mp4",
+            PublicUrl = _publicUrl.Replace("short-video.mp4", assetFileName),
+            BlobName = $"astronomy/reels/{pipelineRunId}/{assetFileName}",
             Error = _error,
             ExpiresUtc = DateTime.UtcNow.AddHours(24)
         });
@@ -578,6 +613,8 @@ public sealed class TempMetaWorkspace : IDisposable
 {
     public string Root { get; } = Path.Combine(Path.GetTempPath(), "meta-publish-tests", Guid.NewGuid().ToString("N"));
     public string TokenPath => Path.Combine(Root, "meta-oauth-token.json");
+
+    private static readonly byte[] TinyPngBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
 
     public TempMetaWorkspace() => Directory.CreateDirectory(Root);
 
@@ -590,6 +627,9 @@ public sealed class TempMetaWorkspace : IDisposable
         File.WriteAllText(Path.Combine(output, "shorts", "seo-metadata.json"), JsonSerializer.Serialize(new SeoMetadataResult { Title = "Amazing Saturn Tonight", Description = "Look up for a fast tour of tonight's best targets.", TagsCsv = "saturn,moon" }));
         File.WriteAllText(Path.Combine(output, "selected-visible-objects.json"), "[{\"objectName\":\"Saturn\"},{\"objectName\":\"Moon\"}]");
         File.WriteAllText(Path.Combine(output, "pre-publish-validation-report.json"), "{\"passed\":true,\"errors\":[],\"warnings\":[]}");
+        Directory.CreateDirectory(Path.Combine(output, "thumbnails"));
+        File.WriteAllBytes(Path.Combine(output, "thumbnails", "thumbnail-long.jpg"), TinyPngBytes);
+        File.WriteAllBytes(Path.Combine(output, "thumbnails", "thumbnail-short.jpg"), TinyPngBytes);
         File.WriteAllText(Path.Combine(output, "thumbnail-1.png"), "thumb");
         File.WriteAllText(Path.Combine(output, "final-video.mp4"), "video");
         if (createVideo)
