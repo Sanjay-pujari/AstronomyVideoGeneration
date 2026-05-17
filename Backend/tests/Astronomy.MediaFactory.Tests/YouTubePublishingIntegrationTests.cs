@@ -288,18 +288,83 @@ public sealed class YouTubePublishingIntegrationTests
         using var workspace = new TempWorkspace();
         var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, createShort: true);
         var api = new TrackingYouTubeApiClient { VideoId = "short-123" };
-        var service = CreateContentService(workspace, repository, api, new PublishingOptions { Enabled = true, Mode = "Private", PublishLongVideo = false, PublishShortVideo = true, UploadThumbnail = true }, new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28", UploadThumbnailForShorts = true });
+        var service = CreateContentService(workspace, repository, api, new PublishingOptions { Enabled = true, Mode = "Private", PublishLongVideo = false, PublishShortVideo = true, UploadThumbnail = true }, new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28", UploadCustomThumbnailForShorts = true });
 
         var result = (await service.PublishForPipelineRunAsync(run.Id, "short", CancellationToken.None)).Single();
 
         Assert.True(result.Success);
+        Assert.True(result.ThumbnailUploadSuccess);
+        Assert.True(result.ThumbnailUploadAttempted);
+        Assert.Equal(1, api.ThumbnailUploadCalls);
+        Assert.Equal(1, api.VideoPostUploadStatusCalls);
         Assert.Equal(Path.Combine(workspace.OutputDirectory(run), "thumbnails", "thumbnail-short.jpg"), api.LastThumbnailPath);
         Assert.Equal(api.LastThumbnailPath, result.ThumbnailPathUsed);
+        Assert.Contains("Shorts feed may display auto-selected frame", result.ThumbnailWarning);
         var diagnosticsPath = Path.Combine(workspace.OutputDirectory(run), "youtube-short-thumbnail-upload-diagnostics.json");
         Assert.True(File.Exists(diagnosticsPath));
         var diagnosticsJson = await File.ReadAllTextAsync(diagnosticsPath);
         Assert.Contains("thumbnail-short.jpg", diagnosticsJson);
+        Assert.Contains("\"isShortVideo\": true", diagnosticsJson);
+        Assert.Contains("\"uploadAttempted\": true", diagnosticsJson);
+        Assert.Contains("\"uploadSuccess\": true", diagnosticsJson);
+        Assert.Contains("\"statusUploadStatus\": \"processed\"", diagnosticsJson);
+        Assert.Contains("Shorts feed may display auto-selected frame", diagnosticsJson);
         Assert.DoesNotContain("thumbnail-long.jpg", diagnosticsJson);
+    }
+
+    [Fact]
+    public async Task YouTubeShort_MissingGeneratedShortThumbnail_DoesNotUseFallbackThumbnail()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, createShort: true);
+        var outputDirectory = workspace.OutputDirectory(run);
+        File.Delete(Path.Combine(outputDirectory, "thumbnails", "thumbnail-short.jpg"));
+        var api = new TrackingYouTubeApiClient { VideoId = "short-missing-thumb" };
+        var service = CreateContentService(
+            workspace,
+            repository,
+            api,
+            new PublishingOptions { Enabled = true, Mode = "Private", PublishLongVideo = false, PublishShortVideo = true, UploadThumbnail = true },
+            new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28", UploadCustomThumbnailForShorts = true });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "short", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.False(result.ThumbnailUploadAttempted);
+        Assert.False(result.ThumbnailUploadSuccess);
+        Assert.Equal(0, api.ThumbnailUploadCalls);
+        Assert.Contains("missing", result.ThumbnailWarning);
+        var diagnosticsJson = await File.ReadAllTextAsync(Path.Combine(outputDirectory, "youtube-short-thumbnail-upload-diagnostics.json"));
+        Assert.Contains(Path.Combine("thumbnails", "thumbnail-short.jpg"), diagnosticsJson);
+        Assert.DoesNotContain("thumbnail-long.jpg", diagnosticsJson);
+        Assert.DoesNotContain("thumbnail-1", diagnosticsJson);
+    }
+
+    [Fact]
+    public async Task YouTubeShort_CustomThumbnailDisabled_SkipsWithWarningAndWritesDiagnostics()
+    {
+        using var workspace = new TempWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, passedValidation: true, createShort: true);
+        var api = new TrackingYouTubeApiClient { VideoId = "short-456" };
+        var service = CreateContentService(
+            workspace,
+            repository,
+            api,
+            new PublishingOptions { Enabled = true, Mode = "Private", PublishLongVideo = false, PublishShortVideo = true, UploadThumbnail = true },
+            new YouTubeOptions { DefaultPrivacyStatus = "private", CategoryId = "28", UploadCustomThumbnailForShorts = false });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "short", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.False(result.ThumbnailUploadAttempted);
+        Assert.False(result.ThumbnailUploadSuccess);
+        Assert.Equal(0, api.ThumbnailUploadCalls);
+        Assert.Contains("UploadCustomThumbnailForShorts=false", result.ThumbnailWarning);
+        var diagnosticsPath = Path.Combine(workspace.OutputDirectory(run), "youtube-short-thumbnail-upload-diagnostics.json");
+        Assert.True(File.Exists(diagnosticsPath));
+        var diagnosticsJson = await File.ReadAllTextAsync(diagnosticsPath);
+        Assert.Contains("UploadCustomThumbnailForShorts=false", diagnosticsJson);
+        Assert.Contains("\"uploadAttempted\": false", diagnosticsJson);
     }
 
     [Fact]
@@ -348,6 +413,7 @@ public sealed class YouTubePublishingIntegrationTests
         _ = await service.PublishForPipelineRunAsync(run.Id, CancellationToken.None);
 
         Assert.Equal(1, api.ThumbnailUploadCalls);
+        Assert.Equal(0, api.VideoPostUploadStatusCalls);
     }
 
     [Fact]
@@ -589,6 +655,7 @@ public sealed class YouTubePublishingIntegrationTests
         public int UploadCalls { get; private set; }
         public List<PublishRequest> Requests { get; } = [];
         public int ThumbnailUploadCalls { get; private set; }
+        public int VideoPostUploadStatusCalls { get; private set; }
         public int ThumbnailFailuresBeforeSuccess { get; init; }
         public PublishRequest? LastRequest { get; private set; }
         public string? ChannelFailure { get; init; }
@@ -625,6 +692,19 @@ public sealed class YouTubePublishingIntegrationTests
             }
 
             return Task.CompletedTask;
+        }
+
+        public Task<YouTubeVideoPostUploadStatus?> GetVideoPostUploadStatusAsync(string videoId, string accessToken, CancellationToken cancellationToken)
+        {
+            VideoPostUploadStatusCalls++;
+            return Task.FromResult<YouTubeVideoPostUploadStatus?>(new YouTubeVideoPostUploadStatus
+            {
+                SnippetThumbnailDefault = new { Url = "https://i.ytimg.com/default.jpg" },
+                SnippetThumbnailMedium = new { Url = "https://i.ytimg.com/mqdefault.jpg" },
+                SnippetThumbnailHigh = new { Url = "https://i.ytimg.com/hqdefault.jpg" },
+                UploadStatus = "processed",
+                PrivacyStatus = "private"
+            });
         }
     }
 
@@ -685,7 +765,9 @@ public sealed class YouTubePublishingIntegrationTests
 
     private static void WriteThumbnailImage(string path, string extension, bool largeThumbnail)
     {
-        using var image = new Image<Rgba32>(1280, 720, Color.DarkBlue);
+        var width = path.Contains("thumbnail-short", StringComparison.OrdinalIgnoreCase) ? 1080 : 1280;
+        var height = path.Contains("thumbnail-short", StringComparison.OrdinalIgnoreCase) ? 1920 : 720;
+        using var image = new Image<Rgba32>(width, height, Color.DarkBlue);
         if (largeThumbnail)
         {
             var random = new Random(42);

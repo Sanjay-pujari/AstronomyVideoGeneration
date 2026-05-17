@@ -18,6 +18,7 @@ public sealed class YouTubeOptions
     public bool PublishingEnabled { get; set; }
     public bool UploadThumbnailForLongVideos { get; set; } = true;
     public bool UploadThumbnailForShorts { get; set; } = false;
+    public bool UploadCustomThumbnailForShorts { get; set; } = true;
     public long MaxThumbnailSizeBytes { get; set; } = 2 * 1024 * 1024;
     public bool CompressThumbnailIfTooLarge { get; set; } = true;
     public int ThumbnailJpegQuality { get; set; } = 85;

@@ -94,6 +94,29 @@ public sealed class GoogleYouTubeApiClient : IYouTubeApiClient
         }
     }
 
+
+    public async Task<YouTubeVideoPostUploadStatus?> GetVideoPostUploadStatusAsync(string videoId, string accessToken, CancellationToken cancellationToken)
+    {
+        var youtube = CreateService(accessToken);
+        var request = youtube.Videos.List("snippet,status");
+        request.Id = videoId;
+        var response = await request.ExecuteAsync(cancellationToken);
+        var video = response.Items?.FirstOrDefault();
+        if (video is null)
+        {
+            return null;
+        }
+
+        return new YouTubeVideoPostUploadStatus
+        {
+            SnippetThumbnailDefault = video.Snippet?.Thumbnails?.Default__,
+            SnippetThumbnailMedium = video.Snippet?.Thumbnails?.Medium,
+            SnippetThumbnailHigh = video.Snippet?.Thumbnails?.High,
+            UploadStatus = video.Status?.UploadStatus,
+            PrivacyStatus = video.Status?.PrivacyStatus
+        };
+    }
+
     private static void ThrowThumbnailUploadException(ThumbnailsResource.SetMediaUpload upload, Exception? exception)
     {
         var progress = upload.GetProgress();
