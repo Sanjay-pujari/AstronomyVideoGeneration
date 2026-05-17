@@ -371,6 +371,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IMetaOAuthService, MetaOAuthService>();
         services.AddHttpClient<IFacebookReelPublishService, FacebookReelPublishService>();
         services.AddHttpClient<IInstagramReelPublishService, InstagramReelPublishService>();
+        services.AddScoped<IMetaPosterFrameFallbackService, MetaPosterFrameFallbackService>();
         services.AddScoped<IMetaPublishService, MetaPublishService>();
         services.AddHttpClient<ITokenHealthService, TokenHealthService>();
         services.AddScoped<ITokenHealthReportWriter, TokenHealthReportWriter>();

@@ -28,6 +28,66 @@ public sealed class MetaPublishingTests
         Assert.True(File.Exists(Path.Combine(workspace.OutputDirectory(run), "facebook-reel-publish-payload.json")));
     }
 
+
+    [Fact]
+    public async Task PosterFrameFallback_GeneratesMetaVideo_WhenMetaCoverUnsupported()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var posterService = new FakePosterFrameFallbackService();
+        var service = MetaPublishingTestFactory.CreateMetaService(
+            workspace,
+            repository,
+            new TrackingMetaHandler(),
+            new MetaPublishingOptions { Enabled = true, Mode = "DryRun", PublishFacebookReel = true, UsePosterFrameFallbackForReels = true, PosterFrameDurationSeconds = 0.75d },
+            posterFrameFallbackService: posterService);
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+        var output = workspace.OutputDirectory(run);
+
+        Assert.True(result.Success);
+        Assert.True(result.PosterFrameApplied);
+        Assert.EndsWith(Path.Combine("shorts", "short-video-meta.mp4"), result.PosterFrameVideoPath);
+        Assert.True(File.Exists(Path.Combine(output, "shorts", "short-video-meta.mp4")));
+        var reportJson = await File.ReadAllTextAsync(Path.Combine(output, "meta-poster-frame-report.json"));
+        Assert.Contains("\"posterFrameApplied\": true", reportJson);
+        Assert.Contains("Custom cover unsupported/rejected by Meta endpoint", reportJson);
+        Assert.Equal(Path.Combine(output, "shorts", "short-video.mp4"), posterService.InputShortVideoPath);
+        Assert.Equal(Path.Combine(output, "thumbnails", "thumbnail-short.jpg"), posterService.PosterFrameImagePath);
+        Assert.Contains("Meta custom cover was not accepted. Poster-frame fallback video was uploaded.", result.Warnings);
+    }
+
+    [Fact]
+    public async Task MetaPublish_UsesMetaVideo_ForFacebookAndInstagramReels()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var storage = new RecordingPublicMediaStorageService("https://cdn.example.test/short-video.mp4");
+        var service = MetaPublishingTestFactory.CreateMetaService(
+            workspace,
+            repository,
+            new TrackingMetaHandler { BaseAddress = "https://upload.example.test" },
+            new MetaPublishingOptions
+            {
+                Enabled = true,
+                Mode = "DryRun",
+                PublishFacebookReel = true,
+                PublishInstagramReel = true,
+                PublicMediaBaseUrl = "https://cdn.example.test/short-video.mp4",
+                UsePosterFrameFallbackForReels = true
+            },
+            publicMediaStorageService: storage,
+            posterFrameFallbackService: new FakePosterFrameFallbackService());
+
+        var results = await service.PublishForPipelineRunAsync(run.Id, "all", CancellationToken.None);
+        var output = workspace.OutputDirectory(run);
+        var metaVideoPath = Path.Combine(output, "shorts", "short-video-meta.mp4");
+
+        Assert.All(results, result => Assert.Equal(metaVideoPath, result.PosterFrameVideoPath));
+        Assert.Contains("short-video-meta.mp4", await File.ReadAllTextAsync(Path.Combine(output, "facebook-reel-publish-payload.json")));
+        Assert.Contains("short-video-meta.mp4", await File.ReadAllTextAsync(Path.Combine(output, "instagram-reel-publish-payload.json")));
+    }
+
     [Fact]
     public async Task MissingMetaTokenFile_FailsClearly()
     {
@@ -521,7 +581,7 @@ public sealed class MetaPublishingTests
 
 internal static class MetaPublishingTestFactory
 {
-    public static MetaPublishService CreateMetaService(TempMetaWorkspace workspace, IPipelineRepository repository, TrackingMetaHandler handler, MetaPublishingOptions options, IPublicMediaStorageService? publicMediaStorageService = null)
+    public static MetaPublishService CreateMetaService(TempMetaWorkspace workspace, IPipelineRepository repository, TrackingMetaHandler handler, MetaPublishingOptions options, IPublicMediaStorageService? publicMediaStorageService = null, IMetaPosterFrameFallbackService? posterFrameFallbackService = null)
     {
         publicMediaStorageService ??= string.IsNullOrWhiteSpace(options.PublicMediaBaseUrl) ? null : new FixedPublicMediaStorageService(options.PublicMediaBaseUrl);
         var facebook = new FacebookReelPublishService(
@@ -548,7 +608,8 @@ internal static class MetaPublishingTestFactory
             Options.Create(options),
             Options.Create(new TokenHealthOptions { Enabled = false }),
             Options.Create(new MaintenanceOptions { WorkingDirectory = workspace.Root }),
-            NullLogger<MetaPublishService>.Instance);
+            NullLogger<MetaPublishService>.Instance,
+            posterFrameFallbackService: posterFrameFallbackService);
     }
 }
 
@@ -606,6 +667,30 @@ internal sealed class RecordingPublicMediaStorageService : IPublicMediaStorageSe
             Error = _error,
             ExpiresUtc = DateTime.UtcNow.AddHours(24)
         });
+    }
+}
+
+
+internal sealed class FakePosterFrameFallbackService : IMetaPosterFrameFallbackService
+{
+    public string? InputShortVideoPath { get; private set; }
+    public string? PosterFrameImagePath { get; private set; }
+
+    public async Task<MetaPosterFrameFallbackResult> ApplyAsync(string outputDirectory, string inputShortVideoPath, string posterFrameImagePath, double durationSeconds, CancellationToken cancellationToken)
+    {
+        InputShortVideoPath = inputShortVideoPath;
+        PosterFrameImagePath = posterFrameImagePath;
+        var outputMetaVideoPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(inputShortVideoPath))!, "short-video-meta.mp4");
+        File.Copy(inputShortVideoPath, outputMetaVideoPath, overwrite: true);
+        var result = new MetaPosterFrameFallbackResult(
+            true,
+            posterFrameImagePath,
+            Math.Clamp(durationSeconds, 0.5d, 1.0d),
+            inputShortVideoPath,
+            outputMetaVideoPath,
+            MetaPosterFrameFallbackService.Reason);
+        await MetaPosterFrameFallbackService.WriteReportAsync(outputDirectory, result, cancellationToken);
+        return result;
     }
 }
 

@@ -18,6 +18,7 @@ public sealed class MetaPublishService : IMetaPublishService
     private readonly MaintenanceOptions _maintenanceOptions;
     private readonly ITokenHealthService _tokenHealthService;
     private readonly IPlatformThumbnailResolver _thumbnailResolver;
+    private readonly IMetaPosterFrameFallbackService? _posterFrameFallbackService;
     private readonly ILogger<MetaPublishService> _logger;
 
     public MetaPublishService(
@@ -29,7 +30,8 @@ public sealed class MetaPublishService : IMetaPublishService
         IOptions<TokenHealthOptions> tokenHealthOptions,
         IOptions<MaintenanceOptions> maintenanceOptions,
         ILogger<MetaPublishService> logger,
-        IPlatformThumbnailResolver? thumbnailResolver = null)
+        IPlatformThumbnailResolver? thumbnailResolver = null,
+        IMetaPosterFrameFallbackService? posterFrameFallbackService = null)
     {
         _repository = repository;
         _facebookReelPublishService = facebookReelPublishService;
@@ -40,6 +42,7 @@ public sealed class MetaPublishService : IMetaPublishService
         _maintenanceOptions = maintenanceOptions.Value;
         _logger = logger;
         _thumbnailResolver = thumbnailResolver ?? new PlatformThumbnailResolver(Microsoft.Extensions.Logging.Abstractions.NullLogger<PlatformThumbnailResolver>.Instance);
+        _posterFrameFallbackService = posterFrameFallbackService;
     }
 
     public async Task<IReadOnlyList<MetaPublishResult>> PublishForPipelineRunAsync(Guid pipelineRunId, string asset = "all", CancellationToken cancellationToken = default)
@@ -95,6 +98,7 @@ public sealed class MetaPublishService : IMetaPublishService
         var outputDirectory = ResolveOutputDirectory(run);
         Directory.CreateDirectory(outputDirectory);
         var videoPath = Path.Combine(outputDirectory, "shorts", "short-video.mp4");
+        MetaPosterFrameFallbackResult? posterFrameFallback = null;
         var facebookThumbnail = await _thumbnailResolver.ResolveAsync(outputDirectory, "Facebook", PlatformThumbnailContentTypes.Reel, cancellationToken);
         var instagramThumbnail = await _thumbnailResolver.ResolveAsync(outputDirectory, "Instagram", PlatformThumbnailContentTypes.Reel, cancellationToken);
         _logger.LogInformation("Platform thumbnail resolved: {@ThumbnailResolution}", new { Platform = "Facebook", ContentKind = PlatformThumbnailContentTypes.Reel, ResolvedThumbnailPath = facebookThumbnail.PlatformThumbnailPath, ThumbnailSource = facebookThumbnail.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(facebookThumbnail.PlatformThumbnailPath) && File.Exists(facebookThumbnail.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(facebookThumbnail.PlatformThumbnailPath) && File.Exists(facebookThumbnail.PlatformThumbnailPath) ? new FileInfo(facebookThumbnail.PlatformThumbnailPath).Length : 0 });
@@ -104,6 +108,29 @@ public sealed class MetaPublishService : IMetaPublishService
             new PlatformThumbnailResolutionReportEntry { Platform = "Facebook", ContentKind = PlatformThumbnailContentTypes.Reel, ResolvedThumbnailPath = facebookThumbnail.PlatformThumbnailPath, ThumbnailSource = facebookThumbnail.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(facebookThumbnail.PlatformThumbnailPath) && File.Exists(facebookThumbnail.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(facebookThumbnail.PlatformThumbnailPath) && File.Exists(facebookThumbnail.PlatformThumbnailPath) ? new FileInfo(facebookThumbnail.PlatformThumbnailPath).Length : 0 },
             new PlatformThumbnailResolutionReportEntry { Platform = "Instagram", ContentKind = PlatformThumbnailContentTypes.Reel, ResolvedThumbnailPath = instagramThumbnail.PlatformThumbnailPath, ThumbnailSource = instagramThumbnail.ThumbnailSource, Exists = !string.IsNullOrWhiteSpace(instagramThumbnail.PlatformThumbnailPath) && File.Exists(instagramThumbnail.PlatformThumbnailPath), Size = !string.IsNullOrWhiteSpace(instagramThumbnail.PlatformThumbnailPath) && File.Exists(instagramThumbnail.PlatformThumbnailPath) ? new FileInfo(instagramThumbnail.PlatformThumbnailPath).Length : 0 }
         }, cancellationToken);
+
+        if (_options.UsePosterFrameFallbackForReels && (publishFacebook || publishInstagram))
+        {
+            var posterFrameImagePath = ResolveExistingPosterFrameImagePath(facebookThumbnail.ShortThumbnailPath, instagramThumbnail.ShortThumbnailPath, facebookThumbnail.PlatformThumbnailPath, instagramThumbnail.PlatformThumbnailPath, Path.Combine(outputDirectory, "thumbnails", "thumbnail-short.jpg"));
+            if (!string.IsNullOrWhiteSpace(posterFrameImagePath) && File.Exists(videoPath) && _posterFrameFallbackService is not null)
+            {
+                try
+                {
+                    posterFrameFallback = await _posterFrameFallbackService.ApplyAsync(outputDirectory, videoPath, posterFrameImagePath, _options.PosterFrameDurationSeconds, cancellationToken);
+                    videoPath = posterFrameFallback.OutputMetaVideoPath;
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or IOException)
+                {
+                    _logger.LogWarning(ex, "Meta poster-frame fallback generation failed; publishing will continue with the original short video.");
+                    posterFrameFallback = await WriteUnappliedPosterFrameReportAsync(outputDirectory, videoPath, posterFrameImagePath, _options.PosterFrameDurationSeconds, cancellationToken);
+                }
+            }
+            else
+            {
+                posterFrameFallback = await WriteUnappliedPosterFrameReportAsync(outputDirectory, videoPath, posterFrameImagePath ?? string.Empty, _options.PosterFrameDurationSeconds, cancellationToken);
+            }
+        }
+
         var results = new List<MetaPublishResult>();
 
         if (publishFacebook)
@@ -119,8 +146,11 @@ public sealed class MetaPublishService : IMetaPublishService
                 VideoPath = videoPath,
                 LongThumbnailPath = facebookThumbnail.LongThumbnailPath,
                 ShortThumbnailPath = facebookThumbnail.ShortThumbnailPath,
-                PlatformThumbnailPath = facebookThumbnail.PlatformThumbnailPath,
+                PlatformThumbnailPath = posterFrameFallback?.PosterFrameApplied == true ? string.Empty : facebookThumbnail.PlatformThumbnailPath,
                 ThumbnailSource = facebookThumbnail.ThumbnailSource,
+                PosterFrameApplied = posterFrameFallback?.PosterFrameApplied == true,
+                PosterFrameImagePath = posterFrameFallback?.PosterFrameImagePath ?? string.Empty,
+                PosterFrameDurationSeconds = posterFrameFallback?.PosterFrameDurationSeconds ?? 0d,
                 Caption = caption,
                 ShortTitle = BuildFacebookShortTitle(metadata?.Title, caption),
                 IsReel = true
@@ -144,8 +174,11 @@ public sealed class MetaPublishService : IMetaPublishService
                 VideoPath = videoPath,
                 LongThumbnailPath = instagramThumbnail.LongThumbnailPath,
                 ShortThumbnailPath = instagramThumbnail.ShortThumbnailPath,
-                PlatformThumbnailPath = instagramThumbnail.PlatformThumbnailPath,
+                PlatformThumbnailPath = posterFrameFallback?.PosterFrameApplied == true ? string.Empty : instagramThumbnail.PlatformThumbnailPath,
                 ThumbnailSource = instagramThumbnail.ThumbnailSource,
+                PosterFrameApplied = posterFrameFallback?.PosterFrameApplied == true,
+                PosterFrameImagePath = posterFrameFallback?.PosterFrameImagePath ?? string.Empty,
+                PosterFrameDurationSeconds = posterFrameFallback?.PosterFrameDurationSeconds ?? 0d,
                 Caption = caption,
                 ShortTitle = BuildFacebookShortTitle(metadata?.Title, caption),
                 IsReel = true
@@ -159,6 +192,22 @@ public sealed class MetaPublishService : IMetaPublishService
         return results;
     }
 
+
+    private static string? ResolveExistingPosterFrameImagePath(params string?[] candidates)
+        => candidates.FirstOrDefault(candidate => !string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate));
+
+    private static async Task<MetaPosterFrameFallbackResult> WriteUnappliedPosterFrameReportAsync(string outputDirectory, string inputShortVideoPath, string posterFrameImagePath, double durationSeconds, CancellationToken cancellationToken)
+    {
+        var result = new MetaPosterFrameFallbackResult(
+            PosterFrameApplied: false,
+            PosterFrameImagePath: posterFrameImagePath,
+            PosterFrameDurationSeconds: Math.Clamp(durationSeconds, 0.5d, 1.0d),
+            InputShortVideoPath: inputShortVideoPath,
+            OutputMetaVideoPath: Path.Combine(Path.GetDirectoryName(Path.GetFullPath(inputShortVideoPath)) ?? outputDirectory, "short-video-meta.mp4"),
+            Reason: MetaPosterFrameFallbackService.Reason);
+        await MetaPosterFrameFallbackService.WriteReportAsync(outputDirectory, result, cancellationToken);
+        return result;
+    }
 
     private static async Task WritePlatformThumbnailResolutionReportAsync(string outputDirectory, IEnumerable<PlatformThumbnailResolutionReportEntry> entries, CancellationToken cancellationToken)
     {

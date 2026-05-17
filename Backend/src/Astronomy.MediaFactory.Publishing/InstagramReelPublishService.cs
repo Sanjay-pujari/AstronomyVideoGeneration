@@ -13,6 +13,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
     public const string MissingInstagramBusinessAccountMessage = "Instagram Business Account ID is missing. Run /api/metaoauth/start first.";
     public const string MissingPublicVideoUrlMessage = "Instagram publishing requires a publicly accessible video_url. Upload short-video.mp4 to public storage first.";
     private const string GraphEndpoint = "https://graph.facebook.com/v23.0";
+    private const string PosterFrameFallbackWarning = "Meta custom cover was not accepted. Poster-frame fallback video was uploaded.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     private readonly HttpClient _httpClient;
@@ -76,6 +77,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             else if (mode == "DryRun")
             {
                 var thumbnailWarning = BuildUnsupportedThumbnailWarning(request);
+                var warnings = BuildWarnings(thumbnailWarning, request.PosterFrameApplied);
                 result = new MetaPublishResult
                 {
                     Success = true,
@@ -87,8 +89,10 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
                     ThumbnailUploadAttempted = false,
                     ThumbnailUploadSuccess = false,
                     ThumbnailWarning = thumbnailWarning,
-                    Warning = thumbnailWarning,
-                    Warnings = string.IsNullOrWhiteSpace(thumbnailWarning) ? [] : [thumbnailWarning],
+                    Warning = warnings.FirstOrDefault(),
+                    Warnings = warnings,
+                    PosterFrameApplied = request.PosterFrameApplied,
+                    PosterFrameVideoPath = request.PosterFrameApplied ? request.VideoPath : null,
                     PublishedUtc = DateTime.UtcNow
                 };
             }
@@ -204,8 +208,10 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
                 ThumbnailUploadAttempted = IsPublicHttpsUrl(coverUrl),
                 ThumbnailUploadSuccess = false,
                 ThumbnailWarning = thumbnailWarning,
-                Warning = thumbnailWarning,
-                Warnings = string.IsNullOrWhiteSpace(thumbnailWarning) ? [] : [thumbnailWarning],
+                Warning = BuildWarnings(thumbnailWarning, request.PosterFrameApplied).FirstOrDefault(),
+                Warnings = BuildWarnings(thumbnailWarning, request.PosterFrameApplied),
+                PosterFrameApplied = request.PosterFrameApplied,
+                PosterFrameVideoPath = request.PosterFrameApplied ? request.VideoPath : null,
                 PublishedUtc = DateTime.UtcNow
             }, containerDiagnostics, new InstagramPublishDiagnostics { CreationId = containerId, InstagramBusinessAccountId = instagramBusinessAccountId, InstagramUsername = instagramUsername }, graphError);
         }
@@ -249,8 +255,10 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             ThumbnailUploadAttempted = IsPublicHttpsUrl(coverUrl),
             ThumbnailUploadSuccess = IsPublicHttpsUrl(coverUrl) && string.IsNullOrWhiteSpace(thumbnailWarning),
             ThumbnailWarning = thumbnailWarning,
-            Warning = thumbnailWarning,
-            Warnings = string.IsNullOrWhiteSpace(thumbnailWarning) ? [] : [thumbnailWarning],
+            Warning = BuildWarnings(thumbnailWarning, request.PosterFrameApplied).FirstOrDefault(),
+            Warnings = BuildWarnings(thumbnailWarning, request.PosterFrameApplied),
+            PosterFrameApplied = request.PosterFrameApplied,
+            PosterFrameVideoPath = request.PosterFrameApplied ? request.VideoPath : null,
             PostId = publish.Id,
             VideoId = publish.Id,
             Url = details?.Permalink,
@@ -556,6 +564,22 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
 
     private static MetaPublishResult Failed(string mode, string error)
         => new() { Success = false, Platform = "Instagram", ContentType = PlatformThumbnailContentTypes.Reel, Mode = mode, Error = error, ThumbnailWarning = error, PublishedUtc = DateTime.UtcNow };
+
+    private static List<string> BuildWarnings(string? thumbnailWarning, bool posterFrameApplied)
+    {
+        var warnings = new List<string>();
+        if (!string.IsNullOrWhiteSpace(thumbnailWarning))
+        {
+            warnings.Add(thumbnailWarning);
+        }
+
+        if (posterFrameApplied)
+        {
+            warnings.Add(PosterFrameFallbackWarning);
+        }
+
+        return warnings;
+    }
 
     private string? BuildUnsupportedThumbnailWarning(MetaPublishRequest request)
     {

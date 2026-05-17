@@ -279,25 +279,43 @@ public sealed class InstagramReelsPlatformPublisher : IShortFormPlatformPublishe
             return target;
         }
 
-        var result = await _instagramReelPublishService.PublishReelAsync(CreateMetaRequest(target, "Instagram"), cancellationToken);
+        var result = await _instagramReelPublishService.PublishReelAsync(CreateMetaRequest(target, "Instagram", _options), cancellationToken);
         return ApplyMetaResult(target, result, _logger);
     }
 
     private static bool MetaPublishingEnabled(MetaPublishingOptions options)
         => options.Enabled && !string.Equals(options.Mode, "Disabled", StringComparison.OrdinalIgnoreCase);
 
-    private static MetaPublishRequest CreateMetaRequest(PlatformPublicationTarget target, string platform)
-        => new()
+    private static MetaPublishRequest CreateMetaRequest(PlatformPublicationTarget target, string platform, MetaPublishingOptions options)
+    {
+        var metaVideoPath = ResolveMetaVideoPath(target.VideoPath, options);
+        var posterFrameApplied = !string.Equals(metaVideoPath, target.VideoPath, StringComparison.OrdinalIgnoreCase);
+        return new MetaPublishRequest
         {
             Platform = platform,
-            VideoPath = target.VideoPath,
+            VideoPath = metaVideoPath,
             ShortThumbnailPath = target.ThumbnailPath ?? string.Empty,
-            PlatformThumbnailPath = target.ThumbnailPath ?? string.Empty,
+            PlatformThumbnailPath = posterFrameApplied ? string.Empty : target.ThumbnailPath ?? string.Empty,
             ThumbnailSource = string.IsNullOrWhiteSpace(target.ThumbnailPath) ? ThumbnailSources.None : ThumbnailSources.GeneratedThumbnail,
+            PosterFrameApplied = posterFrameApplied,
+            PosterFrameImagePath = posterFrameApplied ? target.ThumbnailPath ?? string.Empty : string.Empty,
+            PosterFrameDurationSeconds = posterFrameApplied ? Math.Clamp(options.PosterFrameDurationSeconds, 0.5d, 1.0d) : 0d,
             Caption = target.Caption,
             ShortTitle = target.Title,
             IsReel = true
         };
+    }
+
+    private static string ResolveMetaVideoPath(string videoPath, MetaPublishingOptions options)
+    {
+        if (!options.UsePosterFrameFallbackForReels || string.IsNullOrWhiteSpace(videoPath))
+        {
+            return videoPath;
+        }
+
+        var metaPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(videoPath)) ?? string.Empty, "short-video-meta.mp4");
+        return File.Exists(metaPath) ? metaPath : videoPath;
+    }
 
     private static PlatformPublicationTarget ApplyMetaResult(PlatformPublicationTarget target, MetaPublishResult result, ILogger logger)
     {
@@ -345,25 +363,43 @@ public sealed class FacebookPlatformPublisher : IShortFormPlatformPublisher
             return target;
         }
 
-        var result = await _facebookReelPublishService.PublishReelAsync(CreateMetaRequest(target, "Facebook"), cancellationToken);
+        var result = await _facebookReelPublishService.PublishReelAsync(CreateMetaRequest(target, "Facebook", _options), cancellationToken);
         return ApplyMetaResult(target, result, _logger);
     }
 
     private static bool MetaPublishingEnabled(MetaPublishingOptions options)
         => options.Enabled && !string.Equals(options.Mode, "Disabled", StringComparison.OrdinalIgnoreCase);
 
-    private static MetaPublishRequest CreateMetaRequest(PlatformPublicationTarget target, string platform)
-        => new()
+    private static MetaPublishRequest CreateMetaRequest(PlatformPublicationTarget target, string platform, MetaPublishingOptions options)
+    {
+        var metaVideoPath = ResolveMetaVideoPath(target.VideoPath, options);
+        var posterFrameApplied = !string.Equals(metaVideoPath, target.VideoPath, StringComparison.OrdinalIgnoreCase);
+        return new MetaPublishRequest
         {
             Platform = platform,
-            VideoPath = target.VideoPath,
+            VideoPath = metaVideoPath,
             ShortThumbnailPath = target.ThumbnailPath ?? string.Empty,
-            PlatformThumbnailPath = target.ThumbnailPath ?? string.Empty,
+            PlatformThumbnailPath = posterFrameApplied ? string.Empty : target.ThumbnailPath ?? string.Empty,
             ThumbnailSource = string.IsNullOrWhiteSpace(target.ThumbnailPath) ? ThumbnailSources.None : ThumbnailSources.GeneratedThumbnail,
+            PosterFrameApplied = posterFrameApplied,
+            PosterFrameImagePath = posterFrameApplied ? target.ThumbnailPath ?? string.Empty : string.Empty,
+            PosterFrameDurationSeconds = posterFrameApplied ? Math.Clamp(options.PosterFrameDurationSeconds, 0.5d, 1.0d) : 0d,
             Caption = target.Caption,
             ShortTitle = target.Title,
             IsReel = true
         };
+    }
+
+    private static string ResolveMetaVideoPath(string videoPath, MetaPublishingOptions options)
+    {
+        if (!options.UsePosterFrameFallbackForReels || string.IsNullOrWhiteSpace(videoPath))
+        {
+            return videoPath;
+        }
+
+        var metaPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(videoPath)) ?? string.Empty, "short-video-meta.mp4");
+        return File.Exists(metaPath) ? metaPath : videoPath;
+    }
 
     private static PlatformPublicationTarget ApplyMetaResult(PlatformPublicationTarget target, MetaPublishResult result, ILogger logger)
     {

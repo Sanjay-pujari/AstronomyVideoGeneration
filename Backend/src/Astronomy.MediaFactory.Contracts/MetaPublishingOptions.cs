@@ -22,4 +22,6 @@ public sealed class MetaPublishingOptions
     public string PublicMediaBaseUrl { get; set; } = "";
     public bool PublicMediaUploadEnabled { get; set; }
     public bool RequirePublishedState { get; set; } = true;
+    public bool UsePosterFrameFallbackForReels { get; set; } = true;
+    public double PosterFrameDurationSeconds { get; set; } = 0.75d;
 }
