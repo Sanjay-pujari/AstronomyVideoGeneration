@@ -96,6 +96,7 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             result = Failed(mode, ex.Message);
         }
 
+        await WriteThumbnailDiagnosticsAsync(outputDirectory, diagnostics, result, request, cancellationToken);
         await WriteResultAsync(outputDirectory, diagnostics, result, cancellationToken);
         return result;
     }
@@ -384,6 +385,22 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "facebook-reel-publish-payload.json"), JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
     }
 
+    private static async Task WriteThumbnailDiagnosticsAsync(string outputDirectory, FacebookReelPublishDiagnostics? diagnostics, MetaPublishResult result, MetaPublishRequest request, CancellationToken cancellationToken)
+    {
+        var payload = new
+        {
+            videoId = result.VideoId,
+            reelUrl = result.Url,
+            uploadedThumbnailPath = request.PlatformThumbnailPath,
+            thumbnailSource = request.ThumbnailSource,
+            apiSupportsCustomCover = false,
+            coverUploadAttempted = false,
+            coverUploadSuccess = false,
+            warning = result.ThumbnailWarning
+        };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "facebook-thumbnail-upload-diagnostics.json"), JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+    }
+
     private static async Task WriteResultAsync(string outputDirectory, FacebookReelPublishDiagnostics? diagnostics, MetaPublishResult result, CancellationToken cancellationToken)
     {
         var output = diagnostics is null ? (object)result : diagnostics;
@@ -400,7 +417,7 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             return null;
         }
 
-        const string warning = "Meta endpoint does not support custom reel thumbnail; platform will choose frame automatically.";
+        const string warning = "Facebook Reel endpoint did not accept custom cover image; Facebook will auto-select frame.";
         _logger.LogWarning(warning);
         return warning;
     }

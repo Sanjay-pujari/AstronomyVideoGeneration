@@ -10,103 +10,92 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class PlatformThumbnailResolverTests
 {
     [Fact]
-    public async Task YouTubeLong_ResolvesThumbnailLong()
+    public async Task YouTube_long_resolves_thumbnail_long()
     {
-        var outputDir = CreateTempDirectory();
-        var expected = Path.Combine(outputDir, "thumbnails", "thumbnail-long.jpg");
-        await WriteImageAsync(expected, 1280, 720);
-        await WriteImageAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-short.jpg"), 1080, 1920);
+        var root = CreateTempRoot();
+        try
+        {
+            var expected = await WriteImageAsync(root, "thumbnails/thumbnail-long.jpg", 1280, 720);
+            await WriteImageAsync(root, "thumbnails/thumbnail-short.jpg", 1080, 1920);
 
-        var result = await CreateResolver().ResolveAsync(outputDir, "YouTube", PlatformThumbnailContentTypes.LongVideo, CancellationToken.None);
+            var result = await ResolveAsync(root, "YouTube", PlatformThumbnailContentTypes.LongVideo);
 
-        Assert.Equal(expected, result.PlatformThumbnailPath);
-        Assert.Equal(ThumbnailSources.GeneratedThumbnail, result.ThumbnailSource);
+            Assert.Equal(expected, result.PlatformThumbnailPath);
+            Assert.Equal(ThumbnailSources.GeneratedThumbnail, result.ThumbnailSource);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData("YouTube", PlatformThumbnailContentTypes.ShortVideo)]
+    [InlineData("Facebook", PlatformThumbnailContentTypes.Reel)]
+    [InlineData("Instagram", PlatformThumbnailContentTypes.Reel)]
+    public async Task Short_and_reel_platforms_resolve_thumbnail_short(string platform, string contentKind)
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await WriteImageAsync(root, "thumbnails/thumbnail-long.jpg", 1280, 720);
+            var expected = await WriteImageAsync(root, "thumbnails/thumbnail-short.jpg", 1080, 1920);
+
+            var result = await ResolveAsync(root, platform, contentKind);
+
+            Assert.Equal(expected, result.PlatformThumbnailPath);
+            Assert.Equal(ThumbnailSources.GeneratedThumbnail, result.ThumbnailSource);
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     [Fact]
-    public async Task YouTubeShort_ResolvesThumbnailShort()
+    public async Task Generated_thumbnail_wins_over_existing_fallback_screenshot()
     {
-        var outputDir = CreateTempDirectory();
-        await WriteImageAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-long.jpg"), 1280, 720);
-        var expected = Path.Combine(outputDir, "thumbnails", "thumbnail-short.jpg");
-        await WriteImageAsync(expected, 1080, 1920);
+        var root = CreateTempRoot();
+        try
+        {
+            var generated = await WriteImageAsync(root, "thumbnails/thumbnail-short.jpg", 1080, 1920);
+            await WriteImageAsync(root, "shorts/thumbnail-1.png", 1080, 1920);
 
-        var result = await CreateResolver().ResolveAsync(outputDir, "YouTube", PlatformThumbnailContentTypes.ShortVideo, CancellationToken.None);
+            var result = await ResolveAsync(root, "Instagram", PlatformThumbnailContentTypes.Reel);
 
-        Assert.Equal(expected, result.PlatformThumbnailPath);
-        Assert.Equal(ThumbnailSources.GeneratedThumbnail, result.ThumbnailSource);
+            Assert.Equal(generated, result.PlatformThumbnailPath);
+            Assert.Equal(ThumbnailSources.GeneratedThumbnail, result.ThumbnailSource);
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     [Fact]
-    public async Task FacebookReel_ResolvesThumbnailShort()
+    public async Task Missing_generated_thumbnail_falls_back_safely()
     {
-        var outputDir = CreateTempDirectory();
-        var expected = Path.Combine(outputDir, "thumbnails", "thumbnail-short.jpg");
-        await WriteImageAsync(expected, 1080, 1920);
+        var root = CreateTempRoot();
+        try
+        {
+            var fallback = await WriteImageAsync(root, "shorts/thumbnail-1.png", 1080, 1920);
 
-        var result = await CreateResolver().ResolveAsync(outputDir, "Facebook", PlatformThumbnailContentTypes.Reel, CancellationToken.None);
+            var result = await ResolveAsync(root, "Facebook", PlatformThumbnailContentTypes.Reel);
 
-        Assert.Equal(expected, result.PlatformThumbnailPath);
-        Assert.Equal(ThumbnailSources.GeneratedThumbnail, result.ThumbnailSource);
+            Assert.Equal(fallback, result.PlatformThumbnailPath);
+            Assert.Equal(ThumbnailSources.FallbackThumbnail, result.ThumbnailSource);
+            Assert.True(result.IsValid);
+        }
+        finally { Directory.Delete(root, true); }
     }
 
-    [Fact]
-    public async Task InstagramReel_ResolvesThumbnailShort()
+    private static Task<PlatformThumbnailResolution> ResolveAsync(string root, string platform, string contentKind)
+        => new PlatformThumbnailResolver(NullLogger<PlatformThumbnailResolver>.Instance).ResolveAsync(root, platform, contentKind, CancellationToken.None);
+
+    private static string CreateTempRoot()
     {
-        var outputDir = CreateTempDirectory();
-        var expected = Path.Combine(outputDir, "thumbnails", "thumbnail-short.jpg");
-        await WriteImageAsync(expected, 1080, 1920);
-
-        var result = await CreateResolver().ResolveAsync(outputDir, "Instagram", PlatformThumbnailContentTypes.Reel, CancellationToken.None);
-
-        Assert.Equal(expected, result.PlatformThumbnailPath);
-        Assert.Equal(ThumbnailSources.GeneratedThumbnail, result.ThumbnailSource);
+        var root = Path.Combine(Path.GetTempPath(), "platform-thumbnail-resolver-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
     }
 
-    [Fact]
-    public async Task FallbackScreenshot_IsNotUsed_WhenGeneratedThumbnailExists()
+    private static async Task<string> WriteImageAsync(string root, string relativePath, int width, int height)
     {
-        var outputDir = CreateTempDirectory();
-        var generated = Path.Combine(outputDir, "thumbnails", "thumbnail-long.jpg");
-        var fallback = Path.Combine(outputDir, "thumbnail-1.png");
-        await WriteImageAsync(generated, 1280, 720);
-        await WriteImageAsync(fallback, 1280, 720);
-
-        var result = await CreateResolver().ResolveAsync(outputDir, "YouTube", PlatformThumbnailContentTypes.LongVideo, CancellationToken.None);
-
-        Assert.Equal(generated, result.PlatformThumbnailPath);
-        Assert.NotEqual(fallback, result.PlatformThumbnailPath);
-        Assert.Equal(ThumbnailSources.GeneratedThumbnail, result.ThumbnailSource);
-    }
-
-    [Fact]
-    public async Task MissingThumbnail_FallsBackSafely()
-    {
-        var outputDir = CreateTempDirectory();
-        var fallback = Path.Combine(outputDir, "thumbnail-1.png");
-        await WriteImageAsync(fallback, 1280, 720);
-
-        var result = await CreateResolver().ResolveAsync(outputDir, "YouTube", PlatformThumbnailContentTypes.LongVideo, CancellationToken.None);
-
-        Assert.Equal(fallback, result.PlatformThumbnailPath);
-        Assert.Equal(ThumbnailSources.FallbackThumbnail, result.ThumbnailSource);
-        Assert.True(result.IsValid);
-    }
-
-    private static PlatformThumbnailResolver CreateResolver()
-        => new(NullLogger<PlatformThumbnailResolver>.Instance);
-
-    private static string CreateTempDirectory()
-    {
-        var path = Path.Combine(Path.GetTempPath(), "astro-thumb-resolver-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
-    }
-
-    private static async Task WriteImageAsync(string path, int width, int height)
-    {
+        var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        using var image = new Image<Rgba32>(width, height, Color.MidnightBlue);
+        using var image = new Image<Rgba32>(width, height, new Rgba32(20, 30, 40));
         await image.SaveAsync(path);
+        return path;
     }
 }

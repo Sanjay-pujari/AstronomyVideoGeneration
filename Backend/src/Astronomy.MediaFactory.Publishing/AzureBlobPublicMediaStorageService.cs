@@ -31,7 +31,10 @@ public sealed class AzureBlobPublicMediaStorageService : IPublicMediaStorageServ
         _blobClientFactory = blobClientFactory ?? new AzurePublicBlobClientFactory();
     }
 
-    public async Task<PublicMediaUploadResult> UploadForInstagramAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken)
+    public Task<PublicMediaUploadResult> UploadForInstagramAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken)
+        => UploadPublicAssetAsync(localFilePath, pipelineRunId, "short-video.mp4", "video/mp4", cancellationToken);
+
+    public async Task<PublicMediaUploadResult> UploadPublicAssetAsync(string localFilePath, Guid pipelineRunId, string assetFileName, string contentType, CancellationToken cancellationToken)
     {
         if (!_options.Enabled)
         {
@@ -64,7 +67,7 @@ public sealed class AzureBlobPublicMediaStorageService : IPublicMediaStorageServ
             return Failed($"Instagram Reel video is empty: {localFilePath}.");
         }
 
-        var blobName = BuildBlobName(pipelineRunId);
+        var blobName = BuildBlobName(pipelineRunId, assetFileName);
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -77,7 +80,7 @@ public sealed class AzureBlobPublicMediaStorageService : IPublicMediaStorageServ
 
             try
             {
-                await blob.UploadAsync(localFilePath, "video/mp4", transferOptions, uploadTimeout.Token);
+                await blob.UploadAsync(localFilePath, contentType, transferOptions, uploadTimeout.Token);
             }
             catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && uploadTimeout.IsCancellationRequested)
             {
@@ -183,12 +186,13 @@ public sealed class AzureBlobPublicMediaStorageService : IPublicMediaStorageServ
         return blob.Uri.ToString();
     }
 
-    private string BuildBlobName(Guid pipelineRunId)
+    private string BuildBlobName(Guid pipelineRunId, string assetFileName)
     {
+        var safeAssetFileName = string.IsNullOrWhiteSpace(assetFileName) ? "asset.bin" : Path.GetFileName(assetFileName);
         var prefix = (_options.BlobPrefix ?? string.Empty).Trim('/');
         return string.IsNullOrWhiteSpace(prefix)
-            ? $"{pipelineRunId}/short-video.mp4"
-            : $"{prefix}/{pipelineRunId}/short-video.mp4";
+            ? $"{pipelineRunId}/{safeAssetFileName}"
+            : $"{prefix}/{pipelineRunId}/{safeAssetFileName}";
     }
 
     private static PublicMediaUploadResult Failed(string error, string blobName = "", DateTime expiresUtc = default)

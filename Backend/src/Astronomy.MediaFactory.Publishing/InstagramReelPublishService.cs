@@ -20,6 +20,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
     private readonly MetaPublishingOptions _publishingOptions;
     private readonly RenderingOptions _renderingOptions;
     private readonly IPublicMediaStorageService? _publicMediaStorageService;
+    private readonly IMetaThumbnailAssetPublisher? _thumbnailAssetPublisher;
     private readonly ILogger<InstagramReelPublishService> _logger;
 
     public InstagramReelPublishService(
@@ -28,7 +29,8 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         IOptions<MetaPublishingOptions> publishingOptions,
         IOptions<RenderingOptions> renderingOptions,
         ILogger<InstagramReelPublishService> logger,
-        IPublicMediaStorageService? publicMediaStorageService = null)
+        IPublicMediaStorageService? publicMediaStorageService = null,
+        IMetaThumbnailAssetPublisher? thumbnailAssetPublisher = null)
     {
         _httpClient = httpClient;
         _metaOptions = metaOptions.Value;
@@ -36,6 +38,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         _renderingOptions = renderingOptions.Value;
         _logger = logger;
         _publicMediaStorageService = publicMediaStorageService;
+        _thumbnailAssetPublisher = thumbnailAssetPublisher;
     }
 
     public async Task<MetaPublishResult> PublishReelAsync(MetaPublishRequest request, CancellationToken cancellationToken)
@@ -48,6 +51,9 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         InstagramContainerDiagnostics? containerDiagnostics = null;
         InstagramPublishDiagnostics? publishDiagnostics = null;
         PublicMediaUploadResult? publicMediaUpload = null;
+        PublicMediaUploadResult? thumbnailMediaUpload = null;
+        string? coverUrl = null;
+        string? graphError = null;
         try
         {
             var token = await LoadTokenAsync(cancellationToken);
@@ -57,6 +63,10 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             var publicVideoUrl = publicVideo.PublicUrl;
             var safePublicVideoUrl = RedactSensitiveQuery(publicVideoUrl);
             await WritePublicMediaUploadResultAsync(outputDirectory, request.VideoPath, publicMediaUpload, publicVideoUrl, cancellationToken);
+            var publicCover = await ResolvePublicCoverUrlAsync(request, mode, cancellationToken);
+            thumbnailMediaUpload = publicCover.UploadResult;
+            coverUrl = publicCover.PublicUrl;
+            await WriteInstagramThumbnailDiagnosticsAsync(outputDirectory, null, null, coverUrl, request, thumbnailMediaUpload, null, null, cancellationToken);
             await WritePayloadAsync(outputDirectory, token, request, mode, safePublicVideoUrl, publicMediaUpload, cancellationToken);
 
             if (mode == "Disabled")
@@ -93,10 +103,11 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
                 }
                 else
                 {
-                    var publishResult = await PublishRealAsync(token.InstagramBusinessAccountId!, token.InstagramUsername!, accessToken, publicVideoUrl!, request, mode, cancellationToken);
+                    var publishResult = await PublishRealAsync(token.InstagramBusinessAccountId!, token.InstagramUsername!, accessToken, publicVideoUrl!, coverUrl, request, mode, cancellationToken);
                     result = publishResult.Result;
-                    containerDiagnostics = publishResult.ContainerDiagnostics with { VideoUrlUsedForInstagram = safePublicVideoUrl };
+                    containerDiagnostics = publishResult.ContainerDiagnostics with { VideoUrlUsedForInstagram = safePublicVideoUrl, CoverUrlUsedForInstagram = RedactSensitiveQuery(coverUrl) };
                     publishDiagnostics = publishResult.PublishDiagnostics;
+                    graphError = publishResult.GraphError;
                 }
             }
         }
@@ -107,32 +118,57 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         }
 
         await WritePublicMediaUploadResultAsync(outputDirectory, request.VideoPath, publicMediaUpload, null, cancellationToken);
+        await WriteInstagramThumbnailDiagnosticsAsync(outputDirectory, containerDiagnostics?.CreationId, publishDiagnostics?.MediaId, coverUrl, request, thumbnailMediaUpload, graphError, result.ThumbnailWarning, cancellationToken);
         await WriteContainerResultAsync(outputDirectory, containerDiagnostics, result, cancellationToken);
         await WritePublishResultAsync(outputDirectory, publishDiagnostics, result, cancellationToken);
         return result;
     }
 
-    private async Task<(MetaPublishResult Result, InstagramContainerDiagnostics ContainerDiagnostics, InstagramPublishDiagnostics PublishDiagnostics)> PublishRealAsync(
+    private async Task<(MetaPublishResult Result, InstagramContainerDiagnostics ContainerDiagnostics, InstagramPublishDiagnostics PublishDiagnostics, string? GraphError)> PublishRealAsync(
         string instagramBusinessAccountId,
         string instagramUsername,
         string accessToken,
         string videoUrl,
+        string? coverUrl,
         MetaPublishRequest request,
         string mode,
         CancellationToken cancellationToken)
     {
-        var thumbnailWarning = BuildUnsupportedThumbnailWarning(request);
-        var container = await PostGraphAsync<CreateContainerResponse>(
-            $"{GraphEndpoint}/{Uri.EscapeDataString(instagramBusinessAccountId)}/media",
-            new Dictionary<string, string>
-            {
-                ["media_type"] = "REELS",
-                ["video_url"] = videoUrl,
-                ["caption"] = request.Caption,
-                ["access_token"] = accessToken
-            },
-            "Instagram Reel media container creation",
-            cancellationToken);
+        var thumbnailWarning = string.Empty;
+        var containerForm = new Dictionary<string, string>
+        {
+            ["media_type"] = "REELS",
+            ["video_url"] = videoUrl,
+            ["caption"] = request.Caption,
+            ["access_token"] = accessToken
+        };
+        if (IsPublicHttpsUrl(coverUrl))
+        {
+            containerForm["cover_url"] = coverUrl!;
+        }
+
+        CreateContainerResponse container;
+        string? graphError = null;
+        try
+        {
+            container = await PostGraphAsync<CreateContainerResponse>(
+                $"{GraphEndpoint}/{Uri.EscapeDataString(instagramBusinessAccountId)}/media",
+                containerForm,
+                "Instagram Reel media container creation",
+                cancellationToken);
+        }
+        catch (InvalidOperationException ex) when (containerForm.ContainsKey("cover_url"))
+        {
+            graphError = ex.Message;
+            thumbnailWarning = "Instagram cover_url was not accepted; platform may choose video frame.";
+            _logger.LogWarning(ex, thumbnailWarning);
+            containerForm.Remove("cover_url");
+            container = await PostGraphAsync<CreateContainerResponse>(
+                $"{GraphEndpoint}/{Uri.EscapeDataString(instagramBusinessAccountId)}/media",
+                containerForm,
+                "Instagram Reel media container creation",
+                cancellationToken);
+        }
 
         var containerId = container.ContainerId;
         if (string.IsNullOrWhiteSpace(containerId))
@@ -163,12 +199,15 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
                 Mode = mode,
                 Error = error,
                 UploadedThumbnailPath = request.PlatformThumbnailPath,
+                UploadedThumbnailUrl = coverUrl,
                 ThumbnailSource = request.ThumbnailSource,
+                ThumbnailUploadAttempted = IsPublicHttpsUrl(coverUrl),
+                ThumbnailUploadSuccess = false,
                 ThumbnailWarning = thumbnailWarning,
                 Warning = thumbnailWarning,
                 Warnings = string.IsNullOrWhiteSpace(thumbnailWarning) ? [] : [thumbnailWarning],
                 PublishedUtc = DateTime.UtcNow
-            }, containerDiagnostics, new InstagramPublishDiagnostics { CreationId = containerId, InstagramBusinessAccountId = instagramBusinessAccountId, InstagramUsername = instagramUsername });
+            }, containerDiagnostics, new InstagramPublishDiagnostics { CreationId = containerId, InstagramBusinessAccountId = instagramBusinessAccountId, InstagramUsername = instagramUsername }, graphError);
         }
 
         var publish = await PostGraphAsync<PublishContainerResponse>(
@@ -205,9 +244,10 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             ContentType = PlatformThumbnailContentTypes.Reel,
             Mode = mode,
             UploadedThumbnailPath = request.PlatformThumbnailPath,
+            UploadedThumbnailUrl = coverUrl,
             ThumbnailSource = request.ThumbnailSource,
-            ThumbnailUploadAttempted = false,
-            ThumbnailUploadSuccess = false,
+            ThumbnailUploadAttempted = IsPublicHttpsUrl(coverUrl),
+            ThumbnailUploadSuccess = IsPublicHttpsUrl(coverUrl) && string.IsNullOrWhiteSpace(thumbnailWarning),
             ThumbnailWarning = thumbnailWarning,
             Warning = thumbnailWarning,
             Warnings = string.IsNullOrWhiteSpace(thumbnailWarning) ? [] : [thumbnailWarning],
@@ -216,7 +256,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             Url = details?.Permalink,
             PublishedVerified = !string.IsNullOrWhiteSpace(details?.Permalink),
             PublishedUtc = DateTime.UtcNow
-        }, containerDiagnostics, diagnostics);
+        }, containerDiagnostics, diagnostics, graphError);
     }
 
     private async Task<InstagramContainerPollResult> PollContainerAsync(string creationId, string accessToken, CancellationToken cancellationToken)
@@ -289,6 +329,28 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         }
 
         return (null, null);
+    }
+
+
+    private async Task<(string? PublicUrl, PublicMediaUploadResult? UploadResult)> ResolvePublicCoverUrlAsync(MetaPublishRequest request, string mode, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.PlatformThumbnailPath) || !File.Exists(request.PlatformThumbnailPath))
+        {
+            return (null, null);
+        }
+
+        if (mode == "DryRun" || mode == "Disabled")
+        {
+            return (null, null);
+        }
+
+        if (_thumbnailAssetPublisher is null)
+        {
+            return (null, new PublicMediaUploadResult { Success = false, Error = "PublicMediaStorage is not configured for Instagram thumbnail cover_url publishing." });
+        }
+
+        var upload = await _thumbnailAssetPublisher.UploadThumbnailAsync(request.PlatformThumbnailPath, request.PipelineRunId, cancellationToken);
+        return upload.Success ? (upload.PublicUrl, upload) : (null, upload);
     }
 
     private async Task<string?> ValidateBeforePublishAsync(string videoPath, string? publicVideoUrl, CancellationToken cancellationToken)
@@ -410,6 +472,23 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         return null;
     }
 
+
+    private static async Task WriteInstagramThumbnailDiagnosticsAsync(string outputDirectory, string? mediaContainerId, string? mediaId, string? coverUrl, MetaPublishRequest request, PublicMediaUploadResult? upload, string? graphError, string? warning, CancellationToken cancellationToken)
+    {
+        var payload = new
+        {
+            mediaContainerId,
+            mediaId,
+            coverUrl = RedactSensitiveQuery(coverUrl),
+            thumbnailSource = request.ThumbnailSource,
+            coverUploadAttempted = !string.IsNullOrWhiteSpace(request.PlatformThumbnailPath),
+            coverUploadSuccess = upload?.Success == true && IsPublicHttpsUrl(coverUrl),
+            graphError,
+            warning
+        };
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "instagram-thumbnail-upload-diagnostics.json"), JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+    }
+
     private static async Task WritePayloadAsync(string outputDirectory, MetaOAuthTokenFile token, MetaPublishRequest request, string mode, string? publicVideoUrl, PublicMediaUploadResult? upload, CancellationToken cancellationToken)
     {
         var payload = new
@@ -485,7 +564,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             return null;
         }
 
-        const string warning = "Instagram Reel API flow does not currently upload a custom thumbnail/cover_url; platform will choose frame automatically.";
+        const string warning = "Instagram cover_url was not accepted; platform may choose video frame.";
         _logger.LogWarning(warning);
         return warning;
     }
@@ -516,6 +595,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
         public int Attempts { get; init; }
         public bool Finished { get; init; }
         public string? VideoUrlUsedForInstagram { get; init; }
+        public string? CoverUrlUsedForInstagram { get; init; }
     }
 
     private sealed record InstagramPublishDiagnostics
