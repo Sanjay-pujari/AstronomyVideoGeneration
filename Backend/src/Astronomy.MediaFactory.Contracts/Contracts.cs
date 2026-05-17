@@ -346,22 +346,25 @@ public sealed class RenderingOptions
     public bool EnableDirectionalMotion { get; set; } = false;
     public double DirectionalPanStrength { get; set; } = 0.04d;
     public bool EnableYouTube1440pUpscale { get; set; } = true;
-    public string IntermediatePreset { get; set; } = "fast";
-    public int IntermediateCrf { get; set; } = 21;
+    public string IntermediatePreset { get; set; } = "veryfast";
+    public int IntermediateCrf { get; set; } = 22;
     public string IntermediateScaleFlags { get; set; } = "bicubic";
-    public string YouTubeLongQualityMode { get; set; } = "Quality";
-    public string YouTubeLongPreset { get; set; } = "medium";
-    public int YouTubeLongCrf { get; set; } = 18;
-    public string YouTubeLongMaxRate { get; set; } = "24M";
-    public string YouTubeLongBufferSize { get; set; } = "48M";
+    public string YouTubeLongQualityMode { get; set; } = "Balanced";
+    public string YouTubeLongPreset { get; set; } = "veryfast";
+    public int YouTubeLongCrf { get; set; } = 20;
+    public string YouTubeLongMaxRate { get; set; } = "20M";
+    public string YouTubeLongBufferSize { get; set; } = "40M";
+    public string YouTubeLongAudioBitrate { get; set; } = "128k";
     public int YouTubeLongWidth { get; set; } = 2560;
     public int YouTubeLongHeight { get; set; } = 1440;
-    public string ShortsPreset { get; set; } = "medium";
-    public int ShortsCrf { get; set; } = 20;
+    public string ShortsPreset { get; set; } = "fast";
+    public int ShortsCrf { get; set; } = 21;
     public string ShortsMaxRate { get; set; } = "12M";
-    public string MetaReelPreset { get; set; } = "medium";
-    public int MetaReelCrf { get; set; } = 21;
+    public string ShortsAudioBitrate { get; set; } = "128k";
+    public string MetaReelPreset { get; set; } = "fast";
+    public int MetaReelCrf { get; set; } = 22;
     public string MetaReelMaxRate { get; set; } = "10M";
+    public string MetaReelAudioBitrate { get; set; } = "128k";
     public OutputCleanupOptions OutputCleanup { get; set; } = new();
 }
 
@@ -384,38 +387,39 @@ public sealed record VideoEncodingPreset(
         Width: width,
         Height: height,
         Codec: "libx264",
-        Preset: NormalizePreset(options.IntermediatePreset, "fast"),
-        Crf: Math.Clamp(options.IntermediateCrf, 20, 22),
+        Preset: NormalizePreset(options.IntermediatePreset, "veryfast"),
+        Crf: Math.Clamp(options.IntermediateCrf, 18, 28),
         PixelFormat: "yuv420p",
         VideoBitrate: string.Empty,
         MaxVideoBitrate: string.Empty,
         BufferSize: string.Empty,
-        AudioBitrate: "192k",
+        AudioBitrate: "128k",
         ScaleFlags: NormalizeScaleFlags(options.IntermediateScaleFlags, "bicubic"));
 
     public static VideoEncodingPreset YouTubeLongFinal(RenderingOptions options)
     {
         var enable1440pUpscale = options.EnableYouTube1440pUpscale;
-        var mode = string.IsNullOrWhiteSpace(options.YouTubeLongQualityMode) ? "Quality" : options.YouTubeLongQualityMode.Trim();
-        var balancedMode = string.Equals(mode, "Balanced", StringComparison.OrdinalIgnoreCase);
-        var preset = balancedMode ? "fast" : NormalizePreset(options.YouTubeLongPreset, "medium");
-        var crf = balancedMode ? 19 : (options.YouTubeLongCrf > 0 ? options.YouTubeLongCrf : 18);
-        var maxRate = balancedMode ? "20M" : (string.IsNullOrWhiteSpace(options.YouTubeLongMaxRate) ? (enable1440pUpscale ? "24M" : "20M") : options.YouTubeLongMaxRate.Trim());
-        var bufferSize = balancedMode ? "40M" : (string.IsNullOrWhiteSpace(options.YouTubeLongBufferSize) ? (enable1440pUpscale ? "48M" : "40M") : options.YouTubeLongBufferSize.Trim());
+        var mode = NormalizeYouTubeLongQualityMode(options.YouTubeLongQualityMode);
+        var (preset, crf, maxRate, bufferSize, scaleFlags) = mode switch
+        {
+            "Quality" => ("medium", 18, "24M", "48M", "lanczos"),
+            "Fastest" => ("ultrafast", 22, "14M", "28M", "bicubic"),
+            _ => ("veryfast", 20, "20M", "40M", "bicubic")
+        };
 
         return new(
-            Name: balancedMode ? "YouTubeLongFinalBalanced" : "YouTubeLongFinal",
+            Name: "YouTubeLongFinal",
             Width: enable1440pUpscale ? Math.Max(1, options.YouTubeLongWidth) : 1920,
             Height: enable1440pUpscale ? Math.Max(1, options.YouTubeLongHeight) : 1080,
             Codec: "libx264",
             Preset: preset,
             Crf: crf,
             PixelFormat: "yuv420p",
-            VideoBitrate: enable1440pUpscale ? "20M" : "16M",
+            VideoBitrate: string.Empty,
             MaxVideoBitrate: maxRate,
             BufferSize: bufferSize,
-            AudioBitrate: "320k",
-            ScaleFlags: "lanczos");
+            AudioBitrate: NormalizeBitrate(options.YouTubeLongAudioBitrate, "128k"),
+            ScaleFlags: scaleFlags);
     }
 
     public static VideoEncodingPreset ShortsFinal(RenderingOptions options) => new(
@@ -423,13 +427,13 @@ public sealed record VideoEncodingPreset(
         Width: 1080,
         Height: 1920,
         Codec: "libx264",
-        Preset: NormalizePreset(options.ShortsPreset, "medium"),
-        Crf: options.ShortsCrf > 0 ? options.ShortsCrf : 20,
+        Preset: NormalizePreset(options.ShortsPreset, "fast"),
+        Crf: options.ShortsCrf > 0 ? options.ShortsCrf : 21,
         PixelFormat: "yuv420p",
-        VideoBitrate: "10M",
-        MaxVideoBitrate: string.IsNullOrWhiteSpace(options.ShortsMaxRate) ? "12M" : options.ShortsMaxRate,
+        VideoBitrate: string.Empty,
+        MaxVideoBitrate: string.IsNullOrWhiteSpace(options.ShortsMaxRate) ? "12M" : options.ShortsMaxRate.Trim(),
         BufferSize: "24M",
-        AudioBitrate: "256k",
+        AudioBitrate: NormalizeBitrate(options.ShortsAudioBitrate, "128k"),
         ScaleFlags: "bicubic");
 
     public static VideoEncodingPreset MetaReelFinal(RenderingOptions options) => new(
@@ -437,25 +441,25 @@ public sealed record VideoEncodingPreset(
         Width: 1080,
         Height: 1920,
         Codec: "libx264",
-        Preset: NormalizePreset(options.MetaReelPreset, "medium"),
-        Crf: options.MetaReelCrf > 0 ? options.MetaReelCrf : 21,
+        Preset: NormalizePreset(options.MetaReelPreset, "fast"),
+        Crf: options.MetaReelCrf > 0 ? options.MetaReelCrf : 22,
         PixelFormat: "yuv420p",
-        VideoBitrate: "8M",
-        MaxVideoBitrate: string.IsNullOrWhiteSpace(options.MetaReelMaxRate) ? "10M" : options.MetaReelMaxRate,
+        VideoBitrate: string.Empty,
+        MaxVideoBitrate: string.IsNullOrWhiteSpace(options.MetaReelMaxRate) ? "10M" : options.MetaReelMaxRate.Trim(),
         BufferSize: "20M",
-        AudioBitrate: "256k",
+        AudioBitrate: NormalizeBitrate(options.MetaReelAudioBitrate, "128k"),
         ScaleFlags: "bicubic");
 
     public static VideoEncodingPreset YouTubeLongProduction(bool enable1440pUpscale)
     {
-        var options = new RenderingOptions { EnableYouTube1440pUpscale = enable1440pUpscale, YouTubeLongPreset = "slow" };
+        var options = new RenderingOptions { EnableYouTube1440pUpscale = enable1440pUpscale, YouTubeLongQualityMode = "Balanced" };
         return YouTubeLongFinal(options) with { Name = "YouTubeLongProduction" };
     }
 
     public static VideoEncodingPreset YouTubeShortProduction()
     {
-        var options = new RenderingOptions { ShortsPreset = "slow", ShortsCrf = 18, ShortsMaxRate = "16M" };
-        return ShortsFinal(options) with { Name = "YouTubeShortProduction", VideoBitrate = "12M", BufferSize = "32M" };
+        var options = new RenderingOptions { ShortsPreset = "fast", ShortsCrf = 21, ShortsMaxRate = "12M", ShortsAudioBitrate = "128k" };
+        return ShortsFinal(options) with { Name = "YouTubeShortProduction", VideoBitrate = "12M" };
     }
 
     private static string NormalizePreset(string? value, string fallback)
@@ -463,6 +467,16 @@ public sealed record VideoEncodingPreset(
 
     private static string NormalizeScaleFlags(string? value, string fallback)
         => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+
+    private static string NormalizeBitrate(string? value, string fallback)
+        => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+
+    private static string NormalizeYouTubeLongQualityMode(string? value)
+    {
+        if (string.Equals(value, "Quality", StringComparison.OrdinalIgnoreCase)) return "Quality";
+        if (string.Equals(value, "Fastest", StringComparison.OrdinalIgnoreCase)) return "Fastest";
+        return "Balanced";
+    }
 }
 
 public sealed class OutputCleanupOptions
