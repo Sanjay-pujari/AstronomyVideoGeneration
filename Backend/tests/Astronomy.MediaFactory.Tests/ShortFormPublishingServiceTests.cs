@@ -134,6 +134,78 @@ public sealed class ShortFormPublishingServiceTests
         Assert.Equal(0, publisher.CallCount);
     }
 
+
+
+    [Fact]
+    public async Task FacebookPublisher_MapsProcessingTimeoutToPublishedWarningResult()
+    {
+        var publisher = new FacebookPlatformPublisher(
+            new FakeFacebookReelPublishService(new MetaPublishResult
+            {
+                Success = true,
+                Platform = "Facebook",
+                VideoId = "video-123",
+                Url = "/reel/video-123",
+                PublishedVerified = false,
+                Warning = "Facebook Reel uploaded but public visibility could not be verified before processing timeout."
+            }),
+            Options.Create(new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true }),
+            NullLogger<FacebookPlatformPublisher>.Instance);
+
+        var result = await publisher.PublishAsync(new PlatformPublicationTarget
+        {
+            Platform = ShortFormPlatform.Facebook,
+            Enabled = true,
+            Title = "Facebook Reel",
+            Caption = "Caption",
+            VideoPath = "short-video.mp4"
+        }, CancellationToken.None);
+
+        Assert.Equal(PlatformPublicationStatus.Published, result.Status);
+        Assert.Equal("Facebook", result.Platform.ToString());
+        Assert.Equal("video-123", result.ExternalPostId);
+        Assert.Equal("/reel/video-123", result.ExternalUrl);
+        Assert.False(result.PublishedVerified);
+        Assert.Equal("Processing not verified before timeout.", result.Warning);
+    }
+
+    [Fact]
+    public async Task ExternalCancellation_StillCancelsPublishing()
+    {
+        var repository = new FakePipelineRepository();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var service = CreateService(
+            new TestPublisher(ShortFormPlatform.YouTubeShorts, PlatformPublicationStatus.Skipped),
+            new TestPublisher(ShortFormPlatform.InstagramReels, PlatformPublicationStatus.Skipped),
+            new CancelingPublisher(ShortFormPlatform.Facebook),
+            new PlatformPublishingOptions
+            {
+                FacebookEnabled = true,
+                InstagramReelsEnabled = false,
+                YouTubeShortsEnabled = false
+            },
+            repository);
+
+        var request = BuildRequest();
+        request = new ShortFormPublicationRequest
+        {
+            ParentShortVideoId = request.ParentShortVideoId,
+            ContentType = request.ContentType,
+            PublishToYouTube = false,
+            Title = request.Title,
+            Caption = request.Caption,
+            HookLine = request.HookLine,
+            Tags = request.Tags,
+            Hashtags = request.Hashtags,
+            VideoPath = request.VideoPath,
+            ThumbnailPath = request.ThumbnailPath,
+            Language = request.Language
+        };
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => service.PublishAsync(request, cts.Token));
+    }
+
     private static ShortFormPublishingService CreateService(
         IShortFormPlatformPublisher youtube,
         IShortFormPlatformPublisher instagram,
@@ -218,6 +290,28 @@ public sealed class ShortFormPublishingServiceTests
             target.ExternalPostId = $"{Platform}-123";
             return Task.FromResult(target);
         }
+    }
+
+
+
+    private sealed class FakeFacebookReelPublishService : IFacebookReelPublishService
+    {
+        private readonly MetaPublishResult _result;
+
+        public FakeFacebookReelPublishService(MetaPublishResult result) => _result = result;
+
+        public Task<MetaPublishResult> PublishReelAsync(MetaPublishRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(_result);
+    }
+
+    private sealed class CancelingPublisher : IShortFormPlatformPublisher
+    {
+        public CancelingPublisher(ShortFormPlatform platform) => Platform = platform;
+
+        public ShortFormPlatform Platform { get; }
+
+        public Task<PlatformPublicationTarget> PublishAsync(PlatformPublicationTarget target, CancellationToken cancellationToken)
+            => throw new OperationCanceledException(cancellationToken);
     }
 
     private sealed class ThrowingPublisher : IShortFormPlatformPublisher

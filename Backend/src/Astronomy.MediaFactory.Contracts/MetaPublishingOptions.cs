@@ -14,6 +14,9 @@ public sealed class MetaPublishingOptions
     public string CaptionHashtagSuffix { get; set; } = "#Astronomy #NightSky #Stargazing";
     public int FacebookReelProcessingPollSeconds { get; set; } = 10;
     public int FacebookReelProcessingMaxAttempts { get; set; } = 12;
+    public int FacebookVerificationPollAttempts { get; set; } = 12;
+    public int FacebookVerificationPollDelaySeconds { get; set; } = 15;
+    public bool TreatProcessingTimeoutAsSuccess { get; set; } = true;
     public int InstagramContainerPollSeconds { get; set; } = 10;
     public int InstagramContainerMaxAttempts { get; set; } = 18;
     public string PublicMediaBaseUrl { get; set; } = "";

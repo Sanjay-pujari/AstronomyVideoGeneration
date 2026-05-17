@@ -15,6 +15,7 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
     public const string IncompleteTokenMessage = "Meta OAuth token file is missing or incomplete. Run /api/metaoauth/start first.";
     public const string MetaAppDevelopmentModeWarning = "Meta app may be in Development mode. Content created by apps in development may not be publicly visible to users outside app roles. Move app to Live mode and complete App Review for required permissions.";
     private const string GraphEndpoint = "https://graph.facebook.com/v23.0";
+    private const string VerificationTimeoutWarning = "Facebook Reel uploaded but public visibility could not be verified before processing timeout.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     private readonly HttpClient _httpClient;
@@ -139,23 +140,32 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             warnings.Add(thumbnailWarning);
         }
         var verification = await VerifyPublishedAsync(pageId, pageAccessToken, start.VideoId, cancellationToken);
-        if (!verification.PublishedVerified)
-        {
-            warnings.Add("Facebook Reel upload finished, but public Page visibility could not be verified before the processing timeout.");
-            warnings.Add(MetaAppDevelopmentModeWarning);
-        }
 
         var postId = FirstNonBlank(finish.PostId, finish.Id);
         var permalinkUrl = FirstNonBlank(verification.PermalinkUrl, string.IsNullOrWhiteSpace(postId) ? null : $"https://www.facebook.com/{postId}");
+        if (!verification.PublishedVerified)
+        {
+            warnings.Add(VerificationTimeoutWarning);
+            warnings.Add(MetaAppDevelopmentModeWarning);
+        }
+
+        var publishSuccess = verification.PublishedVerified || (_publishingOptions.TreatProcessingTimeoutAsSuccess && !string.IsNullOrWhiteSpace(start.VideoId) && !string.IsNullOrWhiteSpace(permalinkUrl));
+        var publishError = publishSuccess ? null : VerificationTimeoutWarning;
+        var primaryWarning = !verification.PublishedVerified ? VerificationTimeoutWarning : warnings.FirstOrDefault();
         var diagnostics = new FacebookReelPublishDiagnostics
         {
             StartResponse = start,
             UploadResponseStatus = uploadStatus,
+            FacebookUploadStatus = uploadStatus,
             FinishResponse = finish,
             VideoId = start.VideoId,
+            FacebookVideoId = start.VideoId,
             PostId = postId,
             PermalinkUrl = permalinkUrl,
+            FacebookPermalink = permalinkUrl,
             ProcessingStatus = verification.ProcessingStatus,
+            VerificationTimedOut = verification.VerificationTimedOut,
+            ProcessingPollAttempts = verification.ProcessingPollAttempts,
             PageId = pageId,
             PageName = pageName,
             PublishedVerified = verification.PublishedVerified,
@@ -164,7 +174,7 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
 
         return (new MetaPublishResult
         {
-            Success = true,
+            Success = publishSuccess,
             Platform = "Facebook",
             ContentType = PlatformThumbnailContentTypes.Reel,
             Mode = mode,
@@ -176,8 +186,9 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
             VideoId = start.VideoId,
             PostId = postId,
             Url = permalinkUrl,
+            Error = publishError,
             PublishedVerified = verification.PublishedVerified,
-            Warning = warnings.FirstOrDefault(),
+            Warning = primaryWarning,
             Warnings = warnings,
             PublishedUtc = DateTime.UtcNow
         }, diagnostics);
@@ -205,37 +216,75 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
         return (int)response.StatusCode;
     }
 
-    private async Task<FacebookReelVerificationResult> VerifyPublishedAsync(string pageId, string pageAccessToken, string videoId, CancellationToken cancellationToken)
+    private async Task<FacebookReelVerificationResult> VerifyPublishedAsync(string pageId, string pageAccessToken, string videoId, CancellationToken pipelineCancellationToken)
     {
-        var maxAttempts = Math.Max(1, _publishingOptions.FacebookReelProcessingMaxAttempts);
-        var pollDelay = TimeSpan.FromSeconds(Math.Max(0, _publishingOptions.FacebookReelProcessingPollSeconds));
+        var maxAttempts = GetFacebookVerificationPollAttempts();
+        var pollDelay = TimeSpan.FromSeconds(Math.Max(0, GetFacebookVerificationPollDelaySeconds()));
         JsonObject? latestVideo = null;
         JsonObject? latestReels = null;
         string? latestStatus = null;
         string? permalink = null;
+        var attemptsCompleted = 0;
 
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        using var verificationTimeoutCts = new CancellationTokenSource(GetFacebookVerificationTimeout(maxAttempts, pollDelay));
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(pipelineCancellationToken, verificationTimeoutCts.Token);
+        var verificationCancellationToken = linkedCts.Token;
+
+        try
         {
-            if (attempt > 1 && pollDelay > TimeSpan.Zero)
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                await Task.Delay(pollDelay, cancellationToken);
-            }
+                pipelineCancellationToken.ThrowIfCancellationRequested();
 
-            latestVideo = await TryGetGraphObjectAsync($"{GraphEndpoint}/{Uri.EscapeDataString(videoId)}?fields=id,permalink_url,created_time,description,status&access_token={Uri.EscapeDataString(pageAccessToken)}", cancellationToken);
-            latestReels = await TryGetGraphObjectAsync($"{GraphEndpoint}/{Uri.EscapeDataString(pageId)}/video_reels?fields=id,permalink_url,created_time,description,status&limit=10&access_token={Uri.EscapeDataString(pageAccessToken)}", cancellationToken);
-            latestStatus = FirstNonBlank(ExtractStatusText(latestVideo), ExtractStatusText(latestReels));
-            permalink = FirstNonBlank(ExtractString(latestVideo, "permalink_url"), ExtractReelPermalink(latestReels, videoId));
+                if (attempt > 1 && pollDelay > TimeSpan.Zero)
+                {
+                    await Task.Delay(pollDelay, verificationCancellationToken);
+                }
 
-            _logger.LogInformation("Facebook Reel processing poll {Attempt}/{MaxAttempts} for video {VideoId}: status={Status}, permalink={Permalink}.", attempt, maxAttempts, videoId, latestStatus ?? "unknown", permalink ?? "none");
+                latestVideo = await TryGetGraphObjectAsync($"{GraphEndpoint}/{Uri.EscapeDataString(videoId)}?fields=id,permalink_url,created_time,description,status&access_token={Uri.EscapeDataString(pageAccessToken)}", verificationCancellationToken);
+                latestReels = await TryGetGraphObjectAsync($"{GraphEndpoint}/{Uri.EscapeDataString(pageId)}/video_reels?fields=id,permalink_url,created_time,description,status&limit=10&access_token={Uri.EscapeDataString(pageAccessToken)}", verificationCancellationToken);
+                attemptsCompleted = attempt;
+                latestStatus = FirstNonBlank(ExtractStatusText(latestVideo), ExtractStatusText(latestReels));
+                permalink = FirstNonBlank(ExtractString(latestVideo, "permalink_url"), ExtractReelPermalink(latestReels, videoId));
 
-            if (IsPublished(latestStatus) || (!_publishingOptions.RequirePublishedState && !string.IsNullOrWhiteSpace(permalink)))
-            {
-                return new FacebookReelVerificationResult(true, latestStatus, permalink);
+                _logger.LogInformation("Facebook Reel processing poll {Attempt}/{MaxAttempts} for video {VideoId}: status={Status}, permalink={Permalink}.", attempt, maxAttempts, videoId, latestStatus ?? "unknown", permalink ?? "none");
+
+                if (IsPublished(latestStatus) || (!_publishingOptions.RequirePublishedState && !string.IsNullOrWhiteSpace(permalink)))
+                {
+                    return new FacebookReelVerificationResult(true, latestStatus, permalink, false, attemptsCompleted);
+                }
             }
         }
+        catch (TaskCanceledException ex) when (!pipelineCancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Facebook Reel verification timed out or was canceled while polling video {VideoId}.", videoId);
+            return new FacebookReelVerificationResult(false, latestStatus ?? ExtractStatusText(latestVideo) ?? ExtractStatusText(latestReels), permalink, true, Math.Max(attemptsCompleted, 1));
+        }
+        catch (OperationCanceledException ex) when (!pipelineCancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Facebook Reel verification timed out or was canceled while polling video {VideoId}.", videoId);
+            return new FacebookReelVerificationResult(false, latestStatus ?? ExtractStatusText(latestVideo) ?? ExtractStatusText(latestReels), permalink, true, Math.Max(attemptsCompleted, 1));
+        }
 
-        return new FacebookReelVerificationResult(false, latestStatus ?? ExtractStatusText(latestVideo) ?? ExtractStatusText(latestReels), permalink);
+        return new FacebookReelVerificationResult(false, latestStatus ?? ExtractStatusText(latestVideo) ?? ExtractStatusText(latestReels), permalink, true, attemptsCompleted);
     }
+
+    private static TimeSpan GetFacebookVerificationTimeout(int maxAttempts, TimeSpan pollDelay)
+    {
+        var pollWindow = TimeSpan.FromTicks(pollDelay.Ticks * Math.Max(1, maxAttempts));
+        var minimumWindow = TimeSpan.FromSeconds(30);
+        return pollWindow > minimumWindow ? pollWindow + minimumWindow : minimumWindow;
+    }
+
+    private int GetFacebookVerificationPollAttempts()
+        => Math.Max(1, _publishingOptions.FacebookReelProcessingMaxAttempts != 12
+            ? _publishingOptions.FacebookReelProcessingMaxAttempts
+            : _publishingOptions.FacebookVerificationPollAttempts);
+
+    private int GetFacebookVerificationPollDelaySeconds()
+        => _publishingOptions.FacebookReelProcessingPollSeconds != 10
+            ? _publishingOptions.FacebookReelProcessingPollSeconds
+            : _publishingOptions.FacebookVerificationPollDelaySeconds;
 
     private async Task<JsonObject?> TryGetGraphObjectAsync(string url, CancellationToken cancellationToken)
     {
@@ -457,17 +506,22 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
     private static bool IsPublished(string? status)
         => !string.IsNullOrWhiteSpace(status) && status.Contains("PUBLISHED", StringComparison.OrdinalIgnoreCase);
 
-    private sealed record FacebookReelVerificationResult(bool PublishedVerified, string? ProcessingStatus, string? PermalinkUrl);
+    private sealed record FacebookReelVerificationResult(bool PublishedVerified, string? ProcessingStatus, string? PermalinkUrl, bool VerificationTimedOut, int ProcessingPollAttempts);
 
     private sealed class FacebookReelPublishDiagnostics
     {
         public StartUploadResponse? StartResponse { get; init; }
         public int UploadResponseStatus { get; init; }
+        public int FacebookUploadStatus { get; init; }
         public FinishUploadResponse? FinishResponse { get; init; }
         public string? VideoId { get; init; }
+        public string? FacebookVideoId { get; init; }
         public string? PostId { get; init; }
         public string? PermalinkUrl { get; init; }
+        public string? FacebookPermalink { get; init; }
         public string? ProcessingStatus { get; init; }
+        public bool VerificationTimedOut { get; init; }
+        public int ProcessingPollAttempts { get; init; }
         public string PageId { get; init; } = string.Empty;
         public string PageName { get; init; } = string.Empty;
         public bool PublishedVerified { get; init; }
