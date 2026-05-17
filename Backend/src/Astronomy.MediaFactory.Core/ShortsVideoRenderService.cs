@@ -193,6 +193,7 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
             OutputWidth = 1080,
             OutputHeight = 1920,
             EnableVerticalCrop = true,
+            EncodingProfile = publishToYouTube ? VideoRenderProfileKind.ShortsFinal : VideoRenderProfileKind.MetaReelFinal,
             Scenes = shortSequence.Select(scene => new RenderScene
             {
                 Caption = BuildLocalizedSceneCaption(context.Localization.ResolvedLanguage, scene.Index, scene.ObjectName),

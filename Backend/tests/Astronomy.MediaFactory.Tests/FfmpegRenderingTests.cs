@@ -70,12 +70,12 @@ public sealed class FfmpegRenderingTests
             OutputPath = "/tmp/short-video.mp4"
         }, "/tmp/ffmpeg-input.txt", "/tmp/narration.mp3", "/tmp/short-video.mp4");
 
-        Assert.Contains("scale=1080:1920:force_original_aspect_ratio=increase", args);
+        Assert.Contains("scale=1080:1920:flags=bicubic:force_original_aspect_ratio=increase", args);
         Assert.Contains("crop=1080:1920", args);
         Assert.Contains("pad=1080:1920", args);
         Assert.Contains("setsar=1", args);
-        Assert.Contains("-preset slow", args);
-        Assert.Contains("-b:v 12M", args);
+        Assert.Contains("-preset medium", args);
+        Assert.Contains("-maxrate 12M", args);
         Assert.Contains("-b:a 256k", args);
         Assert.Contains("-movflags +faststart", args);
     }
@@ -758,7 +758,7 @@ public sealed class FfmpegRenderingTests
             ]
         }, CancellationToken.None);
 
-        var concatCommand = processRunner.Commands.Single(command => command.Contains("combined.mp4", StringComparison.Ordinal));
+        var concatCommand = processRunner.Commands.Single(command => command.Contains("combined.mp4", StringComparison.Ordinal) && command.Contains("-f concat", StringComparison.Ordinal));
         Assert.Contains("-f concat", concatCommand, StringComparison.Ordinal);
         var diagnostics = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "ffmpeg.log")];
         Assert.Contains("transitionsEnabled: False", diagnostics, StringComparison.Ordinal);
@@ -956,7 +956,7 @@ public sealed class FfmpegRenderingTests
         await sut.RenderAsync(new RenderManifest { Title = "Plain", AudioPath = audioPath, OutputPath = outputPath, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }] }, CancellationToken.None);
 
         var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
-        Assert.Contains("-vf \"fps=30,scale=2560:1440:flags=lanczos\"", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-vf \"fps=30,scale=2560:1440:flags=bicubic\"", segmentCommand, StringComparison.Ordinal);
         Assert.DoesNotContain("zoompan", segmentCommand, StringComparison.Ordinal);
         Assert.DoesNotContain("fade=t=", segmentCommand, StringComparison.Ordinal);
     }
@@ -978,7 +978,7 @@ public sealed class FfmpegRenderingTests
         await sut.RenderAsync(new RenderManifest { Title = "Short", AudioPath = audioPath, OutputPath = outputPath, OutputWidth = 1080, OutputHeight = 1920, EnableVerticalCrop = true, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 5 }] }, CancellationToken.None);
 
         var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
-        Assert.Contains("scale=1080:1920:force_original_aspect_ratio=increase", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("scale=1080:1920:flags=bicubic:force_original_aspect_ratio=increase", segmentCommand, StringComparison.Ordinal);
         Assert.Contains("crop=1080:1920", segmentCommand, StringComparison.Ordinal);
         Assert.Contains("s=1080x1920", segmentCommand, StringComparison.Ordinal);
         Assert.Contains("(0.08)*pow", segmentCommand, StringComparison.Ordinal);
@@ -1004,13 +1004,16 @@ public sealed class FfmpegRenderingTests
 
         var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
         var finalCommand = processRunner.Commands.Last(command => command.Contains("-movflags +faststart", StringComparison.Ordinal) && command.Contains(outputPath, StringComparison.Ordinal));
-        Assert.Contains("scale=2560:1440:flags=lanczos", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("scale=2560:1440:flags=bicubic", segmentCommand, StringComparison.Ordinal);
         Assert.Contains("-c:v libx264", segmentCommand, StringComparison.Ordinal);
-        Assert.Contains("-preset slow", segmentCommand, StringComparison.Ordinal);
-        Assert.Contains("-crf 18", segmentCommand, StringComparison.Ordinal);
-        Assert.Contains("-b:v 20M", segmentCommand, StringComparison.Ordinal);
-        Assert.Contains("-maxrate 24M", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-preset fast", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-crf 21", segmentCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("-maxrate 24M", segmentCommand, StringComparison.Ordinal);
         Assert.Contains("-pix_fmt yuv420p", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("scale=2560:1440:flags=lanczos", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-preset medium", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-crf 18", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-maxrate 24M", finalCommand, StringComparison.Ordinal);
         Assert.Contains("-b:a 320k", finalCommand, StringComparison.Ordinal);
         Assert.Contains("-movflags +faststart", finalCommand, StringComparison.Ordinal);
         Assert.True(new FileInfo(outputPath).Length > 0);
@@ -1035,12 +1038,12 @@ public sealed class FfmpegRenderingTests
         var reportJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "video-encoding-report.json")];
         using var report = JsonDocument.Parse(reportJson);
         var root = report.RootElement;
-        Assert.Equal("YouTubeLongProduction", root.GetProperty("presetName").GetString());
+        Assert.Equal("YouTubeLongFinal", root.GetProperty("presetName").GetString());
         Assert.Equal("2560x1440", root.GetProperty("resolution").GetString());
         Assert.Equal("20M", root.GetProperty("bitrate").GetString());
         Assert.Equal("libx264", root.GetProperty("codec").GetString());
         Assert.Equal(18, root.GetProperty("crf").GetInt32());
-        Assert.Equal("slow", root.GetProperty("preset").GetString());
+        Assert.Equal("medium", root.GetProperty("preset").GetString());
         Assert.Equal(30, root.GetProperty("fps").GetInt32());
         Assert.Equal("yuv420p", root.GetProperty("pixelFormat").GetString());
         Assert.Equal("320k", root.GetProperty("audioBitrate").GetString());
@@ -1066,19 +1069,75 @@ public sealed class FfmpegRenderingTests
 
         var segmentCommand = processRunner.Commands.Single(command => command.Contains("-loop 1 -i", StringComparison.Ordinal));
         var finalCommand = processRunner.Commands.Last(command => command.Contains("-movflags +faststart", StringComparison.Ordinal) && command.Contains(outputPath, StringComparison.Ordinal));
-        Assert.Contains("scale=1080:1920:force_original_aspect_ratio=increase", segmentCommand, StringComparison.Ordinal);
-        Assert.Contains("-preset slow", segmentCommand, StringComparison.Ordinal);
-        Assert.Contains("-crf 18", segmentCommand, StringComparison.Ordinal);
-        Assert.Contains("-b:v 12M", segmentCommand, StringComparison.Ordinal);
-        Assert.Contains("-maxrate 16M", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("scale=1080:1920:flags=bicubic:force_original_aspect_ratio=increase", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-preset fast", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-crf 21", segmentCommand, StringComparison.Ordinal);
+        Assert.DoesNotContain("-maxrate 12M", segmentCommand, StringComparison.Ordinal);
+        Assert.Contains("-preset medium", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-crf 20", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-maxrate 12M", finalCommand, StringComparison.Ordinal);
         Assert.Contains("-pix_fmt yuv420p", finalCommand, StringComparison.Ordinal);
         Assert.Contains("-b:a 256k", finalCommand, StringComparison.Ordinal);
         Assert.Contains("-movflags +faststart", finalCommand, StringComparison.Ordinal);
 
         var reportJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "video-encoding-report.json")];
         using var report = JsonDocument.Parse(reportJson);
-        Assert.Equal("YouTubeShortProduction", report.RootElement.GetProperty("presetName").GetString());
+        Assert.Equal("ShortsFinal", report.RootElement.GetProperty("presetName").GetString());
         Assert.Equal("1080x1920", report.RootElement.GetProperty("resolution").GetString());
+    }
+
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_WritesRenderPerformanceReport_ForIntermediateSegments()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-performance-report");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 6d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 6d, [outputPath] = 6d } };
+        var sut = CreateService(fileSystem, processRunner, enableTransitions: false);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Long", AudioPath = audioPath, OutputPath = outputPath, Scenes = [new RenderScene { SceneId = "scene-custom", Caption = "Scene", VisualPath = scenePath, DurationSeconds = 6 }] }, CancellationToken.None);
+
+        var reportJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "video-render-performance-report.json")];
+        using var report = JsonDocument.Parse(reportJson);
+        var entry = report.RootElement.EnumerateArray().Single();
+        Assert.Equal(1, entry.GetProperty("segmentIndex").GetInt32());
+        Assert.Equal("scene-custom", entry.GetProperty("sceneId").GetString());
+        Assert.Equal("IntermediateSegment", entry.GetProperty("profileUsed").GetString());
+        Assert.Contains("-preset fast", entry.GetProperty("ffmpegCommand").GetString(), StringComparison.Ordinal);
+        Assert.Equal(0, entry.GetProperty("exitCode").GetInt32());
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_MetaReelFinal_UsesMetaProfile()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-render-meta-reel");
+        var outputPath = Path.Combine(tempDir.FullName, "meta-reel.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var processRunner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 5d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 5d, [outputPath] = 5d } };
+        var sut = CreateService(fileSystem, processRunner, enableTransitions: false);
+
+        await sut.RenderAsync(new RenderManifest { Title = "Meta", AudioPath = audioPath, OutputPath = outputPath, OutputWidth = 1080, OutputHeight = 1920, EnableVerticalCrop = true, EncodingProfile = VideoRenderProfileKind.MetaReelFinal, Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 5 }] }, CancellationToken.None);
+
+        var finalCommand = processRunner.Commands.Last(command => command.Contains("-movflags +faststart", StringComparison.Ordinal) && command.Contains(outputPath, StringComparison.Ordinal));
+        Assert.Contains("-preset medium", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-crf 21", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-maxrate 10M", finalCommand, StringComparison.Ordinal);
+        Assert.Contains("-bufsize 20M", finalCommand, StringComparison.Ordinal);
+
+        var reportJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "video-encoding-report.json")];
+        using var report = JsonDocument.Parse(reportJson);
+        Assert.Equal("MetaReelFinal", report.RootElement.GetProperty("presetName").GetString());
     }
 
     [Theory]
