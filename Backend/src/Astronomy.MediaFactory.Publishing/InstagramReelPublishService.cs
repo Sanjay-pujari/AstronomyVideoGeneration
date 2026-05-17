@@ -789,7 +789,7 @@ public sealed class InstagramReelPublishService : IInstagramReelPublishService
             return value;
         }
 
-        return System.Text.RegularExpressions.Regex.Replace(value, "(?i)(access_token=)[^&\s]+", "$1REDACTED");
+        return System.Text.RegularExpressions.Regex.Replace(value, "(?i)(access_token=)[^&\\s]+", "$1REDACTED");
     }
 
 
