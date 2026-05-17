@@ -68,40 +68,52 @@ public sealed class RenderingOptionsBindingTests
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [$"{RenderingOptions.VideoEncodingSectionName}:IntermediatePreset"] = "fast",
-                [$"{RenderingOptions.VideoEncodingSectionName}:IntermediateCrf"] = "21",
+                [$"{RenderingOptions.VideoEncodingSectionName}:IntermediatePreset"] = "veryfast",
+                [$"{RenderingOptions.VideoEncodingSectionName}:IntermediateCrf"] = "22",
                 [$"{RenderingOptions.VideoEncodingSectionName}:IntermediateScaleFlags"] = "bicubic",
-                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongPreset"] = "medium",
-                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongCrf"] = "18",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongPreset"] = "veryfast",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongCrf"] = "20",
                 [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongWidth"] = "2560",
                 [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongHeight"] = "1440",
                 [$"{RenderingOptions.VideoEncodingSectionName}:EnableYouTube1440pUpscale"] = "true",
-                [$"{RenderingOptions.VideoEncodingSectionName}:ShortsPreset"] = "medium",
-                [$"{RenderingOptions.VideoEncodingSectionName}:ShortsCrf"] = "20",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongQualityMode"] = "Balanced",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongMaxRate"] = "20M",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongBufferSize"] = "40M",
+                [$"{RenderingOptions.VideoEncodingSectionName}:YouTubeLongAudioBitrate"] = "128k",
+                [$"{RenderingOptions.VideoEncodingSectionName}:ShortsPreset"] = "fast",
+                [$"{RenderingOptions.VideoEncodingSectionName}:ShortsCrf"] = "21",
                 [$"{RenderingOptions.VideoEncodingSectionName}:ShortsMaxRate"] = "12M",
-                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelPreset"] = "medium",
-                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelCrf"] = "21",
-                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelMaxRate"] = "10M"
+                [$"{RenderingOptions.VideoEncodingSectionName}:ShortsAudioBitrate"] = "128k",
+                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelPreset"] = "fast",
+                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelCrf"] = "22",
+                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelMaxRate"] = "10M",
+                [$"{RenderingOptions.VideoEncodingSectionName}:MetaReelAudioBitrate"] = "128k"
             })
             .Build();
 
         var options = new RenderingOptions();
         config.GetSection(RenderingOptions.VideoEncodingSectionName).Bind(options);
 
-        Assert.Equal("fast", options.IntermediatePreset);
-        Assert.Equal(21, options.IntermediateCrf);
+        Assert.Equal("veryfast", options.IntermediatePreset);
+        Assert.Equal(22, options.IntermediateCrf);
         Assert.Equal("bicubic", options.IntermediateScaleFlags);
-        Assert.Equal("medium", options.YouTubeLongPreset);
-        Assert.Equal(18, options.YouTubeLongCrf);
+        Assert.Equal("veryfast", options.YouTubeLongPreset);
+        Assert.Equal(20, options.YouTubeLongCrf);
         Assert.Equal(2560, options.YouTubeLongWidth);
         Assert.Equal(1440, options.YouTubeLongHeight);
         Assert.True(options.EnableYouTube1440pUpscale);
-        Assert.Equal("medium", options.ShortsPreset);
-        Assert.Equal(20, options.ShortsCrf);
+        Assert.Equal("Balanced", options.YouTubeLongQualityMode);
+        Assert.Equal("20M", options.YouTubeLongMaxRate);
+        Assert.Equal("40M", options.YouTubeLongBufferSize);
+        Assert.Equal("128k", options.YouTubeLongAudioBitrate);
+        Assert.Equal("fast", options.ShortsPreset);
+        Assert.Equal(21, options.ShortsCrf);
         Assert.Equal("12M", options.ShortsMaxRate);
-        Assert.Equal("medium", options.MetaReelPreset);
-        Assert.Equal(21, options.MetaReelCrf);
+        Assert.Equal("128k", options.ShortsAudioBitrate);
+        Assert.Equal("fast", options.MetaReelPreset);
+        Assert.Equal(22, options.MetaReelCrf);
         Assert.Equal("10M", options.MetaReelMaxRate);
+        Assert.Equal("128k", options.MetaReelAudioBitrate);
     }
 
     [Fact]
