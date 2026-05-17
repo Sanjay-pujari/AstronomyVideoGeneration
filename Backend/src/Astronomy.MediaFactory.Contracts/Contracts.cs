@@ -331,6 +331,10 @@ public sealed class RenderingOptions
     public string TransitionType { get; set; } = "fade";
     public int FfmpegTimeoutSeconds { get; set; } = 600;
     public int FfmpegSegmentTimeoutSeconds { get; set; } = 120;
+    public int SegmentRenderTimeoutSeconds { get; set; } = 180;
+    public int FinalLongRenderTimeoutSeconds { get; set; } = 900;
+    public int FinalShortRenderTimeoutSeconds { get; set; } = 300;
+    public int FinalMetaRenderTimeoutSeconds { get; set; } = 300;
     public bool WriteSegmentDiagnostics { get; set; } = true;
     public bool KeepIntermediateFiles { get; set; } = true;
     public bool EnableKenBurns { get; set; } = true;
@@ -345,8 +349,11 @@ public sealed class RenderingOptions
     public string IntermediatePreset { get; set; } = "fast";
     public int IntermediateCrf { get; set; } = 21;
     public string IntermediateScaleFlags { get; set; } = "bicubic";
+    public string YouTubeLongQualityMode { get; set; } = "Quality";
     public string YouTubeLongPreset { get; set; } = "medium";
     public int YouTubeLongCrf { get; set; } = 18;
+    public string YouTubeLongMaxRate { get; set; } = "24M";
+    public string YouTubeLongBufferSize { get; set; } = "48M";
     public int YouTubeLongWidth { get; set; } = 2560;
     public int YouTubeLongHeight { get; set; } = 1440;
     public string ShortsPreset { get; set; } = "medium";
@@ -389,17 +396,24 @@ public sealed record VideoEncodingPreset(
     public static VideoEncodingPreset YouTubeLongFinal(RenderingOptions options)
     {
         var enable1440pUpscale = options.EnableYouTube1440pUpscale;
+        var mode = string.IsNullOrWhiteSpace(options.YouTubeLongQualityMode) ? "Quality" : options.YouTubeLongQualityMode.Trim();
+        var balancedMode = string.Equals(mode, "Balanced", StringComparison.OrdinalIgnoreCase);
+        var preset = balancedMode ? "fast" : NormalizePreset(options.YouTubeLongPreset, "medium");
+        var crf = balancedMode ? 19 : (options.YouTubeLongCrf > 0 ? options.YouTubeLongCrf : 18);
+        var maxRate = balancedMode ? "20M" : (string.IsNullOrWhiteSpace(options.YouTubeLongMaxRate) ? (enable1440pUpscale ? "24M" : "20M") : options.YouTubeLongMaxRate.Trim());
+        var bufferSize = balancedMode ? "40M" : (string.IsNullOrWhiteSpace(options.YouTubeLongBufferSize) ? (enable1440pUpscale ? "48M" : "40M") : options.YouTubeLongBufferSize.Trim());
+
         return new(
-            Name: "YouTubeLongFinal",
+            Name: balancedMode ? "YouTubeLongFinalBalanced" : "YouTubeLongFinal",
             Width: enable1440pUpscale ? Math.Max(1, options.YouTubeLongWidth) : 1920,
             Height: enable1440pUpscale ? Math.Max(1, options.YouTubeLongHeight) : 1080,
             Codec: "libx264",
-            Preset: NormalizePreset(options.YouTubeLongPreset, "medium"),
-            Crf: options.YouTubeLongCrf > 0 ? options.YouTubeLongCrf : 18,
+            Preset: preset,
+            Crf: crf,
             PixelFormat: "yuv420p",
             VideoBitrate: enable1440pUpscale ? "20M" : "16M",
-            MaxVideoBitrate: enable1440pUpscale ? "24M" : "20M",
-            BufferSize: enable1440pUpscale ? "48M" : "40M",
+            MaxVideoBitrate: maxRate,
+            BufferSize: bufferSize,
             AudioBitrate: "320k",
             ScaleFlags: "lanczos");
     }
