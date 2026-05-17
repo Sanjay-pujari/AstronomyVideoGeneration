@@ -15,10 +15,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private readonly IProcessRunner _processRunner;
     private readonly IFileSystem _fileSystem;
     private readonly ILogger<FfmpegVideoRenderService> _logger;
-    private const int LongOutputWidth = 1920;
-    private const int LongOutputHeight = 1080;
-    private const int ShortOutputWidth = 1080;
-    private const int ShortOutputHeight = 1920;
+    private const string EncodingReportFileName = "video-encoding-report.json";
 
     public FfmpegVideoRenderService(
         IOptions<RenderingOptions> options,
@@ -69,6 +66,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         if (hasSegmentedAudio)
         {
             await RenderFromSegmentsAsync(manifest, plan, outputDirectory, segmentConcatPath, cancellationToken);
+            await WriteEncodingReportAsync(manifest, outputPath, outputDirectory, cancellationToken);
             await WriteShortDiagnosticsIfNeededAsync(manifest, outputPath, outputDirectory, cancellationToken);
             return outputPath;
         }
@@ -96,6 +94,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             throw new InvalidOperationException($"FFmpeg execution failed. See {ffmpegLogPath} for details.", ex);
         }
 
+        await WriteEncodingReportAsync(manifest, outputPath, outputDirectory, cancellationToken);
         await WriteShortDiagnosticsIfNeededAsync(manifest, outputPath, outputDirectory, cancellationToken);
         return outputPath;
     }
@@ -131,7 +130,8 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var effects = ResolveVideoEffects(lockedDurationSeconds, fps, outputWidth, outputHeight, isShort, motionProfile);
             var segmentFilter = BuildSegmentVisualFilter(outputWidth, outputHeight, fps, effects, motionProfile);
             var durationArgument = lockedDurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-            var segmentArguments = $"-y -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -i \"{NormalizePath(sceneAudioPath)}\" -vf \"{segmentFilter}\" -t {durationArgument} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} -c:a aac -f mp4 \"{NormalizePath(segmentOutputPath)}\"";
+            var encodingPreset = ResolveEncodingPreset(manifest);
+            var segmentArguments = $"-y -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -i \"{NormalizePath(sceneAudioPath)}\" -vf \"{segmentFilter}\" -t {durationArgument} {BuildVideoEncodeArguments(encodingPreset)} -r {fps} -c:a aac -b:a {encodingPreset.AudioBitrate} -f mp4 \"{NormalizePath(segmentOutputPath)}\"";
             speechDiagnostics.Add(CreateSpeechSpeedDiagnostic(scene, i, audioDurationSeconds, lockedDurationSeconds));
             var segmentResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, segmentArguments, cancellationToken);
             if (segmentResult.ExitCode != 0 || !File.Exists(segmentOutputPath))
@@ -162,9 +162,12 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await WriteSegmentSyncReportAsync(outputDirectory, syncReports, cancellationToken);
         await WriteVideoEffectsReportAsync(outputDirectory, effectsReports, cancellationToken);
 
-        var concatArguments = IsShortManifest(manifest)
-            ? $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {GetShortSafeFps()} -c:a aac -f mp4 \"{NormalizePath(manifest.OutputPath)}\""
-            : $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(manifest.OutputPath)}\"";
+        var productionPreset = ResolveEncodingPreset(manifest);
+        var concatArguments = $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy -movflags +faststart \"{NormalizePath(manifest.OutputPath)}\"";
+        if (IsShortManifest(manifest))
+        {
+            concatArguments = $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" {BuildVideoEncodeArguments(productionPreset)} -r {GetShortSafeFps()} -c:a aac -b:a {productionPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(manifest.OutputPath)}\"";
+        }
         var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
         if (concatResult.ExitCode != 0 || !File.Exists(manifest.OutputPath))
         {
@@ -251,8 +254,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             var motionProfile = ResolveMotionProfile(scene, isShort);
             var effects = ResolveVideoEffects(duration, fps, outputWidth, outputHeight, isShort, motionProfile);
             var segmentFilter = BuildSegmentVisualFilter(outputWidth, outputHeight, fps, effects, motionProfile);
+            var encodingPreset = ResolveEncodingPreset(manifest);
             var segmentArguments =
-                $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{segmentFilter}\" -frames:v {frameCount} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {fps} -f mp4 \"{NormalizePath(segmentPath)}\"";
+                $"-y -nostdin -loop 1 -i \"{NormalizePath(scene.VisualPath)}\" -vf \"{segmentFilter}\" -frames:v {frameCount} {BuildVideoEncodeArguments(encodingPreset)} -r {fps} -f mp4 \"{NormalizePath(segmentPath)}\"";
             var segmentCommand = $"{_options.FfmpegPath} {segmentArguments}";
             await _fileSystem.WriteAllTextAsync(commandPath, segmentCommand, cancellationToken);
             var segmentCommandPath = Path.Combine(outputDirectory, $"ffmpeg-segment-{i + 1:000}-command.txt");
@@ -324,7 +328,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
         var concatBody = string.Join(Environment.NewLine, segmentPaths.Select(path => $"file '{NormalizePath(path).Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
-        var concatArguments = BuildSegmentTransitionArguments(segmentPaths, segmentDurationsSeconds, segmentConcatPath, combinedPath, transitionsEnabled, transitionDurationSeconds);
+        var concatArguments = BuildSegmentTransitionArguments(segmentPaths, segmentDurationsSeconds, segmentConcatPath, combinedPath, transitionsEnabled, transitionDurationSeconds, ResolveEncodingPreset(manifest));
         await _fileSystem.WriteAllTextAsync(commandPath, $"{_options.FfmpegPath} {concatArguments}", cancellationToken);
         segmentDiagnostics.Add($"xfadeCommand: {_options.FfmpegPath} {concatArguments}");
         _logger.LogInformation("Concatenating FFmpeg segments: {Command}", $"{_options.FfmpegPath} {concatArguments}");
@@ -343,9 +347,10 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             throw new InvalidOperationException($"{warningMessage} Refusing final mux to avoid trimmed/missing scenes.");
         }
 
+        var finalPreset = ResolveEncodingPreset(manifest);
         var finalArguments = IsShortManifest(manifest)
-            ? $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r {GetShortSafeFps()} -c:a aac -f mp4 \"{NormalizePath(outputPath)}\""
-            : $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac \"{NormalizePath(outputPath)}\"";
+            ? $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 {BuildVideoEncodeArguments(finalPreset)} -r {GetShortSafeFps()} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\""
+            : $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart \"{NormalizePath(outputPath)}\"";
         var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
         await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics), cancellationToken);
@@ -566,6 +571,24 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private double GetConfiguredZoomEnd(bool isShort)
         => isShort && _options.ShortKenBurnsZoomEnd > 0d ? _options.ShortKenBurnsZoomEnd : _options.KenBurnsZoomEnd;
 
+
+    private sealed record VideoEncodingReport(
+        string PresetName,
+        string Resolution,
+        int Width,
+        int Height,
+        string Bitrate,
+        string MaxBitrate,
+        string Codec,
+        int Crf,
+        string Preset,
+        int Fps,
+        string PixelFormat,
+        string AudioBitrate,
+        bool FaststartEnabled,
+        long EstimatedUploadSizeBytes,
+        long OutputFileSizeBytes);
+
     private sealed record SpeechSpeedDiagnostic(
         string SceneId,
         string Language,
@@ -618,8 +641,11 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         string ObjectName,
         int SegmentIndex);
     private static string EscapeForJson(string? value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
-    private static (int Width, int Height) GetOutputSize(RenderManifest manifest)
-        => IsShortManifest(manifest) ? (ShortOutputWidth, ShortOutputHeight) : (LongOutputWidth, LongOutputHeight);
+    private (int Width, int Height) GetOutputSize(RenderManifest manifest)
+    {
+        var preset = ResolveEncodingPreset(manifest);
+        return (preset.Width, preset.Height);
+    }
 
     private static bool IsShortManifest(RenderManifest manifest)
         => manifest.OutputHeight.GetValueOrDefault() > manifest.OutputWidth.GetValueOrDefault();
@@ -629,6 +655,74 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     private static int GetShortSafeFps()
         => 30;
+
+
+    private VideoEncodingPreset ResolveEncodingPreset(RenderManifest manifest)
+        => IsShortManifest(manifest)
+            ? VideoEncodingPreset.YouTubeShortProduction()
+            : VideoEncodingPreset.YouTubeLongProduction(_options.EnableYouTube1440pUpscale);
+
+    private static string BuildVideoEncodeArguments(VideoEncodingPreset preset)
+        => $"-c:v {preset.Codec} -preset {preset.Preset} -crf {preset.Crf} -b:v {preset.VideoBitrate} -maxrate {preset.MaxVideoBitrate} -bufsize {preset.BufferSize} -pix_fmt {preset.PixelFormat}";
+
+    private async Task WriteEncodingReportAsync(RenderManifest manifest, string outputPath, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var preset = ResolveEncodingPreset(manifest);
+        var fps = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.KenBurnsFps > 0 ? _options.KenBurnsFps : _options.FrameRate);
+        var durationSeconds = await ProbeMediaDurationSecondsAsync(outputPath, cancellationToken);
+        var fileSizeBytes = File.Exists(outputPath) ? new FileInfo(outputPath).Length : 0L;
+        var estimatedUploadSizeBytes = EstimateUploadSizeBytes(preset.VideoBitrate, preset.AudioBitrate, durationSeconds);
+        if (estimatedUploadSizeBytes <= 0 && fileSizeBytes > 0)
+        {
+            estimatedUploadSizeBytes = fileSizeBytes;
+        }
+        var report = new VideoEncodingReport(
+            PresetName: preset.Name,
+            Resolution: $"{preset.Width}x{preset.Height}",
+            Width: preset.Width,
+            Height: preset.Height,
+            Bitrate: preset.VideoBitrate,
+            MaxBitrate: preset.MaxVideoBitrate,
+            Codec: preset.Codec,
+            Crf: preset.Crf,
+            Preset: preset.Preset,
+            Fps: fps,
+            PixelFormat: preset.PixelFormat,
+            AudioBitrate: preset.AudioBitrate,
+            FaststartEnabled: true,
+            EstimatedUploadSizeBytes: estimatedUploadSizeBytes,
+            OutputFileSizeBytes: fileSizeBytes);
+        var json = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, EncodingReportFileName), json, cancellationToken);
+    }
+
+    private static long EstimateUploadSizeBytes(string videoBitrate, string audioBitrate, double durationSeconds)
+    {
+        if (durationSeconds <= 0d)
+        {
+            return 0L;
+        }
+
+        var totalBitsPerSecond = ParseBitrateBitsPerSecond(videoBitrate) + ParseBitrateBitsPerSecond(audioBitrate);
+        return totalBitsPerSecond <= 0d ? 0L : (long)Math.Ceiling(totalBitsPerSecond * durationSeconds / 8d);
+    }
+
+    private static double ParseBitrateBitsPerSecond(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return 0d;
+        }
+
+        var trimmed = value.Trim();
+        var multiplier = trimmed.EndsWith("M", StringComparison.OrdinalIgnoreCase) ? 1_000_000d
+            : trimmed.EndsWith("k", StringComparison.OrdinalIgnoreCase) ? 1_000d
+            : 1d;
+        var numberText = multiplier == 1d ? trimmed : trimmed[..^1];
+        return double.TryParse(numberText, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var number)
+            ? number * multiplier
+            : 0d;
+    }
 
     private async Task WriteShortDiagnosticsIfNeededAsync(RenderManifest manifest, string outputPath, string outputDirectory, CancellationToken cancellationToken)
     {
@@ -709,7 +803,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private static string NormalizePath(string path)
         => path.Replace('\\', '/');
 
-    private string BuildSegmentTransitionArguments(IReadOnlyList<string> segmentPaths, IReadOnlyList<double> segmentDurationsSeconds, string segmentConcatPath, string combinedPath, bool transitionsEnabled, double transitionDurationSeconds)
+    private string BuildSegmentTransitionArguments(IReadOnlyList<string> segmentPaths, IReadOnlyList<double> segmentDurationsSeconds, string segmentConcatPath, string combinedPath, bool transitionsEnabled, double transitionDurationSeconds, VideoEncodingPreset preset)
     {
         if (!transitionsEnabled)
         {
@@ -731,7 +825,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         }
 
         var filterComplex = string.Join(";", filterParts);
-        return $"-y {inputArguments} -filter_complex \"{filterComplex}\" -map \"[vout]\" -pix_fmt yuv420p -c:v libx264 -preset ultrafast \"{NormalizePath(combinedPath)}\"";
+        return $"-y {inputArguments} -filter_complex \"{filterComplex}\" -map \"[vout]\" {BuildVideoEncodeArguments(preset)} \"{NormalizePath(combinedPath)}\"";
     }
 
     private bool IsXfadeEnabled(int sceneCount, double transitionDurationSeconds)
