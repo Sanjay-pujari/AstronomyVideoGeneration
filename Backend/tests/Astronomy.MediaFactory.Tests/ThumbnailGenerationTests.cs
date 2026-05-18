@@ -468,6 +468,11 @@ public sealed class ThumbnailGenerationTests
         Assert.Contains("drawtext=", report.RootElement.GetProperty("drawTextFilter").GetString() ?? string.Empty);
         Assert.Equal(0, report.RootElement.GetProperty("ffmpegExitCode").GetInt32());
         Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-text-debug-command.txt")));
+        var longDrawText = await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-long-drawtext.txt"));
+        Assert.Contains("fontcolor=white@1.0", longDrawText);
+        Assert.Contains("shadowcolor=black@0.75", longDrawText);
+        using var validationReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-drawtext-validation-report.json")));
+        Assert.Equal("pass", validationReport.RootElement.GetProperty("finalDecision").GetString());
         using var runtimeReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-runtime-assets-report.json")));
         Assert.Equal(englishFont, runtimeReport.RootElement.GetProperty("selectedFontResolvedPath").GetString());
         Assert.True(runtimeReport.RootElement.GetProperty("selectedFontExists").GetBoolean());
@@ -513,6 +518,9 @@ public sealed class ThumbnailGenerationTests
         Assert.Equal("UTF-8", report.RootElement.GetProperty("textFileEncoding").GetString());
         Assert.Equal("textfile", report.RootElement.GetProperty("drawTextMode").GetString());
         Assert.Contains("drawtext=", report.RootElement.GetProperty("drawTextFilter").GetString() ?? string.Empty);
+        var shortDrawText = await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-short-drawtext.txt"));
+        Assert.Contains("fontcolor=white@1.0", shortDrawText);
+        Assert.Contains("shadowcolor=black@0.75", shortDrawText);
         using var runtimeReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-runtime-assets-report.json")));
         Assert.Equal(hindiFont, runtimeReport.RootElement.GetProperty("selectedFontResolvedPath").GetString());
         Assert.True(runtimeReport.RootElement.GetProperty("selectedFontExists").GetBoolean());
@@ -538,10 +546,42 @@ public sealed class ThumbnailGenerationTests
 
         Assert.Contains("drawtext=fontfile='D\\\\:/AstronomyWorkspace/assets/fonts/Montserrat-ExtraBold.ttf'", filter);
         Assert.Contains("textfile='D\\\\:/AstronomyWorkspace/out/thumbnail-title-en.txt'", filter);
-        Assert.Contains("fontcolor=white@0.97", filter);
+        Assert.Contains("fontcolor=white@1.0", filter);
+        Assert.Contains("shadowcolor=black@0.75", filter);
         Assert.Contains("fontsize=84", filter);
         Assert.Contains("x=48", filter);
         Assert.Contains("y=120", filter);
+    }
+
+    [Theory]
+    [InlineData("fontcolor=white")]
+    [InlineData("fontcolor=white@1")]
+    [InlineData("fontcolor=white@1.0")]
+    [InlineData("fontcolor=#FFFFFF")]
+    [InlineData("fontcolor=0xFFFFFF")]
+    [InlineData("fontcolor=FFFFFF")]
+    [InlineData("fontcolor=white:alpha=1")]
+    public void LocalAssetCollage_ValidateDrawTextFilter_AllowsVisibleFontColorFormats(string colorClause)
+    {
+        var filter = $"drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:{colorClause}:x=48:y=120";
+
+        LocalAssetCollageThumbnailService.ValidateDrawTextFilter(filter, "Jupiter Tonight", 84, new RectangleF(48, 120, 500, 260));
+    }
+
+    [Theory]
+    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white@0:x=48:y=120", "Jupiter Tonight", 84, 48, 120, 500, 260)]
+    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=black@0:x=48:y=120", "Jupiter Tonight", 84, 48, 120, 500, 260)]
+    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white:alpha=0:x=48:y=120", "Jupiter Tonight", 84, 48, 120, 500, 260)]
+    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=transparent:x=48:y=120", "Jupiter Tonight", 84, 48, 120, 500, 260)]
+    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white@1:x=48:y=120", "", 84, 48, 120, 500, 260)]
+    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white@1:x=48:y=120", "Jupiter Tonight", 0, 48, 120, 500, 260)]
+    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white@1:x=48:y=120", "Jupiter Tonight", 84, 1200, 120, 500, 260)]
+    public void LocalAssetCollage_ValidateDrawTextFilter_RejectsInvisibleOrInvalidText(string filter, string text, float fontSize, float x, float y, float width, float height)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            LocalAssetCollageThumbnailService.ValidateDrawTextFilter(filter, text, fontSize, new RectangleF(x, y, width, height)));
+
+        Assert.StartsWith("drawtext opacity validation failed:", exception.Message);
     }
 
     [Fact]
