@@ -79,10 +79,10 @@ public sealed class FfmpegRenderingTests
 
 
     [Theory]
-    [InlineData("Quality", "-preset medium", "-crf 18", "-maxrate 24M", "-bufsize 48M", "flags=lanczos")]
+    [InlineData("Quality", "-preset veryfast", "-crf 20", "-maxrate 20M", "-bufsize 40M", "flags=bicubic")]
     [InlineData("Balanced", "-preset veryfast", "-crf 20", "-maxrate 20M", "-bufsize 40M", "flags=bicubic")]
-    [InlineData("Fastest", "-preset ultrafast", "-crf 22", "-maxrate 14M", "-bufsize 28M", "flags=bicubic")]
-    public void FfmpegArgumentBuilder_MapsYouTubeLongQualityModes(string qualityMode, string expectedPreset, string expectedCrf, string expectedMaxRate, string expectedBufferSize, string expectedScaleFlags)
+    [InlineData("Fastest", "-preset veryfast", "-crf 20", "-maxrate 20M", "-bufsize 40M", "flags=bicubic")]
+    public void FfmpegArgumentBuilder_UsesBalancedYouTubeLongEncodingForAllModes(string qualityMode, string expectedPreset, string expectedCrf, string expectedMaxRate, string expectedBufferSize, string expectedScaleFlags)
     {
         var sut = new FfmpegArgumentBuilder();
         var options = new RenderingOptions { FrameRate = 30, YouTubeLongQualityMode = qualityMode };
@@ -1358,9 +1358,9 @@ public sealed class FfmpegRenderingTests
     }
 
     [Fact]
-    public async Task FfmpegVideoRenderService_FinalTimeoutRetryUsesFasterProfileAnd1080pFallback()
+    public async Task FfmpegVideoRenderService_FinalTimeoutDoesNotRetryExperimentalProfile()
     {
-        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-final-retry");
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-final-timeout-no-retry");
         var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
         var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
         var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
@@ -1373,24 +1373,25 @@ public sealed class FfmpegRenderingTests
             TimeoutFirstFinalRender = true,
             ProbeDurationsByPath = { [audioPath] = 300d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 300d }
         };
-        var sut = CreateService(fileSystem, runner, finalLongRenderTimeoutSeconds: 900);
+        var sut = CreateService(fileSystem, runner, finalLongRenderTimeoutSeconds: 1800);
 
-        await sut.RenderAsync(new RenderManifest
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RenderAsync(new RenderManifest
         {
             Title = "Sky",
             AudioPath = audioPath,
             OutputPath = outputPath,
             EncodingProfile = VideoRenderProfileKind.YouTubeLongFinal,
             Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 300 }]
-        }, CancellationToken.None);
+        }, CancellationToken.None));
 
-        Assert.Contains(runner.Commands, command => command.Contains("-preset ultrafast", StringComparison.Ordinal) && command.Contains("scale=1920:1080", StringComparison.Ordinal));
+        Assert.Contains("Final long render timed out", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(runner.Commands, command => command.Contains("-preset ultrafast", StringComparison.Ordinal));
         var reportJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "final-render-performance-report.json")];
         using var report = JsonDocument.Parse(reportJson);
-        Assert.True(report.RootElement.GetProperty("retryUsed").GetBoolean());
-        Assert.True(report.RootElement.GetProperty("fallbackUsed").GetBoolean());
-        Assert.Equal("ultrafast", report.RootElement.GetProperty("encodingPreset").GetString());
-        Assert.Equal("1920x1080", report.RootElement.GetProperty("outputResolution").GetString());
+        Assert.False(report.RootElement.GetProperty("retryUsed").GetBoolean());
+        Assert.False(report.RootElement.GetProperty("fallbackUsed").GetBoolean());
+        Assert.Equal("veryfast", report.RootElement.GetProperty("encodingPreset").GetString());
+        Assert.Equal("2560x1440", report.RootElement.GetProperty("outputResolution").GetString());
     }
 
     [Fact]
@@ -1406,7 +1407,7 @@ public sealed class FfmpegRenderingTests
         var runner = new SegmentAwareProcessRunner();
         runner.ProbeDurationsByPath[audioPath] = 10d;
         runner.ProbeDurationsByPath[Path.Combine(tempDir.FullName, "combined.mp4")] = 10d;
-        var sut = CreateService(new InMemoryFileSystem(), runner, segmentRenderTimeoutSeconds: 450, finalLongRenderTimeoutSeconds: 900);
+        var sut = CreateService(new InMemoryFileSystem(), runner, segmentRenderTimeoutSeconds: 240, finalLongRenderTimeoutSeconds: 1800);
 
         await sut.RenderAsync(new RenderManifest
         {
@@ -1417,14 +1418,14 @@ public sealed class FfmpegRenderingTests
             Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 10 }]
         }, CancellationToken.None);
 
-        Assert.Contains(runner.Timeouts, timeout => timeout.GetValueOrDefault() == TimeSpan.FromSeconds(450));
-        Assert.Equal(TimeSpan.FromSeconds(900), runner.Timeouts.Last().GetValueOrDefault());
+        Assert.Contains(runner.Timeouts, timeout => timeout.GetValueOrDefault() == TimeSpan.FromSeconds(240));
+        Assert.Equal(TimeSpan.FromSeconds(1800), runner.Timeouts.Last().GetValueOrDefault());
     }
 
     [Theory]
     [InlineData(180, 36, 360)]
     [InlineData(180, 100, 1000)]
-    [InlineData(30, 10, 300)]
+    [InlineData(30, 10, 100)]
     [InlineData(450, 20, 450)]
     public void FfmpegVideoRenderService_CalculatesEffectiveSegmentTimeout(int configuredSeconds, double sceneDurationSeconds, int expectedSeconds)
     {

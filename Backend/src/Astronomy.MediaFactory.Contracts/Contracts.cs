@@ -354,14 +354,14 @@ public sealed class RenderingOptions
     public string TransitionType { get; set; } = "fade";
     public int FfmpegTimeoutSeconds { get; set; } = 600;
     public int FfmpegSegmentTimeoutSeconds { get; set; } = 120;
-    public int SegmentRenderTimeoutSeconds { get; set; } = 180;
-    public int FinalLongRenderTimeoutSeconds { get; set; } = 900;
+    public int SegmentRenderTimeoutSeconds { get; set; } = 240;
+    public int FinalLongRenderTimeoutSeconds { get; set; } = 1800;
     public double FinalLongTimeoutMultiplier { get; set; } = 8d;
     public int FinalLongMaxTimeoutSeconds { get; set; } = 3600;
-    public bool RetryFinalLongRenderWithFasterProfile { get; set; } = true;
-    public bool FallbackTo1080pOnFinalRenderTimeout { get; set; } = true;
-    public int FinalShortRenderTimeoutSeconds { get; set; } = 300;
-    public int FinalMetaRenderTimeoutSeconds { get; set; } = 300;
+    public bool RetryFinalLongRenderWithFasterProfile { get; set; } = false;
+    public bool FallbackTo1080pOnFinalRenderTimeout { get; set; } = false;
+    public int FinalShortRenderTimeoutSeconds { get; set; } = 600;
+    public int FinalMetaRenderTimeoutSeconds { get; set; } = 600;
     public bool WriteSegmentDiagnostics { get; set; } = true;
     public bool KeepIntermediateFiles { get; set; } = true;
     public bool EnableKenBurns { get; set; } = true;
@@ -426,27 +426,19 @@ public sealed record VideoEncodingPreset(
     public static VideoEncodingPreset YouTubeLongFinal(RenderingOptions options, bool forceFastest = false, bool force1080p = false)
     {
         var enable1440pUpscale = options.EnableYouTube1440pUpscale && !force1080p;
-        var mode = forceFastest ? "Fastest" : NormalizeYouTubeLongQualityMode(options.YouTubeLongQualityMode);
-        var (preset, crf, maxRate, bufferSize, scaleFlags) = mode switch
-        {
-            "Quality" => ("medium", 18, "24M", "48M", "lanczos"),
-            "Fastest" => ("ultrafast", 22, "14M", "28M", "bicubic"),
-            _ => ("veryfast", 20, "20M", "40M", "bicubic")
-        };
-
         return new(
             Name: "YouTubeLongFinal",
             Width: enable1440pUpscale ? Math.Max(1, options.YouTubeLongWidth) : 1920,
             Height: enable1440pUpscale ? Math.Max(1, options.YouTubeLongHeight) : 1080,
             Codec: "libx264",
-            Preset: preset,
-            Crf: crf,
+            Preset: "veryfast",
+            Crf: 20,
             PixelFormat: "yuv420p",
             VideoBitrate: string.Empty,
-            MaxVideoBitrate: maxRate,
-            BufferSize: bufferSize,
+            MaxVideoBitrate: "20M",
+            BufferSize: "40M",
             AudioBitrate: NormalizeBitrate(options.YouTubeLongAudioBitrate, "128k"),
-            ScaleFlags: scaleFlags);
+            ScaleFlags: "bicubic");
     }
 
     public static VideoEncodingPreset ShortsFinal(RenderingOptions options) => new(
