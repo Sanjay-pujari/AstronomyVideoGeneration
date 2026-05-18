@@ -148,7 +148,7 @@ public sealed class FacebookVideoPublishServiceTests
             NullLogger<FacebookVideoPublishService>.Instance);
 
     private static Task<JsonDocument> ReadDiagnosticsAsync(string videoPath)
-        => JsonDocument.ParseAsync(File.OpenRead(Path.Combine(Path.GetDirectoryName(videoPath)!, "facebook-full-video-upload-diagnostics.json"))).AsTask();
+        => JsonDocument.ParseAsync(File.OpenRead(Path.Combine(Path.GetDirectoryName(videoPath)!, "facebook-full-video-upload-diagnostics.json")));
 }
 
 internal sealed class FacebookLongVideoHandler : HttpMessageHandler
