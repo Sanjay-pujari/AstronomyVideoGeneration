@@ -251,6 +251,12 @@ public static class ServiceCollectionExtensions
             .Validate(opt => opt.JpegQuality is > 0 and <= 100, "ThumbnailGeneration:JpegQuality must be between 1 and 100.")
             .ValidateOnStart();
 
+        services.AddOptions<ThumbnailFontOptions>()
+            .Bind(configuration.GetSection(ThumbnailFontOptions.SectionName))
+            .Validate(options => !string.IsNullOrWhiteSpace(options.DefaultEnglishFont), "ThumbnailFonts:DefaultEnglishFont is required.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.HindiFont), "ThumbnailFonts:HindiFont is required.")
+            .ValidateOnStart();
+
         services.AddOptions<CelestialAssetPackOptions>()
             .Bind(configuration.GetSection(CelestialAssetPackOptions.SectionName))
             .ValidateOnStart();

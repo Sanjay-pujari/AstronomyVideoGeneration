@@ -434,6 +434,85 @@ public sealed class ThumbnailGenerationTests
 
 
 
+
+    [Fact]
+    public async Task LocalAssetCollage_EnglishThumbnailUsesMontserratTextfileDrawtext()
+    {
+        var (assetRoot, englishFont, hindiFont) = await CreateThumbnailTextRenderAssetsAsync();
+        var runner = new CapturingThumbnailTextProcessRunner();
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot }, englishFont, hindiFont, runner);
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}")
+        }, CancellationToken.None);
+
+        Assert.True(File.Exists(plan.LongThumbnailPath));
+        Assert.Contains("drawtext=fontfile=", runner.LastArguments);
+        Assert.Contains("Montserrat-ExtraBold.ttf", runner.LastArguments);
+        Assert.Contains("textfile=", runner.LastArguments);
+        Assert.DoesNotContain("drawtext=text=", runner.LastArguments);
+        Assert.DoesNotContain("□", runner.LastTextFileContents);
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_HindiLanguageSelectsDevanagariFontAndRendersWithoutBoxes()
+    {
+        var (assetRoot, englishFont, hindiFont) = await CreateThumbnailTextRenderAssetsAsync();
+        var runner = new CapturingThumbnailTextProcessRunner();
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot }, englishFont, hindiFont, runner);
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("hi"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}"),
+            IsShortForm = true
+        }, CancellationToken.None);
+
+        Assert.True(File.Exists(plan.ShortThumbnailPath));
+        Assert.Contains("NotoSansDevanagari-Bold.ttf", runner.LastArguments);
+        Assert.Contains("आज रात बृहस्पति", runner.LastTextFileContents);
+        Assert.DoesNotContain("□", runner.LastTextFileContents);
+    }
+
+    [Fact]
+    public void LocalAssetCollage_DevanagariTextSelectsHindiRenderingEvenWhenLanguageIsEnglish()
+    {
+        Assert.True(LocalAssetCollageThumbnailService.IsHindiThumbnailText("en", "आज रात बृहस्पति"));
+        Assert.False(LocalAssetCollageThumbnailService.IsHindiThumbnailText("en", "Jupiter Tonight"));
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_Utf8TextfileRenderingCleansTemporaryFiles()
+    {
+        var (assetRoot, englishFont, hindiFont) = await CreateThumbnailTextRenderAssetsAsync();
+        var runner = new CapturingThumbnailTextProcessRunner();
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot }, englishFont, hindiFont, runner);
+
+        await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("hi"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}"),
+            IsShortForm = true
+        }, CancellationToken.None);
+
+        Assert.NotNull(runner.LastTextFilePath);
+        Assert.True(runner.LastTextFileBytes!.Length > 0);
+        Assert.False(runner.LastTextFileBytes![0] == 0xEF && runner.LastTextFileBytes.Length > 2 && runner.LastTextFileBytes[1] == 0xBB && runner.LastTextFileBytes[2] == 0xBF);
+        Assert.False(File.Exists(runner.LastTextFilePath));
+        Assert.DoesNotContain(Directory.GetFiles(Path.GetDirectoryName(runner.LastTextFilePath!)!), path => Path.GetFileName(path).StartsWith("temp-thumbnail-title-", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task LocalAssetCollage_PrefersTransparentHeroPngOverOtherAssets()
     {
@@ -884,6 +963,15 @@ public sealed class ThumbnailGenerationTests
     private static LocalAssetCollageThumbnailService CreateLocalAssetService(ThumbnailOptions options)
         => new(new ThumbnailStrategyService(), Options.Create(options), NullLogger<LocalAssetCollageThumbnailService>.Instance);
 
+    private static LocalAssetCollageThumbnailService CreateLocalAssetService(ThumbnailOptions options, string englishFont, string hindiFont, IProcessRunner processRunner)
+        => new(
+            new ThumbnailStrategyService(),
+            Options.Create(options),
+            NullLogger<LocalAssetCollageThumbnailService>.Instance,
+            Options.Create(new ThumbnailFontOptions { DefaultEnglishFont = englishFont, HindiFont = hindiFont }),
+            Options.Create(new RenderingOptions { FfmpegPath = "ffmpeg" }),
+            processRunner);
+
     private static AstronomyContext BuildVisiblePlanetContext(string language)
         => new()
         {
@@ -970,6 +1058,71 @@ public sealed class ThumbnailGenerationTests
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         using var image = new Image<Rgba32>(width, height, color);
         await image.SaveAsJpegAsync(path);
+    }
+
+
+
+    private static async Task<(string AssetRoot, string EnglishFont, string HindiFont)> CreateThumbnailTextRenderAssetsAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"thumbnail-text-assets-{Guid.NewGuid():N}");
+        await WriteCuratedAssetAsync(Path.Combine(root, "jupiter", "hero.png"), Color.Orange);
+        await WriteCuratedAssetAsync(Path.Combine(root, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var fontRoot = Path.Combine(root, "fonts");
+        Directory.CreateDirectory(fontRoot);
+        var englishFont = Path.Combine(fontRoot, "Montserrat-ExtraBold.ttf");
+        var hindiFont = Path.Combine(fontRoot, "NotoSansDevanagari-Bold.ttf");
+        await File.WriteAllTextAsync(englishFont, "test-font");
+        await File.WriteAllTextAsync(hindiFont, "test-font");
+        return (root, englishFont, hindiFont);
+    }
+
+    private sealed class CapturingThumbnailTextProcessRunner : IProcessRunner
+    {
+        public string LastArguments { get; private set; } = string.Empty;
+        public string LastTextFileContents { get; private set; } = string.Empty;
+        public string? LastTextFilePath { get; private set; }
+        public byte[]? LastTextFileBytes { get; private set; }
+
+        public async Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
+        {
+            LastArguments = arguments;
+            LastTextFilePath = ExtractDrawTextPath(arguments, "textfile='");
+            LastTextFileBytes = await File.ReadAllBytesAsync(LastTextFilePath, cancellationToken);
+            LastTextFileContents = await File.ReadAllTextAsync(LastTextFilePath, cancellationToken);
+
+            var paths = ExtractQuotedPaths(arguments);
+            File.Copy(paths[0], paths[^1], overwrite: true);
+            var now = DateTimeOffset.UtcNow;
+            return new ProcessExecutionResult(0, string.Empty, string.Empty, now, now, fileName, arguments, string.Empty, false);
+        }
+
+        private static string ExtractDrawTextPath(string arguments, string prefix)
+        {
+            var start = arguments.IndexOf(prefix, StringComparison.Ordinal);
+            Assert.True(start >= 0);
+            start += prefix.Length;
+            var end = arguments.IndexOf('\'', start);
+            Assert.True(end > start);
+            return arguments[start..end].Replace('/', Path.DirectorySeparatorChar);
+        }
+
+        private static List<string> ExtractQuotedPaths(string arguments)
+        {
+            var paths = new List<string>();
+            var index = 0;
+            while (index < arguments.Length)
+            {
+                var start = arguments.IndexOf('\"', index);
+                if (start < 0) break;
+                var end = arguments.IndexOf('\"', start + 1);
+                if (end < 0) break;
+                var value = arguments[(start + 1)..end];
+                if (!value.Contains("drawtext=", StringComparison.Ordinal))
+                    paths.Add(value.Replace('/', Path.DirectorySeparatorChar));
+                index = end + 1;
+            }
+            return paths;
+        }
     }
 
     private static AstronomyContext BuildContext(string language)
