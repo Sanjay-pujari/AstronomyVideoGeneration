@@ -1167,7 +1167,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 {
                     lines.Add(current);
                     if (lines.Count >= maxLines)
-                        return lines;
+                        return lines.ToArray();
                 }
 
                 if (MeasureTextWidth(token, font) <= maxWidth)
@@ -1181,7 +1181,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                     {
                         lines.Add(splitLine);
                         if (lines.Count >= maxLines)
-                            return lines;
+                            return lines.ToArray();
                     }
                     current = string.Empty;
                 }
@@ -1191,7 +1191,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             {
                 lines.Add(current);
                 if (lines.Count >= maxLines)
-                    return lines;
+                    return lines.ToArray();
             }
         }
 
