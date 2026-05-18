@@ -17,6 +17,25 @@ using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Rendering;
 
+
+public sealed record ThumbnailTextRenderOptions
+{
+    public string FontColor { get; init; } = "white";
+    public double? FontOpacity { get; init; }
+    public double? ShadowOpacity { get; init; }
+    public float FontSize { get; init; }
+    public RectangleF Bounds { get; init; }
+    public string Text { get; init; } = string.Empty;
+
+    public ThumbnailTextRenderOptions WithDefaults()
+        => this with
+        {
+            FontColor = string.IsNullOrWhiteSpace(FontColor) ? "white" : FontColor,
+            FontOpacity = FontOpacity ?? 1.0d,
+            ShadowOpacity = ShadowOpacity ?? 0.75d
+        };
+}
+
 public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailService
 {
     private static readonly string[] DefaultPreferredAssetNames = ["hero-transparent.png", "hero.png", "cinematic.png", "closeup.png"];
@@ -118,7 +137,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             await WriteThumbnailRuntimeAssetsReportAsync(thumbnailsDirectory, request.Context.Localization.ResolvedLanguage, ResolveThumbnailFont(request.Context.Localization.ResolvedLanguage, hook), assets, cancellationToken);
             return plan;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && !IsThumbnailTextRenderException(ex) && !IsThumbnailTextRenderingFailure(ex) && !IsThumbnailOutputValidationFailure(ex))
+        catch (Exception ex) when (ex is not OperationCanceledException
+            && !IsThumbnailOutputValidationFailure(ex)
+            && (_options.AllowLegacyFallbackOnFontFailure
+                || (!IsThumbnailTextRenderException(ex)
+                    && !IsThumbnailTextRenderingFailure(ex)
+                    && !IsThumbnailDrawTextValidationFailure(ex))))
         {
             _logger.LogWarning(ex, "Local asset thumbnail generation failed; falling back to Stellarium/extracted frame if available.");
             warnings.Add(ex.Message);
@@ -1053,8 +1077,27 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         await File.WriteAllTextAsync(textFilePath, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
         await ValidateThumbnailTextFileAsync(textFilePath, text, cancellationToken);
 
-        var drawtext = BuildDrawTextFilter(selection.FontPath, textFilePath, fontSize, bounds, portrait);
-        ValidateDrawTextFilter(drawtext, text, fontSize, bounds);
+        var renderOptions = new ThumbnailTextRenderOptions
+        {
+            FontColor = "white",
+            FontOpacity = null,
+            ShadowOpacity = null,
+            FontSize = fontSize,
+            Bounds = bounds,
+            Text = text
+        };
+        var canvasWidth = portrait ? _options.ShortThumbnailWidth : _options.LongThumbnailWidth;
+        var canvasHeight = portrait ? _options.ShortThumbnailHeight : _options.LongThumbnailHeight;
+        var preBuildValidation = EvaluateThumbnailTextRenderOptions(renderOptions, canvasWidth, canvasHeight);
+        if (!preBuildValidation.IsValid)
+        {
+            await WriteThumbnailDrawTextValidationReportAsync(thumbnailDirectory, hook, language, renderOptions, string.Empty, preBuildValidation, cancellationToken);
+            throw new InvalidOperationException(preBuildValidation.ExceptionMessage);
+        }
+
+        var drawtext = BuildDrawTextFilter(selection.FontPath, textFilePath, renderOptions, portrait);
+        await ValidateDrawTextFilterAsync(renderOptions, drawtext, hook, language, thumbnailDirectory, canvasWidth, canvasHeight, cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(thumbnailDirectory, portrait ? "thumbnail-short-drawtext.txt" : "thumbnail-long-drawtext.txt"), drawtext, cancellationToken);
 
         var arguments = string.Join(' ',
             "-y",
@@ -1150,6 +1193,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         => exception is InvalidOperationException invalidOperationException
             && invalidOperationException.Message.StartsWith("Thumbnail stage failed:", StringComparison.Ordinal);
 
+    private static bool IsThumbnailDrawTextValidationFailure(Exception exception)
+        => exception is InvalidOperationException invalidOperationException
+            && invalidOperationException.Message.StartsWith("drawtext opacity validation failed:", StringComparison.Ordinal);
+
     private static async Task<int> CalculateTextAreaSignatureAsync(string imagePath, RectangleF bounds, CancellationToken cancellationToken)
     {
         if (!File.Exists(imagePath)) return 0;
@@ -1196,20 +1243,159 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             throw new InvalidOperationException("Thumbnail text file content does not match the selected hook text.");
     }
 
-    private static void ValidateDrawTextFilter(string drawtext, string text, float fontSize, RectangleF bounds)
+    public static void ValidateDrawTextFilter(ThumbnailTextRenderOptions options, string drawtext, int canvasWidth = 1280, int canvasHeight = 720)
     {
+        var result = EvaluateDrawTextFilter(options, drawtext, canvasWidth, canvasHeight);
+        if (!result.IsValid)
+            throw new InvalidOperationException(result.ExceptionMessage);
+    }
+
+    public static void ValidateDrawTextFilter(string drawtext, string text, float fontSize, RectangleF bounds)
+        => ValidateDrawTextFilter(new ThumbnailTextRenderOptions
+        {
+            FontColor = ExtractDrawTextValue(drawtext, "fontcolor") ?? "white",
+            FontOpacity = ExtractDrawTextOpacity(drawtext),
+            ShadowOpacity = ExtractDrawTextOpacity(drawtext, "shadowcolor"),
+            FontSize = fontSize,
+            Bounds = bounds,
+            Text = text
+        }, drawtext);
+
+    private static async Task ValidateDrawTextFilterAsync(
+        ThumbnailTextRenderOptions options,
+        string drawtext,
+        string hook,
+        string language,
+        string thumbnailDirectory,
+        int canvasWidth,
+        int canvasHeight,
+        CancellationToken cancellationToken)
+    {
+        var result = EvaluateDrawTextFilter(options, drawtext, canvasWidth, canvasHeight);
+        await WriteThumbnailDrawTextValidationReportAsync(thumbnailDirectory, hook, language, options, drawtext, result, cancellationToken);
+        if (!result.IsValid)
+            throw new InvalidOperationException(result.ExceptionMessage);
+    }
+
+    private static DrawTextValidationResult EvaluateDrawTextFilter(ThumbnailTextRenderOptions input, string drawtext, int canvasWidth, int canvasHeight)
+    {
+        var structuredResult = EvaluateThumbnailTextRenderOptions(input, canvasWidth, canvasHeight);
+        if (!structuredResult.IsValid)
+            return structuredResult;
+
+        var options = input.WithDefaults();
+        var fontColor = options.FontColor ?? string.Empty;
+        var parsedOpacity = options.FontOpacity;
+        var alpha = ExtractAlpha(drawtext);
+        string? reason = null;
+
         if (!drawtext.Contains("drawtext=", StringComparison.Ordinal))
-            throw new InvalidOperationException("FFmpeg thumbnail filter chain is missing drawtext.");
-        if (!drawtext.Contains("fontcolor=white@", StringComparison.Ordinal))
-            throw new InvalidOperationException("FFmpeg thumbnail drawtext font color is not visible.");
-        if (fontSize <= 0)
-            throw new InvalidOperationException("FFmpeg thumbnail drawtext fontsize must be greater than zero.");
-        if (bounds.X < 0 || bounds.Y < 0 || bounds.Width <= 0 || bounds.Height <= 0)
-            throw new InvalidOperationException("FFmpeg thumbnail drawtext coordinates are invalid.");
-        if (drawtext.Contains("white@0", StringComparison.Ordinal))
-            throw new InvalidOperationException("FFmpeg thumbnail drawtext opacity is not visible.");
-        if (string.IsNullOrWhiteSpace(text))
-            throw new InvalidOperationException("FFmpeg thumbnail drawtext text is empty.");
+            reason = "missing drawtext filter";
+        else if (IsEnableAlwaysFalse(drawtext))
+            reason = "enable condition always false";
+        else if (IsZero(alpha))
+            reason = $"drawtext opacity validation failed: parsedOpacity={FormatNullable(parsedOpacity)}, fontcolor={fontColor}, alpha={FormatNullable(alpha)}";
+
+        if (reason is null)
+            return new DrawTextValidationResult(true, string.Empty, "accepted", parsedOpacity, alpha);
+
+        var exceptionMessage = reason.StartsWith("drawtext opacity validation failed:", StringComparison.Ordinal)
+            ? reason
+            : $"drawtext opacity validation failed: parsedOpacity={FormatNullable(parsedOpacity)}, fontcolor={fontColor}, alpha={FormatNullable(alpha)}; reason={reason}";
+        return new DrawTextValidationResult(false, reason, exceptionMessage, parsedOpacity, alpha);
+    }
+
+    private static DrawTextValidationResult EvaluateThumbnailTextRenderOptions(ThumbnailTextRenderOptions input, int canvasWidth, int canvasHeight)
+    {
+        var options = input.WithDefaults();
+        var fontColor = options.FontColor ?? string.Empty;
+        var parsedOpacity = options.FontOpacity;
+        string? reason = null;
+
+        if (string.IsNullOrWhiteSpace(options.Text))
+            reason = "empty text";
+        else if (options.FontSize <= 0)
+            reason = "fontSize <= 0";
+        else if (options.Bounds.X < 0 || options.Bounds.Y < 0 || options.Bounds.Width <= 0 || options.Bounds.Height <= 0 || options.Bounds.Right > canvasWidth || options.Bounds.Bottom > canvasHeight)
+            reason = "bounds outside canvas";
+        else if (IsTransparentFontColor(fontColor))
+            reason = "fontcolor=transparent";
+        else if (IsZero(parsedOpacity))
+            reason = $"drawtext opacity validation failed: parsedOpacity={FormatNullable(parsedOpacity)}, fontcolor={fontColor}, alpha=null";
+
+        if (reason is null)
+            return new DrawTextValidationResult(true, string.Empty, "accepted", parsedOpacity, null);
+
+        var exceptionMessage = reason.StartsWith("drawtext opacity validation failed:", StringComparison.Ordinal)
+            ? reason
+            : $"drawtext opacity validation failed: parsedOpacity={FormatNullable(parsedOpacity)}, fontcolor={fontColor}, alpha=null; reason={reason}";
+        return new DrawTextValidationResult(false, reason, exceptionMessage, parsedOpacity, null);
+    }
+
+    private static bool IsTransparentFontColor(string fontColor)
+        => string.Equals(fontColor.Split('@', 2)[0], "transparent", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsEnableAlwaysFalse(string drawtext)
+    {
+        var enable = ExtractDrawTextValue(drawtext, "enable");
+        if (enable is null) return false;
+        var normalized = enable.Trim().Trim('\'').Replace(" ", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+        return normalized is "0" or "false" or "eq(1,0)" or "eq(0,1)";
+    }
+
+    private static double? ExtractAlpha(string drawtext)
+        => ExtractDrawTextValue(drawtext, "alpha") is { } alpha && double.TryParse(alpha.Trim('\''), NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value : null;
+
+    private static double? ExtractDrawTextOpacity(string drawtext, string key = "fontcolor")
+    {
+        var value = ExtractDrawTextValue(drawtext, key);
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var at = value.LastIndexOf('@');
+        if (at < 0 || at == value.Length - 1) return null;
+        return double.TryParse(value[(at + 1)..].Trim('\''), NumberStyles.Float, CultureInfo.InvariantCulture, out var opacity) ? opacity : null;
+    }
+
+    private static string? ExtractDrawTextValue(string drawtext, string key)
+    {
+        var prefix = key + "=";
+        var start = drawtext.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+        if (start < 0) return null;
+        start += prefix.Length;
+        var end = drawtext.IndexOf(':', start);
+        return (end < 0 ? drawtext[start..] : drawtext[start..end]).Trim().Trim('\'');
+    }
+
+    private static bool IsZero(double? value)
+        => value.HasValue && Math.Abs(value.Value) < 0.000001d;
+
+    private static string FormatNullable(double? value)
+        => value.HasValue ? value.Value.ToString("0.###", CultureInfo.InvariantCulture) : "null";
+
+    private static async Task WriteThumbnailDrawTextValidationReportAsync(
+        string thumbnailDirectory,
+        string hook,
+        string language,
+        ThumbnailTextRenderOptions options,
+        string drawtext,
+        DrawTextValidationResult result,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(thumbnailDirectory);
+        var effective = options.WithDefaults();
+        var payload = new
+        {
+            hook,
+            language,
+            fontSize = effective.FontSize,
+            bounds = effective.Bounds,
+            fontColor = effective.FontColor,
+            fontOpacity = effective.FontOpacity,
+            shadowOpacity = effective.ShadowOpacity,
+            drawtext,
+            reason = result.Reason,
+            finalDecision = result.IsValid ? "pass" : "fail"
+        };
+        await File.WriteAllTextAsync(Path.Combine(thumbnailDirectory, "thumbnail-drawtext-validation-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private static async Task WriteThumbnailFontReportAsync(
@@ -1289,22 +1475,36 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         => text.Any(ch => ch is >= '\u0900' and <= '\u097F');
 
     public static string BuildDrawTextFilter(string fontPath, string textFilePath, float fontSize, RectangleF bounds, bool portrait)
+        => BuildDrawTextFilter(fontPath, textFilePath, new ThumbnailTextRenderOptions
+        {
+            FontColor = "white",
+            FontOpacity = null,
+            ShadowOpacity = null,
+            FontSize = fontSize,
+            Bounds = bounds,
+            Text = string.Empty
+        }, portrait);
+
+    public static string BuildDrawTextFilter(string fontPath, string textFilePath, ThumbnailTextRenderOptions options, bool portrait)
     {
-        var alpha = portrait ? "0.92" : "0.97";
-        var x = portrait ? "(w-text_w)/2" : FormatInvariant(bounds.X);
-        var y = FormatInvariant(bounds.Y);
+        var effective = options.WithDefaults();
+        var x = portrait ? "(w-text_w)/2" : FormatInvariant(effective.Bounds.X);
+        var y = FormatInvariant(effective.Bounds.Y);
         return string.Join(':',
             "drawtext=" + $"fontfile='{FfmpegPathEscaper.ToDrawTextPath(fontPath)}'",
             $"textfile='{FfmpegPathEscaper.ToDrawTextPath(textFilePath)}'",
-            $"fontsize={FormatInvariant(fontSize)}",
-            $"fontcolor=white@{alpha}",
-            "shadowcolor=black@0.82",
+            $"fontsize={FormatInvariant(effective.FontSize)}",
+            $"fontcolor={effective.FontColor}@{FormatOpacity(effective.FontOpacity)}",
+            $"shadowcolor=black@{FormatOpacity(effective.ShadowOpacity)}",
             "shadowx=4",
             "shadowy=4",
             $"x={x}",
             $"y={y}",
-            $"line_spacing={FormatInvariant(fontSize * -0.16f)}");
+            $"line_spacing={FormatInvariant(effective.FontSize * -0.16f)}");
     }
+
+    private static string FormatOpacity(double? value)
+        => (value ?? 1.0d).ToString("0.0##", CultureInfo.InvariantCulture);
 
     private static string FormatInvariant(float value)
         => value.ToString("0.###", CultureInfo.InvariantCulture);
@@ -1987,6 +2187,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
 
+    private sealed record DrawTextValidationResult(bool IsValid, string Reason, string ExceptionMessage, double? ParsedOpacity, double? Alpha);
     private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double ProceduralAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore, double AtmosphereDepthScore, double FogBlendScore, double ProceduralArtifactPenalty, double CinematicSoftnessScore, double AtmosphericRealismScore);
     private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists, string BaseDirectory);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
