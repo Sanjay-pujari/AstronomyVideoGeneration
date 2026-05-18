@@ -356,10 +356,6 @@ public sealed class RenderingOptions
     public int FfmpegSegmentTimeoutSeconds { get; set; } = 120;
     public int SegmentRenderTimeoutSeconds { get; set; } = 240;
     public int FinalLongRenderTimeoutSeconds { get; set; } = 1800;
-    public double FinalLongTimeoutMultiplier { get; set; } = 8d;
-    public int FinalLongMaxTimeoutSeconds { get; set; } = 3600;
-    public bool RetryFinalLongRenderWithFasterProfile { get; set; } = false;
-    public bool FallbackTo1080pOnFinalRenderTimeout { get; set; } = false;
     public int FinalShortRenderTimeoutSeconds { get; set; } = 600;
     public int FinalMetaRenderTimeoutSeconds { get; set; } = 600;
     public bool WriteSegmentDiagnostics { get; set; } = true;

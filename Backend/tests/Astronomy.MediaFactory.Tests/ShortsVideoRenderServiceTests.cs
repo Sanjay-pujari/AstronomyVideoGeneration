@@ -173,6 +173,46 @@ public sealed class ShortsVideoRenderServiceTests
         return Assert.IsType<string>(method.Invoke(service, []));
     }
 
+    [Fact]
+    public async Task RenderAsync_CreatesShortVideo_WhenThumbnailGenerationFails()
+    {
+        var renderService = new CapturingRenderService();
+        var sut = new ShortsVideoRenderService(
+            new FakeShortScriptService(),
+            new TrackingSpeechService(),
+            new FixedVisualProvider(),
+            renderService,
+            new NoopBlobService(),
+            new NoopYouTubeService(),
+            new MetadataOptimizationService(NullLogger<MetadataOptimizationService>.Instance),
+            new PassThroughSeoMetadataGeneratorService(),
+            Options.Create(new YouTubeOptions()),
+            Options.Create(new RenderingOptions()),
+            NullLogger<ShortsVideoRenderService>.Instance,
+            thumbnailGenerationService: new FailingThumbnailGenerationService());
+
+        var outputDir = Directory.CreateTempSubdirectory("shorts-thumbnail-failure").FullName;
+        var context = new AstronomyContext
+        {
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            SceneObservationContexts =
+            [
+                new SceneObservationContext { SceneId = "sky-overview", ObjectName = "Sky", SceneTitle = "Sky overview" },
+                new SceneObservationContext { SceneId = "moon", ObjectName = "Moon", SceneTitle = "Moon focus" },
+                new SceneObservationContext { SceneId = "jupiter", ObjectName = "Jupiter", SceneTitle = "Jupiter focus" },
+                new SceneObservationContext { SceneId = "planet-secondary", ObjectName = "Mars", SceneTitle = "Secondary planet" },
+                new SceneObservationContext { SceneId = "constellation", ObjectName = "Orion", SceneTitle = "Constellation" }
+            ]
+        };
+
+        var result = await sut.RenderAsync(ContentType.SpaceNews, context, [], outputDir, false, CancellationToken.None);
+
+        Assert.NotNull(renderService.LastManifest);
+        Assert.Equal(Path.Combine(outputDir, "short-video.mp4"), result.VideoPath);
+        Assert.True(File.Exists(result.VideoPath));
+        Assert.True(File.Exists(result.ThumbnailPath));
+    }
+
     private sealed class FakeShortScriptService : IShortsScriptGenerationService
     {
         public Task<ShortScriptResult> GenerateShortAsync(ContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
@@ -273,6 +313,12 @@ public sealed class ShortsVideoRenderServiceTests
             File.WriteAllBytes(manifest.OutputPath, [1, 2, 3]);
             return Task.FromResult(manifest.OutputPath);
         }
+    }
+
+    private sealed class FailingThumbnailGenerationService : IThumbnailGenerationService
+    {
+        public Task<ThumbnailPlan> GenerateAsync(ThumbnailGenerationRequest request, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("Thumbnail failure should not block short video rendering.");
     }
 
     private sealed class NoopBlobService : IAzureBlobStorageService
