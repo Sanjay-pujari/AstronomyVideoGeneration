@@ -447,17 +447,6 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         var retryUsed = false;
         var fallbackUsed = false;
 
-        if (result.TimedOut && IsLongFinalRender(manifest.EncodingProfile, isShort) && _options.RetryFinalLongRenderWithFasterProfile)
-        {
-            retryUsed = true;
-            fallbackUsed = _options.FallbackTo1080pOnFinalRenderTimeout;
-            _logger.LogWarning("Final long render timed out after {TimeoutSeconds}s; retrying once with Fastest profile. FallbackTo1080p={FallbackTo1080p}", timeoutSeconds, fallbackUsed);
-            var retryPreset = VideoEncodingPreset.YouTubeLongFinal(_options, forceFastest: true, force1080p: fallbackUsed);
-            var retryArguments = BuildFinalRenderArguments(manifest, combinedPath, narrationAudioPath, outputPath, retryPreset);
-            result = await _processRunner.ExecuteAsync(_options.FfmpegPath, retryArguments, cancellationToken, TimeSpan.FromSeconds(timeoutSeconds));
-            diagnostics = BuildFinalRenderDiagnostics(inputDurationSeconds, result, retryPreset, timeoutSeconds, retryArguments, outputPath);
-        }
-
         totalStopwatch.Stop();
         _logger.LogInformation("FFmpeg final encode time: {ElapsedSeconds:F3}s for {InputDurationSeconds:F3}s input", totalStopwatch.Elapsed.TotalSeconds, inputDurationSeconds);
         LogSlowRenderWarning(inputDurationSeconds, diagnostics.ElapsedMs);
@@ -1281,9 +1270,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     public static int CalculateEffectiveSegmentTimeoutSeconds(int configuredSegmentTimeoutSeconds, double sceneDurationSeconds)
     {
-        var effectiveSegmentTimeoutSeconds = Math.Max(configuredSegmentTimeoutSeconds, (int)Math.Ceiling(sceneDurationSeconds * 10d));
-        effectiveSegmentTimeoutSeconds = Math.Max(effectiveSegmentTimeoutSeconds, 300);
-        return effectiveSegmentTimeoutSeconds;
+        return Math.Max(Math.Max(1, configuredSegmentTimeoutSeconds), (int)Math.Ceiling(Math.Max(0d, sceneDurationSeconds) * 10d));
     }
 
     public static int CalculateEffectiveFinalLongRenderTimeoutSeconds(int configuredTimeoutSeconds, double videoDurationSeconds)

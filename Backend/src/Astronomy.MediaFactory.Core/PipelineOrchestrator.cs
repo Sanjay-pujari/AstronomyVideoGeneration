@@ -675,12 +675,6 @@ public sealed class PipelineOrchestrator
                 }).ToList()
             };
 
-            var renderGuard = ApplySafeRenderGuard(manifest, _videoLengthPolicyOptions);
-            if (renderGuard.TrimmingActions.Count > 0)
-            {
-                _logger.LogInformation("Safe render guard trimmed scenes before rendering. EstimatedDurationSeconds={EstimatedDurationSeconds}; EstimatedRenderCost={EstimatedRenderCost:F1}; TrimmedSceneIds={TrimmedSceneIds}", renderGuard.EstimatedDurationSeconds, renderGuard.EstimatedRenderCost, string.Join(",", renderGuard.TrimmingActions));
-            }
-            await WriteSafeRenderGuardReportAsync(renderGuard, outputDir, cancellationToken);
 
             var videoPath = await RunStageAsync("Rendering", () => _videoRenderService.RenderAsync(manifest, cancellationToken));
 
@@ -2056,66 +2050,6 @@ public sealed class PipelineOrchestrator
            || scene.SceneId.Contains("special-event", StringComparison.OrdinalIgnoreCase)
            || scene.SceneId.Contains("event", StringComparison.OrdinalIgnoreCase);
 
-    public static SafeRenderGuardResult ApplySafeRenderGuard(RenderManifest manifest, VideoLengthPolicyOptions options)
-    {
-        var trimmingActions = new List<string>();
-        var minDuration = Math.Max(1, options.MinFullVideoDurationSeconds);
-        var safeCostThreshold = Math.Max(1d, options.SafeRenderCostThreshold);
-
-        double EstimateCost() => manifest.Scenes.Sum(scene => Math.Max(1, scene.DurationSeconds)) * Math.Sqrt(Math.Max(1, manifest.Scenes.Count));
-
-        while (EstimateCost() > safeCostThreshold)
-        {
-            var candidate = manifest.Scenes
-                .Select((scene, index) => new { scene, index })
-                .Where(x => IsOptionalRenderScene(x.scene))
-                .OrderBy(x => ResolveRenderSceneFallbackScore(x.scene))
-                .ThenByDescending(x => x.index)
-                .FirstOrDefault();
-
-            if (candidate is null)
-            {
-                break;
-            }
-
-            var durationAfterTrim = manifest.Scenes.Where((_, index) => index != candidate.index).Sum(scene => Math.Max(1, scene.DurationSeconds));
-            if (durationAfterTrim < minDuration)
-            {
-                break;
-            }
-
-            trimmingActions.Add(candidate.scene.SceneId ?? $"scene-{candidate.index + 1}");
-            manifest.Scenes.RemoveAt(candidate.index);
-        }
-
-        for (var i = 0; i < manifest.Scenes.Count; i++)
-        {
-            manifest.Scenes[i].SegmentIndex = i + 1;
-        }
-
-        return new SafeRenderGuardResult(manifest.Scenes.Sum(scene => scene.DurationSeconds), EstimateCost(), trimmingActions);
-    }
-
-    private static bool IsOptionalRenderScene(RenderScene scene)
-        => !string.Equals(scene.SceneType, "Overview", StringComparison.OrdinalIgnoreCase)
-           && !IsClosingSceneId(scene.SceneId ?? string.Empty)
-           && !(scene.SceneType?.Contains("Closing", StringComparison.OrdinalIgnoreCase) ?? false)
-           && !(scene.SceneType?.Contains("Tips", StringComparison.OrdinalIgnoreCase) ?? false)
-           && !(scene.SceneType?.Contains("SpecialEvent", StringComparison.OrdinalIgnoreCase) ?? false)
-           && !string.Equals(scene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
-
-    private static double ResolveRenderSceneFallbackScore(RenderScene scene)
-    {
-        var contextScene = new SceneObservationContext { ObjectName = scene.ObjectName ?? string.Empty, ObjectType = scene.ObjectType ?? string.Empty, SceneType = scene.SceneType ?? string.Empty, SceneId = scene.SceneId ?? string.Empty };
-        return ResolveLengthPolicyFallbackScore(contextScene);
-    }
-
-    private static Task WriteSafeRenderGuardReportAsync(SafeRenderGuardResult result, string outputDirectory, CancellationToken cancellationToken)
-    {
-        var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-        return File.WriteAllTextAsync(Path.Combine(outputDirectory, "safe-render-guard-report.json"), json, cancellationToken);
-    }
-
     private static Task WriteVideoLengthPolicyDiagnosticsAsync(VideoLengthPolicyResult result, string outputDirectory, CancellationToken cancellationToken)
     {
         var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
@@ -2464,10 +2398,6 @@ public sealed class PipelineOrchestrator
         int EstimatedDurationSeconds,
         IReadOnlyList<string> TrimmedSceneIds);
 
-    public sealed record SafeRenderGuardResult(
-        int EstimatedDurationSeconds,
-        double EstimatedRenderCost,
-        IReadOnlyList<string> TrimmingActions);
 
     private sealed record FullVideoNarrationSection(
         SceneObservationContext Scene,

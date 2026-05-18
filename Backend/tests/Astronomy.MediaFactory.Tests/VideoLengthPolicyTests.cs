@@ -149,26 +149,28 @@ public sealed class VideoLengthPolicyTests
     }
 
     [Fact]
-    public void ApplySafeRenderGuard_TrimsOptionalSceneButKeepsShortsLogicIndependent()
+    public void ApplyVideoLengthPolicy_MultiSceneFullVideoKeepsFiveObjectScenes()
     {
-        var manifest = new RenderManifest
+        var context = new AstronomyContext
         {
-            Scenes =
+            SceneObservationContexts =
             [
-                RenderScene("sky-overview", "Overview", "Sky", 18),
-                RenderScene("object-1", "Planet", "Jupiter", 220),
-                RenderScene("object-2", "DeepSky", "Dim Galaxy", 70),
-                RenderScene("closing", "Closing", "Sky", 12)
+                Scene("sky-overview", "Overview", "Sky", duration: 18),
+                Scene("object-1", "Planet", "Jupiter", duration: 30, score: 95),
+                Scene("object-2", "Planet", "Venus", duration: 30, score: 94),
+                Scene("object-3", "Planet", "Saturn", duration: 30, score: 90),
+                Scene("object-4", "Planet", "Mars", duration: 30, score: 86),
+                Scene("object-5", "Moon", "Moon", duration: 30, score: 89),
+                Scene("closing", "Closing", "Sky", duration: 12)
             ]
         };
 
-        var policy = Policy(maxDuration: 420);
-        policy.SafeRenderCostThreshold = 500;
+        var result = PipelineOrchestrator.ApplyVideoLengthPolicy(context, Policy(maxDuration: 240), estimatedDurationSeconds: 180);
 
-        var result = PipelineOrchestrator.ApplySafeRenderGuard(manifest, policy);
-
-        Assert.Contains("object-2", result.TrimmingActions);
-        Assert.Equal(new[] { "sky-overview", "object-1", "closing" }, manifest.Scenes.Select(scene => scene.SceneId));
+        Assert.Equal(7, result.FinalSegmentCount);
+        Assert.Equal(5, context.SceneObservationContexts.Count(scene => !scene.ObjectName.Equals("Sky", StringComparison.OrdinalIgnoreCase)));
+        Assert.Empty(result.TrimmedSceneIds);
+        Assert.Equal(Enumerable.Range(1, 7), context.SceneObservationContexts.Select(scene => scene.SceneIndex));
     }
 
     private static VideoLengthPolicyOptions Policy(int maxDuration = 420) => new()

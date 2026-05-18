@@ -25,11 +25,11 @@ public sealed class RenderingOptionsBindingTests
                 [$"{RenderingOptions.SectionName}:KenBurnsFps"] = "30",
                 [$"{RenderingOptions.SectionName}:KenBurnsUseEasing"] = "true",
                 [$"{RenderingOptions.SectionName}:EnableDirectionalMotion"] = "false",
-                [$"{RenderingOptions.SectionName}:FinalLongRenderTimeoutSeconds"] = "900",
+                [$"{RenderingOptions.SectionName}:FinalLongRenderTimeoutSeconds"] = "1800",
                 [$"{RenderingOptions.SectionName}:FinalLongTimeoutMultiplier"] = "8",
                 [$"{RenderingOptions.SectionName}:FinalLongMaxTimeoutSeconds"] = "3600",
-                [$"{RenderingOptions.SectionName}:RetryFinalLongRenderWithFasterProfile"] = "true",
-                [$"{RenderingOptions.SectionName}:FallbackTo1080pOnFinalRenderTimeout"] = "true"
+                [$"{RenderingOptions.SectionName}:RetryFinalLongRenderWithFasterProfile"] = "false",
+                [$"{RenderingOptions.SectionName}:FallbackTo1080pOnFinalRenderTimeout"] = "false"
             })
             .Build();
 
@@ -49,11 +49,11 @@ public sealed class RenderingOptionsBindingTests
         Assert.Equal(30, options.KenBurnsFps);
         Assert.True(options.KenBurnsUseEasing);
         Assert.False(options.EnableDirectionalMotion);
-        Assert.Equal(900, options.FinalLongRenderTimeoutSeconds);
+        Assert.Equal(1800, options.FinalLongRenderTimeoutSeconds);
         Assert.Equal(8d, options.FinalLongTimeoutMultiplier);
         Assert.Equal(3600, options.FinalLongMaxTimeoutSeconds);
-        Assert.True(options.RetryFinalLongRenderWithFasterProfile);
-        Assert.True(options.FallbackTo1080pOnFinalRenderTimeout);
+        Assert.False(options.RetryFinalLongRenderWithFasterProfile);
+        Assert.False(options.FallbackTo1080pOnFinalRenderTimeout);
     }
 
     [Fact]
