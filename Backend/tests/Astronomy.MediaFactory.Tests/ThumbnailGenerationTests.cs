@@ -455,8 +455,14 @@ public sealed class ThumbnailGenerationTests
         Assert.Contains("drawtext=fontfile=", runner.LastArguments);
         Assert.Contains("Montserrat-ExtraBold.ttf", runner.LastArguments);
         Assert.Contains("textfile=", runner.LastArguments);
+        Assert.Contains("thumbnail-title-en.txt", runner.LastArguments);
         Assert.DoesNotContain("drawtext=text=", runner.LastArguments);
         Assert.DoesNotContain("□", runner.LastTextFileContents);
+
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-font-report.json")));
+        Assert.Equal("en", report.RootElement.GetProperty("language").GetString());
+        Assert.Equal("textfile", report.RootElement.GetProperty("drawTextMode").GetString());
+        Assert.True(report.RootElement.GetProperty("fontExists").GetBoolean());
     }
 
     [Fact]
@@ -478,8 +484,23 @@ public sealed class ThumbnailGenerationTests
 
         Assert.True(File.Exists(plan.ShortThumbnailPath));
         Assert.Contains("NotoSansDevanagari-Bold.ttf", runner.LastArguments);
+        Assert.Contains("fontfile=", runner.LastArguments);
+        Assert.Contains("textfile=", runner.LastArguments);
+        Assert.Contains("thumbnail-title-hi.txt", runner.LastArguments);
         Assert.Contains("आज रात बृहस्पति", runner.LastTextFileContents);
         Assert.DoesNotContain("□", runner.LastTextFileContents);
+
+        var thumbnailsDir = Path.GetDirectoryName(plan.ShortThumbnailPath!)!;
+        using var analysis = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-analysis-report.json")));
+        Assert.Equal("hi", analysis.RootElement.GetProperty("language").GetString());
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-font-report.json")));
+        Assert.Equal("hi", report.RootElement.GetProperty("language").GetString());
+        Assert.Equal("आज रात बृहस्पति", report.RootElement.GetProperty("selectedHook").GetString());
+        Assert.True(report.RootElement.GetProperty("containsDevanagari").GetBoolean());
+        Assert.Contains("NotoSansDevanagari-Bold.ttf", report.RootElement.GetProperty("selectedFontPath").GetString() ?? string.Empty);
+        Assert.True(report.RootElement.GetProperty("fontExists").GetBoolean());
+        Assert.Equal("UTF-8", report.RootElement.GetProperty("textFileEncoding").GetString());
+        Assert.Equal("textfile", report.RootElement.GetProperty("drawTextMode").GetString());
     }
 
     [Fact]
@@ -507,10 +528,37 @@ public sealed class ThumbnailGenerationTests
         }, CancellationToken.None);
 
         Assert.NotNull(runner.LastTextFilePath);
+        Assert.EndsWith("thumbnail-title-hi.txt", runner.LastTextFilePath);
+        Assert.True(File.Exists(runner.LastTextFilePath));
         Assert.True(runner.LastTextFileBytes!.Length > 0);
         Assert.False(runner.LastTextFileBytes![0] == 0xEF && runner.LastTextFileBytes.Length > 2 && runner.LastTextFileBytes[1] == 0xBB && runner.LastTextFileBytes[2] == 0xBF);
-        Assert.False(File.Exists(runner.LastTextFilePath));
         Assert.DoesNotContain(Directory.GetFiles(Path.GetDirectoryName(runner.LastTextFilePath!)!), path => Path.GetFileName(path).StartsWith("temp-thumbnail-title-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_MissingHindiFontFailsClearly()
+    {
+        var (assetRoot, englishFont, hindiFont) = await CreateThumbnailTextRenderAssetsAsync();
+        File.Delete(hindiFont);
+        var runner = new CapturingThumbnailTextProcessRunner();
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot }, englishFont, hindiFont, runner);
+
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var exception = await Assert.ThrowsAsync<FileNotFoundException>(() => service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("hi"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir,
+            IsShortForm = true
+        }, CancellationToken.None));
+
+        Assert.Contains("Hindi font missing:", exception.Message);
+        Assert.Contains("NotoSansDevanagari-Bold.ttf", exception.Message);
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-font-report.json")));
+        Assert.Equal("hi", report.RootElement.GetProperty("language").GetString());
+        Assert.False(report.RootElement.GetProperty("fontExists").GetBoolean());
     }
 
     [Fact]

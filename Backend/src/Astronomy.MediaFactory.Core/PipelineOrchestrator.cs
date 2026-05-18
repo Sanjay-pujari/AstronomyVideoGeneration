@@ -1315,12 +1315,12 @@ public sealed class PipelineOrchestrator
             Mode = string.Equals(longPlan.Mode, "LocalAssetCollage", StringComparison.OrdinalIgnoreCase) || string.Equals(shortPlan.Mode, "LocalAssetCollage", StringComparison.OrdinalIgnoreCase) ? "LocalAssetCollage" : fallbackUsed ? "FallbackExtractedFrame" : longPlan.Mode,
             CelestialSelection = longPlan.CelestialSelection ?? shortPlan.CelestialSelection
         };
-        await WriteCombinedThumbnailAnalysisAsync(outputDirectory, plan, cancellationToken);
+        await WriteCombinedThumbnailAnalysisAsync(outputDirectory, context.Localization.ResolvedLanguage, plan, cancellationToken);
         return plan;
     }
 
 
-    private static async Task WriteCombinedThumbnailAnalysisAsync(string outputDirectory, ThumbnailPlan plan, CancellationToken cancellationToken)
+    private static async Task WriteCombinedThumbnailAnalysisAsync(string outputDirectory, string language, ThumbnailPlan plan, CancellationToken cancellationToken)
     {
         var thumbnailsDirectory = Path.Combine(outputDirectory, "thumbnails");
         Directory.CreateDirectory(thumbnailsDirectory);
@@ -1334,7 +1334,8 @@ public sealed class PipelineOrchestrator
             selectedAssetSource = plan.CelestialSelection?.AssetSources.FirstOrDefault()?.Source ?? string.Empty,
             oldAssetIgnoredBecauseHeroExists = plan.CelestialSelection?.AssetSources.Any(a => a.OldAssetIgnoredBecauseHeroExists) ?? false,
             layoutUsed = plan.CelestialSelection?.SelectedLayout ?? plan.LayoutType.ToString(),
-            language = "",
+            language,
+            selectedHook = plan.CelestialSelection?.SelectedHook ?? plan.PrimaryThumbnailText,
             dimensions = new
             {
                 longThumbnailPath = plan.LongThumbnailPath,
