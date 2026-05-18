@@ -1,3 +1,4 @@
+using System.Net.Http;
 using Astronomy.MediaFactory.AstroData.Clients;
 using Astronomy.MediaFactory.AstroData.Services;
 using Astronomy.MediaFactory.ContentGen;
@@ -381,7 +382,11 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IYouTubeAuthService, YouTubeAuthService>();
         services.AddHttpClient<IYouTubeOAuthService, YouTubeOAuthService>();
         services.AddHttpClient<IMetaOAuthService, MetaOAuthService>();
-        services.AddHttpClient<IFacebookReelPublishService, FacebookReelPublishService>();
+        services.AddHttpClient<IFacebookReelPublishService, FacebookReelPublishService>(client => client.Timeout = TimeSpan.FromSeconds(60))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            });
         services.AddHttpClient<IFacebookVideoPublishService, FacebookVideoPublishService>();
         services.AddHttpClient<IInstagramReelPublishService, InstagramReelPublishService>(client => client.Timeout = TimeSpan.FromSeconds(60))
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
