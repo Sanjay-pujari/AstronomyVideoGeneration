@@ -66,8 +66,8 @@ public sealed class PromptBuilder : IPromptBuilder
         sb.AppendLine("7) Keep object-scene narration chronological with explicit time progression language.");
         sb.AppendLine("8) Use natural transitions such as 'Later in the night...', 'As midnight approaches...', and 'In the early morning hours...' when they fit the local times.");
         sb.AppendLine("9) If the gap between consecutive object scenes exceeds 2 hours, include the phrase 'Later in the night...'.");
-        sb.AppendLine("10) DailySkyGuide target is about 5-6 minutes, naturally paced at 120-145 English words/minute or 110-130 Hindi words/minute.");
-        sb.AppendLine("11) Use this adaptable cinematic structure when matching the provided scenes: opening overview, tonight's highlight/event, Moon if present, 3-6 ranked objects, constellation/bright star/deep-sky context when present, observation tips, and closing overview.");
+        sb.AppendLine("10) DailySkyGuide target is about 3-4+ minutes (180-240+ seconds), naturally paced at 120-145 English words/minute or 110-130 Hindi words/minute.");
+        sb.AppendLine("11) Use this adaptable cinematic structure exactly in provided scene order: opening overview, 3-5 ranked primary objects, optional special/deep-sky object when present, and closing overview.");
         sb.AppendLine("12) Write natural transitions, educational context, and practical observing instructions. Avoid repetitive phrasing such as 'is visible' at the start of every scene.");
 
         sb.AppendLine();
@@ -237,6 +237,9 @@ public sealed class PromptBuilder : IPromptBuilder
                 azimuthDegrees = scene.AzimuthDegrees,
                 visibilityLevel = scene.IsVisible ? "Visible" : "NotVisible",
                 recommendedTool = scene.RecommendedTool,
+                estimatedDurationSeconds = scene.EstimatedDurationSeconds,
+                finalScore = scene.FinalScore,
+                selectionReason = scene.SelectionReason,
                 observingTip = scene.NarrationFocus,
                 whyInteresting = scene.VisibilityReason
             });

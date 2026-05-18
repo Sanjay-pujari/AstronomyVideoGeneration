@@ -132,17 +132,19 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
             Score = 0.9
         }));
 
-        var selected = visible
+        var scoredObjects = visible
             .Where(v => (v.AltitudeDegrees ?? 0) >= observationOptions.MinimumObjectAltitudeDegrees)
             .Where(IsAllowedByContentExpansion)
-            .Select(v => new { Visibility = v, Score = ScoreVisibility(v, observationOptions) })
-            .Where(x => x.Score >= (_contentExpansionOptions.Enabled ? _contentExpansionOptions.MinimumVisibilityScore : 0d))
-            .OrderByDescending(x => ResolveObjectPriority(x.Visibility.ObjectType, x.Visibility.ObjectName))
-            .ThenByDescending(x => x.Score)
-            .Select(x => x.Visibility)
-            .DistinctBy(v => v.ObjectName, StringComparer.OrdinalIgnoreCase)
-            .Take(_contentExpansionOptions.Enabled ? _contentExpansionOptions.MaxObjectsPerGuide : 3)
+            .Select(v => ScoreVisibleObject(v, observationOptions))
+            .Where(x => x.VisibilityScore >= (_contentExpansionOptions.Enabled ? _contentExpansionOptions.MinimumVisibilityScore * 10d : 0d))
+            .OrderByDescending(x => x.FinalScore)
+            .ThenByDescending(x => ResolveObjectPriority(x.Visibility.ObjectType, x.Visibility.ObjectName))
+            .DistinctBy(x => x.Visibility.ObjectName, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        var maxPrimaryObjects = Math.Clamp(_contentExpansionOptions.Enabled ? _contentExpansionOptions.MaxObjectsPerGuide : 5, 3, 5);
+        var selectedScores = SelectAdaptiveLongFormObjects(scoredObjects, maxPrimaryObjects).ToList();
+        var selected = selectedScores.Select(x => x.Visibility).ToList();
         if (selected.Count == 0)
         {
             return false;
@@ -155,8 +157,9 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
         var usedTimes = new HashSet<DateTime> { overviewLocal };
         var objectScenes = new List<SceneObservationContext>();
-        foreach (var (v, i) in selected.Select((v, i) => (v, i)))
+        foreach (var (score, i) in selectedScores.Select((score, i) => (score, i)))
         {
+            var v = score.Visibility;
             var minimumAltitude = ResolveMinimumAltitudeForObject(v, observationOptions.MinimumObjectAltitudeDegrees);
             var selection = SelectObservationForScene(v, minimumAltitude, sunsetLocal, tz, overviewLocal.AddMinutes(30 + (i * 30)));
             while (usedTimes.Contains(selection.Local))
@@ -187,8 +190,19 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 DirectionLabel = selection.Direction,
                 IsVisible = true,
                 VisibilityReason = v.VisibilityReason,
-                RecommendedTool = "Naked eye / binoculars",
-                NarrationFocus = $"{v.VisibilityReason} Best around {selection.Local:h:mm tt}.",
+                RecommendedTool = ResolveRecommendedTool(v),
+                NarrationFocus = $"{v.VisibilityReason} Best around {selection.Local:h:mm tt}. {score.SelectionReason}",
+                EstimatedDurationSeconds = ResolveSceneDurationSeconds(v.ObjectType, false),
+                VisibilityScore = score.VisibilityScore,
+                BrightnessScore = score.BrightnessScore,
+                FamiliarityScore = score.FamiliarityScore,
+                EngagementScore = score.EngagementScore,
+                SpecialEventBonus = score.SpecialEventBonus,
+                RarityBonus = score.RarityBonus,
+                FinalScore = score.FinalScore,
+                SelectionReason = score.SelectionReason,
+                IsOptionalForLongForm = !score.IsMajorSpecialEvent,
+                IsMajorSpecialEvent = score.IsMajorSpecialEvent,
                 Latitude = context.Latitude,
                 Longitude = context.Longitude,
                 LocationName = context.LocationName
@@ -196,10 +210,6 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
 
             _loggerStatic?.LogInformation("Selected observation scene {ObjectName} at {SelectedLocalTime} altitude {Altitude:F1}° reason: {Reason}", v.ObjectName, selection.Local, selection.Altitude, selection.Reason);
         }
-
-        objectScenes = objectScenes
-            .OrderBy(s => s.LocalObservationTime)
-            .ToList();
 
         for (var i = 0; i < objectScenes.Count; i++)
         {
@@ -209,7 +219,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 SceneId = $"object-{i + 1}",
                 SceneTitle = orderedScene.SceneTitle,
                 SceneType = orderedScene.SceneType,
-                SceneIndex = orderedScene.SceneIndex,
+                SceneIndex = i + 2,
                 ObjectName = orderedScene.ObjectName,
                 ObjectType = orderedScene.ObjectType,
                 LocalObservationTime = orderedScene.LocalObservationTime,
@@ -222,6 +232,17 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
                 VisibilityReason = orderedScene.VisibilityReason,
                 RecommendedTool = orderedScene.RecommendedTool,
                 NarrationFocus = orderedScene.NarrationFocus,
+                EstimatedDurationSeconds = orderedScene.EstimatedDurationSeconds,
+                VisibilityScore = orderedScene.VisibilityScore,
+                BrightnessScore = orderedScene.BrightnessScore,
+                FamiliarityScore = orderedScene.FamiliarityScore,
+                EngagementScore = orderedScene.EngagementScore,
+                SpecialEventBonus = orderedScene.SpecialEventBonus,
+                RarityBonus = orderedScene.RarityBonus,
+                FinalScore = orderedScene.FinalScore,
+                SelectionReason = orderedScene.SelectionReason,
+                IsOptionalForLongForm = orderedScene.IsOptionalForLongForm,
+                IsMajorSpecialEvent = orderedScene.IsMajorSpecialEvent,
                 Latitude = orderedScene.Latitude,
                 Longitude = orderedScene.Longitude,
                 LocationName = orderedScene.LocationName
@@ -229,7 +250,7 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         }
 
         var closingLocalTime = Clamp(scenes.Last().LocalObservationTime.AddMinutes(30), observationWindow.SunsetLocal.DateTime, observationWindow.SunriseLocal.DateTime);
-        scenes.Add(new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing wide sky", SceneType = "Tips", SceneIndex = scenes.Count + 1, ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = closingLocalTime, UtcObservationTime = ToUtc(closingLocalTime, tz), Timezone = timezone, IsVisible = true, VisibilityReason = "Wrap-up", RecommendedTool = "Naked eye", NarrationFocus = "Safe viewing tips.", Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName });
+        scenes.Add(new SceneObservationContext { SceneId = "closing", SceneTitle = "Closing wide sky", SceneType = "Closing", SceneIndex = scenes.Count + 1, ObjectName = "Sky", ObjectType = "Overview", LocalObservationTime = closingLocalTime, UtcObservationTime = ToUtc(closingLocalTime, tz), Timezone = timezone, IsVisible = true, VisibilityReason = "Wrap-up", RecommendedTool = "Naked eye", NarrationFocus = "Closing overview and safe viewing recap.", EstimatedDurationSeconds = 12, IsOptionalForLongForm = false, Latitude = context.Latitude, Longitude = context.Longitude, LocationName = context.LocationName });
 
         var overviewDecision = BuildOverviewDecision(selected, visible, context, observationOptions);
         var overviewNarration = BuildOverviewNarration(overviewDecision);
@@ -250,6 +271,8 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
             VisibilityReason = "Night overview",
             RecommendedTool = "Naked eye",
             NarrationFocus = overviewNarration,
+            EstimatedDurationSeconds = 18,
+            IsOptionalForLongForm = false,
             Latitude = context.Latitude,
             Longitude = context.Longitude,
             LocationName = context.LocationName
@@ -268,8 +291,8 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
         context.SceneObservationContexts = scenes;
 
         var skipped = visible.Where(v => selected.All(s => !s.ObjectName.Equals(v.ObjectName, StringComparison.OrdinalIgnoreCase))).ToList();
-        context.VisualIdeas.Add(new VisualIdeaModel { Title = "selected-visible-objects", Description = Serialize(selected.Select(v => new { v.ObjectName, v.ObjectType, v.BestLocalTime, v.BestUtcTime, v.DirectionLabel, v.AltitudeDegrees, v.IsVisible, v.VisibilityReason })) });
-        context.VisualIdeas.Add(new VisualIdeaModel { Title = "content-expansion-selection", Description = Serialize(new { selectedObjects = selected.Select(v => v.ObjectName), skippedObjects = skipped.Select(v => new { v.ObjectName, reason = "Lower rank, duplicate, below configured visibility score, or beyond max object count" }), minObjects = _contentExpansionOptions.MinObjectsPerGuide, maxObjects = _contentExpansionOptions.MaxObjectsPerGuide, enabled = _contentExpansionOptions.Enabled }) });
+        context.VisualIdeas.Add(new VisualIdeaModel { Title = "selected-visible-objects", Description = Serialize(selectedScores.Select(s => BuildSelectionDiagnostic(s, selected: true))) });
+        context.VisualIdeas.Add(new VisualIdeaModel { Title = "content-expansion-selection", Description = Serialize(new { selectedObjects = selectedScores.Select(s => BuildSelectionDiagnostic(s, selected: true)), skippedObjects = scoredObjects.Where(s => selectedScores.All(selectedScore => !selectedScore.Visibility.ObjectName.Equals(s.Visibility.ObjectName, StringComparison.OrdinalIgnoreCase))).Select(s => BuildSelectionDiagnostic(s, selected: false)), minObjects = _contentExpansionOptions.MinObjectsPerGuide, targetObjects = 5, maxObjects = maxPrimaryObjects, enabled = _contentExpansionOptions.Enabled }) });
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "scene-observation-context", Description = Serialize(scenes) });
         context.VisualIdeas.Add(new VisualIdeaModel { Title = "narration-context", Description = Serialize(scenes.Select(s => new { s.SceneId, s.ObjectName, s.LocalObservationTime, s.UtcObservationTime, s.DirectionLabel, s.AltitudeDegrees, s.IsVisible, s.VisibilityReason })) });
         context.VisualIdeas.Add(new VisualIdeaModel
@@ -284,6 +307,205 @@ public sealed class AstronomyContextProvider : IAstronomyContextProvider
             })
         });
         return true;
+    }
+
+    private sealed record ScoredVisibleObject(
+        SkyfieldObjectVisibility Visibility,
+        double VisibilityScore,
+        double BrightnessScore,
+        double FamiliarityScore,
+        double EngagementScore,
+        double SpecialEventBonus,
+        double RarityBonus,
+        double FinalScore,
+        bool IsMajorSpecialEvent,
+        string SelectionReason);
+
+    private static IEnumerable<ScoredVisibleObject> SelectAdaptiveLongFormObjects(IReadOnlyList<ScoredVisibleObject> scoredObjects, int maxPrimaryObjects)
+    {
+        var selected = new List<ScoredVisibleObject>();
+        var selectedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var planetCount = 0;
+        var moonCount = 0;
+        var deepSkyCount = 0;
+        var starOrConstellationCount = 0;
+
+        foreach (var scored in scoredObjects)
+        {
+            if (!selectedNames.Add(scored.Visibility.ObjectName))
+            {
+                continue;
+            }
+
+            var type = scored.Visibility.ObjectType ?? string.Empty;
+            var isMoon = type.Equals("Moon", StringComparison.OrdinalIgnoreCase) || scored.Visibility.ObjectName.Contains("Moon", StringComparison.OrdinalIgnoreCase);
+            var isPlanet = type.Equals("Planet", StringComparison.OrdinalIgnoreCase);
+            var isDeepSky = IsDeepSkyType(type);
+            var isStarOrConstellation = type.Contains("Star", StringComparison.OrdinalIgnoreCase) || type.Contains("Constellation", StringComparison.OrdinalIgnoreCase);
+
+            if ((isMoon && moonCount >= 1) ||
+                (isPlanet && planetCount >= 5) ||
+                (isDeepSky && deepSkyCount >= 1) ||
+                (isStarOrConstellation && starOrConstellationCount >= 1))
+            {
+                selectedNames.Remove(scored.Visibility.ObjectName);
+                continue;
+            }
+
+            selected.Add(scored);
+            moonCount += isMoon ? 1 : 0;
+            planetCount += isPlanet ? 1 : 0;
+            deepSkyCount += isDeepSky ? 1 : 0;
+            starOrConstellationCount += isStarOrConstellation ? 1 : 0;
+
+            if (selected.Count >= maxPrimaryObjects)
+            {
+                break;
+            }
+        }
+
+        return selected;
+    }
+
+    private static ScoredVisibleObject ScoreVisibleObject(SkyfieldObjectVisibility visibility, ObservationOptions observationOptions)
+    {
+        var visibilityScore = Math.Clamp(((visibility.AltitudeDegrees ?? 0d) / 90d) * 10d, 0d, 10d);
+        if ((visibility.AltitudeDegrees ?? 0d) >= observationOptions.PreferredObjectAltitudeDegrees)
+        {
+            visibilityScore = Math.Min(10d, visibilityScore + 1.25d);
+        }
+
+        var brightnessScore = ResolveBrightnessScore(visibility.ObjectName, visibility.ObjectType);
+        var familiarityScore = ResolveFamiliarityScore(visibility.ObjectName, visibility.ObjectType);
+        var engagementScore = ResolveEngagementScore(visibility.ObjectName, visibility.ObjectType);
+        var specialEventBonus = ResolveSpecialEventBonus(visibility.ObjectName, visibility.ObjectType);
+        var rarityBonus = ResolveRarityBonus(visibility.ObjectName, visibility.ObjectType);
+        var finalScore = visibilityScore + brightnessScore + familiarityScore + engagementScore + specialEventBonus + rarityBonus;
+        var isMajorSpecialEvent = specialEventBonus >= 5d;
+        var selectionReason = BuildSelectionReason(visibility, brightnessScore, engagementScore, specialEventBonus, rarityBonus);
+
+        return new ScoredVisibleObject(visibility, visibilityScore, brightnessScore, familiarityScore, engagementScore, specialEventBonus, rarityBonus, finalScore, isMajorSpecialEvent, selectionReason);
+    }
+
+    private static object BuildSelectionDiagnostic(ScoredVisibleObject score, bool selected) => new
+    {
+        @object = score.Visibility.ObjectName,
+        objectType = score.Visibility.ObjectType,
+        visibilityScore = Math.Round(score.VisibilityScore, 2),
+        brightnessScore = Math.Round(score.BrightnessScore, 2),
+        familiarityScore = Math.Round(score.FamiliarityScore, 2),
+        engagementScore = Math.Round(score.EngagementScore, 2),
+        specialEventBonus = Math.Round(score.SpecialEventBonus, 2),
+        rarityBonus = Math.Round(score.RarityBonus, 2),
+        finalScore = Math.Round(score.FinalScore, 2),
+        selected,
+        selectionReason = score.SelectionReason
+    };
+
+    private static double ResolveBrightnessScore(string? objectName, string? objectType)
+    {
+        var name = objectName ?? string.Empty;
+        var type = objectType ?? string.Empty;
+        if (name.Contains("Moon", StringComparison.OrdinalIgnoreCase)) return 9.8d;
+        if (name.Contains("Venus", StringComparison.OrdinalIgnoreCase)) return 9.7d;
+        if (name.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) return 9.4d;
+        if (name.Contains("Saturn", StringComparison.OrdinalIgnoreCase)) return 8.5d;
+        if (name.Contains("Mars", StringComparison.OrdinalIgnoreCase)) return 8.1d;
+        if (type.Contains("Star", StringComparison.OrdinalIgnoreCase)) return 7.2d;
+        if (IsDeepSkyType(type)) return 5.4d;
+        if (type.Contains("Planet", StringComparison.OrdinalIgnoreCase)) return 7.4d;
+        return 5.8d;
+    }
+
+    private static double ResolveFamiliarityScore(string? objectName, string? objectType)
+    {
+        var name = objectName ?? string.Empty;
+        if (name.Contains("Jupiter", StringComparison.OrdinalIgnoreCase) || name.Contains("Venus", StringComparison.OrdinalIgnoreCase) || name.Contains("Saturn", StringComparison.OrdinalIgnoreCase) || name.Contains("Moon", StringComparison.OrdinalIgnoreCase) || name.Contains("Mars", StringComparison.OrdinalIgnoreCase)) return 9.5d;
+        if (name.Contains("Orion", StringComparison.OrdinalIgnoreCase) || name.Contains("Pleiades", StringComparison.OrdinalIgnoreCase) || name.Contains("Sirius", StringComparison.OrdinalIgnoreCase)) return 8d;
+        var type = objectType ?? string.Empty;
+        if (type.Contains("Planet", StringComparison.OrdinalIgnoreCase)) return 7d;
+        if (IsDeepSkyType(type)) return 5.5d;
+        return 5d;
+    }
+
+    private static double ResolveEngagementScore(string? objectName, string? objectType)
+    {
+        var name = objectName ?? string.Empty;
+        if (name.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) return 9.6d;
+        if (name.Contains("Venus", StringComparison.OrdinalIgnoreCase)) return 9.4d;
+        if (name.Contains("Saturn", StringComparison.OrdinalIgnoreCase)) return 9.2d;
+        if (name.Contains("Moon", StringComparison.OrdinalIgnoreCase)) return 9.1d;
+        if (name.Contains("Mars", StringComparison.OrdinalIgnoreCase)) return 8.6d;
+        if (name.Contains("Meteor", StringComparison.OrdinalIgnoreCase) || name.Contains("Eclipse", StringComparison.OrdinalIgnoreCase) || name.Contains("Conjunction", StringComparison.OrdinalIgnoreCase)) return 10d;
+        var type = objectType ?? string.Empty;
+        if (IsDeepSkyType(type)) return 7.2d;
+        if (type.Contains("Star", StringComparison.OrdinalIgnoreCase) || type.Contains("Constellation", StringComparison.OrdinalIgnoreCase)) return 6.5d;
+        return 5d;
+    }
+
+    private static double ResolveSpecialEventBonus(string? objectName, string? objectType)
+    {
+        var text = $"{objectName} {objectType}";
+        return text.Contains("Meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("Eclipse", StringComparison.OrdinalIgnoreCase) || text.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) || text.Contains("Occultation", StringComparison.OrdinalIgnoreCase) || text.Contains("Event", StringComparison.OrdinalIgnoreCase) ? 7.5d : 0d;
+    }
+
+    private static double ResolveRarityBonus(string? objectName, string? objectType)
+    {
+        var text = $"{objectName} {objectType}";
+        if (text.Contains("Eclipse", StringComparison.OrdinalIgnoreCase)) return 4d;
+        if (text.Contains("Meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("Conjunction", StringComparison.OrdinalIgnoreCase)) return 3d;
+        if (IsDeepSkyType(objectType ?? string.Empty)) return 1.2d;
+        return 0d;
+    }
+
+    private static string BuildSelectionReason(SkyfieldObjectVisibility visibility, double brightnessScore, double engagementScore, double specialEventBonus, double rarityBonus)
+    {
+        if (specialEventBonus > 0d)
+        {
+            return "Major timely sky event with strong audience interest";
+        }
+
+        if (brightnessScore >= 9d && engagementScore >= 9d)
+        {
+            return "Bright and highly recognizable evening target";
+        }
+
+        if (rarityBonus > 0d)
+        {
+            return "Adds a rarer deep-sky layer after the major bright objects";
+        }
+
+        return "Visible target selected to keep the long-form sky tour diverse";
+    }
+
+    private static bool IsDeepSkyType(string objectType)
+        => objectType.Contains("Deep", StringComparison.OrdinalIgnoreCase)
+           || objectType.Contains("Cluster", StringComparison.OrdinalIgnoreCase)
+           || objectType.Contains("Galaxy", StringComparison.OrdinalIgnoreCase)
+           || objectType.Contains("Nebula", StringComparison.OrdinalIgnoreCase);
+
+    private static int ResolveSceneDurationSeconds(string? objectType, bool isSpecialEvent)
+    {
+        if (isSpecialEvent) return 30;
+        var type = objectType ?? string.Empty;
+        if (IsDeepSkyType(type)) return 30;
+        return 36;
+    }
+
+    private static string ResolveRecommendedTool(SkyfieldObjectVisibility visibility)
+    {
+        var type = visibility.ObjectType ?? string.Empty;
+        if (type.Equals("Moon", StringComparison.OrdinalIgnoreCase) || type.Equals("Planet", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Naked eye / binoculars";
+        }
+
+        if (IsDeepSkyType(type))
+        {
+            return "Binoculars / telescope";
+        }
+
+        return "Naked eye";
     }
 
 
