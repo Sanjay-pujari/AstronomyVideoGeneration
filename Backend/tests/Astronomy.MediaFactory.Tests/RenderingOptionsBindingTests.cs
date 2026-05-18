@@ -62,18 +62,28 @@ public sealed class RenderingOptionsBindingTests
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [$"{VideoLengthPolicyOptions.SectionName}:MaxFullVideoDurationSeconds"] = "420",
+                [$"{VideoLengthPolicyOptions.SectionName}:MinPrimaryObjects"] = "3",
+                [$"{VideoLengthPolicyOptions.SectionName}:TargetPrimaryObjects"] = "5",
+                [$"{VideoLengthPolicyOptions.SectionName}:MaxPrimaryObjects"] = "5",
+                [$"{VideoLengthPolicyOptions.SectionName}:TargetFullVideoSegments"] = "7",
                 [$"{VideoLengthPolicyOptions.SectionName}:MaxFullVideoSegments"] = "8",
-                [$"{VideoLengthPolicyOptions.SectionName}:MaxObjectsInFullVideo"] = "5"
+                [$"{VideoLengthPolicyOptions.SectionName}:MinFullVideoDurationSeconds"] = "180",
+                [$"{VideoLengthPolicyOptions.SectionName}:TargetFullVideoDurationSeconds"] = "240",
+                [$"{VideoLengthPolicyOptions.SectionName}:MaxFullVideoDurationSeconds"] = "420"
             })
             .Build();
 
         var options = new VideoLengthPolicyOptions();
         config.GetSection(VideoLengthPolicyOptions.SectionName).Bind(options);
 
-        Assert.Equal(420, options.MaxFullVideoDurationSeconds);
+        Assert.Equal(3, options.MinPrimaryObjects);
+        Assert.Equal(5, options.TargetPrimaryObjects);
+        Assert.Equal(5, options.MaxPrimaryObjects);
+        Assert.Equal(7, options.TargetFullVideoSegments);
         Assert.Equal(8, options.MaxFullVideoSegments);
-        Assert.Equal(5, options.MaxObjectsInFullVideo);
+        Assert.Equal(180, options.MinFullVideoDurationSeconds);
+        Assert.Equal(240, options.TargetFullVideoDurationSeconds);
+        Assert.Equal(420, options.MaxFullVideoDurationSeconds);
     }
 
     [Fact]

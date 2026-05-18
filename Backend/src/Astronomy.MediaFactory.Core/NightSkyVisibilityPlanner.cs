@@ -32,6 +32,17 @@ public sealed class SceneObservationContext
     public string VisibilityReason { get; init; } = "";
     public string RecommendedTool { get; init; } = "Naked eye";
     public string NarrationFocus { get; init; } = "";
+    public int EstimatedDurationSeconds { get; init; }
+    public double VisibilityScore { get; init; }
+    public double BrightnessScore { get; init; }
+    public double FamiliarityScore { get; init; }
+    public double EngagementScore { get; init; }
+    public double SpecialEventBonus { get; init; }
+    public double RarityBonus { get; init; }
+    public double FinalScore { get; init; }
+    public string SelectionReason { get; init; } = "";
+    public bool IsOptionalForLongForm { get; init; } = true;
+    public bool IsMajorSpecialEvent { get; init; }
     public double Latitude { get; init; }
     public double Longitude { get; init; }
     public string LocationName { get; init; } = "";

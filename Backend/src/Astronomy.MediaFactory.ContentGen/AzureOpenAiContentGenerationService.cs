@@ -492,7 +492,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             Title = title,
             Description = description,
             Tags = ["astronomy", "night sky", contentType.ToString()],
-            EstimatedDurationSeconds = isSpecialEvent ? 480 : 360,
+            EstimatedDurationSeconds = isSpecialEvent ? 480 : 240,
             ScriptBody = isSpecialEvent
                 ? isHindi
                     ? $"आज हम {context.SpecialEvent!.EventTitle} पर ध्यान देंगे। {context.SpecialEvent.EventDescription} हम बताएंगे कि यह क्यों महत्वपूर्ण है, कब देखना है, किस दिशा में देखना है, शुरुआती दर्शकों के लिए सुझाव, दुर्लभता, और सुरक्षित अवलोकन की याद दिलाने वाली बातें। {string.Join(" ", eventLines)}"

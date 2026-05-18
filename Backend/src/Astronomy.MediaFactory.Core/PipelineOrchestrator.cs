@@ -380,6 +380,7 @@ public sealed class PipelineOrchestrator
 
             await WriteLocalizationContextAsync(context.Localization, outputDir, cancellationToken);
             await WriteVideoLengthPolicyDiagnosticsAsync(videoLengthPolicyResult, outputDir, cancellationToken);
+            await WriteFullVideoScenePlanReportAsync(context, videoLengthPolicyResult, outputDir, cancellationToken);
             await WritePrimaryContextArtifactsAsync(context, outputDir, cancellationToken);
             if (_pipelineStageExecutor is not null)
             {
@@ -659,7 +660,7 @@ public sealed class PipelineOrchestrator
                     {
                         Caption = i < sceneSections.Count ? sceneSections[i].SectionText : (i < context.VisualIdeas.Count ? context.VisualIdeas[i].Title : $"Scene {i + 1}"),
                         VisualPath = v,
-                        DurationSeconds = durationPerScene,
+                        DurationSeconds = request.ContentType == ContentType.DailySkyGuide && observation is not null ? ResolveSceneDurationSeconds(observation) : durationPerScene,
                         AudioPath = i < sceneAudioSegments.Count ? sceneAudioSegments[i] : null,
                         ObjectName = observation?.ObjectName,
                         ObjectType = observation?.ObjectType,
@@ -673,6 +674,13 @@ public sealed class PipelineOrchestrator
                     };
                 }).ToList()
             };
+
+            var renderGuard = ApplySafeRenderGuard(manifest, _videoLengthPolicyOptions);
+            if (renderGuard.TrimmingActions.Count > 0)
+            {
+                _logger.LogInformation("Safe render guard trimmed scenes before rendering. EstimatedDurationSeconds={EstimatedDurationSeconds}; EstimatedRenderCost={EstimatedRenderCost:F1}; TrimmedSceneIds={TrimmedSceneIds}", renderGuard.EstimatedDurationSeconds, renderGuard.EstimatedRenderCost, string.Join(",", renderGuard.TrimmingActions));
+            }
+            await WriteSafeRenderGuardReportAsync(renderGuard, outputDir, cancellationToken);
 
             var videoPath = await RunStageAsync("Rendering", () => _videoRenderService.RenderAsync(manifest, cancellationToken));
 
@@ -1530,7 +1538,7 @@ public sealed class PipelineOrchestrator
         var objectScenes = scenes
             .Where(s => !ReferenceEquals(s, overview) && !ReferenceEquals(s, closing))
             .Where(s => !s.ObjectName.Equals(eventObject, StringComparison.OrdinalIgnoreCase))
-            .Take(3)
+            .Take(4)
             .ToList();
         removed.AddRange(scenes.Where(s => !ReferenceEquals(s, overview) && !ReferenceEquals(s, closing) && (s.ObjectName.Equals(eventObject, StringComparison.OrdinalIgnoreCase) || !objectScenes.Contains(s))).Select(s => s.ObjectName));
 
@@ -1543,7 +1551,7 @@ public sealed class PipelineOrchestrator
         var final = new List<SceneObservationContext>();
         if (overview is not null) final.Add(CopyScene(overview, 1));
         final.Add(CopyScene(highlight, final.Count + 1));
-        foreach (var scene in objectScenes.Take(3)) final.Add(CopyScene(scene, final.Count + 1));
+        foreach (var scene in objectScenes.Take(4)) final.Add(CopyScene(scene, final.Count + 1));
         if (closing is not null) final.Add(CopyScene(closing, final.Count + 1));
         context.SceneObservationContexts = final;
         context.SpecialEvent = new SpecialEventContext { EventId = selected.EventId, EventType = selected.EventType, EventTitle = LocalizeEventTitle(selected.Title, context.Localization.ResolvedLanguage), EventDescription = LocalizeEventDescription(selected, context.Localization.ResolvedLanguage), ContentOpportunityScore = selected.ContentOpportunityScore };
@@ -1573,6 +1581,17 @@ public sealed class PipelineOrchestrator
         VisibilityReason = source.VisibilityReason,
         RecommendedTool = source.RecommendedTool,
         NarrationFocus = source.NarrationFocus,
+        EstimatedDurationSeconds = source.EstimatedDurationSeconds,
+        VisibilityScore = source.VisibilityScore,
+        BrightnessScore = source.BrightnessScore,
+        FamiliarityScore = source.FamiliarityScore,
+        EngagementScore = source.EngagementScore,
+        SpecialEventBonus = source.SpecialEventBonus,
+        RarityBonus = source.RarityBonus,
+        FinalScore = source.FinalScore,
+        SelectionReason = source.SelectionReason,
+        IsOptionalForLongForm = source.IsOptionalForLongForm,
+        IsMajorSpecialEvent = source.IsMajorSpecialEvent,
         Latitude = source.Latitude,
         Longitude = source.Longitude,
         LocationName = source.LocationName
@@ -1676,6 +1695,13 @@ public sealed class PipelineOrchestrator
             VisibilityReason = title,
             RecommendedTool = ResolveSpecialEventTool(context.SpecialEvent?.EventType ?? string.Empty),
             NarrationFocus = narrationFocus,
+            EstimatedDurationSeconds = sceneType.Contains("Closing", StringComparison.OrdinalIgnoreCase) ? 12 : sceneType.Contains("Tips", StringComparison.OrdinalIgnoreCase) ? 20 : 30,
+            SpecialEventBonus = 7.5d,
+            RarityBonus = 3d,
+            FinalScore = sceneType.Contains("Closing", StringComparison.OrdinalIgnoreCase) ? 0d : 100d,
+            SelectionReason = "Major special event preserved in the long-form scene plan",
+            IsOptionalForLongForm = false,
+            IsMajorSpecialEvent = !sceneType.Contains("Closing", StringComparison.OrdinalIgnoreCase) && !sceneType.Contains("Tips", StringComparison.OrdinalIgnoreCase),
             Latitude = context.Latitude,
             Longitude = context.Longitude,
             LocationName = context.LocationName
@@ -1881,24 +1907,29 @@ public sealed class PipelineOrchestrator
         }
 
         var maxSegments = Math.Max(1, options.MaxFullVideoSegments);
-        var maxObjects = Math.Max(1, options.MaxObjectsInFullVideo);
-        var maxDuration = Math.Max(1, options.MaxFullVideoDurationSeconds);
-        var kept = originalScenes.ToList();
+        var maxObjects = Math.Max(1, options.MaxPrimaryObjects);
+        var maxDuration = Math.Max(options.MinFullVideoDurationSeconds, options.MaxFullVideoDurationSeconds);
+        var minDuration = Math.Max(1, options.MinFullVideoDurationSeconds);
+        var kept = EnsureRequiredOverviewScenes(originalScenes, options).ToList();
         var trimmed = new List<string>();
 
         bool NeedsTrim()
         {
             var objectCount = kept.Count(IsOptionalObjectSceneForLengthPolicy);
-            var projectedDuration = originalScenes.Count == 0
-                ? estimatedDurationSeconds
-                : estimatedDurationSeconds * (kept.Count / (double)originalScenes.Count);
+            var projectedDuration = EstimateScenePlanDurationSeconds(kept, estimatedDurationSeconds);
             return kept.Count > maxSegments || objectCount > maxObjects || projectedDuration > maxDuration;
         }
 
         while (NeedsTrim())
         {
-            var removeIndex = FindLastOptionalObjectSceneIndex(kept);
+            var removeIndex = FindLowestPriorityOptionalObjectSceneIndex(kept);
             if (removeIndex < 0)
+            {
+                break;
+            }
+
+            var projectedAfterTrim = EstimateScenePlanDurationSeconds(kept.Where((_, index) => index != removeIndex).ToList(), estimatedDurationSeconds);
+            if (projectedAfterTrim < minDuration && kept.Count <= maxSegments && kept.Count(IsOptionalObjectSceneForLengthPolicy) <= maxObjects)
             {
                 break;
             }
@@ -1908,13 +1939,15 @@ public sealed class PipelineOrchestrator
         }
 
         context.SceneObservationContexts = kept.Select((scene, index) => CopyScene(scene, index + 1)).ToList();
-        return new VideoLengthPolicyResult(originalScenes.Count, context.SceneObservationContexts.Count, estimatedDurationSeconds, trimmed);
+        var finalDuration = EstimateScenePlanDurationSeconds(context.SceneObservationContexts, estimatedDurationSeconds);
+        return new VideoLengthPolicyResult(originalScenes.Count, context.SceneObservationContexts.Count, finalDuration, trimmed);
     }
 
     private int EstimateFullVideoDurationSeconds(ContentType contentType, int segmentCount)
     {
-        var targetMinutes = contentType == ContentType.SpecialEventGuide ? 8 : 6;
-        var targetSeconds = targetMinutes * 60;
+        var targetSeconds = contentType == ContentType.SpecialEventGuide
+            ? Math.Max(_videoLengthPolicyOptions.TargetFullVideoDurationSeconds, 420)
+            : _videoLengthPolicyOptions.TargetFullVideoDurationSeconds;
         if (segmentCount <= _videoLengthPolicyOptions.MaxFullVideoSegments)
         {
             return targetSeconds;
@@ -1923,23 +1956,99 @@ public sealed class PipelineOrchestrator
         return (int)Math.Ceiling(targetSeconds * (segmentCount / (double)Math.Max(1, _videoLengthPolicyOptions.MaxFullVideoSegments)));
     }
 
-    private static int FindLastOptionalObjectSceneIndex(IReadOnlyList<SceneObservationContext> scenes)
+    private static IReadOnlyList<SceneObservationContext> EnsureRequiredOverviewScenes(IReadOnlyList<SceneObservationContext> scenes, VideoLengthPolicyOptions options)
     {
-        for (var i = scenes.Count - 1; i >= 0; i--)
+        if (scenes.Count == 0)
         {
-            if (IsOptionalObjectSceneForLengthPolicy(scenes[i]))
-            {
-                return i;
-            }
+            return scenes;
         }
 
-        return -1;
+        var result = scenes.ToList();
+        if (options.IncludeOpeningOverview && result.All(scene => !IsOpeningScene(scene)))
+        {
+            result.Insert(0, new SceneObservationContext
+            {
+                SceneId = "sky-overview",
+                SceneTitle = "Opening overview",
+                SceneType = "Overview",
+                ObjectName = "Sky",
+                ObjectType = "Overview",
+                IsVisible = true,
+                VisibilityReason = "Opening sky overview",
+                RecommendedTool = "Naked eye",
+                NarrationFocus = "Opening overview of tonight's selected sky tour.",
+                EstimatedDurationSeconds = 18,
+                IsOptionalForLongForm = false
+            });
+        }
+
+        if (options.IncludeClosingOverview && result.All(scene => !IsClosingScene(scene)))
+        {
+            result.Add(new SceneObservationContext
+            {
+                SceneId = "closing",
+                SceneTitle = "Closing overview",
+                SceneType = "Closing",
+                ObjectName = "Sky",
+                ObjectType = "Overview",
+                IsVisible = true,
+                VisibilityReason = "Closing sky recap",
+                RecommendedTool = "Naked eye",
+                NarrationFocus = "Closing recap and observing invitation.",
+                EstimatedDurationSeconds = 12,
+                IsOptionalForLongForm = false
+            });
+        }
+
+        return result;
+    }
+
+    private static int FindLowestPriorityOptionalObjectSceneIndex(IReadOnlyList<SceneObservationContext> scenes)
+    {
+        var candidate = scenes
+            .Select((scene, index) => new { scene, index })
+            .Where(x => IsOptionalObjectSceneForLengthPolicy(x.scene))
+            .OrderBy(x => x.scene.FinalScore > 0d ? x.scene.FinalScore : ResolveLengthPolicyFallbackScore(x.scene))
+            .ThenBy(x => ResolveLengthPolicyFallbackScore(x.scene))
+            .ThenByDescending(x => x.index)
+            .FirstOrDefault();
+
+        return candidate?.index ?? -1;
+    }
+
+    private static double ResolveLengthPolicyFallbackScore(SceneObservationContext scene)
+    {
+        var name = scene.ObjectName ?? string.Empty;
+        var type = scene.ObjectType ?? scene.SceneType ?? string.Empty;
+        if (name.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)) return 95d;
+        if (name.Contains("Venus", StringComparison.OrdinalIgnoreCase)) return 94d;
+        if (name.Contains("Saturn", StringComparison.OrdinalIgnoreCase)) return 90d;
+        if (name.Contains("Moon", StringComparison.OrdinalIgnoreCase)) return 89d;
+        if (name.Contains("Mars", StringComparison.OrdinalIgnoreCase)) return 86d;
+        if (IsSpecialEventScene(scene)) return 100d;
+        if (type.Contains("Planet", StringComparison.OrdinalIgnoreCase)) return 78d;
+        if (type.Contains("Deep", StringComparison.OrdinalIgnoreCase) || type.Contains("Cluster", StringComparison.OrdinalIgnoreCase) || type.Contains("Galaxy", StringComparison.OrdinalIgnoreCase) || type.Contains("Nebula", StringComparison.OrdinalIgnoreCase)) return 55d;
+        if (type.Contains("Star", StringComparison.OrdinalIgnoreCase) || type.Contains("Constellation", StringComparison.OrdinalIgnoreCase)) return 50d;
+        return 40d;
+    }
+
+    private static int EstimateScenePlanDurationSeconds(IReadOnlyList<SceneObservationContext> scenes, int fallbackEstimatedDurationSeconds)
+    {
+        var explicitDuration = scenes.Sum(scene => scene.EstimatedDurationSeconds);
+        if (explicitDuration > 0)
+        {
+            return explicitDuration;
+        }
+
+        return fallbackEstimatedDurationSeconds;
     }
 
     private static bool IsOptionalObjectSceneForLengthPolicy(SceneObservationContext scene)
-        => !IsOpeningScene(scene)
+        => scene.IsOptionalForLongForm
+           && !IsOpeningScene(scene)
            && !IsClosingScene(scene)
            && !IsSpecialEventScene(scene)
+           && !scene.IsMajorSpecialEvent
            && !string.Equals(scene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsSpecialEventScene(SceneObservationContext scene)
@@ -1947,10 +2056,133 @@ public sealed class PipelineOrchestrator
            || scene.SceneId.Contains("special-event", StringComparison.OrdinalIgnoreCase)
            || scene.SceneId.Contains("event", StringComparison.OrdinalIgnoreCase);
 
+    public static SafeRenderGuardResult ApplySafeRenderGuard(RenderManifest manifest, VideoLengthPolicyOptions options)
+    {
+        var trimmingActions = new List<string>();
+        var minDuration = Math.Max(1, options.MinFullVideoDurationSeconds);
+        var safeCostThreshold = Math.Max(1d, options.SafeRenderCostThreshold);
+
+        double EstimateCost() => manifest.Scenes.Sum(scene => Math.Max(1, scene.DurationSeconds)) * Math.Sqrt(Math.Max(1, manifest.Scenes.Count));
+
+        while (EstimateCost() > safeCostThreshold)
+        {
+            var candidate = manifest.Scenes
+                .Select((scene, index) => new { scene, index })
+                .Where(x => IsOptionalRenderScene(x.scene))
+                .OrderBy(x => ResolveRenderSceneFallbackScore(x.scene))
+                .ThenByDescending(x => x.index)
+                .FirstOrDefault();
+
+            if (candidate is null)
+            {
+                break;
+            }
+
+            var durationAfterTrim = manifest.Scenes.Where((_, index) => index != candidate.index).Sum(scene => Math.Max(1, scene.DurationSeconds));
+            if (durationAfterTrim < minDuration)
+            {
+                break;
+            }
+
+            trimmingActions.Add(candidate.scene.SceneId ?? $"scene-{candidate.index + 1}");
+            manifest.Scenes.RemoveAt(candidate.index);
+        }
+
+        for (var i = 0; i < manifest.Scenes.Count; i++)
+        {
+            manifest.Scenes[i].SegmentIndex = i + 1;
+        }
+
+        return new SafeRenderGuardResult(manifest.Scenes.Sum(scene => scene.DurationSeconds), EstimateCost(), trimmingActions);
+    }
+
+    private static bool IsOptionalRenderScene(RenderScene scene)
+        => !string.Equals(scene.SceneType, "Overview", StringComparison.OrdinalIgnoreCase)
+           && !IsClosingSceneId(scene.SceneId ?? string.Empty)
+           && !(scene.SceneType?.Contains("Closing", StringComparison.OrdinalIgnoreCase) ?? false)
+           && !(scene.SceneType?.Contains("Tips", StringComparison.OrdinalIgnoreCase) ?? false)
+           && !(scene.SceneType?.Contains("SpecialEvent", StringComparison.OrdinalIgnoreCase) ?? false)
+           && !string.Equals(scene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
+
+    private static double ResolveRenderSceneFallbackScore(RenderScene scene)
+    {
+        var contextScene = new SceneObservationContext { ObjectName = scene.ObjectName ?? string.Empty, ObjectType = scene.ObjectType ?? string.Empty, SceneType = scene.SceneType ?? string.Empty, SceneId = scene.SceneId ?? string.Empty };
+        return ResolveLengthPolicyFallbackScore(contextScene);
+    }
+
+    private static Task WriteSafeRenderGuardReportAsync(SafeRenderGuardResult result, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        return File.WriteAllTextAsync(Path.Combine(outputDirectory, "safe-render-guard-report.json"), json, cancellationToken);
+    }
+
     private static Task WriteVideoLengthPolicyDiagnosticsAsync(VideoLengthPolicyResult result, string outputDirectory, CancellationToken cancellationToken)
     {
         var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         return File.WriteAllTextAsync(Path.Combine(outputDirectory, "video-length-policy-report.json"), json, cancellationToken);
+    }
+
+    private static Task WriteFullVideoScenePlanReportAsync(AstronomyContext context, VideoLengthPolicyResult result, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var visibleObjects = context.Events
+            .Select(e => new { e.ObjectName, objectType = e.Category, e.VisibilityWindow, e.Direction, e.Score })
+            .DistinctBy(e => e.ObjectName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var selectedObjectNames = context.SceneObservationContexts
+            .Where(scene => !string.Equals(scene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase))
+            .Select(scene => scene.ObjectName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var scoredObjects = context.SceneObservationContexts
+            .Where(scene => !string.Equals(scene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase))
+            .Select(scene => new
+            {
+                @object = scene.ObjectName,
+                objectType = scene.ObjectType,
+                visibilityScore = Math.Round(scene.VisibilityScore, 2),
+                brightnessScore = Math.Round(scene.BrightnessScore, 2),
+                familiarityScore = Math.Round(scene.FamiliarityScore, 2),
+                engagementScore = Math.Round(scene.EngagementScore, 2),
+                specialEventBonus = Math.Round(scene.SpecialEventBonus, 2),
+                rarityBonus = Math.Round(scene.RarityBonus, 2),
+                finalScore = Math.Round(scene.FinalScore, 2),
+                selected = true,
+                selectionReason = string.IsNullOrWhiteSpace(scene.SelectionReason) ? "Selected scene in finalized long-form plan" : scene.SelectionReason
+            })
+            .ToList();
+        var rejectedObjects = visibleObjects
+            .Where(obj => !selectedObjectNames.Contains(obj.ObjectName))
+            .Select(obj => new { @object = obj.ObjectName, reason = "Lower adaptive score, duplicate category, or trimmed by duration/render guard" })
+            .ToList();
+        var estimatedSceneDurations = context.SceneObservationContexts
+            .Select(scene => new { scene.SceneId, scene.ObjectName, durationSeconds = ResolveSceneDurationSeconds(scene) })
+            .ToList();
+        var payload = new
+        {
+            visibleObjects,
+            scoredObjects,
+            selectedObjects = scoredObjects.Where(x => x.selected).ToList(),
+            rejectedObjects,
+            sceneOrder = context.SceneObservationContexts.Select(scene => new { scene.SceneIndex, scene.SceneId, scene.SceneType, scene.ObjectName }).ToList(),
+            estimatedSceneDurations,
+            estimatedFinalDuration = estimatedSceneDurations.Sum(x => x.durationSeconds),
+            finalSegmentCount = context.SceneObservationContexts.Count,
+            trimmingActions = result.TrimmedSceneIds.Select(sceneId => new { sceneId, action = "trimmed-lowest-priority-optional-scene" }).ToList()
+        };
+        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        return File.WriteAllTextAsync(Path.Combine(outputDirectory, "full-video-scene-plan-report.json"), json, cancellationToken);
+    }
+
+    private static int ResolveSceneDurationSeconds(SceneObservationContext scene)
+    {
+        if (scene.EstimatedDurationSeconds > 0)
+        {
+            return scene.EstimatedDurationSeconds;
+        }
+
+        if (IsOpeningScene(scene)) return 18;
+        if (IsClosingScene(scene)) return 12;
+        if (IsSpecialEventScene(scene)) return 30;
+        return 36;
     }
 
     private static ScriptResult CopyScriptWithSceneSections(ScriptResult script, IReadOnlyDictionary<string, string> alignedSectionsBySceneId)
@@ -2231,6 +2463,11 @@ public sealed class PipelineOrchestrator
         int FinalSegmentCount,
         int EstimatedDurationSeconds,
         IReadOnlyList<string> TrimmedSceneIds);
+
+    public sealed record SafeRenderGuardResult(
+        int EstimatedDurationSeconds,
+        double EstimatedRenderCost,
+        IReadOnlyList<string> TrimmingActions);
 
     private sealed record FullVideoNarrationSection(
         SceneObservationContext Scene,

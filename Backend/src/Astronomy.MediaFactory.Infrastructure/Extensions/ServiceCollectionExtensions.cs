@@ -205,7 +205,9 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<VideoLengthPolicyOptions>()
             .Bind(configuration.GetSection(VideoLengthPolicyOptions.SectionName))
-            .Validate(options => options.MaxFullVideoDurationSeconds > 0 && options.MaxFullVideoSegments > 0 && options.MaxObjectsInFullVideo > 0, "VideoLengthPolicy values must be greater than 0.")
+            .Validate(options => options.MinPrimaryObjects > 0 && options.TargetPrimaryObjects >= options.MinPrimaryObjects && options.MaxPrimaryObjects >= options.TargetPrimaryObjects, "VideoLengthPolicy primary object bounds are invalid.")
+            .Validate(options => options.MinFullVideoDurationSeconds > 0 && options.TargetFullVideoDurationSeconds >= options.MinFullVideoDurationSeconds && options.MaxFullVideoDurationSeconds >= options.TargetFullVideoDurationSeconds, "VideoLengthPolicy duration bounds are invalid.")
+            .Validate(options => options.TargetFullVideoSegments > 0 && options.MaxFullVideoSegments >= options.TargetFullVideoSegments, "VideoLengthPolicy segment bounds are invalid.")
             .ValidateOnStart();
 
         services.AddOptions<ContentExpansionOptions>()

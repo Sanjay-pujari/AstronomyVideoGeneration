@@ -125,9 +125,24 @@ public sealed class ContentDurationOptions
 public sealed class VideoLengthPolicyOptions
 {
     public const string SectionName = "VideoLengthPolicy";
-    public int MaxFullVideoDurationSeconds { get; set; } = 420;
+    public int MinPrimaryObjects { get; set; } = 3;
+    public int TargetPrimaryObjects { get; set; } = 5;
+    public int MaxPrimaryObjects { get; set; } = 5;
+    public bool IncludeOpeningOverview { get; set; } = true;
+    public bool IncludeClosingOverview { get; set; } = true;
+    public int TargetFullVideoSegments { get; set; } = 7;
     public int MaxFullVideoSegments { get; set; } = 8;
-    public int MaxObjectsInFullVideo { get; set; } = 5;
+    public int MinFullVideoDurationSeconds { get; set; } = 180;
+    public int TargetFullVideoDurationSeconds { get; set; } = 240;
+    public int MaxFullVideoDurationSeconds { get; set; } = 420;
+    public double SafeRenderCostThreshold { get; set; } = 3600d;
+
+    // Backward-compatible configuration alias. Prefer MaxPrimaryObjects for new config.
+    public int MaxObjectsInFullVideo
+    {
+        get => MaxPrimaryObjects;
+        set => MaxPrimaryObjects = value;
+    }
 }
 
 public sealed class ContentExpansionOptions
