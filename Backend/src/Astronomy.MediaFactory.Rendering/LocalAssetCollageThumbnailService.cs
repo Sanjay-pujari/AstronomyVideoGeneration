@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.Drawing;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.Formats.Jpeg;
@@ -112,7 +113,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             await WriteCinematicReportAsync(plan, selection, composition, thumbnailsDirectory, cancellationToken);
             return plan;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException && !IsMissingHindiFontException(ex))
         {
             _logger.LogWarning(ex, "Local asset thumbnail generation failed; falling back to Stellarium/extracted frame if available.");
             warnings.Add(ex.Message);
@@ -1020,9 +1021,27 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var text = FormatHookForMobile(hook);
         var fontSize = ResolveFontSize(text, portrait);
         var selection = ResolveThumbnailFont(language, text);
-        var textFilePath = Path.Combine(Path.GetDirectoryName(thumbnailPath) ?? Path.GetTempPath(), $"temp-thumbnail-title-{Guid.NewGuid():N}.txt");
-        var renderedPath = Path.Combine(Path.GetDirectoryName(thumbnailPath) ?? Path.GetTempPath(), $"temp-thumbnail-rendered-{Guid.NewGuid():N}.jpg");
+        var thumbnailDirectory = Path.GetDirectoryName(thumbnailPath) ?? Path.GetTempPath();
+        var textFilePath = Path.Combine(thumbnailDirectory, selection.Language == "hi" ? "thumbnail-title-hi.txt" : "thumbnail-title-en.txt");
+        var renderedPath = Path.Combine(thumbnailDirectory, $"temp-thumbnail-rendered-{Guid.NewGuid():N}.jpg");
         var thumbnailType = portrait ? "Short" : "Long";
+
+        await WriteThumbnailFontReportAsync(
+            thumbnailDirectory,
+            language,
+            hook,
+            selection,
+            textFilePath,
+            portrait ? null : thumbnailPath,
+            portrait ? thumbnailPath : null,
+            cancellationToken);
+
+        if (!selection.FontExists && selection.Language == "hi")
+        {
+            var message = $"Hindi font missing: {selection.FontPath}";
+            _logger.LogError(message);
+            throw new FileNotFoundException(message, selection.FontPath);
+        }
 
         try
         {
@@ -1034,6 +1053,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 textFilePath,
                 thumbnailType);
 
+            var textAreaBefore = await CalculateTextAreaSignatureAsync(thumbnailPath, bounds, cancellationToken);
             var drawtext = BuildDrawTextFilter(selection.FontPath, textFilePath, fontSize, bounds, portrait);
             var arguments = string.Join(' ',
                 "-y",
@@ -1055,35 +1075,41 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 return;
             }
 
+            var textAreaAfter = await CalculateTextAreaSignatureAsync(renderedPath, bounds, cancellationToken);
+            if (textAreaBefore == textAreaAfter)
+            {
+                _logger.LogWarning(
+                    "Thumbnail text render validation warning: selected hook is non-empty but final {ThumbnailType} thumbnail text area appears unchanged. Language={Language}; Hook={SelectedHook}; Font={FontPath}; TextFile={TextFilePath}",
+                    thumbnailType,
+                    selection.Language,
+                    hook,
+                    selection.FontPath,
+                    textFilePath);
+            }
+
             File.Move(renderedPath, thumbnailPath, overwrite: true);
         }
         finally
         {
-            TryDelete(textFilePath);
             TryDelete(renderedPath);
         }
     }
 
     private ThumbnailFontSelection ResolveThumbnailFont(string language, string text)
     {
-        var selectedLanguage = IsHindiThumbnailText(language, text) ? "hi" : "en";
+        var containsDevanagari = ContainsDevanagari(text);
+        var selectedLanguage = LocalizationResolver.IsHindi(language) || containsDevanagari ? "hi" : "en";
         var preferredFont = selectedLanguage == "hi" ? _fontOptions.HindiFont : _fontOptions.DefaultEnglishFont;
         var resolvedPreferredFont = ResolveFontPath(preferredFont);
         if (!string.IsNullOrWhiteSpace(resolvedPreferredFont))
-            return new ThumbnailFontSelection(selectedLanguage, resolvedPreferredFont);
+            return new ThumbnailFontSelection(selectedLanguage, resolvedPreferredFont, true, containsDevanagari);
 
-        _logger.LogWarning(
-            "Configured thumbnail font file is missing. Language={Language}; FontPath={FontPath}; falling back to English font {FallbackFontPath}.",
-            selectedLanguage,
-            preferredFont,
-            _fontOptions.DefaultEnglishFont);
+        var reportPath = ResolveFontPathForReport(preferredFont);
+        if (selectedLanguage == "hi")
+            return new ThumbnailFontSelection(selectedLanguage, reportPath, false, containsDevanagari);
 
-        var resolvedEnglishFont = ResolveFontPath(_fontOptions.DefaultEnglishFont);
-        if (!string.IsNullOrWhiteSpace(resolvedEnglishFont))
-            return new ThumbnailFontSelection(selectedLanguage, resolvedEnglishFont);
-
-        _logger.LogWarning("Fallback English thumbnail font file is also missing. FontPath={FontPath}; FFmpeg rendering may fail.", _fontOptions.DefaultEnglishFont);
-        return new ThumbnailFontSelection(selectedLanguage, _fontOptions.DefaultEnglishFont);
+        _logger.LogWarning("Configured English thumbnail font file is missing. FontPath={FontPath}; FFmpeg rendering may fail.", preferredFont);
+        return new ThumbnailFontSelection(selectedLanguage, reportPath, false, containsDevanagari);
     }
 
     public static string? ResolveFontPath(string fontPath)
@@ -1099,6 +1125,98 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         }
 
         return null;
+    }
+
+    private static bool IsMissingHindiFontException(Exception exception)
+        => exception is FileNotFoundException fileNotFoundException
+            && fileNotFoundException.Message.StartsWith("Hindi font missing:", StringComparison.Ordinal);
+
+    private static string ResolveFontPathForReport(string fontPath)
+    {
+        if (string.IsNullOrWhiteSpace(fontPath)) return fontPath;
+        if (Path.IsPathRooted(fontPath)) return fontPath;
+        return Path.Combine(AppContext.BaseDirectory, fontPath);
+    }
+
+    private static async Task<int> CalculateTextAreaSignatureAsync(string imagePath, RectangleF bounds, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(imagePath)) return 0;
+
+        using var image = await Image.LoadAsync<Rgba32>(imagePath, cancellationToken);
+        var left = Math.Clamp((int)Math.Floor(bounds.Left), 0, Math.Max(0, image.Width - 1));
+        var top = Math.Clamp((int)Math.Floor(bounds.Top), 0, Math.Max(0, image.Height - 1));
+        var right = Math.Clamp((int)Math.Ceiling(bounds.Right), left + 1, image.Width);
+        var bottom = Math.Clamp((int)Math.Ceiling(bounds.Bottom), top + 1, image.Height);
+        var stepX = Math.Max(1, (right - left) / 64);
+        var stepY = Math.Max(1, (bottom - top) / 32);
+
+        unchecked
+        {
+            var hash = 17;
+            for (var y = top; y < bottom; y += stepY)
+            {
+                var row = image.DangerousGetPixelRowMemory(y).Span;
+                for (var x = left; x < right; x += stepX)
+                {
+                    var pixel = row[x];
+                    hash = (hash * 31) + pixel.R;
+                    hash = (hash * 31) + pixel.G;
+                    hash = (hash * 31) + pixel.B;
+                    hash = (hash * 31) + pixel.A;
+                }
+            }
+
+            return hash;
+        }
+    }
+
+    private static async Task WriteThumbnailFontReportAsync(
+        string thumbnailDirectory,
+        string language,
+        string selectedHook,
+        ThumbnailFontSelection selection,
+        string textFilePath,
+        string? thumbnailLongPath,
+        string? thumbnailShortPath,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(thumbnailDirectory);
+        var reportPath = Path.Combine(thumbnailDirectory, "thumbnail-font-report.json");
+        var existingLongPath = string.Empty;
+        var existingShortPath = string.Empty;
+
+        if (File.Exists(reportPath))
+        {
+            try
+            {
+                using var existing = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath, cancellationToken));
+                if (existing.RootElement.TryGetProperty("thumbnailLongPath", out var longElement))
+                    existingLongPath = longElement.GetString() ?? string.Empty;
+                if (existing.RootElement.TryGetProperty("thumbnailShortPath", out var shortElement))
+                    existingShortPath = shortElement.GetString() ?? string.Empty;
+            }
+            catch
+            {
+                // Best effort: diagnostics should not block rendering when an old report is malformed.
+            }
+        }
+
+        var payload = new
+        {
+            language = selection.Language,
+            requestLanguage = language,
+            selectedHook,
+            containsDevanagari = selection.ContainsDevanagari,
+            selectedFontPath = selection.FontPath,
+            fontExists = selection.FontExists,
+            textFilePath,
+            textFileEncoding = "UTF-8",
+            drawTextMode = "textfile",
+            thumbnailLongPath = thumbnailLongPath ?? existingLongPath,
+            thumbnailShortPath = thumbnailShortPath ?? existingShortPath
+        };
+
+        await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     public static bool IsHindiThumbnailText(string language, string text)
@@ -1574,7 +1692,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         return family.CreateFont(size, style);
     }
 
-    private sealed record ThumbnailFontSelection(string Language, string FontPath);
+    private sealed record ThumbnailFontSelection(string Language, string FontPath, bool FontExists, bool ContainsDevanagari);
 
     private static async Task WriteSelectionAsync(ThumbnailPlan plan, string thumbnailsDirectory, CompositionDiagnostics composition, CancellationToken cancellationToken)
     {
@@ -1686,6 +1804,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             safeZoneWarnings = composition.SafeZoneWarnings,
             textBounds = composition.TextBounds,
             language = request.Context.Localization.ResolvedLanguage,
+            selectedHook = plan.CelestialSelection?.SelectedHook ?? plan.PrimaryThumbnailText,
             dimensions = new { width, height, fileSizeBytes = File.Exists(outputPath) ? new FileInfo(outputPath).Length : 0 },
             warnings
         };
