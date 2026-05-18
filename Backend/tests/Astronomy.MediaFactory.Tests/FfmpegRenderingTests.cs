@@ -1259,7 +1259,7 @@ public sealed class FfmpegRenderingTests
     }
 
     [Fact]
-    public async Task FfmpegVideoRenderService_FinalLongTimeoutDoesNotScaleWithVideoDuration()
+    public async Task FfmpegVideoRenderService_FinalLongTimeoutScalesWithVideoDuration()
     {
         var tempDir = Directory.CreateTempSubdirectory("ffmpeg-final-timeout-scale");
         var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
@@ -1282,7 +1282,115 @@ public sealed class FfmpegRenderingTests
             Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 300 }]
         }, CancellationToken.None);
 
-        Assert.Equal(TimeSpan.FromSeconds(900), runner.Timeouts.Last().GetValueOrDefault());
+        Assert.Equal(TimeSpan.FromSeconds(2400), runner.Timeouts.Last().GetValueOrDefault());
+    }
+
+
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_ConcatWithEightSegmentsRemainsAllowed()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-eight-segments");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+
+        var scenes = new List<RenderScene>();
+        for (var i = 0; i < 8; i++)
+        {
+            var scenePath = Path.Combine(tempDir.FullName, $"scene-{i + 1}.png");
+            await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+            scenes.Add(new RenderScene { Caption = $"Scene {i + 1}", VisualPath = scenePath, DurationSeconds = 10 });
+        }
+
+        var runner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 80d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 80d } };
+        var sut = CreateService(new InMemoryFileSystem(), runner, enableTransitions: false);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            EncodingProfile = VideoRenderProfileKind.YouTubeLongFinal,
+            Scenes = scenes
+        }, CancellationToken.None);
+
+        Assert.Contains(runner.Commands, command => command.Contains("combined.mp4", StringComparison.Ordinal) && command.Contains("-f concat", StringComparison.Ordinal));
+        Assert.Equal(8, runner.Commands.Count(command => command.Contains("segment-", StringComparison.Ordinal) && command.Contains("-frames:v", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_WritesFinalRenderPerformanceReport()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-final-performance-report");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var runner = new SegmentAwareProcessRunner { ProbeDurationsByPath = { [audioPath] = 300d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 300d } };
+        var sut = CreateService(fileSystem, runner, finalLongRenderTimeoutSeconds: 900);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            EncodingProfile = VideoRenderProfileKind.YouTubeLongFinal,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 300 }]
+        }, CancellationToken.None);
+
+        var reportJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "final-render-performance-report.json")];
+        using var report = JsonDocument.Parse(reportJson);
+        var root = report.RootElement;
+        Assert.Equal(1, root.GetProperty("segmentCount").GetInt32());
+        Assert.Equal(300d, root.GetProperty("inputDurationSeconds").GetDouble());
+        Assert.Equal("2560x1440", root.GetProperty("outputResolution").GetString());
+        Assert.Equal("veryfast", root.GetProperty("encodingPreset").GetString());
+        Assert.Equal(20, root.GetProperty("crf").GetInt32());
+        Assert.Equal("20M", root.GetProperty("maxrate").GetString());
+        Assert.Equal(900, root.GetProperty("configuredTimeout").GetInt32());
+        Assert.Equal(2400, root.GetProperty("adaptiveTimeout").GetInt32());
+        Assert.False(root.GetProperty("retryUsed").GetBoolean());
+        Assert.False(root.GetProperty("fallbackUsed").GetBoolean());
+    }
+
+    [Fact]
+    public async Task FfmpegVideoRenderService_FinalTimeoutRetryUsesFasterProfileAnd1080pFallback()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("ffmpeg-final-retry");
+        var outputPath = Path.Combine(tempDir.FullName, "final-video.mp4");
+        var audioPath = Path.Combine(tempDir.FullName, "narration.mp3");
+        var scenePath = Path.Combine(tempDir.FullName, "scene-1.png");
+        await File.WriteAllBytesAsync(audioPath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(scenePath, [4, 5, 6]);
+
+        var fileSystem = new InMemoryFileSystem();
+        var runner = new SegmentAwareProcessRunner
+        {
+            TimeoutFirstFinalRender = true,
+            ProbeDurationsByPath = { [audioPath] = 300d, [Path.Combine(tempDir.FullName, "combined.mp4")] = 300d }
+        };
+        var sut = CreateService(fileSystem, runner, finalLongRenderTimeoutSeconds: 900);
+
+        await sut.RenderAsync(new RenderManifest
+        {
+            Title = "Sky",
+            AudioPath = audioPath,
+            OutputPath = outputPath,
+            EncodingProfile = VideoRenderProfileKind.YouTubeLongFinal,
+            Scenes = [new RenderScene { Caption = "Scene", VisualPath = scenePath, DurationSeconds = 300 }]
+        }, CancellationToken.None);
+
+        Assert.Contains(runner.Commands, command => command.Contains("-preset ultrafast", StringComparison.Ordinal) && command.Contains("scale=1920:1080", StringComparison.Ordinal));
+        var reportJson = fileSystem.TextWrites[Path.Combine(tempDir.FullName, "final-render-performance-report.json")];
+        using var report = JsonDocument.Parse(reportJson);
+        Assert.True(report.RootElement.GetProperty("retryUsed").GetBoolean());
+        Assert.True(report.RootElement.GetProperty("fallbackUsed").GetBoolean());
+        Assert.Equal("ultrafast", report.RootElement.GetProperty("encodingPreset").GetString());
+        Assert.Equal("1920x1080", report.RootElement.GetProperty("outputResolution").GetString());
     }
 
     [Fact]
@@ -1321,6 +1429,18 @@ public sealed class FfmpegRenderingTests
     public void FfmpegVideoRenderService_CalculatesEffectiveSegmentTimeout(int configuredSeconds, double sceneDurationSeconds, int expectedSeconds)
     {
         var effective = FfmpegVideoRenderService.CalculateEffectiveSegmentTimeoutSeconds(configuredSeconds, sceneDurationSeconds);
+
+        Assert.Equal(expectedSeconds, effective);
+    }
+
+
+    [Theory]
+    [InlineData(900, 100, 900)]
+    [InlineData(900, 300, 2400)]
+    [InlineData(900, 600, 3600)]
+    public void FfmpegVideoRenderService_CalculatesAdaptiveFinalLongTimeout(int configuredSeconds, double durationSeconds, int expectedSeconds)
+    {
+        var effective = FfmpegVideoRenderService.CalculateEffectiveFinalLongRenderTimeoutSeconds(configuredSeconds, durationSeconds);
 
         Assert.Equal(expectedSeconds, effective);
     }
@@ -1530,6 +1650,8 @@ public sealed class FfmpegRenderingTests
         public List<string> FileNames { get; } = [];
         public List<TimeSpan?> Timeouts { get; } = [];
         public Dictionary<string, double> ProbeDurationsByPath { get; } = [];
+        public bool TimeoutFirstFinalRender { get; init; }
+        private int _finalRenderAttempts;
 
         public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
         {
@@ -1553,6 +1675,24 @@ public sealed class FfmpegRenderingTests
             }
 
             var outputPath = ExtractOutputPath(arguments);
+            if (!string.IsNullOrWhiteSpace(outputPath) && outputPath.EndsWith("final-video.mp4", StringComparison.OrdinalIgnoreCase) && arguments.Contains("-movflags +faststart", StringComparison.Ordinal))
+            {
+                _finalRenderAttempts++;
+                if (TimeoutFirstFinalRender && _finalRenderAttempts == 1)
+                {
+                    return Task.FromResult(new ProcessExecutionResult(
+                        ExitCode: -1,
+                        StandardOutput: string.Empty,
+                        StandardError: "FFmpeg timed out.",
+                        StartTimeUtc: DateTimeOffset.UtcNow.AddSeconds(-(timeout?.TotalSeconds ?? 1d)),
+                        EndTimeUtc: DateTimeOffset.UtcNow,
+                        FileName: fileName,
+                        Arguments: arguments,
+                        ExceptionText: "FFmpeg timed out.",
+                        TimedOut: true));
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(outputPath))
             {
                 File.WriteAllBytes(outputPath, [1, 2, 3]);

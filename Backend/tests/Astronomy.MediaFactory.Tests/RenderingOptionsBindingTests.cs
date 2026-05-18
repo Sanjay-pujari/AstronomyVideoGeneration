@@ -24,7 +24,12 @@ public sealed class RenderingOptionsBindingTests
                 [$"{RenderingOptions.SectionName}:ShortKenBurnsZoomEnd"] = "1.08",
                 [$"{RenderingOptions.SectionName}:KenBurnsFps"] = "30",
                 [$"{RenderingOptions.SectionName}:KenBurnsUseEasing"] = "true",
-                [$"{RenderingOptions.SectionName}:EnableDirectionalMotion"] = "false"
+                [$"{RenderingOptions.SectionName}:EnableDirectionalMotion"] = "false",
+                [$"{RenderingOptions.SectionName}:FinalLongRenderTimeoutSeconds"] = "900",
+                [$"{RenderingOptions.SectionName}:FinalLongTimeoutMultiplier"] = "8",
+                [$"{RenderingOptions.SectionName}:FinalLongMaxTimeoutSeconds"] = "3600",
+                [$"{RenderingOptions.SectionName}:RetryFinalLongRenderWithFasterProfile"] = "true",
+                [$"{RenderingOptions.SectionName}:FallbackTo1080pOnFinalRenderTimeout"] = "true"
             })
             .Build();
 
@@ -44,7 +49,33 @@ public sealed class RenderingOptionsBindingTests
         Assert.Equal(30, options.KenBurnsFps);
         Assert.True(options.KenBurnsUseEasing);
         Assert.False(options.EnableDirectionalMotion);
+        Assert.Equal(900, options.FinalLongRenderTimeoutSeconds);
+        Assert.Equal(8d, options.FinalLongTimeoutMultiplier);
+        Assert.Equal(3600, options.FinalLongMaxTimeoutSeconds);
+        Assert.True(options.RetryFinalLongRenderWithFasterProfile);
+        Assert.True(options.FallbackTo1080pOnFinalRenderTimeout);
     }
+
+    [Fact]
+    public void VideoLengthPolicyOptions_BindsFromConfiguration()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{VideoLengthPolicyOptions.SectionName}:MaxFullVideoDurationSeconds"] = "420",
+                [$"{VideoLengthPolicyOptions.SectionName}:MaxFullVideoSegments"] = "8",
+                [$"{VideoLengthPolicyOptions.SectionName}:MaxObjectsInFullVideo"] = "5"
+            })
+            .Build();
+
+        var options = new VideoLengthPolicyOptions();
+        config.GetSection(VideoLengthPolicyOptions.SectionName).Bind(options);
+
+        Assert.Equal(420, options.MaxFullVideoDurationSeconds);
+        Assert.Equal(8, options.MaxFullVideoSegments);
+        Assert.Equal(5, options.MaxObjectsInFullVideo);
+    }
+
     [Fact]
     public void RenderingOptions_BindsVideoEncodingUpscaleConfiguration()
     {

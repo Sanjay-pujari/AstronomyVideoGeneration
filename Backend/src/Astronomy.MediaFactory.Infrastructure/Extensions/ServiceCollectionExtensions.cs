@@ -202,6 +202,12 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.YouTubeShortSeconds > 0 && options.InstagramReelSeconds > 0 && options.FacebookReelSeconds > 0, "ContentDuration short-form targets must be greater than 0.")
             .ValidateOnStart();
 
+
+        services.AddOptions<VideoLengthPolicyOptions>()
+            .Bind(configuration.GetSection(VideoLengthPolicyOptions.SectionName))
+            .Validate(options => options.MaxFullVideoDurationSeconds > 0 && options.MaxFullVideoSegments > 0 && options.MaxObjectsInFullVideo > 0, "VideoLengthPolicy values must be greater than 0.")
+            .ValidateOnStart();
+
         services.AddOptions<ContentExpansionOptions>()
             .Bind(configuration.GetSection(ContentExpansionOptions.SectionName))
             .Validate(options => options.MinObjectsPerGuide > 0 && options.MaxObjectsPerGuide >= options.MinObjectsPerGuide, "ContentExpansion object bounds are invalid.")

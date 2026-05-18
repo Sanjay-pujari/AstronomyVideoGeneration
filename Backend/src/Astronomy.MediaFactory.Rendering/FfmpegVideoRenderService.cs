@@ -17,6 +17,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     private readonly ILogger<FfmpegVideoRenderService> _logger;
     private const string EncodingReportFileName = "video-encoding-report.json";
     private const string RenderPerformanceReportFileName = "video-render-performance-report.json";
+    private const string FinalRenderPerformanceReportFileName = "final-render-performance-report.json";
     private static readonly JsonSerializerOptions DiagnosticJsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public FfmpegVideoRenderService(
@@ -108,6 +109,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     private async Task RenderFromSegmentsAsync(RenderManifest manifest, RenderPlan plan, string outputDirectory, string segmentConcatPath, CancellationToken cancellationToken)
     {
+        var segmentGenerationStopwatch = System.Diagnostics.Stopwatch.StartNew();
         var segmentClipPaths = new List<string>();
         var speechDiagnostics = new List<SpeechSpeedDiagnostic>();
         var syncReports = new List<SegmentSyncReportEntry>();
@@ -182,6 +184,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             segmentClipPaths.Add(segmentOutputPath);
         }
 
+        segmentGenerationStopwatch.Stop();
+        _logger.LogInformation("FFmpeg segment generation total time: {ElapsedSeconds:F3}s for {SegmentCount} segments", segmentGenerationStopwatch.Elapsed.TotalSeconds, segmentClipPaths.Count);
+
         if (segmentClipPaths.Count == 0)
         {
             throw new InvalidOperationException("Segmented narration flow was requested but no segment clips were produced.");
@@ -196,28 +201,23 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
         var concatArguments = $"-y -f concat -safe 0 -i \"{NormalizePath(segmentConcatPath)}\" -c copy \"{NormalizePath(combinedPath)}\"";
+        var concatStopwatch = System.Diagnostics.Stopwatch.StartNew();
         var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
+        concatStopwatch.Stop();
+        _logger.LogInformation("FFmpeg concat copy time: {ElapsedSeconds:F3}s for {SegmentCount} segments", concatStopwatch.Elapsed.TotalSeconds, segmentClipPaths.Count);
         if (concatResult.ExitCode != 0 || !File.Exists(combinedPath))
         {
             throw new InvalidOperationException("FFmpeg concat of segmented clips failed.");
         }
 
-        var productionPreset = ResolveFinalEncodingPreset(manifest);
-        var finalFilter = BuildFinalOutputFilter(productionPreset, IsShortManifest(manifest) || manifest.EnableVerticalCrop);
-        var finalArguments = $"-y -i \"{NormalizePath(combinedPath)}\" -vf \"{finalFilter}\" {BuildVideoEncodeArguments(productionPreset)} -r {(IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate))} -c:a aac -b:a {productionPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(manifest.OutputPath)}\"";
         var inputDurationSeconds = await ProbeMediaDurationSecondsAsync(combinedPath, cancellationToken);
-        var timeoutSeconds = CalculateEffectiveFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest), GetConfiguredFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest)), inputDurationSeconds);
-        var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken, TimeSpan.FromSeconds(timeoutSeconds));
-        var finalDiagnostics = BuildFinalRenderDiagnostics(inputDurationSeconds, finalResult, productionPreset, timeoutSeconds, finalArguments, manifest.OutputPath);
-        LogSlowRenderWarning(inputDurationSeconds, finalDiagnostics.ElapsedMs);
-        LogFinalRenderDiagnostics(finalDiagnostics);
-        await WriteFinalRenderDiagnosticsAsync(outputDirectory, finalDiagnostics, cancellationToken);
-        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), $"{BuildProcessDiagnostics(finalResult)}{Environment.NewLine}{FormatFinalRenderDiagnostics(finalDiagnostics)}", cancellationToken);
-        if (finalResult.TimedOut)
+        var finalOutcome = await ExecuteFinalRenderWithFallbackAsync(manifest, combinedPath, null, manifest.OutputPath, outputDirectory, inputDurationSeconds, cancellationToken);
+        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), $"{BuildProcessDiagnostics(finalOutcome.Result)}{Environment.NewLine}{FormatFinalRenderDiagnostics(finalOutcome.Diagnostics)}", cancellationToken);
+        if (finalOutcome.Result.TimedOut)
         {
-            throw new InvalidOperationException($"Final long render timed out after {timeoutSeconds} seconds. Increase FinalLongRenderTimeoutSeconds or use faster preset.");
+            throw new InvalidOperationException($"Final long render timed out after {finalOutcome.Diagnostics.TimeoutSeconds} seconds. Increase FinalLongRenderTimeoutSeconds or use faster preset.");
         }
-        if (finalResult.ExitCode != 0 || !File.Exists(manifest.OutputPath))
+        if (finalOutcome.Result.ExitCode != 0 || !File.Exists(manifest.OutputPath))
         {
             throw new InvalidOperationException("FFmpeg final render of segmented clips failed.");
         }
@@ -234,6 +234,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         string commandPath,
         CancellationToken cancellationToken)
     {
+        var segmentGenerationStopwatch = System.Diagnostics.Stopwatch.StartNew();
         var narrationDurationSeconds = await ProbeMediaDurationSecondsAsync(narrationAudioPath, cancellationToken);
         if (narrationDurationSeconds <= 0)
         {
@@ -372,6 +373,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             effectsReports.Add(CreateVideoEffectsReportEntry(scene, i, isShort, effects, duration, finalSegmentDurationSeconds));
         }
 
+        segmentGenerationStopwatch.Stop();
+        _logger.LogInformation("FFmpeg segment generation total time: {ElapsedSeconds:F3}s for {SegmentCount} segments", segmentGenerationStopwatch.Elapsed.TotalSeconds, segmentPaths.Count);
+
         var combinedPath = Path.Combine(outputDirectory, "combined.mp4");
         var concatBody = string.Join(Environment.NewLine, segmentPaths.Select(path => $"file '{NormalizePath(path).Replace("'", "'\\''")}'"));
         await _fileSystem.WriteAllTextAsync(segmentConcatPath, concatBody, cancellationToken);
@@ -380,7 +384,10 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         await _fileSystem.WriteAllTextAsync(commandPath, $"{_options.FfmpegPath} {concatArguments}", cancellationToken);
         segmentDiagnostics.Add($"xfadeCommand: {_options.FfmpegPath} {concatArguments}");
         _logger.LogInformation("Concatenating FFmpeg segments: {Command}", $"{_options.FfmpegPath} {concatArguments}");
+        var concatStopwatch = System.Diagnostics.Stopwatch.StartNew();
         var concatResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, concatArguments, cancellationToken);
+        concatStopwatch.Stop();
+        _logger.LogInformation("FFmpeg concat copy time: {ElapsedSeconds:F3}s for {SegmentCount} segments", concatStopwatch.Elapsed.TotalSeconds, segmentPaths.Count);
         if (concatResult.ExitCode != 0 || !File.Exists(combinedPath))
         {
             throw new InvalidOperationException("FFmpeg concat of scene segments failed.");
@@ -395,42 +402,103 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
             throw new InvalidOperationException($"{warningMessage} Refusing final mux to avoid trimmed/missing scenes.");
         }
 
-        var finalPreset = ResolveFinalEncodingPreset(manifest);
-        var finalFilter = BuildFinalOutputFilter(finalPreset, IsShortManifest(manifest) || manifest.EnableVerticalCrop);
-        var finalArguments = $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -vf \"{finalFilter}\" {BuildVideoEncodeArguments(finalPreset)} -r {(IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate))} -c:a aac -b:a {finalPreset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\"";
-        var finalCommand = $"{_options.FfmpegPath} {finalArguments}";
-        await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
-        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics), cancellationToken);
         await WriteSpeechSpeedDiagnosticsAsync(outputDirectory, speechDiagnostics, cancellationToken);
         await WriteSegmentSyncReportAsync(outputDirectory, syncReports, cancellationToken);
         await WriteVideoEffectsReportAsync(outputDirectory, effectsReports, cancellationToken);
         await WriteRenderPerformanceReportAsync(outputDirectory, performanceReports, cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "video-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
         await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "directional-motion-settings.json"), $"[{Environment.NewLine}{string.Join($",{Environment.NewLine}", motionDiagnostics)}{Environment.NewLine}]", cancellationToken);
-        _logger.LogInformation("Rendering final FFmpeg output with narration: {Command}", finalCommand);
 
-        var timeoutSeconds = CalculateEffectiveFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest), GetConfiguredFinalRenderTimeoutSeconds(manifest.EncodingProfile, IsShortManifest(manifest)), combinedDurationSeconds);
-        var finalResult = await _processRunner.ExecuteAsync(_options.FfmpegPath, finalArguments, cancellationToken, TimeSpan.FromSeconds(timeoutSeconds));
-        var finalDiagnostics = BuildFinalRenderDiagnostics(combinedDurationSeconds, finalResult, finalPreset, timeoutSeconds, finalArguments, outputPath);
-        LogSlowRenderWarning(combinedDurationSeconds, finalDiagnostics.ElapsedMs);
-        LogFinalRenderDiagnostics(finalDiagnostics);
-        await WriteFinalRenderDiagnosticsAsync(outputDirectory, finalDiagnostics, cancellationToken);
-        if (finalResult.TimedOut)
+        var finalOutcome = await ExecuteFinalRenderWithFallbackAsync(manifest, combinedPath, narrationAudioPath, outputPath, outputDirectory, combinedDurationSeconds, cancellationToken);
+        var finalCommand = $"{_options.FfmpegPath} {finalOutcome.Result.Arguments}";
+        await _fileSystem.WriteAllTextAsync(commandPath, finalCommand, cancellationToken);
+        await _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, "ffmpeg.log"), string.Join($"{Environment.NewLine}{Environment.NewLine}", segmentDiagnostics.Append(BuildProcessDiagnostics(finalOutcome.Result)).Append(FormatFinalRenderDiagnostics(finalOutcome.Diagnostics))), cancellationToken);
+        if (finalOutcome.Result.TimedOut)
         {
-            throw new InvalidOperationException($"Final long render timed out after {timeoutSeconds} seconds. Increase FinalLongRenderTimeoutSeconds or use faster preset.");
+            throw new InvalidOperationException($"Final long render timed out after {finalOutcome.Diagnostics.TimeoutSeconds} seconds. Increase FinalLongRenderTimeoutSeconds or use faster preset.");
         }
-        if (finalResult.ExitCode != 0 || !File.Exists(outputPath))
+        if (finalOutcome.Result.ExitCode != 0 || !File.Exists(outputPath))
         {
             throw new InvalidOperationException("FFmpeg final render with narration failed.");
         }
 
-        return (finalCommand, finalResult, finalDiagnostics);
+        return (finalCommand, finalOutcome.Result, finalOutcome.Diagnostics);
+    }
+
+    private async Task<FinalRenderOutcome> ExecuteFinalRenderWithFallbackAsync(
+        RenderManifest manifest,
+        string combinedPath,
+        string? narrationAudioPath,
+        string outputPath,
+        string outputDirectory,
+        double inputDurationSeconds,
+        CancellationToken cancellationToken)
+    {
+        var isShort = IsShortManifest(manifest);
+        var configuredTimeoutSeconds = GetConfiguredFinalRenderTimeoutSeconds(manifest.EncodingProfile, isShort);
+        var timeoutSeconds = CalculateEffectiveFinalRenderTimeoutSeconds(manifest.EncodingProfile, isShort, configuredTimeoutSeconds, inputDurationSeconds, _options.FinalLongTimeoutMultiplier, _options.FinalLongMaxTimeoutSeconds);
+        var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var initialPreset = ResolveFinalEncodingPreset(manifest);
+        var initialArguments = BuildFinalRenderArguments(manifest, combinedPath, narrationAudioPath, outputPath, initialPreset);
+        _logger.LogInformation("Rendering final FFmpeg output: {Command}", $"{_options.FfmpegPath} {initialArguments}");
+        var result = await _processRunner.ExecuteAsync(_options.FfmpegPath, initialArguments, cancellationToken, TimeSpan.FromSeconds(timeoutSeconds));
+        var diagnostics = BuildFinalRenderDiagnostics(inputDurationSeconds, result, initialPreset, timeoutSeconds, initialArguments, outputPath);
+        var retryUsed = false;
+        var fallbackUsed = false;
+
+        if (result.TimedOut && IsLongFinalRender(manifest.EncodingProfile, isShort) && _options.RetryFinalLongRenderWithFasterProfile)
+        {
+            retryUsed = true;
+            fallbackUsed = _options.FallbackTo1080pOnFinalRenderTimeout;
+            _logger.LogWarning("Final long render timed out after {TimeoutSeconds}s; retrying once with Fastest profile. FallbackTo1080p={FallbackTo1080p}", timeoutSeconds, fallbackUsed);
+            var retryPreset = VideoEncodingPreset.YouTubeLongFinal(_options, forceFastest: true, force1080p: fallbackUsed);
+            var retryArguments = BuildFinalRenderArguments(manifest, combinedPath, narrationAudioPath, outputPath, retryPreset);
+            result = await _processRunner.ExecuteAsync(_options.FfmpegPath, retryArguments, cancellationToken, TimeSpan.FromSeconds(timeoutSeconds));
+            diagnostics = BuildFinalRenderDiagnostics(inputDurationSeconds, result, retryPreset, timeoutSeconds, retryArguments, outputPath);
+        }
+
+        totalStopwatch.Stop();
+        _logger.LogInformation("FFmpeg final encode time: {ElapsedSeconds:F3}s for {InputDurationSeconds:F3}s input", totalStopwatch.Elapsed.TotalSeconds, inputDurationSeconds);
+        LogSlowRenderWarning(inputDurationSeconds, diagnostics.ElapsedMs);
+        LogFinalRenderDiagnostics(diagnostics);
+        await WriteFinalRenderDiagnosticsAsync(outputDirectory, diagnostics, cancellationToken);
+        await WriteFinalRenderPerformanceReportAsync(outputDirectory, new FinalRenderPerformanceReport(
+            SegmentCount: Math.Max(0, manifest.Scenes.Count),
+            InputDurationSeconds: Math.Round(inputDurationSeconds, 3, MidpointRounding.AwayFromZero),
+            OutputResolution: diagnostics.OutputResolution,
+            EncodingPreset: diagnostics.Preset,
+            Crf: diagnostics.Crf,
+            Maxrate: diagnostics.Bitrate,
+            ConfiguredTimeout: configuredTimeoutSeconds,
+            AdaptiveTimeout: timeoutSeconds,
+            ElapsedSeconds: Math.Round(totalStopwatch.Elapsed.TotalSeconds, 3, MidpointRounding.AwayFromZero),
+            RenderSpeedRatio: totalStopwatch.Elapsed.TotalSeconds > 0d ? Math.Round(inputDurationSeconds / totalStopwatch.Elapsed.TotalSeconds, 3, MidpointRounding.AwayFromZero) : 0d,
+            RetryUsed: retryUsed,
+            FallbackUsed: fallbackUsed), cancellationToken);
+
+        return new FinalRenderOutcome(result, diagnostics, retryUsed, fallbackUsed);
+    }
+
+    private string BuildFinalRenderArguments(RenderManifest manifest, string combinedPath, string? narrationAudioPath, string outputPath, VideoEncodingPreset preset)
+    {
+        var finalFilter = BuildFinalOutputFilter(preset, IsShortManifest(manifest) || manifest.EnableVerticalCrop);
+        var frameRate = IsShortManifest(manifest) ? GetShortSafeFps() : Math.Max(1, _options.FrameRate);
+        return string.IsNullOrWhiteSpace(narrationAudioPath)
+            ? $"-y -i \"{NormalizePath(combinedPath)}\" -vf \"{finalFilter}\" {BuildVideoEncodeArguments(preset)} -r {frameRate} -c:a aac -b:a {preset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\""
+            : $"-y -i \"{NormalizePath(combinedPath)}\" -i \"{NormalizePath(narrationAudioPath)}\" -map 0:v:0 -map 1:a:0 -vf \"{finalFilter}\" {BuildVideoEncodeArguments(preset)} -r {frameRate} -c:a aac -b:a {preset.AudioBitrate} -movflags +faststart -f mp4 \"{NormalizePath(outputPath)}\"";
     }
 
     private Task WriteRenderPerformanceReportAsync(string outputDirectory, IReadOnlyCollection<SegmentRenderPerformanceReportEntry> diagnostics, CancellationToken cancellationToken)
     {
         var json = JsonSerializer.Serialize(diagnostics, DiagnosticJsonOptions);
         return _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, RenderPerformanceReportFileName), json, cancellationToken);
+    }
+
+    private Task WriteFinalRenderPerformanceReportAsync(string outputDirectory, FinalRenderPerformanceReport report, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(report, DiagnosticJsonOptions);
+        return _fileSystem.WriteAllTextAsync(Path.Combine(outputDirectory, FinalRenderPerformanceReportFileName), json, cancellationToken);
     }
 
     private void AddSegmentRenderPerformanceReport(List<SegmentRenderPerformanceReportEntry> reports, RenderPlanScene scene, int index, double durationSeconds, VideoEncodingPreset preset, string ffmpegCommand, ProcessExecutionResult result, int timeoutSeconds)
@@ -717,6 +785,22 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         int TimeoutUsedSeconds,
         string FfmpegCommand,
         int ExitCode);
+
+    private sealed record FinalRenderOutcome(ProcessExecutionResult Result, FinalRenderDiagnostics Diagnostics, bool RetryUsed, bool FallbackUsed);
+
+    private sealed record FinalRenderPerformanceReport(
+        int SegmentCount,
+        double InputDurationSeconds,
+        string OutputResolution,
+        string EncodingPreset,
+        int Crf,
+        string Maxrate,
+        int ConfiguredTimeout,
+        int AdaptiveTimeout,
+        double ElapsedSeconds,
+        double RenderSpeedRatio,
+        bool RetryUsed,
+        bool FallbackUsed);
 
     private sealed record FinalRenderDiagnostics(
         string FinalCommand,
@@ -1203,10 +1287,28 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
     }
 
     public static int CalculateEffectiveFinalLongRenderTimeoutSeconds(int configuredTimeoutSeconds, double videoDurationSeconds)
-        => Math.Max(1, configuredTimeoutSeconds);
+        => CalculateEffectiveFinalLongRenderTimeoutSeconds(configuredTimeoutSeconds, videoDurationSeconds, 8d, 3600);
 
-    private static int CalculateEffectiveFinalRenderTimeoutSeconds(VideoRenderProfileKind profileKind, bool isShortManifest, int configuredTimeoutSeconds, double videoDurationSeconds)
-        => Math.Max(1, configuredTimeoutSeconds);
+    public static int CalculateEffectiveFinalLongRenderTimeoutSeconds(int configuredTimeoutSeconds, double videoDurationSeconds, double multiplier, int maxTimeoutSeconds)
+    {
+        var configured = Math.Max(1, configuredTimeoutSeconds);
+        var scaled = (int)Math.Ceiling(Math.Max(0d, videoDurationSeconds) * Math.Max(0d, multiplier));
+        var effective = Math.Max(configured, scaled);
+        if (maxTimeoutSeconds > 0)
+        {
+            effective = Math.Min(effective, Math.Max(configured, maxTimeoutSeconds));
+        }
+
+        return Math.Max(1, effective);
+    }
+
+    private static int CalculateEffectiveFinalRenderTimeoutSeconds(VideoRenderProfileKind profileKind, bool isShortManifest, int configuredTimeoutSeconds, double videoDurationSeconds, double finalLongTimeoutMultiplier, int finalLongMaxTimeoutSeconds)
+        => IsLongFinalRender(profileKind, isShortManifest)
+            ? CalculateEffectiveFinalLongRenderTimeoutSeconds(configuredTimeoutSeconds, videoDurationSeconds, finalLongTimeoutMultiplier, finalLongMaxTimeoutSeconds)
+            : Math.Max(1, configuredTimeoutSeconds);
+
+    private static bool IsLongFinalRender(VideoRenderProfileKind profileKind, bool isShortManifest)
+        => !isShortManifest && profileKind is VideoRenderProfileKind.Auto or VideoRenderProfileKind.YouTubeLongFinal;
 
     private int GetConfiguredFinalRenderTimeoutSeconds(VideoRenderProfileKind profileKind, bool isShortManifest)
         => profileKind switch
