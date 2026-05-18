@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup>
+    <Content Include="..\..\src\Astronomy.MediaFactory.Api\assets\fonts\*.ttf" Link="assets\fonts\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Contracts\Astronomy.MediaFactory.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Core\Astronomy.MediaFactory.Core.csproj" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.ContentGen\Astronomy.MediaFactory.ContentGen.csproj" />
