@@ -9,4 +9,8 @@
     <PackageReference Include="Serilog.Sinks.Console" />
     <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\Astronomy.MediaFactory.Api\assets\fonts\*.ttf" Link="assets\fonts\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
