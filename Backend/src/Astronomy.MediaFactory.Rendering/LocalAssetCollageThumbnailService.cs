@@ -1068,8 +1068,9 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     {
         var selectedLanguage = IsHindiThumbnailText(language, text) ? "hi" : "en";
         var preferredFont = selectedLanguage == "hi" ? _fontOptions.HindiFont : _fontOptions.DefaultEnglishFont;
-        if (File.Exists(preferredFont))
-            return new ThumbnailFontSelection(selectedLanguage, preferredFont);
+        var resolvedPreferredFont = ResolveFontPath(preferredFont);
+        if (!string.IsNullOrWhiteSpace(resolvedPreferredFont))
+            return new ThumbnailFontSelection(selectedLanguage, resolvedPreferredFont);
 
         _logger.LogWarning(
             "Configured thumbnail font file is missing. Language={Language}; FontPath={FontPath}; falling back to English font {FallbackFontPath}.",
@@ -1077,11 +1078,27 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             preferredFont,
             _fontOptions.DefaultEnglishFont);
 
-        if (File.Exists(_fontOptions.DefaultEnglishFont))
-            return new ThumbnailFontSelection(selectedLanguage, _fontOptions.DefaultEnglishFont);
+        var resolvedEnglishFont = ResolveFontPath(_fontOptions.DefaultEnglishFont);
+        if (!string.IsNullOrWhiteSpace(resolvedEnglishFont))
+            return new ThumbnailFontSelection(selectedLanguage, resolvedEnglishFont);
 
         _logger.LogWarning("Fallback English thumbnail font file is also missing. FontPath={FontPath}; FFmpeg rendering may fail.", _fontOptions.DefaultEnglishFont);
         return new ThumbnailFontSelection(selectedLanguage, _fontOptions.DefaultEnglishFont);
+    }
+
+    public static string? ResolveFontPath(string fontPath)
+    {
+        if (string.IsNullOrWhiteSpace(fontPath)) return null;
+
+        if (File.Exists(fontPath)) return fontPath;
+
+        if (!Path.IsPathRooted(fontPath))
+        {
+            var appRelativePath = Path.Combine(AppContext.BaseDirectory, fontPath);
+            if (File.Exists(appRelativePath)) return appRelativePath;
+        }
+
+        return null;
     }
 
     public static bool IsHindiThumbnailText(string language, string text)
