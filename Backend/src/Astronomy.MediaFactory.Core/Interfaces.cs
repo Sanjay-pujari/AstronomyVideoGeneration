@@ -227,6 +227,19 @@ public interface IFeedbackSignalExtractor
     void Extract(AnalyticsAggregationSummary summary, int topN, FeedbackSignalCollector collector);
 }
 
+
+public interface IRuntimeAssetPathResolver
+{
+    string BaseDirectory { get; }
+    string ResolveAssetPath(string relativePath);
+    string ResolveFontPath(string relativeFontPath);
+    string ResolveCelestialAssetPath(string objectKey, string fileName);
+    string GetAssetsRoot();
+    string GetFontsRoot();
+    string GetCelestialRoot();
+    bool AssetExists(string relativePath);
+}
+
 public interface IThumbnailStrategyService
 {
     ThumbnailPlan BuildPlan(ThumbnailGenerationRequest request);

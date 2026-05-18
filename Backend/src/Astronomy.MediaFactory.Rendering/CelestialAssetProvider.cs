@@ -10,15 +10,18 @@ public sealed class CelestialAssetProvider : ICelestialAssetProvider
     private readonly ICelestialAssetIngestionService _ingestionService;
     private readonly CelestialAssetsOptions _options;
     private readonly ILogger<CelestialAssetProvider> _logger;
+    private readonly IRuntimeAssetPathResolver _assetPathResolver;
 
     public CelestialAssetProvider(
         ICelestialAssetIngestionService ingestionService,
         IOptions<CelestialAssetsOptions> options,
-        ILogger<CelestialAssetProvider> logger)
+        ILogger<CelestialAssetProvider> logger,
+        IRuntimeAssetPathResolver? assetPathResolver = null)
     {
         _ingestionService = ingestionService;
         _options = options.Value;
         _logger = logger;
+        _assetPathResolver = assetPathResolver ?? new RuntimeAssetPathResolver();
     }
 
     public async Task<CelestialAsset> GetAssetAsync(CelestialAssetRequest request, CancellationToken cancellationToken)
@@ -59,12 +62,14 @@ public sealed class CelestialAssetProvider : ICelestialAssetProvider
             Title = metadata.Title,
             Copyright = metadata.LicenseNote,
             OriginalUrl = metadata.OriginalUrl,
-            FallbackUsed = fallbackUsed
+            FallbackUsed = fallbackUsed,
+            BaseDirectory = _assetPathResolver.BaseDirectory
         };
 
     private async Task<CelestialAsset> CreateLocalFallbackAssetAsync(CelestialAssetRequest request, string objectKey, CancellationToken cancellationToken)
     {
-        var directory = Path.Combine(Path.IsPathRooted(_options.RootPath) ? _options.RootPath : Path.Combine(Directory.GetCurrentDirectory(), _options.RootPath), objectKey);
+        var root = Path.IsPathRooted(_options.RootPath) ? _options.RootPath : _assetPathResolver.GetCelestialRoot();
+        var directory = Path.Combine(root, objectKey);
         Directory.CreateDirectory(directory);
         var imagePath = Path.Combine(directory, $"{Sanitize(request.ObjectName)}-fallback.jpg");
         if (!File.Exists(imagePath))
@@ -79,7 +84,8 @@ public sealed class CelestialAssetProvider : ICelestialAssetProvider
             Source = "StellariumFrameFallback",
             Title = $"Fallback frame for {request.ObjectName}",
             OriginalUrl = string.Empty,
-            FallbackUsed = true
+            FallbackUsed = true,
+            BaseDirectory = _assetPathResolver.BaseDirectory
         };
     }
 

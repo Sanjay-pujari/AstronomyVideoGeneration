@@ -290,6 +290,8 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<StartupValidationOptions>, ProductionStartupValidator>();
         services.AddHostedService<ObsoleteConfigurationWarningHostedService>();
+        services.AddSingleton<IRuntimeAssetPathResolver, RuntimeAssetPathResolver>();
+        services.AddHostedService<RuntimeAssetValidationHostedService>();
         services.AddHostedService<CelestialAssetWarmupHostedService>();
 
         services.AddHttpClient<NasaApodClient>();

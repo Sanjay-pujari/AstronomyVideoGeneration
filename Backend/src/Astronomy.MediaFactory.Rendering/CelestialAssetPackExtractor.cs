@@ -16,20 +16,25 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
     private const int ObjectPaddingPixels = 6;
 
     private readonly CelestialAssetPackOptions _options;
+    private readonly IRuntimeAssetPathResolver _assetPathResolver;
 
-    public CelestialAssetPackExtractor(IOptions<CelestialAssetPackOptions> options) => _options = options.Value;
+    public CelestialAssetPackExtractor(IOptions<CelestialAssetPackOptions> options, IRuntimeAssetPathResolver? assetPathResolver = null)
+    {
+        _options = options.Value;
+        _assetPathResolver = assetPathResolver ?? new RuntimeAssetPathResolver();
+    }
 
     public async Task<CelestialAssetPackExtractionReport> ExtractAsync(CancellationToken cancellationToken)
     {
         var sourcePath = ResolvePath(_options.SourceSheetPath);
-        var outputRoot = ResolvePath(_options.OutputRootPath);
+        var outputRoot = string.IsNullOrWhiteSpace(_options.OutputRootPath) ? _assetPathResolver.GetCelestialRoot() : ResolvePath(_options.OutputRootPath);
         Directory.CreateDirectory(outputRoot);
         var warnings = new List<string>();
         var extracted = new List<string>();
         var skipped = new List<string>();
         var items = new List<CelestialAssetPackExtractionItem>();
         var reportPath = Path.Combine(outputRoot, "asset-pack-extraction-report.json");
-        var mapPath = ResolvePath(string.IsNullOrWhiteSpace(_options.SheetMapPath) ? Path.Combine(Path.GetDirectoryName(sourcePath) ?? "", "celestial-object-sheet-map.json") : _options.SheetMapPath);
+        var mapPath = ResolvePath(string.IsNullOrWhiteSpace(_options.SheetMapPath) ? "assets/celestial/source/celestial-object-sheet-map.json" : _options.SheetMapPath);
 
         if (!_options.Enabled)
             return await WriteReportAsync(false, sourcePath, mapPath, outputRoot, items, extracted, skipped, ["Celestial asset pack extraction is disabled."], reportPath, cancellationToken);
@@ -387,7 +392,7 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
         return max > ForegroundBlackThreshold || max - min > 20;
     }
 
-    private static async Task<CelestialAssetPackExtractionReport> WriteReportAsync(bool enabled, string sourcePath, string sourceMapPath, string outputRoot, IReadOnlyCollection<CelestialAssetPackExtractionItem> items, IReadOnlyCollection<string> extracted, IReadOnlyCollection<string> skipped, IReadOnlyCollection<string> warnings, string reportPath, CancellationToken cancellationToken)
+    private async Task<CelestialAssetPackExtractionReport> WriteReportAsync(bool enabled, string sourcePath, string sourceMapPath, string outputRoot, IReadOnlyCollection<CelestialAssetPackExtractionItem> items, IReadOnlyCollection<string> extracted, IReadOnlyCollection<string> skipped, IReadOnlyCollection<string> warnings, string reportPath, CancellationToken cancellationToken)
     {
         var successCount = items.Count(item => item.Success);
         var report = new CelestialAssetPackExtractionReport
@@ -402,6 +407,7 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
             Items = items,
             Enabled = enabled,
             OutputRootPath = outputRoot,
+            BaseDirectory = _assetPathResolver.BaseDirectory,
             ExtractedObjects = extracted,
             SkippedObjects = skipped,
             Warnings = warnings,
@@ -426,7 +432,7 @@ public sealed class CelestialAssetPackExtractor : ICelestialAssetPackExtractor
         }
     }
 
-    private static string ResolvePath(string path) => Path.IsPathRooted(path) ? path : Path.Combine(Directory.GetCurrentDirectory(), path);
+    private string ResolvePath(string path) => Path.IsPathRooted(path) ? path : _assetPathResolver.ResolveAssetPath(path);
 
     private sealed class Component
     {

@@ -31,6 +31,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private readonly ThumbnailFontOptions _fontOptions;
     private readonly RenderingOptions _renderingOptions;
     private readonly IProcessRunner _processRunner;
+    private readonly IRuntimeAssetPathResolver _assetPathResolver;
     private readonly ILogger<LocalAssetCollageThumbnailService> _logger;
 
     public LocalAssetCollageThumbnailService(
@@ -39,13 +40,15 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         ILogger<LocalAssetCollageThumbnailService> logger,
         IOptions<ThumbnailFontOptions>? fontOptions = null,
         IOptions<RenderingOptions>? renderingOptions = null,
-        IProcessRunner? processRunner = null)
+        IProcessRunner? processRunner = null,
+        IRuntimeAssetPathResolver? assetPathResolver = null)
     {
         _strategyService = strategyService;
         _options = options.Value;
         _fontOptions = fontOptions?.Value ?? new ThumbnailFontOptions();
         _renderingOptions = renderingOptions?.Value ?? new RenderingOptions();
         _processRunner = processRunner ?? new ProcessRunner();
+        _assetPathResolver = assetPathResolver ?? new RuntimeAssetPathResolver();
         _logger = logger;
     }
 
@@ -78,6 +81,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             var hook = _options.EnableHookText ? BuildHook(selection, request) : string.Empty;
             var composition = await ComposeAsync(request, outputPath, width, height, assets, selection, hook, warnings, cancellationToken);
             await EnsureJpegSizeAsync(outputPath, width, height, cancellationToken);
+            ValidateThumbnailOutput(outputPath, request.IsShortForm);
 
             var celestialSelection = new CelestialThumbnailSelection
             {
@@ -111,9 +115,10 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             await WriteSelectionAsync(plan, thumbnailsDirectory, composition, cancellationToken);
             await WriteAnalysisAsync(plan, request, width, height, assets, warnings, composition, cancellationToken);
             await WriteCinematicReportAsync(plan, selection, composition, thumbnailsDirectory, cancellationToken);
+            await WriteThumbnailRuntimeAssetsReportAsync(thumbnailsDirectory, request.Context.Localization.ResolvedLanguage, ResolveThumbnailFont(request.Context.Localization.ResolvedLanguage, hook), assets, cancellationToken);
             return plan;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && !IsThumbnailTextRenderException(ex))
+        catch (Exception ex) when (ex is not OperationCanceledException && !IsThumbnailTextRenderException(ex) && !IsThumbnailTextRenderingFailure(ex) && !IsThumbnailOutputValidationFailure(ex))
         {
             _logger.LogWarning(ex, "Local asset thumbnail generation failed; falling back to Stellarium/extracted frame if available.");
             warnings.Add(ex.Message);
@@ -314,7 +319,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
         await canvas.SaveAsJpegAsync(outputPath, new JpegEncoder { Quality = Math.Clamp(_options.JpegQuality, 1, 100) }, cancellationToken);
         if (_options.EnableHookText)
-            await RenderHookTextAsync(outputPath, hook, textBox, portrait, request.Context.Localization.ResolvedLanguage, cancellationToken);
+            await RenderHookTextAsync(outputPath, hook, textBox, portrait, request.Context.Localization.ResolvedLanguage, assets, cancellationToken);
 
         return new CompositionDiagnostics(
             LayoutUsed: portrait ? "PortraitObjectUpperTextLowerThird" : "LandscapeHeroRightTextLeft",
@@ -612,6 +617,16 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         }
     }
 
+    private static void ValidateThumbnailOutput(string outputPath, bool isShortForm)
+    {
+        var expectedName = isShortForm ? "thumbnail-short.jpg" : "thumbnail-long.jpg";
+        if (!File.Exists(outputPath))
+            throw new InvalidOperationException($"Thumbnail stage failed: {expectedName} was not generated at {outputPath}.");
+
+        if (new FileInfo(outputPath).Length <= 0)
+            throw new InvalidOperationException($"Thumbnail stage failed: {expectedName} is empty at {outputPath}.");
+    }
+
     private ThumbnailPlan BuildFallbackPlan(ThumbnailPlan strategyPlan, ThumbnailGenerationRequest request)
     {
         var fallback = _options.FallbackToStellariumFrame || _options.FallbackToExtractedFrame ? request.AvailableVisuals.FirstOrDefault(File.Exists) ?? strategyPlan.SelectedVisualPath : null;
@@ -634,18 +649,17 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private async Task<CelestialAsset> CreateProceduralAssetAsync(string name, string key, CancellationToken cancellationToken)
     {
-        var directory = Path.Combine(ResolveAssetRoot(), key);
+        var directory = ResolveCelestialObjectDirectory(key);
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, "hero-fallback.jpg");
+        var path = _assetPathResolver.ResolveCelestialAssetPath(key, "hero-fallback.jpg");
         if (!File.Exists(path))
             await ProceduralCelestialFallback.CreateAsync(path, name, key, cancellationToken);
-        return new CelestialAsset { ObjectName = name, ObjectType = key, Category = key, LocalPath = path, Source = "GeneratedFallback", Title = name, FallbackUsed = true };
+        return new CelestialAsset { ObjectName = name, ObjectType = key, Category = key, LocalPath = path, Source = "GeneratedFallback", Title = name, FallbackUsed = true, BaseDirectory = _assetPathResolver.BaseDirectory };
     }
 
     private ResolvedAsset? FindAsset(string key)
     {
-        var root = ResolveAssetRoot();
-        var directory = Path.Combine(root, key);
+        var directory = ResolveCelestialObjectDirectory(key);
         if (!Directory.Exists(directory))
             return null;
 
@@ -668,7 +682,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         {
             foreach (var name in preferredNames)
             {
-                var path = Path.Combine(directory, name);
+                var path = _assetPathResolver.ResolveCelestialAssetPath(key, name);
                 if (File.Exists(path))
                     return CreateResolvedAsset(path, key, legacyExists && IsAssetPackFileName(Path.GetFileName(path)));
             }
@@ -694,8 +708,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private string? FindMilkyWayBackground()
     {
-        var directory = Path.Combine(ResolveAssetRoot(), "milky-way");
-        var hero = Path.Combine(directory, "hero.png");
+        var hero = _assetPathResolver.ResolveCelestialAssetPath("milky-way", "hero.png");
         if (File.Exists(hero))
             return hero;
         return FindAsset("milky-way")?.Path;
@@ -720,7 +733,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private bool HasAsset(string key) => FindAsset(key) is not null;
 
-    private string ResolveAssetRoot() => Path.IsPathRooted(_options.AssetRootPath) ? _options.AssetRootPath : Path.Combine(Directory.GetCurrentDirectory(), _options.AssetRootPath);
+    private string ResolveCelestialObjectDirectory(string key) => Path.GetDirectoryName(_assetPathResolver.ResolveCelestialAssetPath(key, "placeholder.txt")) ?? _assetPathResolver.GetCelestialRoot();
 
     private static bool IsImage(string path) => Path.GetExtension(path).Equals(".png", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(path).Equals(".jpg", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(path).Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
 
@@ -731,13 +744,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         || fileName.Equals("cinematic.png", StringComparison.OrdinalIgnoreCase)
         || fileName.Equals("closeup.png", StringComparison.OrdinalIgnoreCase);
 
-    private static ResolvedAsset CreateResolvedAsset(string path, string key, bool oldAssetIgnoredBecauseHeroExists)
+    private ResolvedAsset CreateResolvedAsset(string path, string key, bool oldAssetIgnoredBecauseHeroExists)
     {
         var fileName = Path.GetFileName(path);
         var source = IsAssetPackFileName(fileName)
             ? "AssetPack"
             : IsLegacyJpgAsset(path) ? "LegacyJpgAsset" : "LocalCuratedAsset";
-        return new ResolvedAsset(path, fileName, source, oldAssetIgnoredBecauseHeroExists);
+        return new ResolvedAsset(path, fileName, source, oldAssetIgnoredBecauseHeroExists, _assetPathResolver.BaseDirectory);
     }
 
     private static CelestialAsset ToAsset(SelectedObject obj, ResolvedAsset resolved, bool fallback) => new()
@@ -750,7 +763,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         Title = $"{obj.Name} {resolved.Source} asset",
         OriginalUrl = resolved.FileName,
         OldAssetIgnoredBecauseHeroExists = resolved.OldAssetIgnoredBecauseHeroExists,
-        FallbackUsed = fallback
+        FallbackUsed = fallback,
+        BaseDirectory = resolved.BaseDirectory
     };
 
     private static SelectedObject? SelectHeroObject(IReadOnlyCollection<HeroObjectScore> scores, bool allowDeepSpaceHero)
@@ -1014,7 +1028,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         ctx.DrawText(text, font, Color.White.WithAlpha(0.72f), new PointF(portrait ? 46 : 50, portrait ? 56 : 42));
     }
 
-    private async Task RenderHookTextAsync(string thumbnailPath, string hook, RectangleF bounds, bool portrait, string language, CancellationToken cancellationToken)
+    private async Task RenderHookTextAsync(string thumbnailPath, string hook, RectangleF bounds, bool portrait, string language, IReadOnlyCollection<CelestialAsset> selectedAssets, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(hook)) return;
 
@@ -1028,11 +1042,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var textFilePath = Path.Combine(thumbnailDirectory, selection.Language == "hi" ? "thumbnail-title-hi.txt" : "thumbnail-title-en.txt");
         var renderedPath = Path.Combine(thumbnailDirectory, $"temp-thumbnail-rendered-{Guid.NewGuid():N}.jpg");
         var thumbnailType = portrait ? "Short" : "Long";
+        await WriteThumbnailRuntimeAssetsReportAsync(thumbnailDirectory, language, selection, selectedAssets, cancellationToken);
 
         if (!selection.FontExists)
         {
             await WriteThumbnailFontReportAsync(thumbnailDirectory, language, text, selection, textFilePath, string.Empty, string.Empty, null, string.Empty, cancellationToken);
-            throw new FileNotFoundException($"Thumbnail font not found: {selection.FontPath}", selection.FontPath);
+            throw new FileNotFoundException($"Thumbnail font missing from executable assets folder: {selection.FontPath}", selection.FontPath);
         }
 
         await File.WriteAllTextAsync(textFilePath, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
@@ -1065,16 +1080,13 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             var result = await _processRunner.ExecuteAsync(_renderingOptions.FfmpegPath, arguments, cancellationToken, TimeSpan.FromSeconds(60));
             var stderr = string.Join(Environment.NewLine, new[] { result.StandardError, result.ExceptionText }.Where(value => !string.IsNullOrWhiteSpace(value)));
             await WriteThumbnailFontReportAsync(thumbnailDirectory, language, text, selection, textFilePath, drawtext, ffmpegCommand, result.ExitCode, stderr, cancellationToken);
+            await WriteThumbnailRuntimeAssetsReportAsync(thumbnailDirectory, language, selection, selectedAssets, cancellationToken);
 
             if (result.ExitCode != 0 || !File.Exists(renderedPath))
             {
-                _logger.LogWarning(
-                    "FFmpeg thumbnail text rendering failed for {ThumbnailType} thumbnail. ExitCode={ExitCode}; Error={Error}; Exception={ExceptionText}",
-                    thumbnailType,
-                    result.ExitCode,
-                    result.StandardError,
-                    result.ExceptionText);
-                return;
+                var message = $"Thumbnail text rendering failed for {thumbnailType} thumbnail. ExitCode={result.ExitCode}; Error={result.StandardError}; Exception={result.ExceptionText}";
+                _logger.LogWarning("{Message}", message);
+                throw new InvalidOperationException(message);
             }
 
             var textAreaAfter = await CalculateTextAreaSignatureAsync(renderedPath, bounds, cancellationToken);
@@ -1102,27 +1114,41 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var containsDevanagari = ContainsDevanagari(text);
         var selectedLanguage = LocalizationResolver.IsHindi(language) || containsDevanagari ? "hi" : "en";
         var preferredFont = selectedLanguage == "hi" ? _fontOptions.HindiFont : _fontOptions.DefaultEnglishFont;
-        var resolvedFont = ResolveFontPathForReport(preferredFont);
-        return new ThumbnailFontSelection(selectedLanguage, preferredFont, resolvedFont, File.Exists(resolvedFont), containsDevanagari);
+        var resolvedFont = _assetPathResolver.ResolveFontPath(preferredFont);
+        return new ThumbnailFontSelection(selectedLanguage, preferredFont, resolvedFont, IsReadableFile(resolvedFont), containsDevanagari);
     }
 
     public static string? ResolveFontPath(string fontPath)
     {
         if (string.IsNullOrWhiteSpace(fontPath)) return null;
-        var resolvedPath = ResolveFontPathForReport(fontPath);
+        var resolvedPath = new RuntimeAssetPathResolver().ResolveFontPath(fontPath);
         return File.Exists(resolvedPath) ? resolvedPath : null;
+    }
+
+    private static bool IsReadableFile(string path)
+    {
+        try
+        {
+            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return stream.CanRead;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsThumbnailTextRenderException(Exception exception)
         => exception is FileNotFoundException fileNotFoundException
-            && fileNotFoundException.Message.StartsWith("Thumbnail font not found:", StringComparison.Ordinal);
+            && fileNotFoundException.Message.StartsWith("Thumbnail font missing from executable assets folder:", StringComparison.Ordinal);
 
-    private static string ResolveFontPathForReport(string fontPath)
-    {
-        if (string.IsNullOrWhiteSpace(fontPath)) return fontPath;
-        if (Path.IsPathRooted(fontPath)) return fontPath;
-        return Path.Combine(AppContext.BaseDirectory, fontPath);
-    }
+    private static bool IsThumbnailTextRenderingFailure(Exception exception)
+        => exception is InvalidOperationException invalidOperationException
+            && invalidOperationException.Message.StartsWith("Thumbnail text rendering failed", StringComparison.Ordinal);
+
+    private static bool IsThumbnailOutputValidationFailure(Exception exception)
+        => exception is InvalidOperationException invalidOperationException
+            && invalidOperationException.Message.StartsWith("Thumbnail stage failed:", StringComparison.Ordinal);
 
     private static async Task<int> CalculateTextAreaSignatureAsync(string imagePath, RectangleF bounds, CancellationToken cancellationToken)
     {
@@ -1225,6 +1251,35 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         };
 
         await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private async Task WriteThumbnailRuntimeAssetsReportAsync(
+        string thumbnailDirectory,
+        string requestLanguage,
+        ThumbnailFontSelection selection,
+        IReadOnlyCollection<CelestialAsset> selectedAssets,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(thumbnailDirectory);
+        var selectedAssetPaths = selectedAssets.Select(asset => asset.LocalPath).ToArray();
+        var missingAssets = selectedAssetPaths.Where(path => !File.Exists(path)).ToArray();
+        var payload = new
+        {
+            appBaseDirectory = _assetPathResolver.BaseDirectory,
+            assetsRoot = _assetPathResolver.GetAssetsRoot(),
+            fontsRoot = _assetPathResolver.GetFontsRoot(),
+            celestialRoot = _assetPathResolver.GetCelestialRoot(),
+            requestLanguage,
+            selectedFontLanguage = selection.Language,
+            selectedFontConfigPath = selection.ConfigPath,
+            selectedFontResolvedPath = selection.FontPath,
+            selectedFontExists = selection.FontExists,
+            selectedAssetPaths,
+            missingAssets,
+            fallbackUsed = selectedAssets.Any(asset => asset.FallbackUsed)
+        };
+
+        await File.WriteAllTextAsync(Path.Combine(thumbnailDirectory, "thumbnail-runtime-assets-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     public static bool IsHindiThumbnailText(string language, string text)
@@ -1933,7 +1988,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
 
     private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double ProceduralAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore, double AtmosphereDepthScore, double FogBlendScore, double ProceduralArtifactPenalty, double CinematicSoftnessScore, double AtmosphericRealismScore);
-    private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists);
+    private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists, string BaseDirectory);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
     private sealed record Selection(SelectedObject Hero, IReadOnlyCollection<SelectedObject> Support, IReadOnlyCollection<object> VisibilityData, bool IsSpecialEvent, string CinematicMode, IReadOnlyCollection<HeroObjectScore> HeroScores, bool HasConjunction)
     {
