@@ -11,6 +11,7 @@
     <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" />
   </ItemGroup>
   <ItemGroup>
+    <Content Remove="assets\**\*.*" />
     <Content Include="assets\**\*.*">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
