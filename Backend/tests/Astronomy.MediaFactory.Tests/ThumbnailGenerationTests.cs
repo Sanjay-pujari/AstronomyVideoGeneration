@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
@@ -467,10 +468,22 @@ public sealed class ThumbnailGenerationTests
         Assert.Equal(englishFont, report.RootElement.GetProperty("selectedFontResolvedPath").GetString());
         Assert.Contains("drawtext=", report.RootElement.GetProperty("drawTextFilter").GetString() ?? string.Empty);
         Assert.Equal(0, report.RootElement.GetProperty("ffmpegExitCode").GetInt32());
-        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-text-debug-command.txt")));
-        var longDrawText = await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-long-drawtext.txt"));
+        var thumbnailsDir = Path.GetDirectoryName(plan.ThumbnailPath!)!;
+        Assert.True(File.Exists(Path.Combine(thumbnailsDir, "thumbnail-text-debug-command.txt")));
+        Assert.True(File.Exists(Path.Combine(thumbnailsDir, "thumbnail-long.jpg")));
+        Assert.True(runner.LastRenderedTextVisible);
+        var longDrawText = await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-long-drawtext.txt"));
         Assert.Contains("fontcolor=white@1.0", longDrawText);
         Assert.Contains("shadowcolor=black@0.75", longDrawText);
+        Assert.DoesNotContain(@"\:", longDrawText);
+        var debug = await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-drawtext-debug.txt"));
+        Assert.Contains("raw font path:", debug);
+        Assert.Contains("normalized font path:", debug);
+        Assert.Contains("raw textfile path:", debug);
+        Assert.Contains("normalized textfile path:", debug);
+        Assert.Contains("final drawtext filter:", debug);
+        Assert.Contains("full ffmpeg command:", debug);
+        Assert.DoesNotContain(@"\:", debug);
         using var validationReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-drawtext-validation-report.json")));
         Assert.Equal("pass", validationReport.RootElement.GetProperty("finalDecision").GetString());
         using var runtimeReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-runtime-assets-report.json")));
@@ -504,6 +517,8 @@ public sealed class ThumbnailGenerationTests
         Assert.DoesNotContain("□", runner.LastTextFileContents);
 
         var thumbnailsDir = Path.GetDirectoryName(plan.ShortThumbnailPath!)!;
+        Assert.True(File.Exists(Path.Combine(thumbnailsDir, "thumbnail-short.jpg")));
+        Assert.True(runner.LastRenderedTextVisible);
         using var analysis = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-analysis-report.json")));
         Assert.Equal("hi", analysis.RootElement.GetProperty("language").GetString());
         using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-font-report.json")));
@@ -521,17 +536,54 @@ public sealed class ThumbnailGenerationTests
         var shortDrawText = await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-short-drawtext.txt"));
         Assert.Contains("fontcolor=white@1.0", shortDrawText);
         Assert.Contains("shadowcolor=black@0.75", shortDrawText);
+        Assert.DoesNotContain(@"\:", shortDrawText);
+        var debug = await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-drawtext-debug.txt"));
+        Assert.Contains("NotoSansDevanagari-Bold.ttf", debug);
+        Assert.Contains("thumbnail-title-hi.txt", debug);
+        Assert.DoesNotContain(@"\:", debug);
         using var runtimeReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-runtime-assets-report.json")));
         Assert.Equal(hindiFont, runtimeReport.RootElement.GetProperty("selectedFontResolvedPath").GetString());
         Assert.True(runtimeReport.RootElement.GetProperty("selectedFontExists").GetBoolean());
     }
 
+
+    [Theory]
+    [InlineData("en", false, "thumbnail-long.jpg", "Jupiter Tonight")]
+    [InlineData("en", true, "thumbnail-short.jpg", "Jupiter Tonight")]
+    [InlineData("hi", false, "thumbnail-long.jpg", "आज रात बृहस्पति")]
+    [InlineData("hi", true, "thumbnail-short.jpg", "आज रात बृहस्पति")]
+    public async Task LocalAssetCollage_MultilingualThumbnailOutputsGenerateWithVisibleText(string language, bool isShortForm, string expectedFileName, string expectedText)
+    {
+        var (assetRoot, englishFont, hindiFont) = await CreateThumbnailTextRenderAssetsAsync();
+        var runner = new CapturingThumbnailTextProcessRunner();
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot }, englishFont, hindiFont, runner);
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext(language),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}"),
+            IsShortForm = isShortForm
+        }, CancellationToken.None);
+
+        var outputPath = isShortForm ? plan.ShortThumbnailPath : plan.LongThumbnailPath;
+        Assert.NotNull(outputPath);
+        Assert.EndsWith(expectedFileName, outputPath);
+        Assert.True(File.Exists(outputPath));
+        Assert.Contains(expectedText, runner.LastTextFileContents);
+        Assert.True(runner.LastRenderedTextVisible);
+        Assert.DoesNotContain(@"\:", runner.LastArguments);
+    }
+
     [Fact]
-    public void LocalAssetCollage_DrawtextEscapesWindowsDriveAndSingleQuotes()
+    public void LocalAssetCollage_DrawtextNormalizesWindowsDriveWithoutEscapingColon()
     {
         var escaped = FfmpegPathEscaper.ToDrawTextPath(@"D:\Astronomy Workspace\fonts\John's Font.ttf");
 
-        Assert.Equal("D\\\\:/Astronomy Workspace/fonts/John\\'s Font.ttf", escaped);
+        Assert.Equal("D:/Astronomy Workspace/fonts/John\\'s Font.ttf", escaped);
+        Assert.DoesNotContain(@"\:", escaped);
     }
 
     [Fact]
@@ -544,13 +596,44 @@ public sealed class ThumbnailGenerationTests
             new RectangleF(48, 120, 500, 260),
             portrait: false);
 
-        Assert.Contains("drawtext=fontfile='D\\\\:/AstronomyWorkspace/assets/fonts/Montserrat-ExtraBold.ttf'", filter);
-        Assert.Contains("textfile='D\\\\:/AstronomyWorkspace/out/thumbnail-title-en.txt'", filter);
+        Assert.Contains("drawtext=fontfile='D:/AstronomyWorkspace/assets/fonts/Montserrat-ExtraBold.ttf'", filter);
+        Assert.Contains("textfile='D:/AstronomyWorkspace/out/thumbnail-title-en.txt'", filter);
+        Assert.DoesNotContain(@"\:", filter);
         Assert.Contains("fontcolor=white@1.0", filter);
         Assert.Contains("shadowcolor=black@0.75", filter);
         Assert.Contains("fontsize=84", filter);
         Assert.Contains("x=48", filter);
         Assert.Contains("y=120", filter);
+    }
+
+
+    [Fact]
+    public void LocalAssetCollage_FlagsInvalidWindowsDriveColonEscaping()
+    {
+        Assert.True(LocalAssetCollageThumbnailService.ContainsInvalidWindowsDriveColonEscaping(@"drawtext=fontfile='D\\:/fonts/font.ttf':textfile='D\\:/out/title.txt'"));
+        Assert.False(LocalAssetCollageThumbnailService.ContainsInvalidWindowsDriveColonEscaping("drawtext=fontfile='D:/fonts/font.ttf':textfile='D:/out/title.txt'"));
+    }
+
+    [Fact]
+    public async Task LocalAssetCollage_DrawtextParseFailureFailsClearlyWithoutLegacyFallback()
+    {
+        var (assetRoot, englishFont, hindiFont) = await CreateThumbnailTextRenderAssetsAsync();
+        var runner = new FailingThumbnailTextProcessRunner("No option name near fontfile");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot }, englishFont, hindiFont, runner);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None));
+
+        Assert.Contains("Thumbnail text rendering failed for Long thumbnail", exception.Message);
+        Assert.Contains("No option name near fontfile", exception.Message);
+        Assert.False(File.Exists(Path.Combine(outputDir, "thumbnails", "thumbnail-selection.json")));
     }
 
     [Theory]
@@ -1235,6 +1318,7 @@ public sealed class ThumbnailGenerationTests
         public string LastTextFileContents { get; private set; } = string.Empty;
         public string? LastTextFilePath { get; private set; }
         public byte[]? LastTextFileBytes { get; private set; }
+        public bool LastRenderedTextVisible { get; private set; }
 
         public async Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
         {
@@ -1244,7 +1328,8 @@ public sealed class ThumbnailGenerationTests
             LastTextFileContents = await File.ReadAllTextAsync(LastTextFilePath, cancellationToken);
 
             var paths = ExtractQuotedPaths(arguments);
-            File.Copy(paths[0], paths[^1], overwrite: true);
+            await RenderVisibleTextMarkerAsync(paths[0], paths[^1], arguments, cancellationToken);
+            LastRenderedTextVisible = true;
             var now = DateTimeOffset.UtcNow;
             return new ProcessExecutionResult(0, string.Empty, string.Empty, now, now, fileName, arguments, string.Empty, false);
         }
@@ -1257,6 +1342,31 @@ public sealed class ThumbnailGenerationTests
             var end = arguments.IndexOf('\'', start);
             Assert.True(end > start);
             return arguments[start..end].Replace('/', Path.DirectorySeparatorChar);
+        }
+
+        private static async Task RenderVisibleTextMarkerAsync(string inputPath, string outputPath, string arguments, CancellationToken cancellationToken)
+        {
+            using var image = await Image.LoadAsync<Rgba32>(inputPath, cancellationToken);
+            var x = TryExtractFloat(arguments, "x=") ?? 64f;
+            var y = TryExtractFloat(arguments, "y=") ?? MathF.Max(40f, image.Height * 0.62f);
+            var fontSize = TryExtractFloat(arguments, "fontsize=") ?? 84f;
+            x = Math.Clamp(x, 0, Math.Max(0, image.Width - 1));
+            y = Math.Clamp(y, 0, Math.Max(0, image.Height - 1));
+            var width = Math.Min(image.Width - x, Math.Max(120f, fontSize * 5f));
+            var height = Math.Min(image.Height - y, Math.Max(32f, fontSize * 0.75f));
+            image.Mutate(ctx => ctx.Fill(Color.White, new RectangleF(x, y, width, height)));
+            await image.SaveAsJpegAsync(outputPath, cancellationToken);
+        }
+
+        private static float? TryExtractFloat(string arguments, string prefix)
+        {
+            var start = arguments.IndexOf(prefix, StringComparison.Ordinal);
+            if (start < 0) return null;
+            start += prefix.Length;
+            var end = arguments.IndexOf(':', start);
+            if (end < 0) end = arguments.IndexOf('"', start);
+            if (end < 0) end = arguments.Length;
+            return float.TryParse(arguments[start..end], NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value : null;
         }
 
         private static List<string> ExtractQuotedPaths(string arguments)
@@ -1275,6 +1385,17 @@ public sealed class ThumbnailGenerationTests
                 index = end + 1;
             }
             return paths;
+        }
+    }
+
+
+
+    private sealed class FailingThumbnailTextProcessRunner(string stderr) : IProcessRunner
+    {
+        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
+        {
+            var now = DateTimeOffset.UtcNow;
+            return Task.FromResult(new ProcessExecutionResult(1, string.Empty, stderr, now, now, fileName, arguments, string.Empty, false));
         }
     }
 

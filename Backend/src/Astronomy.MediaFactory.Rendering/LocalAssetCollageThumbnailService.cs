@@ -1097,6 +1097,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
         var drawtext = BuildDrawTextFilter(selection.FontPath, textFilePath, renderOptions, portrait);
         await ValidateDrawTextFilterAsync(renderOptions, drawtext, hook, language, thumbnailDirectory, canvasWidth, canvasHeight, cancellationToken);
+        if (ContainsInvalidWindowsDriveColonEscaping(drawtext))
+            _logger.LogWarning("Invalid Windows drive colon escaping detected.");
         await File.WriteAllTextAsync(Path.Combine(thumbnailDirectory, portrait ? "thumbnail-short-drawtext.txt" : "thumbnail-long-drawtext.txt"), drawtext, cancellationToken);
 
         var arguments = string.Join(' ',
@@ -1108,6 +1110,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             QuoteFfmpegPath(renderedPath));
         var ffmpegCommand = $"{_renderingOptions.FfmpegPath} {arguments}";
         await File.WriteAllTextAsync(Path.Combine(thumbnailDirectory, "thumbnail-text-debug-command.txt"), ffmpegCommand, cancellationToken);
+        await WriteThumbnailDrawTextDebugAsync(thumbnailDirectory, selection.FontPath, textFilePath, drawtext, ffmpegCommand, cancellationToken);
         await WriteThumbnailFontReportAsync(thumbnailDirectory, language, text, selection, textFilePath, drawtext, ffmpegCommand, null, string.Empty, cancellationToken);
 
         try
@@ -1396,6 +1399,36 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             finalDecision = result.IsValid ? "pass" : "fail"
         };
         await File.WriteAllTextAsync(Path.Combine(thumbnailDirectory, "thumbnail-drawtext-validation-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+
+    public static bool ContainsInvalidWindowsDriveColonEscaping(string drawtext)
+        => drawtext.Contains(@"\\:", StringComparison.Ordinal);
+
+    private static async Task WriteThumbnailDrawTextDebugAsync(
+        string thumbnailDirectory,
+        string rawFontPath,
+        string rawTextFilePath,
+        string drawtext,
+        string ffmpegCommand,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(thumbnailDirectory);
+        var warning = ContainsInvalidWindowsDriveColonEscaping(drawtext)
+            ? "Invalid Windows drive colon escaping detected."
+            : string.Empty;
+        var lines = new[]
+        {
+            $"raw font path: {rawFontPath}",
+            $"normalized font path: {FfmpegPathEscaper.ToDrawTextPath(rawFontPath)}",
+            $"raw textfile path: {rawTextFilePath}",
+            $"normalized textfile path: {FfmpegPathEscaper.ToDrawTextPath(rawTextFilePath)}",
+            $"final drawtext filter: {drawtext}",
+            $"full ffmpeg command: {ffmpegCommand}",
+            $"warning: {warning}"
+        };
+
+        await File.WriteAllLinesAsync(Path.Combine(thumbnailDirectory, "thumbnail-drawtext-debug.txt"), lines, cancellationToken);
     }
 
     private static async Task WriteThumbnailFontReportAsync(
