@@ -219,6 +219,7 @@ public sealed class CelestialAsset
     public string OriginalUrl { get; init; } = "";
     public bool OldAssetIgnoredBecauseHeroExists { get; init; }
     public bool FallbackUsed { get; init; }
+    public string BaseDirectory { get; init; } = "";
 }
 
 
@@ -235,6 +236,7 @@ public sealed class CelestialAssetPackExtractionReport
 
     public bool Enabled { get; init; }
     public string OutputRootPath { get; init; } = "";
+    public string BaseDirectory { get; init; } = "";
     [JsonIgnore]
     public IReadOnlyCollection<CelestialAssetPackExtractionItem> Objects => Items;
     public IReadOnlyCollection<string> ExtractedObjects { get; init; } = [];

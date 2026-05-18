@@ -40,19 +40,22 @@ public sealed class CelestialAssetIngestionService : ICelestialAssetIngestionSer
     private readonly AstronomyApiOptions _astronomyApiOptions;
     private readonly NasaImagesOptions _nasaImagesOptions;
     private readonly ILogger<CelestialAssetIngestionService> _logger;
+    private readonly IRuntimeAssetPathResolver _assetPathResolver;
 
     public CelestialAssetIngestionService(
         HttpClient httpClient,
         IOptions<CelestialAssetsOptions> assetOptions,
         IOptions<AstronomyApiOptions> astronomyApiOptions,
         IOptions<NasaImagesOptions> nasaImagesOptions,
-        ILogger<CelestialAssetIngestionService> logger)
+        ILogger<CelestialAssetIngestionService> logger,
+        IRuntimeAssetPathResolver? assetPathResolver = null)
     {
         _httpClient = httpClient;
         _assetOptions = assetOptions.Value;
         _astronomyApiOptions = astronomyApiOptions.Value;
         _nasaImagesOptions = nasaImagesOptions.Value;
         _logger = logger;
+        _assetPathResolver = assetPathResolver ?? new RuntimeAssetPathResolver();
     }
 
     public async Task<CelestialAssetIngestionReport> RefreshAsync(CancellationToken cancellationToken)
@@ -448,7 +451,7 @@ public sealed class CelestialAssetIngestionService : ICelestialAssetIngestionSer
 
     private string GetObjectDirectory(string objectKey) => Path.Combine(GetRootPath(), NormalizeObjectKey(objectKey));
 
-    private string GetRootPath() => Path.IsPathRooted(_assetOptions.RootPath) ? _assetOptions.RootPath : Path.Combine(Directory.GetCurrentDirectory(), _assetOptions.RootPath);
+    private string GetRootPath() => Path.IsPathRooted(_assetOptions.RootPath) ? _assetOptions.RootPath : _assetPathResolver.GetCelestialRoot();
 
     private bool IsAllowedLocalImage(string path)
         => _assetOptions.AllowedExtensions.Any(ext => path.EndsWith(ext, StringComparison.OrdinalIgnoreCase));

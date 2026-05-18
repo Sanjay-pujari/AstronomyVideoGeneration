@@ -468,6 +468,9 @@ public sealed class ThumbnailGenerationTests
         Assert.Contains("drawtext=", report.RootElement.GetProperty("drawTextFilter").GetString() ?? string.Empty);
         Assert.Equal(0, report.RootElement.GetProperty("ffmpegExitCode").GetInt32());
         Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-text-debug-command.txt")));
+        using var runtimeReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-runtime-assets-report.json")));
+        Assert.Equal(englishFont, runtimeReport.RootElement.GetProperty("selectedFontResolvedPath").GetString());
+        Assert.True(runtimeReport.RootElement.GetProperty("selectedFontExists").GetBoolean());
     }
 
     [Fact]
@@ -510,6 +513,9 @@ public sealed class ThumbnailGenerationTests
         Assert.Equal("UTF-8", report.RootElement.GetProperty("textFileEncoding").GetString());
         Assert.Equal("textfile", report.RootElement.GetProperty("drawTextMode").GetString());
         Assert.Contains("drawtext=", report.RootElement.GetProperty("drawTextFilter").GetString() ?? string.Empty);
+        using var runtimeReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-runtime-assets-report.json")));
+        Assert.Equal(hindiFont, runtimeReport.RootElement.GetProperty("selectedFontResolvedPath").GetString());
+        Assert.True(runtimeReport.RootElement.GetProperty("selectedFontExists").GetBoolean());
     }
 
     [Fact]
@@ -589,7 +595,7 @@ public sealed class ThumbnailGenerationTests
             IsShortForm = true
         }, CancellationToken.None));
 
-        Assert.Contains("Thumbnail font not found:", exception.Message);
+        Assert.Contains("Thumbnail font missing from executable assets folder:", exception.Message);
         Assert.Contains("NotoSansDevanagari-Bold.ttf", exception.Message);
         using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-font-report.json")));
         Assert.Equal("hi", report.RootElement.GetProperty("language").GetString());
@@ -1044,7 +1050,7 @@ public sealed class ThumbnailGenerationTests
 
 
     private static LocalAssetCollageThumbnailService CreateLocalAssetService(ThumbnailOptions options)
-        => new(new ThumbnailStrategyService(), Options.Create(options), NullLogger<LocalAssetCollageThumbnailService>.Instance);
+        => new(new ThumbnailStrategyService(), Options.Create(options), NullLogger<LocalAssetCollageThumbnailService>.Instance, assetPathResolver: new TestRuntimeAssetPathResolver(options.AssetRootPath));
 
     private static LocalAssetCollageThumbnailService CreateLocalAssetService(ThumbnailOptions options, string englishFont, string hindiFont, IProcessRunner processRunner)
         => new(
@@ -1053,7 +1059,8 @@ public sealed class ThumbnailGenerationTests
             NullLogger<LocalAssetCollageThumbnailService>.Instance,
             Options.Create(new ThumbnailFontOptions { DefaultEnglishFont = englishFont, HindiFont = hindiFont }),
             Options.Create(new RenderingOptions { FfmpegPath = "ffmpeg" }),
-            processRunner);
+            processRunner,
+            new TestRuntimeAssetPathResolver(options.AssetRootPath));
 
     private static AstronomyContext BuildVisiblePlanetContext(string language)
         => new()
@@ -1157,6 +1164,29 @@ public sealed class ThumbnailGenerationTests
         await File.WriteAllTextAsync(englishFont, "test-font");
         await File.WriteAllTextAsync(hindiFont, "test-font");
         return (root, englishFont, hindiFont);
+    }
+
+
+    private sealed class TestRuntimeAssetPathResolver : IRuntimeAssetPathResolver
+    {
+        private readonly string _celestialRoot;
+        private readonly string _assetsRoot;
+
+        public TestRuntimeAssetPathResolver(string celestialRoot)
+        {
+            _celestialRoot = Path.GetFullPath(celestialRoot);
+            _assetsRoot = Directory.GetParent(_celestialRoot)?.FullName ?? _celestialRoot;
+            BaseDirectory = Directory.GetParent(_assetsRoot)?.FullName ?? _assetsRoot;
+        }
+
+        public string BaseDirectory { get; }
+        public string ResolveAssetPath(string relativePath) => Path.IsPathRooted(relativePath) ? relativePath : Path.GetFullPath(Path.Combine(BaseDirectory, relativePath));
+        public string ResolveFontPath(string relativeFontPath) => ResolveAssetPath(relativeFontPath);
+        public string ResolveCelestialAssetPath(string objectKey, string fileName) => Path.Combine(_celestialRoot, objectKey, fileName);
+        public string GetAssetsRoot() => _assetsRoot;
+        public string GetFontsRoot() => Path.Combine(_assetsRoot, "fonts");
+        public string GetCelestialRoot() => _celestialRoot;
+        public bool AssetExists(string relativePath) => File.Exists(ResolveAssetPath(relativePath)) || Directory.Exists(ResolveAssetPath(relativePath));
     }
 
     private sealed class CapturingThumbnailTextProcessRunner : IProcessRunner
