@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
@@ -25,12 +27,24 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private readonly IThumbnailStrategyService _strategyService;
     private readonly ThumbnailOptions _options;
+    private readonly ThumbnailFontOptions _fontOptions;
+    private readonly RenderingOptions _renderingOptions;
+    private readonly IProcessRunner _processRunner;
     private readonly ILogger<LocalAssetCollageThumbnailService> _logger;
 
-    public LocalAssetCollageThumbnailService(IThumbnailStrategyService strategyService, IOptions<ThumbnailOptions> options, ILogger<LocalAssetCollageThumbnailService> logger)
+    public LocalAssetCollageThumbnailService(
+        IThumbnailStrategyService strategyService,
+        IOptions<ThumbnailOptions> options,
+        ILogger<LocalAssetCollageThumbnailService> logger,
+        IOptions<ThumbnailFontOptions>? fontOptions = null,
+        IOptions<RenderingOptions>? renderingOptions = null,
+        IProcessRunner? processRunner = null)
     {
         _strategyService = strategyService;
         _options = options.Value;
+        _fontOptions = fontOptions?.Value ?? new ThumbnailFontOptions();
+        _renderingOptions = renderingOptions?.Value ?? new RenderingOptions();
+        _processRunner = processRunner ?? new ProcessRunner();
         _logger = logger;
     }
 
@@ -257,7 +271,6 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         canvas.Mutate(ctx =>
         {
             DrawDateLocation(ctx, request, width, height, portrait);
-            if (_options.EnableHookText) DrawHook(ctx, hook, textBox, portrait, request.Context.Localization.ResolvedLanguage);
             DrawBrand(ctx, width, height, portrait);
             DrawVignette(ctx, width, height);
         });
@@ -299,6 +312,9 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var cinematicRealismScore = ScoreCinematicRealism(depthScore, atmosphericBlendScore, negativeSpaceScore, heroIsolationScore, compositionBalanceScore, readabilityScore, cinematicSubtletyScore, edgeIntegrationScore, environmentalDepthScore, supportObjectDepthScore, compositingSeamPenalty);
 
         await canvas.SaveAsJpegAsync(outputPath, new JpegEncoder { Quality = Math.Clamp(_options.JpegQuality, 1, 100) }, cancellationToken);
+        if (_options.EnableHookText)
+            await RenderHookTextAsync(outputPath, hook, textBox, portrait, request.Context.Localization.ResolvedLanguage, cancellationToken);
+
         return new CompositionDiagnostics(
             LayoutUsed: portrait ? "PortraitObjectUpperTextLowerThird" : "LandscapeHeroRightTextLeft",
             HeroObjectScale: Math.Round(heroRect.Width / width, 3),
@@ -997,18 +1013,124 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         ctx.DrawText(text, font, Color.White.WithAlpha(0.72f), new PointF(portrait ? 46 : 50, portrait ? 56 : 42));
     }
 
-    private static void DrawHook(IImageProcessingContext ctx, string hook, RectangleF bounds, bool portrait, string language)
+    private async Task RenderHookTextAsync(string thumbnailPath, string hook, RectangleF bounds, bool portrait, string language, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(hook)) return;
+
         var text = FormatHookForMobile(hook);
         var fontSize = ResolveFontSize(text, portrait);
-        var font = CreateFont(fontSize, portrait ? FontStyle.Regular : FontStyle.Bold, LocalizationResolver.IsHindi(language));
-        var origin = new PointF(portrait ? bounds.X + bounds.Width / 2f : bounds.X, bounds.Y);
-        var opts = new RichTextOptions(font) { Origin = origin, WrappingLength = bounds.Width, HorizontalAlignment = portrait ? HorizontalAlignment.Center : HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, LineSpacing = 0.84f };
-        ctx.DrawText(new RichTextOptions(opts) { Origin = new PointF(origin.X + 5, origin.Y + 7) }, text, Color.Black.WithAlpha(portrait ? 0.22f : 0.32f));
-        ctx.DrawText(new RichTextOptions(opts) { Origin = new PointF(origin.X + 3, origin.Y + 4) }, text, Color.Black.WithAlpha(portrait ? 0.16f : 0.24f));
-        ctx.DrawText(new RichTextOptions(opts) { Origin = new PointF(origin.X + 1.2f, origin.Y + 1.2f) }, text, Color.FromRgb(255, 220, 148).WithAlpha(portrait ? 0.14f : 0.20f));
-        ctx.DrawText(opts, text, Color.White.WithAlpha(portrait ? 0.92f : 0.97f));
+        var selection = ResolveThumbnailFont(language, text);
+        var textFilePath = Path.Combine(Path.GetDirectoryName(thumbnailPath) ?? Path.GetTempPath(), $"temp-thumbnail-title-{Guid.NewGuid():N}.txt");
+        var renderedPath = Path.Combine(Path.GetDirectoryName(thumbnailPath) ?? Path.GetTempPath(), $"temp-thumbnail-rendered-{Guid.NewGuid():N}.jpg");
+        var thumbnailType = portrait ? "Short" : "Long";
+
+        try
+        {
+            await File.WriteAllTextAsync(textFilePath, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+            _logger.LogInformation(
+                "Thumbnail text rendering: Language={Language}; Font={Font}; TextFile={TextFile}; ThumbnailType={ThumbnailType}",
+                selection.Language,
+                Path.GetFileName(selection.FontPath),
+                textFilePath,
+                thumbnailType);
+
+            var drawtext = BuildDrawTextFilter(selection.FontPath, textFilePath, fontSize, bounds, portrait);
+            var arguments = string.Join(' ',
+                "-y",
+                $"-i {QuoteFfmpegPath(thumbnailPath)}",
+                $"-vf \"{drawtext}\"",
+                "-frames:v 1",
+                "-q:v 2",
+                QuoteFfmpegPath(renderedPath));
+            var result = await _processRunner.ExecuteAsync(_renderingOptions.FfmpegPath, arguments, cancellationToken, TimeSpan.FromSeconds(60));
+
+            if (result.ExitCode != 0 || !File.Exists(renderedPath))
+            {
+                _logger.LogWarning(
+                    "FFmpeg thumbnail text rendering failed for {ThumbnailType} thumbnail. ExitCode={ExitCode}; Error={Error}; Exception={ExceptionText}",
+                    thumbnailType,
+                    result.ExitCode,
+                    result.StandardError,
+                    result.ExceptionText);
+                return;
+            }
+
+            File.Move(renderedPath, thumbnailPath, overwrite: true);
+        }
+        finally
+        {
+            TryDelete(textFilePath);
+            TryDelete(renderedPath);
+        }
+    }
+
+    private ThumbnailFontSelection ResolveThumbnailFont(string language, string text)
+    {
+        var selectedLanguage = IsHindiThumbnailText(language, text) ? "hi" : "en";
+        var preferredFont = selectedLanguage == "hi" ? _fontOptions.HindiFont : _fontOptions.DefaultEnglishFont;
+        if (File.Exists(preferredFont))
+            return new ThumbnailFontSelection(selectedLanguage, preferredFont);
+
+        _logger.LogWarning(
+            "Configured thumbnail font file is missing. Language={Language}; FontPath={FontPath}; falling back to English font {FallbackFontPath}.",
+            selectedLanguage,
+            preferredFont,
+            _fontOptions.DefaultEnglishFont);
+
+        if (File.Exists(_fontOptions.DefaultEnglishFont))
+            return new ThumbnailFontSelection(selectedLanguage, _fontOptions.DefaultEnglishFont);
+
+        _logger.LogWarning("Fallback English thumbnail font file is also missing. FontPath={FontPath}; FFmpeg rendering may fail.", _fontOptions.DefaultEnglishFont);
+        return new ThumbnailFontSelection(selectedLanguage, _fontOptions.DefaultEnglishFont);
+    }
+
+    public static bool IsHindiThumbnailText(string language, string text)
+        => LocalizationResolver.IsHindi(language) || ContainsDevanagari(text);
+
+    public static bool ContainsDevanagari(string text)
+        => text.Any(ch => ch is >= '\u0900' and <= '\u097F');
+
+    public static string BuildDrawTextFilter(string fontPath, string textFilePath, float fontSize, RectangleF bounds, bool portrait)
+    {
+        var alpha = portrait ? "0.92" : "0.97";
+        var x = portrait ? "(w-text_w)/2" : FormatInvariant(bounds.X);
+        var y = FormatInvariant(bounds.Y);
+        return string.Join(':',
+            "drawtext=" + $"fontfile='{EscapeDrawtextPath(fontPath)}'",
+            $"textfile='{EscapeDrawtextPath(textFilePath)}'",
+            $"fontsize={FormatInvariant(fontSize)}",
+            $"fontcolor=white@{alpha}",
+            "shadowcolor=black@0.82",
+            "shadowx=4",
+            "shadowy=4",
+            $"x={x}",
+            $"y={y}",
+            $"line_spacing={FormatInvariant(fontSize * -0.16f)}");
+    }
+
+    private static string EscapeDrawtextPath(string path)
+        => path.Replace('\\', '/').Replace("'", "\\'", StringComparison.Ordinal);
+
+    private static string FormatInvariant(float value)
+        => value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private static string QuoteFfmpegPath(string path)
+    {
+        if (path.IndexOfAny(['\0', '\r', '\n']) >= 0)
+            throw new ArgumentException("Path contains control characters.", nameof(path));
+        return $"\"{path.Replace('\\', '/').Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+            // Best effort cleanup for thumbnail text render scratch files.
+        }
     }
 
     private void DrawBrand(IImageProcessingContext ctx, int width, int height, bool portrait)
@@ -1434,6 +1556,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         if (string.IsNullOrWhiteSpace(family.Name)) family = families.First();
         return family.CreateFont(size, style);
     }
+
+    private sealed record ThumbnailFontSelection(string Language, string FontPath);
 
     private static async Task WriteSelectionAsync(ThumbnailPlan plan, string thumbnailsDirectory, CompositionDiagnostics composition, CancellationToken cancellationToken)
     {
