@@ -436,7 +436,7 @@ public sealed class ThumbnailGenerationTests
 
 
     [Fact]
-    public async Task LocalAssetCollage_EnglishThumbnailUsesMontserratTextfileDrawtext()
+    public async Task LocalAssetCollage_EnglishThumbnailUsesMontserratImageSharpTextRendering()
     {
         var (assetRoot, englishFont, hindiFont) = await CreateThumbnailTextRenderAssetsAsync();
         var runner = new CapturingThumbnailTextProcessRunner();
@@ -452,34 +452,32 @@ public sealed class ThumbnailGenerationTests
         }, CancellationToken.None);
 
         Assert.True(File.Exists(plan.LongThumbnailPath));
-        Assert.Contains("drawtext=fontfile=", runner.LastArguments);
-        Assert.Contains("Montserrat-ExtraBold.ttf", runner.LastArguments);
-        Assert.Contains("textfile=", runner.LastArguments);
-        Assert.Contains("thumbnail-title-en.txt", runner.LastArguments);
-        Assert.DoesNotContain("drawtext=text=", runner.LastArguments);
-        Assert.DoesNotContain("□", runner.LastTextFileContents);
+        Assert.Equal(0, runner.CallCount);
 
-        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-font-report.json")));
+        var thumbnailsDir = Path.GetDirectoryName(plan.ThumbnailPath!)!;
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-text-render-report.json")));
+        Assert.Equal("ImageSharp", report.RootElement.GetProperty("renderer").GetString());
         Assert.Equal("en", report.RootElement.GetProperty("language").GetString());
-        Assert.Equal("textfile", report.RootElement.GetProperty("drawTextMode").GetString());
-        Assert.True(report.RootElement.GetProperty("fontExists").GetBoolean());
+        Assert.Equal("Jupiter Tonight", report.RootElement.GetProperty("hook").GetString());
+        Assert.False(report.RootElement.GetProperty("containsDevanagari").GetBoolean());
         Assert.Equal(englishFont, report.RootElement.GetProperty("selectedFontConfigPath").GetString());
         Assert.Equal(englishFont, report.RootElement.GetProperty("selectedFontResolvedPath").GetString());
-        Assert.Contains("drawtext=", report.RootElement.GetProperty("drawTextFilter").GetString() ?? string.Empty);
-        Assert.Equal(0, report.RootElement.GetProperty("ffmpegExitCode").GetInt32());
-        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-text-debug-command.txt")));
-        var longDrawText = await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-long-drawtext.txt"));
-        Assert.Contains("fontcolor=white@1.0", longDrawText);
-        Assert.Contains("shadowcolor=black@0.75", longDrawText);
-        using var validationReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-drawtext-validation-report.json")));
-        Assert.Equal("pass", validationReport.RootElement.GetProperty("finalDecision").GetString());
-        using var runtimeReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(plan.ThumbnailPath!)!, "thumbnail-runtime-assets-report.json")));
+        Assert.True(report.RootElement.GetProperty("fontExists").GetBoolean());
+        Assert.True(report.RootElement.GetProperty("success").GetBoolean());
+        Assert.InRange(report.RootElement.GetProperty("lineCount").GetInt32(), 1, 2);
+        Assert.True(report.RootElement.GetProperty("finalFontSize").GetSingle() > 0);
+        AssertThumbnailHasVisibleText(plan.LongThumbnailPath!, report.RootElement.GetProperty("bounds"));
+        Assert.False(File.Exists(Path.Combine(thumbnailsDir, "thumbnail-text-debug-command.txt")));
+        Assert.DoesNotContain(Directory.GetFiles(thumbnailsDir), path => Path.GetFileName(path).Contains("drawtext", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(Directory.GetFiles(thumbnailsDir), path => Path.GetFileName(path).StartsWith("thumbnail-title-", StringComparison.OrdinalIgnoreCase));
+
+        using var runtimeReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-runtime-assets-report.json")));
         Assert.Equal(englishFont, runtimeReport.RootElement.GetProperty("selectedFontResolvedPath").GetString());
         Assert.True(runtimeReport.RootElement.GetProperty("selectedFontExists").GetBoolean());
     }
 
     [Fact]
-    public async Task LocalAssetCollage_HindiLanguageSelectsDevanagariFontAndRendersWithoutBoxes()
+    public async Task LocalAssetCollage_HindiLanguageSelectsDevanagariFontAndRendersWithImageSharp()
     {
         var (assetRoot, englishFont, hindiFont) = await CreateThumbnailTextRenderAssetsAsync();
         var runner = new CapturingThumbnailTextProcessRunner();
@@ -496,92 +494,27 @@ public sealed class ThumbnailGenerationTests
         }, CancellationToken.None);
 
         Assert.True(File.Exists(plan.ShortThumbnailPath));
-        Assert.Contains("NotoSansDevanagari-Bold.ttf", runner.LastArguments);
-        Assert.Contains("fontfile=", runner.LastArguments);
-        Assert.Contains("textfile=", runner.LastArguments);
-        Assert.Contains("thumbnail-title-hi.txt", runner.LastArguments);
-        Assert.Contains("आज रात बृहस्पति", runner.LastTextFileContents);
-        Assert.DoesNotContain("□", runner.LastTextFileContents);
+        Assert.Equal(0, runner.CallCount);
 
         var thumbnailsDir = Path.GetDirectoryName(plan.ShortThumbnailPath!)!;
         using var analysis = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-analysis-report.json")));
         Assert.Equal("hi", analysis.RootElement.GetProperty("language").GetString());
-        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-font-report.json")));
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-text-render-report.json")));
+        Assert.Equal("ImageSharp", report.RootElement.GetProperty("renderer").GetString());
         Assert.Equal("hi", report.RootElement.GetProperty("language").GetString());
-        Assert.Equal("आज रात बृहस्पति", report.RootElement.GetProperty("selectedHook").GetString());
+        Assert.Equal("आज रात बृहस्पति", report.RootElement.GetProperty("hook").GetString());
         Assert.True(report.RootElement.GetProperty("containsDevanagari").GetBoolean());
-        Assert.Contains("NotoSansDevanagari-Bold.ttf", report.RootElement.GetProperty("selectedFontPath").GetString() ?? string.Empty);
         Assert.Contains("NotoSansDevanagari-Bold.ttf", report.RootElement.GetProperty("selectedFontResolvedPath").GetString() ?? string.Empty);
         Assert.True(report.RootElement.GetProperty("fontExists").GetBoolean());
-        Assert.True(report.RootElement.GetProperty("textFileExists").GetBoolean());
-        Assert.True(report.RootElement.GetProperty("textFileSizeBytes").GetInt64() > 0);
-        Assert.Equal("UTF-8", report.RootElement.GetProperty("textFileEncoding").GetString());
-        Assert.Equal("textfile", report.RootElement.GetProperty("drawTextMode").GetString());
-        Assert.Contains("drawtext=", report.RootElement.GetProperty("drawTextFilter").GetString() ?? string.Empty);
-        var shortDrawText = await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-short-drawtext.txt"));
-        Assert.Contains("fontcolor=white@1.0", shortDrawText);
-        Assert.Contains("shadowcolor=black@0.75", shortDrawText);
+        Assert.True(report.RootElement.GetProperty("success").GetBoolean());
+        Assert.InRange(report.RootElement.GetProperty("lineCount").GetInt32(), 1, 3);
+        AssertThumbnailHasVisibleText(plan.ShortThumbnailPath!, report.RootElement.GetProperty("bounds"));
+        Assert.DoesNotContain(Directory.GetFiles(thumbnailsDir), path => Path.GetFileName(path).Contains("drawtext", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(Directory.GetFiles(thumbnailsDir), path => Path.GetFileName(path).StartsWith("thumbnail-title-", StringComparison.OrdinalIgnoreCase));
+
         using var runtimeReport = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-runtime-assets-report.json")));
         Assert.Equal(hindiFont, runtimeReport.RootElement.GetProperty("selectedFontResolvedPath").GetString());
         Assert.True(runtimeReport.RootElement.GetProperty("selectedFontExists").GetBoolean());
-    }
-
-    [Fact]
-    public void LocalAssetCollage_DrawtextEscapesWindowsDriveAndSingleQuotes()
-    {
-        var escaped = FfmpegPathEscaper.ToDrawTextPath(@"D:\Astronomy Workspace\fonts\John's Font.ttf");
-
-        Assert.Equal("D\\\\:/Astronomy Workspace/fonts/John\\'s Font.ttf", escaped);
-    }
-
-    [Fact]
-    public void LocalAssetCollage_DrawtextFilterAppendsEscapedFontAndTextfilePaths()
-    {
-        var filter = LocalAssetCollageThumbnailService.BuildDrawTextFilter(
-            @"D:\AstronomyWorkspace\assets\fonts\Montserrat-ExtraBold.ttf",
-            @"D:\AstronomyWorkspace\out\thumbnail-title-en.txt",
-            84,
-            new RectangleF(48, 120, 500, 260),
-            portrait: false);
-
-        Assert.Contains("drawtext=fontfile='D\\\\:/AstronomyWorkspace/assets/fonts/Montserrat-ExtraBold.ttf'", filter);
-        Assert.Contains("textfile='D\\\\:/AstronomyWorkspace/out/thumbnail-title-en.txt'", filter);
-        Assert.Contains("fontcolor=white@1.0", filter);
-        Assert.Contains("shadowcolor=black@0.75", filter);
-        Assert.Contains("fontsize=84", filter);
-        Assert.Contains("x=48", filter);
-        Assert.Contains("y=120", filter);
-    }
-
-    [Theory]
-    [InlineData("fontcolor=white")]
-    [InlineData("fontcolor=white@1")]
-    [InlineData("fontcolor=white@1.0")]
-    [InlineData("fontcolor=#FFFFFF")]
-    [InlineData("fontcolor=0xFFFFFF")]
-    [InlineData("fontcolor=FFFFFF")]
-    [InlineData("fontcolor=white:alpha=1")]
-    public void LocalAssetCollage_ValidateDrawTextFilter_AllowsVisibleFontColorFormats(string colorClause)
-    {
-        var filter = $"drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:{colorClause}:x=48:y=120";
-
-        LocalAssetCollageThumbnailService.ValidateDrawTextFilter(filter, "Jupiter Tonight", 84, new RectangleF(48, 120, 500, 260));
-    }
-
-    [Theory]
-    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white@0:x=48:y=120", "Jupiter Tonight", 84, 48, 120, 500, 260)]
-    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=black@0:x=48:y=120", "Jupiter Tonight", 84, 48, 120, 500, 260)]
-    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white:alpha=0:x=48:y=120", "Jupiter Tonight", 84, 48, 120, 500, 260)]
-    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=transparent:x=48:y=120", "Jupiter Tonight", 84, 48, 120, 500, 260)]
-    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white@1:x=48:y=120", "", 84, 48, 120, 500, 260)]
-    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white@1:x=48:y=120", "Jupiter Tonight", 0, 48, 120, 500, 260)]
-    [InlineData("drawtext=fontfile='font.ttf':textfile='title.txt':fontsize=84:fontcolor=white@1:x=48:y=120", "Jupiter Tonight", 84, 1200, 120, 500, 260)]
-    public void LocalAssetCollage_ValidateDrawTextFilter_RejectsInvisibleOrInvalidText(string filter, string text, float fontSize, float x, float y, float width, float height)
-    {
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            LocalAssetCollageThumbnailService.ValidateDrawTextFilter(filter, text, fontSize, new RectangleF(x, y, width, height)));
-
-        Assert.StartsWith("drawtext opacity validation failed:", exception.Message);
     }
 
     [Fact]
@@ -592,28 +525,26 @@ public sealed class ThumbnailGenerationTests
     }
 
     [Fact]
-    public async Task LocalAssetCollage_Utf8TextfileRenderingCleansTemporaryFiles()
+    public async Task LocalAssetCollage_ThumbnailTextRenderingDoesNotCallFfmpegOrWriteTextfiles()
     {
         var (assetRoot, englishFont, hindiFont) = await CreateThumbnailTextRenderAssetsAsync();
         var runner = new CapturingThumbnailTextProcessRunner();
         var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot }, englishFont, hindiFont, runner);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
 
         await service.GenerateAsync(new ThumbnailGenerationRequest
         {
             ContentType = ContentType.DailySkyGuide,
-            Context = BuildVisiblePlanetContext("hi"),
+            Context = BuildVisiblePlanetContext("en"),
             Metadata = new OptimizedVideoMetadata(),
             AvailableVisuals = [],
-            OutputDirectory = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}"),
-            IsShortForm = true
+            OutputDirectory = outputDir
         }, CancellationToken.None);
 
-        Assert.NotNull(runner.LastTextFilePath);
-        Assert.EndsWith("thumbnail-title-hi.txt", runner.LastTextFilePath);
-        Assert.True(File.Exists(runner.LastTextFilePath));
-        Assert.True(runner.LastTextFileBytes!.Length > 0);
-        Assert.False(runner.LastTextFileBytes![0] == 0xEF && runner.LastTextFileBytes.Length > 2 && runner.LastTextFileBytes[1] == 0xBB && runner.LastTextFileBytes[2] == 0xBF);
-        Assert.DoesNotContain(Directory.GetFiles(Path.GetDirectoryName(runner.LastTextFilePath!)!), path => Path.GetFileName(path).StartsWith("temp-thumbnail-title-", StringComparison.Ordinal));
+        var thumbnailsDir = Path.Combine(outputDir, "thumbnails");
+        Assert.Equal(0, runner.CallCount);
+        Assert.DoesNotContain(Directory.GetFiles(thumbnailsDir), path => Path.GetFileName(path).Contains("drawtext", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(Directory.GetFiles(thumbnailsDir), path => Path.GetFileName(path).StartsWith("thumbnail-title-", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -635,11 +566,14 @@ public sealed class ThumbnailGenerationTests
             IsShortForm = true
         }, CancellationToken.None));
 
-        Assert.Contains("Thumbnail font missing from executable assets folder:", exception.Message);
+        Assert.Contains("Thumbnail font not found:", exception.Message);
         Assert.Contains("NotoSansDevanagari-Bold.ttf", exception.Message);
-        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-font-report.json")));
+        Assert.Equal(0, runner.CallCount);
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-text-render-report.json")));
         Assert.Equal("hi", report.RootElement.GetProperty("language").GetString());
         Assert.False(report.RootElement.GetProperty("fontExists").GetBoolean());
+        Assert.False(report.RootElement.GetProperty("success").GetBoolean());
+        Assert.Contains("Thumbnail font not found:", report.RootElement.GetProperty("error").GetString());
     }
 
     [Fact]
@@ -1090,7 +1024,16 @@ public sealed class ThumbnailGenerationTests
 
 
     private static LocalAssetCollageThumbnailService CreateLocalAssetService(ThumbnailOptions options)
-        => new(new ThumbnailStrategyService(), Options.Create(options), NullLogger<LocalAssetCollageThumbnailService>.Instance, assetPathResolver: new TestRuntimeAssetPathResolver(options.AssetRootPath));
+        => new(
+            new ThumbnailStrategyService(),
+            Options.Create(options),
+            NullLogger<LocalAssetCollageThumbnailService>.Instance,
+            Options.Create(new ThumbnailFontOptions
+            {
+                DefaultEnglishFont = Path.Combine(GetRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Api", "assets", "fonts", "Montserrat-ExtraBold.ttf"),
+                HindiFont = Path.Combine(GetRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Api", "assets", "fonts", "NotoSansDevanagari-Bold.ttf")
+            }),
+            assetPathResolver: new TestRuntimeAssetPathResolver(options.AssetRootPath));
 
     private static LocalAssetCollageThumbnailService CreateLocalAssetService(ThumbnailOptions options, string englishFont, string hindiFont, IProcessRunner processRunner)
         => new(
@@ -1201,9 +1144,49 @@ public sealed class ThumbnailGenerationTests
         Directory.CreateDirectory(fontRoot);
         var englishFont = Path.Combine(fontRoot, "Montserrat-ExtraBold.ttf");
         var hindiFont = Path.Combine(fontRoot, "NotoSansDevanagari-Bold.ttf");
-        await File.WriteAllTextAsync(englishFont, "test-font");
-        await File.WriteAllTextAsync(hindiFont, "test-font");
+        File.Copy(Path.Combine(GetRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Api", "assets", "fonts", "Montserrat-ExtraBold.ttf"), englishFont);
+        File.Copy(Path.Combine(GetRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Api", "assets", "fonts", "NotoSansDevanagari-Bold.ttf"), hindiFont);
         return (root, englishFont, hindiFont);
+    }
+
+
+    private static string GetRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Backend", "Directory.Packages.props")))
+            directory = directory.Parent;
+        return directory?.FullName ?? Directory.GetCurrentDirectory();
+    }
+
+    private static void AssertThumbnailHasVisibleText(string thumbnailPath, JsonElement boundsElement)
+    {
+        Assert.True(new FileInfo(thumbnailPath).Length > 0);
+        var x = (int)Math.Floor(boundsElement.GetProperty("x").GetSingle());
+        var y = (int)Math.Floor(boundsElement.GetProperty("y").GetSingle());
+        var width = (int)Math.Ceiling(boundsElement.GetProperty("width").GetSingle());
+        var height = (int)Math.Ceiling(boundsElement.GetProperty("height").GetSingle());
+
+        using var image = Image.Load<Rgba32>(thumbnailPath);
+        var left = Math.Clamp(x, 0, image.Width - 1);
+        var top = Math.Clamp(y, 0, image.Height - 1);
+        var right = Math.Clamp(x + width, left + 1, image.Width);
+        var bottom = Math.Clamp(y + height, top + 1, image.Height);
+        var brightPixels = 0;
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var rowIndex = top; rowIndex < bottom; rowIndex++)
+            {
+                var row = accessor.GetRowSpan(rowIndex);
+                for (var column = left; column < right; column++)
+                {
+                    var pixel = row[column];
+                    if (pixel.R >= 220 && pixel.G >= 220 && pixel.B >= 220)
+                        brightPixels++;
+                }
+            }
+        });
+
+        Assert.True(brightPixels > 100, $"Expected visible white text pixels in {thumbnailPath}, but found {brightPixels}.");
     }
 
 
@@ -1231,50 +1214,13 @@ public sealed class ThumbnailGenerationTests
 
     private sealed class CapturingThumbnailTextProcessRunner : IProcessRunner
     {
-        public string LastArguments { get; private set; } = string.Empty;
-        public string LastTextFileContents { get; private set; } = string.Empty;
-        public string? LastTextFilePath { get; private set; }
-        public byte[]? LastTextFileBytes { get; private set; }
+        public int CallCount { get; private set; }
 
-        public async Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
+        public Task<ProcessExecutionResult> ExecuteAsync(string fileName, string arguments, CancellationToken cancellationToken, TimeSpan? timeout = null)
         {
-            LastArguments = arguments;
-            LastTextFilePath = ExtractDrawTextPath(arguments, "textfile='");
-            LastTextFileBytes = await File.ReadAllBytesAsync(LastTextFilePath, cancellationToken);
-            LastTextFileContents = await File.ReadAllTextAsync(LastTextFilePath, cancellationToken);
-
-            var paths = ExtractQuotedPaths(arguments);
-            File.Copy(paths[0], paths[^1], overwrite: true);
+            CallCount++;
             var now = DateTimeOffset.UtcNow;
-            return new ProcessExecutionResult(0, string.Empty, string.Empty, now, now, fileName, arguments, string.Empty, false);
-        }
-
-        private static string ExtractDrawTextPath(string arguments, string prefix)
-        {
-            var start = arguments.IndexOf(prefix, StringComparison.Ordinal);
-            Assert.True(start >= 0);
-            start += prefix.Length;
-            var end = arguments.IndexOf('\'', start);
-            Assert.True(end > start);
-            return arguments[start..end].Replace('/', Path.DirectorySeparatorChar);
-        }
-
-        private static List<string> ExtractQuotedPaths(string arguments)
-        {
-            var paths = new List<string>();
-            var index = 0;
-            while (index < arguments.Length)
-            {
-                var start = arguments.IndexOf('\"', index);
-                if (start < 0) break;
-                var end = arguments.IndexOf('\"', start + 1);
-                if (end < 0) break;
-                var value = arguments[(start + 1)..end];
-                if (!value.Contains("drawtext=", StringComparison.Ordinal))
-                    paths.Add(value.Replace('/', Path.DirectorySeparatorChar));
-                index = end + 1;
-            }
-            return paths;
+            return Task.FromResult(new ProcessExecutionResult(0, string.Empty, string.Empty, now, now, fileName, arguments, string.Empty, false));
         }
     }
 
