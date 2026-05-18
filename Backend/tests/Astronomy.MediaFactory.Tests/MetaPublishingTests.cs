@@ -237,6 +237,38 @@ public sealed class MetaPublishingTests
     }
 
     [Fact]
+    public async Task FacebookFinishTaskCanceled_RetriesGraphPostAndSucceeds()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] { "PUBLISHED" }) };
+        handler.FacebookFinishExceptions.Enqueue(new TaskCanceledException("finish response timeout access_token=page-token-secret"));
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1, GraphRetryMaxAttempts = 2, GraphRetryBaseDelaySeconds = 0 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal("video-123", result.VideoId);
+        Assert.Equal(2, handler.Requests.Count(x => x.Phase == "finish"));
+    }
+
+    [Fact]
+    public async Task FacebookFinishTransientHttpStatus_RetriesGraphPostAndSucceeds()
+    {
+        using var workspace = new TempMetaWorkspace();
+        var repository = workspace.CreateRepositoryWithRun(out var run, createVideo: true, createToken: true);
+        var handler = new TrackingMetaHandler { VerificationStatuses = new Queue<string>(new[] { "PUBLISHED" }) };
+        handler.FacebookFinishHttpStatuses.Enqueue(HttpStatusCode.ServiceUnavailable);
+        var service = MetaPublishingTestFactory.CreateMetaService(workspace, repository, handler, new MetaPublishingOptions { Enabled = true, Mode = "Public", PublishFacebookReel = true, FacebookReelProcessingPollSeconds = 0, FacebookReelProcessingMaxAttempts = 1, GraphRetryMaxAttempts = 2, GraphRetryBaseDelaySeconds = 0 });
+
+        var result = (await service.PublishForPipelineRunAsync(run.Id, "facebook-reel", CancellationToken.None)).Single();
+
+        Assert.True(result.Success);
+        Assert.Equal("post-456", result.PostId);
+        Assert.Equal(2, handler.Requests.Count(x => x.Phase == "finish"));
+    }
+
+    [Fact]
     public async Task VerificationPolling_RetriesUntilStatusAvailable()
     {
         using var workspace = new TempMetaWorkspace();
@@ -969,6 +1001,8 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
     public Queue<string> InstagramContainerStatuses { get; set; } = new Queue<string>(new[] { "FINISHED" });
     public Queue<Exception> InstagramPollExceptions { get; } = new();
     public Queue<HttpStatusCode> InstagramPollHttpStatuses { get; } = new();
+    public Queue<Exception> FacebookFinishExceptions { get; } = new();
+    public Queue<HttpStatusCode> FacebookFinishHttpStatuses { get; } = new();
     public List<(string Phase, Dictionary<string, string> Headers, Dictionary<string, string> ContentHeaders, string Body)> Requests { get; } = new();
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -1036,6 +1070,16 @@ public sealed class TrackingMetaHandler : HttpMessageHandler
         if (request.RequestUri!.AbsolutePath.EndsWith("/video_reels", StringComparison.OrdinalIgnoreCase) && body.Contains("upload_phase=finish", StringComparison.Ordinal))
         {
             Requests.Add(("finish", request.Headers.ToDictionary(x => x.Key, x => string.Join(",", x.Value)), ContentHeaders(request), body));
+            if (FacebookFinishExceptions.Count > 0)
+            {
+                throw FacebookFinishExceptions.Dequeue();
+            }
+
+            if (FacebookFinishHttpStatuses.Count > 0)
+            {
+                return new HttpResponseMessage(FacebookFinishHttpStatuses.Dequeue()) { Content = JsonContent.Create(new { error = new { message = "temporary graph error access_token=page-token-secret" } }) };
+            }
+
             return JsonResponse(new { post_id = "post-456", id = "post-456" });
         }
 

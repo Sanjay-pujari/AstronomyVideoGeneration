@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -320,15 +321,104 @@ public sealed class FacebookReelPublishService : IFacebookReelPublishService
 
     private async Task<T> PostGraphAsync<T>(string url, Dictionary<string, string> form, string operation, CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.PostAsync(url, new FormUrlEncodedContent(form), cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        var maxAttempts = Math.Clamp(_publishingOptions.GraphRetryMaxAttempts, 1, 5);
+        HttpStatusCode? lastStatusCode = null;
+        Exception? lastException = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            throw new InvalidOperationException($"{operation} failed with status {(int)response.StatusCode}.");
+            if (attempt > 1)
+            {
+                await DelayGraphRetryAsync(attempt, cancellationToken);
+            }
+
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, url)
+                {
+                    Content = new FormUrlEncodedContent(form)
+                };
+                using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                if (response.IsSuccessStatusCode)
+                {
+                    var payload = await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
+                    return payload ?? throw new InvalidOperationException($"{operation} returned an empty response.");
+                }
+
+                lastStatusCode = response.StatusCode;
+                if (!IsTransientStatusCode(response.StatusCode))
+                {
+                    throw new InvalidOperationException($"{operation} failed with status {(int)response.StatusCode}.");
+                }
+
+                var statusMessage = $"{operation} failed with transient status {(int)response.StatusCode}.";
+                lastException = new HttpRequestException(statusMessage, null, response.StatusCode);
+                if (attempt == maxAttempts)
+                {
+                    break;
+                }
+
+                _logger.LogWarning("Transient Meta Graph API HTTP status {StatusCode} for {Operation} on attempt {Attempt}/{MaxAttempts}; retrying. Url={Url}", (int)response.StatusCode, operation, attempt, maxAttempts, RedactAccessToken(url));
+            }
+            catch (Exception ex) when (IsTransientGraphException(ex, cancellationToken))
+            {
+                lastException = ex;
+                if (ex is HttpRequestException httpRequestException)
+                {
+                    lastStatusCode = httpRequestException.StatusCode;
+                }
+
+                if (attempt == maxAttempts)
+                {
+                    throw new HttpRequestException($"{operation} failed after {attempt} transient Meta Graph API attempts: {RedactAccessToken(ex.Message)}", ex, lastStatusCode);
+                }
+
+                _logger.LogWarning("Transient Meta Graph API exception for {Operation} on attempt {Attempt}/{MaxAttempts}; retrying. Url={Url}; Error={Error}", operation, attempt, maxAttempts, RedactAccessToken(url), RedactAccessToken(ex.Message));
+            }
         }
 
-        var payload = await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
-        return payload ?? throw new InvalidOperationException($"{operation} returned an empty response.");
+        throw new HttpRequestException($"{operation} failed after {maxAttempts} transient Meta Graph API attempts: {RedactAccessToken(lastException?.Message ?? "transient Meta Graph API failure")}", lastException, lastStatusCode);
     }
+
+    private async Task DelayGraphRetryAsync(int attempt, CancellationToken cancellationToken)
+    {
+        var delay = GetGraphRetryDelay(attempt, Math.Max(0, _publishingOptions.GraphRetryBaseDelaySeconds));
+        if (delay > TimeSpan.Zero)
+        {
+            await Task.Delay(delay, cancellationToken);
+        }
+    }
+
+    private static TimeSpan GetGraphRetryDelay(int attempt, int baseDelaySeconds)
+    {
+        if (baseDelaySeconds <= 0)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var multiplier = attempt switch
+        {
+            2 => 1.0d,
+            3 => 2.5d,
+            _ => 5.0d
+        };
+        var jitter = Random.Shared.NextDouble() * 0.25d;
+        return TimeSpan.FromSeconds((baseDelaySeconds * multiplier) + jitter);
+    }
+
+    private static bool IsTransientStatusCode(HttpStatusCode statusCode)
+        => statusCode is HttpStatusCode.RequestTimeout
+            or HttpStatusCode.TooManyRequests
+            or HttpStatusCode.InternalServerError
+            or HttpStatusCode.BadGateway
+            or HttpStatusCode.ServiceUnavailable
+            or HttpStatusCode.GatewayTimeout
+            || (int)statusCode == 425;
+
+    private static bool IsTransientGraphException(Exception ex, CancellationToken cancellationToken)
+        => ex is HttpRequestException
+            || ex is IOException
+            || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested);
 
     private async Task<string?> ValidateVideoAsync(string videoPath, CancellationToken cancellationToken)
     {
