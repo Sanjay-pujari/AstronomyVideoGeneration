@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -1294,6 +1295,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
         if (!drawtext.Contains("drawtext=", StringComparison.Ordinal))
             reason = "missing drawtext filter";
+        else if (!HasValidWindowsDrawTextDriveEscaping(drawtext))
+            reason = "drawtext Windows drive path escaping validation failed: paths must use D\\:/ and must not use D:/ or D\\\\:/";
         else if (IsEnableAlwaysFalse(drawtext))
             reason = "enable condition always false";
         else if (IsZero(alpha))
@@ -1403,7 +1406,16 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
 
     public static bool ContainsInvalidWindowsDriveColonEscaping(string drawtext)
-        => drawtext.Contains(@"\\:", StringComparison.Ordinal);
+        => UnescapedWindowsDriveColonPattern.IsMatch(drawtext) || DoubleEscapedWindowsDriveColonPattern.IsMatch(drawtext);
+
+    public static bool HasValidWindowsDrawTextDriveEscaping(string drawtext)
+        => !ContainsWindowsDrivePathPattern.IsMatch(drawtext)
+            || (EscapedWindowsDriveColonPattern.IsMatch(drawtext) && !ContainsInvalidWindowsDriveColonEscaping(drawtext));
+
+    private static readonly Regex ContainsWindowsDrivePathPattern = new(@"[A-Za-z](?:\\{1,2})?:/", RegexOptions.CultureInvariant);
+    private static readonly Regex EscapedWindowsDriveColonPattern = new(@"(?<!\\)[A-Za-z]\\:/", RegexOptions.CultureInvariant);
+    private static readonly Regex UnescapedWindowsDriveColonPattern = new(@"(?<!\\)[A-Za-z]:/", RegexOptions.CultureInvariant);
+    private static readonly Regex DoubleEscapedWindowsDriveColonPattern = new(@"[A-Za-z]\\\\:/", RegexOptions.CultureInvariant);
 
     private static async Task WriteThumbnailDrawTextDebugAsync(
         string thumbnailDirectory,
@@ -1420,9 +1432,9 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var lines = new[]
         {
             $"raw font path: {rawFontPath}",
-            $"normalized font path: {FfmpegPathEscaper.ToDrawTextPath(rawFontPath)}",
+            $"escaped font path: {FfmpegPathEscaper.ToDrawTextPath(rawFontPath)}",
             $"raw textfile path: {rawTextFilePath}",
-            $"normalized textfile path: {FfmpegPathEscaper.ToDrawTextPath(rawTextFilePath)}",
+            $"escaped textfile path: {FfmpegPathEscaper.ToDrawTextPath(rawTextFilePath)}",
             $"final drawtext filter: {drawtext}",
             $"full ffmpeg command: {ffmpegCommand}",
             $"warning: {warning}"

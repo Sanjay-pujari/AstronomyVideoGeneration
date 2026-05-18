@@ -478,9 +478,9 @@ public sealed class ThumbnailGenerationTests
         Assert.DoesNotContain(@"\:", longDrawText);
         var debug = await File.ReadAllTextAsync(Path.Combine(thumbnailsDir, "thumbnail-drawtext-debug.txt"));
         Assert.Contains("raw font path:", debug);
-        Assert.Contains("normalized font path:", debug);
+        Assert.Contains("escaped font path:", debug);
         Assert.Contains("raw textfile path:", debug);
-        Assert.Contains("normalized textfile path:", debug);
+        Assert.Contains("escaped textfile path:", debug);
         Assert.Contains("final drawtext filter:", debug);
         Assert.Contains("full ffmpeg command:", debug);
         Assert.DoesNotContain(@"\:", debug);
@@ -578,12 +578,25 @@ public sealed class ThumbnailGenerationTests
     }
 
     [Fact]
-    public void LocalAssetCollage_DrawtextNormalizesWindowsDriveWithoutEscapingColon()
+    public void LocalAssetCollage_DrawtextEscapesOnlyWindowsDriveColon()
     {
         var escaped = FfmpegPathEscaper.ToDrawTextPath(@"D:\Astronomy Workspace\fonts\John's Font.ttf");
 
-        Assert.Equal("D:/Astronomy Workspace/fonts/John\\'s Font.ttf", escaped);
-        Assert.DoesNotContain(@"\:", escaped);
+        Assert.Equal("D\\:/Astronomy Workspace/fonts/John\\'s Font.ttf", escaped);
+        Assert.Contains(@"D\:/", escaped);
+        Assert.DoesNotContain(@"D\\:/", escaped);
+    }
+
+    [Theory]
+    [InlineData(@"D:/AstronomyWorkspace/fonts/font.ttf")]
+    [InlineData(@"D\:/AstronomyWorkspace/fonts/font.ttf")]
+    [InlineData(@"D\\:/AstronomyWorkspace/fonts/font.ttf")]
+    public void LocalAssetCollage_DrawtextEscaperDoesNotDoubleEscapeWindowsDriveColon(string input)
+    {
+        var escaped = FfmpegPathEscaper.ToDrawTextPath(input);
+
+        Assert.Equal(@"D\:/AstronomyWorkspace/fonts/font.ttf", escaped);
+        Assert.DoesNotContain(@"D\\:/", escaped);
     }
 
     [Fact]
@@ -596,9 +609,11 @@ public sealed class ThumbnailGenerationTests
             new RectangleF(48, 120, 500, 260),
             portrait: false);
 
-        Assert.Contains("drawtext=fontfile='D:/AstronomyWorkspace/assets/fonts/Montserrat-ExtraBold.ttf'", filter);
-        Assert.Contains("textfile='D:/AstronomyWorkspace/out/thumbnail-title-en.txt'", filter);
-        Assert.DoesNotContain(@"\:", filter);
+        Assert.Contains(@"drawtext=fontfile='D\:/AstronomyWorkspace/assets/fonts/Montserrat-ExtraBold.ttf'", filter);
+        Assert.Contains(@"textfile='D\:/AstronomyWorkspace/out/thumbnail-title-en.txt'", filter);
+        Assert.Contains(@"D\:/", filter);
+        Assert.DoesNotContain(@"D\\:/", filter);
+        LocalAssetCollageThumbnailService.ValidateDrawTextFilter(filter, "Jupiter Tonight", 84, new RectangleF(48, 120, 500, 260));
         Assert.Contains("fontcolor=white@1.0", filter);
         Assert.Contains("shadowcolor=black@0.75", filter);
         Assert.Contains("fontsize=84", filter);
@@ -611,7 +626,10 @@ public sealed class ThumbnailGenerationTests
     public void LocalAssetCollage_FlagsInvalidWindowsDriveColonEscaping()
     {
         Assert.True(LocalAssetCollageThumbnailService.ContainsInvalidWindowsDriveColonEscaping(@"drawtext=fontfile='D\\:/fonts/font.ttf':textfile='D\\:/out/title.txt'"));
-        Assert.False(LocalAssetCollageThumbnailService.ContainsInvalidWindowsDriveColonEscaping("drawtext=fontfile='D:/fonts/font.ttf':textfile='D:/out/title.txt'"));
+        Assert.True(LocalAssetCollageThumbnailService.ContainsInvalidWindowsDriveColonEscaping("drawtext=fontfile='D:/fonts/font.ttf':textfile='D:/out/title.txt'"));
+        Assert.False(LocalAssetCollageThumbnailService.ContainsInvalidWindowsDriveColonEscaping(@"drawtext=fontfile='D\:/fonts/font.ttf':textfile='D\:/out/title.txt'"));
+        Assert.True(LocalAssetCollageThumbnailService.HasValidWindowsDrawTextDriveEscaping(@"drawtext=fontfile='D\:/fonts/font.ttf':textfile='D\:/out/title.txt'"));
+        Assert.False(LocalAssetCollageThumbnailService.HasValidWindowsDrawTextDriveEscaping("drawtext=fontfile='D:/fonts/font.ttf':textfile='D:/out/title.txt'"));
     }
 
     [Fact]
