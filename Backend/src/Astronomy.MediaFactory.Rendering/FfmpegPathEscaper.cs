@@ -16,7 +16,7 @@ public static partial class FfmpegPathEscaper
             && normalized[1] == ':'
             && normalized[2] == '/')
         {
-            normalized = string.Concat(normalized[0], "\\:", normalized.AsSpan(2));
+            normalized = string.Concat(normalized[0].ToString(), "\\:", normalized[2..]);
         }
 
         return normalized.Replace("'", "\\'", StringComparison.Ordinal);
