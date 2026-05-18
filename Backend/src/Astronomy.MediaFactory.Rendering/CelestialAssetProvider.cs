@@ -51,7 +51,7 @@ public sealed class CelestialAssetProvider : ICelestialAssetProvider
         return await CreateLocalFallbackAssetAsync(request, objectKey, cancellationToken);
     }
 
-    private static CelestialAsset ToAsset(CelestialAssetRequest request, string objectKey, CelestialAssetImageMetadata metadata, bool fallbackUsed)
+    private CelestialAsset ToAsset(CelestialAssetRequest request, string objectKey, CelestialAssetImageMetadata metadata, bool fallbackUsed)
         => new()
         {
             ObjectName = request.ObjectName,
