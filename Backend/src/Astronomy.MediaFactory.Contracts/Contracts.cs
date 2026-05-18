@@ -122,6 +122,14 @@ public sealed class ContentDurationOptions
     public bool AllowDynamicOptimization { get; set; } = true;
 }
 
+public sealed class VideoLengthPolicyOptions
+{
+    public const string SectionName = "VideoLengthPolicy";
+    public int MaxFullVideoDurationSeconds { get; set; } = 420;
+    public int MaxFullVideoSegments { get; set; } = 8;
+    public int MaxObjectsInFullVideo { get; set; } = 5;
+}
+
 public sealed class ContentExpansionOptions
 {
     public const string SectionName = "ContentExpansion";
@@ -333,6 +341,10 @@ public sealed class RenderingOptions
     public int FfmpegSegmentTimeoutSeconds { get; set; } = 120;
     public int SegmentRenderTimeoutSeconds { get; set; } = 180;
     public int FinalLongRenderTimeoutSeconds { get; set; } = 900;
+    public double FinalLongTimeoutMultiplier { get; set; } = 8d;
+    public int FinalLongMaxTimeoutSeconds { get; set; } = 3600;
+    public bool RetryFinalLongRenderWithFasterProfile { get; set; } = true;
+    public bool FallbackTo1080pOnFinalRenderTimeout { get; set; } = true;
     public int FinalShortRenderTimeoutSeconds { get; set; } = 300;
     public int FinalMetaRenderTimeoutSeconds { get; set; } = 300;
     public bool WriteSegmentDiagnostics { get; set; } = true;
@@ -396,10 +408,10 @@ public sealed record VideoEncodingPreset(
         AudioBitrate: "128k",
         ScaleFlags: NormalizeScaleFlags(options.IntermediateScaleFlags, "bicubic"));
 
-    public static VideoEncodingPreset YouTubeLongFinal(RenderingOptions options)
+    public static VideoEncodingPreset YouTubeLongFinal(RenderingOptions options, bool forceFastest = false, bool force1080p = false)
     {
-        var enable1440pUpscale = options.EnableYouTube1440pUpscale;
-        var mode = NormalizeYouTubeLongQualityMode(options.YouTubeLongQualityMode);
+        var enable1440pUpscale = options.EnableYouTube1440pUpscale && !force1080p;
+        var mode = forceFastest ? "Fastest" : NormalizeYouTubeLongQualityMode(options.YouTubeLongQualityMode);
         var (preset, crf, maxRate, bufferSize, scaleFlags) = mode switch
         {
             "Quality" => ("medium", 18, "24M", "48M", "lanczos"),

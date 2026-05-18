@@ -40,6 +40,7 @@ public sealed class PipelineOrchestrator
     private readonly IContentExperimentService? _contentExperimentService;
     private readonly IShortFormPublishingService? _shortFormPublishingService;
     private readonly RenderingOptions _renderingOptions;
+    private readonly VideoLengthPolicyOptions _videoLengthPolicyOptions;
     private readonly IPrePublishValidationService _prePublishValidationService;
     private readonly PublishingValidationOptions _publishingValidationOptions;
     private readonly PublishingOptions _publishingOptions;
@@ -95,7 +96,8 @@ public sealed class PipelineOrchestrator
         IOptions<SchedulerOptions>? schedulerOptions = null,
         IAstronomyEventDecisionService? eventDecisionService = null,
         IAstronomyEventStore? eventStore = null,
-        ICinematicThumbnailService? cinematicThumbnailService = null)
+        ICinematicThumbnailService? cinematicThumbnailService = null,
+        IOptions<VideoLengthPolicyOptions>? videoLengthPolicyOptions = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -139,6 +141,7 @@ public sealed class PipelineOrchestrator
         _growthOptions = growthOptions?.Value ?? new GrowthOptions();
         _eventDecisionService = eventDecisionService;
         _eventStore = eventStore;
+        _videoLengthPolicyOptions = videoLengthPolicyOptions?.Value ?? new VideoLengthPolicyOptions();
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken, Guid? pipelineRunId = null)
@@ -364,7 +367,19 @@ public sealed class PipelineOrchestrator
                 }
                 await _repository.SaveChangesAsync(cancellationToken);
             }
+            var videoLengthPolicyResult = ApplyVideoLengthPolicy(context, _videoLengthPolicyOptions, EstimateFullVideoDurationSeconds(request.ContentType, context.SceneObservationContexts.Count));
+            if (videoLengthPolicyResult.TrimmedSceneIds.Count > 0)
+            {
+                _logger.LogInformation(
+                    "Video length policy trimmed optional scenes before prompt generation. OriginalSegments={OriginalSegments}; FinalSegments={FinalSegments}; EstimatedDurationSeconds={EstimatedDurationSeconds}; TrimmedSceneIds={TrimmedSceneIds}",
+                    videoLengthPolicyResult.OriginalSegmentCount,
+                    videoLengthPolicyResult.FinalSegmentCount,
+                    videoLengthPolicyResult.EstimatedDurationSeconds,
+                    string.Join(",", videoLengthPolicyResult.TrimmedSceneIds));
+            }
+
             await WriteLocalizationContextAsync(context.Localization, outputDir, cancellationToken);
+            await WriteVideoLengthPolicyDiagnosticsAsync(videoLengthPolicyResult, outputDir, cancellationToken);
             await WritePrimaryContextArtifactsAsync(context, outputDir, cancellationToken);
             if (_pipelineStageExecutor is not null)
             {
@@ -452,6 +467,13 @@ public sealed class PipelineOrchestrator
             }
 
             optimizedMetadata = ApplyGrowthMetadata(optimizedMetadata, _growthOptions, context.Localization.ResolvedLanguage, request.RegionId ?? context.LocationName);
+
+            var postPromptPolicyResult = ApplyVideoLengthPolicy(context, _videoLengthPolicyOptions, script.EstimatedDurationSeconds);
+            if (postPromptPolicyResult.TrimmedSceneIds.Count > 0)
+            {
+                _logger.LogInformation("Video length policy trimmed optional scenes after prompt duration estimate. EstimatedDurationSeconds={EstimatedDurationSeconds}; TrimmedSceneIds={TrimmedSceneIds}", script.EstimatedDurationSeconds, string.Join(",", postPromptPolicyResult.TrimmedSceneIds));
+                await WriteVideoLengthPolicyDiagnosticsAsync(postPromptPolicyResult, outputDir, cancellationToken);
+            }
 
             script = new ScriptResult
             {
@@ -1850,6 +1872,87 @@ public sealed class PipelineOrchestrator
             .Select(x => x.Equals("Night sky", StringComparison.OrdinalIgnoreCase) ? "Sky" : x)
             .ToList();
 
+    public static VideoLengthPolicyResult ApplyVideoLengthPolicy(AstronomyContext context, VideoLengthPolicyOptions options, int estimatedDurationSeconds)
+    {
+        var originalScenes = context.SceneObservationContexts.ToList();
+        if (originalScenes.Count == 0)
+        {
+            return new VideoLengthPolicyResult(0, 0, estimatedDurationSeconds, []);
+        }
+
+        var maxSegments = Math.Max(1, options.MaxFullVideoSegments);
+        var maxObjects = Math.Max(1, options.MaxObjectsInFullVideo);
+        var maxDuration = Math.Max(1, options.MaxFullVideoDurationSeconds);
+        var kept = originalScenes.ToList();
+        var trimmed = new List<string>();
+
+        bool NeedsTrim()
+        {
+            var objectCount = kept.Count(IsOptionalObjectSceneForLengthPolicy);
+            var projectedDuration = originalScenes.Count == 0
+                ? estimatedDurationSeconds
+                : estimatedDurationSeconds * (kept.Count / (double)originalScenes.Count);
+            return kept.Count > maxSegments || objectCount > maxObjects || projectedDuration > maxDuration;
+        }
+
+        while (NeedsTrim())
+        {
+            var removeIndex = FindLastOptionalObjectSceneIndex(kept);
+            if (removeIndex < 0)
+            {
+                break;
+            }
+
+            trimmed.Add(kept[removeIndex].SceneId);
+            kept.RemoveAt(removeIndex);
+        }
+
+        context.SceneObservationContexts = kept.Select((scene, index) => CopyScene(scene, index + 1)).ToList();
+        return new VideoLengthPolicyResult(originalScenes.Count, context.SceneObservationContexts.Count, estimatedDurationSeconds, trimmed);
+    }
+
+    private int EstimateFullVideoDurationSeconds(ContentType contentType, int segmentCount)
+    {
+        var targetMinutes = contentType == ContentType.SpecialEventGuide ? 8 : 6;
+        var targetSeconds = targetMinutes * 60;
+        if (segmentCount <= _videoLengthPolicyOptions.MaxFullVideoSegments)
+        {
+            return targetSeconds;
+        }
+
+        return (int)Math.Ceiling(targetSeconds * (segmentCount / (double)Math.Max(1, _videoLengthPolicyOptions.MaxFullVideoSegments)));
+    }
+
+    private static int FindLastOptionalObjectSceneIndex(IReadOnlyList<SceneObservationContext> scenes)
+    {
+        for (var i = scenes.Count - 1; i >= 0; i--)
+        {
+            if (IsOptionalObjectSceneForLengthPolicy(scenes[i]))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsOptionalObjectSceneForLengthPolicy(SceneObservationContext scene)
+        => !IsOpeningScene(scene)
+           && !IsClosingScene(scene)
+           && !IsSpecialEventScene(scene)
+           && !string.Equals(scene.ObjectName, "Sky", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSpecialEventScene(SceneObservationContext scene)
+        => scene.SceneType.Contains("SpecialEvent", StringComparison.OrdinalIgnoreCase)
+           || scene.SceneId.Contains("special-event", StringComparison.OrdinalIgnoreCase)
+           || scene.SceneId.Contains("event", StringComparison.OrdinalIgnoreCase);
+
+    private static Task WriteVideoLengthPolicyDiagnosticsAsync(VideoLengthPolicyResult result, string outputDirectory, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        return File.WriteAllTextAsync(Path.Combine(outputDirectory, "video-length-policy-report.json"), json, cancellationToken);
+    }
+
     private static ScriptResult CopyScriptWithSceneSections(ScriptResult script, IReadOnlyDictionary<string, string> alignedSectionsBySceneId)
         => new()
         {
@@ -2122,6 +2225,12 @@ public sealed class PipelineOrchestrator
         observingTip = astronomyEvent?.Details ?? "Let your eyes adapt to darkness for 15-20 minutes.",
         whyInteresting = astronomyEvent?.Details ?? "A useful beginner observing target."
     };
+
+    public sealed record VideoLengthPolicyResult(
+        int OriginalSegmentCount,
+        int FinalSegmentCount,
+        int EstimatedDurationSeconds,
+        IReadOnlyList<string> TrimmedSceneIds);
 
     private sealed record FullVideoNarrationSection(
         SceneObservationContext Scene,
