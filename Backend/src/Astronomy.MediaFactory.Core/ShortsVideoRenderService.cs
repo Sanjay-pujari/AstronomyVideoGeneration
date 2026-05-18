@@ -208,8 +208,8 @@ public sealed class ShortsVideoRenderService : IShortsVideoRenderService
         };
 
         await ValidateShortSequenceBeforeRenderAsync(shortSequence, shortScenesOrdered, context.Localization.ResolvedLanguage, outputDirectory, cancellationToken);
-        var thumbnailPath = await GenerateShortThumbnailAsync(contentType, context, optimizedMetadata, visualCandidates, manifest.Scenes, outputDirectory, cancellationToken);
         var videoPath = await _videoRenderService.RenderAsync(manifest, cancellationToken);
+        var thumbnailPath = await GenerateShortThumbnailAsync(contentType, context, optimizedMetadata, visualCandidates, manifest.Scenes, outputDirectory, cancellationToken);
 
         string? blobUrl = null;
         try
