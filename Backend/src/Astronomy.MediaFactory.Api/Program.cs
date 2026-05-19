@@ -215,6 +215,15 @@ app.MapPost("/api/scheduler/disable/{scheduleName}", async (string scheduleName,
     return updated ? Results.Ok(new { scheduleName, enabled = false }) : Results.NotFound(new { message = $"Schedule '{scheduleName}' was not found." });
 });
 
+
+app.MapGet("/api/ai-optimization/hooks/{pipelineRunId:guid}", async (Guid pipelineRunId, IAIOptimizationReadService service, CancellationToken ct) => Results.Ok(await service.GetHooksAsync(pipelineRunId, ct)));
+app.MapGet("/api/ai-optimization/trends/{date}", async (DateOnly date, IAIOptimizationReadService service, CancellationToken ct) => Results.Ok(await service.GetTrendsAsync(date, ct)));
+app.MapGet("/api/ai-optimization/publishing/{pipelineRunId:guid}", async (Guid pipelineRunId, IAIOptimizationReadService service, CancellationToken ct) =>
+{
+    var item = await service.GetPublishingAsync(pipelineRunId, ct);
+    return item is null ? Results.NotFound() : Results.Ok(item);
+});
+
 app.MapPost("/api/events/{eventId}/generate", async (string eventId, string? regionId, ContentType? contentType, RunPipelineRequest request, IAstronomyEventDiscoveryService events, IPipelineRepository repository, PipelineOrchestrator orchestrator, CancellationToken ct) =>
 {
     var astronomyEvent = await events.GetByIdAsync(eventId, ct);

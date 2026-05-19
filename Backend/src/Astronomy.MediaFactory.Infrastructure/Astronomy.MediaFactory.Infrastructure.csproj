@@ -19,5 +19,6 @@
 	  <PackageReference Include="Microsoft.Extensions.Http" />
 	  <PackageReference Include="Azure.Identity" />
 	  <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" />
+      <ProjectReference Include="..\Astronomy.MediaFactory.AIOptimization\Astronomy.MediaFactory.AIOptimization.csproj" />
   </ItemGroup>
 </Project>

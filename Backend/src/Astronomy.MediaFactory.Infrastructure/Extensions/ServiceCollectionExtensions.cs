@@ -1,5 +1,6 @@
 using System.Net.Http;
 using Astronomy.MediaFactory.AstroData.Clients;
+using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.AstroData.Services;
 using Astronomy.MediaFactory.ContentGen;
 using Astronomy.MediaFactory.Contracts;
@@ -251,6 +252,10 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<ThumbnailAIOptimizationOptions>()
             .Bind(configuration.GetSection(ThumbnailAIOptimizationOptions.SectionName));
+
+        services.AddSingleton<IHookOptimizationService, HookOptimizationService>();
+        services.AddSingleton<ITrendSignalProvider, StaticTrendSignalProvider>();
+        services.AddScoped<IAIOptimizationReadService, AIOptimizationReadService>();
 
         services.AddOptions<ThumbnailOptions>()
             .Bind(configuration.GetSection(ThumbnailOptions.SectionName))

@@ -305,6 +305,11 @@ public sealed class AIOptimizationOptions
         "recommendedObjectsToBoost"
     ];
     public string OutputFileName { get; set; } = "ai-optimization-recommendations.json";
+    public bool GenerateHookVariants { get; set; } = true;
+    public int HookVariantCount { get; set; } = 5;
+    public bool EnableTrendScoring { get; set; } = true;
+    public bool EnablePublishingOptimization { get; set; } = true;
+    public bool EnableThumbnailMetadataScoring { get; set; } = true;
 }
 
 public sealed class AnalyticsOptions

@@ -28,6 +28,10 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<AlertNotification> AlertNotifications => Set<AlertNotification>();
     public DbSet<AstronomyEvent> AstronomyEvents => Set<AstronomyEvent>();
     public DbSet<AstronomyEventGenerationHistory> AstronomyEventGenerationHistory => Set<AstronomyEventGenerationHistory>();
+    public DbSet<PublishingOptimizationResultEntity> PublishingOptimizationResults => Set<PublishingOptimizationResultEntity>();
+    public DbSet<TrendSignalEntity> TrendSignals => Set<TrendSignalEntity>();
+    public DbSet<ThumbnailOptimizationResultEntity> ThumbnailOptimizationResults => Set<ThumbnailOptimizationResultEntity>();
+    public DbSet<HookOptimizationResultEntity> HookOptimizationResults => Set<HookOptimizationResultEntity>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
         (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
@@ -152,6 +156,12 @@ public sealed class MediaFactoryDbContext : DbContext
             .WithOne()
             .HasForeignKey(x => x.ContentExperimentId)
             .OnDelete(DeleteBehavior.Cascade);
+
+
+        modelBuilder.Entity<HookOptimizationResultEntity>().ToTable("hook_optimization_results").HasKey(x => x.Id);
+        modelBuilder.Entity<ThumbnailOptimizationResultEntity>().ToTable("thumbnail_optimization_results").HasKey(x => x.Id);
+        modelBuilder.Entity<TrendSignalEntity>().ToTable("trend_signals").HasKey(x => x.Id);
+        modelBuilder.Entity<PublishingOptimizationResultEntity>().ToTable("publishing_optimization_results").HasKey(x => x.Id);
 
         modelBuilder.Entity<PipelineRun>().HasIndex(x => new { x.RegionId, x.RunDate, x.ContentType });
         modelBuilder.Entity<PipelineRun>().HasIndex(x => new { x.EventId, x.RunDate, x.RegionId });
