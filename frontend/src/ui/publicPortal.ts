@@ -11,7 +11,7 @@ const SOCIAL_LINKS = [
 
 const PUBLIC_NAV = [
   { label: 'Home', href: '/' },
-  { label: "Tonight's Sky", href: '/tonight' },
+  { label: "Tonight's Sky", href: '/tonights-sky' },
   { label: 'Events', href: '/events' },
   { label: 'Videos', href: '/videos' },
   { label: 'Alerts', href: '/alerts' },
@@ -25,7 +25,7 @@ export type PublicRoute = {
 
 export function parsePublicRoute(pathname: string): PublicRoute {
   const path = pathname.replace(/\/+$/, '') || '/';
-  if (path === '/tonight') return { page: 'tonight' };
+  if (path === '/tonight' || path === '/tonights-sky') return { page: 'tonight' };
   if (path === '/events') return { page: 'events' };
   if (path === '/videos') return { page: 'videos' };
   if (path === '/alerts') return { page: 'alerts' };
@@ -95,9 +95,9 @@ function socialLinks() {
 }
 
 function publicNav(active: PublicPageKey) {
-  return `<nav class="public-nav" aria-label="Public pages"><a class="brand" href="/">AstroPulse</a><div>${PUBLIC_NAV.map((link) => {
+  return `<nav class="public-nav" aria-label="Public pages"><a class="brand" href="/" data-router-link>AstroPulse</a><div>${PUBLIC_NAV.map((link) => {
     const key = link.href === '/' ? 'home' : link.href.slice(1);
-    return `<a class="nav-link ${key === active ? 'nav-link--active' : ''}" href="${link.href}">${escapeHtml(link.label)}</a>`;
+    return `<a class="nav-link ${key === active ? 'nav-link--active' : ''}" href="${link.href}" data-router-link>${escapeHtml(link.label)}</a>`;
   }).join('')}</div></nav>`;
 }
 
@@ -168,7 +168,7 @@ function latestGuide(data: DashboardData, regionId?: string) {
 function homePage(data: DashboardData) {
   const latestVideos = data.latestVideos.slice(0, 3);
   const shortVideos = data.latestShorts.slice(0, 3);
-  return `<header class="public-hero"><div><span class="eyebrow">Location-aware astronomy</span><h1>Explore tonight's sky with AstroPulse.</h1><p>Friendly astronomy guides, event previews, long videos, shorts, and reels tailored by region and date.</p>${socialLinks()}</div><div class="hero-panel"><h2>Find your sky</h2>${regionSelector(data.regions)}<a class="primary-button" href="/tonight">Open Tonight's Sky</a></div></header><section class="public-section"><h2>Latest sky guides</h2>${mediaGrid(latestVideos, 'Latest sky guides are coming soon.')}</section><section class="public-section"><h2>Latest shorts and reels</h2>${mediaGrid(shortVideos, 'Short-form sky updates are coming soon.')}</section><section class="public-section"><h2>Upcoming sky events</h2>${eventGrid(data.upcomingEvents.slice(0, 3), [...latestVideos, ...shortVideos], 'Upcoming astronomy events are coming soon.')}</section>`;
+  return `<header class="public-hero"><div><span class="eyebrow">Location-aware astronomy</span><h1>Explore tonight's sky with AstroPulse.</h1><p>Friendly astronomy guides, event previews, long videos, shorts, and reels tailored by region and date.</p>${socialLinks()}</div><div class="hero-panel"><h2>Find your sky</h2>${regionSelector(data.regions)}<a class="primary-button" href="/tonights-sky" data-router-link>Open Tonight's Sky</a></div></header><section class="public-section"><h2>Latest sky guides</h2>${mediaGrid(latestVideos, 'Latest sky guides are coming soon.')}</section><section class="public-section"><h2>Latest shorts and reels</h2>${mediaGrid(shortVideos, 'Short-form sky updates are coming soon.')}</section><section class="public-section"><h2>Upcoming sky events</h2>${eventGrid(data.upcomingEvents.slice(0, 3), [...latestVideos, ...shortVideos], 'Upcoming astronomy events are coming soon.')}</section>`;
 }
 
 function tonightPage(data: DashboardData, selectedRegionId?: string) {
