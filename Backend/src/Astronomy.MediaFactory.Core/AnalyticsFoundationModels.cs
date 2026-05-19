@@ -2,7 +2,7 @@ using Astronomy.MediaFactory.Core.Common;
 
 namespace Astronomy.MediaFactory.Analytics;
 
-public class PlatformVideoAnalytics : EntityBase
+public abstract class AnalyticsRecordBase : EntityBase
 {
     public Guid PipelineRunId { get; set; }
     public string Platform { get; set; } = "";
@@ -21,11 +21,17 @@ public class PlatformVideoAnalytics : EntityBase
     public long SubscribersGained { get; set; }
 }
 
-public sealed class PlatformPostAnalytics : PlatformVideoAnalytics { }
-public sealed class AudienceAnalytics : PlatformVideoAnalytics { }
-public sealed class ThumbnailPerformance : PlatformVideoAnalytics { }
-public sealed class HookPerformance : PlatformVideoAnalytics { }
-public sealed class DailyPerformanceSummary : PlatformVideoAnalytics
+public sealed class PlatformVideoAnalytics : AnalyticsRecordBase;
+
+public sealed class PlatformPostAnalytics : AnalyticsRecordBase;
+
+public sealed class AudienceAnalytics : AnalyticsRecordBase;
+
+public sealed class ThumbnailPerformance : AnalyticsRecordBase;
+
+public sealed class HookPerformance : AnalyticsRecordBase;
+
+public sealed class DailyPerformanceSummary : AnalyticsRecordBase
 {
     public DateOnly SummaryDate { get; set; }
 }
