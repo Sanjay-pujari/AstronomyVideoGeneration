@@ -173,6 +173,30 @@ function bindAdminInteractions() {
     });
   });
   publishDiagnostics();
+  const bindRunAction = async (button: HTMLButtonElement, action: () => Promise<unknown>, idleLabel: string) => {
+    const original = button.textContent || idleLabel;
+    button.textContent = 'Running…';
+    button.disabled = true;
+    try {
+      await action();
+      button.textContent = 'Done';
+    } catch (error) {
+      button.textContent = error instanceof Error ? 'Failed' : 'Unavailable';
+    } finally {
+      setTimeout(() => { button.textContent = original; button.disabled = false; }, 1600);
+    }
+  };
+
+  document.querySelectorAll<HTMLButtonElement>('[data-ai-opt-run]').forEach((button) => {
+    button.addEventListener('click', () => { const runId = button.dataset.aiOptRun; if (!runId) return; void bindRunAction(button, () => api.runAiOptimization(runId), 'Run AI Optimization'); });
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-analytics-init]').forEach((button) => {
+    button.addEventListener('click', () => { const runId = button.dataset.analyticsInit; if (!runId) return; void bindRunAction(button, () => api.initializeAnalytics(runId), 'Initialize Analytics'); });
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-intel-backfill]').forEach((button) => {
+    button.addEventListener('click', () => { const runId = button.dataset.intelBackfill; if (!runId) return; void bindRunAction(button, () => api.backfillIntelligence(runId), 'Backfill Intelligence'); });
+  });
+
   document.getElementById('load-run')?.addEventListener('click', async () => {
     const input = document.getElementById('run-id') as HTMLInputElement | null;
     if (!input?.value) return;
