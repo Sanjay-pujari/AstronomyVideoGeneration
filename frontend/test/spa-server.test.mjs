@@ -34,7 +34,7 @@ test('known assets are served directly', async () => {
 test('unknown SPA paths fallback to index.html', async () => {
   const root = await setupDistFixture();
 
-  for (const route of ['/admin', '/admin/analytics', '/dashboard']) {
+  for (const route of ['/admin', '/dashboard', '/admin/analytics', '/dashboard/analytics']) {
     const response = await resolveRequest(root, route);
     assert.equal(response.status, 200);
     assert.equal(response.contentType, 'text/html; charset=utf-8');

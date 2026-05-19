@@ -10,7 +10,7 @@ let latestAdminData: DashboardData | undefined;
 let latestAdminError: string | undefined;
 
 function isAdminRoute() {
-  return location.pathname === '/admin' || location.pathname.startsWith('/admin/') || adminPathPages.has(location.pathname.replace(/\/+$/, '') || '/');
+  return location.pathname === '/admin' || location.pathname.startsWith('/admin/') || location.pathname.startsWith('/dashboard/') || adminPathPages.has(location.pathname.replace(/\/+$/, '') || '/');
 }
 
 function resolvePage(): { page: PageKey; unknownPage?: string } {
@@ -271,7 +271,7 @@ window.addEventListener('hashchange', () => {
   }
 });
 
-if (isAdminRoute() && !adminPathPages.has(location.pathname.replace(/\/+$/, '') || '/') && !location.pathname.startsWith('/admin')) {
+if (isAdminRoute() && !adminPathPages.has(location.pathname.replace(/\/+$/, '') || '/') && !location.pathname.startsWith('/admin') && !location.pathname.startsWith('/dashboard/')) {
   navigate('/dashboard');
 } else if (isAdminRoute()) {
   void loadAndRenderAdmin();
