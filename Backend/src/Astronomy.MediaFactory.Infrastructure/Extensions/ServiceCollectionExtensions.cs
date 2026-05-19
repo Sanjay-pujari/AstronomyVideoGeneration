@@ -427,6 +427,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IHookOptimizationService, HookOptimizationService>();
         services.AddScoped<ITrendSignalProvider, StaticTrendSignalProvider>();
         services.AddScoped<IPublishingOptimizationService, PublishingOptimizationService>();
+        services.AddScoped<IAIOptimizationPipelineService, AIOptimizationPipelineService>();
         services.AddHttpClient<IAIOptimizationService, AIOptimizationService>();
         services.AddScoped<IContentExperimentService, EfContentExperimentService>();
         services.AddScoped<IFeedbackSignalExtractor, TopKeywordSignalExtractor>();
