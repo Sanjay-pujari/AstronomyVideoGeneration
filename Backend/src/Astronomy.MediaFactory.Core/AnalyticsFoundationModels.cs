@@ -2,7 +2,7 @@ using Astronomy.MediaFactory.Core.Common;
 
 namespace Astronomy.MediaFactory.Analytics;
 
-public sealed class PlatformVideoAnalytics : EntityBase
+public class PlatformVideoAnalytics : EntityBase
 {
     public Guid PipelineRunId { get; set; }
     public string Platform { get; set; } = "";
