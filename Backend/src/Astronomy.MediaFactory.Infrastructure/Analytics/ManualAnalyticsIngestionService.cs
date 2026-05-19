@@ -41,7 +41,8 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
     {
         foreach (var platform in request.Platforms.DefaultIfEmpty("YouTube"))
         {
-            _db.PlatformVideoAnalytics.Add(new PlatformVideoAnalytics
+            var existingVideo = await _db.PlatformVideoAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == request.ContentType, cancellationToken);
+            if (existingVideo is null) _db.PlatformVideoAnalytics.Add(new PlatformVideoAnalytics
             {
                 PipelineRunId = request.PipelineRunId,
                 Platform = platform,
@@ -53,11 +54,12 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
 
             foreach (var hook in request.HookTexts.DefaultIfEmpty(string.Empty))
             {
-                _db.HookPerformance.Add(new HookPerformance
+                var existingHook = await _db.HookPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == request.ContentType, cancellationToken);
+                if (existingHook is null) _db.HookPerformance.Add(new HookPerformance
                 {
                     PipelineRunId = request.PipelineRunId,
                     Platform = platform,
-                    ContentType = request.ContentType,
+                    ContentType = thumbnail.ThumbnailType,
                     Language = request.Language,
                     RegionId = request.RegionId,
                     PublishedAtUtc = request.PublishedAtUtc
@@ -66,7 +68,8 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
 
             foreach (var thumbnail in request.Thumbnails)
             {
-                _db.ThumbnailPerformance.Add(new ThumbnailPerformance
+                var existingThumb = await _db.ThumbnailPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == thumbnail.ThumbnailType, cancellationToken);
+                if (existingThumb is null) _db.ThumbnailPerformance.Add(new ThumbnailPerformance
                 {
                     PipelineRunId = request.PipelineRunId,
                     Platform = platform,
