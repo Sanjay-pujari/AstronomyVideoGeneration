@@ -229,6 +229,10 @@ export type DashboardData = {
   settingsSummary: SafeSettingsSummary;
   warnings: string[];
   apiError?: string;
+  analyticsSummaryCards: JsonRecord;
+  analyticsVideoBreakdown: JsonRecord[];
+  aiOptimizationByRun: JsonRecord[];
+  publishingRecommendationsByRun: JsonRecord[];
 };
 
 
@@ -416,6 +420,10 @@ export const api = {
   getUpcomingEvents: () => request<AstroEvent[]>('/api/events/upcoming'),
   getTopEvents: () => request<AstroEvent[]>('/api/events/top'),
   getAnalyticsDashboard: () => request<AnalyticsDashboard>('/api/analytics/dashboard'),
+  getAnalyticsSummary: () => request<JsonRecord>('/api/analytics/summary'),
+  getAnalyticsVideos: (pipelineRunId: string) => request<JsonRecord[]>(`/api/analytics/videos/${encodeURIComponent(pipelineRunId)}`),
+  getAiOptimizationHooks: (pipelineRunId: string) => request<JsonRecord[]>(`/api/ai-optimization/hooks/${encodeURIComponent(pipelineRunId)}`),
+  getAiOptimizationPublishing: (pipelineRunId: string) => request<JsonRecord[]>(`/api/ai-optimization/publishing/${encodeURIComponent(pipelineRunId)}`),
   getTopContent: () => request<MediaItem[] | { items?: MediaItem[] }>('/api/analytics/top-content'),
   getTokenHealth: () => request<TokenHealthItem[]>('/api/tokenhealth'),
   requestRegionRunNow: (regionId: string, force = false) => request<PipelineRun>(`/api/regions/${encodeURIComponent(regionId)}/run-now?force=${force}`, { method: 'POST' }),
@@ -576,7 +584,11 @@ export function emptyDashboardData(): DashboardData {
     topEvents: [],
     pipelineRuns: [],
     settingsSummary: settingsSummary(),
-    warnings: []
+    warnings: [],
+    analyticsSummaryCards: {},
+    analyticsVideoBreakdown: [],
+    aiOptimizationByRun: [],
+    publishingRecommendationsByRun: []
   };
 }
 
@@ -592,7 +604,7 @@ async function capture<T>(endpoint: string, loader: () => Promise<T>, fallback: 
 }
 
 export async function loadDashboardData(): Promise<DashboardData> {
-  const [opsResult, schedulerResult, regionsResult, upcomingEventsResult, topEventsResult, alertUpcomingResult, analyticsDashboardResult, topContentResult, tokenHealthResult] = await Promise.all([
+  const [opsResult, schedulerResult, regionsResult, upcomingEventsResult, topEventsResult, alertUpcomingResult, analyticsDashboardResult, analyticsSummaryResult, topContentResult, tokenHealthResult] = await Promise.all([
     capture('/api/ops/dashboard', api.getOpsDashboard, {} as OpsDashboard),
     capture('/api/scheduler/status', api.getSchedulerStatus, {} as SchedulerStatus),
     capture('/api/regions', api.getRegions, [] as Region[]),
@@ -600,6 +612,7 @@ export async function loadDashboardData(): Promise<DashboardData> {
     capture('/api/events/top', api.getTopEvents, [] as AstroEvent[]),
     capture('/api/alerts/upcoming', () => api.getUpcomingAlerts(), [] as AlertUpcomingEvent[]),
     capture('/api/analytics/dashboard', api.getAnalyticsDashboard, {} as AnalyticsDashboard),
+    capture('/api/analytics/summary', api.getAnalyticsSummary, {} as JsonRecord),
     capture('/api/analytics/top-content', api.getTopContent, [] as MediaItem[]),
     capture('/api/tokenhealth', api.getTokenHealth, [] as TokenHealthItem[])
   ]);
@@ -623,6 +636,12 @@ export async function loadDashboardData(): Promise<DashboardData> {
   };
   const tokenHealthSummary = ops.tokenHealthSummary;
   const pipelineRuns = ops.pipelineRuns ?? ops.recentPipelineRuns ?? schedulerPipelineRuns(scheduler);
+  const latestRunId = pipelineRuns[0]?.runId ?? pipelineRuns[0]?.pipelineRunId ?? '';
+  const [analyticsVideosResult, hookRecommendationsResult, publishingRecommendationsResult] = await Promise.all([
+    latestRunId ? capture(`/api/analytics/videos/${latestRunId}`, () => api.getAnalyticsVideos(latestRunId), [] as JsonRecord[]) : Promise.resolve({ value: [] as JsonRecord[], failed: false }),
+    latestRunId ? capture(`/api/ai-optimization/hooks/${latestRunId}`, () => api.getAiOptimizationHooks(latestRunId), [] as JsonRecord[]) : Promise.resolve({ value: [] as JsonRecord[], failed: false }),
+    latestRunId ? capture(`/api/ai-optimization/publishing/${latestRunId}`, () => api.getAiOptimizationPublishing(latestRunId), [] as JsonRecord[]) : Promise.resolve({ value: [] as JsonRecord[], failed: false })
+  ]);
   const videos = topContent.filter((item) => !isShortForm(item));
   const shorts = topContent.filter(isShortForm);
 
@@ -644,7 +663,11 @@ export async function loadDashboardData(): Promise<DashboardData> {
     pipelineRuns,
     settingsSummary: settingsSummary(),
     warnings: [...(ops.warnings ?? []), ...(scheduler.warnings ?? [])],
-    apiError
+    apiError,
+    analyticsSummaryCards: analyticsSummaryResult.value,
+    analyticsVideoBreakdown: arrayFrom<JsonRecord>(analyticsVideosResult.value),
+    aiOptimizationByRun: arrayFrom<JsonRecord>(hookRecommendationsResult.value),
+    publishingRecommendationsByRun: arrayFrom<JsonRecord>(publishingRecommendationsResult.value)
   };
 }
 

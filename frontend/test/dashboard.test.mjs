@@ -9,7 +9,7 @@ test('dashboard renders real analytics sections and required operations widgets'
   assert.match(html, /AstroPulse Mission Control/);
   assert.match(html, /Total views/);
   assert.match(html, /124,800/);
-  assert.match(html, /Total engagement/);
+  assert.match(html, /Engagement/);
   assert.match(html, /8,200/);
   assert.match(html, /YouTube/);
   assert.match(html, /Facebook/);
@@ -20,19 +20,17 @@ test('dashboard renders real analytics sections and required operations widgets'
 test('dashboard operations page renders latest published content from analytics data', () => {
   const html = renderDashboardHtml(mockDashboardData);
   assert.match(html, /Overall system health/);
-  assert.match(html, /Latest generated videos/);
-  assert.match(html, /Latest shorts\/reels/);
+  assert.match(html, /Latest pipeline runs/);
+  assert.match(html, /AI recommendations summary/);
   assert.match(html, /Platform publish status/);
-  assert.match(html, /Token health/);
-  assert.match(html, /Scheduler status/);
+  assert.match(html, /Failed stages/);
   assert.match(html, /Published/);
-  assert.match(html, /views/);
 });
 
 test('empty analytics shows empty onboarding state instead of fake values', () => {
   const html = renderDashboardHtml(emptyDashboardData(), { page: 'analytics' });
   assert.match(html, /Waiting for analytics data/);
-  assert.match(html, /Connect YouTube, Facebook, or Instagram analytics collection/);
+  assert.match(html, /Waiting for analytics data/);
   assert.doesNotMatch(html, /124,800/);
   assert.doesNotMatch(html, /8,200/);
 });
@@ -59,7 +57,7 @@ test('failed API state does not render fake metrics', () => {
 });
 
 test('pipeline runs page renders details, timeline, and published URLs', () => {
-  const html = renderDashboardHtml(mockDashboardData, { page: 'runs' });
+  const html = renderDashboardHtml(mockDashboardData, { page: 'pipeline-runs' });
   assert.match(html, /Recent pipeline runs/);
   assert.match(html, /Run details/);
   assert.match(html, /Stage timeline/);

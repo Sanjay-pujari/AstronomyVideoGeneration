@@ -1,14 +1,16 @@
 import type { AstroEvent, DashboardData, JsonRecord, MediaItem, PipelineRun, PipelineStage, PublishStatus, Region, SchedulerSchedule, TokenHealthItem } from '../services/api.js';
 
-export type PageKey = 'dashboard' | 'runs' | 'regions' | 'events' | 'alerts' | 'analytics' | 'settings';
+export type PageKey = 'dashboard' | 'pipeline-runs' | 'regions' | 'events' | 'alerts' | 'analytics' | 'ai-optimization' | 'content-calendar' | 'settings';
 
 const PAGES: Array<{ key: PageKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
-  { key: 'runs', label: 'Pipeline Runs' },
+  { key: 'pipeline-runs', label: 'Pipeline Runs' },
   { key: 'regions', label: 'Regions' },
   { key: 'events', label: 'Events' },
   { key: 'alerts', label: 'Alerts' },
   { key: 'analytics', label: 'Analytics' },
+  { key: 'ai-optimization', label: 'AI Optimization' },
+  { key: 'content-calendar', label: 'Content Calendar' },
   { key: 'settings', label: 'Settings' }
 ];
 
@@ -185,7 +187,7 @@ function analyticsPage(data: DashboardData) {
   const regionBreakdown = data.analyticsDashboard.regionBreakdown ?? [];
   const topContent = data.analytics.topContent ?? [];
   const hasAnalytics = platformBreakdown.length > 0 || topContent.length > 0 || Number(overall.totalContentPublished ?? 0) > 0;
-  return `<section class="metric-grid">${metric('Total views', hasAnalytics ? formatOptionalNumber(data.analytics.totalViews ?? data.analytics.views) : '—', 'From /api/analytics/dashboard')}${metric('Total engagement', hasAnalytics ? formatOptionalNumber(data.analytics.totalEngagement) : '—', 'From /api/analytics/dashboard')}${metric('Engagement rate', hasAnalytics ? `${formatOptionalNumber(data.analytics.engagementRate ?? Number(overall.averageEngagementRate))}%` : '—', 'Average')}${metric('Best platform', data.analytics.bestPlatform || data.analytics.topPlatform || '—', 'Top performer')}</section><section class="dashboard-grid">${card('Platform summary', 'Views and engagement by platform', platformBreakdown.length ? `<div class="stack-list">${platformBreakdown.map((item) => `<div class="list-row"><div><h3>${escapeHtml(item.platform)}</h3><p>${escapeHtml(`${formatOptionalNumber(Number(item.totalViews))} views • ${formatOptionalNumber(Number(item.contentCount))} items`)}</p></div><strong class="score-pill">${escapeHtml(item.averageEngagement ?? item.averageEngagementRate ?? '—')}</strong></div>`).join('')}</div>` : emptyState('Waiting for analytics data. Connect YouTube, Facebook, or Instagram analytics collection to populate platform totals.'))}${card('Top content', 'Recent published content from analytics', topContent.length ? mediaList(topContent) : emptyState('Waiting for analytics data. Published YouTube, Facebook, and Instagram content will appear after analytics collection.'))}${card('Engagement trends', 'Trend data from analytics charts', trendPanel(data.analyticsDashboard.trends ?? data.analyticsDashboard.charts))}${card('Best region/platform', 'Operational winner summary', regionBreakdown.length ? `<div class="stack-list">${regionBreakdown.map((item) => `<div class="list-row"><div><h3>${escapeHtml(item.locationName ?? item.regionId ?? 'Region')}</h3><p>${escapeHtml(`${formatOptionalNumber(Number(item.views))} views • ${formatOptionalNumber(Number(item.runs))} runs`)}</p></div></div>`).join('')}</div>` : emptyState('Waiting for analytics data. Regional performance appears after collected analytics include locations.'))}</section>`;
+  return `<section class="metric-grid">${metric('Total views', hasAnalytics ? formatOptionalNumber(data.analytics.totalViews ?? data.analytics.views) : '—', 'Views')}${metric('CTR', formatOptionalNumber(Number(data.analyticsSummaryCards.ctr ?? 0)), 'Click-through rate')}${metric('Engagement', hasAnalytics ? formatOptionalNumber(data.analytics.totalEngagement) : '—', 'Across platforms')}${metric('Best platform', data.analytics.bestPlatform || data.analytics.topPlatform || '—', 'Top performer')}</section><section class="dashboard-grid">${card('Platform comparison', 'Views, CTR, engagement by platform', platformBreakdown.length ? `<div class="stack-list">${platformBreakdown.map((item) => `<div class="list-row"><div><h3>${escapeHtml(item.platform)}</h3><p>${escapeHtml(`${formatOptionalNumber(Number(item.totalViews))} views • CTR ${formatOptionalNumber(Number(item.ctr ?? 0))}% • Engagement ${formatOptionalNumber(Number(item.averageEngagement ?? item.averageEngagementRate ?? 0))}%`)}</p></div></div>`).join('')}</div>` : emptyState('Waiting for analytics data.'))}${card('Video analytics', 'Per-run video performance', data.analyticsVideoBreakdown.length ? `<pre class="json-preview">${escapeHtml(JSON.stringify(data.analyticsVideoBreakdown, null, 2))}</pre>` : emptyState('No video analytics for current run yet.'))}${card('Hook performance', 'Top hook outcomes', trendPanel((data.analyticsSummaryCards.hookPerformance as JsonRecord | undefined) ?? {}))}${card('Thumbnail performance', 'Top thumbnail outcomes', trendPanel((data.analyticsSummaryCards.thumbnailPerformance as JsonRecord | undefined) ?? {}))}${card('Top content', 'Recent published content from analytics', topContent.length ? mediaList(topContent) : emptyState('Waiting for analytics data.'))}${card('Best region/platform', 'Operational winner summary', regionBreakdown.length ? `<div class="stack-list">${regionBreakdown.map((item) => `<div class="list-row"><div><h3>${escapeHtml(item.locationName ?? item.regionId ?? 'Region')}</h3><p>${escapeHtml(`${formatOptionalNumber(Number(item.views))} views • ${formatOptionalNumber(Number(item.runs))} runs`)}</p></div></div>`).join('')}</div>` : emptyState('Waiting for analytics data.'))}</section>`;
 }
 
 function trendPanel(value?: JsonRecord) {
@@ -196,12 +198,22 @@ function trendPanel(value?: JsonRecord) {
 function dashboardPage(data: DashboardData) {
   const schedulerState = data.scheduler.enabled ?? data.scheduler.isEnabled ?? data.scheduler.state ?? 'unknown';
   const failures = data.ops.systemHealthSummary && typeof data.ops.systemHealthSummary === 'object' ? ((data.ops.systemHealthSummary as JsonRecord).warnings as unknown[] | undefined)?.length ?? 0 : 0;
-  return `<section class="metric-grid">${metric('System health', String(schedulerState), 'Scheduler heartbeat')}${metric('Recent runs', formatNumber(data.pipelineRuns.length), 'Latest operations')}${metric('Published platforms', formatNumber(data.publishStatuses.length), 'Provider statuses')}${metric('Warnings', formatNumber(data.warnings.length + failures), 'Needs operator review')}</section><section class="dashboard-grid">${card('Overall system health', 'Infrastructure readiness', systemHealth(data))}${card('Latest runs', 'Most recent scheduler and pipeline activity', `<div class="table-wrap"><table><thead><tr><th>Run</th><th>Region</th><th>Type</th><th>Status</th><th>Started</th><th></th></tr></thead><tbody>${runRows(data.pipelineRuns.slice(0, 5))}</tbody></table></div>`)}${card('Platform publish status', 'Sanitized provider status only', publishStatusList(data.publishStatuses))}${card('Token health', 'No tokens or secrets displayed', tokenPanel(data.tokenHealth))}${card('Scheduler status', 'Automation heartbeat', schedulerPanel(data))}${card('Latest generated videos', 'Published and rendered content', mediaList(data.latestVideos))}${card('Latest shorts/reels', 'Short-form previews', mediaList(data.latestShorts))}</section>`;
+  const publishedToday = [...data.latestVideos, ...data.latestShorts].filter((item) => item.status === 'published').length;
+  const failedStages = data.pipelineRuns.filter((run) => (run.status ?? '').toLowerCase() === 'failed' || Boolean(run.failedStage || run.lastError));
+  return `<section class="metric-grid">${metric('Generation status', String(schedulerState), 'Scheduler heartbeat')}${metric('Latest runs', formatNumber(data.pipelineRuns.length), 'Most recent pipeline activity')}${metric('Published today', formatNumber(publishedToday), 'Videos/shorts published today')}${metric('Warnings', formatNumber(data.warnings.length + failures), 'Needs operator review')}</section><section class="dashboard-grid">${card('Overall system health', 'Infrastructure readiness', systemHealth(data))}${card('Latest pipeline runs', 'Most recent scheduler and pipeline activity', `<div class="table-wrap"><table><thead><tr><th>Run</th><th>Region</th><th>Type</th><th>Status</th><th>Started</th><th></th></tr></thead><tbody>${runRows(data.pipelineRuns.slice(0, 5))}</tbody></table></div>`)}${card('Analytics summary cards', 'Views, CTR, engagement summary', trendPanel(data.analyticsSummaryCards))}${card('AI recommendations summary', 'Hook and publishing recommendations', `<p>Hook recommendations: ${escapeHtml(String(data.aiOptimizationByRun.length))}</p><p>Publishing recommendations: ${escapeHtml(String(data.publishingRecommendationsByRun.length))}</p>`)}${card('Failed stages', 'Any runs with failed stages or errors', failedStages.length ? `<div class="stack-list">${failedStages.map((run) => `<article class="list-row"><div><h3>${escapeHtml(runId(run))}</h3><p>${escapeHtml(run.failedStage ?? run.lastError ?? 'Failed status reported')}</p></div>${statusBadge(runStatus(run))}</article>`).join('')}</div>` : emptyState('No failed stages in current dataset.'))}${card('Platform publish status', 'Sanitized provider status only', publishStatusList(data.publishStatuses))}</section>`;
 }
 
 function runsPage(data: DashboardData) {
   const selected = data.pipelineRuns[0];
   return `<section class="dashboard-grid dashboard-grid--wide"><section class="card card--full"><div class="card__header"><div><h2>Recent pipeline runs</h2><p>Loaded from operations dashboard and scheduler history.</p></div></div><div class="table-wrap"><table><thead><tr><th>Run</th><th>Region</th><th>Type</th><th>Status</th><th>Started</th><th></th></tr></thead><tbody>${runRows(data.pipelineRuns)}</tbody></table></div></section>${card('Run details', 'Load a run to inspect status, stages, and publications', pipelineViewer(selected), 'card--full')}</section>`;
+}
+
+function aiOptimizationPage(data: DashboardData) {
+  return `<section class="dashboard-grid">${card('Hook scores and recommendations', 'From AI optimization hooks endpoint', data.aiOptimizationByRun.length ? `<pre class="json-preview">${escapeHtml(JSON.stringify(data.aiOptimizationByRun, null, 2))}</pre>` : emptyState('No AI hook recommendations yet.'))}${card('Publishing recommendations', 'Recommended title/hooks, publish time, hashtags', data.publishingRecommendationsByRun.length ? `<pre class="json-preview">${escapeHtml(JSON.stringify(data.publishingRecommendationsByRun, null, 2))}</pre>` : emptyState('No publishing recommendations yet.'))}</section>`;
+}
+
+function contentCalendarPage(data: DashboardData) {
+  return `<section class="dashboard-grid"><section class="card card--full"><div class="card__header"><div><h2>Daily planned videos</h2><p>Run plan grouped by region, language, status, and platform targets.</p></div></div><div class="table-wrap"><table><thead><tr><th>Run</th><th>Region</th><th>Language</th><th>Status</th><th>Platform targets</th></tr></thead><tbody>${data.pipelineRuns.length ? data.pipelineRuns.map((run) => `<tr><td><code>${escapeHtml(runId(run))}</code></td><td>${escapeHtml(run.regionName ?? run.regionId ?? '—')}</td><td>${escapeHtml(data.regions.find((region) => region.id === run.regionId)?.language ?? 'en')}</td><td>${statusBadge(runStatus(run))}</td><td>${escapeHtml('YouTube, Facebook, Instagram')}</td></tr>`).join('') : '<tr><td colspan=\"5\">No planned videos yet.</td></tr>'}</tbody></table></div></section></section>`;
 }
 
 function pipelineViewer(run?: PipelineRun) {
@@ -239,14 +251,18 @@ function settingsPage(data: DashboardData) {
     ['Request timeout', `${settings.timeoutMs}ms`],
     ['Environment', settings.environment],
     ['Production API configured', settings.productionApiConfigured ? 'yes' : 'no'],
-    ['Secret policy', settings.secretPolicy]
+    ['Secret policy', settings.secretPolicy],
+    ['AIOptimization settings', 'Read-only'],
+    ['Analytics settings', 'Read-only'],
+    ['Publishing targets', 'Read-only'],
+    ['VideoEncoding settings', 'Read-only']
   ];
   return `<section class="dashboard-grid"><section class="card card--full"><div class="card__header"><div><h2>Settings Readonly</h2><p>Safe configuration summary only. Secrets and SAS query strings are intentionally hidden.</p></div></div><div class="settings-list">${rows.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div><p><a class="safe-link" href="frontend-api-health.json" data-api-health-download>Download frontend-api-health.json</a></p></section></section>`;
 }
 
 export function renderDashboardHtml(data: DashboardData, options: { error?: string; page?: PageKey } = {}) {
   const page = options.page ?? 'dashboard';
-  const body = page === 'runs'
+  const body = page === 'pipeline-runs'
     ? runsPage(data)
     : page === 'regions'
       ? regionsPage(data)
@@ -256,6 +272,10 @@ export function renderDashboardHtml(data: DashboardData, options: { error?: stri
           ? alertsAdminPage(data)
           : page === 'analytics'
           ? analyticsPage(data)
+          : page === 'ai-optimization'
+            ? aiOptimizationPage(data)
+            : page === 'content-calendar'
+              ? contentCalendarPage(data)
           : page === 'settings'
             ? settingsPage(data)
             : dashboardPage(data);
