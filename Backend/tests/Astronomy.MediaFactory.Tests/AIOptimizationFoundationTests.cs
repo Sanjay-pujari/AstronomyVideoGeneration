@@ -1,3 +1,4 @@
+using Xunit;
 using Astronomy.MediaFactory.AIOptimization;
 
 namespace Astronomy.MediaFactory.Tests;
