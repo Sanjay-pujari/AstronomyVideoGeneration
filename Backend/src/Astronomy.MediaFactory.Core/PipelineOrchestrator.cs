@@ -968,38 +968,7 @@ public sealed class PipelineOrchestrator
 
                 if (_shortFormPublishingService is not null)
                 {
-                    var publicationResults = await _shortFormPublishingService.PublishAsync(new ShortFormPublicationRequest
-                    {
-                        ParentShortVideoId = shortVideo.Id,
-                        ContentType = request.ContentType,
-                        PublishToYouTube = request.PublishToYouTube,
-                        Title = shortResult.Script.OptimizedMetadata?.PrimaryTitle ?? shortResult.Script.Title,
-                        Caption = shortResult.Script.OptimizedMetadata?.OptimizedDescription ?? shortResult.Script.ShortScript,
-                        HookLine = shortResult.Script.OptimizedMetadata?.HookLine ?? shortResult.Script.Hook,
-                        Tags = shortResult.Script.OptimizedMetadata?.Tags ?? shortResult.Script.Tags,
-                        Hashtags = shortResult.Script.OptimizedMetadata?.Hashtags ?? [],
-                        VideoPath = shortResult.VideoPath,
-                        ThumbnailPath = ResolveExistingThumbnailPath(shortThumbnailPath, shortResult.ThumbnailPath, thumbnailPath),
-                        Language = context.Localization.ResolvedLanguage
-                    }, cancellationToken);
-
-                    foreach (var publication in publicationResults)
-                    {
-                        await _repository.AddPlatformPublicationRecordAsync(new PlatformPublicationRecord
-                        {
-                            ParentShortVideoId = shortVideo.Id,
-                            Platform = publication.Platform,
-                            ExternalPostId = publication.ExternalPostId,
-                            ExternalUrl = publication.ExternalUrl,
-                            Status = publication.Status,
-                            PublishedAt = publication.PublishedAt,
-                            ErrorMessage = publication.ErrorMessage
-                        }, cancellationToken);
-                    }
-
-                    shortVideo.YouTubeVideoId = publicationResults
-                        .FirstOrDefault(x => x.Platform == ShortFormPlatform.YouTubeShorts && x.Status == PlatformPublicationStatus.Published)
-                        ?.ExternalPostId;
+                    _logger.LogInformation("Skipping legacy short-form publisher invocation for pipeline run {PipelineRunId} to avoid duplicate platform uploads; canonical publishing paths are YouTubePublish and MetaPublish stages.", run.Id);
                 }
 
                 if (_contentPublishService is not null && request.PublishToYouTube && publishingEnabled && validationPassed && _publishingOptions.PublishShortVideo)
