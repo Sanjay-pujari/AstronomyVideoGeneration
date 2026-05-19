@@ -30,7 +30,7 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 ContentType = r.ContentType,
                 Language = r.Language,
                 RegionId = r.RegionId,
-                PublishedAtUtc = r.PublishedAtUtc
+                PublishedAtUtc = EnsureUtc(r.PublishedAtUtc)
             });
         }
 
@@ -39,6 +39,8 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
 
     public async Task InitializeForPipelineRunAsync(AnalyticsPipelineInitializationRequest request, CancellationToken cancellationToken)
     {
+        var publishedAtUtc = EnsureUtc(request.PublishedAtUtc);
+
         foreach (var platform in request.Platforms.DefaultIfEmpty("YouTube"))
         {
             var existingVideo = await _db.PlatformVideoAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == request.ContentType, cancellationToken);
@@ -49,7 +51,7 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 ContentType = request.ContentType,
                 Language = request.Language,
                 RegionId = request.RegionId,
-                PublishedAtUtc = request.PublishedAtUtc
+                PublishedAtUtc = publishedAtUtc
             });
 
             foreach (var hook in request.HookTexts.DefaultIfEmpty(string.Empty))
@@ -62,7 +64,7 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                     ContentType = request.ContentType,
                     Language = request.Language,
                     RegionId = request.RegionId,
-                    PublishedAtUtc = request.PublishedAtUtc
+                    PublishedAtUtc = publishedAtUtc
                 });
             }
 
@@ -76,11 +78,16 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                     ContentType = request.ContentType,
                     Language = request.Language,
                     RegionId = request.RegionId,
-                    PublishedAtUtc = request.PublishedAtUtc
+                    PublishedAtUtc = publishedAtUtc
                 });
             }
         }
 
         await _db.SaveChangesAsync(cancellationToken);
     }
+
+    private static DateTimeOffset EnsureUtc(DateTimeOffset value)
+        => value.Offset == TimeSpan.Zero
+            ? value
+            : value.ToUniversalTime();
 }

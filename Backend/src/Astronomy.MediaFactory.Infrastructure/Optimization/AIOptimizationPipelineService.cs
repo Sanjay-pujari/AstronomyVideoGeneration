@@ -51,7 +51,7 @@ public sealed class AIOptimizationPipelineService : IAIOptimizationPipelineServi
         _db.PublishingOptimizationResults.Add(new PublishingOptimizationRecord
         {
             PipelineRunId = request.PipelineRunId,
-            RecommendedPublishTime = publishing.RecommendedPublishTime,
+            RecommendedPublishTime = EnsureUtc(publishing.RecommendedPublishTime),
             RecommendedHashtagsCsv = string.Join(",", publishing.RecommendedHashtags),
             RecommendedTagsCsv = string.Join(",", publishing.RecommendedTags),
             RecommendedAudienceType = publishing.RecommendedAudienceType,
@@ -80,4 +80,9 @@ public sealed class AIOptimizationPipelineService : IAIOptimizationPipelineServi
 
         return new AIOptimizationPipelineResult(true, scores.Count, 1, string.IsNullOrWhiteSpace(request.ShortThumbnailPath) && string.IsNullOrWhiteSpace(request.LongThumbnailPath) ? 0 : (string.IsNullOrWhiteSpace(request.ShortThumbnailPath) || string.IsNullOrWhiteSpace(request.LongThumbnailPath) ? 1 : 2), []);
     }
+
+    private static DateTimeOffset EnsureUtc(DateTimeOffset value)
+        => value.Offset == TimeSpan.Zero
+            ? value
+            : value.ToUniversalTime();
 }
