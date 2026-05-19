@@ -1,17 +1,12 @@
 import { api, emptyDashboardData, getFrontendApiHealth, loadDashboardData, loadPublicPortalData, type DashboardData } from './services/api.js';
 import { renderDashboardHtml, runDetails, type PageKey } from './ui/dashboard.js';
 import { parsePublicRoute, renderPublicPortalHtml } from './ui/publicPortal.js';
-import { resolveDashboardPage } from './ui/routes.js';
+import { isAdminRoute, resolveDashboardPage } from './ui/routes.js';
 
 const root = document.getElementById('root');
-const adminPathPages = new Set<string>(['/dashboard', '/pipeline-runs', '/regions', '/events', '/alerts', '/analytics', '/ai-optimization', '/optimization-insights', '/content-calendar', '/settings', '/tonights-sky', '/videos', '/about']);
 let latestData: DashboardData | undefined;
 let latestAdminData: DashboardData | undefined;
 let latestAdminError: string | undefined;
-
-function isAdminRoute() {
-  return location.pathname === '/admin' || location.pathname.startsWith('/admin/') || location.pathname.startsWith('/dashboard/') || adminPathPages.has(location.pathname.replace(/\/+$/, '') || '/');
-}
 
 function resolvePage(): { page: PageKey; unknownPage?: string } {
   return resolveDashboardPage(location.pathname, location.hash);
@@ -56,7 +51,19 @@ async function loadRun(runId: string) {
   }
 }
 
+function bindRouterLinks() {
+  document.querySelectorAll<HTMLAnchorElement>('a[data-router-link]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      const href = link.getAttribute('href');
+      if (!href || href.startsWith('http')) return;
+      event.preventDefault();
+      navigate(href);
+    });
+  });
+}
+
 function bindPublicInteractions() {
+  bindRouterLinks();
   document.querySelectorAll<HTMLFormElement>('[data-alert-preferences]').forEach((form) => {
     form.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -141,11 +148,10 @@ function navigate(path: string) {
   if (isAdminRoute()) {
     if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
     else void loadAndRenderAdmin();
-  } else if (latestData) {
-    renderPublic(latestData);
-  } else {
-    void loadAndRenderPublic();
+    return;
   }
+  if (latestData) renderPublic(latestData);
+  else void loadAndRenderPublic();
 }
 
 function bindAdminInteractions() {
@@ -229,14 +235,6 @@ function bindAdminInteractions() {
       if (runId) await loadRun(runId);
     });
   });
-  document.querySelectorAll<HTMLAnchorElement>('a[data-router-link]').forEach((link) => {
-    link.addEventListener('click', (event) => {
-      const href = link.getAttribute('href');
-      if (!href || href.startsWith('http')) return;
-      event.preventDefault();
-      navigate(href);
-    });
-  });
 }
 
 async function loadAndRenderAdmin() {
@@ -261,19 +259,19 @@ async function loadAndRenderPublic() {
 window.addEventListener('popstate', () => {
   if (isAdminRoute()) {
     if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
-  } else if (latestData) {
-    renderPublic(latestData);
+    else void loadAndRenderAdmin();
+    return;
   }
+  if (latestData) renderPublic(latestData);
+  else void loadAndRenderPublic();
 });
 window.addEventListener('hashchange', () => {
-  if (isAdminRoute()) {
-    if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
-  }
+  if (!isAdminRoute()) return;
+  if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
+  else void loadAndRenderAdmin();
 });
 
-if (isAdminRoute() && !adminPathPages.has(location.pathname.replace(/\/+$/, '') || '/') && !location.pathname.startsWith('/admin') && !location.pathname.startsWith('/dashboard/')) {
-  navigate('/dashboard');
-} else if (isAdminRoute()) {
+if (isAdminRoute()) {
   void loadAndRenderAdmin();
 } else {
   void loadAndRenderPublic();

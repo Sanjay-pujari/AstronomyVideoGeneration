@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { access, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -71,7 +71,8 @@ export async function ensureBuildExists(rootDir = defaultRoot) {
   await access(path.join(rootDir, 'index.html'));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (invokedDirectly) {
   const port = Number(process.env.PORT || 3000);
   await ensureBuildExists(defaultRoot);
   const server = createSpaServer({ rootDir: defaultRoot });
