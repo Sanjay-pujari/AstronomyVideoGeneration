@@ -322,3 +322,45 @@ public sealed class AlertNotification : EntityBase
     public DateTimeOffset? SentUtc { get; set; }
     public string? Error { get; set; }
 }
+
+public sealed class HookOptimizationRecord : EntityBase
+{
+    public Guid PipelineRunId { get; set; }
+    public string Hook { get; set; } = "";
+    public double CuriosityScore { get; set; }
+    public double EmotionalImpactScore { get; set; }
+    public double ClarityScore { get; set; }
+    public double ClickProbability { get; set; }
+    public double FinalScore { get; set; }
+    public string RecommendationReason { get; set; } = "";
+    public string Language { get; set; } = "en";
+}
+
+public sealed class ThumbnailOptimizationRecord : EntityBase
+{
+    public Guid PipelineRunId { get; set; }
+    public int ObjectCount { get; set; }
+    public double Brightness { get; set; }
+    public int TextLength { get; set; }
+    public string Language { get; set; } = "en";
+    public double HookIntensity { get; set; }
+    public double CompositionScore { get; set; }
+}
+
+public sealed class TrendSignalRecord : EntityBase
+{
+    public DateOnly SignalDate { get; set; }
+    public string Topic { get; set; } = "";
+    public double Score { get; set; }
+    public string Source { get; set; } = "internal";
+}
+
+public sealed class PublishingOptimizationRecord : EntityBase
+{
+    public Guid PipelineRunId { get; set; }
+    public DateTimeOffset RecommendedPublishTime { get; set; }
+    public string RecommendedHashtagsCsv { get; set; } = "";
+    public string RecommendedTagsCsv { get; set; } = "";
+    public string RecommendedAudienceType { get; set; } = "";
+    public string PlatformPriorityCsv { get; set; } = "";
+}

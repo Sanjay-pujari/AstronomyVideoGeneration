@@ -1,4 +1,5 @@
 using System.Net.Http;
+using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.AstroData.Clients;
 using Astronomy.MediaFactory.AstroData.Services;
 using Astronomy.MediaFactory.ContentGen;
@@ -422,6 +423,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAnalyticsAggregationService, AnalyticsAggregationService>();
         services.AddScoped<IAnalyticsIntelligenceService, AnalyticsIntelligenceService>();
         services.AddScoped<IOptimizationService, RuleBasedOptimizationService>();
+        services.AddScoped<IHookOptimizationService, HookOptimizationService>();
+        services.AddScoped<ITrendSignalProvider, StaticTrendSignalProvider>();
+        services.AddScoped<IPublishingOptimizationService, PublishingOptimizationService>();
         services.AddHttpClient<IAIOptimizationService, AIOptimizationService>();
         services.AddScoped<IContentExperimentService, EfContentExperimentService>();
         services.AddScoped<IFeedbackSignalExtractor, TopKeywordSignalExtractor>();
