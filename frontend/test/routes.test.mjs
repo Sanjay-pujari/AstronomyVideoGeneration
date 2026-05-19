@@ -18,6 +18,10 @@ test('/admin/ai-optimization path resolves ai optimization page', () => {
   assert.equal(resolveDashboardPage('/admin/ai-optimization', '').page, 'ai-optimization');
 });
 
+test('/dashboard/analytics path resolves analytics page', () => {
+  assert.equal(resolveDashboardPage('/dashboard/analytics', '').page, 'analytics');
+});
+
 test('unknown hash falls back to dashboard with warning', () => {
   const resolved = resolveDashboardPage('/admin', '#not-a-page');
   assert.equal(resolved.page, 'dashboard');
