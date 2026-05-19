@@ -27,7 +27,11 @@ public sealed class PlatformPostAnalytics : AnalyticsRecordBase;
 
 public sealed class AudienceAnalytics : AnalyticsRecordBase;
 
-public sealed class ThumbnailPerformance : AnalyticsRecordBase;
+public sealed class ThumbnailPerformance : AnalyticsRecordBase
+{
+    public string ThumbnailType { get; set; } = "";
+    public string ThumbnailPath { get; set; } = "";
+}
 
 public sealed class HookPerformance : AnalyticsRecordBase;
 
