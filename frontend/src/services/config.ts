@@ -6,13 +6,13 @@ declare global {
 }
 
 const DEFAULT_LOCAL_API_BASE_URL = 'https://localhost:59235';
-const DEFAULT_PRODUCTION_API_BASE_URL = 'https://api.astropulse.example';
 const DEFAULT_TIMEOUT_MS = 12_000;
 
 export function getApiBaseUrl() {
   const configured = typeof window !== 'undefined' ? window.ASTROPULSE_API_BASE_URL : undefined;
-  const fallback = typeof location !== 'undefined' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'
-    ? DEFAULT_PRODUCTION_API_BASE_URL
+  const isLocal = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+  const fallback = !isLocal && typeof location !== 'undefined'
+    ? location.origin
     : DEFAULT_LOCAL_API_BASE_URL;
   return (configured || fallback).replace(/\/$/, '');
 }

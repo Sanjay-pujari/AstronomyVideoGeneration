@@ -1,10 +1,10 @@
 import { api, emptyDashboardData, getFrontendApiHealth, loadDashboardData, loadPublicPortalData, type DashboardData } from './services/api.js';
 import { renderDashboardHtml, runDetails, type PageKey } from './ui/dashboard.js';
 import { parsePublicRoute, renderPublicPortalHtml } from './ui/publicPortal.js';
+import { resolveDashboardPage } from './ui/routes.js';
 
 const root = document.getElementById('root');
-const validPages = new Set<PageKey>(['dashboard', 'pipeline-runs', 'regions', 'events', 'alerts', 'analytics', 'ai-optimization', 'content-calendar', 'settings', 'tonights-sky', 'videos', 'about']);
-const adminPathPages = new Set<string>(['/dashboard', '/pipeline-runs', '/regions', '/events', '/alerts', '/analytics', '/ai-optimization', '/content-calendar', '/settings', '/tonights-sky', '/videos', '/about']);
+const adminPathPages = new Set<string>(['/dashboard', '/pipeline-runs', '/regions', '/events', '/alerts', '/analytics', '/ai-optimization', '/optimization-insights', '/content-calendar', '/settings', '/tonights-sky', '/videos', '/about']);
 let latestData: DashboardData | undefined;
 let latestAdminData: DashboardData | undefined;
 let latestAdminError: string | undefined;
@@ -13,12 +13,8 @@ function isAdminRoute() {
   return location.pathname === '/admin' || location.pathname.startsWith('/admin/') || adminPathPages.has(location.pathname.replace(/\/+$/, '') || '/');
 }
 
-function currentPage(): PageKey {
-  const cleanPath = location.pathname.replace(/\/+$/, '') || '/';
-  if (cleanPath === '/admin/alerts') return 'alerts';
-  if (cleanPath === '/admin' || cleanPath === '/admin/dashboard') return 'dashboard';
-  const page = cleanPath.startsWith('/admin/') ? cleanPath.slice('/admin/'.length) : cleanPath.slice(1);
-  return validPages.has(page as PageKey) ? (page as PageKey) : 'dashboard';
+function resolvePage(): { page: PageKey; unknownPage?: string } {
+  return resolveDashboardPage(location.pathname, location.hash);
 }
 
 function renderLoading(message = 'Loading AstroPulse…') {
@@ -28,7 +24,8 @@ function renderLoading(message = 'Loading AstroPulse…') {
 function renderAdmin(data: DashboardData, error?: string) {
   latestAdminData = data;
   latestAdminError = error;
-  if (root) root.innerHTML = renderDashboardHtml(data, { error, page: currentPage() });
+  const route = resolvePage();
+  if (root) root.innerHTML = renderDashboardHtml(data, { error, page: route.page, warning: route.unknownPage ? `Unknown dashboard page: ${route.unknownPage}` : undefined });
   bindAdminInteractions();
 }
 
@@ -134,8 +131,13 @@ function bindPublicInteractions() {
 }
 
 function navigate(path: string) {
-  if (location.pathname === path) return;
-  history.pushState({}, '', path);
+  if (path.startsWith('#')) {
+    if (location.hash === path) return;
+    location.hash = path;
+  } else {
+    if (location.pathname === path) return;
+    history.pushState({}, '', path);
+  }
   if (isAdminRoute()) {
     if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
     else void loadAndRenderAdmin();
@@ -261,6 +263,11 @@ window.addEventListener('popstate', () => {
     if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
   } else if (latestData) {
     renderPublic(latestData);
+  }
+});
+window.addEventListener('hashchange', () => {
+  if (isAdminRoute()) {
+    if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
   }
 });
 

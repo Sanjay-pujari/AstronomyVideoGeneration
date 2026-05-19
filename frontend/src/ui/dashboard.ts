@@ -1,6 +1,6 @@
 import type { AstroEvent, DashboardData, JsonRecord, MediaItem, PipelineRun, PipelineStage, PublishStatus, Region, SchedulerSchedule, TokenHealthItem } from '../services/api.js';
 
-export type PageKey = 'dashboard' | 'pipeline-runs' | 'regions' | 'events' | 'alerts' | 'analytics' | 'ai-optimization' | 'content-calendar' | 'settings' | 'tonights-sky' | 'videos' | 'about';
+export type PageKey = 'dashboard' | 'pipeline-runs' | 'regions' | 'events' | 'alerts' | 'analytics' | 'ai-optimization' | 'optimization-insights' | 'content-calendar' | 'settings' | 'tonights-sky' | 'videos' | 'about';
 
 const PAGES: Array<{ key: PageKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -10,6 +10,7 @@ const PAGES: Array<{ key: PageKey; label: string }> = [
   { key: 'alerts', label: 'Alerts' },
   { key: 'analytics', label: 'Analytics' },
   { key: 'ai-optimization', label: 'AI Optimization' },
+  { key: 'optimization-insights', label: 'Optimization Insights' },
   { key: 'content-calendar', label: 'Content Calendar' },
   { key: 'settings', label: 'Settings' },
   { key: 'tonights-sky', label: "Tonight's Sky" },
@@ -83,7 +84,7 @@ function externalLink(url?: string) {
 }
 
 function nav(activePage: PageKey) {
-  return `<nav class="top-nav" aria-label="AstroPulse pages">${PAGES.map((page) => `<a class="nav-link ${page.key === activePage ? 'nav-link--active' : ''}" href="/${page.key}" data-router-link>${page.label}</a>`).join('')}</nav>`;
+  return `<nav class="top-nav" aria-label="AstroPulse pages">${PAGES.map((page) => `<a class="nav-link ${page.key === activePage ? 'nav-link--active' : ''}" href="#${page.key}">${page.label}</a>`).join('')}</nav>`;
 }
 
 function hero(activePage: PageKey) {
@@ -203,7 +204,7 @@ function dashboardPage(data: DashboardData) {
   const failures = data.ops.systemHealthSummary && typeof data.ops.systemHealthSummary === 'object' ? ((data.ops.systemHealthSummary as JsonRecord).warnings as unknown[] | undefined)?.length ?? 0 : 0;
   const publishedToday = [...data.latestVideos, ...data.latestShorts].filter((item) => item.status === 'published').length;
   const failedStages = data.pipelineRuns.filter((run) => (run.status ?? '').toLowerCase() === 'failed' || Boolean(run.failedStage || run.lastError));
-  return `<section class="metric-grid">${metric('Generation status', String(schedulerState), 'Scheduler heartbeat')}${metric('Latest runs', formatNumber(data.pipelineRuns.length), 'Most recent pipeline activity')}${metric('Published today', formatNumber(publishedToday), 'Videos/shorts published today')}${metric('Warnings', formatNumber(data.warnings.length + failures), 'Needs operator review')}</section><section class="dashboard-grid">${card('Overall system health', 'Infrastructure readiness', systemHealth(data))}${card('Latest pipeline runs', 'Most recent scheduler and pipeline activity', `<div class="table-wrap"><table><thead><tr><th>Run</th><th>Region</th><th>Type</th><th>Status</th><th>Started</th><th></th></tr></thead><tbody>${runRows(data.pipelineRuns.slice(0, 5))}</tbody></table></div>`)}${card('Analytics summary cards', 'Views, CTR, engagement summary', trendPanel(data.analyticsSummaryCards))}${card('AI recommendations summary', 'Hook and publishing recommendations', `<p>Hook recommendations: ${escapeHtml(String(data.aiOptimizationByRun.length))}</p><p>Publishing recommendations: ${escapeHtml(String(data.publishingRecommendationsByRun.length))}</p>`)}${card('Failed stages', 'Any runs with failed stages or errors', failedStages.length ? `<div class="stack-list">${failedStages.map((run) => `<article class="list-row"><div><h3>${escapeHtml(runId(run))}</h3><p>${escapeHtml(run.failedStage ?? run.lastError ?? 'Failed status reported')}</p></div>${statusBadge(runStatus(run))}</article>`).join('')}</div>` : emptyState('No failed stages in current dataset.'))}${card('Platform publish status', 'Sanitized provider status only', publishStatusList(data.publishStatuses))}</section>`;
+  return `<section class="metric-grid">${metric('Generation status', String(schedulerState), 'Scheduler heartbeat')}${metric('Latest runs', formatNumber(data.pipelineRuns.length), 'Most recent pipeline activity')}${metric('Published today', formatNumber(publishedToday), 'Videos/shorts published today')}${metric('Warnings', formatNumber(data.warnings.length + failures), 'Needs operator review')}</section><section class="dashboard-grid">${card('Quick links', 'Open core admin dashboards', '<p><a class="safe-link" href="#analytics">Analytics Dashboard</a></p><p><a class="safe-link" href="#ai-optimization">AI Optimization</a></p><p><a class="safe-link" href="#optimization-insights">Optimization Insights</a></p><p><a class="safe-link" href="#pipeline-runs">Pipeline Runs</a></p>')}${card('Overall system health', 'Infrastructure readiness', systemHealth(data))}${card('Latest pipeline runs', 'Most recent scheduler and pipeline activity', `<div class="table-wrap"><table><thead><tr><th>Run</th><th>Region</th><th>Type</th><th>Status</th><th>Started</th><th></th></tr></thead><tbody>${runRows(data.pipelineRuns.slice(0, 5))}</tbody></table></div>`)}${card('Analytics summary cards', 'Views, CTR, engagement summary', trendPanel(data.analyticsSummaryCards))}${card('AI recommendations summary', 'Hook and publishing recommendations', `<p>Hook recommendations: ${escapeHtml(String(data.aiOptimizationByRun.length))}</p><p>Publishing recommendations: ${escapeHtml(String(data.publishingRecommendationsByRun.length))}</p>`)}${card('Failed stages', 'Any runs with failed stages or errors', failedStages.length ? `<div class="stack-list">${failedStages.map((run) => `<article class="list-row"><div><h3>${escapeHtml(runId(run))}</h3><p>${escapeHtml(run.failedStage ?? run.lastError ?? 'Failed status reported')}</p></div>${statusBadge(runStatus(run))}</article>`).join('')}</div>` : emptyState('No failed stages in current dataset.'))}${card('Platform publish status', 'Sanitized provider status only', publishStatusList(data.publishStatuses))}</section>`;
 }
 
 function runsPage(data: DashboardData) {
@@ -213,6 +214,10 @@ function runsPage(data: DashboardData) {
 
 function aiOptimizationPage(data: DashboardData) {
   return `<section class="dashboard-grid">${card('Hook scores and recommendations', 'From AI optimization hooks endpoint', data.aiOptimizationByRun.length ? `<pre class="json-preview">${escapeHtml(JSON.stringify(data.aiOptimizationByRun, null, 2))}</pre>` : emptyState('No AI hook recommendations yet.'))}${card('Publishing recommendations', 'Recommended title/hooks, publish time, hashtags', data.publishingRecommendationsByRun.length ? `<pre class="json-preview">${escapeHtml(JSON.stringify(data.publishingRecommendationsByRun, null, 2))}</pre>` : emptyState('No publishing recommendations yet.'))}</section>`;
+}
+
+function optimizationInsightsPage(data: DashboardData) {
+  return `<section class="dashboard-grid">${card('Optimization insights', 'Combined analytics and recommendation trends', trendPanel(data.analyticsSummaryCards), 'card--full')}${card('AI optimization payloads', 'Current optimization output by run', data.aiOptimizationByRun.length ? `<pre class="json-preview">${escapeHtml(JSON.stringify(data.aiOptimizationByRun, null, 2))}</pre>` : emptyState('No optimization insights yet.'))}${card('Publishing recommendation payloads', 'Current recommendation output by run', data.publishingRecommendationsByRun.length ? `<pre class="json-preview">${escapeHtml(JSON.stringify(data.publishingRecommendationsByRun, null, 2))}</pre>` : emptyState('No recommendation insights yet.'))}</section>`;
 }
 
 function contentCalendarPage(data: DashboardData) {
@@ -277,7 +282,7 @@ function settingsPage(data: DashboardData) {
   return `<section class="dashboard-grid"><section class="card card--full"><div class="card__header"><div><h2>Settings Readonly</h2><p>Safe configuration summary only. Secrets and SAS query strings are intentionally hidden.</p></div></div><div class="settings-list">${rows.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div><p><a class="safe-link" href="frontend-api-health.json" data-api-health-download>Download frontend-api-health.json</a></p></section></section>`;
 }
 
-export function renderDashboardHtml(data: DashboardData, options: { error?: string; page?: PageKey } = {}) {
+export function renderDashboardHtml(data: DashboardData, options: { error?: string; page?: PageKey; warning?: string } = {}) {
   const page = options.page ?? 'dashboard';
   const body = page === 'pipeline-runs'
     ? runsPage(data)
@@ -291,6 +296,8 @@ export function renderDashboardHtml(data: DashboardData, options: { error?: stri
           ? analyticsPage(data)
           : page === 'ai-optimization'
             ? aiOptimizationPage(data)
+            : page === 'optimization-insights'
+              ? optimizationInsightsPage(data)
             : page === 'content-calendar'
               ? contentCalendarPage(data)
           : page === 'settings'
@@ -302,5 +309,5 @@ export function renderDashboardHtml(data: DashboardData, options: { error?: stri
                 : page === 'about'
                   ? aboutAdminPage()
                   : dashboardPage(data);
-  return shell(page, body, options.error);
+  return shell(page, body, options.error) + (options.warning ? `<aside class="state state--warn" role="status">${escapeHtml(options.warning)}</aside>` : '');
 }
