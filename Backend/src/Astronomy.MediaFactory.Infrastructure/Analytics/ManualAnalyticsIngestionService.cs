@@ -65,6 +65,26 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 RegionId = request.RegionId,
                 PublishedAtUtc = publishedAtUtc
             });
+            var existingPlatformContent = await _db.PlatformContentAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.PlatformContentType == request.ContentType, cancellationToken);
+            if (existingPlatformContent is null)
+            {
+                _db.PlatformContentAnalytics.Add(new PlatformContentAnalytics
+                {
+                    PipelineRunId = request.PipelineRunId,
+                    Platform = platform,
+                    PlatformContentType = request.ContentType,
+                    Language = request.Language,
+                    RegionId = request.RegionId,
+                    PublishedUtc = publishedAtUtc,
+                    CollectedUtc = publishedAtUtc,
+                    IsAnalyticsAvailable = true,
+                    Impressions = 0,
+                    Views = 0,
+                    Likes = 0,
+                    Comments = 0,
+                    Shares = 0
+                });
+            }
 
             foreach (var hook in hooks.DefaultIfEmpty(request.ContentType))
             {
@@ -90,6 +110,8 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                     PipelineRunId = request.PipelineRunId,
                     Platform = platform,
                     ContentType = thumbContentType,
+                    ThumbnailType = thumbnail.ThumbnailType,
+                    ThumbnailPath = thumbnail.ThumbnailPath,
                     Language = request.Language,
                     RegionId = request.RegionId,
                     PublishedAtUtc = publishedAtUtc

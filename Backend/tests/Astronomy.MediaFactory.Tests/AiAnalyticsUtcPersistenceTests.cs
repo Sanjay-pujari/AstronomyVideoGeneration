@@ -94,9 +94,28 @@ public sealed class AiAnalyticsUtcPersistenceTests
             null), CancellationToken.None);
 
         Assert.Equal(2, await db.PlatformVideoAnalytics.CountAsync(x => x.PipelineRunId == runId));
+        Assert.Equal(2, await db.PlatformContentAnalytics.CountAsync(x => x.PipelineRunId == runId));
         Assert.Equal(4, await db.HookPerformance.CountAsync(x => x.PipelineRunId == runId));
         Assert.Equal(4, await db.ThumbnailPerformance.CountAsync(x => x.PipelineRunId == runId));
+        Assert.All(await db.ThumbnailPerformance.Where(x => x.PipelineRunId == runId).ToListAsync(), x => Assert.False(string.IsNullOrWhiteSpace(x.ThumbnailPath)));
         Assert.All(await db.PlatformVideoAnalytics.Where(x => x.PipelineRunId == runId).ToListAsync(), x => Assert.Equal(0, x.Views));
+
+        await service.InitializeForPipelineRunAsync(new AnalyticsPipelineInitializationRequest(
+            runId,
+            "en",
+            "us",
+            DateTimeOffset.UtcNow,
+            ["YouTube-Long", "YouTube-Short"],
+            ["Hook A", "Hook B"],
+            [new AnalyticsThumbnailSeed("/tmp/long.jpg", "Long"), new AnalyticsThumbnailSeed("/tmp/short.jpg", "Short")],
+            "Short",
+            "yt123",
+            null), CancellationToken.None);
+
+        Assert.Equal(2, await db.PlatformVideoAnalytics.CountAsync(x => x.PipelineRunId == runId));
+        Assert.Equal(2, await db.PlatformContentAnalytics.CountAsync(x => x.PipelineRunId == runId));
+        Assert.Equal(4, await db.HookPerformance.CountAsync(x => x.PipelineRunId == runId));
+        Assert.Equal(4, await db.ThumbnailPerformance.CountAsync(x => x.PipelineRunId == runId));
     }
 
     [Fact]
