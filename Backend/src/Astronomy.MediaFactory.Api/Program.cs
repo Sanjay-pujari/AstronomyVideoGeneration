@@ -566,7 +566,7 @@ app.MapPost("/api/ai-optimization/apply-approved", async Task<IResult> (AIOptimi
 app.MapPost("/api/ai-optimization/reject", async (AIOptimizationApplyRequest request, IAIOptimizationService service, CancellationToken ct) =>
     Results.Ok(await service.RejectAsync(request, ct)));
 
-app.MapGet("/api/analytics/summary", async (int? days, IPipelineRepository repository, CancellationToken ct) =>
+app.MapGet("/api/analytics/dashboard-summary", async (int? days, IPipelineRepository repository, CancellationToken ct) =>
     Results.Ok(await repository.GetAnalyticsDashboardSummaryAsync(days ?? 14, ct)));
 app.MapGet("/api/analytics/top-performing", async (int? topN, IAnalyticsAggregationService aggregationService, CancellationToken ct) =>
 {
