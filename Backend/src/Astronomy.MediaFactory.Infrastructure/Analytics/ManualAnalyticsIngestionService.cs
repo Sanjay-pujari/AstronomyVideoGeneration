@@ -36,4 +36,48 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
 
         await _db.SaveChangesAsync(cancellationToken);
     }
+
+    public async Task InitializeForPipelineRunAsync(AnalyticsPipelineInitializationRequest request, CancellationToken cancellationToken)
+    {
+        foreach (var platform in request.Platforms.DefaultIfEmpty("YouTube"))
+        {
+            _db.PlatformVideoAnalytics.Add(new PlatformVideoAnalytics
+            {
+                PipelineRunId = request.PipelineRunId,
+                Platform = platform,
+                ContentType = request.ContentType,
+                Language = request.Language,
+                RegionId = request.RegionId,
+                PublishedAtUtc = request.PublishedAtUtc
+            });
+
+            foreach (var hook in request.HookTexts.DefaultIfEmpty(string.Empty))
+            {
+                _db.HookPerformance.Add(new HookPerformance
+                {
+                    PipelineRunId = request.PipelineRunId,
+                    Platform = platform,
+                    ContentType = request.ContentType,
+                    Language = request.Language,
+                    RegionId = request.RegionId,
+                    PublishedAtUtc = request.PublishedAtUtc
+                });
+            }
+
+            foreach (var thumbnail in request.Thumbnails)
+            {
+                _db.ThumbnailPerformance.Add(new ThumbnailPerformance
+                {
+                    PipelineRunId = request.PipelineRunId,
+                    Platform = platform,
+                    ContentType = request.ContentType,
+                    Language = request.Language,
+                    RegionId = request.RegionId,
+                    PublishedAtUtc = request.PublishedAtUtc
+                });
+            }
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+    }
 }

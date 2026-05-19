@@ -52,6 +52,8 @@ public sealed class PipelineOrchestrator
     private readonly GrowthOptions _growthOptions;
     private readonly IAstronomyEventDecisionService? _eventDecisionService;
     private readonly IAstronomyEventStore? _eventStore;
+    private readonly IAIOptimizationPipelineService? _aiOptimizationPipelineService;
+    private readonly IAnalyticsIngestionService? _analyticsIngestionService;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -95,7 +97,9 @@ public sealed class PipelineOrchestrator
         IOptions<SchedulerOptions>? schedulerOptions = null,
         IAstronomyEventDecisionService? eventDecisionService = null,
         IAstronomyEventStore? eventStore = null,
-        ICinematicThumbnailService? cinematicThumbnailService = null)
+        ICinematicThumbnailService? cinematicThumbnailService = null,
+        IAIOptimizationPipelineService? aiOptimizationPipelineService = null,
+        IAnalyticsIngestionService? analyticsIngestionService = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -139,6 +143,8 @@ public sealed class PipelineOrchestrator
         _growthOptions = growthOptions?.Value ?? new GrowthOptions();
         _eventDecisionService = eventDecisionService;
         _eventStore = eventStore;
+        _aiOptimizationPipelineService = aiOptimizationPipelineService;
+        _analyticsIngestionService = analyticsIngestionService;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken, Guid? pipelineRunId = null)
@@ -1096,6 +1102,84 @@ public sealed class PipelineOrchestrator
                 run.FailureReason = $"Publishing failed: {string.Join(", ", failedEnabledPublishStages)}";
                 _logger.LogWarning("Pipeline run {PipelineRunId} completed generation with publish errors: {FailedPublishStages}", run.Id, string.Join(", ", failedEnabledPublishStages));
             }
+
+            var intelligenceErrors = new List<string>();
+            var aiExecuted = false;
+            var aiHookCount = 0;
+            var aiPublishingCount = 0;
+            var aiThumbCount = 0;
+            if (_aiOptimizationPipelineService is not null)
+            {
+                try
+                {
+                    var aiResult = await _aiOptimizationPipelineService.RunForPipelineAsync(new AIOptimizationPipelineRequest(
+                        run.Id,
+                        outputDir,
+                        context.Localization.ResolvedLanguage,
+                        NormalizeRegionId(request.RegionId, request.LocationName),
+                        request.Date,
+                        request.LocationName,
+                        script.OptimizedMetadata?.HookLine,
+                        script.OptimizedMetadata?.PrimaryTitle ?? script.Title,
+                        selectedObjects,
+                        thumbnailPath,
+                        shortThumbnailPath,
+                        request.EventType ?? request.ContentType.ToString()), cancellationToken);
+                    aiExecuted = aiResult.Executed;
+                    aiHookCount = aiResult.HookRecordsCreated;
+                    aiPublishingCount = aiResult.PublishingRecordsCreated;
+                    aiThumbCount = aiResult.ThumbnailRecordsCreated;
+                }
+                catch (Exception ex)
+                {
+                    intelligenceErrors.Add($"AI optimization failed: {ex.Message}");
+                    _logger.LogWarning(ex, "AI optimization post-processing failed for pipeline run {PipelineRunId}", run.Id);
+                }
+            }
+
+            var analyticsInitialized = false;
+            var analyticsRecordCount = 0;
+            if (_analyticsIngestionService is not null)
+            {
+                try
+                {
+                    var platforms = new[] { "YouTube", "Facebook", "Instagram" };
+                    var thumbnails = new List<AnalyticsThumbnailSeed>();
+                    if (!string.IsNullOrWhiteSpace(thumbnailPath)) thumbnails.Add(new AnalyticsThumbnailSeed(thumbnailPath, "Long"));
+                    if (!string.IsNullOrWhiteSpace(shortThumbnailPath)) thumbnails.Add(new AnalyticsThumbnailSeed(shortThumbnailPath, "Short"));
+                    await _analyticsIngestionService.InitializeForPipelineRunAsync(new AnalyticsPipelineInitializationRequest(
+                        run.Id,
+                        context.Localization.ResolvedLanguage,
+                        NormalizeRegionId(request.RegionId, request.LocationName),
+                        DateTimeOffset.UtcNow,
+                        platforms,
+                        [script.OptimizedMetadata?.HookLine ?? script.Title],
+                        thumbnails,
+                        request.ContentType.ToString(),
+                        run.YouTubeVideoId,
+                        blobUploadResult.VideoUrl), cancellationToken);
+                    analyticsInitialized = true;
+                    analyticsRecordCount = platforms.Length + platforms.Length + (thumbnails.Count * platforms.Length);
+                }
+                catch (Exception ex)
+                {
+                    intelligenceErrors.Add($"Analytics initialization failed: {ex.Message}");
+                    _logger.LogWarning(ex, "Analytics initialization post-processing failed for pipeline run {PipelineRunId}", run.Id);
+                }
+            }
+
+            await File.WriteAllTextAsync(Path.Combine(outputDir, "pipeline-intelligence-hook-report.json"), JsonSerializer.Serialize(new
+            {
+                aiOptimizationEnabled = _aiOptimizationPipelineService is not null,
+                aiOptimizationExecuted = aiExecuted,
+                hookRecordsCreated = aiHookCount,
+                publishingRecordsCreated = aiPublishingCount,
+                thumbnailRecordsCreated = aiThumbCount,
+                analyticsEnabled = _analyticsIngestionService is not null,
+                analyticsInitialized,
+                analyticsRecordsCreated = analyticsRecordCount,
+                errors = intelligenceErrors
+            }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 
             if (_pipelineStageExecutor is not null)
             {

@@ -221,7 +221,48 @@ public interface IAnalyticsFeedbackProvider
 public interface IAnalyticsIngestionService
 {
     Task IngestManualAsync(IReadOnlyCollection<Astronomy.MediaFactory.Analytics.AnalyticsIngestionDto> records, CancellationToken cancellationToken);
+    Task InitializeForPipelineRunAsync(AnalyticsPipelineInitializationRequest request, CancellationToken cancellationToken);
 }
+
+public sealed record AnalyticsPipelineInitializationRequest(
+    Guid PipelineRunId,
+    string Language,
+    string RegionId,
+    DateTimeOffset PublishedAtUtc,
+    IReadOnlyCollection<string> Platforms,
+    IReadOnlyCollection<string> HookTexts,
+    IReadOnlyCollection<AnalyticsThumbnailSeed> Thumbnails,
+    string ContentType,
+    string? VideoId,
+    string? VideoUrl);
+
+public sealed record AnalyticsThumbnailSeed(string ThumbnailPath, string ThumbnailType);
+
+public interface IAIOptimizationPipelineService
+{
+    Task<AIOptimizationPipelineResult> RunForPipelineAsync(AIOptimizationPipelineRequest request, CancellationToken cancellationToken);
+}
+
+public sealed record AIOptimizationPipelineRequest(
+    Guid PipelineRunId,
+    string OutputDirectory,
+    string Language,
+    string RegionId,
+    DateOnly RunDate,
+    string LocationName,
+    string? SelectedHook,
+    string? SelectedTitle,
+    IReadOnlyCollection<string> Objects,
+    string? LongThumbnailPath,
+    string? ShortThumbnailPath,
+    string EventType);
+
+public sealed record AIOptimizationPipelineResult(
+    bool Executed,
+    int HookRecordsCreated,
+    int PublishingRecordsCreated,
+    int ThumbnailRecordsCreated,
+    string[] Errors);
 public interface IPromptFeedbackService
 {
     Task<PromptFeedbackContext> BuildContextAsync(PromptFeedbackRequest request, CancellationToken cancellationToken);
