@@ -40,8 +40,20 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
     public async Task InitializeForPipelineRunAsync(AnalyticsPipelineInitializationRequest request, CancellationToken cancellationToken)
     {
         var publishedAtUtc = EnsureUtc(request.PublishedAtUtc);
+        var platforms = request.Platforms
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var hooks = request.HookTexts
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var thumbnails = request.Thumbnails
+            .GroupBy(x => $"{x.ThumbnailPath}|{x.ThumbnailType}", StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
+            .ToArray();
 
-        foreach (var platform in request.Platforms.DefaultIfEmpty("YouTube"))
+        foreach (var platform in platforms.DefaultIfEmpty("YouTube"))
         {
             var existingVideo = await _db.PlatformVideoAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == request.ContentType, cancellationToken);
             if (existingVideo is null) _db.PlatformVideoAnalytics.Add(new PlatformVideoAnalytics
@@ -54,28 +66,30 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 PublishedAtUtc = publishedAtUtc
             });
 
-            foreach (var hook in request.HookTexts.DefaultIfEmpty(string.Empty))
+            foreach (var hook in hooks.DefaultIfEmpty(request.ContentType))
             {
-                var existingHook = await _db.HookPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == request.ContentType, cancellationToken);
+                var hookContentType = $"{request.ContentType}|{hook}";
+                var existingHook = await _db.HookPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == hookContentType, cancellationToken);
                 if (existingHook is null) _db.HookPerformance.Add(new HookPerformance
                 {
                     PipelineRunId = request.PipelineRunId,
                     Platform = platform,
-                    ContentType = request.ContentType,
+                    ContentType = hookContentType,
                     Language = request.Language,
                     RegionId = request.RegionId,
                     PublishedAtUtc = publishedAtUtc
                 });
             }
 
-            foreach (var thumbnail in request.Thumbnails)
+            foreach (var thumbnail in thumbnails)
             {
-                var existingThumb = await _db.ThumbnailPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == thumbnail.ThumbnailType, cancellationToken);
+                var thumbContentType = $"{request.ContentType}|{thumbnail.ThumbnailType}";
+                var existingThumb = await _db.ThumbnailPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == thumbContentType, cancellationToken);
                 if (existingThumb is null) _db.ThumbnailPerformance.Add(new ThumbnailPerformance
                 {
                     PipelineRunId = request.PipelineRunId,
                     Platform = platform,
-                    ContentType = request.ContentType,
+                    ContentType = thumbContentType,
                     Language = request.Language,
                     RegionId = request.RegionId,
                     PublishedAtUtc = publishedAtUtc

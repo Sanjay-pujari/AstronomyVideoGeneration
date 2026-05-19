@@ -359,43 +359,115 @@ app.MapPost("/api/analytics/initialize/{pipelineRunId:guid}", async (Guid pipeli
     if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
         return Results.NotFound(new { message = $"Pipeline run {pipelineRunId} output folder was not found.", outputDirectory });
 
+    var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("AnalyticsInitialization");
+    logger.LogInformation("Analytics initialization START for pipeline run {PipelineRunId}", pipelineRunId);
     var script = await db.GeneratedScripts.Where(x => x.PipelineRunId == pipelineRunId).OrderByDescending(x => x.CreatedUtc).FirstOrDefaultAsync(ct);
-    var longThumb = Path.Combine(outputDirectory, "thumbnail.jpg");
+    var longThumb = Path.Combine(outputDirectory, "thumbnail-long.jpg");
+    var fallbackLongThumb = Path.Combine(outputDirectory, "thumbnail.jpg");
     var shortThumb = Path.Combine(outputDirectory, "thumbnail-short.jpg");
     var thumbs = new List<AnalyticsThumbnailSeed>();
     if (File.Exists(longThumb)) thumbs.Add(new AnalyticsThumbnailSeed(longThumb, "Long"));
+    else if (File.Exists(fallbackLongThumb)) thumbs.Add(new AnalyticsThumbnailSeed(fallbackLongThumb, "Long"));
     if (File.Exists(shortThumb)) thumbs.Add(new AnalyticsThumbnailSeed(shortThumb, "Short"));
-    var platforms = new[] { "YouTube", "Facebook", "Instagram" };
+    var platforms = new[] { "YouTube-Long", "YouTube-Short", "Facebook-Long", "Facebook-Reel", "Instagram-Reel" };
+    var hooks = new[] { script?.HookLine, run.EventTitle }.Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-    var existingVideoRows = await db.PlatformVideoAnalytics.Where(x => x.PipelineRunId == pipelineRunId).ToListAsync(ct);
     var recordsSkipped = 0;
     if (force == true)
     {
-        foreach (var row in existingVideoRows.Where(x => x.Views == 0 && x.Impressions == 0 && x.Likes == 0 && x.Comments == 0 && x.Shares == 0 && x.WatchTimeMinutes == 0))
-            db.PlatformVideoAnalytics.Remove(row);
+        var existingVideoRows = await db.PlatformVideoAnalytics.Where(x => x.PipelineRunId == pipelineRunId).ToListAsync(ct);
+        var existingHookRows = await db.HookPerformance.Where(x => x.PipelineRunId == pipelineRunId).ToListAsync(ct);
+        var existingThumbRows = await db.ThumbnailPerformance.Where(x => x.PipelineRunId == pipelineRunId).ToListAsync(ct);
+        db.PlatformVideoAnalytics.RemoveRange(existingVideoRows.Where(x => x.Views == 0 && x.Impressions == 0 && x.Likes == 0 && x.Comments == 0 && x.Shares == 0 && x.WatchTimeMinutes == 0));
+        db.HookPerformance.RemoveRange(existingHookRows.Where(x => x.Views == 0 && x.Impressions == 0 && x.Likes == 0 && x.Comments == 0 && x.Shares == 0 && x.WatchTimeMinutes == 0));
+        db.ThumbnailPerformance.RemoveRange(existingThumbRows.Where(x => x.Views == 0 && x.Impressions == 0 && x.Likes == 0 && x.Comments == 0 && x.Shares == 0 && x.WatchTimeMinutes == 0));
         await db.SaveChangesAsync(ct);
     }
     else
     {
-        recordsSkipped += existingVideoRows.Count;
+        recordsSkipped += await db.PlatformVideoAnalytics.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+        recordsSkipped += await db.HookPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+        recordsSkipped += await db.ThumbnailPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
     }
+
+    var beforeVideoCount = await db.PlatformVideoAnalytics.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+    var beforeHookCount = await db.HookPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+    var beforeThumbCount = await db.ThumbnailPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
 
     await analytics.InitializeForPipelineRunAsync(new AnalyticsPipelineInitializationRequest(
         pipelineRunId, run.Language, run.RegionId, DateTimeOffset.UtcNow, platforms,
-        [script?.HookLine ?? script?.Title ?? run.EventTitle ?? "Astronomy tonight"], thumbs,
+        hooks.Length > 0 ? hooks : ["Astronomy tonight"], thumbs,
         run.ContentType.ToString(), run.YouTubeVideoId, null), ct);
 
-    return Results.Ok(new { pipelineRunId, aiOptimizationExecuted = false, hookRecordsCreated = 0, analyticsInitialized = true, recordsSkipped, warnings = Array.Empty<string>(), outputReportPath = Path.Combine(outputDirectory, "pipeline-intelligence-hook-report.json") });
+    var afterVideoCount = await db.PlatformVideoAnalytics.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+    var afterHookCount = await db.HookPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+    var afterThumbCount = await db.ThumbnailPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+    var platformRowsCreated = afterVideoCount - beforeVideoCount;
+    var hookRowsCreated = afterHookCount - beforeHookCount;
+    var thumbnailRowsCreated = afterThumbCount - beforeThumbCount;
+    var warnings = new List<string>();
+    if (platformRowsCreated + hookRowsCreated + thumbnailRowsCreated == 0)
+    {
+        warnings.Add("No analytics rows were created.");
+        logger.LogWarning("No analytics rows were created for pipeline run {PipelineRunId}", pipelineRunId);
+    }
+    logger.LogInformation("Analytics rows created for pipeline run {PipelineRunId}: platform={PlatformRowsCreated}, hook={HookRowsCreated}, thumbnail={ThumbnailRowsCreated}", pipelineRunId, platformRowsCreated, hookRowsCreated, thumbnailRowsCreated);
+    logger.LogInformation("SaveChanges completed for analytics initialization of pipeline run {PipelineRunId}", pipelineRunId);
+
+    var reportPath = Path.Combine(outputDirectory, "analytics-initialization-report.json");
+    await File.WriteAllTextAsync(reportPath, System.Text.Json.JsonSerializer.Serialize(new
+    {
+        pipelineRunId,
+        platformRowsCreated,
+        hookRowsCreated,
+        thumbnailRowsCreated,
+        saveChangesSucceeded = true,
+        warnings,
+        errors = Array.Empty<string>()
+    }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), ct);
+
+    return Results.Ok(new { pipelineRunId, analyticsInitialized = true, platformRowsCreated, hookRowsCreated, thumbnailRowsCreated, recordsSkipped, warnings, outputReportPath = reportPath });
 });
 
 app.MapPost("/api/intelligence/backfill/{pipelineRunId:guid}", async (Guid pipelineRunId, bool? force, HttpContext http, CancellationToken ct) =>
 {
-    var ai = await http.RequestServices.GetRequiredService<IPipelineRepository>().GetAsync(pipelineRunId, ct);
-    if (ai is null) return Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." });
-    var aiResult = await http.RequestServices.GetRequiredService<IAIOptimizationPipelineService>().RunForPipelineAsync(new AIOptimizationPipelineRequest(
-        pipelineRunId, ai.OutputFolder ?? string.Empty, ai.Language, ai.RegionId, DateOnly.FromDateTime(ai.CreatedUtc.UtcDateTime), ai.LocationName, ai.EventTitle ?? "Astronomy tonight", ai.EventTitle ?? "Astronomy tonight", Array.Empty<string>(), null, null, ai.EventType ?? ai.ContentType.ToString()), ct);
-    await File.WriteAllTextAsync(Path.Combine(ai.OutputFolder, "pipeline-intelligence-hook-report.json"), System.Text.Json.JsonSerializer.Serialize(new { pipelineRunId, aiOptimizationExecuted = aiResult.Executed, hookRecordsCreated = aiResult.HookRecordsCreated, analyticsInitialized = true, recordsSkipped = 0, warnings = aiResult.Errors, outputReportPath = Path.Combine(ai.OutputFolder, "pipeline-intelligence-hook-report.json") }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), ct);
-    return Results.Ok(new { pipelineRunId, aiOptimizationExecuted = aiResult.Executed, hookRecordsCreated = aiResult.HookRecordsCreated, analyticsInitialized = true, recordsSkipped = 0, warnings = aiResult.Errors, outputReportPath = Path.Combine(ai.OutputFolder, "pipeline-intelligence-hook-report.json") });
+    var repository = http.RequestServices.GetRequiredService<IPipelineRepository>();
+    var db = http.RequestServices.GetRequiredService<MediaFactoryDbContext>();
+    var analytics = http.RequestServices.GetRequiredService<IAnalyticsIngestionService>();
+    var aiPipeline = http.RequestServices.GetRequiredService<IAIOptimizationPipelineService>();
+    var run = await repository.GetAsync(pipelineRunId, ct);
+    if (run is null) return Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." });
+    var outputDirectory = run.OutputFolder ?? string.Empty;
+    if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
+        return Results.NotFound(new { message = $"Pipeline run {pipelineRunId} output folder was not found.", outputDirectory });
+
+    var aiResult = await aiPipeline.RunForPipelineAsync(new AIOptimizationPipelineRequest(
+        pipelineRunId, outputDirectory, run.Language, run.RegionId, DateOnly.FromDateTime(run.CreatedUtc.UtcDateTime), run.LocationName, run.EventTitle ?? "Astronomy tonight", run.EventTitle ?? "Astronomy tonight", Array.Empty<string>(), null, null, run.EventType ?? run.ContentType.ToString()), ct);
+
+    var script = await db.GeneratedScripts.Where(x => x.PipelineRunId == pipelineRunId).OrderByDescending(x => x.CreatedUtc).FirstOrDefaultAsync(ct);
+    var longThumb = Path.Combine(outputDirectory, "thumbnail-long.jpg");
+    var fallbackLongThumb = Path.Combine(outputDirectory, "thumbnail.jpg");
+    var shortThumb = Path.Combine(outputDirectory, "thumbnail-short.jpg");
+    var thumbs = new List<AnalyticsThumbnailSeed>();
+    if (File.Exists(longThumb)) thumbs.Add(new AnalyticsThumbnailSeed(longThumb, "Long"));
+    else if (File.Exists(fallbackLongThumb)) thumbs.Add(new AnalyticsThumbnailSeed(fallbackLongThumb, "Long"));
+    if (File.Exists(shortThumb)) thumbs.Add(new AnalyticsThumbnailSeed(shortThumb, "Short"));
+    var hooks = new[] { script?.HookLine, run.EventTitle }.Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    var platforms = new[] { "YouTube-Long", "YouTube-Short", "Facebook-Long", "Facebook-Reel", "Instagram-Reel" };
+    var beforeVideoCount = await db.PlatformVideoAnalytics.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+    var beforeHookCount = await db.HookPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+    var beforeThumbCount = await db.ThumbnailPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct);
+    await analytics.InitializeForPipelineRunAsync(new AnalyticsPipelineInitializationRequest(
+        pipelineRunId, run.Language, run.RegionId, DateTimeOffset.UtcNow, platforms, hooks.Length > 0 ? hooks : ["Astronomy tonight"], thumbs, run.ContentType.ToString(), run.YouTubeVideoId, null), ct);
+    var platformRowsCreated = await db.PlatformVideoAnalytics.CountAsync(x => x.PipelineRunId == pipelineRunId, ct) - beforeVideoCount;
+    var hookRowsCreated = await db.HookPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct) - beforeHookCount;
+    var thumbnailRowsCreated = await db.ThumbnailPerformance.CountAsync(x => x.PipelineRunId == pipelineRunId, ct) - beforeThumbCount;
+    var warnings = aiResult.Errors.ToList();
+    if (platformRowsCreated + hookRowsCreated + thumbnailRowsCreated == 0) warnings.Add("No analytics rows were created.");
+    await File.WriteAllTextAsync(Path.Combine(outputDirectory, "analytics-initialization-report.json"), System.Text.Json.JsonSerializer.Serialize(new { pipelineRunId, platformRowsCreated, hookRowsCreated, thumbnailRowsCreated, saveChangesSucceeded = true, warnings, errors = Array.Empty<string>() }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), ct);
+    var reportPath = Path.Combine(outputDirectory, "pipeline-intelligence-hook-report.json");
+    await File.WriteAllTextAsync(reportPath, System.Text.Json.JsonSerializer.Serialize(new { pipelineRunId, aiOptimizationExecuted = aiResult.Executed, hookRecordsCreated = aiResult.HookRecordsCreated, analyticsInitialized = true, analytics = new { platformRowsCreated, hookRowsCreated, thumbnailRowsCreated }, recordsSkipped = 0, warnings, outputReportPath = reportPath }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), ct);
+    return Results.Ok(new { pipelineRunId, aiOptimizationExecuted = aiResult.Executed, hookRecordsCreated = aiResult.HookRecordsCreated, analyticsInitialized = true, platformRowsCreated, hookRowsCreated, thumbnailRowsCreated, recordsSkipped = 0, warnings, outputReportPath = reportPath });
 });
 app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, IPipelineRecoveryService recoveryService, ILogger<Program> logger, CancellationToken ct) =>
 {
