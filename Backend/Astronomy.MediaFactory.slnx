@@ -1,6 +1,8 @@
 <Solution>
+  <Project Path="src/Astronomy.MediaFactory.AIOptimization/Astronomy.MediaFactory.AIOptimization.csproj">
+    <Build Solution="Debug|*" Project="false" />
+  </Project>
   <Project Path="src/Astronomy.MediaFactory.Api/Astronomy.MediaFactory.Api.csproj" />
-  <Project Path="src/Astronomy.MediaFactory.AIOptimization/Astronomy.MediaFactory.AIOptimization.csproj" />
   <Project Path="src/Astronomy.MediaFactory.AstroData/Astronomy.MediaFactory.AstroData.csproj" />
   <Project Path="src/Astronomy.MediaFactory.ContentGen/Astronomy.MediaFactory.ContentGen.csproj" />
   <Project Path="src/Astronomy.MediaFactory.Contracts/Astronomy.MediaFactory.Contracts.csproj" />
