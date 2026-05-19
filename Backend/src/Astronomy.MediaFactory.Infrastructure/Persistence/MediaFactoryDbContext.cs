@@ -45,6 +45,30 @@ public sealed class MediaFactoryDbContext : DbContext
         values => values == null ? 0 : values.Aggregate(0, (hashCode, value) => HashCode.Combine(hashCode, value == null ? 0 : StringComparer.Ordinal.GetHashCode(value))),
         values => values == null ? Array.Empty<string>() : values.ToArray());
 
+    public override int SaveChanges()
+    {
+        NormalizeUtcDateTimeOffsetFields();
+        return base.SaveChanges();
+    }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        NormalizeUtcDateTimeOffsetFields();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        NormalizeUtcDateTimeOffsetFields();
+        return base.SaveChangesAsync(cancellationToken);
+    }
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        NormalizeUtcDateTimeOffsetFields();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<PipelineRun>().ToTable("pipeline_runs").HasKey(x => x.Id);
@@ -216,4 +240,25 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<PlatformContentAnalytics>().HasIndex(x => new { x.Platform, x.PlatformContentType, x.PlatformMediaId, x.CollectedUtc }).IsUnique();
         modelBuilder.Entity<PipelineStageExecution>().HasIndex(x => new { x.PipelineRunId, x.StageName, x.CreatedUtc });
     }
+
+    private void NormalizeUtcDateTimeOffsetFields()
+    {
+        foreach (var entry in ChangeTracker.Entries().Where(e => e.State is EntityState.Added or EntityState.Modified))
+        {
+            foreach (var property in entry.Properties.Where(p =>
+                         p.Metadata.Name.EndsWith("Utc", StringComparison.Ordinal) &&
+                         (p.Metadata.ClrType == typeof(DateTimeOffset) || p.Metadata.ClrType == typeof(DateTimeOffset?))))
+            {
+                if (property.CurrentValue is DateTimeOffset value)
+                {
+                    property.CurrentValue = EnsureUtc(value);
+                }
+            }
+        }
+    }
+
+    private static DateTimeOffset EnsureUtc(DateTimeOffset value)
+        => value.Offset == TimeSpan.Zero
+            ? value
+            : value.ToUniversalTime();
 }
