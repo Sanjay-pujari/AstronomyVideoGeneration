@@ -265,6 +265,37 @@ app.MapGet("/api/ai-optimization/publishing/{pipelineRunId:guid}", async (Guid p
     return Results.Ok(rows);
 });
 
+
+app.MapGet("/api/analytics/summary", async (string? platform, MediaFactoryDbContext db, CancellationToken ct) =>
+{
+    var query = db.PlatformVideoAnalytics.AsQueryable();
+    if (!string.IsNullOrWhiteSpace(platform)) query = query.Where(x => x.Platform == platform);
+    var rows = await query.ToListAsync(ct);
+    return Results.Ok(new {
+        impressions = rows.Sum(x => x.Impressions),
+        views = rows.Sum(x => x.Views),
+        ctr = rows.Count == 0 ? 0d : rows.Average(x => x.Ctr),
+        averageWatchDuration = rows.Count == 0 ? 0d : rows.Average(x => x.AverageWatchDuration),
+        watchTimeMinutes = rows.Sum(x => x.WatchTimeMinutes),
+        likes = rows.Sum(x => x.Likes),
+        comments = rows.Sum(x => x.Comments),
+        shares = rows.Sum(x => x.Shares),
+        subscribersGained = rows.Sum(x => x.SubscribersGained)
+    });
+});
+
+app.MapGet("/api/analytics/videos/{pipelineRunId:guid}", async (Guid pipelineRunId, MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.PlatformVideoAnalytics.Where(x => x.PipelineRunId == pipelineRunId).ToListAsync(ct)));
+
+app.MapGet("/api/analytics/platforms", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.PlatformVideoAnalytics.Select(x => x.Platform).Distinct().OrderBy(x => x).ToListAsync(ct)));
+
+app.MapGet("/api/analytics/hooks", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.HookPerformance.OrderByDescending(x => x.Views).ToListAsync(ct)));
+
+app.MapGet("/api/analytics/thumbnails", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.ThumbnailPerformance.OrderByDescending(x => x.Ctr).ToListAsync(ct)));
+
 app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, IPipelineRecoveryService recoveryService, ILogger<Program> logger, CancellationToken ct) =>
 {
     using var scope = logger.BeginScope(new Dictionary<string, object>
