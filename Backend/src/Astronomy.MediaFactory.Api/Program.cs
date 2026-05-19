@@ -308,9 +308,9 @@ app.MapPost("/api/ai-optimization/run/{pipelineRunId:guid}", async (Guid pipelin
 
     var scripts = await db.GeneratedScripts.Where(x => x.PipelineRunId == pipelineRunId).OrderByDescending(x => x.CreatedUtc).ToListAsync(ct);
     var script = scripts.FirstOrDefault();
-    var selectedHook = script?.OptimizedMetadata?.HookLine ?? script?.Title ?? run.Title ?? "Astronomy tonight";
-    var selectedTitle = script?.OptimizedMetadata?.PrimaryTitle ?? script?.Title ?? run.Title;
-    var objects = script?.AstronomyObjects?.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? Array.Empty<string>();
+    var selectedHook = script?.HookLine ?? script?.Title ?? run.EventTitle ?? "Astronomy tonight";
+    var selectedTitle = script?.OptimizedTitle ?? script?.Title ?? run.EventTitle ?? "Astronomy tonight";
+    var objects = Array.Empty<string>();
     var longThumb = File.Exists(Path.Combine(outputDirectory, "thumbnail.jpg")) ? Path.Combine(outputDirectory, "thumbnail.jpg") : null;
     var shortThumb = File.Exists(Path.Combine(outputDirectory, "thumbnail-short.jpg")) ? Path.Combine(outputDirectory, "thumbnail-short.jpg") : null;
 
@@ -382,8 +382,8 @@ app.MapPost("/api/analytics/initialize/{pipelineRunId:guid}", async (Guid pipeli
 
     await analytics.InitializeForPipelineRunAsync(new AnalyticsPipelineInitializationRequest(
         pipelineRunId, run.Language, run.RegionId, DateTimeOffset.UtcNow, platforms,
-        [script?.OptimizedMetadata?.HookLine ?? script?.Title ?? run.Title ?? "Astronomy tonight"], thumbs,
-        run.ContentType.ToString(), run.YouTubeVideoId, run.PublishedUrl), ct);
+        [script?.HookLine ?? script?.Title ?? run.EventTitle ?? "Astronomy tonight"], thumbs,
+        run.ContentType.ToString(), run.YouTubeVideoId, null), ct);
 
     return Results.Ok(new { pipelineRunId, aiOptimizationExecuted = false, hookRecordsCreated = 0, analyticsInitialized = true, recordsSkipped, warnings = Array.Empty<string>(), outputReportPath = Path.Combine(outputDirectory, "pipeline-intelligence-hook-report.json") });
 });
@@ -393,7 +393,7 @@ app.MapPost("/api/intelligence/backfill/{pipelineRunId:guid}", async (Guid pipel
     var ai = await http.RequestServices.GetRequiredService<IPipelineRepository>().GetAsync(pipelineRunId, ct);
     if (ai is null) return Results.NotFound(new { message = $"Pipeline run {pipelineRunId} was not found." });
     var aiResult = await http.RequestServices.GetRequiredService<IAIOptimizationPipelineService>().RunForPipelineAsync(new AIOptimizationPipelineRequest(
-        pipelineRunId, ai.OutputFolder, ai.Language, ai.RegionId, DateOnly.FromDateTime(ai.CreatedUtc.UtcDateTime), ai.LocationName, ai.Title, ai.Title, Array.Empty<string>(), null, null, ai.EventType ?? ai.ContentType.ToString()), ct);
+        pipelineRunId, ai.OutputFolder ?? string.Empty, ai.Language, ai.RegionId, DateOnly.FromDateTime(ai.CreatedUtc.UtcDateTime), ai.LocationName, ai.EventTitle ?? "Astronomy tonight", ai.EventTitle ?? "Astronomy tonight", Array.Empty<string>(), null, null, ai.EventType ?? ai.ContentType.ToString()), ct);
     await File.WriteAllTextAsync(Path.Combine(ai.OutputFolder, "pipeline-intelligence-hook-report.json"), System.Text.Json.JsonSerializer.Serialize(new { pipelineRunId, aiOptimizationExecuted = aiResult.Executed, hookRecordsCreated = aiResult.HookRecordsCreated, analyticsInitialized = true, recordsSkipped = 0, warnings = aiResult.Errors, outputReportPath = Path.Combine(ai.OutputFolder, "pipeline-intelligence-hook-report.json") }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), ct);
     return Results.Ok(new { pipelineRunId, aiOptimizationExecuted = aiResult.Executed, hookRecordsCreated = aiResult.HookRecordsCreated, analyticsInitialized = true, recordsSkipped = 0, warnings = aiResult.Errors, outputReportPath = Path.Combine(ai.OutputFolder, "pipeline-intelligence-hook-report.json") });
 });

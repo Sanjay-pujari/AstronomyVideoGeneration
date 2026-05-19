@@ -59,7 +59,7 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 {
                     PipelineRunId = request.PipelineRunId,
                     Platform = platform,
-                    ContentType = thumbnail.ThumbnailType,
+                    ContentType = request.ContentType,
                     Language = request.Language,
                     RegionId = request.RegionId,
                     PublishedAtUtc = request.PublishedAtUtc
