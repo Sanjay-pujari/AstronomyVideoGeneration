@@ -86,3 +86,24 @@ test('admin alerts page renders backend alert subscription controls', () => {
   assert.match(html, /POST \/api\/alerts\/subscribe is ready/);
   assert.match(html, /Upcoming alert candidates/);
 });
+
+
+test('AI optimization and optimization insights pages render', () => {
+  const aiHtml = renderDashboardHtml(mockDashboardData, { page: 'ai-optimization' });
+  const insightsHtml = renderDashboardHtml(mockDashboardData, { page: 'optimization-insights' });
+  assert.match(aiHtml, /Hook scores and recommendations/);
+  assert.match(insightsHtml, /Optimization insights/);
+});
+
+test('dashboard quick links use hash href values', () => {
+  const html = renderDashboardHtml(mockDashboardData, { page: 'dashboard' });
+  assert.match(html, /href="#analytics"/);
+  assert.match(html, /href="#ai-optimization"/);
+  assert.match(html, /href="#optimization-insights"/);
+  assert.match(html, /href="#pipeline-runs"/);
+});
+
+test('warning renders for unknown dashboard pages', () => {
+  const html = renderDashboardHtml(mockDashboardData, { page: 'dashboard', warning: 'Unknown dashboard page: bogus' });
+  assert.match(html, /Unknown dashboard page: bogus/);
+});
