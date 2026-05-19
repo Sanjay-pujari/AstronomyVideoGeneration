@@ -121,5 +121,13 @@ export const mockDashboardData: DashboardData = {
     productionApiConfigured: true,
     secretPolicy: 'Secret-shaped fields are stripped before rendering; tokens, app secrets, connection strings, and SAS query strings are never shown.'
   },
-  warnings: []
+  warnings: [],
+  analyticsSummaryCards: {
+    ctr: 6.1,
+    hookPerformance: { topHook: 'Watch Jupiter rise at dusk', score: 0.84 },
+    thumbnailPerformance: { topThumbnail: 'Moon close-up', score: 0.78 }
+  },
+  analyticsVideoBreakdown: [{ pipelineRunId: '11111111-1111-1111-1111-111111111111', views: 84200, ctr: 7.4, engagement: 6200 }],
+  aiOptimizationByRun: [{ pipelineRunId: '11111111-1111-1111-1111-111111111111', hookScore: 0.84, recommendedHooks: ['Watch Jupiter rise at dusk'] }],
+  publishingRecommendationsByRun: [{ pipelineRunId: '11111111-1111-1111-1111-111111111111', recommendedTitle: 'Jupiter and the Moon Tonight', recommendedPublishTimeUtc: '2026-05-09T21:00:00Z', hashtags: ['#astronomy', '#jupiter'] }]
 };

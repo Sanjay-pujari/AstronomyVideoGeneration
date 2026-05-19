@@ -3,7 +3,7 @@ import { renderDashboardHtml, runDetails, type PageKey } from './ui/dashboard.js
 import { parsePublicRoute, renderPublicPortalHtml } from './ui/publicPortal.js';
 
 const root = document.getElementById('root');
-const validPages = new Set<PageKey>(['dashboard', 'runs', 'regions', 'events', 'alerts', 'analytics', 'settings']);
+const validPages = new Set<PageKey>(['dashboard', 'pipeline-runs', 'regions', 'events', 'alerts', 'analytics', 'ai-optimization', 'content-calendar', 'settings']);
 let latestData: DashboardData | undefined;
 let latestAdminData: DashboardData | undefined;
 let latestAdminError: string | undefined;
@@ -182,7 +182,7 @@ function bindAdminInteractions() {
     button.addEventListener('click', async () => {
       const runId = button.dataset.loadRun;
       const input = document.getElementById('run-id') as HTMLInputElement | null;
-      if (location.hash !== '#runs') location.hash = '#runs';
+      if (location.hash !== '#pipeline-runs') location.hash = '#pipeline-runs';
       await Promise.resolve();
       if (input && runId) input.value = runId;
       if (runId) await loadRun(runId);
