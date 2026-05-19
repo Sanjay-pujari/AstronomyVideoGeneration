@@ -217,6 +217,11 @@ public interface IAnalyticsFeedbackProvider
     Task<AnalyticsAggregationSummary> GetSummaryAsync(int topN, CancellationToken cancellationToken);
 }
 
+
+public interface IAnalyticsIngestionService
+{
+    Task IngestManualAsync(IReadOnlyCollection<Astronomy.MediaFactory.Analytics.AnalyticsIngestionDto> records, CancellationToken cancellationToken);
+}
 public interface IPromptFeedbackService
 {
     Task<PromptFeedbackContext> BuildContextAsync(PromptFeedbackRequest request, CancellationToken cancellationToken);

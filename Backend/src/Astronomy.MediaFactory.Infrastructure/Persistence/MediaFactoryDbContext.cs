@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Analytics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 
@@ -32,6 +33,12 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<ThumbnailOptimizationRecord> ThumbnailOptimizationResults => Set<ThumbnailOptimizationRecord>();
     public DbSet<TrendSignalRecord> TrendSignals => Set<TrendSignalRecord>();
     public DbSet<PublishingOptimizationRecord> PublishingOptimizationResults => Set<PublishingOptimizationRecord>();
+    public DbSet<PlatformVideoAnalytics> PlatformVideoAnalytics => Set<PlatformVideoAnalytics>();
+    public DbSet<PlatformPostAnalytics> PlatformPostAnalytics => Set<PlatformPostAnalytics>();
+    public DbSet<AudienceAnalytics> AudienceAnalytics => Set<AudienceAnalytics>();
+    public DbSet<ThumbnailPerformance> ThumbnailPerformance => Set<ThumbnailPerformance>();
+    public DbSet<HookPerformance> HookPerformance => Set<HookPerformance>();
+    public DbSet<DailyPerformanceSummary> DailyPerformanceSummary => Set<DailyPerformanceSummary>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
         (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
@@ -142,6 +149,14 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ThumbnailOptimizationRecord>().ToTable("thumbnail_optimization_results").HasKey(x => x.Id);
         modelBuilder.Entity<TrendSignalRecord>().ToTable("trend_signals").HasKey(x => x.Id);
         modelBuilder.Entity<PublishingOptimizationRecord>().ToTable("publishing_optimization_results").HasKey(x => x.Id);
+        modelBuilder.Entity<PlatformVideoAnalytics>().ToTable("platform_video_analytics").HasKey(x => x.Id);
+        modelBuilder.Entity<PlatformPostAnalytics>().ToTable("platform_post_analytics").HasKey(x => x.Id);
+        modelBuilder.Entity<AudienceAnalytics>().ToTable("audience_analytics").HasKey(x => x.Id);
+        modelBuilder.Entity<ThumbnailPerformance>().ToTable("thumbnail_performance").HasKey(x => x.Id);
+        modelBuilder.Entity<HookPerformance>().ToTable("hook_performance").HasKey(x => x.Id);
+        modelBuilder.Entity<DailyPerformanceSummary>().ToTable("daily_performance_summary").HasKey(x => x.Id);
+        modelBuilder.Entity<DailyPerformanceSummary>().Property(x => x.SummaryDate).HasColumnName("summaryDate");
+
 
         modelBuilder.Entity<AlertNotification>().ToTable("alert_notifications").HasKey(x => x.Id);
         modelBuilder.Entity<AlertNotification>().Property(x => x.SubscriberId).HasColumnName("subscriberId");

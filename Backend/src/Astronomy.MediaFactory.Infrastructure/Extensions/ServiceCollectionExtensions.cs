@@ -422,6 +422,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IShortFormPublishingService, ShortFormPublishingService>();
         services.AddScoped<IAnalyticsAggregationService, AnalyticsAggregationService>();
         services.AddScoped<IAnalyticsIntelligenceService, AnalyticsIntelligenceService>();
+        services.AddScoped<IAnalyticsIngestionService, ManualAnalyticsIngestionService>();
         services.AddScoped<IOptimizationService, RuleBasedOptimizationService>();
         services.AddScoped<IHookOptimizationService, HookOptimizationService>();
         services.AddScoped<ITrendSignalProvider, StaticTrendSignalProvider>();
