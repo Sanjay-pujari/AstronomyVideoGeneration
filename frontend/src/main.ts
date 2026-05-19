@@ -3,8 +3,8 @@ import { renderDashboardHtml, runDetails, type PageKey } from './ui/dashboard.js
 import { parsePublicRoute, renderPublicPortalHtml } from './ui/publicPortal.js';
 
 const root = document.getElementById('root');
-const validPages = new Set<PageKey>(['dashboard', 'pipeline-runs', 'regions', 'events', 'alerts', 'analytics', 'ai-optimization', 'content-calendar', 'settings']);
-const adminPathPages = new Set<string>(['/dashboard', '/pipeline-runs', '/regions', '/events', '/alerts', '/analytics', '/ai-optimization', '/content-calendar', '/settings']);
+const validPages = new Set<PageKey>(['dashboard', 'pipeline-runs', 'regions', 'events', 'alerts', 'analytics', 'ai-optimization', 'content-calendar', 'settings', 'tonights-sky', 'videos', 'about']);
+const adminPathPages = new Set<string>(['/dashboard', '/pipeline-runs', '/regions', '/events', '/alerts', '/analytics', '/ai-optimization', '/content-calendar', '/settings', '/tonights-sky', '/videos', '/about']);
 let latestData: DashboardData | undefined;
 let latestAdminData: DashboardData | undefined;
 let latestAdminError: string | undefined;

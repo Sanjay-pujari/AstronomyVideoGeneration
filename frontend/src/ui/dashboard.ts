@@ -1,6 +1,6 @@
 import type { AstroEvent, DashboardData, JsonRecord, MediaItem, PipelineRun, PipelineStage, PublishStatus, Region, SchedulerSchedule, TokenHealthItem } from '../services/api.js';
 
-export type PageKey = 'dashboard' | 'pipeline-runs' | 'regions' | 'events' | 'alerts' | 'analytics' | 'ai-optimization' | 'content-calendar' | 'settings';
+export type PageKey = 'dashboard' | 'pipeline-runs' | 'regions' | 'events' | 'alerts' | 'analytics' | 'ai-optimization' | 'content-calendar' | 'settings' | 'tonights-sky' | 'videos' | 'about';
 
 const PAGES: Array<{ key: PageKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -11,7 +11,10 @@ const PAGES: Array<{ key: PageKey; label: string }> = [
   { key: 'analytics', label: 'Analytics' },
   { key: 'ai-optimization', label: 'AI Optimization' },
   { key: 'content-calendar', label: 'Content Calendar' },
-  { key: 'settings', label: 'Settings' }
+  { key: 'settings', label: 'Settings' },
+  { key: 'tonights-sky', label: "Tonight's Sky" },
+  { key: 'videos', label: 'Videos' },
+  { key: 'about', label: 'About' }
 ];
 
 export function escapeHtml(value: unknown) {
@@ -244,6 +247,20 @@ function alertsAdminPage(data: DashboardData) {
   return `<section class="dashboard-grid"><section class="card card--full"><div class="card__header"><div><h2>Sky alert subscription API</h2><p>Create, update, test, and unsubscribe email sky alerts without exposing diagnostics or SMTP secrets.</p></div>${statusBadge('api-ready')}</div><form class="alert-form" data-alert-preferences><input type="hidden" name="subscriberId" value=""><label>Email<input name="email" type="email" placeholder="viewer@example.com" required></label><label>Region<select name="regionId" required><option value="">Select a region</option>${data.regions.map((region) => `<option value="${escapeHtml(region.id)}">${escapeHtml(region.displayName ?? region.name ?? region.id)}</option>`).join('')}</select></label><label>Language<select name="language" required><option value="en">English</option><option value="hi">Hindi</option></select></label><fieldset><legend>Event types</legend>${['MeteorShower', 'FullMoon', 'Eclipse', 'SpecialEvent', 'DailySkyGuide'].map((type) => `<label class="check-row"><input type="checkbox" name="eventTypes" value="${type}" ${type === 'MeteorShower' ? 'checked' : ''}>${type}</label>`).join('')}</fieldset><label>Preferred alert time<input name="preferredAlertTimeLocal" type="time" value="18:00" required></label><label>Minimum event score<input name="minimumEventScore" type="number" min="0" max="1" step="0.01" value="0.65" required></label><div class="state state--empty" data-alert-form-state>POST /api/alerts/subscribe is ready. Save first, then test or unsubscribe the created subscriber.</div><div class="alert-actions"><button class="primary-button" type="submit">Save alert subscription</button><button class="secondary-button" type="button" data-alert-test>Send test alert</button><button class="secondary-button" type="button" data-alert-unsubscribe>Unsubscribe</button></div></form></section>${card('Upcoming alert candidates', 'Loaded from /api/alerts/upcoming with event API fallback', alertCandidateList(candidates), 'card--full')}</section>`;
 }
 
+
+
+function tonightsSkyPage(data: DashboardData) {
+  return `<section class="dashboard-grid">${card("Tonight's Sky", 'Regional sky visibility and latest guide links', '<p>Use this page to review tonight sky guide coverage by region and jump to public-facing tonight pages.</p><p><a class="safe-link" href="/tonights-sky" data-router-link>Open public Tonight&amp;#39;s Sky page</a></p>')}${card('Regional readiness', 'Configured regions for tonight', regionList(data.regions, data.scheduler.schedules ?? []), 'card--full')}</section>`;
+}
+
+function videosAdminPage(data: DashboardData) {
+  return `<section class="dashboard-grid">${card('Video library', 'Published long videos, shorts, and reels', mediaList([...data.latestVideos, ...data.latestShorts, ...(data.analytics.topContent ?? [])]), 'card--full')}</section>`;
+}
+
+function aboutAdminPage() {
+  return `<section class="dashboard-grid">${card('About AstroPulse', 'Operations and public experience', '<p>AstroPulse produces regional astronomy videos, manages scheduling, and publishes cross-platform content.</p><p><a class="safe-link" href="/about" data-router-link>Open public About page</a></p>', 'card--full')}</section>`;
+}
+
 function settingsPage(data: DashboardData) {
   const settings = data.settingsSummary;
   const rows = [
@@ -278,6 +295,12 @@ export function renderDashboardHtml(data: DashboardData, options: { error?: stri
               ? contentCalendarPage(data)
           : page === 'settings'
             ? settingsPage(data)
-            : dashboardPage(data);
+            : page === 'tonights-sky'
+              ? tonightsSkyPage(data)
+              : page === 'videos'
+                ? videosAdminPage(data)
+                : page === 'about'
+                  ? aboutAdminPage()
+                  : dashboardPage(data);
   return shell(page, body, options.error);
 }
