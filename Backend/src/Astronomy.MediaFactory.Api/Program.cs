@@ -1,11 +1,14 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
+using Microsoft.EntityFrameworkCore;
+using Astronomy.MediaFactory.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration
@@ -242,6 +245,25 @@ app.MapPost("/api/events/{eventId}/generate", async (string eventId, string? reg
 });
 app.MapGet("/api/events/generated", async (int? take, IPipelineRepository repository, CancellationToken ct) =>
     Results.Ok(await repository.GetGeneratedSpecialEventRunsAsync(Math.Clamp(take ?? 50, 1, 200), ct)));
+
+
+app.MapGet("/api/ai-optimization/hooks/{pipelineRunId:guid}", async (Guid pipelineRunId, MediaFactoryDbContext db, CancellationToken ct) =>
+{
+    var rows = await db.HookOptimizationResults.Where(x => x.PipelineRunId == pipelineRunId).OrderByDescending(x => x.FinalScore).ToListAsync(ct);
+    return Results.Ok(rows);
+});
+
+app.MapGet("/api/ai-optimization/trends/{date}", async (DateOnly date, MediaFactoryDbContext db, CancellationToken ct) =>
+{
+    var rows = await db.TrendSignals.Where(x => x.SignalDate == date).OrderByDescending(x => x.Score).ToListAsync(ct);
+    return Results.Ok(rows);
+});
+
+app.MapGet("/api/ai-optimization/publishing/{pipelineRunId:guid}", async (Guid pipelineRunId, MediaFactoryDbContext db, CancellationToken ct) =>
+{
+    var rows = await db.PublishingOptimizationResults.Where(x => x.PipelineRunId == pipelineRunId).OrderByDescending(x => x.CreatedUtc).ToListAsync(ct);
+    return Results.Ok(rows);
+});
 
 app.MapPost("/api/pipelines/run", async (RunPipelineRequest request, PipelineOrchestrator orchestrator, IPipelineRecoveryService recoveryService, ILogger<Program> logger, CancellationToken ct) =>
 {

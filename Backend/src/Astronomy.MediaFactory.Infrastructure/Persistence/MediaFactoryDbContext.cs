@@ -28,6 +28,10 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<AlertNotification> AlertNotifications => Set<AlertNotification>();
     public DbSet<AstronomyEvent> AstronomyEvents => Set<AstronomyEvent>();
     public DbSet<AstronomyEventGenerationHistory> AstronomyEventGenerationHistory => Set<AstronomyEventGenerationHistory>();
+    public DbSet<HookOptimizationRecord> HookOptimizationResults => Set<HookOptimizationRecord>();
+    public DbSet<ThumbnailOptimizationRecord> ThumbnailOptimizationResults => Set<ThumbnailOptimizationRecord>();
+    public DbSet<TrendSignalRecord> TrendSignals => Set<TrendSignalRecord>();
+    public DbSet<PublishingOptimizationRecord> PublishingOptimizationResults => Set<PublishingOptimizationRecord>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
         (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
@@ -132,6 +136,12 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<AstronomyEventGenerationHistory>().Property(x => x.GenerationMode).HasColumnName("generationMode");
         modelBuilder.Entity<AstronomyEventGenerationHistory>().Property(x => x.CreatedUtc).HasColumnName("createdUtc");
         modelBuilder.Entity<AstronomyEventGenerationHistory>().HasIndex(x => new { x.AstronomyEventId, x.RegionId, x.TargetDate, x.ContentType }).IsUnique();
+
+
+        modelBuilder.Entity<HookOptimizationRecord>().ToTable("hook_optimization_results").HasKey(x => x.Id);
+        modelBuilder.Entity<ThumbnailOptimizationRecord>().ToTable("thumbnail_optimization_results").HasKey(x => x.Id);
+        modelBuilder.Entity<TrendSignalRecord>().ToTable("trend_signals").HasKey(x => x.Id);
+        modelBuilder.Entity<PublishingOptimizationRecord>().ToTable("publishing_optimization_results").HasKey(x => x.Id);
 
         modelBuilder.Entity<AlertNotification>().ToTable("alert_notifications").HasKey(x => x.Id);
         modelBuilder.Entity<AlertNotification>().Property(x => x.SubscriberId).HasColumnName("subscriberId");
