@@ -9,6 +9,7 @@
     <PackageReference Include="Serilog.AspNetCore" />
     <PackageReference Include="Serilog.Sinks.Console" />
     <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" />
+      <ProjectReference Include="..\Astronomy.MediaFactory.AIOptimization\Astronomy.MediaFactory.AIOptimization.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Remove="assets\**\*.*" />

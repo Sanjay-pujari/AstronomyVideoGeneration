@@ -1,0 +1,20 @@
+using System;
+using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations;
+
+public partial class AddAIOptimizationTables : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.CreateTable(name: "hook_optimization_results", columns: table => new { Id = table.Column<Guid>(type: "uuid", nullable: false), PipelineRunId = table.Column<Guid>(type: "uuid", nullable: false), Hook = table.Column<string>(type: "text", nullable: false), Language = table.Column<string>(type: "text", nullable: false), EventType = table.Column<string>(type: "text", nullable: false), CuriosityScore = table.Column<double>(type: "double precision", nullable: false), EmotionalImpactScore = table.Column<double>(type: "double precision", nullable: false), ClarityScore = table.Column<double>(type: "double precision", nullable: false), ClickProbability = table.Column<double>(type: "double precision", nullable: false), FinalScore = table.Column<double>(type: "double precision", nullable: false), RecommendationReason = table.Column<string>(type: "text", nullable: false), CreatedUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false) }, constraints: table => table.PrimaryKey("PK_hook_optimization_results", x => x.Id));
+        migrationBuilder.CreateTable(name: "thumbnail_optimization_results", columns: table => new { Id = table.Column<Guid>(type: "uuid", nullable: false), PipelineRunId = table.Column<Guid>(type: "uuid", nullable: false), ObjectCount = table.Column<int>(type: "integer", nullable: false), Brightness = table.Column<double>(type: "double precision", nullable: false), TextLength = table.Column<int>(type: "integer", nullable: false), Language = table.Column<string>(type: "text", nullable: false), HookIntensity = table.Column<double>(type: "double precision", nullable: false), CompositionScore = table.Column<double>(type: "double precision", nullable: false), FinalScore = table.Column<double>(type: "double precision", nullable: false), CreatedUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false) }, constraints: table => table.PrimaryKey("PK_thumbnail_optimization_results", x => x.Id));
+        migrationBuilder.CreateTable(name: "trend_signals", columns: table => new { Id = table.Column<Guid>(type: "uuid", nullable: false), SignalDate = table.Column<DateOnly>(type: "date", nullable: false), Topic = table.Column<string>(type: "text", nullable: false), Score = table.Column<double>(type: "double precision", nullable: false), Source = table.Column<string>(type: "text", nullable: false), CreatedUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false) }, constraints: table => table.PrimaryKey("PK_trend_signals", x => x.Id));
+        migrationBuilder.CreateTable(name: "publishing_optimization_results", columns: table => new { Id = table.Column<Guid>(type: "uuid", nullable: false), PipelineRunId = table.Column<Guid>(type: "uuid", nullable: false), RecommendedPublishTimeUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false), RecommendedHashtagsJson = table.Column<string>(type: "text", nullable: false), RecommendedTagsJson = table.Column<string>(type: "text", nullable: false), RecommendedAudienceType = table.Column<string>(type: "text", nullable: false), PlatformPriorityJson = table.Column<string>(type: "text", nullable: false), CreatedUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false) }, constraints: table => table.PrimaryKey("PK_publishing_optimization_results", x => x.Id));
+    }
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable("hook_optimization_results"); migrationBuilder.DropTable("thumbnail_optimization_results"); migrationBuilder.DropTable("trend_signals"); migrationBuilder.DropTable("publishing_optimization_results");
+    }
+}
