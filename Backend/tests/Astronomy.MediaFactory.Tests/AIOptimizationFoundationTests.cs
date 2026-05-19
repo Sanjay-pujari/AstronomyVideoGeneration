@@ -21,6 +21,30 @@ public sealed class AIOptimizationFoundationTests
     }
 
     [Fact]
+    public void StaticTrendProvider_ReturnsSignals()
+    {
+        var provider = new StaticTrendSignalProvider();
+        var results = provider.GetSignals(DateOnly.FromDateTime(DateTime.UtcNow));
+
+        Assert.NotEmpty(results);
+        Assert.All(results, r => Assert.Equal("internal-static", r.Source));
+    }
+
+    [Fact]
+    public void PublishingOptimization_ReturnsRecommendationPayload()
+    {
+        var service = new PublishingOptimizationService();
+        var pipelineRunId = Guid.NewGuid();
+
+        var result = service.BuildRecommendation(pipelineRunId, "en", "meteor-shower");
+
+        Assert.Equal(pipelineRunId, result.PipelineRunId);
+        Assert.NotEmpty(result.RecommendedHashtags);
+        Assert.NotEmpty(result.RecommendedTags);
+        Assert.NotEmpty(result.PlatformPriority);
+    }
+
+    [Fact]
     public async Task OptimizationReport_IsGenerated()
     {
         var service = new HookOptimizationService();
