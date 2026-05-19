@@ -4,18 +4,21 @@ import { parsePublicRoute, renderPublicPortalHtml } from './ui/publicPortal.js';
 
 const root = document.getElementById('root');
 const validPages = new Set<PageKey>(['dashboard', 'pipeline-runs', 'regions', 'events', 'alerts', 'analytics', 'ai-optimization', 'content-calendar', 'settings']);
+const adminPathPages = new Set<string>(['/dashboard', '/pipeline-runs', '/regions', '/events', '/alerts', '/analytics', '/ai-optimization', '/content-calendar', '/settings']);
 let latestData: DashboardData | undefined;
 let latestAdminData: DashboardData | undefined;
 let latestAdminError: string | undefined;
 
 function isAdminRoute() {
-  return location.pathname === '/admin' || location.pathname.startsWith('/admin/') || location.pathname === '/dashboard' || location.pathname.startsWith('/dashboard/');
+  return location.pathname === '/admin' || location.pathname.startsWith('/admin/') || adminPathPages.has(location.pathname.replace(/\/+$/, '') || '/');
 }
 
 function currentPage(): PageKey {
-  const page = location.hash.replace(/^#/, '') as PageKey;
-  if (location.pathname === '/admin/alerts') return 'alerts';
-  return validPages.has(page) ? page : 'dashboard';
+  const cleanPath = location.pathname.replace(/\/+$/, '') || '/';
+  if (cleanPath === '/admin/alerts') return 'alerts';
+  if (cleanPath === '/admin' || cleanPath === '/admin/dashboard') return 'dashboard';
+  const page = cleanPath.startsWith('/admin/') ? cleanPath.slice('/admin/'.length) : cleanPath.slice(1);
+  return validPages.has(page as PageKey) ? (page as PageKey) : 'dashboard';
 }
 
 function renderLoading(message = 'Loading AstroPulse…') {
@@ -125,9 +128,22 @@ function bindPublicInteractions() {
 
   document.querySelectorAll<HTMLSelectElement>('[data-region-selector]').forEach((select) => {
     select.addEventListener('change', () => {
-      if (select.value) location.href = `/regions/${encodeURIComponent(select.value)}`;
+      if (select.value) navigate(`/regions/${encodeURIComponent(select.value)}`);
     });
   });
+}
+
+function navigate(path: string) {
+  if (location.pathname === path) return;
+  history.pushState({}, '', path);
+  if (isAdminRoute()) {
+    if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
+    else void loadAndRenderAdmin();
+  } else if (latestData) {
+    renderPublic(latestData);
+  } else {
+    void loadAndRenderPublic();
+  }
 }
 
 function bindAdminInteractions() {
@@ -206,10 +222,17 @@ function bindAdminInteractions() {
     button.addEventListener('click', async () => {
       const runId = button.dataset.loadRun;
       const input = document.getElementById('run-id') as HTMLInputElement | null;
-      if (location.hash !== '#pipeline-runs') location.hash = '#pipeline-runs';
-      await Promise.resolve();
+      if (location.pathname !== '/pipeline-runs') navigate('/pipeline-runs');
       if (input && runId) input.value = runId;
       if (runId) await loadRun(runId);
+    });
+  });
+  document.querySelectorAll<HTMLAnchorElement>('a[data-router-link]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      const href = link.getAttribute('href');
+      if (!href || href.startsWith('http')) return;
+      event.preventDefault();
+      navigate(href);
     });
   });
 }
@@ -233,10 +256,6 @@ async function loadAndRenderPublic() {
   }
 }
 
-window.addEventListener('hashchange', () => {
-  if (isAdminRoute() && latestAdminData) renderAdmin(latestAdminData, latestAdminError);
-});
-
 window.addEventListener('popstate', () => {
   if (isAdminRoute()) {
     if (latestAdminData) renderAdmin(latestAdminData, latestAdminError);
@@ -245,7 +264,9 @@ window.addEventListener('popstate', () => {
   }
 });
 
-if (isAdminRoute()) {
+if (isAdminRoute() && !adminPathPages.has(location.pathname.replace(/\/+$/, '') || '/') && !location.pathname.startsWith('/admin')) {
+  navigate('/dashboard');
+} else if (isAdminRoute()) {
   void loadAndRenderAdmin();
 } else {
   void loadAndRenderPublic();

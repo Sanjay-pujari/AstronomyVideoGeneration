@@ -41,6 +41,7 @@ test('public empty states do not render mock metrics', () => {
 
 test('region pages route correctly and include locale details', () => {
   assert.deepEqual(parsePublicRoute('/regions/na'), { page: 'region', regionId: 'na' });
+  assert.deepEqual(parsePublicRoute('/tonights-sky'), { page: 'tonight' });
   const html = renderPublicPortalHtml(mockDashboardData, parsePublicRoute('/regions/na'));
   assert.match(html, /North America/);
   assert.match(html, /America\/New_York/);

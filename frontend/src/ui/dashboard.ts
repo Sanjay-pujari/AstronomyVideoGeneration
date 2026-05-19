@@ -80,7 +80,7 @@ function externalLink(url?: string) {
 }
 
 function nav(activePage: PageKey) {
-  return `<nav class="top-nav" aria-label="AstroPulse pages">${PAGES.map((page) => `<a class="nav-link ${page.key === activePage ? 'nav-link--active' : ''}" href="#${page.key}">${page.label}</a>`).join('')}</nav>`;
+  return `<nav class="top-nav" aria-label="AstroPulse pages">${PAGES.map((page) => `<a class="nav-link ${page.key === activePage ? 'nav-link--active' : ''}" href="/${page.key}" data-router-link>${page.label}</a>`).join('')}</nav>`;
 }
 
 function hero(activePage: PageKey) {
