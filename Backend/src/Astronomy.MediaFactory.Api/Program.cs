@@ -862,18 +862,6 @@ app.MapGet("/api/assets/celestial/{objectKey}", async (string objectKey, ICelest
 
 app.Run();
 
-public sealed record GenerateDailyPlanRequest(
-    string ContentCategoryCode,
-    string Language,
-    string RegionId,
-    DateTimeOffset ScheduledUtc,
-    string? PrimaryCelestialObjectCode);
-
-public sealed record GenerateDailyPlanResponse(
-    Guid ContentGenerationPlanId,
-    string Status);
-
-
 static AnalyticsIntelligenceRequest BuildAnalyticsIntelligenceRequest(int? days, string? platform, string? contentType, string? location, int? limit)
     => new(days ?? 14, platform, contentType, location, limit ?? 10);
 
@@ -906,3 +894,16 @@ static IReadOnlyCollection<string> GetChangedFields(RunPipelineRequest original,
     if (original.RegionId != result.RegionId) changed.Add(nameof(RunPipelineRequest.RegionId));
     return changed;
 }
+
+public sealed record GenerateDailyPlanRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    DateTimeOffset ScheduledUtc,
+    string? PrimaryCelestialObjectCode);
+
+public sealed record GenerateDailyPlanResponse(
+    Guid ContentGenerationPlanId,
+    string Status);
+
+
