@@ -5,7 +5,7 @@ using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
-public sealed class ContentPlanningGeneratePlanTests
+public sealed partial class ContentPlanningGeneratePlanTests
 {
     [Fact]
     public async Task GeneratePlanAsync_Creates_ContentGenerationPlan_Row()
@@ -113,5 +113,98 @@ public sealed class ContentPlanningGeneratePlanTests
         public Task<bool> CanUseStyleAsync(string categoryCode, string styleCode, string styleType, DateTimeOffset date, CancellationToken cancellationToken) => Task.FromResult(true);
         public Task<IReadOnlyCollection<ContentVarietyBlockedItem>> GetBlockedItemsAsync(string categoryCode, DateTimeOffset date, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyCollection<ContentVarietyBlockedItem>>([]);
+    }
+}
+
+
+
+public sealed partial class ContentPlanningGeneratePlanTests
+{
+    [Fact]
+    public async Task PipelineRequestPreview_Returns_Json_For_Planned()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.ContentCategoryStyleSettings.Add(new ContentCategoryStyleSettings { ContentCategoryCode = "DailySkyGuide", Language = "en", Enabled = true, HookStyleCode = "HookA", NarrationStyleCode = "NarA", ThumbnailStyleCode = "ThumbA" });
+        db.ContentGenerationPlans.Add(new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR", Title = "T", ScheduledUtc = DateTimeOffset.UtcNow });
+        await db.SaveChangesAsync();
+        var planId = db.ContentGenerationPlans.Single().Id;
+        var svc = CreateService(db);
+
+        var preview = await svc.BuildPipelineRequestPreviewAsync(planId, CancellationToken.None);
+
+        Assert.Equal("Planned", preview.Status);
+        Assert.NotNull(preview.PipelineRequest);
+    }
+
+    [Fact]
+    public async Task PipelineRequestPreview_Returns_Json_For_ReadyForManualRun()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.ContentCategoryStyleSettings.Add(new ContentCategoryStyleSettings { ContentCategoryCode = "DailySkyGuide", Language = "en", Enabled = true, HookStyleCode = "HookA", NarrationStyleCode = "NarA", ThumbnailStyleCode = "ThumbA" });
+        db.ContentGenerationPlans.Add(new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "ReadyForManualRun", Language = "en", RegionId = "IN-RJ-UDAIPUR", Title = "T", ScheduledUtc = DateTimeOffset.UtcNow });
+        await db.SaveChangesAsync();
+        var planId = db.ContentGenerationPlans.Single().Id;
+        var svc = CreateService(db);
+
+        var preview = await svc.BuildPipelineRequestPreviewAsync(planId, CancellationToken.None);
+
+        Assert.Equal("ReadyForManualRun", preview.Status);
+        Assert.NotNull(preview.PipelineRequest);
+    }
+
+    [Fact]
+    public async Task PipelineRequestPreview_Does_Not_Execute_Pipeline_Or_Update_Db()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.ContentCategoryStyleSettings.Add(new ContentCategoryStyleSettings { ContentCategoryCode = "DailySkyGuide", Language = "en", Enabled = true, HookStyleCode = "HookA", NarrationStyleCode = "NarA", ThumbnailStyleCode = "ThumbA" });
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR", Title = "Original", ScheduledUtc = DateTimeOffset.UtcNow };
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+        var beforeUpdated = plan.UpdatedUtc;
+        var svc = CreateService(db);
+
+        _ = await svc.BuildPipelineRequestPreviewAsync(plan.Id, CancellationToken.None);
+
+        Assert.Empty(db.ContentPipelineExecutions);
+        var reloaded = await db.ContentGenerationPlans.SingleAsync(x => x.Id == plan.Id);
+        Assert.Equal(beforeUpdated, reloaded.UpdatedUtc);
+        Assert.Equal("Original", reloaded.Title);
+    }
+
+    [Fact]
+    public async Task PipelineRequestPreview_Includes_Warnings_For_Missing_Optional_Master_Data()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.ContentGenerationPlans.Add(new ContentGenerationPlan
+        {
+            ContentCategoryCode = "DailySkyGuide",
+            Status = "Planned",
+            Language = "fr",
+            RegionId = "IN-RJ-UDAIPUR",
+            PrimaryCelestialObjectCode = "UnknownObject",
+            PrimaryAstronomyEventTypeCode = "UnknownEvent"
+        });
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        var preview = await svc.BuildPipelineRequestPreviewAsync(db.ContentGenerationPlans.Single().Id, CancellationToken.None);
+
+        Assert.Contains("missing style setting", preview.Warnings);
+        Assert.Contains("missing celestial object", preview.Warnings);
+        Assert.Contains("missing astronomy event type", preview.Warnings);
+        Assert.Contains("missing scheduledUtc", preview.Warnings);
+    }
+
+    [Fact]
+    public void Existing_Pipeline_Run_Request_Dto_Remains_Unchanged()
+    {
+        var type = typeof(Astronomy.MediaFactory.Contracts.RunPipelineRequest);
+        Assert.NotNull(type.GetProperty("Date"));
+        Assert.NotNull(type.GetProperty("ContentType"));
+        Assert.NotNull(type.GetProperty("LocationName"));
     }
 }
