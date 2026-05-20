@@ -129,5 +129,18 @@ export const mockDashboardData: DashboardData = {
   },
   analyticsVideoBreakdown: [{ pipelineRunId: '11111111-1111-1111-1111-111111111111', views: 84200, ctr: 7.4, engagement: 6200 }],
   aiOptimizationByRun: [{ pipelineRunId: '11111111-1111-1111-1111-111111111111', hookScore: 0.84, recommendedHooks: ['Watch Jupiter rise at dusk'] }],
-  publishingRecommendationsByRun: [{ pipelineRunId: '11111111-1111-1111-1111-111111111111', recommendedTitle: 'Jupiter and the Moon Tonight', recommendedPublishTimeUtc: '2026-05-09T21:00:00Z', hashtags: ['#astronomy', '#jupiter'] }]
+  publishingRecommendationsByRun: [{ pipelineRunId: '11111111-1111-1111-1111-111111111111', recommendedTitle: 'Jupiter and the Moon Tonight', recommendedPublishTimeUtc: '2026-05-09T21:00:00Z', hashtags: ['#astronomy', '#jupiter'] }],
+  opsSummary: { healthy: true },
+  recentFailures: [],
+  jobSummary: { queued: 0 },
+  thumbnailPublishStatus: { longThumbnail: 'ok', shortThumbnail: 'ok' },
+  analyticsInsights: [{ message: 'Best time window 21:00 UTC' }],
+  platformSummary: [{ platform: 'YouTube', score: 0.8 }],
+  contentPerformance: [{ id: 'vid-001', views: 84200 }],
+  aiOptimizationRecommendations: [{ pipelineRunId: '11111111-1111-1111-1111-111111111111', action: 'keep-hook' }],
+  aiOptimizationPendingApproval: [{ recommendationId: 'rec-1', status: 'pending' }],
+  optimizationPlan: { location: 'global', platform: 'youtube' },
+  celestialAssetStatus: { sun: 'ready' },
+  partialData: false,
+  lastRefreshedAt: '2026-05-09T21:30:00Z'
 };

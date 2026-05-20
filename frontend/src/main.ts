@@ -17,6 +17,7 @@ function renderLoading(message = 'Loading AstroPulse…') {
 }
 
 function renderAdmin(data: DashboardData, error?: string) {
+  (globalThis as { __dashboardLastRefreshedAt?: string }).__dashboardLastRefreshedAt = data.lastRefreshedAt;
   latestAdminData = data;
   latestAdminError = error;
   const route = resolvePage();
@@ -219,6 +220,35 @@ function bindAdminInteractions() {
   });
   document.querySelectorAll<HTMLButtonElement>('[data-intel-backfill]').forEach((button) => {
     button.addEventListener('click', () => { const runId = button.dataset.intelBackfill; if (!runId) return; void bindRunAction(button, () => api.backfillIntelligence(runId), 'Backfill Intelligence'); });
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-ai-generate-now]').forEach((button) => {
+    button.addEventListener('click', () => void bindRunAction(button, () => api.generateAiOptimizationNow(), 'Generate now'));
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-ai-apply-approved]').forEach((button) => {
+    button.addEventListener('click', () => void bindRunAction(button, () => api.applyAiOptimizationApproved(), 'Apply approved'));
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-ai-reject]').forEach((button) => {
+    button.addEventListener('click', () => void bindRunAction(button, () => api.rejectAiOptimization({ reason: 'manual-review' }), 'Reject'));
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-optimization-load]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const locationInput = document.getElementById('optimization-location') as HTMLInputElement | null;
+      const platformInput = document.getElementById('optimization-platform') as HTMLInputElement | null;
+      if (!locationInput || !platformInput) return;
+      await api.getOptimizationPlan(locationInput.value || 'global', platformInput.value || 'youtube');
+      await loadAndRenderAdmin();
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-optimization-apply-preview]').forEach((button) => {
+    button.addEventListener('click', () => void bindRunAction(button, () => api.applyOptimizationPreview({ source: 'dashboard' }), 'Apply preview'));
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-load-run]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const runId = button.dataset.loadRun;
+      if (!runId) return;
+      await loadRun(runId);
+      await Promise.allSettled([api.getThumbnailPublishStatus(runId)]);
+    });
   });
 
   document.getElementById('load-run')?.addEventListener('click', async () => {
