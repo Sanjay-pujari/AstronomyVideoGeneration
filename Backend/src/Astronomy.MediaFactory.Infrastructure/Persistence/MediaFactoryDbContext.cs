@@ -52,6 +52,7 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<ContentPipelineExecution> ContentPipelineExecutions => Set<ContentPipelineExecution>();
     public DbSet<ContentCategoryStyleSettings> ContentCategoryStyleSettings => Set<ContentCategoryStyleSettings>();
     public DbSet<ContentVarietyRule> ContentVarietyRules => Set<ContentVarietyRule>();
+    public DbSet<ContentIdeaTemplate> ContentIdeaTemplates => Set<ContentIdeaTemplate>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
         (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
@@ -272,6 +273,8 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentCategoryStyleSettings>().ToTable("content_category_style_settings").HasKey(x => x.Id);
         modelBuilder.Entity<ContentVarietyRule>().ToTable("content_variety_rules").HasKey(x => x.Id);
         modelBuilder.Entity<ContentVarietyRule>().HasIndex(x => new { x.ContentCategoryCode, x.RuleType, x.RuleKey }).IsUnique();
+        modelBuilder.Entity<ContentIdeaTemplate>().ToTable("content_idea_templates").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentIdeaTemplate>().HasIndex(x => new { x.ContentCategoryCode, x.TemplateCode, x.Language }).IsUnique();
 
         var seedUtc = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
         // Anonymous types: EntityBase uses protected setters, so entity instances cannot be used in HasData.
