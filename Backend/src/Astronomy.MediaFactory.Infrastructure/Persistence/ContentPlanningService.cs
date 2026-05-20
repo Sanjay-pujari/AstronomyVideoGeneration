@@ -316,5 +316,114 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
     public Task<bool> MarkPlanAsInProgressAsync(Guid id, CancellationToken cancellationToken) => UpdatePlanStatusAsync(id, "InProgress", cancellationToken);
     public Task<bool> MarkPlanAsCompletedAsync(Guid id, CancellationToken cancellationToken) => UpdatePlanStatusAsync(id, "Completed", cancellationToken);
     public Task<bool> MarkPlanAsFailedAsync(Guid id, CancellationToken cancellationToken) => UpdatePlanStatusAsync(id, "Failed", cancellationToken);
+    public async Task<ManualExecutionStartResponse?> StartManualExecutionAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var plan = await db.ContentGenerationPlans.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (plan is null) return null;
+
+        var allowed = string.Equals(plan.Status, "Planned", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(plan.Status, "ReadyForManualRun", StringComparison.OrdinalIgnoreCase);
+        if (!allowed)
+        {
+            throw new InvalidOperationException($"Manual execution can only be started for Planned or ReadyForManualRun plans. Current status is '{plan.Status}'.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var execution = new ContentPipelineExecution
+        {
+            Id = Guid.NewGuid(),
+            ContentGenerationPlanId = plan.Id,
+            PipelineRunId = null,
+            ContentCategoryCode = plan.ContentCategoryCode,
+            StartedUtc = now,
+            FinishedUtc = null,
+            Status = "InProgress",
+            ErrorMessage = null,
+            OutputFolder = null,
+            LongVideoPath = null,
+            ShortVideoPath = null,
+            ThumbnailLongPath = null,
+            ThumbnailShortPath = null,
+            PublishingCompleted = false,
+            AnalyticsInitialized = false,
+            CreatedUtc = now,
+            UpdatedUtc = now
+        };
+
+        plan.Status = "InProgress";
+        plan.UpdatedUtc = now;
+        db.ContentPipelineExecutions.Add(execution);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new ManualExecutionStartResponse(plan.Id, execution.Id, execution.Status);
+    }
+
+    public async Task<ContentPipelineExecution?> CompleteExecutionAsync(Guid executionId, CompleteContentPlanningExecutionRequest request, CancellationToken cancellationToken)
+    {
+        var execution = await db.ContentPipelineExecutions.FirstOrDefaultAsync(x => x.Id == executionId, cancellationToken);
+        if (execution is null) return null;
+
+        var now = DateTimeOffset.UtcNow;
+        execution.Status = "Completed";
+        execution.FinishedUtc = now;
+        execution.UpdatedUtc = now;
+        execution.PipelineRunId = request.PipelineRunId ?? execution.PipelineRunId;
+        execution.OutputFolder = request.OutputFolder ?? execution.OutputFolder;
+        execution.LongVideoPath = request.LongVideoPath ?? execution.LongVideoPath;
+        execution.ShortVideoPath = request.ShortVideoPath ?? execution.ShortVideoPath;
+        execution.ThumbnailLongPath = request.ThumbnailLongPath ?? execution.ThumbnailLongPath;
+        execution.ThumbnailShortPath = request.ThumbnailShortPath ?? execution.ThumbnailShortPath;
+        execution.PublishingCompleted = request.PublishingCompleted;
+        execution.AnalyticsInitialized = request.AnalyticsInitialized;
+
+        if (execution.ContentGenerationPlanId.HasValue)
+        {
+            var plan = await db.ContentGenerationPlans.FirstOrDefaultAsync(x => x.Id == execution.ContentGenerationPlanId.Value, cancellationToken);
+            if (plan is not null)
+            {
+                plan.Status = "Completed";
+                plan.UpdatedUtc = now;
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        return execution;
+    }
+
+    public async Task<ContentPipelineExecution?> FailExecutionAsync(Guid executionId, FailContentPlanningExecutionRequest request, CancellationToken cancellationToken)
+    {
+        var execution = await db.ContentPipelineExecutions.FirstOrDefaultAsync(x => x.Id == executionId, cancellationToken);
+        if (execution is null) return null;
+
+        var now = DateTimeOffset.UtcNow;
+        execution.Status = "Failed";
+        execution.ErrorMessage = request.ErrorMessage;
+        execution.FinishedUtc = now;
+        execution.UpdatedUtc = now;
+
+        if (execution.ContentGenerationPlanId.HasValue)
+        {
+            var plan = await db.ContentGenerationPlans.FirstOrDefaultAsync(x => x.Id == execution.ContentGenerationPlanId.Value, cancellationToken);
+            if (plan is not null)
+            {
+                plan.Status = "Failed";
+                plan.UpdatedUtc = now;
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        return execution;
+    }
+
+    public async Task<IReadOnlyCollection<ContentPipelineExecution>> GetExecutionsAsync(string? status, CancellationToken cancellationToken)
+    {
+        var query = db.ContentPipelineExecutions.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(status)) query = query.Where(x => x.Status == status);
+        return await query.OrderByDescending(x => x.CreatedUtc).ToListAsync(cancellationToken);
+    }
+
+    public Task<ContentPipelineExecution?> GetExecutionByIdAsync(Guid executionId, CancellationToken cancellationToken)
+        => db.ContentPipelineExecutions.AsNoTracking().FirstOrDefaultAsync(x => x.Id == executionId, cancellationToken);
+
     private async Task<bool> UpdatePlanStatusAsync(Guid id, string status, CancellationToken cancellationToken){var plan = await db.ContentGenerationPlans.FirstOrDefaultAsync(x => x.Id == id, cancellationToken); if (plan is null) return false; plan.Status = status; plan.Touch(); await db.SaveChangesAsync(cancellationToken); return true;}
 }

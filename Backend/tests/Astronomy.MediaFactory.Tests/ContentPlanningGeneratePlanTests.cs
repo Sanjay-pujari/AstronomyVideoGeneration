@@ -207,4 +207,86 @@ public sealed partial class ContentPlanningGeneratePlanTests
         Assert.NotNull(type.GetProperty("ContentType"));
         Assert.NotNull(type.GetProperty("LocationName"));
     }
+
+    [Fact]
+    public async Task StartManualExecution_Creates_Execution_And_Updates_Plan_Status()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR" };
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        var result = await svc.StartManualExecutionAsync(plan.Id, CancellationToken.None);
+
+        Assert.NotNull(result);
+        var execution = await db.ContentPipelineExecutions.SingleAsync(x => x.Id == result!.ContentPipelineExecutionId);
+        Assert.Equal("InProgress", execution.Status);
+        Assert.Null(execution.PipelineRunId);
+        var reloadedPlan = await db.ContentGenerationPlans.SingleAsync(x => x.Id == plan.Id);
+        Assert.Equal("InProgress", reloadedPlan.Status);
+    }
+
+    [Theory]
+    [InlineData("InProgress")]
+    [InlineData("Completed")]
+    [InlineData("Failed")]
+    [InlineData("Skipped")]
+    [InlineData("Cancelled")]
+    public async Task StartManualExecution_Rejects_Invalid_Statuses(string status)
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = status, Language = "en", RegionId = "IN-RJ-UDAIPUR" };
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.StartManualExecutionAsync(plan.Id, CancellationToken.None));
+        Assert.Empty(db.ContentPipelineExecutions);
+    }
+
+    [Fact]
+    public async Task CompleteExecution_Marks_Execution_And_Plan_As_Completed()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "InProgress", Language = "en", RegionId = "IN-RJ-UDAIPUR" };
+        db.ContentGenerationPlans.Add(plan);
+        var execution = new ContentPipelineExecution { ContentGenerationPlanId = plan.Id, ContentCategoryCode = plan.ContentCategoryCode, Status = "InProgress", StartedUtc = DateTimeOffset.UtcNow };
+        db.ContentPipelineExecutions.Add(execution);
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+        var runId = Guid.NewGuid();
+
+        var updated = await svc.CompleteExecutionAsync(execution.Id, new CompleteContentPlanningExecutionRequest(runId, "/tmp/out", "long.mp4", "short.mp4", "long.png", "short.png", true, true), CancellationToken.None);
+
+        Assert.NotNull(updated);
+        Assert.Equal("Completed", updated!.Status);
+        Assert.Equal(runId, updated.PipelineRunId);
+        Assert.True(updated.PublishingCompleted);
+        Assert.True(updated.AnalyticsInitialized);
+        Assert.Equal("Completed", (await db.ContentGenerationPlans.SingleAsync(x => x.Id == plan.Id)).Status);
+    }
+
+    [Fact]
+    public async Task FailExecution_Marks_Execution_And_Plan_As_Failed()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "InProgress", Language = "en", RegionId = "IN-RJ-UDAIPUR" };
+        db.ContentGenerationPlans.Add(plan);
+        var execution = new ContentPipelineExecution { ContentGenerationPlanId = plan.Id, ContentCategoryCode = plan.ContentCategoryCode, Status = "InProgress", StartedUtc = DateTimeOffset.UtcNow };
+        db.ContentPipelineExecutions.Add(execution);
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        var updated = await svc.FailExecutionAsync(execution.Id, new FailContentPlanningExecutionRequest("manual error"), CancellationToken.None);
+
+        Assert.NotNull(updated);
+        Assert.Equal("Failed", updated!.Status);
+        Assert.Equal("manual error", updated.ErrorMessage);
+        Assert.Equal("Failed", (await db.ContentGenerationPlans.SingleAsync(x => x.Id == plan.Id)).Status);
+    }
 }

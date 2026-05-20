@@ -245,7 +245,24 @@ public interface IContentPlanningService
     Task<bool> MarkPlanAsInProgressAsync(Guid id, CancellationToken cancellationToken);
     Task<bool> MarkPlanAsCompletedAsync(Guid id, CancellationToken cancellationToken);
     Task<bool> MarkPlanAsFailedAsync(Guid id, CancellationToken cancellationToken);
+    Task<ManualExecutionStartResponse?> StartManualExecutionAsync(Guid id, CancellationToken cancellationToken);
+    Task<ContentPipelineExecution?> CompleteExecutionAsync(Guid executionId, CompleteContentPlanningExecutionRequest request, CancellationToken cancellationToken);
+    Task<ContentPipelineExecution?> FailExecutionAsync(Guid executionId, FailContentPlanningExecutionRequest request, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<ContentPipelineExecution>> GetExecutionsAsync(string? status, CancellationToken cancellationToken);
+    Task<ContentPipelineExecution?> GetExecutionByIdAsync(Guid executionId, CancellationToken cancellationToken);
 }
+
+public sealed record ManualExecutionStartResponse(Guid ContentGenerationPlanId, Guid ContentPipelineExecutionId, string Status);
+public sealed record CompleteContentPlanningExecutionRequest(
+    Guid? PipelineRunId,
+    string? OutputFolder,
+    string? LongVideoPath,
+    string? ShortVideoPath,
+    string? ThumbnailLongPath,
+    string? ThumbnailShortPath,
+    bool PublishingCompleted,
+    bool AnalyticsInitialized);
+public sealed record FailContentPlanningExecutionRequest(string ErrorMessage);
 
 public sealed record GenerateContentPlanRequest(
     string ContentCategoryCode,

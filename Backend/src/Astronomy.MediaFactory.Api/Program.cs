@@ -255,6 +255,35 @@ app.MapPost("/api/content-planning/plans/{id:guid}/mark-ready", async (Guid id, 
     var updated = await planning.MarkPlanReadyForManualRunAsync(id, ct);
     return updated is null ? Results.NotFound() : Results.Ok(updated);
 });
+app.MapPost("/api/content-planning/plans/{id:guid}/start-manual-execution", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        var response = await planning.StartManualExecutionAsync(id, ct);
+        return response is null ? Results.NotFound() : Results.Ok(response);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+app.MapPost("/api/content-planning/executions/{executionId:guid}/complete", async (Guid executionId, CompleteContentPlanningExecutionRequest request, IContentPlanningService planning, CancellationToken ct) =>
+{
+    var execution = await planning.CompleteExecutionAsync(executionId, request, ct);
+    return execution is null ? Results.NotFound() : Results.Ok(execution);
+});
+app.MapPost("/api/content-planning/executions/{executionId:guid}/fail", async (Guid executionId, FailContentPlanningExecutionRequest request, IContentPlanningService planning, CancellationToken ct) =>
+{
+    var execution = await planning.FailExecutionAsync(executionId, request, ct);
+    return execution is null ? Results.NotFound() : Results.Ok(execution);
+});
+app.MapGet("/api/content-planning/executions", async (string? status, IContentPlanningService planning, CancellationToken ct) =>
+    Results.Ok(await planning.GetExecutionsAsync(status, ct)));
+app.MapGet("/api/content-planning/executions/{executionId:guid}", async (Guid executionId, IContentPlanningService planning, CancellationToken ct) =>
+{
+    var execution = await planning.GetExecutionByIdAsync(executionId, ct);
+    return execution is null ? Results.NotFound() : Results.Ok(execution);
+});
 
 app.MapGet("/api/content-categories/settings", async (MediaFactoryDbContext db, CancellationToken ct) =>
     Results.Ok(await db.ContentCategorySettings.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
