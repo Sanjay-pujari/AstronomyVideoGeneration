@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Analytics;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Data;
 
@@ -9,19 +10,23 @@ namespace Astronomy.MediaFactory.Infrastructure.Analytics;
 
 public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
 {
-    private readonly MediaFactoryDbContext _db;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ManualAnalyticsIngestionService> _logger;
-    public ManualAnalyticsIngestionService(MediaFactoryDbContext db, ILogger<ManualAnalyticsIngestionService> logger)
+    public ManualAnalyticsIngestionService(IServiceScopeFactory scopeFactory, ILogger<ManualAnalyticsIngestionService> logger)
     {
-        _db = db;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
     public async Task IngestManualAsync(IReadOnlyCollection<AnalyticsIngestionDto> records, CancellationToken cancellationToken)
     {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MediaFactoryDbContext>();
+        _logger.LogInformation("Analytics ingestion scope created. DbContextHash={DbContextHash}", db.GetHashCode());
+
         foreach (var r in records)
         {
-            _db.PlatformVideoAnalytics.Add(new PlatformVideoAnalytics
+            db.PlatformVideoAnalytics.Add(new PlatformVideoAnalytics
             {
                 PipelineRunId = r.PipelineRunId,
                 Impressions = r.Impressions,
@@ -41,7 +46,8 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
             });
         }
 
-        await _db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Analytics ingestion scope disposed. DbContextHash={DbContextHash}", db.GetHashCode());
     }
 
     public async Task InitializeForPipelineRunAsync(AnalyticsPipelineInitializationRequest request, CancellationToken cancellationToken)
@@ -61,16 +67,20 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
             .ToArray();
 
 
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MediaFactoryDbContext>();
+        _logger.LogInformation("Analytics initialization scope created. DbContextHash={DbContextHash}; PipelineRunId={PipelineRunId}", db.GetHashCode(), request.PipelineRunId);
+
         var expectedColumns = new[] { "Id", "PipelineRunId", "Platform", "ContentType", "ThumbnailType", "ThumbnailPath", "Language", "RegionId", "PublishedAtUtc", "UpdatedUtc" };
-        var detectedColumns = await GetThumbnailPerformanceColumnsAsync(cancellationToken);
+        var detectedColumns = await GetThumbnailPerformanceColumnsAsync(db, cancellationToken);
         var missingColumns = expectedColumns.Where(c => !detectedColumns.Contains(c, StringComparer.Ordinal)).ToArray();
         var schemaMismatchDetected = missingColumns.Length > 0;
         _logger.LogInformation("Thumbnail analytics schema diagnostics. expected={ExpectedColumns}; detected={DetectedColumns}; missing={MissingColumns}; migrationRequired={MigrationRequired}", expectedColumns, detectedColumns, missingColumns, schemaMismatchDetected);
 
         foreach (var platform in platforms.DefaultIfEmpty("YouTube"))
         {
-            var existingVideo = await _db.PlatformVideoAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == request.ContentType, cancellationToken);
-            if (existingVideo is null) _db.PlatformVideoAnalytics.Add(new PlatformVideoAnalytics
+            var existingVideo = await db.PlatformVideoAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == request.ContentType, cancellationToken);
+            if (existingVideo is null) db.PlatformVideoAnalytics.Add(new PlatformVideoAnalytics
             {
                 PipelineRunId = request.PipelineRunId,
                 Platform = platform,
@@ -79,10 +89,10 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 RegionId = request.RegionId,
                 PublishedAtUtc = publishedAtUtc
             });
-            var existingPlatformContent = await _db.PlatformContentAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.PlatformContentType == request.ContentType, cancellationToken);
+            var existingPlatformContent = await db.PlatformContentAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.PlatformContentType == request.ContentType, cancellationToken);
             if (existingPlatformContent is null)
             {
-                _db.PlatformContentAnalytics.Add(new PlatformContentAnalytics
+                db.PlatformContentAnalytics.Add(new PlatformContentAnalytics
                 {
                     PipelineRunId = request.PipelineRunId,
                     Platform = platform,
@@ -103,8 +113,8 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
             foreach (var hook in hooks.DefaultIfEmpty(request.ContentType))
             {
                 var hookContentType = $"{request.ContentType}|{hook}";
-                var existingHook = await _db.HookPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == hookContentType, cancellationToken);
-                if (existingHook is null) _db.HookPerformance.Add(new HookPerformance
+                var existingHook = await db.HookPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == hookContentType, cancellationToken);
+                if (existingHook is null) db.HookPerformance.Add(new HookPerformance
                 {
                     PipelineRunId = request.PipelineRunId,
                     Platform = platform,
@@ -120,8 +130,8 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 foreach (var thumbnail in thumbnails)
                 {
                     var thumbContentType = $"{request.ContentType}|{thumbnail.ThumbnailType}";
-                    var existingThumb = await _db.ThumbnailPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == thumbContentType, cancellationToken);
-                    if (existingThumb is null) _db.ThumbnailPerformance.Add(new ThumbnailPerformance
+                    var existingThumb = await db.ThumbnailPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == thumbContentType, cancellationToken);
+                    if (existingThumb is null) db.ThumbnailPerformance.Add(new ThumbnailPerformance
                     {
                         PipelineRunId = request.PipelineRunId,
                         Platform = platform,
@@ -140,7 +150,9 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
             }
         }
 
-        await _db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Analytics initialization materialized entries. Platforms={PlatformCount}; Hooks={HookCount}; Thumbnails={ThumbnailCount}", platforms.Length, hooks.Length, thumbnails.Length);
+        _logger.LogInformation("Analytics initialization scope disposed. DbContextHash={DbContextHash}; PipelineRunId={PipelineRunId}", db.GetHashCode(), request.PipelineRunId);
     }
 
     private static DateTimeOffset EnsureUtc(DateTimeOffset value)
@@ -149,9 +161,9 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
             : value.ToUniversalTime();
 
 
-    private async Task<string[]> GetThumbnailPerformanceColumnsAsync(CancellationToken cancellationToken)
+    private async Task<string[]> GetThumbnailPerformanceColumnsAsync(MediaFactoryDbContext db, CancellationToken cancellationToken)
     {
-        await using var connection = _db.Database.GetDbConnection();
+        await using var connection = db.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open) await connection.OpenAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();

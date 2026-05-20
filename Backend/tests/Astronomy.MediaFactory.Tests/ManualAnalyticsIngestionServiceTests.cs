@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Analytics;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -12,9 +13,9 @@ public class ManualAnalyticsIngestionServiceTests
     [Fact]
     public async Task InitializeForPipelineRunAsync_creates_thumbnail_rows_for_long_and_short()
     {
-        await using var db = new MediaFactoryDbContext(new DbContextOptionsBuilder<MediaFactoryDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
-        var service = new ManualAnalyticsIngestionService(db, NullLogger<ManualAnalyticsIngestionService>.Instance);
+        var serviceProvider = CreateAnalyticsServiceProvider();
+        await using var db = serviceProvider.GetRequiredService<MediaFactoryDbContext>();
+        var service = new ManualAnalyticsIngestionService(serviceProvider.GetRequiredService<IServiceScopeFactory>(), NullLogger<ManualAnalyticsIngestionService>.Instance);
         var runId = Guid.NewGuid();
 
         await service.InitializeForPipelineRunAsync(new AnalyticsPipelineInitializationRequest(
@@ -38,5 +39,13 @@ public class ManualAnalyticsIngestionServiceTests
         Assert.Equal(2, rows.Count);
         Assert.Contains(rows, x => x.ThumbnailPath == "thumbnail-long.jpg");
         Assert.Contains(rows, x => x.ThumbnailPath == "thumbnail-short.jpg");
+    }
+
+
+    private static IServiceProvider CreateAnalyticsServiceProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<MediaFactoryDbContext>(o => o.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
+        return services.BuildServiceProvider();
     }
 }
