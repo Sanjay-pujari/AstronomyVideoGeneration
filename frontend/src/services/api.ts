@@ -506,6 +506,64 @@ function arrayFrom<T>(value: unknown): T[] {
   return [];
 }
 
+
+function firstDefined<T>(...values: T[]): T | undefined {
+  return values.find((value) => value !== undefined && value !== null);
+}
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function asString(value: unknown, fallback = 'Not available') {
+  if (value === undefined || value === null || value === '') return fallback;
+  return String(value);
+}
+
+function normalizeRegion(raw: unknown): Region {
+  const item = asRecord(raw);
+  return {
+    id: asString(firstDefined(item.id, item.regionId, item.name), 'unknown-region'),
+    name: asString(firstDefined(item.name, item.regionName, item.locationName), 'Not available'),
+    displayName: asString(firstDefined(item.displayName, item.regionDisplayName), 'Not available'),
+    timezone: asString(firstDefined(item.timezone, item.timeZone), 'Not available'),
+    language: asString(firstDefined(item.language, item.locale), 'Not available'),
+    latitude: Number(firstDefined(item.latitude, item.lat) ?? NaN),
+    longitude: Number(firstDefined(item.longitude, item.lng) ?? NaN),
+    enabled: Boolean(firstDefined(item.enabled, item.isEnabled) ?? false),
+    localRunTime: item.localRunTime as string | undefined,
+    nextPlannedRunUtc: asString(firstDefined(item.nextPlannedRunUtc, item.nextRunAt), 'Not available'),
+    nextTargetDate: asString(item.nextTargetDate, 'Not available')
+  };
+}
+
+function normalizePipelineRun(raw: unknown): PipelineRun {
+  const item = asRecord(raw);
+  const runId = asString(firstDefined(item.runId, item.pipelineRunId, item.id), 'unknown-run');
+  const publishedUrls = arrayFrom<unknown>(firstDefined(item.publishedUrls, item.urls, item.links)).map((url) => asString(url)).filter((url) => safePublicUrl(url));
+  return {
+    ...item,
+    runId,
+    pipelineRunId: asString(firstDefined(item.pipelineRunId, item.runId, item.id), runId),
+    id: asString(firstDefined(item.id, item.pipelineRunId, item.runId), runId),
+    regionId: asString(firstDefined(item.regionId, item.locationId), 'Not available'),
+    regionName: asString(firstDefined(item.regionName, item.locationName), 'Not available'),
+    locationName: asString(firstDefined(item.locationName, item.regionName), 'Not available'),
+    contentType: asString(firstDefined(item.contentType, item.platformContentType), 'Not available'),
+    status: asString(firstDefined(item.status, item.runStatus), 'unknown'),
+    runStatus: asString(firstDefined(item.runStatus, item.status), 'unknown'),
+    startedAt: asString(firstDefined(item.startedAt, item.startedUtc, item.actualRunUtc), 'Not available'),
+    startedUtc: asString(firstDefined(item.startedUtc, item.startedAt, item.actualRunUtc), 'Not available'),
+    completedUtc: asString(firstDefined(item.completedUtc, item.completedAt), 'Not available'),
+    publishedUrls,
+    warnings: arrayFrom<unknown>(firstDefined(item.warnings, item.messages)).map((v) => String(v))
+  } as PipelineRun;
+}
+
+function safePublicUrl(url: string) {
+  try { const parsed = new URL(url); return parsed.protocol === 'http:' || parsed.protocol === 'https:'; } catch { return false; }
+}
+
 function canonicalPlatform(value?: string) {
   const raw = String(value ?? '').trim();
   const normalized = raw.toLowerCase().replace(/[^a-z]/g, '');
@@ -534,7 +592,19 @@ function normalizeMediaItem(item: MediaItem): MediaItem | undefined {
 }
 
 function supportedMedia(items: MediaItem[]) {
-  return items.map(normalizeMediaItem).filter((item): item is MediaItem => Boolean(item));
+  return items.map((raw) => normalizeMediaItem({
+    ...raw,
+    id: String(firstDefined(raw.id, raw.mediaId, raw.url, (raw as JsonRecord).publishedUrl, (raw as JsonRecord).permalink, raw.previewUrl, raw.title) ?? 'content'),
+    platform: asString(firstDefined(raw.platform, (raw as JsonRecord).provider), 'Not available'),
+    status: asString(firstDefined(raw.status, (raw as JsonRecord).runStatus), 'unknown'),
+    regionName: asString(firstDefined(raw.regionName, raw.locationName, (raw as JsonRecord).regionId), 'Not available'),
+    createdAt: asString(firstDefined(raw.createdAt, raw.publishedAt, raw.publishedUtc), 'Not available'),
+    publishedAt: asString(firstDefined(raw.publishedAt, raw.publishedUtc, raw.createdAt), 'Not available'),
+    url: asString(firstDefined(raw.url, (raw as JsonRecord).publishedUrl, (raw as JsonRecord).permalink, raw.previewUrl), 'Not available'),
+    views: Number(firstDefined(raw.views, (raw as JsonRecord).totalViews) ?? 0),
+    engagementRate: Number(firstDefined(raw.engagementRate, (raw as JsonRecord).averageEngagementRate) ?? 0),
+    contentType: asString(firstDefined(raw.contentType, raw.platformContentType), 'Not available')
+  } as MediaItem)).filter((item): item is MediaItem => Boolean(item));
 }
 
 function contentTypeValue(item: MediaItem) {
@@ -715,7 +785,7 @@ export async function loadDashboardData(): Promise<DashboardData> {
   const tokenHealth = tokenHealthResult.value;
   const apiError = analyticsDashboardResult.failed || topContentResult.failed ? 'Analytics service temporarily unavailable.' : undefined;
 
-  const regions = arrayFrom<Region>(regionsResponse);
+  const regions = arrayFrom<unknown>(regionsResponse).map(normalizeRegion);
   const topContent = supportedMedia(arrayFrom<MediaItem>(topContentResponse));
   const analyticsDashboardWithSupportedPlatforms = {
     ...analyticsDashboard,
@@ -723,7 +793,7 @@ export async function loadDashboardData(): Promise<DashboardData> {
     topContent
   };
   const tokenHealthSummary = ops.tokenHealthSummary;
-  const pipelineRuns = opsRunsResult.value.length ? opsRunsResult.value : (ops.pipelineRuns ?? ops.recentPipelineRuns ?? schedulerPipelineRuns(scheduler));
+  const pipelineRuns = (opsRunsResult.value.length ? opsRunsResult.value : (ops.pipelineRuns ?? ops.recentPipelineRuns ?? schedulerPipelineRuns(scheduler))).map((run) => normalizePipelineRun(run));
   const latestRunId = pipelineRuns[0]?.runId ?? pipelineRuns[0]?.pipelineRunId ?? '';
   const [analyticsVideosResult, hookRecommendationsResult, publishingRecommendationsResult, thumbnailStatusResult] = await Promise.all([
     latestRunId ? capture(`/api/analytics/videos/${latestRunId}`, () => api.getAnalyticsVideos(latestRunId), [] as JsonRecord[]) : Promise.resolve({ value: [] as JsonRecord[], failed: false }),
@@ -745,7 +815,7 @@ export async function loadDashboardData(): Promise<DashboardData> {
     tokenHealthSummary,
     analytics: analyticsFromResponses(ops, analyticsDashboardWithSupportedPlatforms, topContent),
     analyticsDashboard: analyticsDashboardWithSupportedPlatforms,
-    regions: ops.regions ?? regions,
+    regions: (ops.regions ?? regions).map((region) => normalizeRegion(region)),
     events: ops.events ?? upcomingEvents,
     upcomingEvents,
     topEvents,
@@ -783,7 +853,7 @@ export async function loadPublicPortalData(): Promise<DashboardData> {
     capture('/api/analytics/top-content', api.getTopContent, [] as MediaItem[])
   ]);
 
-  const regions = arrayFrom<Region>(regionsResult.value);
+  const regions = arrayFrom<unknown>(regionsResult.value).map(normalizeRegion);
   const alertUpcomingEvents = normalizeAlertEvents(alertUpcomingResult.value);
   const upcomingEvents = alertUpcomingEvents.length ? alertUpcomingEvents : upcomingEventsResult.value;
   const topEvents = topEventsResult.value;
