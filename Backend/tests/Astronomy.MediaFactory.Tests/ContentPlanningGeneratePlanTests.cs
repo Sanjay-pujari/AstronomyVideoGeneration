@@ -100,7 +100,7 @@ public sealed partial class ContentPlanningGeneratePlanTests
 
     private static void SeedRequired(MediaFactoryDbContext db)
     {
-        db.ContentCategories.Add(new ContentCategory { Code = "DailySkyGuide", Name = "Daily", Priority = 1, Enabled = true });
+        db.ContentCategories.Add(new ContentCategoryMaster { Code = "DailySkyGuide", Name = "Daily", Priority = 1, Enabled = true });
         db.SaveChanges();
     }
 
