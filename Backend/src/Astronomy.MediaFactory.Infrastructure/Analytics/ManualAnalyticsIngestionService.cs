@@ -2,13 +2,20 @@ using Astronomy.MediaFactory.Analytics;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using System.Data;
 
 namespace Astronomy.MediaFactory.Infrastructure.Analytics;
 
 public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
 {
     private readonly MediaFactoryDbContext _db;
-    public ManualAnalyticsIngestionService(MediaFactoryDbContext db) => _db = db;
+    private readonly ILogger<ManualAnalyticsIngestionService> _logger;
+    public ManualAnalyticsIngestionService(MediaFactoryDbContext db, ILogger<ManualAnalyticsIngestionService> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
 
     public async Task IngestManualAsync(IReadOnlyCollection<AnalyticsIngestionDto> records, CancellationToken cancellationToken)
     {
@@ -52,6 +59,13 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
             .GroupBy(x => $"{x.ThumbnailPath}|{x.ThumbnailType}", StringComparer.OrdinalIgnoreCase)
             .Select(x => x.First())
             .ToArray();
+
+
+        var expectedColumns = new[] { "Id", "PipelineRunId", "Platform", "ContentType", "ThumbnailType", "ThumbnailPath", "Language", "RegionId", "PublishedAtUtc", "UpdatedUtc" };
+        var detectedColumns = await GetThumbnailPerformanceColumnsAsync(cancellationToken);
+        var missingColumns = expectedColumns.Where(c => !detectedColumns.Contains(c, StringComparer.Ordinal)).ToArray();
+        var schemaMismatchDetected = missingColumns.Length > 0;
+        _logger.LogInformation("Thumbnail analytics schema diagnostics. expected={ExpectedColumns}; detected={DetectedColumns}; missing={MissingColumns}; migrationRequired={MigrationRequired}", expectedColumns, detectedColumns, missingColumns, schemaMismatchDetected);
 
         foreach (var platform in platforms.DefaultIfEmpty("YouTube"))
         {
@@ -101,21 +115,28 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 });
             }
 
-            foreach (var thumbnail in thumbnails)
+            try
             {
-                var thumbContentType = $"{request.ContentType}|{thumbnail.ThumbnailType}";
-                var existingThumb = await _db.ThumbnailPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == thumbContentType, cancellationToken);
-                if (existingThumb is null) _db.ThumbnailPerformance.Add(new ThumbnailPerformance
+                foreach (var thumbnail in thumbnails)
                 {
-                    PipelineRunId = request.PipelineRunId,
-                    Platform = platform,
-                    ContentType = thumbContentType,
-                    ThumbnailType = thumbnail.ThumbnailType,
-                    ThumbnailPath = thumbnail.ThumbnailPath,
-                    Language = request.Language,
-                    RegionId = request.RegionId,
-                    PublishedAtUtc = publishedAtUtc
-                });
+                    var thumbContentType = $"{request.ContentType}|{thumbnail.ThumbnailType}";
+                    var existingThumb = await _db.ThumbnailPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == thumbContentType, cancellationToken);
+                    if (existingThumb is null) _db.ThumbnailPerformance.Add(new ThumbnailPerformance
+                    {
+                        PipelineRunId = request.PipelineRunId,
+                        Platform = platform,
+                        ContentType = thumbContentType,
+                        ThumbnailType = thumbnail.ThumbnailType,
+                        ThumbnailPath = thumbnail.ThumbnailPath,
+                        Language = request.Language,
+                        RegionId = request.RegionId,
+                        PublishedAtUtc = publishedAtUtc
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Thumbnail analytics initialization failed for pipeline run {PipelineRunId}. Continuing with non-thumbnail analytics initialization.", request.PipelineRunId);
             }
         }
 
@@ -126,4 +147,21 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
         => value.Offset == TimeSpan.Zero
             ? value
             : value.ToUniversalTime();
+
+
+    private async Task<string[]> GetThumbnailPerformanceColumnsAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = _db.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open) await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'thumbnail_performance'";
+        var columns = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) columns.Add(reader.GetString(0));
+
+        var normalized = columns.Select(x => x.StartsWith(char.ToUpperInvariant(x[0])) ? x : char.ToUpperInvariant(x[0]) + x[1..]).ToArray();
+        return normalized;
+    }
 }
+
