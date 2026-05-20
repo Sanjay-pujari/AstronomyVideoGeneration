@@ -496,6 +496,18 @@ public sealed class ContentVarietyRule : EntityBase
     public bool Enabled { get; set; } = true;
 }
 
+public sealed class ContentIdeaTemplate : EntityBase
+{
+    public string ContentCategoryCode { get; set; } = "";
+    public string TemplateCode { get; set; } = "";
+    public string TitleTemplate { get; set; } = "";
+    public string TopicTemplate { get; set; } = "";
+    public string? Description { get; set; }
+    public string Language { get; set; } = "en";
+    public int Priority { get; set; } = 100;
+    public bool Enabled { get; set; } = true;
+}
+
 public sealed class ContentGenerationPlan : EntityBase
 {
     public string ContentCategoryCode { get; set; } = "";

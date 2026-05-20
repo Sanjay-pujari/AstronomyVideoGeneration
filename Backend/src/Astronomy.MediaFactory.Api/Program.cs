@@ -191,6 +191,8 @@ app.MapGet("/api/content-master/category-style-settings", async (MediaFactoryDbC
     Results.Ok(await db.ContentCategoryStyleSettings.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
 app.MapGet("/api/content-master/variety-rules", async (MediaFactoryDbContext db, CancellationToken ct) =>
     Results.Ok(await db.ContentVarietyRules.AsNoTracking().OrderBy(x => x.ContentCategoryCode).ThenBy(x => x.Priority).ToListAsync(ct)));
+app.MapGet("/api/content-master/idea-templates", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.ContentIdeaTemplates.AsNoTracking().OrderBy(x => x.ContentCategoryCode).ThenBy(x => x.Priority).ToListAsync(ct)));
 
 app.MapPost("/api/content-planning/generate-daily-plan", async (GenerateDailyPlanRequest request, IContentPlanningService planning, CancellationToken ct) =>
 {
@@ -927,4 +929,3 @@ public sealed record GenerateDailyPlanRequest(
 public sealed record GenerateDailyPlanResponse(
     Guid ContentGenerationPlanId,
     string Status);
-

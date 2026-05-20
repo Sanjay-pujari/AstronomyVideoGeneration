@@ -29,10 +29,22 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         var selectedHook = ChooseStyle(style.HookStyleCode, "HookStyle", blocked, planningNotes);
         var selectedNarration = ChooseStyle(style.NarrationStyleCode, "NarrationStyle", blocked, planningNotes);
         var selectedThumbnail = ChooseStyle(style.ThumbnailStyleCode, "ThumbnailStyle", blocked, planningNotes);
+        var selectedTemplate = await SelectIdeaTemplateAsync(contentCategoryCode, language, cancellationToken);
+        var resolvedTemplateValues = await BuildTemplateValuesAsync(selectedObject, regionId, scheduledUtc, language, cancellationToken);
+        var generatedTitle = selectedTemplate is null ? null : ApplyTemplate(selectedTemplate.TitleTemplate, resolvedTemplateValues);
+        if (selectedTemplate is not null)
+        {
+            planningNotes.Add($"Generated title using idea template '{selectedTemplate.TemplateCode}' ({selectedTemplate.Language}).");
+        }
+        else
+        {
+            planningNotes.Add($"No enabled idea template found for category '{contentCategoryCode}' and language '{language}'.");
+        }
 
         var plan = new ContentGenerationPlan
         {
             ContentCategoryCode = contentCategoryCode,
+            Title = generatedTitle,
             Language = language,
             RegionId = regionId,
             ScheduledUtc = scheduledUtc,
@@ -49,6 +61,46 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         db.ContentGenerationPlans.Add(plan);
         await db.SaveChangesAsync(cancellationToken);
         return plan;
+    }
+
+    private async Task<ContentIdeaTemplate?> SelectIdeaTemplateAsync(string categoryCode, string language, CancellationToken cancellationToken)
+        => await db.ContentIdeaTemplates.AsNoTracking()
+            .Where(x => x.ContentCategoryCode == categoryCode && x.Enabled && x.Language == language)
+            .OrderBy(x => x.Priority)
+            .FirstOrDefaultAsync(cancellationToken)
+        ?? await db.ContentIdeaTemplates.AsNoTracking()
+            .Where(x => x.ContentCategoryCode == categoryCode && x.Enabled)
+            .OrderBy(x => x.Priority)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    private async Task<Dictionary<string, string>> BuildTemplateValuesAsync(string? selectedObjectCode, string regionId, DateTimeOffset scheduledUtc, string language, CancellationToken cancellationToken)
+    {
+        var objectName = selectedObjectCode;
+        if (!string.IsNullOrWhiteSpace(selectedObjectCode))
+        {
+            var celestialObject = await db.CelestialObjects.AsNoTracking().FirstOrDefaultAsync(x => x.Code == selectedObjectCode, cancellationToken);
+            objectName = celestialObject?.Name ?? selectedObjectCode;
+        }
+
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ObjectName"] = objectName ?? "Night Sky",
+            ["EventName"] = "Sky Event",
+            ["RegionName"] = regionId,
+            ["Date"] = scheduledUtc.UtcDateTime.ToString("yyyy-MM-dd"),
+            ["Language"] = language
+        };
+    }
+
+    private static string ApplyTemplate(string template, IReadOnlyDictionary<string, string> values)
+    {
+        var output = template;
+        foreach (var entry in values)
+        {
+            output = output.Replace($"{{{entry.Key}}}", entry.Value, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return output;
     }
 
     private async Task<string?> SelectCelestialObjectAsync(string categoryCode, string? preferredObjectCode, IReadOnlyCollection<ContentVarietyBlockedItem> blocked, List<string> planningNotes, CancellationToken cancellationToken)
