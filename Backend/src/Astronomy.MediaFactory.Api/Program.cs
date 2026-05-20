@@ -422,6 +422,9 @@ app.MapPost("/api/analytics/initialize/{pipelineRunId:guid}", async (Guid pipeli
     logger.LogInformation("SaveChanges completed for analytics initialization of pipeline run {PipelineRunId}", pipelineRunId);
 
     var reportPath = Path.Combine(outputDirectory, "analytics-initialization-report.json");
+    var thumbnailPerformanceTableValidated = thumbnailRowsCreated > 0 || beforeThumbCount > 0 || thumbs.Count == 0;
+    var schemaMismatchDetected = thumbnailRowsCreated == 0 && thumbs.Count > 0 && beforeThumbCount == 0;
+    var migrationApplied = !schemaMismatchDetected;
     await File.WriteAllTextAsync(reportPath, System.Text.Json.JsonSerializer.Serialize(new
     {
         pipelineRunId,
@@ -435,6 +438,9 @@ app.MapPost("/api/analytics/initialize/{pipelineRunId:guid}", async (Guid pipeli
         hookRowsCreated,
         thumbnailRowsCreated,
         videoAnalyticsRowsCreated,
+        thumbnailPerformanceTableValidated,
+        schemaMismatchDetected,
+        migrationApplied,
         saveChangesSucceeded = true,
         warnings,
         reasons = zeroReasons,
