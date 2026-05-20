@@ -5,6 +5,102 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVarietyGuard varietyGuard) : IContentPlanningService
 {
+    public async Task<GenerateContentPlanResponse> GeneratePlanAsync(GenerateContentPlanRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.ContentCategoryCode)) throw new ArgumentException("ContentCategoryCode is required.");
+        if (string.IsNullOrWhiteSpace(request.Language)) throw new ArgumentException("Language is required.");
+        if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("RegionId is required.");
+        if (string.IsNullOrWhiteSpace(request.RegionName)) throw new ArgumentException("RegionName is required.");
+
+        var category = await db.ContentCategories.AsNoTracking().FirstOrDefaultAsync(x => x.Code == request.ContentCategoryCode, cancellationToken);
+        if (category is null || !category.Enabled) throw new KeyNotFoundException($"Content category '{request.ContentCategoryCode}' is not found or disabled.");
+
+        var template = await db.ContentIdeaTemplates.AsNoTracking()
+            .Where(x => x.ContentCategoryCode == request.ContentCategoryCode && x.Enabled && x.Language == request.Language)
+            .OrderByDescending(x => x.Priority)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? await db.ContentIdeaTemplates.AsNoTracking()
+                .Where(x => x.ContentCategoryCode == request.ContentCategoryCode && x.Enabled && x.Language == "en")
+                .OrderByDescending(x => x.Priority)
+                .FirstOrDefaultAsync(cancellationToken);
+
+        var style = await db.ContentCategoryStyleSettings.AsNoTracking()
+            .Where(x => x.ContentCategoryCode == request.ContentCategoryCode && x.Enabled && x.Language == request.Language)
+            .OrderByDescending(x => x.Priority)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? await db.ContentCategoryStyleSettings.AsNoTracking()
+                .Where(x => x.ContentCategoryCode == request.ContentCategoryCode && x.Enabled && x.Language == "en")
+                .OrderByDescending(x => x.Priority)
+                .FirstOrDefaultAsync(cancellationToken);
+
+        var objectCode = string.Empty;
+        var objectName = string.Empty;
+        if (!string.IsNullOrWhiteSpace(request.PrimaryCelestialObjectCode))
+        {
+            var celestialObject = await db.CelestialObjects.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Code == request.PrimaryCelestialObjectCode && x.Enabled, cancellationToken);
+            if (celestialObject is not null)
+            {
+                objectCode = celestialObject.Code;
+                objectName = celestialObject.Name;
+            }
+        }
+
+        var eventCode = string.Empty;
+        var eventName = string.Empty;
+        if (!string.IsNullOrWhiteSpace(request.PrimaryAstronomyEventTypeCode))
+        {
+            var eventType = await db.AstronomyEventTypes.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Code == request.PrimaryAstronomyEventTypeCode && x.Enabled, cancellationToken);
+            if (eventType is not null)
+            {
+                eventCode = eventType.Code;
+                eventName = eventType.DisplayName;
+            }
+        }
+
+        var scheduleDate = request.ScheduledUtc ?? DateTime.UtcNow;
+        var placeholders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ObjectName"] = objectName,
+            ["ObjectCode"] = objectCode,
+            ["EventName"] = eventName,
+            ["EventCode"] = eventCode,
+            ["RegionName"] = request.RegionName,
+            ["RegionId"] = request.RegionId,
+            ["Date"] = scheduleDate.ToString("yyyy-MM-dd"),
+            ["Language"] = request.Language,
+            ["ContentCategoryCode"] = request.ContentCategoryCode
+        };
+
+        var titleTemplate = template?.TitleTemplate ?? "{ContentCategoryCode} for {RegionName}";
+        var title = ApplyTemplate(titleTemplate, placeholders);
+        var topic = template is null ? null : ApplyTemplate(template.TopicTemplate, placeholders);
+
+        var plan = new ContentGenerationPlan
+        {
+            Id = Guid.NewGuid(),
+            ContentCategoryCode = request.ContentCategoryCode,
+            Title = title,
+            Language = request.Language,
+            RegionId = request.RegionId,
+            ScheduledUtc = request.ScheduledUtc is null ? null : new DateTimeOffset(DateTime.SpecifyKind(request.ScheduledUtc.Value, DateTimeKind.Utc)),
+            Status = "Planned",
+            PrimaryCelestialObjectCode = request.PrimaryCelestialObjectCode,
+            PrimaryAstronomyEventTypeCode = request.PrimaryAstronomyEventTypeCode,
+            HookStyleCode = style?.HookStyleCode,
+            NarrationStyleCode = style?.NarrationStyleCode,
+            ThumbnailStyleCode = style?.ThumbnailStyleCode,
+            GeneratedByAi = request.GeneratedByAi,
+            Priority = 100,
+            PlanningReason = $"Template={(template?.TemplateCode ?? "default")}({template?.Language ?? "n/a"}); Topic={topic ?? "n/a"}; Style={(style is null ? "none" : $"{style.HookStyleCode}/{style.NarrationStyleCode}/{style.ThumbnailStyleCode}")}; Object={objectCode}; Event={eventCode}; GeneratedByAi={request.GeneratedByAi};"
+        };
+
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync(cancellationToken);
+        return new GenerateContentPlanResponse(plan.Id, "Planned", plan.Title, plan.PlanningReason);
+    }
+
     public async Task<ContentGenerationPlan> GenerateDailyPlanAsync(
         string contentCategoryCode,
         string language,
@@ -139,7 +235,7 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
     {
         var query = db.ContentGenerationPlans.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(status)) query = query.Where(x => x.Status == status);
-        return await query.OrderBy(x => x.ScheduledUtc).ThenBy(x => x.Priority).ToListAsync(cancellationToken);
+        return await query.OrderByDescending(x => x.CreatedUtc).ToListAsync(cancellationToken);
     }
 
     public Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken) => db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken);

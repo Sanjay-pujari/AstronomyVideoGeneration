@@ -192,8 +192,23 @@ app.MapGet("/api/content-master/category-style-settings", async (MediaFactoryDbC
 app.MapGet("/api/content-master/variety-rules", async (MediaFactoryDbContext db, CancellationToken ct) =>
     Results.Ok(await db.ContentVarietyRules.AsNoTracking().OrderBy(x => x.ContentCategoryCode).ThenBy(x => x.Priority).ToListAsync(ct)));
 app.MapGet("/api/content-master/idea-templates", async (MediaFactoryDbContext db, CancellationToken ct) =>
-    Results.Ok(await db.ContentIdeaTemplates.AsNoTracking().OrderBy(x => x.ContentCategoryCode).ThenBy(x => x.Priority).ToListAsync(ct)));
+    Results.Ok(await db.ContentIdeaTemplates.AsNoTracking().Where(x => x.Enabled).OrderBy(x => x.ContentCategoryCode).ThenByDescending(x => x.Priority).ToListAsync(ct)));
 
+app.MapPost("/api/content-planning/generate-plan", async (GenerateContentPlanRequest request, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await planning.GeneratePlanAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
 app.MapPost("/api/content-planning/generate-daily-plan", async (GenerateDailyPlanRequest request, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
