@@ -295,6 +295,21 @@ public interface IAnalyticsIngestionService
     Task InitializeForPipelineRunAsync(AnalyticsPipelineInitializationRequest request, CancellationToken cancellationToken);
 }
 
+public interface ISafeAnalyticsExecutor
+{
+    Task<SafeAnalyticsExecutionResult> ExecuteInitializationAsync(AnalyticsPipelineInitializationRequest request, string outputDirectory, CancellationToken cancellationToken);
+}
+
+public sealed record SafeAnalyticsExecutionResult(
+    bool AnalyticsStarted,
+    bool AnalyticsCompleted,
+    bool AnalyticsFailed,
+    bool ScopeCreated,
+    bool DbContextIsolated,
+    int QueriesMaterialized,
+    string? Exception,
+    bool TimedOut);
+
 public sealed record AnalyticsPipelineInitializationRequest(
     Guid PipelineRunId,
     string Language,

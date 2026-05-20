@@ -147,7 +147,7 @@ public sealed record PipelineStatusResponse(
         PipelineStageNames.InstagramReelPublished
     ];
 
-    public string GenerationStatus => RunStatus is PipelineRunStatus.Succeeded or PipelineRunStatus.CompletedWithPublishErrors or PipelineRunStatus.PublishFailed
+    public string GenerationStatus => RunStatus is PipelineRunStatus.Succeeded or PipelineRunStatus.SuccessWithWarnings or PipelineRunStatus.CompletedWithPublishErrors or PipelineRunStatus.PublishFailed
         ? "Succeeded"
         : RunStatus.ToString();
 

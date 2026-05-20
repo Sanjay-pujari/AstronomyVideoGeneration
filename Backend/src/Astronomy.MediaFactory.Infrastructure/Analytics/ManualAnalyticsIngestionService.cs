@@ -163,7 +163,7 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
 
     private async Task<string[]> GetThumbnailPerformanceColumnsAsync(MediaFactoryDbContext db, CancellationToken cancellationToken)
     {
-        await using var connection = db.Database.GetDbConnection();
+        var connection = db.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open) await connection.OpenAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
@@ -176,4 +176,3 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
         return normalized;
     }
 }
-
