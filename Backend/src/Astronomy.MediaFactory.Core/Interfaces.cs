@@ -228,6 +228,9 @@ public sealed record ContentVarietyBlockedItem(string RuleType, string RuleKey, 
 
 public interface IContentPlanningService
 {
+    Task<GenerateContentPlanResponse> GeneratePlanAsync(
+        GenerateContentPlanRequest request,
+        CancellationToken cancellationToken);
     Task<ContentGenerationPlan> GenerateDailyPlanAsync(
         string contentCategoryCode,
         string language,
@@ -243,6 +246,22 @@ public interface IContentPlanningService
     Task<bool> MarkPlanAsCompletedAsync(Guid id, CancellationToken cancellationToken);
     Task<bool> MarkPlanAsFailedAsync(Guid id, CancellationToken cancellationToken);
 }
+
+public sealed record GenerateContentPlanRequest(
+    string ContentCategoryCode,
+    string Language = "en",
+    string RegionId = "",
+    string RegionName = "",
+    DateTime? ScheduledUtc = null,
+    string? PrimaryCelestialObjectCode = null,
+    string? PrimaryAstronomyEventTypeCode = null,
+    bool GeneratedByAi = false);
+
+public sealed record GenerateContentPlanResponse(
+    Guid ContentGenerationPlanId,
+    string Status,
+    string? Title,
+    string? PlanningReason);
 
 public sealed record ContentPlanningPipelineRunRequest(
     string Category,
