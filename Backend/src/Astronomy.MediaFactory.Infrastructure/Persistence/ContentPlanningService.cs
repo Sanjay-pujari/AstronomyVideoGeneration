@@ -79,7 +79,6 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
 
         var plan = new ContentGenerationPlan
         {
-            Id = Guid.NewGuid(),
             ContentCategoryCode = request.ContentCategoryCode,
             Title = title,
             Language = request.Language,
