@@ -72,6 +72,58 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db) : IContentP
     public Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken) =>
         db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
+    public async Task<ContentPlanningPipelineRequestPreview> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var plan = await db.ContentGenerationPlans
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Content generation plan '{id}' was not found.");
+
+        if (!string.Equals(plan.Status, "Planned", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Pipeline request preview is only allowed for Planned plans. Current status is '{plan.Status}'.");
+        }
+
+        var style = await db.ContentCategoryStyleSettings
+            .AsNoTracking()
+            .Where(x => x.ContentCategoryCode == plan.ContentCategoryCode && x.Enabled && x.Language == plan.Language)
+            .OrderBy(x => x.Priority)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? await db.ContentCategoryStyleSettings
+                .AsNoTracking()
+                .Where(x => x.ContentCategoryCode == plan.ContentCategoryCode && x.Enabled)
+                .OrderBy(x => x.Priority)
+                .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new KeyNotFoundException($"No enabled style settings found for category '{plan.ContentCategoryCode}'.");
+
+        var request = new ContentPlanningPipelineRunRequest(
+            plan.ContentCategoryCode,
+            plan.Language,
+            plan.RegionId,
+            plan.RegionId,
+            plan.PrimaryCelestialObjectCode,
+            plan.HookStyleCode ?? style.HookStyleCode,
+            plan.NarrationStyleCode ?? style.NarrationStyleCode,
+            plan.ThumbnailStyleCode ?? style.ThumbnailStyleCode,
+            plan.ScheduledUtc);
+
+        return new ContentPlanningPipelineRequestPreview(plan.Id, plan.ContentCategoryCode, request);
+    }
+
+    public async Task<ContentGenerationPlan?> MarkPlanReadyForManualRunAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var plan = await db.ContentGenerationPlans.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (plan is null)
+        {
+            return null;
+        }
+
+        plan.Status = "ReadyForManualRun";
+        plan.Touch();
+        await db.SaveChangesAsync(cancellationToken);
+        return plan;
+    }
+
     public Task<bool> MarkPlanAsInProgressAsync(Guid id, CancellationToken cancellationToken) =>
         UpdatePlanStatusAsync(id, "InProgress", cancellationToken);
 

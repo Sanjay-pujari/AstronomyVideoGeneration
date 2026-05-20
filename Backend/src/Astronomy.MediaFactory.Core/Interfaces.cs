@@ -228,10 +228,28 @@ public interface IContentPlanningService
         CancellationToken cancellationToken);
     Task<IReadOnlyCollection<ContentGenerationPlan>> GetPendingPlansAsync(string? status, CancellationToken cancellationToken);
     Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken);
+    Task<ContentPlanningPipelineRequestPreview> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken);
+    Task<ContentGenerationPlan?> MarkPlanReadyForManualRunAsync(Guid id, CancellationToken cancellationToken);
     Task<bool> MarkPlanAsInProgressAsync(Guid id, CancellationToken cancellationToken);
     Task<bool> MarkPlanAsCompletedAsync(Guid id, CancellationToken cancellationToken);
     Task<bool> MarkPlanAsFailedAsync(Guid id, CancellationToken cancellationToken);
 }
+
+public sealed record ContentPlanningPipelineRunRequest(
+    string Category,
+    string Language,
+    string RegionId,
+    string LocationName,
+    string? PrimaryCelestialObject,
+    string HookStyle,
+    string NarrationStyle,
+    string ThumbnailStyle,
+    DateTimeOffset? ScheduledUtc);
+
+public sealed record ContentPlanningPipelineRequestPreview(
+    Guid ContentGenerationPlanId,
+    string ContentCategoryCode,
+    ContentPlanningPipelineRunRequest PipelineRequest);
 
 
 public interface IAnalyticsIngestionService
