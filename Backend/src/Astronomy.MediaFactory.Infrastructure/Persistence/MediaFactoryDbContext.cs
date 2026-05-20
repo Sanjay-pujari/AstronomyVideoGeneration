@@ -39,6 +39,9 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<ThumbnailPerformance> ThumbnailPerformance => Set<ThumbnailPerformance>();
     public DbSet<HookPerformance> HookPerformance => Set<HookPerformance>();
     public DbSet<DailyPerformanceSummary> DailyPerformanceSummary => Set<DailyPerformanceSummary>();
+    public DbSet<ContentCategoryPublishingSettings> ContentCategoryPublishingSettings => Set<ContentCategoryPublishingSettings>();
+    public DbSet<ContentCategoryPromptSettings> ContentCategoryPromptSettings => Set<ContentCategoryPromptSettings>();
+    public DbSet<ContentCategorySettings> ContentCategorySettings => Set<ContentCategorySettings>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
         (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
@@ -201,6 +204,17 @@ public sealed class MediaFactoryDbContext : DbContext
             .WithOne()
             .HasForeignKey(x => x.ContentExperimentId)
             .OnDelete(DeleteBehavior.Cascade);
+
+
+        modelBuilder.Entity<ContentCategorySettings>().ToTable("content_category_settings").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentCategorySettings>().Property(x => x.PipelineType).HasConversion<string>();
+        modelBuilder.Entity<ContentCategorySettings>().HasIndex(x => x.PipelineType).IsUnique();
+        modelBuilder.Entity<ContentCategoryPromptSettings>().ToTable("content_category_prompt_settings").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentCategoryPromptSettings>().Property(x => x.PipelineType).HasConversion<string>();
+        modelBuilder.Entity<ContentCategoryPromptSettings>().HasIndex(x => new { x.PipelineType, x.Language }).IsUnique();
+        modelBuilder.Entity<ContentCategoryPublishingSettings>().ToTable("content_category_publishing_settings").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentCategoryPublishingSettings>().Property(x => x.PipelineType).HasConversion<string>();
+        modelBuilder.Entity<ContentCategoryPublishingSettings>().HasIndex(x => new { x.PipelineType, x.Platform }).IsUnique();
 
         modelBuilder.Entity<PipelineRun>().HasIndex(x => new { x.RegionId, x.RunDate, x.ContentType });
         modelBuilder.Entity<PipelineRun>().HasIndex(x => new { x.EventId, x.RunDate, x.RegionId });
