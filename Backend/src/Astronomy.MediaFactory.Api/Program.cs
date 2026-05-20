@@ -190,6 +190,33 @@ app.MapGet("/api/content-master/event-types", async (MediaFactoryDbContext db, C
 app.MapGet("/api/content-master/category-style-settings", async (MediaFactoryDbContext db, CancellationToken ct) =>
     Results.Ok(await db.ContentCategoryStyleSettings.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
 
+app.MapPost("/api/content-planning/generate-daily-plan", async (GenerateDailyPlanRequest request, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        var plan = await planning.GenerateDailyPlanAsync(
+            request.ContentCategoryCode,
+            request.Language,
+            request.RegionId,
+            request.ScheduledUtc,
+            request.PrimaryCelestialObjectCode,
+            ct);
+
+        return Results.Ok(new GenerateDailyPlanResponse(plan.Id, plan.Status));
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+app.MapGet("/api/content-planning/plans", async (string? status, IContentPlanningService planning, CancellationToken ct) =>
+    Results.Ok(await planning.GetPendingPlansAsync(status, ct)));
+app.MapGet("/api/content-planning/plans/{id:guid}", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
+{
+    var plan = await planning.GetPlanByIdAsync(id, ct);
+    return plan is null ? Results.NotFound() : Results.Ok(plan);
+});
+
 app.MapGet("/api/content-categories/settings", async (MediaFactoryDbContext db, CancellationToken ct) =>
     Results.Ok(await db.ContentCategorySettings.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
 app.MapGet("/api/content-categories/settings/{pipelineType}", async (ContentPipelineType pipelineType, IContentCategorySettingsService svc, CancellationToken ct) =>
@@ -834,6 +861,17 @@ app.MapGet("/api/assets/celestial/{objectKey}", async (string objectKey, ICelest
 });
 
 app.Run();
+
+public sealed record GenerateDailyPlanRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    DateTimeOffset ScheduledUtc,
+    string? PrimaryCelestialObjectCode);
+
+public sealed record GenerateDailyPlanResponse(
+    Guid ContentGenerationPlanId,
+    string Status);
 
 
 static AnalyticsIntelligenceRequest BuildAnalyticsIntelligenceRequest(int? days, string? platform, string? contentType, string? location, int? limit)
