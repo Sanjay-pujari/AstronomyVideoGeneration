@@ -408,6 +408,14 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.Property<long>("SubscribersGained")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("ThumbnailPath")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ThumbnailType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset?>("UpdatedUtc")
                         .HasColumnType("timestamp with time zone");
 
