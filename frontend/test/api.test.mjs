@@ -30,3 +30,17 @@ test('frontend alert form client calls backend subscribe endpoint', async () => 
   assert.equal(captured.init.method, 'POST');
   assert.match(String(captured.init.body), /MeteorShower/);
 });
+
+test('api exposes newly wired admin endpoint methods', () => {
+  const required = [
+    'getOpsRuns','getOpsRun','getOpsFailures','getOpsSummary','getOpsPipelinesRecent','getOpsPipelineStages','getOpsFailuresRecent','getOpsJobsSummary',
+    'getPipelinesRecent','getPipelineById','getThumbnailPublishStatus','resumePipeline','retryPublish','retryYoutubePublish','retryMetaPublish',
+    'getSchedulerEventPlan','enableSchedule','disableSchedule','enableRegion','disableRegion',
+    'getEventById','refreshEvents','generateEvent','getGeneratedEvents',
+    'getAnalyticsInsights','getAnalyticsPlatformSummary','getAnalyticsContentPerformance','getAnalyticsRecent','getAnalyticsPlatform','getAnalyticsRun','collectAnalyticsNow','getAnalyticsTopPerforming','getAnalyticsYoutubeVideo',
+    'getAiOptimizationRecommendations','generateAiOptimizationNow','getAiOptimizationPendingApproval','applyAiOptimizationApproved','rejectAiOptimization','getAiOptimizationTrends',
+    'getOptimizationPlan','applyOptimizationPreview','getYoutubeTokenHealth','getMetaTokenHealth',
+    'getCelestialAssetStatus','refreshCelestialAssetStatus','getCelestialAsset'
+  ];
+  for (const key of required) assert.equal(typeof api[key], 'function', `missing ${key}`);
+});

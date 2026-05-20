@@ -233,6 +233,19 @@ export type DashboardData = {
   analyticsVideoBreakdown: JsonRecord[];
   aiOptimizationByRun: JsonRecord[];
   publishingRecommendationsByRun: JsonRecord[];
+  opsSummary: JsonRecord;
+  recentFailures: JsonRecord[];
+  jobSummary: JsonRecord;
+  thumbnailPublishStatus: JsonRecord;
+  analyticsInsights: JsonRecord[];
+  platformSummary: JsonRecord[];
+  contentPerformance: JsonRecord[];
+  aiOptimizationRecommendations: JsonRecord[];
+  aiOptimizationPendingApproval: JsonRecord[];
+  optimizationPlan: JsonRecord;
+  celestialAssetStatus: JsonRecord;
+  partialData: boolean;
+  lastRefreshedAt: string;
 };
 
 
@@ -437,6 +450,54 @@ export const api = {
   getUpcomingAlerts: (regionId?: string) => request<AlertUpcomingEvent[]>(`/api/alerts/upcoming${regionId ? `?regionId=${encodeURIComponent(regionId)}` : ''}`),
   sendTestAlert: (subscriberId: string, eventId?: string) => request<{ notificationId: string; status: string; message: string }>('/api/alerts/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriberId, eventId }) }),
   unsubscribeAlerts: (subscriberId: string) => request<{ subscriberId: string; isActive: boolean }>(`/api/alerts/unsubscribe/${encodeURIComponent(subscriberId)}`, { method: 'POST' })
+  ,getOpsRuns: () => request<PipelineRun[]>('/api/ops/runs')
+  ,getOpsRun: (pipelineRunId: string) => request<PipelineRun>(`/api/ops/run/${encodeURIComponent(pipelineRunId)}`)
+  ,getOpsFailures: () => request<JsonRecord[]>('/api/ops/failures')
+  ,getOpsSummary: () => request<JsonRecord>('/api/ops/summary')
+  ,getOpsPipelinesRecent: () => request<PipelineRun[]>('/api/ops/pipelines/recent')
+  ,getOpsPipelineStages: (id: string) => request<PipelineStage[]>(`/api/ops/pipelines/${encodeURIComponent(id)}/stages`)
+  ,getOpsFailuresRecent: () => request<JsonRecord[]>('/api/ops/failures/recent')
+  ,getOpsJobsSummary: () => request<JsonRecord>('/api/ops/jobs/summary')
+  ,getPipelinesRecent: () => request<PipelineRun[]>('/api/pipelines/recent')
+  ,getPipelineById: (id: string) => request<PipelineRun>(`/api/pipelines/${encodeURIComponent(id)}`)
+  ,getThumbnailPublishStatus: (runId: string) => request<JsonRecord>(`/api/pipeline/${encodeURIComponent(runId)}/thumbnail-publish-status`)
+  ,resumePipeline: (pipelineRunId: string) => request<JsonRecord>(`/api/pipeline/resume/${encodeURIComponent(pipelineRunId)}`, { method: 'POST' })
+  ,retryPublish: (pipelineRunId: string, platform: string) => request<JsonRecord>(`/api/pipeline/retry-publish/${encodeURIComponent(pipelineRunId)}?platform=${encodeURIComponent(platform)}`, { method: 'POST' })
+  ,retryYoutubePublish: (pipelineRunId: string, asset = 'all') => request<JsonRecord>(`/api/youtubepublish/${encodeURIComponent(pipelineRunId)}?asset=${encodeURIComponent(asset)}`, { method: 'POST' })
+  ,retryMetaPublish: (pipelineRunId: string, asset = 'all') => request<JsonRecord>(`/api/metapublish/${encodeURIComponent(pipelineRunId)}?asset=${encodeURIComponent(asset)}`, { method: 'POST' })
+  ,getSchedulerEventPlan: (regionId: string, date: string) => request<JsonRecord>(`/api/scheduler/event-plan?regionId=${encodeURIComponent(regionId)}&date=${encodeURIComponent(date)}`)
+  ,enableSchedule: (scheduleName: string) => request<JsonRecord>(`/api/scheduler/enable/${encodeURIComponent(scheduleName)}`, { method: 'POST' })
+  ,disableSchedule: (scheduleName: string) => request<JsonRecord>(`/api/scheduler/disable/${encodeURIComponent(scheduleName)}`, { method: 'POST' })
+  ,enableRegion: (regionId: string) => request<JsonRecord>(`/api/regions/${encodeURIComponent(regionId)}/enable`, { method: 'POST' })
+  ,disableRegion: (regionId: string) => request<JsonRecord>(`/api/regions/${encodeURIComponent(regionId)}/disable`, { method: 'POST' })
+  ,getEventById: (eventId: string) => request<AstroEvent>(`/api/events/${encodeURIComponent(eventId)}`)
+  ,refreshEvents: () => request<JsonRecord>('/api/events/refresh', { method: 'POST' })
+  ,generateEvent: (eventId: string) => request<JsonRecord>(`/api/events/${encodeURIComponent(eventId)}/generate`, { method: 'POST' })
+  ,getGeneratedEvents: () => request<AstroEvent[]>('/api/events/generated')
+  ,getAnalyticsInsights: () => request<JsonRecord[]>('/api/analytics/insights')
+  ,getAnalyticsPlatformSummary: () => request<JsonRecord[]>('/api/analytics/platform-summary')
+  ,getAnalyticsContentPerformance: () => request<JsonRecord[]>('/api/analytics/content-performance')
+  ,getAnalyticsRecent: () => request<JsonRecord[]>('/api/analytics/recent')
+  ,getAnalyticsPlatform: (platform: string) => request<JsonRecord>(`/api/analytics/platform/${encodeURIComponent(platform)}`)
+  ,getAnalyticsRun: (pipelineRunId: string) => request<JsonRecord>(`/api/analytics/run/${encodeURIComponent(pipelineRunId)}`)
+  ,collectAnalyticsNow: () => request<JsonRecord>('/api/analytics/collect-now', { method: 'POST' })
+  ,getAnalyticsTopPerforming: () => request<JsonRecord[]>('/api/analytics/top-performing')
+  ,getAnalyticsYoutubeVideo: (videoId: string) => request<JsonRecord>(`/api/analytics/youtube/${encodeURIComponent(videoId)}`)
+  ,getAiOptimizationRecommendations: () => request<JsonRecord[]>('/api/ai-optimization/recommendations')
+  ,generateAiOptimizationNow: () => request<JsonRecord>('/api/ai-optimization/generate-now', { method: 'POST' })
+  ,getAiOptimizationPendingApproval: () => request<JsonRecord[]>('/api/ai-optimization/pending-approval')
+  ,applyAiOptimizationApproved: () => request<JsonRecord>('/api/ai-optimization/apply-approved', { method: 'POST' })
+  ,rejectAiOptimization: (payload: JsonRecord = {}) => request<JsonRecord>('/api/ai-optimization/reject', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+  ,getAiOptimizationTrends: (date: string) => request<JsonRecord>(`/api/ai-optimization/trends/${encodeURIComponent(date)}`)
+  ,getOptimizationPlan: (location: string, platform: string) => request<JsonRecord>(`/api/optimization/plan?location=${encodeURIComponent(location)}&platform=${encodeURIComponent(platform)}`)
+  ,applyOptimizationPreview: (payload: JsonRecord) => request<JsonRecord>('/api/optimization/apply-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+  ,getYoutubeTokenHealth: () => request<JsonRecord>('/api/tokenhealth/youtube')
+  ,getMetaTokenHealth: () => request<JsonRecord>('/api/tokenhealth/meta')
+  ,getCelestialAssetStatus: () => request<JsonRecord>('/api/assets/celestial/status')
+  ,refreshCelestialAssetStatus: () => request<JsonRecord>('/api/assets/celestial/refresh', { method: 'POST' })
+  ,getCelestialAsset: (objectKey: string) => request<JsonRecord>(`/api/assets/celestial/${encodeURIComponent(objectKey)}`)
+  ,checkHealth: () => request<JsonRecord>('/health')
+  ,checkReadyHealth: () => request<JsonRecord>('/health/ready')
 };
 
 function arrayFrom<T>(value: unknown): T[] {
@@ -592,6 +653,19 @@ export function emptyDashboardData(): DashboardData {
     analyticsVideoBreakdown: [],
     aiOptimizationByRun: [],
     publishingRecommendationsByRun: []
+    ,opsSummary: {}
+    ,recentFailures: []
+    ,jobSummary: {}
+    ,thumbnailPublishStatus: {}
+    ,analyticsInsights: []
+    ,platformSummary: []
+    ,contentPerformance: []
+    ,aiOptimizationRecommendations: []
+    ,aiOptimizationPendingApproval: []
+    ,optimizationPlan: {}
+    ,celestialAssetStatus: {}
+    ,partialData: false
+    ,lastRefreshedAt: new Date().toISOString()
   };
 }
 
@@ -607,7 +681,7 @@ async function capture<T>(endpoint: string, loader: () => Promise<T>, fallback: 
 }
 
 export async function loadDashboardData(): Promise<DashboardData> {
-  const [opsResult, schedulerResult, regionsResult, upcomingEventsResult, topEventsResult, alertUpcomingResult, analyticsDashboardResult, analyticsSummaryResult, topContentResult, tokenHealthResult] = await Promise.all([
+  const [opsResult, schedulerResult, regionsResult, upcomingEventsResult, topEventsResult, alertUpcomingResult, analyticsDashboardResult, analyticsSummaryResult, topContentResult, tokenHealthResult, opsRunsResult, recentFailuresResult, opsSummaryResult, jobsSummaryResult, analyticsInsightsResult, platformSummaryResult, contentPerformanceResult, aiRecsResult, aiPendingResult, optimizationPlanResult, celestialAssetStatusResult] = await Promise.all([
     capture('/api/ops/dashboard', api.getOpsDashboard, {} as OpsDashboard),
     capture('/api/scheduler/status', api.getSchedulerStatus, {} as SchedulerStatus),
     capture('/api/regions', api.getRegions, [] as Region[]),
@@ -617,7 +691,18 @@ export async function loadDashboardData(): Promise<DashboardData> {
     capture('/api/analytics/dashboard', api.getAnalyticsDashboard, {} as AnalyticsDashboard),
     capture('/api/analytics/summary', api.getAnalyticsSummary, {} as JsonRecord),
     capture('/api/analytics/top-content', api.getTopContent, [] as MediaItem[]),
-    capture('/api/tokenhealth', api.getTokenHealth, [] as TokenHealthItem[])
+    capture('/api/tokenhealth', api.getTokenHealth, [] as TokenHealthItem[]),
+    capture('/api/ops/runs', api.getOpsRuns, [] as PipelineRun[]),
+    capture('/api/ops/failures/recent', api.getOpsFailuresRecent, [] as JsonRecord[]),
+    capture('/api/ops/summary', api.getOpsSummary, {} as JsonRecord),
+    capture('/api/ops/jobs/summary', api.getOpsJobsSummary, {} as JsonRecord),
+    capture('/api/analytics/insights', api.getAnalyticsInsights, [] as JsonRecord[]),
+    capture('/api/analytics/platform-summary', api.getAnalyticsPlatformSummary, [] as JsonRecord[]),
+    capture('/api/analytics/content-performance', api.getAnalyticsContentPerformance, [] as JsonRecord[]),
+    capture('/api/ai-optimization/recommendations', api.getAiOptimizationRecommendations, [] as JsonRecord[]),
+    capture('/api/ai-optimization/pending-approval', api.getAiOptimizationPendingApproval, [] as JsonRecord[]),
+    capture('/api/optimization/plan', () => api.getOptimizationPlan('global', 'youtube'), {} as JsonRecord),
+    capture('/api/assets/celestial/status', api.getCelestialAssetStatus, {} as JsonRecord)
   ]);
   const ops = opsResult.value;
   const scheduler = schedulerResult.value;
@@ -638,12 +723,13 @@ export async function loadDashboardData(): Promise<DashboardData> {
     topContent
   };
   const tokenHealthSummary = ops.tokenHealthSummary;
-  const pipelineRuns = ops.pipelineRuns ?? ops.recentPipelineRuns ?? schedulerPipelineRuns(scheduler);
+  const pipelineRuns = opsRunsResult.value.length ? opsRunsResult.value : (ops.pipelineRuns ?? ops.recentPipelineRuns ?? schedulerPipelineRuns(scheduler));
   const latestRunId = pipelineRuns[0]?.runId ?? pipelineRuns[0]?.pipelineRunId ?? '';
-  const [analyticsVideosResult, hookRecommendationsResult, publishingRecommendationsResult] = await Promise.all([
+  const [analyticsVideosResult, hookRecommendationsResult, publishingRecommendationsResult, thumbnailStatusResult] = await Promise.all([
     latestRunId ? capture(`/api/analytics/videos/${latestRunId}`, () => api.getAnalyticsVideos(latestRunId), [] as JsonRecord[]) : Promise.resolve({ value: [] as JsonRecord[], failed: false }),
     latestRunId ? capture(`/api/ai-optimization/hooks/${latestRunId}`, () => api.getAiOptimizationHooks(latestRunId), [] as JsonRecord[]) : Promise.resolve({ value: [] as JsonRecord[], failed: false }),
-    latestRunId ? capture(`/api/ai-optimization/publishing/${latestRunId}`, () => api.getAiOptimizationPublishing(latestRunId), [] as JsonRecord[]) : Promise.resolve({ value: [] as JsonRecord[], failed: false })
+    latestRunId ? capture(`/api/ai-optimization/publishing/${latestRunId}`, () => api.getAiOptimizationPublishing(latestRunId), [] as JsonRecord[]) : Promise.resolve({ value: [] as JsonRecord[], failed: false }),
+    latestRunId ? capture(`/api/pipeline/${latestRunId}/thumbnail-publish-status`, () => api.getThumbnailPublishStatus(latestRunId), {} as JsonRecord) : Promise.resolve({ value: {} as JsonRecord, failed: false })
   ]);
   const videos = topContent.filter((item) => !isShortForm(item));
   const shorts = topContent.filter(isShortForm);
@@ -670,7 +756,20 @@ export async function loadDashboardData(): Promise<DashboardData> {
     analyticsSummaryCards: analyticsSummaryResult.value,
     analyticsVideoBreakdown: arrayFrom<JsonRecord>(analyticsVideosResult.value),
     aiOptimizationByRun: arrayFrom<JsonRecord>(hookRecommendationsResult.value),
-    publishingRecommendationsByRun: arrayFrom<JsonRecord>(publishingRecommendationsResult.value)
+    publishingRecommendationsByRun: arrayFrom<JsonRecord>(publishingRecommendationsResult.value),
+    opsSummary: opsSummaryResult.value,
+    recentFailures: arrayFrom<JsonRecord>(recentFailuresResult.value),
+    jobSummary: jobsSummaryResult.value,
+    thumbnailPublishStatus: thumbnailStatusResult.value,
+    analyticsInsights: arrayFrom<JsonRecord>(analyticsInsightsResult.value),
+    platformSummary: arrayFrom<JsonRecord>(platformSummaryResult.value),
+    contentPerformance: arrayFrom<JsonRecord>(contentPerformanceResult.value),
+    aiOptimizationRecommendations: arrayFrom<JsonRecord>(aiRecsResult.value),
+    aiOptimizationPendingApproval: arrayFrom<JsonRecord>(aiPendingResult.value),
+    optimizationPlan: optimizationPlanResult.value,
+    celestialAssetStatus: celestialAssetStatusResult.value,
+    partialData: [opsResult,schedulerResult,regionsResult,upcomingEventsResult,topEventsResult,alertUpcomingResult,analyticsDashboardResult,analyticsSummaryResult,topContentResult,tokenHealthResult,opsRunsResult,recentFailuresResult,opsSummaryResult,jobsSummaryResult,analyticsInsightsResult,platformSummaryResult,contentPerformanceResult,aiRecsResult,aiPendingResult,optimizationPlanResult,celestialAssetStatusResult,analyticsVideosResult,hookRecommendationsResult,publishingRecommendationsResult,thumbnailStatusResult].some((r)=>r.failed),
+    lastRefreshedAt: new Date().toISOString()
   };
 }
 

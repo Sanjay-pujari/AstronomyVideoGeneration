@@ -54,3 +54,14 @@ test('frontend API health records endpoint success and failure diagnostics', asy
   assert.ok(report.endpoints.some((entry) => entry.endpoint === '/api/analytics/dashboard' && entry.success === false && entry.fallbackUsed === true));
   assert.ok(report.endpoints.every((entry) => typeof entry.responseTimeMs === 'number'));
 });
+
+test('loadDashboardData tolerates partial failures and keeps partialData true', async () => {
+  globalThis.fetch = async (url) => {
+    const path = new URL(url).pathname;
+    if (path === '/api/ops/runs') return new Response(JSON.stringify({ message: 'down' }), { status: 500 });
+    return json([]);
+  };
+  const data = await loadDashboardData();
+  assert.equal(data.partialData, true);
+  assert.ok(Array.isArray(data.recentFailures));
+});
