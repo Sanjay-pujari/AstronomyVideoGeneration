@@ -42,6 +42,15 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<ContentCategoryPublishingSettings> ContentCategoryPublishingSettings => Set<ContentCategoryPublishingSettings>();
     public DbSet<ContentCategoryPromptSettings> ContentCategoryPromptSettings => Set<ContentCategoryPromptSettings>();
     public DbSet<ContentCategorySettings> ContentCategorySettings => Set<ContentCategorySettings>();
+    public DbSet<ContentCategoryMaster> ContentCategories => Set<ContentCategoryMaster>();
+    public DbSet<HookStyle> HookStyles => Set<HookStyle>();
+    public DbSet<ThumbnailStyle> ThumbnailStyles => Set<ThumbnailStyle>();
+    public DbSet<NarrationStyle> NarrationStyles => Set<NarrationStyle>();
+    public DbSet<CelestialObject> CelestialObjects => Set<CelestialObject>();
+    public DbSet<AstronomyEventTypeMaster> AstronomyEventTypes => Set<AstronomyEventTypeMaster>();
+    public DbSet<ContentGenerationPlan> ContentGenerationPlans => Set<ContentGenerationPlan>();
+    public DbSet<ContentPipelineExecution> ContentPipelineExecutions => Set<ContentPipelineExecution>();
+    public DbSet<ContentCategoryStyleSettings> ContentCategoryStyleSettings => Set<ContentCategoryStyleSettings>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
         (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
@@ -215,6 +224,73 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentCategoryPublishingSettings>().ToTable("content_category_publishing_settings").HasKey(x => x.Id);
         modelBuilder.Entity<ContentCategoryPublishingSettings>().Property(x => x.PipelineType).HasConversion<string>();
         modelBuilder.Entity<ContentCategoryPublishingSettings>().HasIndex(x => new { x.PipelineType, x.Platform }).IsUnique();
+
+
+        modelBuilder.Entity<ContentCategoryMaster>().ToTable("content_categories").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentCategoryMaster>().HasIndex(x => x.Code).IsUnique();
+
+        modelBuilder.Entity<HookStyle>().ToTable("hook_styles").HasKey(x => x.Id);
+        modelBuilder.Entity<HookStyle>().HasIndex(x => x.Code).IsUnique();
+
+        modelBuilder.Entity<ThumbnailStyle>().ToTable("thumbnail_styles").HasKey(x => x.Id);
+        modelBuilder.Entity<ThumbnailStyle>().HasIndex(x => x.Code).IsUnique();
+
+        modelBuilder.Entity<NarrationStyle>().ToTable("narration_styles").HasKey(x => x.Id);
+        modelBuilder.Entity<NarrationStyle>().HasIndex(x => x.Code).IsUnique();
+
+        modelBuilder.Entity<CelestialObject>().ToTable("celestial_objects").HasKey(x => x.Id);
+        modelBuilder.Entity<CelestialObject>().Property(x => x.VisibilityPriority).HasPrecision(5, 2);
+        modelBuilder.Entity<CelestialObject>().Property(x => x.PhotogenicScore).HasPrecision(5, 2);
+        modelBuilder.Entity<CelestialObject>().Property(x => x.EducationalScore).HasPrecision(5, 2);
+        modelBuilder.Entity<CelestialObject>().Property(x => x.ViralityScore).HasPrecision(5, 2);
+        modelBuilder.Entity<CelestialObject>().HasIndex(x => x.Code).IsUnique();
+
+        modelBuilder.Entity<AstronomyEventTypeMaster>().ToTable("astronomy_event_types").HasKey(x => x.Id);
+        modelBuilder.Entity<AstronomyEventTypeMaster>().Property(x => x.RarityScore).HasPrecision(5, 2);
+        modelBuilder.Entity<AstronomyEventTypeMaster>().Property(x => x.ViralityScore).HasPrecision(5, 2);
+        modelBuilder.Entity<AstronomyEventTypeMaster>().Property(x => x.EducationalScore).HasPrecision(5, 2);
+        modelBuilder.Entity<AstronomyEventTypeMaster>().Property(x => x.MythologyRelevance).HasPrecision(5, 2);
+        modelBuilder.Entity<AstronomyEventTypeMaster>().Property(x => x.PhotographyRelevance).HasPrecision(5, 2);
+        modelBuilder.Entity<AstronomyEventTypeMaster>().HasIndex(x => x.Code).IsUnique();
+
+        modelBuilder.Entity<ContentGenerationPlan>().ToTable("content_generation_plans").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.ContentCategoryCode);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.PipelineRunId);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.Language);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.RegionId);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.ScheduledUtc);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.Status);
+
+        modelBuilder.Entity<ContentPipelineExecution>().ToTable("content_pipeline_executions").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentPipelineExecution>().HasIndex(x => x.ContentGenerationPlanId);
+        modelBuilder.Entity<ContentPipelineExecution>().HasIndex(x => x.PipelineRunId);
+        modelBuilder.Entity<ContentPipelineExecution>().HasIndex(x => x.ContentCategoryCode);
+        modelBuilder.Entity<ContentPipelineExecution>().HasIndex(x => x.Status);
+        modelBuilder.Entity<ContentPipelineExecution>().HasIndex(x => x.StartedUtc);
+
+        modelBuilder.Entity<ContentCategoryStyleSettings>().ToTable("content_category_style_settings").HasKey(x => x.Id);
+
+
+
+        var seedUtc = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        modelBuilder.Entity<ContentCategoryMaster>().HasData(
+            new ContentCategoryMaster { Id = Guid.Parse("10000000-0000-0000-0000-000000000001"), Code = "DailySkyGuide", DisplayName = "Daily Sky Guide", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new ContentCategoryMaster { Id = Guid.Parse("10000000-0000-0000-0000-000000000002"), Code = "WeeklySkyForecast", DisplayName = "Weekly Sky Forecast", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new ContentCategoryMaster { Id = Guid.Parse("10000000-0000-0000-0000-000000000003"), Code = "RareEventAlert", DisplayName = "Rare Event Alert", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new ContentCategoryMaster { Id = Guid.Parse("10000000-0000-0000-0000-000000000004"), Code = "CosmicStoryShort", DisplayName = "Cosmic Story Short", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new ContentCategoryMaster { Id = Guid.Parse("10000000-0000-0000-0000-000000000005"), Code = "AstronomyEducation", DisplayName = "Astronomy Education", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new ContentCategoryMaster { Id = Guid.Parse("10000000-0000-0000-0000-000000000006"), Code = "AstroPhotographyGuide", DisplayName = "Astro Photography Guide", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new ContentCategoryMaster { Id = Guid.Parse("10000000-0000-0000-0000-000000000007"), Code = "MythologySkyStory", DisplayName = "Mythology Sky Story", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new ContentCategoryMaster { Id = Guid.Parse("10000000-0000-0000-0000-000000000008"), Code = "MonthlySkyReport", DisplayName = "Monthly Sky Report", CreatedUtc = seedUtc, UpdatedUtc = seedUtc });
+
+        modelBuilder.Entity<HookStyle>().HasData(
+            new HookStyle { Id = Guid.Parse("11000000-0000-0000-0000-000000000001"), Code = "Curiosity", DisplayName = "Curiosity", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new HookStyle { Id = Guid.Parse("11000000-0000-0000-0000-000000000002"), Code = "Dramatic", DisplayName = "Dramatic", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new HookStyle { Id = Guid.Parse("11000000-0000-0000-0000-000000000003"), Code = "Scientific", DisplayName = "Scientific", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new HookStyle { Id = Guid.Parse("11000000-0000-0000-0000-000000000004"), Code = "Emotional", DisplayName = "Emotional", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new HookStyle { Id = Guid.Parse("11000000-0000-0000-0000-000000000005"), Code = "Educational", DisplayName = "Educational", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new HookStyle { Id = Guid.Parse("11000000-0000-0000-0000-000000000006"), Code = "Mythological", DisplayName = "Mythological", CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new HookStyle { Id = Guid.Parse("11000000-0000-0000-0000-000000000007"), Code = "FastPaced", DisplayName = "Fast Paced", CreatedUtc = seedUtc, UpdatedUtc = seedUtc });
 
         modelBuilder.Entity<PipelineRun>().HasIndex(x => new { x.RegionId, x.RunDate, x.ContentType });
         modelBuilder.Entity<PipelineRun>().HasIndex(x => new { x.EventId, x.RunDate, x.RegionId });

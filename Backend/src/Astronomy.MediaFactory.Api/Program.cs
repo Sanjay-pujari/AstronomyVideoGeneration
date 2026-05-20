@@ -174,6 +174,22 @@ app.MapPost("/api/events/refresh", async (int? days, IAstronomyEventDiscoverySer
     Results.Ok(await events.RefreshAsync(days, ct)));
 
 
+
+app.MapGet("/api/content-master/categories", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.ContentCategories.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
+app.MapGet("/api/content-master/hook-styles", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.HookStyles.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
+app.MapGet("/api/content-master/thumbnail-styles", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.ThumbnailStyles.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
+app.MapGet("/api/content-master/narration-styles", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.NarrationStyles.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
+app.MapGet("/api/content-master/celestial-objects", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.CelestialObjects.AsNoTracking().OrderBy(x => x.Name).ToListAsync(ct)));
+app.MapGet("/api/content-master/event-types", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.AstronomyEventTypes.AsNoTracking().OrderBy(x => x.DisplayName).ToListAsync(ct)));
+app.MapGet("/api/content-master/category-style-settings", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.ContentCategoryStyleSettings.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
+
 app.MapGet("/api/content-categories/settings", async (MediaFactoryDbContext db, CancellationToken ct) =>
     Results.Ok(await db.ContentCategorySettings.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
 app.MapGet("/api/content-categories/settings/{pipelineType}", async (ContentPipelineType pipelineType, IContentCategorySettingsService svc, CancellationToken ct) =>
