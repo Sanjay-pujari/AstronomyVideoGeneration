@@ -14,6 +14,7 @@ test('public home renders AstroPulse portal content and social CTAs', () => {
   assert.match(html, /Latest shorts and reels/);
   assert.match(html, /Upcoming sky events/);
   assert.match(html, /Follow on YouTube/);
+  assert.doesNotMatch(html, /AI Optimization|Analytics|Pipeline Runs|Settings/);
   assert.match(html, /Choose your region/);
 });
 

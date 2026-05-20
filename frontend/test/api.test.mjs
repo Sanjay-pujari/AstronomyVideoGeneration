@@ -44,3 +44,13 @@ test('api exposes newly wired admin endpoint methods', () => {
   ];
   for (const key of required) assert.equal(typeof api[key], 'function', `missing ${key}`);
 });
+
+
+test('public and admin API modules have separated endpoint ownership', () => {
+  return import('../dist/assets/public/publicApi.js').then(async ({ publicApi }) => {
+    const { adminApi } = await import('../dist/assets/admin/adminApi.js');
+    assert.equal(typeof publicApi.getOpsDashboard, 'undefined');
+    assert.equal(typeof adminApi.getOpsDashboard, 'function');
+    assert.equal(typeof publicApi.getRegions, 'function');
+  });
+});
