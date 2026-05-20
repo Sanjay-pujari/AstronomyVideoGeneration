@@ -51,6 +51,7 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<ContentGenerationPlan> ContentGenerationPlans => Set<ContentGenerationPlan>();
     public DbSet<ContentPipelineExecution> ContentPipelineExecutions => Set<ContentPipelineExecution>();
     public DbSet<ContentCategoryStyleSettings> ContentCategoryStyleSettings => Set<ContentCategoryStyleSettings>();
+    public DbSet<ContentVarietyRule> ContentVarietyRules => Set<ContentVarietyRule>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
         (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
@@ -269,6 +270,7 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentPipelineExecution>().HasIndex(x => x.StartedUtc);
 
         modelBuilder.Entity<ContentCategoryStyleSettings>().ToTable("content_category_style_settings").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentVarietyRule>().ToTable("content_variety_rules").HasKey(x => x.Id);
 
 
 
@@ -283,6 +285,19 @@ public sealed class MediaFactoryDbContext : DbContext
             new { Id = Guid.Parse("10000000-0000-0000-0000-000000000006"), Code = "AstroPhotographyGuide", DisplayName = "Astro Photography Guide", Description = (string?)null, Enabled = true, Priority = 100, SupportsLongVideo = true, SupportsShortVideo = true, SupportsThumbnail = true, SupportsPublishing = true, SupportsAiOptimization = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
             new { Id = Guid.Parse("10000000-0000-0000-0000-000000000007"), Code = "MythologySkyStory", DisplayName = "Mythology Sky Story", Description = (string?)null, Enabled = true, Priority = 100, SupportsLongVideo = true, SupportsShortVideo = true, SupportsThumbnail = true, SupportsPublishing = true, SupportsAiOptimization = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
             new { Id = Guid.Parse("10000000-0000-0000-0000-000000000008"), Code = "MonthlySkyReport", DisplayName = "Monthly Sky Report", Description = (string?)null, Enabled = true, Priority = 100, SupportsLongVideo = true, SupportsShortVideo = true, SupportsThumbnail = true, SupportsPublishing = true, SupportsAiOptimization = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc });
+
+        modelBuilder.Entity<ContentVarietyRule>().HasData(
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000001"), ContentCategoryCode = "DailySkyGuide", RuleType = "CelestialObject", RuleKey = "Moon", CooldownDays = 2, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000002"), ContentCategoryCode = "DailySkyGuide", RuleType = "CelestialObject", RuleKey = "Mars", CooldownDays = 4, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000003"), ContentCategoryCode = "DailySkyGuide", RuleType = "CelestialObject", RuleKey = "Jupiter", CooldownDays = 4, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000004"), ContentCategoryCode = "DailySkyGuide", RuleType = "CelestialObject", RuleKey = "Saturn", CooldownDays = 5, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000005"), ContentCategoryCode = "DailySkyGuide", RuleType = "CelestialObject", RuleKey = "Venus", CooldownDays = 3, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000006"), ContentCategoryCode = "CosmicStoryShort", RuleType = "CelestialObject", RuleKey = "BlackHole", CooldownDays = 5, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000007"), ContentCategoryCode = "CosmicStoryShort", RuleType = "CelestialObject", RuleKey = "Galaxy", CooldownDays = 4, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000008"), ContentCategoryCode = "CosmicStoryShort", RuleType = "CelestialObject", RuleKey = "Nebula", CooldownDays = 4, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000009"), ContentCategoryCode = "MythologySkyStory", RuleType = "HookStyle", RuleKey = "Mythological", CooldownDays = 3, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000010"), ContentCategoryCode = "AstroPhotographyGuide", RuleType = "ThumbnailStyle", RuleKey = "MoonDominant", CooldownDays = 4, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },
+            new { Id = Guid.Parse("14000000-0000-0000-0000-000000000011"), ContentCategoryCode = "AstroPhotographyGuide", RuleType = "ThumbnailStyle", RuleKey = "Minimal", CooldownDays = 2, MaxUsagePerWeek = (int?)null, MaxUsagePerMonth = (int?)null, Priority = 100, Enabled = true, CreatedUtc = seedUtc, UpdatedUtc = seedUtc });
 
         modelBuilder.Entity<HookStyle>().HasData(
             new { Id = Guid.Parse("11000000-0000-0000-0000-000000000001"), Code = "Curiosity", DisplayName = "Curiosity", Description = (string?)null, Enabled = true, Priority = 100, CreatedUtc = seedUtc, UpdatedUtc = seedUtc },

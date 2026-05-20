@@ -483,6 +483,19 @@ public sealed class AstronomyEventTypeMaster : EntityBase
     public bool Enabled { get; set; } = true;
 }
 
+
+public sealed class ContentVarietyRule : EntityBase
+{
+    public string ContentCategoryCode { get; set; } = "";
+    public string RuleType { get; set; } = "";
+    public string RuleKey { get; set; } = "";
+    public int CooldownDays { get; set; }
+    public int? MaxUsagePerWeek { get; set; }
+    public int? MaxUsagePerMonth { get; set; }
+    public int Priority { get; set; } = 100;
+    public bool Enabled { get; set; } = true;
+}
+
 public sealed class ContentGenerationPlan : EntityBase
 {
     public string ContentCategoryCode { get; set; } = "";

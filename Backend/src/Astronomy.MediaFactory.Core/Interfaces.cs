@@ -217,6 +217,15 @@ public interface IAnalyticsFeedbackProvider
     Task<AnalyticsAggregationSummary> GetSummaryAsync(int topN, CancellationToken cancellationToken);
 }
 
+public interface IContentVarietyGuard
+{
+    Task<bool> CanUseCelestialObjectAsync(string categoryCode, string objectCode, DateTimeOffset date, CancellationToken cancellationToken);
+    Task<bool> CanUseStyleAsync(string categoryCode, string styleCode, string styleType, DateTimeOffset date, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<ContentVarietyBlockedItem>> GetBlockedItemsAsync(string categoryCode, DateTimeOffset date, CancellationToken cancellationToken);
+}
+
+public sealed record ContentVarietyBlockedItem(string RuleType, string RuleKey, string Reason);
+
 public interface IContentPlanningService
 {
     Task<ContentGenerationPlan> GenerateDailyPlanAsync(

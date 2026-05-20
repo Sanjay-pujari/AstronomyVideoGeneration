@@ -189,6 +189,8 @@ app.MapGet("/api/content-master/event-types", async (MediaFactoryDbContext db, C
     Results.Ok(await db.AstronomyEventTypes.AsNoTracking().OrderBy(x => x.DisplayName).ToListAsync(ct)));
 app.MapGet("/api/content-master/category-style-settings", async (MediaFactoryDbContext db, CancellationToken ct) =>
     Results.Ok(await db.ContentCategoryStyleSettings.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
+app.MapGet("/api/content-master/variety-rules", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.ContentVarietyRules.AsNoTracking().OrderBy(x => x.ContentCategoryCode).ThenBy(x => x.Priority).ToListAsync(ct)));
 
 app.MapPost("/api/content-planning/generate-daily-plan", async (GenerateDailyPlanRequest request, IContentPlanningService planning, CancellationToken ct) =>
 {
