@@ -569,3 +569,21 @@ public interface IPipelineRecoveryService
     Task<PipelineStatusResponse?> ResumeAsync(Guid pipelineRunId, string? forceStage, CancellationToken cancellationToken);
     Task<PipelineStatusResponse?> RetryPublishAsync(Guid pipelineRunId, string platform, CancellationToken cancellationToken);
 }
+
+
+public interface IContentCategorySettingsService
+{
+    Task<ContentCategorySettings?> GetSettingsAsync(ContentPipelineType type, CancellationToken cancellationToken = default);
+    Task<ContentCategoryPromptSettings?> GetPromptSettingsAsync(ContentPipelineType type, string language, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<ContentCategoryPublishingSettings>> GetPublishingSettingsAsync(ContentPipelineType type, CancellationToken cancellationToken = default);
+    Task<bool> IsEnabledAsync(ContentPipelineType type, CancellationToken cancellationToken = default);
+}
+
+public sealed record ContentPipelineRunRequest(DateOnly Date, string? RegionId = null, string? Language = null, bool? PublishToYouTube = null, bool? UseTopicPlanner = null);
+public sealed record ContentPipelineRunResult(ContentPipelineType PipelineType, bool Started, string Message, Guid? PipelineRunId = null);
+
+public interface IContentCategoryPipeline
+{
+    ContentPipelineType PipelineType { get; }
+    Task<ContentPipelineRunResult> RunAsync(ContentPipelineRunRequest request, CancellationToken ct);
+}

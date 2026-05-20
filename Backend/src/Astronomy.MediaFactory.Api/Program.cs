@@ -173,6 +173,35 @@ app.MapGet("/api/events/{eventId}", async (string eventId, IAstronomyEventDiscov
 app.MapPost("/api/events/refresh", async (int? days, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
     Results.Ok(await events.RefreshAsync(days, ct)));
 
+
+app.MapGet("/api/content-categories/settings", async (MediaFactoryDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.ContentCategorySettings.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
+app.MapGet("/api/content-categories/settings/{pipelineType}", async (ContentPipelineType pipelineType, IContentCategorySettingsService svc, CancellationToken ct) =>
+{
+    var settings = await svc.GetSettingsAsync(pipelineType, ct);
+    return settings is null ? Results.NotFound() : Results.Ok(settings);
+});
+app.MapPut("/api/content-categories/settings/{pipelineType}", async (ContentPipelineType pipelineType, ContentCategorySettings incoming, MediaFactoryDbContext db, CancellationToken ct) =>
+{
+    var current = await db.ContentCategorySettings.FirstOrDefaultAsync(x => x.PipelineType == pipelineType, ct);
+    if (current is null) return Results.NotFound();
+    incoming.Id = current.Id;
+    incoming.PipelineType = pipelineType;
+    incoming.CreatedUtc = current.CreatedUtc;
+    incoming.UpdatedUtc = DateTimeOffset.UtcNow;
+    db.Entry(current).CurrentValues.SetValues(incoming);
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(current);
+});
+app.MapPost("/api/content-pipelines/run/{pipelineType}", async (ContentPipelineType pipelineType, ContentPipelineRunRequest request, IEnumerable<IContentCategoryPipeline> pipelines, IContentCategorySettingsService settingsService, CancellationToken ct) =>
+{
+    if (!await settingsService.IsEnabledAsync(pipelineType, ct)) return Results.BadRequest(new { message = "Content category is disabled." });
+    var pipeline = pipelines.FirstOrDefault(x => x.PipelineType == pipelineType);
+    if (pipeline is null) return Results.NotFound(new { message = $"Pipeline '{pipelineType}' is not wired yet." });
+    var result = await pipeline.RunAsync(request, ct);
+    return Results.Ok(result);
+});
+
 app.MapGet("/api/pipelines/recent", async (IPipelineRepository repository, CancellationToken ct) => Results.Ok(await repository.GetRecentAsync(20, ct)));
 app.MapGet("/api/pipelines/{id:guid}", async (Guid id, IPipelineRepository repository, CancellationToken ct) =>
 {

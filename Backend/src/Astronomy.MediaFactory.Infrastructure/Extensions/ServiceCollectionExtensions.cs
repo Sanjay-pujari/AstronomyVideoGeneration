@@ -444,6 +444,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<PipelineSchedulerService>();
         services.AddSingleton<IPipelineSchedulerService>(sp => sp.GetRequiredService<PipelineSchedulerService>());
         services.AddHostedService(sp => sp.GetRequiredService<PipelineSchedulerService>());
+        services.AddScoped<IContentCategorySettingsService, ContentCategorySettingsService>();
+        services.AddScoped<IContentCategoryPipeline, DailySkyGuideContentPipeline>();
         services.AddScoped<PipelineOrchestrator>();
         services.AddScoped<IPipelineRunExecutor, OrchestratorPipelineRunExecutor>();
         services.AddScoped<IPipelineJobQueue, PipelineJobQueue>();

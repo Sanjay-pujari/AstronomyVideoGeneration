@@ -364,3 +364,46 @@ public sealed class PublishingOptimizationRecord : EntityBase
     public string RecommendedAudienceType { get; set; } = "";
     public string PlatformPriorityCsv { get; set; } = "";
 }
+
+
+public sealed class ContentCategorySettings : EntityBase
+{
+    public ContentPipelineType PipelineType { get; set; }
+    public string DisplayName { get; set; } = "";
+    public bool Enabled { get; set; }
+    public string DefaultLanguage { get; set; } = "en";
+    public string DefaultRegionId { get; set; } = "india-udaipur";
+    public string Frequency { get; set; } = "Daily";
+    public int TargetDurationSeconds { get; set; }
+    public int MaxDurationSeconds { get; set; }
+    public int MaxObjects { get; set; }
+    public bool GenerateLongVideo { get; set; }
+    public bool GenerateShortVideo { get; set; }
+    public bool GenerateThumbnail { get; set; }
+    public bool PublishToYouTube { get; set; }
+    public bool PublishToFacebook { get; set; }
+    public bool PublishToInstagram { get; set; }
+    public int Priority { get; set; }
+}
+
+public sealed class ContentCategoryPromptSettings : EntityBase
+{
+    public ContentPipelineType PipelineType { get; set; }
+    public string ScriptPromptTemplate { get; set; } = "";
+    public string HookPromptTemplate { get; set; } = "";
+    public string ThumbnailTextPromptTemplate { get; set; } = "";
+    public string SeoPromptTemplate { get; set; } = "";
+    public string Language { get; set; } = "en";
+}
+
+public sealed class ContentCategoryPublishingSettings : EntityBase
+{
+    public ContentPipelineType PipelineType { get; set; }
+    public string Platform { get; set; } = "YouTube";
+    public bool Enabled { get; set; }
+    public string ContentType { get; set; } = "Long";
+    public string PrivacyStatus { get; set; } = "private";
+    public string PublishTimeWindowStart { get; set; } = "18:00";
+    public string PublishTimeWindowEnd { get; set; } = "23:00";
+    public string HashtagTemplate { get; set; } = "#astronomy #stargazing";
+}
