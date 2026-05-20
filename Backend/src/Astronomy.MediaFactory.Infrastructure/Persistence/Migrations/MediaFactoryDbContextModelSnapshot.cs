@@ -1481,6 +1481,53 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.ToTable("content_pipeline_executions", (string)null);
                 });
 
+            modelBuilder.Entity("Astronomy.MediaFactory.Core.ContentVarietyRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ContentCategoryCode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("CooldownDays")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<int?>("MaxUsagePerMonth")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("MaxUsagePerWeek")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RuleKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RuleType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("UpdatedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ContentCategoryCode", "RuleType", "RuleKey")
+                        .IsUnique();
+
+                    b.ToTable("content_variety_rules", (string)null);
+                });
+
             modelBuilder.Entity("Astronomy.MediaFactory.Core.ContentVariant", b =>
                 {
                     b.Property<Guid>("Id")
