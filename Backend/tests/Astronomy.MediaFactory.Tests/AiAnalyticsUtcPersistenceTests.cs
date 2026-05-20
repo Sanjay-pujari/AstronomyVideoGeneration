@@ -6,6 +6,7 @@ using Astronomy.MediaFactory.Infrastructure.Analytics;
 using Astronomy.MediaFactory.Infrastructure.Optimization;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -49,7 +50,7 @@ public sealed class AiAnalyticsUtcPersistenceTests
     public async Task AnalyticsInitialization_Converts_PublishedAtUtc_To_Utc()
     {
         await using var db = CreateDb();
-        var service = new ManualAnalyticsIngestionService(db);
+        var service = new ManualAnalyticsIngestionService(db, NullLogger<ManualAnalyticsIngestionService>.Instance);
         var runId = Guid.NewGuid();
         var publishedIst = new DateTimeOffset(2026, 5, 19, 18, 0, 0, TimeSpan.FromHours(5.5));
 
@@ -78,7 +79,7 @@ public sealed class AiAnalyticsUtcPersistenceTests
     public async Task AnalyticsInitialization_Creates_Zero_Metric_Baseline_Rows()
     {
         await using var db = CreateDb();
-        var service = new ManualAnalyticsIngestionService(db);
+        var service = new ManualAnalyticsIngestionService(db, NullLogger<ManualAnalyticsIngestionService>.Instance);
         var runId = Guid.NewGuid();
 
         await service.InitializeForPipelineRunAsync(new AnalyticsPipelineInitializationRequest(
