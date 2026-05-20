@@ -185,11 +185,9 @@ app.MapPut("/api/content-categories/settings/{pipelineType}", async (ContentPipe
 {
     var current = await db.ContentCategorySettings.FirstOrDefaultAsync(x => x.PipelineType == pipelineType, ct);
     if (current is null) return Results.NotFound();
-    incoming.Id = current.Id;
     incoming.PipelineType = pipelineType;
-    incoming.CreatedUtc = current.CreatedUtc;
-    incoming.UpdatedUtc = DateTimeOffset.UtcNow;
     db.Entry(current).CurrentValues.SetValues(incoming);
+    current.Touch();
     await db.SaveChangesAsync(ct);
     return Results.Ok(current);
 });
