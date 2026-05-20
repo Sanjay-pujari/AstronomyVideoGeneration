@@ -53,7 +53,7 @@ public sealed class PipelineOrchestrator
     private readonly IAstronomyEventDecisionService? _eventDecisionService;
     private readonly IAstronomyEventStore? _eventStore;
     private readonly IAIOptimizationPipelineService? _aiOptimizationPipelineService;
-    private readonly IAnalyticsIngestionService? _analyticsIngestionService;
+    private readonly ISafeAnalyticsExecutor? _safeAnalyticsExecutor;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -99,7 +99,7 @@ public sealed class PipelineOrchestrator
         IAstronomyEventStore? eventStore = null,
         ICinematicThumbnailService? cinematicThumbnailService = null,
         IAIOptimizationPipelineService? aiOptimizationPipelineService = null,
-        IAnalyticsIngestionService? analyticsIngestionService = null)
+        ISafeAnalyticsExecutor? safeAnalyticsExecutor = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -144,7 +144,7 @@ public sealed class PipelineOrchestrator
         _eventDecisionService = eventDecisionService;
         _eventStore = eventStore;
         _aiOptimizationPipelineService = aiOptimizationPipelineService;
-        _analyticsIngestionService = analyticsIngestionService;
+        _safeAnalyticsExecutor = safeAnalyticsExecutor;
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken, Guid? pipelineRunId = null)
@@ -1108,7 +1108,8 @@ public sealed class PipelineOrchestrator
 
             var analyticsInitialized = false;
             var analyticsRecordCount = 0;
-            if (_analyticsIngestionService is not null)
+            var analyticsFailed = false;
+            if (_safeAnalyticsExecutor is not null)
             {
                 try
                 {
@@ -1116,7 +1117,7 @@ public sealed class PipelineOrchestrator
                     var thumbnails = new List<AnalyticsThumbnailSeed>();
                     if (!string.IsNullOrWhiteSpace(thumbnailPath)) thumbnails.Add(new AnalyticsThumbnailSeed(thumbnailPath, "Long"));
                     if (!string.IsNullOrWhiteSpace(shortThumbnailPath)) thumbnails.Add(new AnalyticsThumbnailSeed(shortThumbnailPath, "Short"));
-                    await _analyticsIngestionService.InitializeForPipelineRunAsync(new AnalyticsPipelineInitializationRequest(
+                    var analyticsResult = await _safeAnalyticsExecutor.ExecuteInitializationAsync(new AnalyticsPipelineInitializationRequest(
                         run.Id,
                         context.Localization.ResolvedLanguage,
                         NormalizeRegionId(request.RegionId, request.LocationName),
@@ -1126,13 +1127,15 @@ public sealed class PipelineOrchestrator
                         thumbnails,
                         request.ContentType.ToString(),
                         run.YouTubeVideoId,
-                        blobUploadResult.VideoUrl), cancellationToken);
-                    analyticsInitialized = true;
+                        blobUploadResult.VideoUrl), outputDir, cancellationToken);
+                    analyticsInitialized = analyticsResult.AnalyticsCompleted;
+                    analyticsFailed = analyticsResult.AnalyticsFailed;
                     analyticsRecordCount = platforms.Length + platforms.Length + (thumbnails.Count * platforms.Length);
                 }
                 catch (Exception ex)
                 {
                     intelligenceErrors.Add($"Analytics initialization failed: {ex.Message}");
+                    analyticsFailed = true;
                     _logger.LogWarning(ex, "Analytics initialization post-processing failed for pipeline run {PipelineRunId}", run.Id);
                 }
             }
@@ -1144,7 +1147,7 @@ public sealed class PipelineOrchestrator
                 hookRecordsCreated = aiHookCount,
                 publishingRecordsCreated = aiPublishingCount,
                 thumbnailRecordsCreated = aiThumbCount,
-                analyticsEnabled = _analyticsIngestionService is not null,
+                analyticsEnabled = _safeAnalyticsExecutor is not null,
                 analyticsInitialized,
                 analyticsRecordsCreated = analyticsRecordCount,
                 errors = intelligenceErrors
@@ -1158,6 +1161,8 @@ public sealed class PipelineOrchestrator
             run.Status = failedEnabledPublishStages.Length > 0
                 ? PipelineRunStatus.CompletedWithPublishErrors
                 : PipelineRunStatus.Succeeded;
+            if (run.Status == PipelineRunStatus.Succeeded && analyticsFailed)
+                run.Status = PipelineRunStatus.SuccessWithWarnings;
             if (_operationalAlertNotifier is not null && request.PublishToYouTube && publishStatus == "Published")
             {
                 await _operationalAlertNotifier.NotifyAsync(new OperationalAlert(

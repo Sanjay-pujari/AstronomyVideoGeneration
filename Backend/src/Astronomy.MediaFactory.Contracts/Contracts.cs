@@ -3,7 +3,7 @@ namespace Astronomy.MediaFactory.Contracts;
 public enum ContentType { DailySkyGuide = 1, TelescopeTargets = 2, SpaceNews = 3, AstrophotographyTips = 4, SpecialEventGuide = 5 }
 
 public enum ContentPipelineType { DailySkyGuide = 1, WeeklySkyForecast = 2, RareEventAlert = 3, CosmicStoryShort = 4, AstronomyEducation = 5, AstroPhotographyGuide = 6, MythologySkyStory = 7, MonthlySkyReport = 8 }
-public enum PipelineRunStatus { Queued = 1, Running = 2, Succeeded = 3, Failed = 4, PublishFailed = 5, CompletedWithPublishErrors = 6 }
+public enum PipelineRunStatus { Queued = 1, Running = 2, Succeeded = 3, Failed = 4, PublishFailed = 5, CompletedWithPublishErrors = 6, SuccessWithWarnings = 7 }
 public enum PipelineJobType { GenerateMainVideo = 1, GenerateShorts = 2, PublishVideo = 3, ArchiveAssets = 4 }
 public enum PipelineJobStatus { Pending = 1, Running = 2, Succeeded = 3, Failed = 4, Retrying = 5, Stale = 6 }
 
