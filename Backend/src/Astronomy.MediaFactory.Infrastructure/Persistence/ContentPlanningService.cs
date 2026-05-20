@@ -331,7 +331,6 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         var now = DateTimeOffset.UtcNow;
         var execution = new ContentPipelineExecution
         {
-            Id = Guid.NewGuid(),
             ContentGenerationPlanId = plan.Id,
             PipelineRunId = null,
             ContentCategoryCode = plan.ContentCategoryCode,
@@ -346,12 +345,10 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
             ThumbnailShortPath = null,
             PublishingCompleted = false,
             AnalyticsInitialized = false,
-            CreatedUtc = now,
-            UpdatedUtc = now
         };
 
         plan.Status = "InProgress";
-        plan.UpdatedUtc = now;
+        plan.Touch();
         db.ContentPipelineExecutions.Add(execution);
         await db.SaveChangesAsync(cancellationToken);
 
@@ -366,7 +363,7 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         var now = DateTimeOffset.UtcNow;
         execution.Status = "Completed";
         execution.FinishedUtc = now;
-        execution.UpdatedUtc = now;
+        execution.Touch();
         execution.PipelineRunId = request.PipelineRunId ?? execution.PipelineRunId;
         execution.OutputFolder = request.OutputFolder ?? execution.OutputFolder;
         execution.LongVideoPath = request.LongVideoPath ?? execution.LongVideoPath;
@@ -382,7 +379,7 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
             if (plan is not null)
             {
                 plan.Status = "Completed";
-                plan.UpdatedUtc = now;
+                plan.Touch();
             }
         }
 
@@ -399,7 +396,7 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         execution.Status = "Failed";
         execution.ErrorMessage = request.ErrorMessage;
         execution.FinishedUtc = now;
-        execution.UpdatedUtc = now;
+        execution.Touch();
 
         if (execution.ContentGenerationPlanId.HasValue)
         {
@@ -407,7 +404,7 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
             if (plan is not null)
             {
                 plan.Status = "Failed";
-                plan.UpdatedUtc = now;
+                plan.Touch();
             }
         }
 
