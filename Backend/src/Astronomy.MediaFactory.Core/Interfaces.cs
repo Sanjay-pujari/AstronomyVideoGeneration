@@ -263,21 +263,13 @@ public sealed record GenerateContentPlanResponse(
     string? Title,
     string? PlanningReason);
 
-public sealed record ContentPlanningPipelineRunRequest(
-    string Category,
-    string Language,
-    string RegionId,
-    string LocationName,
-    string? PrimaryCelestialObject,
-    string HookStyle,
-    string NarrationStyle,
-    string ThumbnailStyle,
-    DateTimeOffset? ScheduledUtc);
-
 public sealed record ContentPlanningPipelineRequestPreview(
     Guid ContentGenerationPlanId,
     string ContentCategoryCode,
-    ContentPlanningPipelineRunRequest PipelineRequest);
+    string Status,
+    string? Title,
+    object PipelineRequest,
+    IReadOnlyList<string> Warnings);
 
 
 public interface IAnalyticsIngestionService

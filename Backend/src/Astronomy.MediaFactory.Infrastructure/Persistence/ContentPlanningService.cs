@@ -238,14 +238,79 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
     }
 
     public Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken) => db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
-    public async Task<ContentPlanningPipelineRequestPreview> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken){/* unchanged */
-        var plan = await db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken) ?? throw new KeyNotFoundException($"Content generation plan '{id}' was not found.");
-        if (!string.Equals(plan.Status, "Planned", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Pipeline request preview is only allowed for Planned plans. Current status is '{plan.Status}'.");
-        var style = await db.ContentCategoryStyleSettings.AsNoTracking().Where(x => x.ContentCategoryCode == plan.ContentCategoryCode && x.Enabled && x.Language == plan.Language).OrderBy(x => x.Priority).FirstOrDefaultAsync(cancellationToken)
-                    ?? await db.ContentCategoryStyleSettings.AsNoTracking().Where(x => x.ContentCategoryCode == plan.ContentCategoryCode && x.Enabled).OrderBy(x => x.Priority).FirstOrDefaultAsync(cancellationToken)
-                    ?? throw new KeyNotFoundException($"No enabled style settings found for category '{plan.ContentCategoryCode}'.");
-        var request = new ContentPlanningPipelineRunRequest(plan.ContentCategoryCode, plan.Language, plan.RegionId, plan.RegionId, plan.PrimaryCelestialObjectCode, plan.HookStyleCode ?? style.HookStyleCode, plan.NarrationStyleCode ?? style.NarrationStyleCode, plan.ThumbnailStyleCode ?? style.ThumbnailStyleCode, plan.ScheduledUtc);
-        return new ContentPlanningPipelineRequestPreview(plan.Id, plan.ContentCategoryCode, request);
+    public async Task<ContentPlanningPipelineRequestPreview> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var plan = await db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Content generation plan '{id}' was not found.");
+
+        var allowedStatus = string.Equals(plan.Status, "Planned", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(plan.Status, "ReadyForManualRun", StringComparison.OrdinalIgnoreCase);
+        if (!allowedStatus)
+        {
+            throw new InvalidOperationException($"Pipeline request preview is only allowed for Planned or ReadyForManualRun plans. Current status is '{plan.Status}'.");
+        }
+
+        var category = await db.ContentCategories.AsNoTracking().FirstOrDefaultAsync(x => x.Code == plan.ContentCategoryCode, cancellationToken);
+        var warnings = new List<string>();
+        if (category is null || !category.Enabled)
+        {
+            warnings.Add("unsupported category");
+        }
+
+        var style = await db.ContentCategoryStyleSettings.AsNoTracking()
+            .Where(x => x.ContentCategoryCode == plan.ContentCategoryCode && x.Enabled && x.Language == plan.Language)
+            .OrderBy(x => x.Priority)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? await db.ContentCategoryStyleSettings.AsNoTracking()
+                .Where(x => x.ContentCategoryCode == plan.ContentCategoryCode && x.Enabled && x.Language == "en")
+                .OrderBy(x => x.Priority)
+                .FirstOrDefaultAsync(cancellationToken);
+
+        var hookStyle = plan.HookStyleCode ?? style?.HookStyleCode;
+        var narrationStyle = plan.NarrationStyleCode ?? style?.NarrationStyleCode;
+        var thumbnailStyle = plan.ThumbnailStyleCode ?? style?.ThumbnailStyleCode;
+        if (string.IsNullOrWhiteSpace(hookStyle) || string.IsNullOrWhiteSpace(narrationStyle) || string.IsNullOrWhiteSpace(thumbnailStyle))
+        {
+            warnings.Add("missing style setting");
+        }
+
+        string? celestialObjectName = null;
+        if (!string.IsNullOrWhiteSpace(plan.PrimaryCelestialObjectCode))
+        {
+            var celestialObject = await db.CelestialObjects.AsNoTracking().FirstOrDefaultAsync(x => x.Code == plan.PrimaryCelestialObjectCode && x.Enabled, cancellationToken);
+            celestialObjectName = celestialObject?.Name;
+            if (celestialObject is null) warnings.Add("missing celestial object");
+        }
+
+        string? eventTypeName = null;
+        if (!string.IsNullOrWhiteSpace(plan.PrimaryAstronomyEventTypeCode))
+        {
+            var eventType = await db.AstronomyEventTypes.AsNoTracking().FirstOrDefaultAsync(x => x.Code == plan.PrimaryAstronomyEventTypeCode && x.Enabled, cancellationToken);
+            eventTypeName = eventType?.DisplayName;
+            if (eventType is null) warnings.Add("missing astronomy event type");
+        }
+
+        if (plan.ScheduledUtc is null) warnings.Add("missing scheduledUtc");
+
+        var pipelineRequest = new Dictionary<string, object?>
+        {
+            ["contentCategoryCode"] = plan.ContentCategoryCode,
+            ["title"] = plan.Title,
+            ["language"] = plan.Language,
+            ["regionId"] = plan.RegionId,
+            ["locationName"] = plan.RegionId,
+            ["scheduledUtc"] = plan.ScheduledUtc,
+            ["primaryCelestialObjectCode"] = plan.PrimaryCelestialObjectCode,
+            ["primaryCelestialObjectName"] = celestialObjectName,
+            ["primaryAstronomyEventTypeCode"] = plan.PrimaryAstronomyEventTypeCode,
+            ["primaryAstronomyEventTypeName"] = eventTypeName,
+            ["hookStyleCode"] = hookStyle,
+            ["narrationStyleCode"] = narrationStyle,
+            ["thumbnailStyleCode"] = thumbnailStyle,
+            ["generatedByAi"] = plan.GeneratedByAi
+        };
+
+        return new ContentPlanningPipelineRequestPreview(plan.Id, plan.ContentCategoryCode, plan.Status, plan.Title, pipelineRequest, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
     }
     public async Task<ContentGenerationPlan?> MarkPlanReadyForManualRunAsync(Guid id, CancellationToken cancellationToken){var plan = await db.ContentGenerationPlans.FirstOrDefaultAsync(x => x.Id == id, cancellationToken); if (plan is null) return null; plan.Status = "ReadyForManualRun"; plan.Touch(); await db.SaveChangesAsync(cancellationToken); return plan;}
     public Task<bool> MarkPlanAsInProgressAsync(Guid id, CancellationToken cancellationToken) => UpdatePlanStatusAsync(id, "InProgress", cancellationToken);
