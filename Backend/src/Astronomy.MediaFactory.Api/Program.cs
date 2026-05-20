@@ -216,6 +216,26 @@ app.MapGet("/api/content-planning/plans/{id:guid}", async (Guid id, IContentPlan
     var plan = await planning.GetPlanByIdAsync(id, ct);
     return plan is null ? Results.NotFound() : Results.Ok(plan);
 });
+app.MapGet("/api/content-planning/plans/{id:guid}/pipeline-request-preview", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await planning.BuildPipelineRequestPreviewAsync(id, ct));
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+app.MapPost("/api/content-planning/plans/{id:guid}/mark-ready", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
+{
+    var updated = await planning.MarkPlanReadyForManualRunAsync(id, ct);
+    return updated is null ? Results.NotFound() : Results.Ok(updated);
+});
 
 app.MapGet("/api/content-categories/settings", async (MediaFactoryDbContext db, CancellationToken ct) =>
     Results.Ok(await db.ContentCategorySettings.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(ct)));
@@ -905,5 +925,4 @@ public sealed record GenerateDailyPlanRequest(
 public sealed record GenerateDailyPlanResponse(
     Guid ContentGenerationPlanId,
     string Status);
-
 
