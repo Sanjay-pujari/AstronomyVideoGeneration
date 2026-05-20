@@ -217,6 +217,22 @@ public interface IAnalyticsFeedbackProvider
     Task<AnalyticsAggregationSummary> GetSummaryAsync(int topN, CancellationToken cancellationToken);
 }
 
+public interface IContentPlanningService
+{
+    Task<ContentGenerationPlan> GenerateDailyPlanAsync(
+        string contentCategoryCode,
+        string language,
+        string regionId,
+        DateTimeOffset scheduledUtc,
+        string? primaryCelestialObjectCode,
+        CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<ContentGenerationPlan>> GetPendingPlansAsync(string? status, CancellationToken cancellationToken);
+    Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken);
+    Task<bool> MarkPlanAsInProgressAsync(Guid id, CancellationToken cancellationToken);
+    Task<bool> MarkPlanAsCompletedAsync(Guid id, CancellationToken cancellationToken);
+    Task<bool> MarkPlanAsFailedAsync(Guid id, CancellationToken cancellationToken);
+}
+
 
 public interface IAnalyticsIngestionService
 {
