@@ -29,7 +29,7 @@ public sealed class ContentMasterDataTests
         using var db = CreateDb();
         var seeded = db.ContentCategories.Single(x => x.Code == "DailySkyGuide");
         Assert.Equal(TimeSpan.Zero, seeded.CreatedUtc.Offset);
-        Assert.Equal(TimeSpan.Zero, seeded.UpdatedUtc.Offset);
+        Assert.Equal(TimeSpan.Zero, (seeded.UpdatedUtc ?? seeded.CreatedUtc).Offset);
     }
 
     private static MediaFactoryDbContext CreateDb()
