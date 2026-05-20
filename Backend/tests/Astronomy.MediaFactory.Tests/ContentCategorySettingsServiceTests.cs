@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
