@@ -407,3 +407,126 @@ public sealed class ContentCategoryPublishingSettings : EntityBase
     public string PublishTimeWindowEnd { get; set; } = "23:00";
     public string HashtagTemplate { get; set; } = "#astronomy #stargazing";
 }
+
+
+public sealed class ContentCategoryMaster : EntityBase
+{
+    public string Code { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string? Description { get; set; }
+    public bool Enabled { get; set; } = true;
+    public int Priority { get; set; } = 100;
+    public bool SupportsLongVideo { get; set; } = true;
+    public bool SupportsShortVideo { get; set; } = true;
+    public bool SupportsThumbnail { get; set; } = true;
+    public bool SupportsPublishing { get; set; } = true;
+    public bool SupportsAiOptimization { get; set; } = true;
+}
+
+public sealed class HookStyle : EntityBase
+{
+    public string Code { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string? Description { get; set; }
+    public bool Enabled { get; set; } = true;
+    public int Priority { get; set; } = 100;
+}
+
+public sealed class ThumbnailStyle : EntityBase
+{
+    public string Code { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string? Description { get; set; }
+    public bool Enabled { get; set; } = true;
+    public int Priority { get; set; } = 100;
+}
+
+public sealed class NarrationStyle : EntityBase
+{
+    public string Code { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string? Description { get; set; }
+    public bool Enabled { get; set; } = true;
+    public int Priority { get; set; } = 100;
+}
+
+public sealed class CelestialObject : EntityBase
+{
+    public string Code { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string? ScientificName { get; set; }
+    public string ObjectType { get; set; } = "";
+    public string? Description { get; set; }
+    public string? FunFact { get; set; }
+    public string? MythologySummary { get; set; }
+    public string? BestViewingMonths { get; set; }
+    public bool NakedEyeVisible { get; set; }
+    public bool BestForPhotography { get; set; }
+    public decimal VisibilityPriority { get; set; }
+    public decimal PhotogenicScore { get; set; }
+    public decimal EducationalScore { get; set; }
+    public decimal ViralityScore { get; set; }
+    public string? DefaultThumbnailStyleCode { get; set; }
+    public bool Enabled { get; set; } = true;
+}
+
+public sealed class AstronomyEventTypeMaster : EntityBase
+{
+    public string Code { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string? Description { get; set; }
+    public decimal RarityScore { get; set; }
+    public decimal ViralityScore { get; set; }
+    public decimal EducationalScore { get; set; }
+    public decimal MythologyRelevance { get; set; }
+    public decimal PhotographyRelevance { get; set; }
+    public bool Enabled { get; set; } = true;
+}
+
+public sealed class ContentGenerationPlan : EntityBase
+{
+    public string ContentCategoryCode { get; set; } = "";
+    public Guid? PipelineRunId { get; set; }
+    public string? Title { get; set; }
+    public string Language { get; set; } = "en";
+    public string RegionId { get; set; } = "";
+    public DateTimeOffset? ScheduledUtc { get; set; }
+    public string Status { get; set; } = "Planned";
+    public string? PrimaryCelestialObjectCode { get; set; }
+    public string? PrimaryAstronomyEventTypeCode { get; set; }
+    public string? HookStyleCode { get; set; }
+    public string? NarrationStyleCode { get; set; }
+    public string? ThumbnailStyleCode { get; set; }
+    public bool GeneratedByAi { get; set; }
+    public int Priority { get; set; } = 100;
+    public string? PlanningReason { get; set; }
+}
+
+public sealed class ContentPipelineExecution : EntityBase
+{
+    public Guid? ContentGenerationPlanId { get; set; }
+    public Guid? PipelineRunId { get; set; }
+    public string ContentCategoryCode { get; set; } = "";
+    public DateTimeOffset? StartedUtc { get; set; }
+    public DateTimeOffset? FinishedUtc { get; set; }
+    public string Status { get; set; } = "";
+    public string? ErrorMessage { get; set; }
+    public string? OutputFolder { get; set; }
+    public string? LongVideoPath { get; set; }
+    public string? ShortVideoPath { get; set; }
+    public string? ThumbnailLongPath { get; set; }
+    public string? ThumbnailShortPath { get; set; }
+    public bool PublishingCompleted { get; set; }
+    public bool AnalyticsInitialized { get; set; }
+}
+
+public sealed class ContentCategoryStyleSettings : EntityBase
+{
+    public string ContentCategoryCode { get; set; } = "";
+    public string HookStyleCode { get; set; } = "";
+    public string NarrationStyleCode { get; set; } = "";
+    public string ThumbnailStyleCode { get; set; } = "";
+    public string Language { get; set; } = "en";
+    public int Priority { get; set; } = 100;
+    public bool Enabled { get; set; } = true;
+}
