@@ -29,6 +29,6 @@ public sealed class DailySkyGuideContentPipeline(PipelineOrchestrator orchestrat
         var report = new { pipelineType = PipelineType.ToString(), settingsUsed = settings, promptsUsed = prompts, publishingSettingsUsed = publishing, enabled = settings?.Enabled ?? false, durationPolicy = new { settings?.TargetDurationSeconds, settings?.MaxDurationSeconds }, outputFolder = run.OutputFolder };
         await File.WriteAllTextAsync(Path.Combine(run.OutputFolder ?? ".", "content-category-pipeline-report.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), ct);
 
-        return new ContentPipelineRunResult(PipelineType, true, "Pipeline started.", run.PipelineRunId);
+        return new ContentPipelineRunResult(PipelineType, true, "Pipeline started.", run.Id);
     }
 }
