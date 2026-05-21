@@ -17,13 +17,14 @@ public sealed class DailySkyGuidePipelineStrategy(IDailySkyGuideVisualAssetPacka
                 plan.Id,
                 null,
                 [],
+                null,
                 [],
                 $"Strategy '{CategoryCode}' cannot build category '{plan.ContentCategoryCode}'.");
         }
 
         var warnings = new List<string>();
         // Bridge step for preview only: ensure DailySkyGuide context can still be built without executing pipeline.
-        _ = await contextBuilder.BuildAsync(plan, cancellationToken);
+        var astronomyContext = await contextBuilder.BuildAsync(plan, cancellationToken);
         var visualAssetPackage = await visualAssetPackager.BuildPackageAsync(plan.Id, cancellationToken);
         warnings.AddRange(visualAssetPackage.Warnings);
 
@@ -46,7 +47,24 @@ public sealed class DailySkyGuidePipelineStrategy(IDailySkyGuideVisualAssetPacka
             ["thumbnailStyleCode"] = plan.ThumbnailStyleCode
         };
 
-        return new PipelineBuildResult(true, plan.ContentCategoryCode, plan.Id, pipelineRequest, visualAssetPackage.Assets.ToList(), warnings, null);
+        var thumbnailCandidatePath = visualAssetPackage.Assets
+            .FirstOrDefault(x => x.Role.Equals("ThumbnailCandidate", StringComparison.OrdinalIgnoreCase) && x.Exists)?.Path;
+
+        var recommendedImageSequence = new[] { "IntroBackground", "ThumbnailCandidate", "SupportingSkyMap", "OutroBackground" }
+            .Where(role => visualAssetPackage.Assets.Any(x => x.Exists && x.Role.Equals(role, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+
+        var assetAwareMetadata = new DailySkyGuideAssetAwareMetadata(
+            plan.Id,
+            plan.ContentCategoryCode,
+            astronomyContext,
+            visualAssetPackage.Assets.ToList(),
+            astronomyContext.SceneCapturePlan,
+            thumbnailCandidatePath,
+            recommendedImageSequence,
+            visualAssetPackage.Warnings.ToList());
+
+        return new PipelineBuildResult(true, plan.ContentCategoryCode, plan.Id, pipelineRequest, visualAssetPackage.Assets.ToList(), assetAwareMetadata, warnings, null);
     }
 }
 

@@ -253,7 +253,13 @@ app.MapGet("/api/content-planning/plans/{id:guid}/pipeline-request-preview", asy
 {
     try
     {
-        return Results.Ok(await planning.BuildPipelineRequestPreviewAsync(id, ct));
+        var preview = await planning.BuildPipelineRequestPreviewAsync(id, ct);
+        return Results.Ok(new
+        {
+            pipelineRequest = preview.PipelineRequest,
+            assetAwareMetadata = preview.AssetAwareMetadata,
+            warnings = preview.Warnings
+        });
     }
     catch (KeyNotFoundException ex)
     {

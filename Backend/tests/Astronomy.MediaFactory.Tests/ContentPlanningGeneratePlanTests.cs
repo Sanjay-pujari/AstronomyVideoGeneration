@@ -221,6 +221,7 @@ public sealed partial class ContentPlanningGeneratePlanTests
 
         Assert.True(preview.Success);
         Assert.NotNull(preview.PipelineRequest);
+        Assert.NotNull(preview.AssetAwareMetadata);
     }
 
     [Fact]
@@ -238,6 +239,7 @@ public sealed partial class ContentPlanningGeneratePlanTests
 
         Assert.True(preview.Success);
         Assert.NotNull(preview.PipelineRequest);
+        Assert.NotNull(preview.AssetAwareMetadata);
     }
 
     [Fact]
@@ -280,6 +282,64 @@ public sealed partial class ContentPlanningGeneratePlanTests
         var preview = await svc.BuildPipelineRequestPreviewAsync(db.ContentGenerationPlans.Single().Id, CancellationToken.None);
 
         Assert.True(preview.Success);
+    }
+
+    [Fact]
+    public async Task PipelineRequestPreview_AssetAwareMetadata_Works_Without_Assets()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.ContentGenerationPlans.Add(new ContentGenerationPlan
+        {
+            ContentCategoryCode = "DailySkyGuide",
+            Status = "Planned",
+            Language = "en",
+            RegionId = "IN-RJ-UDAIPUR",
+            ScheduledUtc = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        var preview = await svc.BuildPipelineRequestPreviewAsync(db.ContentGenerationPlans.Single().Id, CancellationToken.None);
+
+        Assert.True(preview.Success);
+        Assert.NotNull(preview.PipelineRequest);
+        Assert.NotNull(preview.AssetAwareMetadata);
+        Assert.Empty(preview.AssetAwareMetadata!.RecommendedImageSequence);
+        Assert.Contains(preview.Warnings, x => x.Contains("Missing expected assets", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task PipelineRequestPreview_AssetAwareMetadata_Works_With_Assets()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        var plan = new ContentGenerationPlan
+        {
+            ContentCategoryCode = "DailySkyGuide",
+            Status = "Planned",
+            Language = "en",
+            RegionId = "IN-RJ-UDAIPUR",
+            ScheduledUtc = DateTimeOffset.UtcNow
+        };
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        var sceneRoot = Path.Combine(Path.GetTempPath(), "content-plans", plan.Id.ToString(), "stellarium-scenes");
+        Directory.CreateDirectory(sceneRoot);
+        foreach (var role in new[] { "IntroBackground", "ThumbnailCandidate", "SupportingSkyMap", "OutroBackground" })
+        {
+            await File.WriteAllTextAsync(Path.Combine(sceneRoot, $"01_{role}_{role}.png"), "asset");
+        }
+
+        var svc = CreateService(db);
+        var preview = await svc.BuildPipelineRequestPreviewAsync(plan.Id, CancellationToken.None);
+
+        Assert.True(preview.Success);
+        Assert.NotNull(preview.PipelineRequest);
+        Assert.NotNull(preview.AssetAwareMetadata);
+        Assert.Equal(["IntroBackground", "ThumbnailCandidate", "SupportingSkyMap", "OutroBackground"], preview.AssetAwareMetadata!.RecommendedImageSequence);
+        Assert.NotNull(preview.AssetAwareMetadata.ThumbnailCandidatePath);
     }
 
     [Fact]
