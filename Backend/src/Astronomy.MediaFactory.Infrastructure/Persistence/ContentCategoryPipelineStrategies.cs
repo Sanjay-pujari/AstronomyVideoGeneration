@@ -18,7 +18,7 @@ public sealed class DailySkyGuidePipelineStrategy(IDailySkyGuideVisualAssetPacka
                 null,
                 [],
                 [],
-                $"Strategy '{CategoryCode}' cannot build category '{plan.ContentCategoryCode}'."));
+                $"Strategy '{CategoryCode}' cannot build category '{plan.ContentCategoryCode}'.");
         }
 
         var warnings = new List<string>();
