@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptions<SchedulerOptions> schedulerOptions) : IDailySkyGuideContextBuilder
+public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptions<SchedulerOptions> schedulerOptions, IAstronomyVisibilityService visibilityService) : IDailySkyGuideContextBuilder
 {
     public async Task<DailySkyGuideContext> BuildAsync(ContentGenerationPlan plan, CancellationToken cancellationToken)
     {
@@ -15,36 +15,21 @@ public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptio
         var region = ResolveRegion(plan.RegionId, warnings);
 
         var scheduledUtc = plan.ScheduledUtc ?? DateTimeOffset.UtcNow;
-        if (plan.ScheduledUtc is null)
-        {
-            warnings.Add("scheduled_utc missing on plan; used current UTC date as fallback target date.");
-        }
-
+        if (plan.ScheduledUtc is null) warnings.Add("scheduled_utc missing on plan; used current UTC date as fallback target date.");
         var targetDate = DateOnly.FromDateTime(scheduledUtc.UtcDateTime);
-        var timezone = TryResolveTimeZone(region.Timezone, warnings);
+        var visibility = await visibilityService.CalculateVisibilityAsync(new AstronomyVisibilityRequest(
+            plan.RegionId, region.LocationName, region.Latitude, region.Longitude, region.Timezone, targetDate, plan.PrimaryCelestialObjectCode, plan.Language), cancellationToken);
+        warnings.AddRange(visibility.Warnings);
+        var zone = TryResolveTimeZone(region.Timezone, warnings);
+        var viewingStartLocal = TimeZoneInfo.ConvertTimeFromUtc(visibility.BestViewingStartUtc, zone);
+        var viewingEndLocal = TimeZoneInfo.ConvertTimeFromUtc(visibility.BestViewingEndUtc, zone);
+        var startOffset = new DateTimeOffset(viewingStartLocal, zone.GetUtcOffset(viewingStartLocal));
+        var endOffset = new DateTimeOffset(viewingEndLocal, zone.GetUtcOffset(viewingEndLocal));
+        var viewingMiddleLocal = startOffset.Add((endOffset - startOffset) / 2);
 
-        var viewingStartLocal = CreateLocalDateTime(targetDate, new TimeOnly(19, 30), timezone, warnings);
-        var viewingEndLocal = CreateLocalDateTime(targetDate, new TimeOnly(22, 30), timezone, warnings);
-        var viewingMiddleLocal = viewingStartLocal.Add((viewingEndLocal - viewingStartLocal) / 2);
-
-        string? primaryName = null;
-        if (!string.IsNullOrWhiteSpace(plan.PrimaryCelestialObjectCode))
-        {
-            var celestialObject = await db.CelestialObjects.AsNoTracking().FirstOrDefaultAsync(x => x.Code == plan.PrimaryCelestialObjectCode, cancellationToken);
-            primaryName = celestialObject?.Name;
-            if (primaryName is null)
-            {
-                warnings.Add($"primary celestial object '{plan.PrimaryCelestialObjectCode}' was not found in master data.");
-            }
-        }
-
-        var visibleCodes = string.IsNullOrWhiteSpace(plan.PrimaryCelestialObjectCode)
-            ? Array.Empty<string>()
-            : new[] { plan.PrimaryCelestialObjectCode! };
-        if (visibleCodes.Length == 0)
-        {
-            warnings.Add("visibleObjectCodes fallback applied: no primary celestial object code on plan.");
-        }
+        string? primaryName = visibility.VisibleObjects.FirstOrDefault(x=>string.Equals(x.ObjectCode, plan.PrimaryCelestialObjectCode, StringComparison.OrdinalIgnoreCase))?.ObjectName;
+        var visibleCodes = visibility.VisibleObjects.Select(x=>x.ObjectCode).ToArray();
+        if (visibleCodes.Length == 0) warnings.Add("visibleObjectCodes fallback applied: no visible celestial objects found.");
 
         var thumbnailStrategy = ResolveThumbnailStrategy(plan, warnings);
 
@@ -56,8 +41,8 @@ public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptio
             region.Longitude,
             region.Timezone,
             targetDate,
-            viewingStartLocal,
-            viewingEndLocal,
+            startOffset,
+            endOffset,
             plan.PrimaryCelestialObjectCode,
             primaryName,
             visibleCodes,

@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVarietyGuard varietyGuard, IContentCategoryPipelineStrategyResolver strategyResolver, IDailySkyGuideContextBuilder dailySkyGuideContextBuilder) : IContentPlanningService
+public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVarietyGuard varietyGuard, IContentCategoryPipelineStrategyResolver strategyResolver, IDailySkyGuideContextBuilder dailySkyGuideContextBuilder, IAstronomyVisibilityService visibilityService) : IContentPlanningService
 {
     public async Task<GenerateContentPlanResponse> GeneratePlanAsync(GenerateContentPlanRequest request, CancellationToken cancellationToken)
     {
@@ -243,6 +243,13 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         var plan = await db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException($"Content generation plan '{id}' was not found.");
         return await dailySkyGuideContextBuilder.BuildAsync(plan, cancellationToken);
+    }
+
+    public async Task<AstronomyVisibilityResult> BuildAstronomyVisibilityPreviewAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var ctx = await BuildDailySkyGuideContextPreviewAsync(id, cancellationToken);
+        var request = new AstronomyVisibilityRequest(ctx.RegionId, ctx.LocationName, ctx.Latitude, ctx.Longitude, ctx.Timezone, ctx.TargetDate, ctx.PrimaryCelestialObjectCode, "en");
+        return await visibilityService.CalculateVisibilityAsync(request, cancellationToken);
     }
     public async Task<PipelineBuildResult> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken)
     {
