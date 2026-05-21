@@ -240,6 +240,7 @@ public interface IContentPlanningService
         CancellationToken cancellationToken);
     Task<IReadOnlyCollection<ContentGenerationPlan>> GetPendingPlansAsync(string? status, CancellationToken cancellationToken);
     Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken);
+    Task<DailySkyGuideContext> BuildDailySkyGuideContextPreviewAsync(Guid id, CancellationToken cancellationToken);
     Task<PipelineBuildResult> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken);
     Task<PrepareManualRunResponse?> PrepareManualRunAsync(Guid id, CancellationToken cancellationToken);
     Task<ContentGenerationPlan?> MarkPlanReadyForManualRunAsync(Guid id, CancellationToken cancellationToken);
@@ -252,6 +253,30 @@ public interface IContentPlanningService
     Task<IReadOnlyCollection<ContentPipelineExecution>> GetExecutionsAsync(string? status, CancellationToken cancellationToken);
     Task<ContentPipelineExecution?> GetExecutionByIdAsync(Guid executionId, CancellationToken cancellationToken);
 }
+
+public interface IDailySkyGuideContextBuilder
+{
+    Task<DailySkyGuideContext> BuildAsync(ContentGenerationPlan plan, CancellationToken cancellationToken);
+}
+
+public sealed record DailySkyGuideContext(
+    Guid ContentGenerationPlanId,
+    string RegionId,
+    string LocationName,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    DateOnly TargetDate,
+    DateTimeOffset BestViewingStartLocal,
+    DateTimeOffset BestViewingEndLocal,
+    string? PrimaryCelestialObjectCode,
+    string? PrimaryCelestialObjectName,
+    IReadOnlyList<string> VisibleObjectCodes,
+    IReadOnlyList<DateTimeOffset> SceneCaptureTimesUtc,
+    string ImageInputSource,
+    string AudioSource,
+    string ThumbnailStrategy,
+    IReadOnlyList<string> Warnings);
 
 public sealed record ManualExecutionStartResponse(Guid ContentGenerationPlanId, Guid ContentPipelineExecutionId, string Status);
 public sealed record CompleteContentPlanningExecutionRequest(

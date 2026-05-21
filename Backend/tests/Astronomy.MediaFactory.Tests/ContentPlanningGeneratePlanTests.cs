@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -96,7 +97,34 @@ public sealed partial class ContentPlanningGeneratePlanTests
         Assert.NotNull(method);
     }
 
-    private static ContentPlanningService CreateService(MediaFactoryDbContext db) => new(db, new NoopVarietyGuard(), new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]));
+    [Fact]
+    public async Task DailySkyContextPreview_Builds_Context_Only()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.CelestialObjects.Add(new CelestialObjectMaster { Code = "Moon", Name = "Moon", Enabled = true });
+        var scheduledUtc = new DateTimeOffset(2026, 5, 21, 14, 0, 0, TimeSpan.Zero);
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR", ScheduledUtc = scheduledUtc, PrimaryCelestialObjectCode = "Moon" };
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        var context = await svc.BuildDailySkyGuideContextPreviewAsync(plan.Id, CancellationToken.None);
+
+        Assert.Equal("IN-RJ-UDAIPUR", context.RegionId);
+        Assert.Equal("MoonDominant", context.ThumbnailStrategy);
+        Assert.Equal("Stellarium", context.ImageInputSource);
+        Assert.Equal("AzureSpeech", context.AudioSource);
+        Assert.Equal(3, context.SceneCaptureTimesUtc.Count);
+        Assert.Empty(db.ContentPipelineExecutions);
+    }
+
+    private static ContentPlanningService CreateService(MediaFactoryDbContext db)
+        => new(
+            db,
+            new NoopVarietyGuard(),
+            new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]),
+            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions())));
 
     private static void SeedRequired(MediaFactoryDbContext db)
     {

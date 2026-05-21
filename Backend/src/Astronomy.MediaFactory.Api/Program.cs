@@ -250,6 +250,17 @@ app.MapGet("/api/content-planning/plans/{id:guid}/pipeline-request-preview", asy
         return Results.BadRequest(new { message = ex.Message });
     }
 });
+app.MapGet("/api/content-planning/plans/{id:guid}/daily-sky-context-preview", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await planning.BuildDailySkyGuideContextPreviewAsync(id, ct));
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+});
 
 app.MapPost("/api/content-planning/plans/{id:guid}/prepare-manual-run", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
 {
