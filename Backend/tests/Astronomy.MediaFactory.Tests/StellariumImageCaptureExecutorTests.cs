@@ -44,7 +44,7 @@ public sealed class StellariumImageCaptureExecutorTests
     }
 
     [Fact]
-    public async Task RealCapture_CreatesDirectory_WhenDryRunFalse()
+    public async Task RealCapture_DoesNotCreateDirectory_WhenDisabled()
     {
         var captureRoot = Path.Combine(Path.GetTempPath(), $"stellarium-captures-{Guid.NewGuid():N}");
         var options = Options.Create(new StellariumOptions { CaptureDirectory = captureRoot, Enabled = false });
@@ -53,8 +53,16 @@ public sealed class StellariumImageCaptureExecutorTests
 
         var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId, DryRun: false), CancellationToken.None);
 
-        Assert.True(Directory.Exists(result.OutputFolder));
+        Assert.False(Directory.Exists(result.OutputFolder));
         Assert.Contains("Stellarium capture is disabled in configuration.", result.Warnings);
+        Assert.False(result.Success);
+        Assert.Equal(0, result.CapturedSceneCount);
+        Assert.All(result.Images, image =>
+        {
+            Assert.False(image.Success);
+            Assert.Equal("Stellarium capture is disabled in configuration.", image.ErrorMessage);
+            Assert.False(File.Exists(image.ImagePath));
+        });
     }
 
     [Fact]
@@ -67,6 +75,28 @@ public sealed class StellariumImageCaptureExecutorTests
         var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId, DryRun: false), CancellationToken.None);
 
         Assert.Contains("Stellarium capture is disabled in configuration.", result.Warnings);
+        Assert.False(result.Success);
+        Assert.Equal(0, result.CapturedSceneCount);
+    }
+
+    [Fact]
+    public async Task CaptureUtilityNotWired_ReturnsFailedImages()
+    {
+        var captureRoot = Path.Combine(Path.GetTempPath(), $"stellarium-captures-{Guid.NewGuid():N}");
+        var options = Options.Create(new StellariumOptions { CaptureDirectory = captureRoot, Enabled = true, UseExistingCaptureUtility = false });
+        var sut = new StellariumImageCaptureExecutor(options, NullLogger<StellariumImageCaptureExecutor>.Instance);
+        var planId = Guid.NewGuid();
+
+        var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId, DryRun: false), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(0, result.CapturedSceneCount);
+        Assert.Contains("Stellarium capture utility is not wired yet.", result.Warnings);
+        Assert.All(result.Images, image =>
+        {
+            Assert.False(image.Success);
+            Assert.Equal("Stellarium capture utility is not wired yet.", image.ErrorMessage);
+        });
     }
 
     private static StellariumSceneCapturePlan BuildPlan(Guid planId) => new(
