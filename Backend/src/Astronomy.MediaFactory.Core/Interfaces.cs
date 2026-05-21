@@ -603,8 +603,19 @@ public sealed record PipelineBuildResult(
     Guid ContentGenerationPlanId,
     object? PipelineRequest,
     IReadOnlyList<DailySkyGuideVisualAssetItem> VisualAssets,
+    DailySkyGuideAssetAwareMetadata? AssetAwareMetadata,
     IReadOnlyList<string> Warnings,
     string? ErrorMessage);
+
+public sealed record DailySkyGuideAssetAwareMetadata(
+    Guid ContentGenerationPlanId,
+    string ContentCategoryCode,
+    DailySkyGuideContext AstronomyContext,
+    IReadOnlyList<DailySkyGuideVisualAssetItem> VisualAssets,
+    StellariumSceneCapturePlan? SceneCapturePlan,
+    string? ThumbnailCandidatePath,
+    IReadOnlyList<string> RecommendedImageSequence,
+    IReadOnlyList<string> Warnings);
 
 public sealed record PrepareManualRunResponse(
     Guid ContentGenerationPlanId,
