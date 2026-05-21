@@ -102,7 +102,7 @@ public sealed partial class ContentPlanningGeneratePlanTests
     {
         await using var db = CreateDb();
         SeedRequired(db);
-        db.CelestialObjects.Add(new CelestialObjectMaster { Code = "Moon", Name = "Moon", Enabled = true });
+        db.CelestialObjects.Add(new CelestialObject { Code = "Moon", Name = "Moon", ObjectType = "Moon", NakedEyeVisible = true, Enabled = true, VisibilityPriority = 1, PhotogenicScore = 1, EducationalScore = 1, ViralityScore = 1 });
         var scheduledUtc = new DateTimeOffset(2026, 5, 21, 14, 0, 0, TimeSpan.Zero);
         var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR", ScheduledUtc = scheduledUtc, PrimaryCelestialObjectCode = "Moon" };
         db.ContentGenerationPlans.Add(plan);
