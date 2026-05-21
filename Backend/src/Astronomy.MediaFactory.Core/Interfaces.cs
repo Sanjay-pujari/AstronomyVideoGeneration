@@ -572,6 +572,30 @@ public sealed record DailySkyGuideAssetAwareExecutionContext(
     List<string> RecommendedImageSequence,
     List<string> Warnings);
 
+public sealed record AssetAwareVideoSegment(
+    int SortOrder,
+    string SegmentCode,
+    string SegmentType,
+    string VisualRole,
+    string? ImagePath,
+    bool ImageExists,
+    string? SuggestedNarrationPurpose,
+    double SuggestedDurationSeconds,
+    string? TransitionType,
+    Dictionary<string, string>? Metadata);
+
+public sealed record AssetAwareVideoCompositionPlan(
+    Guid ContentGenerationPlanId,
+    string ContentCategoryCode,
+    string LocationName,
+    DateOnly TargetDate,
+    string Language,
+    string? Title,
+    int TotalSegments,
+    List<AssetAwareVideoSegment> Segments,
+    List<string> Warnings,
+    bool ReadyForComposition);
+
 public interface IDailySkyGuideVisualAssetProvider
 {
     Task<IReadOnlyList<DailySkyGuideVisualAsset>> GetAssetsAsync(
@@ -584,6 +608,22 @@ public interface IDailySkyGuideAssetAwareContextService
     Task<DailySkyGuideAssetAwareExecutionContext> BuildAsync(
         Guid contentGenerationPlanId,
         CancellationToken cancellationToken);
+}
+
+public interface IDailySkyGuideAssetAwareCompositionPlanner
+{
+    Task<AssetAwareVideoCompositionPlan> BuildAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken);
+}
+
+public interface IAssetAwareCompositionPlanner
+{
+    string ContentCategoryCode { get; }
+    Task<AssetAwareVideoCompositionPlan> BuildAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken);
+}
+
+public interface IAssetAwareCompositionPlannerResolver
+{
+    IAssetAwareCompositionPlanner? Resolve(string contentCategoryCode);
 }
 
 public interface IDailySkyGuideVisualAssetConsumer
