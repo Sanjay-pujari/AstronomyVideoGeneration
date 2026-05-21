@@ -179,7 +179,26 @@ public sealed partial class ContentPlanningGeneratePlanTests
     private sealed class FakeDailySkyGuideContextBuilder : IDailySkyGuideContextBuilder
     {
         public Task<DailySkyGuideContext> BuildAsync(ContentGenerationPlan plan, CancellationToken cancellationToken)
-            => Task.FromResult(new DailySkyGuideContext(plan.Id, plan.ContentCategoryCode, plan.Language, plan.RegionId, "Region", 0, 0, "UTC", DateOnly.FromDateTime(DateTime.UtcNow), "Moon", "Moon", "Clear", [], "MoonDominant", "Stellarium", "AzureSpeech", []));
+            => Task.FromResult(new DailySkyGuideContext(
+                plan.Id,
+                plan.RegionId,
+                "Region",
+                0,
+                0,
+                "UTC",
+                DateOnly.FromDateTime(DateTime.UtcNow),
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow.AddHours(1),
+                "Moon",
+                "Moon",
+                [],
+                [],
+                "Stellarium",
+                "AzureSpeech",
+                "MoonDominant",
+                null,
+                0,
+                []));
     }
 }
 
