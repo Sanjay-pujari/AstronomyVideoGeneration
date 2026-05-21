@@ -304,6 +304,42 @@ public interface IAstronomyVisibilityService
     Task<AstronomyVisibilityResult> CalculateVisibilityAsync(AstronomyVisibilityRequest request, CancellationToken cancellationToken);
 }
 
+public sealed record SkyfieldVisibilityRequest(
+    string RegionId,
+    string LocationName,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    DateOnly TargetDate,
+    IReadOnlyList<string> ObjectCodes);
+
+public sealed record SkyfieldVisibilityObjectResult(
+    string ObjectCode,
+    bool Visible,
+    DateTime? RiseUtc,
+    DateTime? SetUtc,
+    DateTime? TransitUtc,
+    double MaxAltitudeDegrees,
+    DateTime? BestViewingStartUtc,
+    DateTime? BestViewingEndUtc,
+    double AltitudeScore,
+    string? Reason);
+
+public sealed record SkyfieldVisibilityResponse(
+    bool Success,
+    DateTime? SunsetUtc,
+    DateTime? SunriseUtc,
+    string? MoonPhase,
+    double? MoonIlluminationPercent,
+    IReadOnlyList<SkyfieldVisibilityObjectResult> Objects,
+    IReadOnlyList<string> Warnings,
+    string? ErrorMessage);
+
+public interface ISkyfieldVisibilityClient
+{
+    Task<SkyfieldVisibilityResponse> CalculateAsync(SkyfieldVisibilityRequest request, CancellationToken cancellationToken);
+}
+
 public interface IDailySkyGuideContextBuilder
 {
     Task<DailySkyGuideContext> BuildAsync(ContentGenerationPlan plan, CancellationToken cancellationToken);
