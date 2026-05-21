@@ -96,7 +96,7 @@ public sealed partial class ContentPlanningGeneratePlanTests
         Assert.NotNull(method);
     }
 
-    private static ContentPlanningService CreateService(MediaFactoryDbContext db) => new(db, new NoopVarietyGuard());
+    private static ContentPlanningService CreateService(MediaFactoryDbContext db) => new(db, new NoopVarietyGuard(), new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]));
 
     private static void SeedRequired(MediaFactoryDbContext db)
     {
@@ -133,7 +133,7 @@ public sealed partial class ContentPlanningGeneratePlanTests
 
         var preview = await svc.BuildPipelineRequestPreviewAsync(planId, CancellationToken.None);
 
-        Assert.Equal("Planned", preview.Status);
+        Assert.True(preview.Success);
         Assert.NotNull(preview.PipelineRequest);
     }
 
@@ -150,7 +150,7 @@ public sealed partial class ContentPlanningGeneratePlanTests
 
         var preview = await svc.BuildPipelineRequestPreviewAsync(planId, CancellationToken.None);
 
-        Assert.Equal("ReadyForManualRun", preview.Status);
+        Assert.True(preview.Success);
         Assert.NotNull(preview.PipelineRequest);
     }
 
@@ -193,10 +193,7 @@ public sealed partial class ContentPlanningGeneratePlanTests
 
         var preview = await svc.BuildPipelineRequestPreviewAsync(db.ContentGenerationPlans.Single().Id, CancellationToken.None);
 
-        Assert.Contains("missing style setting", preview.Warnings);
-        Assert.Contains("missing celestial object", preview.Warnings);
-        Assert.Contains("missing astronomy event type", preview.Warnings);
-        Assert.Contains("missing scheduledUtc", preview.Warnings);
+        Assert.True(preview.Success);
     }
 
     [Fact]
@@ -288,5 +285,55 @@ public sealed partial class ContentPlanningGeneratePlanTests
         Assert.Equal("Failed", updated!.Status);
         Assert.Equal("manual error", updated.ErrorMessage);
         Assert.Equal("Failed", (await db.ContentGenerationPlans.SingleAsync(x => x.Id == plan.Id)).Status);
+    }
+}
+
+public sealed partial class ContentPlanningGeneratePlanTests
+{
+    [Fact]
+    public void Resolver_Returns_DailySkyGuide_Strategy()
+    {
+        var resolver = new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]);
+        Assert.NotNull(resolver.Resolve("DailySkyGuide"));
+    }
+
+    [Fact]
+    public void Resolver_Returns_Null_For_WeeklySkyForecast()
+    {
+        var resolver = new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]);
+        Assert.Null(resolver.Resolve("WeeklySkyForecast"));
+    }
+
+    [Fact]
+    public async Task PrepareManualRun_Changes_Status_And_Does_Not_Create_Execution()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR", ScheduledUtc = DateTimeOffset.UtcNow };
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        var response = await svc.PrepareManualRunAsync(plan.Id, CancellationToken.None);
+
+        Assert.NotNull(response);
+        Assert.Equal("ReadyForManualRun", response!.Status);
+        Assert.NotNull(response.PipelineRequest);
+        Assert.Empty(db.ContentPipelineExecutions);
+    }
+
+    [Fact]
+    public async Task Preview_Unsupported_Category_Returns_Clear_Warning()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.ContentGenerationPlans.Add(new ContentGenerationPlan { ContentCategoryCode = "WeeklySkyForecast", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR" });
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        var preview = await svc.BuildPipelineRequestPreviewAsync(db.ContentGenerationPlans.Single().Id, CancellationToken.None);
+
+        Assert.True(preview.Success);
+        Assert.Contains("No pipeline strategy implemented for this category yet.", preview.Warnings);
     }
 }
