@@ -446,6 +446,23 @@ public interface IStellariumImageCaptureExecutor
         CancellationToken cancellationToken);
 }
 
+public sealed record DailySkyGuideVisualAssetItem(
+    string Role,
+    string Path,
+    bool Exists);
+
+public sealed record DailySkyGuideVisualAssetPackageResponse(
+    Guid ContentGenerationPlanId,
+    bool Success,
+    string AssetRoot,
+    IReadOnlyCollection<DailySkyGuideVisualAssetItem> Assets,
+    IReadOnlyCollection<string> Warnings);
+
+public interface IDailySkyGuideVisualAssetPackager
+{
+    Task<DailySkyGuideVisualAssetPackageResponse> BuildPackageAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken);
+}
+
 public sealed record ManualExecutionStartResponse(Guid ContentGenerationPlanId, Guid ContentPipelineExecutionId, string Status);
 public sealed record CompleteContentPlanningExecutionRequest(
     Guid? PipelineRunId,
