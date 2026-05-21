@@ -145,8 +145,9 @@ public sealed partial class ContentPlanningGeneratePlanTests
             db,
             new NoopVarietyGuard(),
             new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]),
-            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions()), new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions()))),
-            new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())));
+            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions()), new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())), new StellariumScenePlannerResolver([new DailySkyGuideStellariumScenePlanner()])),
+            new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())),
+            new StellariumScenePlannerResolver([new DailySkyGuideStellariumScenePlanner()]));
 
     private static void SeedRequired(MediaFactoryDbContext db)
     {
@@ -391,5 +392,63 @@ public sealed partial class ContentPlanningGeneratePlanTests
 
         Assert.True(preview.Success);
         Assert.Contains("No pipeline strategy implemented for this category yet.", preview.Warnings);
+    }
+}
+
+
+public sealed partial class ContentPlanningGeneratePlanTests
+{
+    [Fact]
+    public async Task ScenePlanner_Returns_Scenes_For_DailySkyGuide_And_WideSky()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.CelestialObjects.AddRange(
+            new CelestialObject { Code = "Moon", Name = "Moon", ObjectType = "Moon", NakedEyeVisible = true, Enabled = true, VisibilityPriority = 10, PhotogenicScore = 10, EducationalScore = 10, ViralityScore = 10 },
+            new CelestialObject { Code = "Jupiter", Name = "Jupiter", ObjectType = "Planet", NakedEyeVisible = true, Enabled = true, VisibilityPriority = 9, PhotogenicScore = 9, EducationalScore = 9, ViralityScore = 9 });
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR", ScheduledUtc = DateTimeOffset.UtcNow, PrimaryCelestialObjectCode = "Jupiter" };
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        var preview = await svc.BuildStellariumScenePlanPreviewAsync(plan.Id, CancellationToken.None);
+
+        Assert.Equal("DailySkyGuide", preview.ContentCategoryCode);
+        Assert.True(preview.Scenes.Count >= 3);
+        Assert.Contains(preview.Scenes, x => x.SceneType == "WideSky");
+        Assert.Contains(preview.Scenes, x => x.SceneType == "ObjectFocus" && x.TargetObjectCode == "Jupiter");
+        Assert.Contains(preview.Scenes, x => x.SceneType == "MoonFocus" && x.OutputImageRole == "ThumbnailCandidate");
+    }
+
+    [Fact]
+    public async Task ScenePreview_Does_Not_Update_Db_Or_Execute_Pipeline()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.CelestialObjects.Add(new CelestialObject { Code = "Moon", Name = "Moon", ObjectType = "Moon", NakedEyeVisible = true, Enabled = true, VisibilityPriority = 10, PhotogenicScore = 10, EducationalScore = 10, ViralityScore = 10 });
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR", ScheduledUtc = DateTimeOffset.UtcNow, PrimaryCelestialObjectCode = "Moon" };
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+        var before = plan.UpdatedUtc;
+        var svc = CreateService(db);
+
+        _ = await svc.BuildStellariumScenePlanPreviewAsync(plan.Id, CancellationToken.None);
+
+        Assert.Equal(before, (await db.ContentGenerationPlans.SingleAsync(x=>x.Id==plan.Id)).UpdatedUtc);
+        Assert.Empty(db.ContentPipelineExecutions);
+    }
+
+    [Fact]
+    public async Task ScenePreview_Unsupported_Category_Returns_Clear_Warning()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.ContentGenerationPlans.Add(new ContentGenerationPlan { ContentCategoryCode = "WeeklySkyForecast", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR" });
+        await db.SaveChangesAsync();
+        var svc = CreateService(db);
+
+        var preview = await svc.BuildStellariumScenePlanPreviewAsync(db.ContentGenerationPlans.Single().Id, CancellationToken.None);
+
+        Assert.Contains("No Stellarium scene planner implemented for this category.", preview.Warnings);
     }
 }

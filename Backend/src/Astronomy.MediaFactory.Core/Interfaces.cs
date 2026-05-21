@@ -242,6 +242,7 @@ public interface IContentPlanningService
     Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken);
     Task<DailySkyGuideContext> BuildDailySkyGuideContextPreviewAsync(Guid id, CancellationToken cancellationToken);
     Task<AstronomyVisibilityResult> BuildAstronomyVisibilityPreviewAsync(Guid id, CancellationToken cancellationToken);
+    Task<StellariumSceneCapturePlan> BuildStellariumScenePlanPreviewAsync(Guid id, CancellationToken cancellationToken);
     Task<PipelineBuildResult> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken);
     Task<PrepareManualRunResponse?> PrepareManualRunAsync(Guid id, CancellationToken cancellationToken);
     Task<ContentGenerationPlan?> MarkPlanReadyForManualRunAsync(Guid id, CancellationToken cancellationToken);
@@ -362,7 +363,52 @@ public sealed record DailySkyGuideContext(
     string ImageInputSource,
     string AudioSource,
     string ThumbnailStrategy,
+    StellariumSceneCapturePlan? SceneCapturePlan,
+    int SceneCount,
     IReadOnlyList<string> Warnings);
+
+public sealed record StellariumSceneCapturePlan(
+    Guid ContentGenerationPlanId,
+    string ContentCategoryCode,
+    string RegionId,
+    string LocationName,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    DateOnly TargetDate,
+    List<StellariumSceneCaptureItem> Scenes,
+    List<string> Warnings);
+
+public sealed record StellariumSceneCaptureItem(
+    string SceneCode,
+    string SceneType,
+    string Title,
+    string? TargetObjectCode,
+    string? TargetObjectName,
+    DateTime CaptureTimeUtc,
+    string FramingMode,
+    double? FieldOfViewDegrees,
+    bool ShowConstellationLines,
+    bool ShowConstellationLabels,
+    bool ShowPlanetLabels,
+    bool ShowAzimuthGrid,
+    bool ShowEquatorialGrid,
+    string OutputImageRole,
+    int SortOrder,
+    Dictionary<string, string>? Metadata);
+
+public interface IStellariumScenePlanner
+{
+    Task<StellariumSceneCapturePlan> BuildScenePlanAsync(
+        ContentGenerationPlan plan,
+        AstronomyVisibilityResult visibilityResult,
+        CancellationToken cancellationToken);
+}
+
+public interface IStellariumScenePlannerResolver
+{
+    IStellariumScenePlanner? Resolve(string contentCategoryCode);
+}
 
 public sealed record ManualExecutionStartResponse(Guid ContentGenerationPlanId, Guid ContentPipelineExecutionId, string Status);
 public sealed record CompleteContentPlanningExecutionRequest(

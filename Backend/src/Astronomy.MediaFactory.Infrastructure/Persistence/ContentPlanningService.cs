@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVarietyGuard varietyGuard, IContentCategoryPipelineStrategyResolver strategyResolver, IDailySkyGuideContextBuilder dailySkyGuideContextBuilder, IAstronomyVisibilityService visibilityService) : IContentPlanningService
+public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVarietyGuard varietyGuard, IContentCategoryPipelineStrategyResolver strategyResolver, IDailySkyGuideContextBuilder dailySkyGuideContextBuilder, IAstronomyVisibilityService visibilityService, IStellariumScenePlannerResolver scenePlannerResolver) : IContentPlanningService
 {
     public async Task<GenerateContentPlanResponse> GeneratePlanAsync(GenerateContentPlanRequest request, CancellationToken cancellationToken)
     {
@@ -250,6 +250,24 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         var ctx = await BuildDailySkyGuideContextPreviewAsync(id, cancellationToken);
         var request = new AstronomyVisibilityRequest(ctx.RegionId, ctx.LocationName, ctx.Latitude, ctx.Longitude, ctx.Timezone, ctx.TargetDate, ctx.PrimaryCelestialObjectCode, "en");
         return await visibilityService.CalculateVisibilityAsync(request, cancellationToken);
+    }
+
+    public async Task<StellariumSceneCapturePlan> BuildStellariumScenePlanPreviewAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var plan = await db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Content generation plan '{id}' was not found.");
+        var context = await dailySkyGuideContextBuilder.BuildAsync(plan, cancellationToken);
+        var visibility = await visibilityService.CalculateVisibilityAsync(new AstronomyVisibilityRequest(
+            context.RegionId, context.LocationName, context.Latitude, context.Longitude, context.Timezone, context.TargetDate, context.PrimaryCelestialObjectCode, plan.Language), cancellationToken);
+
+        var planner = scenePlannerResolver.Resolve(plan.ContentCategoryCode);
+        if (planner is null)
+        {
+            return new StellariumSceneCapturePlan(plan.Id, plan.ContentCategoryCode, context.RegionId, context.LocationName, context.Latitude, context.Longitude, context.Timezone, context.TargetDate, [],
+                ["No Stellarium scene planner implemented for this category."]);
+        }
+
+        return await planner.BuildScenePlanAsync(plan, visibility, cancellationToken);
     }
     public async Task<PipelineBuildResult> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken)
     {
