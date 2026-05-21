@@ -4,6 +4,7 @@ using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
