@@ -548,6 +548,55 @@ public interface IDailySkyGuideVisualAssetPackager
     Task<DailySkyGuideVisualAssetPackageResponse> BuildPackageAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken);
 }
 
+
+public sealed record DailySkyGuideVisualAsset(
+    string Role,
+    string Path,
+    bool Exists,
+    int SortOrder,
+    string? SceneCode,
+    string? SceneType,
+    string? TargetObjectCode);
+
+public sealed record DailySkyGuideAssetAwareExecutionContext(
+    Guid ContentGenerationPlanId,
+    string ContentCategoryCode,
+    string RegionId,
+    string LocationName,
+    DateOnly TargetDate,
+    string Language,
+    string? Title,
+    string? PrimaryCelestialObjectCode,
+    string? ThumbnailCandidatePath,
+    List<DailySkyGuideVisualAsset> VisualAssets,
+    List<string> RecommendedImageSequence,
+    List<string> Warnings);
+
+public interface IDailySkyGuideVisualAssetProvider
+{
+    Task<IReadOnlyList<DailySkyGuideVisualAsset>> GetAssetsAsync(
+        Guid contentGenerationPlanId,
+        CancellationToken cancellationToken);
+}
+
+public interface IDailySkyGuideAssetAwareContextService
+{
+    Task<DailySkyGuideAssetAwareExecutionContext> BuildAsync(
+        Guid contentGenerationPlanId,
+        CancellationToken cancellationToken);
+}
+
+public interface IDailySkyGuideVisualAssetConsumer
+{
+    Task<bool> CanConsumeAsync(
+        DailySkyGuideAssetAwareExecutionContext context,
+        CancellationToken cancellationToken);
+
+    Task ConsumeAsync(
+        DailySkyGuideAssetAwareExecutionContext context,
+        CancellationToken cancellationToken);
+}
+
 public sealed record ManualExecutionStartResponse(Guid ContentGenerationPlanId, Guid ContentPipelineExecutionId, string Status);
 public sealed record CompleteContentPlanningExecutionRequest(
     Guid? PipelineRunId,

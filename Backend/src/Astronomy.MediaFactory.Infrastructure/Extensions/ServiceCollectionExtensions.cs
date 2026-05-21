@@ -460,6 +460,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IStellariumScriptGenerator, StellariumScriptGenerator>();
         services.AddScoped<IStellariumImageCaptureExecutor, StellariumImageCaptureExecutor>();
         services.AddScoped<IDailySkyGuideVisualAssetPackager, DailySkyGuideVisualAssetPackager>();
+        services.AddScoped<IDailySkyGuideVisualAssetProvider, CapturedDailySkyGuideVisualAssetProvider>();
+        services.AddScoped<IDailySkyGuideAssetAwareContextService, DailySkyGuideAssetAwareContextService>();
+        services.AddScoped<IDailySkyGuideVisualAssetConsumer, NoOpDailySkyGuideVisualAssetConsumer>();
         services.AddScoped<IStellariumScenePlanner, DailySkyGuideStellariumScenePlanner>();
         services.AddScoped<IStellariumScenePlannerResolver, StellariumScenePlannerResolver>();
         services.AddScoped<IDailySkyGuideContextBuilder, DailySkyGuideContextBuilder>();
