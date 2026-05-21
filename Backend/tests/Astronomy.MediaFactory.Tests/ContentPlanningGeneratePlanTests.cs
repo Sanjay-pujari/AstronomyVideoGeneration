@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -144,8 +145,8 @@ public sealed partial class ContentPlanningGeneratePlanTests
             db,
             new NoopVarietyGuard(),
             new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]),
-            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions()), new AstronomyVisibilityService(db)),
-            new AstronomyVisibilityService(db));
+            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions()), new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new AstronomyOptions()))),
+            new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new AstronomyOptions())));
 
     private static void SeedRequired(MediaFactoryDbContext db)
     {
@@ -162,6 +163,12 @@ public sealed partial class ContentPlanningGeneratePlanTests
         public Task<bool> CanUseStyleAsync(string categoryCode, string styleCode, string styleType, DateTimeOffset date, CancellationToken cancellationToken) => Task.FromResult(true);
         public Task<IReadOnlyCollection<ContentVarietyBlockedItem>> GetBlockedItemsAsync(string categoryCode, DateTimeOffset date, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyCollection<ContentVarietyBlockedItem>>([]);
+    }
+
+    private sealed class FakeSkyfieldVisibilityClient : ISkyfieldVisibilityClient
+    {
+        public Task<SkyfieldVisibilityResponse> CalculateAsync(SkyfieldVisibilityRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(new SkyfieldVisibilityResponse(false, null, null, null, null, [], [], "not configured in unit tests"));
     }
 }
 

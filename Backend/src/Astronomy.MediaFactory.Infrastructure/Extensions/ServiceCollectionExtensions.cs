@@ -283,6 +283,11 @@ public static class ServiceCollectionExtensions
         services.AddOptions<StartupValidationOptions>()
             .Bind(configuration.GetSection(StartupValidationOptions.SectionName))
             .ValidateOnStart();
+        services.AddOptions<AstronomyOptions>()
+            .Bind(configuration.GetSection(AstronomyOptions.SectionName))
+            .Validate(o => !o.UseSkyfield || Uri.TryCreate(o.SkyfieldSidecarBaseUrl, UriKind.Absolute, out _), "Astronomy:SkyfieldSidecarBaseUrl must be an absolute URI when UseSkyfield=true.")
+            .Validate(o => o.SkyfieldTimeoutSeconds > 0, "Astronomy:SkyfieldTimeoutSeconds must be > 0.")
+            .ValidateOnStart();
 
         services.AddOptions<OptimizationOptions>()
             .Bind(configuration.GetSection(OptimizationOptions.SectionName))
@@ -304,6 +309,11 @@ public static class ServiceCollectionExtensions
         {
             var options = sp.GetRequiredService<IOptions<SkyfieldSidecarOptions>>().Value;
             client.BaseAddress = new Uri(options.BaseUrl);
+        });
+        services.AddHttpClient<ISkyfieldVisibilityClient, SkyfieldVisibilityClient>((sp, client) =>
+        {
+            var options = sp.GetRequiredService<IOptions<AstronomyOptions>>().Value;
+            client.BaseAddress = new Uri(options.SkyfieldSidecarBaseUrl);
         });
 
         var cs = configuration.GetConnectionString("Postgres")
