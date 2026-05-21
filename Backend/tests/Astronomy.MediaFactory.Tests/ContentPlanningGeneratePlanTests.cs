@@ -141,13 +141,17 @@ public sealed partial class ContentPlanningGeneratePlanTests
         Assert.Empty(db.ContentPipelineExecutions);
     }
     private static ContentPlanningService CreateService(MediaFactoryDbContext db)
-        => new(
+    {
+        var packager = new DailySkyGuideVisualAssetPackager(Options.Create(new StellariumOptions { CaptureDirectory = Path.GetTempPath() }));
+        var contextBuilder = new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions()), new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())), new StellariumScenePlannerResolver([new DailySkyGuideStellariumScenePlanner()]));
+        return new(
             db,
             new NoopVarietyGuard(),
-            new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]),
-            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions()), new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())), new StellariumScenePlannerResolver([new DailySkyGuideStellariumScenePlanner()])),
+            new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy(packager, contextBuilder)]),
+            contextBuilder,
             new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())),
             new StellariumScenePlannerResolver([new DailySkyGuideStellariumScenePlanner()]));
+    }
 
     private static void SeedRequired(MediaFactoryDbContext db)
     {
@@ -170,6 +174,12 @@ public sealed partial class ContentPlanningGeneratePlanTests
     {
         public Task<SkyfieldVisibilityResponse> CalculateAsync(SkyfieldVisibilityRequest request, CancellationToken cancellationToken)
             => Task.FromResult(new SkyfieldVisibilityResponse(false, null, null, null, null, [], [], "not configured in unit tests"));
+    }
+
+    private sealed class FakeDailySkyGuideContextBuilder : IDailySkyGuideContextBuilder
+    {
+        public Task<DailySkyGuideContext> BuildAsync(ContentGenerationPlan plan, CancellationToken cancellationToken)
+            => Task.FromResult(new DailySkyGuideContext(plan.Id, plan.ContentCategoryCode, plan.Language, plan.RegionId, "Region", 0, 0, "UTC", DateOnly.FromDateTime(DateTime.UtcNow), "Moon", "Moon", "Clear", [], "MoonDominant", "Stellarium", "AzureSpeech", []));
     }
 }
 
@@ -350,14 +360,14 @@ public sealed partial class ContentPlanningGeneratePlanTests
     [Fact]
     public void Resolver_Returns_DailySkyGuide_Strategy()
     {
-        var resolver = new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]);
+        var resolver = new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy(new DailySkyGuideVisualAssetPackager(Options.Create(new StellariumOptions { CaptureDirectory = Path.GetTempPath() })), new FakeDailySkyGuideContextBuilder())]);
         Assert.NotNull(resolver.Resolve("DailySkyGuide"));
     }
 
     [Fact]
     public void Resolver_Returns_Null_For_WeeklySkyForecast()
     {
-        var resolver = new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]);
+        var resolver = new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy(new DailySkyGuideVisualAssetPackager(Options.Create(new StellariumOptions { CaptureDirectory = Path.GetTempPath() })), new FakeDailySkyGuideContextBuilder())]);
         Assert.Null(resolver.Resolve("WeeklySkyForecast"));
     }
 
