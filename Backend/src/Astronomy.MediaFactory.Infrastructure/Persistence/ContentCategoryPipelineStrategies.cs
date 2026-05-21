@@ -32,7 +32,9 @@ public sealed class DailySkyGuidePipelineStrategy(IDailySkyGuideVisualAssetPacka
         var request = new RunPipelineRequest(
             DateOnly.FromDateTime(scheduledUtc),
             ContentType.DailySkyGuide,
-            plan.RegionId,
+            astronomyContext.LocationName,
+            Latitude: astronomyContext.Latitude,
+            Longitude: astronomyContext.Longitude,
             RegionId: plan.RegionId,
             Language: plan.Language);
 
