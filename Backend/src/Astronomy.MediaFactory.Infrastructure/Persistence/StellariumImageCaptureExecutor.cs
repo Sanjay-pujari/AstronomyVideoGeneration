@@ -13,8 +13,21 @@ public sealed class StellariumImageCaptureExecutor(IOptions<StellariumOptions> o
     {
         var warnings = new List<string>();
         var images = new List<StellariumCapturedImageResult>();
-        var outputRoot = string.IsNullOrWhiteSpace(_options.OutputRoot) ? "outputs/content-plans" : _options.OutputRoot;
-        var outputFolder = Path.Combine(outputRoot, request.ContentGenerationPlanId.ToString(), "stellarium-scenes");
+        var outputRoot = _options.CaptureDirectory;
+        if (string.IsNullOrWhiteSpace(outputRoot))
+        {
+            outputRoot = string.IsNullOrWhiteSpace(_options.OutputRoot) ? "outputs" : _options.OutputRoot;
+            warnings.Add("Stellarium:CaptureDirectory is not configured; fallback output path used.");
+        }
+
+        var outputFolder = string.IsNullOrWhiteSpace(_options.CaptureDirectory)
+            ? Path.Combine(outputRoot, request.ContentGenerationPlanId.ToString(), "stellarium-scenes")
+            : Path.Combine(outputRoot, "content-plans", request.ContentGenerationPlanId.ToString(), "stellarium-scenes");
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(outputFolder);
+        }
 
         if (request.DryRun)
         {
