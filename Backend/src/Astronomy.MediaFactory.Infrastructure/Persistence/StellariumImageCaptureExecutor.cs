@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -5,42 +6,25 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class StellariumImageCaptureExecutor(IOptions<StellariumOptions> options, ILogger<StellariumImageCaptureExecutor> logger) : IStellariumImageCaptureExecutor
+public sealed class StellariumImageCaptureExecutor(
+    IOptions<StellariumOptions> options,
+    IStellariumScriptGenerator scriptGenerator,
+    ILogger<StellariumImageCaptureExecutor> logger) : IStellariumImageCaptureExecutor
 {
     private readonly StellariumOptions _options = options.Value;
     private const string DisabledMessage = "Stellarium capture is disabled in configuration.";
-    private const string UtilityNotWiredMessage = "Stellarium capture utility is not wired yet.";
 
-    public Task<StellariumCaptureExecutionResponse> CaptureAsync(StellariumSceneCapturePlan scenePlan, StellariumCaptureExecutionRequest request, CancellationToken cancellationToken)
+    public async Task<StellariumCaptureExecutionResponse> CaptureAsync(StellariumSceneCapturePlan scenePlan, StellariumCaptureExecutionRequest request, CancellationToken cancellationToken)
     {
         var warnings = new List<string>();
         var images = new List<StellariumCapturedImageResult>();
-        var outputRoot = _options.CaptureDirectory;
-        if (string.IsNullOrWhiteSpace(outputRoot))
-        {
-            outputRoot = string.IsNullOrWhiteSpace(_options.OutputRoot) ? "outputs" : _options.OutputRoot;
-            warnings.Add("Stellarium:CaptureDirectory is not configured; fallback output path used.");
-        }
+        var outputFolder = BuildCaptureFolder(request.ContentGenerationPlanId, warnings);
+        var scriptsFolder = BuildScriptsFolder(request.ContentGenerationPlanId);
 
-        var outputFolder = string.IsNullOrWhiteSpace(_options.CaptureDirectory)
-            ? Path.Combine(outputRoot, request.ContentGenerationPlanId.ToString(), "stellarium-scenes")
-            : Path.Combine(outputRoot, "content-plans", request.ContentGenerationPlanId.ToString(), "stellarium-scenes");
-
-        if (request.DryRun)
-        {
-            warnings.Add("DryRun enabled. No images were captured.");
-        }
-        else if (!_options.Enabled)
-        {
-            warnings.Add(DisabledMessage);
-        }
-        else if (!_options.UseExistingCaptureUtility)
-        {
-            warnings.Add(UtilityNotWiredMessage);
-        }
-        else
+        if (!request.DryRun)
         {
             Directory.CreateDirectory(outputFolder);
+            Directory.CreateDirectory(scriptsFolder);
         }
 
         foreach (var scene in scenePlan.Scenes.OrderBy(x => x.SortOrder))
@@ -48,78 +32,109 @@ public sealed class StellariumImageCaptureExecutor(IOptions<StellariumOptions> o
             cancellationToken.ThrowIfCancellationRequested();
             var fileName = $"{scene.SortOrder:D2}_{scene.SceneCode}_{scene.OutputImageRole}.png";
             var imagePath = Path.Combine(outputFolder, fileName);
-
-            var success = false;
-            string? errorMessage = null;
+            var scriptPath = Path.Combine(scriptsFolder, $"{scene.SortOrder:D2}_{scene.SceneCode}.ssc");
+            string? commandLine = null;
+            int? exitCode = null;
+            string? stdOut = null;
+            string? stdErr = null;
+            string? error = null;
 
             if (request.DryRun)
             {
-                success = true;
+                await scriptGenerator.GenerateScriptAsync(scene, scenePlan, imagePath, scriptPath, cancellationToken);
             }
             else if (!_options.Enabled)
             {
-                errorMessage = DisabledMessage;
+                error = DisabledMessage;
+                warnings.Add(DisabledMessage);
             }
-            else if (!_options.UseExistingCaptureUtility)
+            else if (string.IsNullOrWhiteSpace(_options.ExecutablePath) || !File.Exists(_options.ExecutablePath))
             {
-                errorMessage = UtilityNotWiredMessage;
+                error = $"Stellarium executable was not found at '{_options.ExecutablePath}'.";
+                warnings.Add(error);
             }
             else
             {
-                // Capture command execution is not yet implemented. Only mark success when output file physically exists.
-                success = IsRealCapturedFile(imagePath);
-                if (!success)
+                await scriptGenerator.GenerateScriptAsync(scene, scenePlan, imagePath, scriptPath, cancellationToken);
+                if (request.OverwriteExisting && File.Exists(imagePath)) File.Delete(imagePath);
+
+                var psi = new ProcessStartInfo
                 {
-                    errorMessage = "Capture command completed but output file was not created.";
+                    FileName = _options.ExecutablePath,
+                    Arguments = $"--startup-script \"{scriptPath}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = false
+                };
+                commandLine = $"\"{psi.FileName}\" {psi.Arguments}";
+
+                using var process = new Process { StartInfo = psi };
+                process.Start();
+                var outTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+                var errTask = process.StandardError.ReadToEndAsync(cancellationToken);
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(5, _options.CaptureTimeoutSeconds)));
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+                await process.WaitForExitAsync(linked.Token);
+                exitCode = process.ExitCode;
+                stdOut = await outTask;
+                stdErr = await errTask;
+
+                await WaitForCaptureWriteAsync(imagePath, cancellationToken);
+                if (!IsRealCapturedFile(imagePath))
+                {
+                    error = "Capture command completed but output file was not created.";
                 }
             }
 
-            logger.LogInformation(
-                "Prepared Stellarium capture scene {SceneCode} at {CaptureTimeUtc} for {Latitude},{Longitude} target={TargetObjectCode} fov={FieldOfView} flags=({ConstellationLines},{ConstellationLabels},{PlanetLabels},{AzimuthGrid},{EquatorialGrid})",
-                scene.SceneCode,
-                scene.CaptureTimeUtc,
-                scenePlan.Latitude,
-                scenePlan.Longitude,
-                scene.TargetObjectCode,
-                scene.FieldOfViewDegrees,
-                scene.ShowConstellationLines,
-                scene.ShowConstellationLabels,
-                scene.ShowPlanetLabels,
-                scene.ShowAzimuthGrid,
-                scene.ShowEquatorialGrid);
-
-            images.Add(new StellariumCapturedImageResult(
-                scene.SceneCode,
-                scene.SceneType,
-                scene.OutputImageRole,
-                scene.TargetObjectCode,
-                scene.CaptureTimeUtc,
-                imagePath,
-                success,
-                errorMessage));
+            var success = request.DryRun || (error is null && IsRealCapturedFile(imagePath));
+            images.Add(new StellariumCapturedImageResult(scene.SceneCode, scene.SceneType, scene.OutputImageRole, scene.TargetObjectCode, scene.CaptureTimeUtc, imagePath, success, error, scriptPath, commandLine, exitCode, request.Diagnostics ? stdOut : null, request.Diagnostics ? stdErr : null));
         }
 
-        var capturedCount = images.Count(x => !request.DryRun && IsRealCapturedFile(x.ImagePath));
+        var capturedCount = images.Count(x => x.Success && !request.DryRun);
         var requestedCount = images.Count;
         var overallSuccess = request.DryRun || capturedCount == requestedCount;
-        if (!request.DryRun && capturedCount < requestedCount)
-        {
-            warnings.Add($"Missing Stellarium output files: expected {requestedCount}, found {capturedCount}.");
-        }
-
-        return Task.FromResult(new StellariumCaptureExecutionResponse(
-            request.ContentGenerationPlanId,
-            overallSuccess,
-            requestedCount,
-            capturedCount,
-            outputFolder,
-            images,
-            warnings,
-            overallSuccess ? null : "One or more Stellarium scene captures failed."));
+        return new StellariumCaptureExecutionResponse(request.ContentGenerationPlanId, overallSuccess, requestedCount, capturedCount, outputFolder, images, warnings.Distinct().ToList(), overallSuccess ? null : "One or more Stellarium scene captures failed.");
     }
 
-    private static bool IsRealCapturedFile(string imagePath)
+    public Task<StellariumCaptureDiagnosticsResponse> GetDiagnosticsAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken)
     {
-        return File.Exists(imagePath) && new FileInfo(imagePath).Length > 0;
+        cancellationToken.ThrowIfCancellationRequested();
+        var captureFolder = BuildCaptureFolder(contentGenerationPlanId, new List<string>());
+        var canStart = _options.Enabled && !string.IsNullOrWhiteSpace(_options.ExecutablePath) && File.Exists(_options.ExecutablePath);
+        return Task.FromResult(new StellariumCaptureDiagnosticsResponse(contentGenerationPlanId, _options.Enabled, _options.ExecutablePath, !string.IsNullOrWhiteSpace(_options.ExecutablePath) && File.Exists(_options.ExecutablePath), _options.ScriptsDirectory, !string.IsNullOrWhiteSpace(_options.ScriptsDirectory) && Directory.Exists(_options.ScriptsDirectory), _options.CaptureDirectory, !string.IsNullOrWhiteSpace(_options.CaptureDirectory) && Directory.Exists(_options.CaptureDirectory), _options.CaptureTimeoutSeconds, captureFolder, canStart));
+    }
+
+    private string BuildCaptureFolder(Guid planId, List<string> warnings)
+    {
+        var root = _options.CaptureDirectory;
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            root = string.IsNullOrWhiteSpace(_options.OutputRoot) ? "outputs" : _options.OutputRoot;
+            warnings.Add("Stellarium:CaptureDirectory is not configured; fallback output path used.");
+            return Path.Combine(root, planId.ToString(), "stellarium-scenes");
+        }
+
+        return Path.Combine(root, "content-plans", planId.ToString(), "stellarium-scenes");
+    }
+
+    private string BuildScriptsFolder(Guid planId)
+    {
+        var root = string.IsNullOrWhiteSpace(_options.ScriptsDirectory)
+            ? Path.Combine(string.IsNullOrWhiteSpace(_options.OutputRoot) ? "outputs" : _options.OutputRoot, "stellarium-scripts")
+            : _options.ScriptsDirectory;
+        return Path.Combine(root, "content-plans", planId.ToString());
+    }
+
+    private static bool IsRealCapturedFile(string imagePath) => File.Exists(imagePath) && new FileInfo(imagePath).Length > 0;
+
+    private static async Task WaitForCaptureWriteAsync(string imagePath, CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (IsRealCapturedFile(imagePath)) return;
+            await Task.Delay(250, cancellationToken);
+        }
     }
 }

@@ -413,10 +413,12 @@ public interface IStellariumScenePlannerResolver
 public sealed record StellariumCaptureExecutionRequest(
     Guid ContentGenerationPlanId,
     bool DryRun = false,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    bool Diagnostics = true);
 public sealed record StellariumCaptureExecutionApiRequest(
     bool DryRun = false,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    bool Diagnostics = true);
 
 public sealed record StellariumCapturedImageResult(
     string SceneCode,
@@ -426,7 +428,25 @@ public sealed record StellariumCapturedImageResult(
     DateTime CaptureTimeUtc,
     string? ImagePath,
     bool Success,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    string? ScriptPath,
+    string? CommandLine,
+    int? ExitCode,
+    string? StandardOutput,
+    string? StandardError);
+
+public sealed record StellariumCaptureDiagnosticsResponse(
+    Guid ContentGenerationPlanId,
+    bool StellariumEnabled,
+    string? ExecutablePath,
+    bool ExecutableExists,
+    string? ScriptsDirectory,
+    bool ScriptsDirectoryExists,
+    string? CaptureDirectory,
+    bool CaptureDirectoryExists,
+    int CaptureTimeoutSeconds,
+    string? LastExpectedOutputFolder,
+    bool CanStartProcess);
 
 public sealed record StellariumCaptureExecutionResponse(
     Guid ContentGenerationPlanId,
@@ -443,6 +463,18 @@ public interface IStellariumImageCaptureExecutor
     Task<StellariumCaptureExecutionResponse> CaptureAsync(
         StellariumSceneCapturePlan scenePlan,
         StellariumCaptureExecutionRequest request,
+        CancellationToken cancellationToken);
+
+    Task<StellariumCaptureDiagnosticsResponse> GetDiagnosticsAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken);
+}
+
+public interface IStellariumScriptGenerator
+{
+    Task<string> GenerateScriptAsync(
+        StellariumSceneCaptureItem scene,
+        StellariumSceneCapturePlan plan,
+        string outputImagePath,
+        string scriptPath,
         CancellationToken cancellationToken);
 }
 
