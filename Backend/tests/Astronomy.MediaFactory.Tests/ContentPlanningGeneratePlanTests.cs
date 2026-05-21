@@ -145,8 +145,8 @@ public sealed partial class ContentPlanningGeneratePlanTests
             db,
             new NoopVarietyGuard(),
             new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]),
-            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions()), new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new AstronomyOptions()))),
-            new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new AstronomyOptions())));
+            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions()), new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions()))),
+            new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())));
 
     private static void SeedRequired(MediaFactoryDbContext db)
     {

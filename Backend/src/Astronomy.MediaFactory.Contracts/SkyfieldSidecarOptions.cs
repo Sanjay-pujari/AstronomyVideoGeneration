@@ -10,4 +10,8 @@ public sealed class SkyfieldSidecarOptions
 
     [Url]
     public string BaseUrl { get; set; } = "http://localhost:8010";
+
+    public int TimeoutSeconds { get; set; } = 30;
+
+    public bool FallbackOnFailure { get; set; } = true;
 }

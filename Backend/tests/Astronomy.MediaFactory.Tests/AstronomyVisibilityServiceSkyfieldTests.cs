@@ -17,7 +17,7 @@ public sealed class AstronomyVisibilityServiceSkyfieldTests
         await db.SaveChangesAsync();
         var response = new SkyfieldVisibilityResponse(true, new DateTime(2026,5,21,13,0,0,DateTimeKind.Utc), new DateTime(2026,5,22,0,30,0,DateTimeKind.Utc), "Waxing Gibbous", 73.2,
             [new SkyfieldVisibilityObjectResult("Moon", true, new DateTime(2026,5,21,14,0,0,DateTimeKind.Utc), new DateTime(2026,5,22,1,0,0,DateTimeKind.Utc), new DateTime(2026,5,21,19,0,0,DateTimeKind.Utc), 62, new DateTime(2026,5,21,19,30,0,DateTimeKind.Utc), new DateTime(2026,5,21,22,0,0,DateTimeKind.Utc), 10, null)], [], null);
-        var svc = new AstronomyVisibilityService(db, new StubClient(response), Options.Create(new AstronomyOptions()));
+        var svc = new AstronomyVisibilityService(db, new StubClient(response), Options.Create(new SkyfieldSidecarOptions()));
 
         var result = await svc.CalculateVisibilityAsync(new AstronomyVisibilityRequest("R", "Loc", 10, 20, "UTC", new DateOnly(2026, 5, 21), "Moon"), CancellationToken.None);
 
@@ -36,7 +36,7 @@ public sealed class AstronomyVisibilityServiceSkyfieldTests
         await using var db = CreateDb();
         db.CelestialObjects.Add(new CelestialObject { Code = "Moon", Name = "Moon", ObjectType = "Moon", NakedEyeVisible = true, Enabled = true, VisibilityPriority = 8, PhotogenicScore = 9, EducationalScore = 7, ViralityScore = 6 });
         await db.SaveChangesAsync();
-        var svc = new AstronomyVisibilityService(db, new StubClient(new SkyfieldVisibilityResponse(false, null, null, null, null, [], [], "timeout")), Options.Create(new AstronomyOptions()));
+        var svc = new AstronomyVisibilityService(db, new StubClient(new SkyfieldVisibilityResponse(false, null, null, null, null, [], [], "timeout")), Options.Create(new SkyfieldSidecarOptions()));
 
         var result = await svc.CalculateVisibilityAsync(new AstronomyVisibilityRequest("R", "Loc", 10, 20, "UTC", new DateOnly(2026, 5, 21), "Moon"), CancellationToken.None);
 
