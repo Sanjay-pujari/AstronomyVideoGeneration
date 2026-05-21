@@ -57,19 +57,22 @@ public sealed class StellariumCaptureEndpointSafetyTests
         public int GetPlanByIdCalls;
         public int ScenePreviewCalls;
         public Task<GenerateContentPlanResponse> GeneratePlanAsync(GenerateContentPlanRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<ContentGenerationPlan> GenerateDailyPlanAsync(string contentCategoryCode, string language, string regionId, DateTime? scheduledUtc, string? primaryCelestialObjectCode, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<IReadOnlyList<ContentGenerationPlan>> GetPendingPlansAsync(string? status, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<ContentGenerationPlan> GenerateDailyPlanAsync(string contentCategoryCode, string language, string regionId, DateTimeOffset scheduledUtc, string? primaryCelestialObjectCode, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<IReadOnlyCollection<ContentGenerationPlan>> GetPendingPlansAsync(string? status, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken) { GetPlanByIdCalls++; return Task.FromResult<ContentGenerationPlan?>(new ContentGenerationPlan{Id=id,Status="Planned",ContentCategoryCode="DailySkyGuide"}); }
-        public Task<ContentPlanningPipelineRequestPreview> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<PipelineBuildResult> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<DailySkyGuideContext> BuildDailySkyGuideContextPreviewAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<AstronomyVisibilityResult> BuildAstronomyVisibilityPreviewAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<StellariumSceneCapturePlan> BuildStellariumScenePlanPreviewAsync(Guid id, CancellationToken cancellationToken) { ScenePreviewCalls++; return Task.FromResult(new StellariumSceneCapturePlan(id,"DailySkyGuide","us","x",0,0,"UTC",DateOnly.FromDateTime(DateTime.UtcNow),[],[])); }
         public Task<ContentGenerationPlan?> MarkPlanReadyForManualRunAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<ContentPlanningExecution?> PrepareManualRunAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<PrepareManualRunResponse?> PrepareManualRunAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<bool> MarkPlanAsInProgressAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<bool> MarkPlanAsCompletedAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<bool> MarkPlanAsFailedAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<ManualExecutionStartResponse?> StartManualExecutionAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<ContentPlanningExecution?> CompleteExecutionAsync(Guid contentPipelineExecutionId, CompleteContentPlanningExecutionRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<ContentPlanningExecution?> FailExecutionAsync(Guid contentPipelineExecutionId, FailContentPlanningExecutionRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<IReadOnlyList<ContentPlanningExecution>> GetExecutionsAsync(string? status, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<ContentPlanningExecution?> GetExecutionByIdAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<ContentPipelineExecution?> CompleteExecutionAsync(Guid contentPipelineExecutionId, CompleteContentPlanningExecutionRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<ContentPipelineExecution?> FailExecutionAsync(Guid contentPipelineExecutionId, FailContentPlanningExecutionRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<IReadOnlyCollection<ContentPipelineExecution>> GetExecutionsAsync(string? status, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<ContentPipelineExecution?> GetExecutionByIdAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
     }
 }
