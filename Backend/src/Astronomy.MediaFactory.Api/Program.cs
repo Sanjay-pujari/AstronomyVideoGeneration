@@ -250,6 +250,19 @@ app.MapGet("/api/content-planning/plans/{id:guid}/pipeline-request-preview", asy
         return Results.BadRequest(new { message = ex.Message });
     }
 });
+
+app.MapPost("/api/content-planning/plans/{id:guid}/prepare-manual-run", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        var response = await planning.PrepareManualRunAsync(id, ct);
+        return response is null ? Results.NotFound() : Results.Ok(response);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
 app.MapPost("/api/content-planning/plans/{id:guid}/mark-ready", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
 {
     var updated = await planning.MarkPlanReadyForManualRunAsync(id, ct);

@@ -240,7 +240,8 @@ public interface IContentPlanningService
         CancellationToken cancellationToken);
     Task<IReadOnlyCollection<ContentGenerationPlan>> GetPendingPlansAsync(string? status, CancellationToken cancellationToken);
     Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken);
-    Task<ContentPlanningPipelineRequestPreview> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken);
+    Task<PipelineBuildResult> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken);
+    Task<PrepareManualRunResponse?> PrepareManualRunAsync(Guid id, CancellationToken cancellationToken);
     Task<ContentGenerationPlan?> MarkPlanReadyForManualRunAsync(Guid id, CancellationToken cancellationToken);
     Task<bool> MarkPlanAsInProgressAsync(Guid id, CancellationToken cancellationToken);
     Task<bool> MarkPlanAsCompletedAsync(Guid id, CancellationToken cancellationToken);
@@ -288,6 +289,32 @@ public sealed record ContentPlanningPipelineRequestPreview(
     object PipelineRequest,
     IReadOnlyList<string> Warnings);
 
+
+
+public interface IContentCategoryPipelineStrategy
+{
+    string CategoryCode { get; }
+    Task<PipelineBuildResult> BuildAsync(ContentGenerationPlan plan, CancellationToken cancellationToken);
+}
+
+public interface IContentCategoryPipelineStrategyResolver
+{
+    IContentCategoryPipelineStrategy? Resolve(string contentCategoryCode);
+}
+
+public sealed record PipelineBuildResult(
+    bool Success,
+    string ContentCategoryCode,
+    Guid ContentGenerationPlanId,
+    object? PipelineRequest,
+    IReadOnlyList<string> Warnings,
+    string? ErrorMessage);
+
+public sealed record PrepareManualRunResponse(
+    Guid ContentGenerationPlanId,
+    string Status,
+    object? PipelineRequest,
+    IReadOnlyList<string> Warnings);
 
 public interface IAnalyticsIngestionService
 {

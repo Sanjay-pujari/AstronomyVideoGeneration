@@ -448,6 +448,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IContentCategorySettingsService, ContentCategorySettingsService>();
         services.AddScoped<IContentVarietyGuard, ContentVarietyGuard>();
         services.AddScoped<IContentPlanningService, ContentPlanningService>();
+        services.AddScoped<IContentCategoryPipelineStrategy, DailySkyGuidePipelineStrategy>();
+        services.AddScoped<IContentCategoryPipelineStrategyResolver, ContentCategoryPipelineStrategyResolver>();
         services.AddScoped<IContentCategoryPipeline, DailySkyGuideContentPipeline>();
         services.AddScoped<PipelineOrchestrator>();
         services.AddScoped<IPipelineRunExecutor, OrchestratorPipelineRunExecutor>();
