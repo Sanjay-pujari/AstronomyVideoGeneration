@@ -10,99 +10,48 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class StellariumImageCaptureExecutorTests
 {
     [Fact]
-    public async Task DryRun_UsesCaptureDirectory_AndDoesNotCreateDirectory()
+    public async Task DryRun_UsesConfiguredScriptAndCaptureDirectories()
     {
         var captureRoot = Path.Combine(Path.GetTempPath(), $"stellarium-captures-{Guid.NewGuid():N}");
-        var options = Options.Create(new StellariumOptions { CaptureDirectory = captureRoot, Enabled = true });
-        var sut = new StellariumImageCaptureExecutor(options, NullLogger<StellariumImageCaptureExecutor>.Instance);
+        var scriptsRoot = Path.Combine(Path.GetTempPath(), $"stellarium-scripts-{Guid.NewGuid():N}");
+        var options = Options.Create(new StellariumOptions { CaptureDirectory = captureRoot, ScriptsDirectory = scriptsRoot, Enabled = true });
+        var sut = new StellariumImageCaptureExecutor(options, new StellariumScriptGenerator(), NullLogger<StellariumImageCaptureExecutor>.Instance);
         var planId = Guid.NewGuid();
 
         var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId, DryRun: true), CancellationToken.None);
 
-        var expectedFolder = Path.Combine(captureRoot, "content-plans", planId.ToString(), "stellarium-scenes");
-        Assert.Equal(expectedFolder, result.OutputFolder);
-        Assert.Contains("DryRun enabled. No images were captured.", result.Warnings);
-        Assert.DoesNotContain("Stellarium:CaptureDirectory is not configured; fallback output path used.", result.Warnings);
-        Assert.False(Directory.Exists(expectedFolder));
-        Assert.All(result.Images, image => Assert.StartsWith(expectedFolder, image.ImagePath, StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task MissingCaptureDirectory_UsesFallbackOutputRoot_AndReturnsWarning()
-    {
-        var fallbackRoot = Path.Combine(Path.GetTempPath(), $"stellarium-outputroot-{Guid.NewGuid():N}");
-        var options = Options.Create(new StellariumOptions { OutputRoot = fallbackRoot, CaptureDirectory = "", Enabled = true });
-        var sut = new StellariumImageCaptureExecutor(options, NullLogger<StellariumImageCaptureExecutor>.Instance);
-        var planId = Guid.NewGuid();
-
-        var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId, DryRun: true), CancellationToken.None);
-
-        var expectedFolder = Path.Combine(fallbackRoot, planId.ToString(), "stellarium-scenes");
-        Assert.Equal(expectedFolder, result.OutputFolder);
-        Assert.Contains("Stellarium:CaptureDirectory is not configured; fallback output path used.", result.Warnings);
-        Assert.False(Directory.Exists(expectedFolder));
-    }
-
-    [Fact]
-    public async Task RealCapture_DoesNotCreateDirectory_WhenDisabled()
-    {
-        var captureRoot = Path.Combine(Path.GetTempPath(), $"stellarium-captures-{Guid.NewGuid():N}");
-        var options = Options.Create(new StellariumOptions { CaptureDirectory = captureRoot, Enabled = false });
-        var sut = new StellariumImageCaptureExecutor(options, NullLogger<StellariumImageCaptureExecutor>.Instance);
-        var planId = Guid.NewGuid();
-
-        var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId, DryRun: false), CancellationToken.None);
-
-        Assert.False(Directory.Exists(result.OutputFolder));
-        Assert.Contains("Stellarium capture is disabled in configuration.", result.Warnings);
-        Assert.False(result.Success);
-        Assert.Equal(0, result.CapturedSceneCount);
         Assert.All(result.Images, image =>
         {
-            Assert.False(image.Success);
-            Assert.Equal("Stellarium capture is disabled in configuration.", image.ErrorMessage);
-            Assert.False(File.Exists(image.ImagePath));
+            Assert.StartsWith(Path.Combine(captureRoot, "content-plans", planId.ToString(), "stellarium-scenes"), image.ImagePath!, StringComparison.Ordinal);
+            Assert.StartsWith(Path.Combine(scriptsRoot, "content-plans", planId.ToString()), image.ScriptPath!, StringComparison.Ordinal);
+            Assert.Contains(Path.GetFileNameWithoutExtension(image.ImagePath!), File.ReadAllText(image.ScriptPath!));
         });
     }
 
     [Fact]
-    public async Task DisabledConfig_ReturnsWarning()
+    public async Task Disabled_DoesNotExecute_AndReturnsClearError()
     {
-        var options = Options.Create(new StellariumOptions { CaptureDirectory = Path.Combine(Path.GetTempPath(), $"stellarium-captures-{Guid.NewGuid():N}"), Enabled = false });
-        var sut = new StellariumImageCaptureExecutor(options, NullLogger<StellariumImageCaptureExecutor>.Instance);
+        var options = Options.Create(new StellariumOptions { Enabled = false, CaptureDirectory = Path.GetTempPath(), ScriptsDirectory = Path.GetTempPath() });
+        var sut = new StellariumImageCaptureExecutor(options, new StellariumScriptGenerator(), NullLogger<StellariumImageCaptureExecutor>.Instance);
         var planId = Guid.NewGuid();
 
-        var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId, DryRun: false), CancellationToken.None);
+        var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId), CancellationToken.None);
 
-        Assert.Contains("Stellarium capture is disabled in configuration.", result.Warnings);
-        Assert.False(result.Success);
-        Assert.Equal(0, result.CapturedSceneCount);
+        Assert.All(result.Images, i => Assert.Equal("Stellarium capture is disabled in configuration.", i.ErrorMessage));
     }
 
     [Fact]
-    public async Task CaptureUtilityNotWired_ReturnsFailedImages()
+    public async Task MissingExecutable_ReturnsClearError_AndFailsScene()
     {
-        var captureRoot = Path.Combine(Path.GetTempPath(), $"stellarium-captures-{Guid.NewGuid():N}");
-        var options = Options.Create(new StellariumOptions { CaptureDirectory = captureRoot, Enabled = true, UseExistingCaptureUtility = false });
-        var sut = new StellariumImageCaptureExecutor(options, NullLogger<StellariumImageCaptureExecutor>.Instance);
+        var options = Options.Create(new StellariumOptions { Enabled = true, ExecutablePath = Path.Combine(Path.GetTempPath(), "missing-stellarium.exe"), CaptureDirectory = Path.GetTempPath(), ScriptsDirectory = Path.GetTempPath() });
+        var sut = new StellariumImageCaptureExecutor(options, new StellariumScriptGenerator(), NullLogger<StellariumImageCaptureExecutor>.Instance);
         var planId = Guid.NewGuid();
-
-        var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId, DryRun: false), CancellationToken.None);
-
+        var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId), CancellationToken.None);
+        Assert.All(result.Images, i => Assert.Contains("executable was not found", i.ErrorMessage!, StringComparison.OrdinalIgnoreCase));
         Assert.False(result.Success);
-        Assert.Equal(0, result.CapturedSceneCount);
-        Assert.Contains("Stellarium capture utility is not wired yet.", result.Warnings);
-        Assert.All(result.Images, image =>
-        {
-            Assert.False(image.Success);
-            Assert.Equal("Stellarium capture utility is not wired yet.", image.ErrorMessage);
-        });
     }
 
     private static StellariumSceneCapturePlan BuildPlan(Guid planId) => new(
         planId, "DailySkyGuide", "us", "x", 1, 2, "UTC", DateOnly.FromDateTime(DateTime.UtcNow),
-        [
-            new("DailySkyGuide_IntroWideSky", "WideSky", "Intro", null, null, DateTime.UtcNow, "Wide", 60, true, true, true, true, false, "IntroBackground", 1, null),
-            new("DailySkyGuide_Target", "ObjectFocus", "Target", "mars", "Mars", DateTime.UtcNow, "Focus", 35, true, true, true, false, true, "TargetHighlight", 2, null)
-        ], []);
+        [new("DailySkyGuide_Target", "ObjectFocus", "Target", "mars", "Mars", DateTime.UtcNow, "Focus", 35, true, true, true, false, true, "TargetHighlight", 2, null)], []);
 }

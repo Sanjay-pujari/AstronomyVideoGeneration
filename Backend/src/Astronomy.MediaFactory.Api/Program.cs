@@ -306,7 +306,7 @@ app.MapPost("/api/content-planning/plans/{id:guid}/capture-stellarium-scenes", a
         }
 
         var scenePlan = await planning.BuildStellariumScenePlanPreviewAsync(id, ct);
-        var request = new StellariumCaptureExecutionRequest(id, apiRequest.DryRun, apiRequest.OverwriteExisting);
+        var request = new StellariumCaptureExecutionRequest(id, apiRequest.DryRun, apiRequest.OverwriteExisting, apiRequest.Diagnostics);
         var response = await executor.CaptureAsync(scenePlan, request, ct);
         return Results.Ok(response);
     }
@@ -314,6 +314,12 @@ app.MapPost("/api/content-planning/plans/{id:guid}/capture-stellarium-scenes", a
     {
         return Results.NotFound(new { message = ex.Message });
     }
+});
+
+app.MapGet("/api/content-planning/plans/{id:guid}/stellarium-capture-diagnostics", async (Guid id, IStellariumImageCaptureExecutor executor, CancellationToken ct) =>
+{
+    var response = await executor.GetDiagnosticsAsync(id, ct);
+    return Results.Ok(response);
 });
 app.MapPost("/api/content-planning/plans/{id:guid}/prepare-manual-run", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
 {

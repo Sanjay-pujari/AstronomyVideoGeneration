@@ -27,7 +27,7 @@ public sealed class StellariumCaptureEndpointSafetyTests
         {
             var plan = await p.GetPlanByIdAsync(id, ct);
             var scenePlan = await p.BuildStellariumScenePlanPreviewAsync(id, ct);
-            return Results.Ok(await e.CaptureAsync(scenePlan, new StellariumCaptureExecutionRequest(id, apiRequest.DryRun, apiRequest.OverwriteExisting), ct));
+            return Results.Ok(await e.CaptureAsync(scenePlan, new StellariumCaptureExecutionRequest(id, apiRequest.DryRun, apiRequest.OverwriteExisting, apiRequest.Diagnostics), ct));
         });
 
         await app.StartAsync();
@@ -45,6 +45,7 @@ public sealed class StellariumCaptureEndpointSafetyTests
     private sealed class FakeExecutor : IStellariumImageCaptureExecutor
     {
         public int Calls;
+        public Task<StellariumCaptureDiagnosticsResponse> GetDiagnosticsAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken) => Task.FromResult(new StellariumCaptureDiagnosticsResponse(contentGenerationPlanId, true, null, false, null, false, null, false, 0, null, false));
         public Task<StellariumCaptureExecutionResponse> CaptureAsync(StellariumSceneCapturePlan scenePlan, StellariumCaptureExecutionRequest request, CancellationToken cancellationToken)
         {
             Calls++;
