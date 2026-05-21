@@ -77,20 +77,35 @@ public sealed class StellariumImageCaptureExecutor(
                 stdErr = await errTask;
 
                 await WaitForCaptureWriteAsync(imagePath, cancellationToken);
-                if (!IsRealCapturedFile(imagePath))
+                var captureFileExists = IsRealCapturedFile(imagePath);
+                if (!captureFileExists)
                 {
                     error = "Capture command completed but output file was not created.";
+                }
+                else if (IsInterruptedQuitNoise(exitCode, stdErr))
+                {
+                    logger.LogDebug("Ignoring non-fatal Stellarium interruption after successful screenshot for scene {SceneCode}.", scene.SceneCode);
                 }
             }
 
             var success = request.DryRun || (error is null && IsRealCapturedFile(imagePath));
+            var actionableWarning = BuildActionableWarning(error);
+            if (actionableWarning is not null)
+            {
+                warnings.Add(actionableWarning);
+            }
+
             images.Add(new StellariumCapturedImageResult(scene.SceneCode, scene.SceneType, scene.OutputImageRole, scene.TargetObjectCode, scene.CaptureTimeUtc, imagePath, success, error ?? generation.ErrorMessage, scriptPath, commandLine, exitCode, request.Diagnostics ? stdOut : null, request.Diagnostics ? stdErr : null, request.Diagnostics || !success ? generation.ScriptContent : null));
         }
 
         var capturedCount = images.Count(x => x.Success && !request.DryRun);
         var requestedCount = images.Count;
         var overallSuccess = request.DryRun || capturedCount == requestedCount;
-        return new StellariumCaptureExecutionResponse(request.ContentGenerationPlanId, overallSuccess, requestedCount, capturedCount, outputFolder, images, warnings.Distinct().ToList(), overallSuccess ? null : "One or more Stellarium scene captures failed.");
+        var filteredWarnings = warnings
+            .Where(IsActionableWarning)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return new StellariumCaptureExecutionResponse(request.ContentGenerationPlanId, overallSuccess, requestedCount, capturedCount, outputFolder, images, filteredWarnings, overallSuccess ? null : "One or more Stellarium scene captures failed.");
     }
 
     public Task<StellariumCaptureDiagnosticsResponse> GetDiagnosticsAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken)
@@ -114,6 +129,37 @@ public sealed class StellariumImageCaptureExecutor(
         return Path.Combine(root, "content-plans", planId.ToString(), "stellarium-scenes");
     }
 
+
+    private static bool IsInterruptedQuitNoise(int? exitCode, string? stdErr)
+    {
+        if (exitCode is not null && exitCode == 0)
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(stdErr)
+            && stdErr.Contains("Error: Interrupted", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? BuildActionableWarning(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error) || !IsActionableWarning(error))
+        {
+            return null;
+        }
+
+        return error;
+    }
+
+    private static bool IsActionableWarning(string? warning)
+    {
+        if (string.IsNullOrWhiteSpace(warning))
+        {
+            return false;
+        }
+
+        return !warning.Contains("fallback output path used", StringComparison.OrdinalIgnoreCase);
+    }
     private static bool IsRealCapturedFile(string imagePath) => File.Exists(imagePath) && new FileInfo(imagePath).Length > 0;
 
     private static async Task WaitForCaptureWriteAsync(string imagePath, CancellationToken cancellationToken)
