@@ -256,6 +256,41 @@ public interface IContentPlanningService
     Task<ContentPipelineExecution?> GetExecutionByIdAsync(Guid executionId, CancellationToken cancellationToken);
 }
 
+public sealed record CategoryPipelineRequirement(
+    string ContentCategoryCode,
+    bool RequiresSkyfield,
+    bool RequiresStellarium,
+    bool RequiresSscScript,
+    bool RequiresAiImages,
+    bool RequiresNasaImages,
+    bool RequiresEducationalDiagrams,
+    bool RequiresVoiceNarration,
+    bool RequiresThumbnail,
+    string PrimaryVisualSource,
+    IReadOnlyList<string> RequiredDataPoints,
+    IReadOnlyList<string> Warnings);
+
+public interface ICategoryRequirementResolver
+{
+    Task<CategoryPipelineRequirement> ResolveAsync(string contentCategoryCode, CancellationToken cancellationToken);
+}
+
+public sealed record VisualStrategyPlan(
+    string ContentCategoryCode,
+    string PrimaryVisualSource,
+    bool UseStellariumCapture,
+    bool UseSscScript,
+    bool UseAiImageGeneration,
+    bool UseNasaImageSearch,
+    bool UseEducationalDiagramGenerator,
+    IReadOnlyList<string> AssetTypesToGenerate,
+    IReadOnlyList<string> Warnings);
+
+public interface IVisualStrategyResolver
+{
+    Task<VisualStrategyPlan> ResolveAsync(ContentGenerationPlan plan, CancellationToken cancellationToken);
+}
+
 
 public sealed record AstronomyVisibilityRequest(
     string RegionId,

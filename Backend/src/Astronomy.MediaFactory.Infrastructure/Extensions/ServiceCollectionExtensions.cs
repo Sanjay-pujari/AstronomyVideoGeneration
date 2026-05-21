@@ -453,6 +453,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IContentCategorySettingsService, ContentCategorySettingsService>();
         services.AddScoped<IContentVarietyGuard, ContentVarietyGuard>();
         services.AddScoped<IContentPlanningService, ContentPlanningService>();
+        services.AddScoped<ICategoryRequirementResolver, CategoryRequirementResolver>();
+        services.AddScoped<IVisualStrategyResolver, VisualStrategyResolver>();
         services.AddScoped<IAstronomyVisibilityService, AstronomyVisibilityService>();
         services.AddScoped<IStellariumScriptGenerator, StellariumScriptGenerator>();
         services.AddScoped<IStellariumImageCaptureExecutor, StellariumImageCaptureExecutor>();
