@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
@@ -39,12 +40,12 @@ public sealed class DailySkyGuideAssetAwareContextTests
     public async Task Service_Returns_Missing_Assets_Safely_And_Rejects_Non_DailySkyGuide()
     {
         await using var db = CreateDb();
-        var id = Guid.NewGuid();
-        db.ContentGenerationPlans.Add(new ContentGenerationPlan { Id = id, ContentCategoryCode = "SpecialEventGuide", RegionId = "IN-RJ-UDAIPUR", Language = "hi", Title = "x", PrimaryCelestialObjectCode = "Moon" });
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "SpecialEventGuide", RegionId = "IN-RJ-UDAIPUR", Language = "hi", Title = "x", PrimaryCelestialObjectCode = "Moon" };
+        db.ContentGenerationPlans.Add(plan);
         await db.SaveChangesAsync();
 
         var svc = new DailySkyGuideAssetAwareContextService(db, new FakePlanning(), new CapturedDailySkyGuideVisualAssetProvider(Options.Create(new StellariumOptions { CaptureDirectory = Path.GetTempPath() })));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.BuildAsync(id, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.BuildAsync(plan.Id, CancellationToken.None));
     }
 
     [Fact]
