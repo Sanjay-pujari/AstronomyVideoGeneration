@@ -266,8 +266,12 @@ public sealed record CategoryPipelineRequirement(
     bool RequiresEducationalDiagrams,
     bool RequiresVoiceNarration,
     bool RequiresThumbnail,
+    string PrimaryInformationSource,
     string PrimaryVisualSource,
+    string NarrationSource,
+    string ThumbnailStrategy,
     IReadOnlyList<string> RequiredDataPoints,
+    IReadOnlyList<string> VisualAssetTypes,
     IReadOnlyList<string> Warnings);
 
 public interface ICategoryRequirementResolver
@@ -276,6 +280,7 @@ public interface ICategoryRequirementResolver
 }
 
 public sealed record VisualStrategyPlan(
+    Guid ContentGenerationPlanId,
     string ContentCategoryCode,
     string PrimaryVisualSource,
     bool UseStellariumCapture,
@@ -283,7 +288,10 @@ public sealed record VisualStrategyPlan(
     bool UseAiImageGeneration,
     bool UseNasaImageSearch,
     bool UseEducationalDiagramGenerator,
+    bool UseVoiceNarration,
+    bool UseThumbnailGeneration,
     IReadOnlyList<string> AssetTypesToGenerate,
+    IReadOnlyList<string> RequiredDataPoints,
     IReadOnlyList<string> Warnings);
 
 public interface IVisualStrategyResolver
