@@ -602,6 +602,7 @@ public sealed record PipelineBuildResult(
     string ContentCategoryCode,
     Guid ContentGenerationPlanId,
     object? PipelineRequest,
+    IReadOnlyList<DailySkyGuideVisualAssetItem> VisualAssets,
     IReadOnlyList<string> Warnings,
     string? ErrorMessage);
 

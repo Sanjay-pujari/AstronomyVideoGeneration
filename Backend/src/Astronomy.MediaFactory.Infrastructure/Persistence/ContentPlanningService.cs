@@ -289,6 +289,7 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
                 plan.ContentCategoryCode,
                 plan.Id,
                 null,
+                [],
                 ["No pipeline strategy implemented for this category yet."],
                 null);
         }
