@@ -285,6 +285,11 @@ app.MapGet("/api/content-planning/plans/{id:guid}/stellarium-scene-plan-preview"
         return Results.NotFound(new { message = ex.Message });
     }
 });
+app.MapGet("/api/content-planning/plans/{id:guid}/visual-assets-preview", async (Guid id, IDailySkyGuideVisualAssetPackager packager, CancellationToken ct) =>
+{
+    var package = await packager.BuildPackageAsync(id, ct);
+    return Results.Ok(package);
+});
 app.MapPost("/api/content-planning/plans/{id:guid}/capture-stellarium-scenes", async (Guid id, StellariumCaptureExecutionApiRequest apiRequest, IContentPlanningService planning, IStellariumImageCaptureExecutor executor, CancellationToken ct) =>
 {
     try
