@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class AstronomyVisibilityService(MediaFactoryDbContext db, ISkyfieldVisibilityClient skyfieldClient, IOptions<AstronomyOptions> options) : IAstronomyVisibilityService
+public sealed class AstronomyVisibilityService(MediaFactoryDbContext db, ISkyfieldVisibilityClient skyfieldClient, IOptions<SkyfieldSidecarOptions> options) : IAstronomyVisibilityService
 {
     public async Task<AstronomyVisibilityResult> CalculateVisibilityAsync(AstronomyVisibilityRequest request, CancellationToken cancellationToken)
     {
@@ -36,7 +36,7 @@ public sealed class AstronomyVisibilityService(MediaFactoryDbContext db, ISkyfie
         double moonIllum;
         List<VisibleCelestialObjectResult> visible;
 
-        if (cfg.UseSkyfield && sky.Success && sky.SunsetUtc.HasValue && sky.SunriseUtc.HasValue)
+        if (cfg.Enabled && sky.Success && sky.SunsetUtc.HasValue && sky.SunriseUtc.HasValue)
         {
             warnings.Add("Visibility source: Skyfield.");
             warnings.AddRange(sky.Warnings);
@@ -53,7 +53,7 @@ public sealed class AstronomyVisibilityService(MediaFactoryDbContext db, ISkyfie
             var sunsetLocal = request.TargetDate.ToDateTime(new TimeOnly(18,45), DateTimeKind.Unspecified);
             var sunriseLocal = request.TargetDate.AddDays(1).ToDateTime(new TimeOnly(6,0), DateTimeKind.Unspecified);
             warnings.Add("Using fallback sunset/sunrise times.");
-            if (cfg.UseSkyfield && cfg.FallbackOnSkyfieldFailure)
+            if (cfg.Enabled && cfg.FallbackOnFailure)
                 warnings.Add("Skyfield calculation failed; fallback visibility approximation used.");
             warnings.Add("Visibility source: Fallback.");
             if (!string.IsNullOrWhiteSpace(sky.ErrorMessage)) warnings.Add($"Skyfield error: {sky.ErrorMessage}");

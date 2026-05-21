@@ -7,7 +7,7 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class SkyfieldVisibilityClient(HttpClient httpClient, IOptions<AstronomyOptions> options, ILogger<SkyfieldVisibilityClient> logger) : ISkyfieldVisibilityClient
+public sealed class SkyfieldVisibilityClient(HttpClient httpClient, IOptions<SkyfieldSidecarOptions> options, ILogger<SkyfieldVisibilityClient> logger) : ISkyfieldVisibilityClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -15,16 +15,16 @@ public sealed class SkyfieldVisibilityClient(HttpClient httpClient, IOptions<Ast
     {
         ArgumentNullException.ThrowIfNull(request);
         var cfg = options.Value;
-        if (!cfg.UseSkyfield)
+        if (!cfg.Enabled)
         {
             return new SkyfieldVisibilityResponse(false, null, null, null, null, [], ["Skyfield disabled by configuration; using fallback visibility approximation."], "Skyfield disabled by configuration.");
         }
 
-        if (!Uri.TryCreate(cfg.SkyfieldSidecarBaseUrl, UriKind.Absolute, out _))
-            throw new InvalidOperationException("Astronomy:SkyfieldSidecarBaseUrl must be an absolute URI when Astronomy:UseSkyfield=true.");
+        if (!Uri.TryCreate(cfg.BaseUrl, UriKind.Absolute, out _))
+            throw new InvalidOperationException("SkyfieldSidecar:BaseUrl must be an absolute URI when SkyfieldSidecar:Enabled=true.");
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, cfg.SkyfieldTimeoutSeconds)));
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, cfg.TimeoutSeconds)));
 
         try
         {
