@@ -241,6 +241,7 @@ public interface IContentPlanningService
     Task<IReadOnlyCollection<ContentGenerationPlan>> GetPendingPlansAsync(string? status, CancellationToken cancellationToken);
     Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken);
     Task<DailySkyGuideContext> BuildDailySkyGuideContextPreviewAsync(Guid id, CancellationToken cancellationToken);
+    Task<AstronomyVisibilityResult> BuildAstronomyVisibilityPreviewAsync(Guid id, CancellationToken cancellationToken);
     Task<PipelineBuildResult> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken);
     Task<PrepareManualRunResponse?> PrepareManualRunAsync(Guid id, CancellationToken cancellationToken);
     Task<ContentGenerationPlan?> MarkPlanReadyForManualRunAsync(Guid id, CancellationToken cancellationToken);
@@ -252,6 +253,55 @@ public interface IContentPlanningService
     Task<ContentPipelineExecution?> FailExecutionAsync(Guid executionId, FailContentPlanningExecutionRequest request, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<ContentPipelineExecution>> GetExecutionsAsync(string? status, CancellationToken cancellationToken);
     Task<ContentPipelineExecution?> GetExecutionByIdAsync(Guid executionId, CancellationToken cancellationToken);
+}
+
+
+public sealed record AstronomyVisibilityRequest(
+    string RegionId,
+    string LocationName,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    DateOnly TargetDate,
+    string? PreferredObjectCode,
+    string Language = "en");
+
+public sealed record VisibleCelestialObjectResult(
+    string ObjectCode,
+    string ObjectName,
+    string ObjectType,
+    bool Visible,
+    DateTime? RiseUtc,
+    DateTime? SetUtc,
+    DateTime? TransitUtc,
+    DateTime? BestViewingStartUtc,
+    DateTime? BestViewingEndUtc,
+    double AltitudeScore,
+    double VisibilityScore,
+    double PhotographyScore,
+    double EducationalScore,
+    double ViralityScore,
+    string? Reason);
+
+public sealed record AstronomyVisibilityResult(
+    string RegionId,
+    string LocationName,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    DateOnly TargetDate,
+    DateTime SunsetUtc,
+    DateTime SunriseUtc,
+    DateTime BestViewingStartUtc,
+    DateTime BestViewingEndUtc,
+    string MoonPhase,
+    double MoonIlluminationPercent,
+    IReadOnlyList<VisibleCelestialObjectResult> VisibleObjects,
+    IReadOnlyList<string> Warnings);
+
+public interface IAstronomyVisibilityService
+{
+    Task<AstronomyVisibilityResult> CalculateVisibilityAsync(AstronomyVisibilityRequest request, CancellationToken cancellationToken);
 }
 
 public interface IDailySkyGuideContextBuilder

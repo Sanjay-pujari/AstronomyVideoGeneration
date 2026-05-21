@@ -448,6 +448,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IContentCategorySettingsService, ContentCategorySettingsService>();
         services.AddScoped<IContentVarietyGuard, ContentVarietyGuard>();
         services.AddScoped<IContentPlanningService, ContentPlanningService>();
+        services.AddScoped<IAstronomyVisibilityService, AstronomyVisibilityService>();
         services.AddScoped<IDailySkyGuideContextBuilder, DailySkyGuideContextBuilder>();
         services.AddScoped<IContentCategoryPipelineStrategy, DailySkyGuidePipelineStrategy>();
         services.AddScoped<IContentCategoryPipelineStrategyResolver, ContentCategoryPipelineStrategyResolver>();

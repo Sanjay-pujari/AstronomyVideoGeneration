@@ -119,12 +119,33 @@ public sealed partial class ContentPlanningGeneratePlanTests
         Assert.Empty(db.ContentPipelineExecutions);
     }
 
+
+    [Fact]
+    public async Task AstronomyVisibilityPreview_Returns_Result_And_Does_Not_Update_Db()
+    {
+        await using var db = CreateDb();
+        SeedRequired(db);
+        db.CelestialObjects.Add(new CelestialObject { Code = "Moon", Name = "Moon", ObjectType = "Moon", NakedEyeVisible = true, Enabled = true, VisibilityPriority = 1, PhotogenicScore = 1, EducationalScore = 1, ViralityScore = 1 });
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Status = "Planned", Language = "en", RegionId = "IN-RJ-UDAIPUR", ScheduledUtc = DateTimeOffset.UtcNow, PrimaryCelestialObjectCode = "Moon" };
+        db.ContentGenerationPlans.Add(plan);
+        await db.SaveChangesAsync();
+        var before = plan.UpdatedUtc;
+        var svc = CreateService(db);
+
+        var result = await svc.BuildAstronomyVisibilityPreviewAsync(plan.Id, CancellationToken.None);
+
+        Assert.Equal("IN-RJ-UDAIPUR", result.RegionId);
+        Assert.NotEmpty(result.VisibleObjects);
+        Assert.Equal(before, (await db.ContentGenerationPlans.SingleAsync(x=>x.Id==plan.Id)).UpdatedUtc);
+        Assert.Empty(db.ContentPipelineExecutions);
+    }
     private static ContentPlanningService CreateService(MediaFactoryDbContext db)
         => new(
             db,
             new NoopVarietyGuard(),
             new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy()]),
-            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions())));
+            new DailySkyGuideContextBuilder(db, Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions()), new AstronomyVisibilityService(db)),
+            new AstronomyVisibilityService(db));
 
     private static void SeedRequired(MediaFactoryDbContext db)
     {
