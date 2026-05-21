@@ -412,6 +412,23 @@ app.MapGet("/api/content-planning/plans/{id:guid}/daily-skyguide-asset-context",
     }
 });
 
+
+app.MapGet("/api/content-planning/plans/{id:guid}/daily-skyguide-composition-plan", async (Guid id, IDailySkyGuideAssetAwareCompositionPlanner planner, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await planner.BuildAsync(id, ct));
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/content-planning/plans/{id:guid}/prepare-manual-run", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
 {
     try

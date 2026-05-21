@@ -462,6 +462,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDailySkyGuideVisualAssetPackager, DailySkyGuideVisualAssetPackager>();
         services.AddScoped<IDailySkyGuideVisualAssetProvider, CapturedDailySkyGuideVisualAssetProvider>();
         services.AddScoped<IDailySkyGuideAssetAwareContextService, DailySkyGuideAssetAwareContextService>();
+        services.AddScoped<IDailySkyGuideAssetAwareCompositionPlanner, DailySkyGuideAssetAwareCompositionPlanner>();
+        services.AddScoped<IAssetAwareCompositionPlanner, DailySkyGuideAssetAwareCompositionPlanner>();
+        services.AddScoped<IAssetAwareCompositionPlannerResolver, AssetAwareCompositionPlannerResolver>();
         services.AddScoped<IDailySkyGuideVisualAssetConsumer, NoOpDailySkyGuideVisualAssetConsumer>();
         services.AddScoped<IStellariumScenePlanner, DailySkyGuideStellariumScenePlanner>();
         services.AddScoped<IStellariumScenePlannerResolver, StellariumScenePlannerResolver>();
