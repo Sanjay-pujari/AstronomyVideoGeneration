@@ -299,6 +299,45 @@ app.MapGet("/api/content-planning/plans/{id:guid}/stellarium-scene-plan-preview"
         return Results.NotFound(new { message = ex.Message });
     }
 });
+
+app.MapGet("/api/content-planning/plans/{id:guid}/ssc-script-preview", async (Guid id, IContentPlanningService planning, IStellariumScriptGenerator scriptGenerator, CancellationToken ct) =>
+{
+    try
+    {
+        var scenePlan = await planning.BuildStellariumScenePlanPreviewAsync(id, ct);
+        var scripts = new List<StellariumScriptGenerationResult>();
+        foreach (var scene in scenePlan.Scenes.OrderBy(x => x.SortOrder))
+        {
+            scripts.Add(await scriptGenerator.GenerateAsync(scenePlan, scene, ct));
+        }
+
+        return Results.Ok(new { scenePlan.ContentGenerationPlanId, scenePlan.ContentCategoryCode, ScriptCount = scripts.Count, Scripts = scripts, scenePlan.Warnings });
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+});
+
+app.MapGet("/api/content-planning/plans/{id:guid}/ssc-script-preview/{sceneCode}", async (Guid id, string sceneCode, IContentPlanningService planning, IStellariumScriptGenerator scriptGenerator, CancellationToken ct) =>
+{
+    try
+    {
+        var scenePlan = await planning.BuildStellariumScenePlanPreviewAsync(id, ct);
+        var scene = scenePlan.Scenes.FirstOrDefault(x => string.Equals(x.SceneCode, sceneCode, StringComparison.OrdinalIgnoreCase));
+        if (scene is null)
+        {
+            return Results.NotFound(new { message = $"Scene code '{sceneCode}' was not found for plan '{id}'." });
+        }
+
+        var script = await scriptGenerator.GenerateAsync(scenePlan, scene, ct);
+        return Results.Ok(script);
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+});
 app.MapGet("/api/content-planning/plans/{id:guid}/visual-assets-preview", async (Guid id, IDailySkyGuideVisualAssetPackager packager, CancellationToken ct) =>
 {
     var package = await packager.BuildPackageAsync(id, ct);

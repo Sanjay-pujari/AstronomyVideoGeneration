@@ -15,7 +15,7 @@ public sealed class StellariumImageCaptureExecutorTests
         var captureRoot = Path.Combine(Path.GetTempPath(), $"stellarium-captures-{Guid.NewGuid():N}");
         var scriptsRoot = Path.Combine(Path.GetTempPath(), $"stellarium-scripts-{Guid.NewGuid():N}");
         var options = Options.Create(new StellariumOptions { CaptureDirectory = captureRoot, ScriptsDirectory = scriptsRoot, Enabled = true });
-        var sut = new StellariumImageCaptureExecutor(options, new StellariumScriptGenerator(), NullLogger<StellariumImageCaptureExecutor>.Instance);
+        var sut = new StellariumImageCaptureExecutor(options, new StellariumScriptGenerator(options), NullLogger<StellariumImageCaptureExecutor>.Instance);
         var planId = Guid.NewGuid();
 
         var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId, DryRun: true), CancellationToken.None);
@@ -32,7 +32,7 @@ public sealed class StellariumImageCaptureExecutorTests
     public async Task Disabled_DoesNotExecute_AndReturnsClearError()
     {
         var options = Options.Create(new StellariumOptions { Enabled = false, CaptureDirectory = Path.GetTempPath(), ScriptsDirectory = Path.GetTempPath() });
-        var sut = new StellariumImageCaptureExecutor(options, new StellariumScriptGenerator(), NullLogger<StellariumImageCaptureExecutor>.Instance);
+        var sut = new StellariumImageCaptureExecutor(options, new StellariumScriptGenerator(options), NullLogger<StellariumImageCaptureExecutor>.Instance);
         var planId = Guid.NewGuid();
 
         var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId), CancellationToken.None);
@@ -44,7 +44,7 @@ public sealed class StellariumImageCaptureExecutorTests
     public async Task MissingExecutable_ReturnsClearError_AndFailsScene()
     {
         var options = Options.Create(new StellariumOptions { Enabled = true, ExecutablePath = Path.Combine(Path.GetTempPath(), "missing-stellarium.exe"), CaptureDirectory = Path.GetTempPath(), ScriptsDirectory = Path.GetTempPath() });
-        var sut = new StellariumImageCaptureExecutor(options, new StellariumScriptGenerator(), NullLogger<StellariumImageCaptureExecutor>.Instance);
+        var sut = new StellariumImageCaptureExecutor(options, new StellariumScriptGenerator(options), NullLogger<StellariumImageCaptureExecutor>.Instance);
         var planId = Guid.NewGuid();
         var result = await sut.CaptureAsync(BuildPlan(planId), new StellariumCaptureExecutionRequest(planId), CancellationToken.None);
         Assert.All(result.Images, i => Assert.Contains("executable was not found", i.ErrorMessage!, StringComparison.OrdinalIgnoreCase));

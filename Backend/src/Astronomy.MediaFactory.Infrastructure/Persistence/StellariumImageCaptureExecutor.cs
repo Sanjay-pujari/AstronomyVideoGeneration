@@ -19,20 +19,18 @@ public sealed class StellariumImageCaptureExecutor(
         var warnings = new List<string>();
         var images = new List<StellariumCapturedImageResult>();
         var outputFolder = BuildCaptureFolder(request.ContentGenerationPlanId, warnings);
-        var scriptsFolder = BuildScriptsFolder(request.ContentGenerationPlanId);
 
         if (!request.DryRun)
         {
             Directory.CreateDirectory(outputFolder);
-            Directory.CreateDirectory(scriptsFolder);
         }
 
         foreach (var scene in scenePlan.Scenes.OrderBy(x => x.SortOrder))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var fileName = $"{scene.SortOrder:D2}_{scene.SceneCode}_{scene.OutputImageRole}.png";
-            var imagePath = Path.Combine(outputFolder, fileName);
-            var scriptPath = Path.Combine(scriptsFolder, $"{scene.SortOrder:D2}_{scene.SceneCode}.ssc");
+            var generation = await scriptGenerator.GenerateAsync(scenePlan, scene, cancellationToken);
+            var imagePath = generation.OutputImagePath;
+            var scriptPath = generation.ScriptPath;
             string? commandLine = null;
             int? exitCode = null;
             string? stdOut = null;
@@ -41,7 +39,6 @@ public sealed class StellariumImageCaptureExecutor(
 
             if (request.DryRun)
             {
-                await scriptGenerator.GenerateScriptAsync(scene, scenePlan, imagePath, scriptPath, cancellationToken);
             }
             else if (!_options.Enabled)
             {
@@ -55,7 +52,6 @@ public sealed class StellariumImageCaptureExecutor(
             }
             else
             {
-                await scriptGenerator.GenerateScriptAsync(scene, scenePlan, imagePath, scriptPath, cancellationToken);
                 if (request.OverwriteExisting && File.Exists(imagePath)) File.Delete(imagePath);
 
                 var psi = new ProcessStartInfo
@@ -88,7 +84,7 @@ public sealed class StellariumImageCaptureExecutor(
             }
 
             var success = request.DryRun || (error is null && IsRealCapturedFile(imagePath));
-            images.Add(new StellariumCapturedImageResult(scene.SceneCode, scene.SceneType, scene.OutputImageRole, scene.TargetObjectCode, scene.CaptureTimeUtc, imagePath, success, error, scriptPath, commandLine, exitCode, request.Diagnostics ? stdOut : null, request.Diagnostics ? stdErr : null));
+            images.Add(new StellariumCapturedImageResult(scene.SceneCode, scene.SceneType, scene.OutputImageRole, scene.TargetObjectCode, scene.CaptureTimeUtc, imagePath, success, error ?? generation.ErrorMessage, scriptPath, commandLine, exitCode, request.Diagnostics ? stdOut : null, request.Diagnostics ? stdErr : null, request.Diagnostics || !success ? generation.ScriptContent : null));
         }
 
         var capturedCount = images.Count(x => x.Success && !request.DryRun);
@@ -116,14 +112,6 @@ public sealed class StellariumImageCaptureExecutor(
         }
 
         return Path.Combine(root, "content-plans", planId.ToString(), "stellarium-scenes");
-    }
-
-    private string BuildScriptsFolder(Guid planId)
-    {
-        var root = string.IsNullOrWhiteSpace(_options.ScriptsDirectory)
-            ? Path.Combine(string.IsNullOrWhiteSpace(_options.OutputRoot) ? "outputs" : _options.OutputRoot, "stellarium-scripts")
-            : _options.ScriptsDirectory;
-        return Path.Combine(root, "content-plans", planId.ToString());
     }
 
     private static bool IsRealCapturedFile(string imagePath) => File.Exists(imagePath) && new FileInfo(imagePath).Length > 0;
