@@ -287,7 +287,7 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
         if (build.Success)
         {
             plan.Status = "ReadyForManualRun";
-            plan.UpdatedUtc = DateTimeOffset.UtcNow;
+            plan.Touch();
             await db.SaveChangesAsync(cancellationToken);
         }
 
