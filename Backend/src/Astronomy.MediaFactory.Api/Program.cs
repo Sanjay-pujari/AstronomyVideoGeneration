@@ -285,6 +285,31 @@ app.MapGet("/api/content-planning/plans/{id:guid}/stellarium-scene-plan-preview"
         return Results.NotFound(new { message = ex.Message });
     }
 });
+app.MapPost("/api/content-planning/plans/{id:guid}/capture-stellarium-scenes", async (Guid id, StellariumCaptureExecutionApiRequest apiRequest, IContentPlanningService planning, IStellariumImageCaptureExecutor executor, CancellationToken ct) =>
+{
+    try
+    {
+        var plan = await planning.GetPlanByIdAsync(id, ct);
+        if (plan is null)
+        {
+            return Results.NotFound(new { message = $"Content generation plan '{id}' was not found." });
+        }
+
+        if (plan.Status is not ("Planned" or "ReadyForManualRun" or "InProgress"))
+        {
+            return Results.BadRequest(new { message = "Plan status must be Planned, ReadyForManualRun, or InProgress to capture Stellarium scenes." });
+        }
+
+        var scenePlan = await planning.BuildStellariumScenePlanPreviewAsync(id, ct);
+        var request = new StellariumCaptureExecutionRequest(id, apiRequest.DryRun, apiRequest.OverwriteExisting);
+        var response = await executor.CaptureAsync(scenePlan, request, ct);
+        return Results.Ok(response);
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+});
 app.MapPost("/api/content-planning/plans/{id:guid}/prepare-manual-run", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
 {
     try

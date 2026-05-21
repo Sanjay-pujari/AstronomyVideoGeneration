@@ -6,6 +6,16 @@ public sealed class StellariumOptions
 {
     public const string SectionName = "Stellarium";
 
+    public bool Enabled { get; set; } = false;
+
+    [MaxLength(1024)]
+    public string OutputRoot { get; set; } = "outputs/content-plans";
+
+    [Range(1, 600)]
+    public int CaptureTimeoutSeconds { get; set; } = 60;
+
+    public bool UseExistingCaptureUtility { get; set; } = true;
+
     [MaxLength(1024)]
     public string ExecutablePath { get; set; } = "";
 

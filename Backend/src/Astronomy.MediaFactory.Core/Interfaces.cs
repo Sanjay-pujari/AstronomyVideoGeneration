@@ -410,6 +410,42 @@ public interface IStellariumScenePlannerResolver
     IStellariumScenePlanner? Resolve(string contentCategoryCode);
 }
 
+public sealed record StellariumCaptureExecutionRequest(
+    Guid ContentGenerationPlanId,
+    bool DryRun = false,
+    bool OverwriteExisting = false);
+public sealed record StellariumCaptureExecutionApiRequest(
+    bool DryRun = false,
+    bool OverwriteExisting = false);
+
+public sealed record StellariumCapturedImageResult(
+    string SceneCode,
+    string SceneType,
+    string OutputImageRole,
+    string? TargetObjectCode,
+    DateTime CaptureTimeUtc,
+    string? ImagePath,
+    bool Success,
+    string? ErrorMessage);
+
+public sealed record StellariumCaptureExecutionResponse(
+    Guid ContentGenerationPlanId,
+    bool Success,
+    int RequestedSceneCount,
+    int CapturedSceneCount,
+    string? OutputFolder,
+    List<StellariumCapturedImageResult> Images,
+    List<string> Warnings,
+    string? ErrorMessage);
+
+public interface IStellariumImageCaptureExecutor
+{
+    Task<StellariumCaptureExecutionResponse> CaptureAsync(
+        StellariumSceneCapturePlan scenePlan,
+        StellariumCaptureExecutionRequest request,
+        CancellationToken cancellationToken);
+}
+
 public sealed record ManualExecutionStartResponse(Guid ContentGenerationPlanId, Guid ContentPipelineExecutionId, string Status);
 public sealed record CompleteContentPlanningExecutionRequest(
     Guid? PipelineRunId,
