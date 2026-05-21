@@ -274,6 +274,17 @@ app.MapGet("/api/content-planning/plans/{id:guid}/astronomy-visibility-preview",
         return Results.NotFound(new { message = ex.Message });
     }
 });
+app.MapGet("/api/content-planning/plans/{id:guid}/stellarium-scene-plan-preview", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await planning.BuildStellariumScenePlanPreviewAsync(id, ct));
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+});
 app.MapPost("/api/content-planning/plans/{id:guid}/prepare-manual-run", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
 {
     try

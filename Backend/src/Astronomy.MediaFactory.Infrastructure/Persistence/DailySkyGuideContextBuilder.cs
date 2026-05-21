@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptions<SchedulerOptions> schedulerOptions, IAstronomyVisibilityService visibilityService) : IDailySkyGuideContextBuilder
+public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptions<SchedulerOptions> schedulerOptions, IAstronomyVisibilityService visibilityService, IStellariumScenePlannerResolver scenePlannerResolver) : IDailySkyGuideContextBuilder
 {
     public async Task<DailySkyGuideContext> BuildAsync(ContentGenerationPlan plan, CancellationToken cancellationToken)
     {
@@ -32,6 +32,13 @@ public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptio
         if (visibleCodes.Length == 0) warnings.Add("visibleObjectCodes fallback applied: no visible celestial objects found.");
 
         var thumbnailStrategy = ResolveThumbnailStrategy(plan, warnings);
+        StellariumSceneCapturePlan? sceneCapturePlan = null;
+        var planner = scenePlannerResolver.Resolve(plan.ContentCategoryCode);
+        if (planner is not null)
+        {
+            sceneCapturePlan = await planner.BuildScenePlanAsync(plan, visibility, cancellationToken);
+            warnings.AddRange(sceneCapturePlan.Warnings);
+        }
 
         return new DailySkyGuideContext(
             plan.Id,
@@ -50,6 +57,8 @@ public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptio
             "Stellarium",
             "AzureSpeech",
             thumbnailStrategy,
+            sceneCapturePlan,
+            sceneCapturePlan?.Scenes.Count ?? 0,
             warnings);
     }
 
