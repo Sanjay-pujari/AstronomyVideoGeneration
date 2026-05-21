@@ -228,6 +228,9 @@ app.MapPost("/api/content-planning/generate-daily-plan", async (GenerateDailyPla
         return Results.BadRequest(new { message = ex.Message });
     }
 });
+app.MapGet("/api/content-planning/categories/{categoryCode}/requirements", async (string categoryCode, ICategoryRequirementResolver resolver, CancellationToken ct) =>
+    Results.Ok(await resolver.ResolveAsync(categoryCode, ct)));
+
 app.MapGet("/api/content-planning/plans", async (string? status, IContentPlanningService planning, CancellationToken ct) =>
     Results.Ok(await planning.GetPendingPlansAsync(status, ct)));
 app.MapGet("/api/content-planning/plans/{id:guid}", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
@@ -235,6 +238,17 @@ app.MapGet("/api/content-planning/plans/{id:guid}", async (Guid id, IContentPlan
     var plan = await planning.GetPlanByIdAsync(id, ct);
     return plan is null ? Results.NotFound() : Results.Ok(plan);
 });
+app.MapGet("/api/content-planning/plans/{id:guid}/visual-strategy-preview", async (Guid id, IContentPlanningService planning, IVisualStrategyResolver resolver, CancellationToken ct) =>
+{
+    var plan = await planning.GetPlanByIdAsync(id, ct);
+    if (plan is null)
+    {
+        return Results.NotFound();
+    }
+
+    return Results.Ok(await resolver.ResolveAsync(plan, ct));
+});
+
 app.MapGet("/api/content-planning/plans/{id:guid}/pipeline-request-preview", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
