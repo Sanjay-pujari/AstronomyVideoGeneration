@@ -58,7 +58,7 @@ public sealed class CategoryRequirementAndVisualStrategyTests
     public async Task Visual_Strategy_DailySkyGuide_Expected_Flags()
     {
         var strategy = await new VisualStrategyResolver(new CategoryRequirementResolver())
-            .ResolveAsync(new ContentGenerationPlan { Id = Guid.NewGuid(), ContentCategoryCode = "DailySkyGuide" }, CancellationToken.None);
+            .ResolveAsync(new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide" }, CancellationToken.None);
         Assert.True(strategy.UseStellariumCapture);
         Assert.True(strategy.UseSscScript);
         Assert.False(strategy.UseAiImageGeneration);
@@ -68,7 +68,7 @@ public sealed class CategoryRequirementAndVisualStrategyTests
     public async Task Visual_Strategy_CosmicStoryShort_Expected_Flags()
     {
         var strategy = await new VisualStrategyResolver(new CategoryRequirementResolver())
-            .ResolveAsync(new ContentGenerationPlan { Id = Guid.NewGuid(), ContentCategoryCode = "CosmicStoryShort" }, CancellationToken.None);
+            .ResolveAsync(new ContentGenerationPlan { ContentCategoryCode = "CosmicStoryShort" }, CancellationToken.None);
         Assert.False(strategy.UseStellariumCapture);
         Assert.False(strategy.UseSscScript);
         Assert.True(strategy.UseAiImageGeneration);
