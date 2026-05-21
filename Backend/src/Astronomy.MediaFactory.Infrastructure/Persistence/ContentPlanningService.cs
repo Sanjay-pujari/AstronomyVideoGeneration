@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVarietyGuard varietyGuard, IContentCategoryPipelineStrategyResolver strategyResolver) : IContentPlanningService
+public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVarietyGuard varietyGuard, IContentCategoryPipelineStrategyResolver strategyResolver, IDailySkyGuideContextBuilder dailySkyGuideContextBuilder) : IContentPlanningService
 {
     public async Task<GenerateContentPlanResponse> GeneratePlanAsync(GenerateContentPlanRequest request, CancellationToken cancellationToken)
     {
@@ -238,6 +238,12 @@ public sealed class ContentPlanningService(MediaFactoryDbContext db, IContentVar
     }
 
     public Task<ContentGenerationPlan?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken) => db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+    public async Task<DailySkyGuideContext> BuildDailySkyGuideContextPreviewAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var plan = await db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Content generation plan '{id}' was not found.");
+        return await dailySkyGuideContextBuilder.BuildAsync(plan, cancellationToken);
+    }
     public async Task<PipelineBuildResult> BuildPipelineRequestPreviewAsync(Guid id, CancellationToken cancellationToken)
     {
         var plan = await db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
