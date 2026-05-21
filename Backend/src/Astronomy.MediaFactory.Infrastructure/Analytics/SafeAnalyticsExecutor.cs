@@ -35,7 +35,8 @@ public sealed class SafeAnalyticsExecutor : ISafeAnalyticsExecutor
 
             var ingestion = scope.ServiceProvider.GetRequiredService<IAnalyticsIngestionService>();
             await ingestion.InitializeForPipelineRunAsync(request, timeoutCts.Token);
-            report = report with { AnalyticsCompleted = true, QueriesMaterialized = 1 };
+            var queryMaterializedCount = request.Platforms.Count + request.Platforms.Count + (request.Platforms.Count * request.HookTexts.Count) + (request.Platforms.Count * request.Thumbnails.Count);
+            report = report with { AnalyticsCompleted = true, QueriesMaterialized = queryMaterializedCount };
             _logger.LogInformation("Analytics completed safely for pipeline run {PipelineRunId}", request.PipelineRunId);
         }
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
@@ -58,6 +59,7 @@ public sealed class SafeAnalyticsExecutor : ISafeAnalyticsExecutor
             scopeCreated = report.ScopeCreated,
             dbContextIsolated = report.DbContextIsolated,
             queriesMaterialized = report.QueriesMaterialized,
+            timedOut = report.TimedOut,
             pipelineImpacted = false
         };
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, "analytics-post-processing-report.json"), JsonSerializer.Serialize(reportPayload, JsonOptions), CancellationToken.None);

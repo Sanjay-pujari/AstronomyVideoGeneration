@@ -77,9 +77,11 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
         var schemaMismatchDetected = missingColumns.Length > 0;
         _logger.LogInformation("Thumbnail analytics schema diagnostics. expected={ExpectedColumns}; detected={DetectedColumns}; missing={MissingColumns}; migrationRequired={MigrationRequired}", expectedColumns, detectedColumns, missingColumns, schemaMismatchDetected);
 
+        var materializedQueryCount = 0;
         foreach (var platform in platforms.DefaultIfEmpty("YouTube"))
         {
             var existingVideo = await db.PlatformVideoAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == request.ContentType, cancellationToken);
+            materializedQueryCount++;
             if (existingVideo is null) db.PlatformVideoAnalytics.Add(new PlatformVideoAnalytics
             {
                 PipelineRunId = request.PipelineRunId,
@@ -90,6 +92,7 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 PublishedAtUtc = publishedAtUtc
             });
             var existingPlatformContent = await db.PlatformContentAnalytics.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.PlatformContentType == request.ContentType, cancellationToken);
+            materializedQueryCount++;
             if (existingPlatformContent is null)
             {
                 db.PlatformContentAnalytics.Add(new PlatformContentAnalytics
@@ -114,6 +117,7 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
             {
                 var hookContentType = $"{request.ContentType}|{hook}";
                 var existingHook = await db.HookPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == hookContentType, cancellationToken);
+                materializedQueryCount++;
                 if (existingHook is null) db.HookPerformance.Add(new HookPerformance
                 {
                     PipelineRunId = request.PipelineRunId,
@@ -131,6 +135,7 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
                 {
                     var thumbContentType = $"{request.ContentType}|{thumbnail.ThumbnailType}";
                     var existingThumb = await db.ThumbnailPerformance.FirstOrDefaultAsync(x => x.PipelineRunId == request.PipelineRunId && x.Platform == platform && x.ContentType == thumbContentType, cancellationToken);
+                    materializedQueryCount++;
                     if (existingThumb is null) db.ThumbnailPerformance.Add(new ThumbnailPerformance
                     {
                         PipelineRunId = request.PipelineRunId,
@@ -151,7 +156,7 @@ public sealed class ManualAnalyticsIngestionService : IAnalyticsIngestionService
         }
 
         await db.SaveChangesAsync(cancellationToken);
-        _logger.LogInformation("Analytics initialization materialized entries. Platforms={PlatformCount}; Hooks={HookCount}; Thumbnails={ThumbnailCount}", platforms.Length, hooks.Length, thumbnails.Length);
+        _logger.LogInformation("Analytics initialization materialized entries. Platforms={PlatformCount}; Hooks={HookCount}; Thumbnails={ThumbnailCount}; QueryMaterializedCount={QueryMaterializedCount}", platforms.Length, hooks.Length, thumbnails.Length, materializedQueryCount);
         _logger.LogInformation("Analytics initialization scope disposed. DbContextHash={DbContextHash}; PipelineRunId={PipelineRunId}", db.GetHashCode(), request.PipelineRunId);
     }
 
