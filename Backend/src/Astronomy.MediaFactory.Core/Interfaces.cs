@@ -617,6 +617,37 @@ public sealed record DailySkyGuideAssetAwareMetadata(
     IReadOnlyList<string> RecommendedImageSequence,
     IReadOnlyList<string> Warnings);
 
+public sealed record AssetAwareManualRunPackage(
+    Guid ContentGenerationPlanId,
+    string ContentCategoryCode,
+    string Status,
+    object? RunPipelineRequest,
+    AssetAwareMetadata? AssetAwareMetadata,
+    bool AssetsReady,
+    bool CanRunManually,
+    IReadOnlyList<string> RequiredManualSteps,
+    IReadOnlyList<string> Warnings);
+
+public sealed record VisualAssetItem(
+    string Role,
+    string Path,
+    bool Exists);
+
+public sealed record AssetAwareMetadata(
+    Guid ContentGenerationPlanId,
+    string ContentCategoryCode,
+    object? AstronomyContext,
+    object? SceneCapturePlan,
+    IReadOnlyList<VisualAssetItem> VisualAssets,
+    string? ThumbnailCandidatePath,
+    IReadOnlyList<string> RecommendedImageSequence,
+    IReadOnlyList<string> Warnings);
+
+public interface IAssetAwareManualRunPreparationService
+{
+    Task<AssetAwareManualRunPackage> PrepareAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken);
+}
+
 public sealed record PrepareManualRunResponse(
     Guid ContentGenerationPlanId,
     string Status,

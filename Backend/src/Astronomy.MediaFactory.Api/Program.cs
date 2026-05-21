@@ -380,6 +380,21 @@ app.MapGet("/api/content-planning/plans/{id:guid}/stellarium-capture-diagnostics
     var response = await executor.GetDiagnosticsAsync(id, ct);
     return Results.Ok(response);
 });
+app.MapGet("/api/content-planning/plans/{id:guid}/asset-aware-manual-run-package", async (Guid id, IAssetAwareManualRunPreparationService preparation, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await preparation.PrepareAsync(id, ct));
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
 app.MapPost("/api/content-planning/plans/{id:guid}/prepare-manual-run", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
