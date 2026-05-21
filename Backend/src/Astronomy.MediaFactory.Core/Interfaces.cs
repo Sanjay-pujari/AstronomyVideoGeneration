@@ -476,7 +476,8 @@ public sealed record StellariumCapturedImageResult(
     string? CommandLine,
     int? ExitCode,
     string? StandardOutput,
-    string? StandardError);
+    string? StandardError,
+    string? ScriptContent);
 
 public sealed record StellariumCaptureDiagnosticsResponse(
     Guid ContentGenerationPlanId,
@@ -511,13 +512,22 @@ public interface IStellariumImageCaptureExecutor
     Task<StellariumCaptureDiagnosticsResponse> GetDiagnosticsAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken);
 }
 
+public sealed record StellariumScriptGenerationResult(
+    Guid ContentGenerationPlanId,
+    string SceneCode,
+    string SceneType,
+    string ScriptPath,
+    string OutputImagePath,
+    bool Success,
+    string? ScriptContent,
+    List<string> Warnings,
+    string? ErrorMessage);
+
 public interface IStellariumScriptGenerator
 {
-    Task<string> GenerateScriptAsync(
-        StellariumSceneCaptureItem scene,
+    Task<StellariumScriptGenerationResult> GenerateAsync(
         StellariumSceneCapturePlan plan,
-        string outputImagePath,
-        string scriptPath,
+        StellariumSceneCaptureItem scene,
         CancellationToken cancellationToken);
 }
 
