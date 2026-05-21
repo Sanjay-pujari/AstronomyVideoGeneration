@@ -18,7 +18,7 @@ public sealed class StellariumScriptGenerator(IOptions<StellariumOptions> option
         var scriptPath = BuildScriptPath(plan.ContentGenerationPlanId, scene);
         var outputImagePath = BuildImagePath(plan.ContentGenerationPlanId, scene);
 
-        var utcDate = scene.CaptureTimeUtc.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+        var utcDate = scene.CaptureTimeUtc.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
         var screenshotPrefix = Path.GetFileNameWithoutExtension(outputImagePath).Replace("\"", "\\\"");
         var screenshotDir = (Path.GetDirectoryName(outputImagePath) ?? ".").Replace("\\", "/").Replace("\"", "\\\"");
         var locationName = (plan.LocationName ?? "Earth").Replace("\"", "\\\"");
