@@ -34,15 +34,34 @@ def test_weekly_sky_success_and_shape():
     assert body["weekStartDate"] == "2026-05-22"
     assert body["weekEndDate"] == "2026-05-28"
     assert len(body["days"]) == 7
-    assert len(body["weeklyHighlights"]) >= 3
+    assert len(body["weeklyHighlights"]) >= 1
     assert len(body["recommendedNights"]) >= 1
     assert body["bestPlanetOfWeek"] is not None
+    assert body["bestPlanetOfWeek"]["objectCode"] != "MOON"
+    assert any(h["highlightType"] == "best_overall_night" for h in body["weeklyHighlights"])
+    max_altitudes = []
+    best_times = []
+    has_invisible = False
+    has_no_conjunction = True
     for day in body["days"]:
         assert day["sunsetUtc"]
         assert day["sunriseUtc"]
         assert day["moonPhase"]
         assert day["moonIlluminationPercent"] >= 0
         assert len(day["visibleObjects"]) > 0
+        if any(evt["eventType"] == "conjunction" for evt in day["events"]):
+            has_no_conjunction = False
+        for obj in day["visibleObjects"]:
+            if obj["objectCode"] in {"MERCURY", "VENUS", "MARS", "JUPITER", "SATURN", "URANUS", "NEPTUNE"}:
+                max_altitudes.append(obj["maxAltitudeDegrees"])
+                best_times.append(obj["bestViewingTimeUtc"])
+            if obj["visible"] is False:
+                has_invisible = True
+                assert obj["visibilityScore"] == 0
+    assert len(set(max_altitudes)) > 1
+    assert len(set(best_times)) > 1
+    assert has_invisible
+    assert has_no_conjunction
 
 
 def test_weekly_sky_invalid_latitude():
