@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Contracts;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -10,7 +12,8 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
     IWeeklySkyForecastSscScenePlanner scenePlanner,
     ICategoryOutputPathResolver pathResolver,
     IStellariumScriptGenerator scriptGenerator,
-    IStellariumImageCaptureExecutor captureExecutor) : IWeeklySkyForecastVisualAssetGenerationService
+    IStellariumImageCaptureExecutor captureExecutor,
+    IOptions<StellariumOptions> stellariumOptions) : IWeeklySkyForecastVisualAssetGenerationService
 {
     public async Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, CancellationToken cancellationToken)
     {
@@ -41,9 +44,12 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
         var segmentPlan = await segmentPlanner.BuildAsync(context, cancellationToken);
         var weeklyScenePlan = await scenePlanner.BuildAsync(context, segmentPlan, cancellationToken);
         var outputPaths = pathResolver.Resolve("WeeklySkyForecast", context.WeekStartDate, context.RegionId, contentGenerationPlanId);
-        Directory.CreateDirectory(outputPaths.StellariumScriptsDirectory);
-        Directory.CreateDirectory(outputPaths.StellariumScenesDirectory);
+        var canonicalSscScriptsDirectory = Path.Combine(stellariumOptions.Value.ScriptsDirectory, "content-plans", contentGenerationPlanId.ToString());
+        var canonicalStellariumCapturesDirectory = Path.Combine(stellariumOptions.Value.CaptureDirectory, "content-plans", contentGenerationPlanId.ToString(), "stellarium-scenes");
+        Directory.CreateDirectory(canonicalSscScriptsDirectory);
+        Directory.CreateDirectory(canonicalStellariumCapturesDirectory);
         Directory.CreateDirectory(outputPaths.ManifestsDirectory);
+        Directory.CreateDirectory(outputPaths.NarrationDirectory);
         steps.Add(Step("BuildWeeklySceneInputs", sw.ElapsedMilliseconds));
 
         sw.Restart();
@@ -60,9 +66,9 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
         foreach (var scene in capturePlan.Scenes)
         {
             var generated = await scriptGenerator.GenerateAsync(capturePlan, scene, cancellationToken);
-            var destinationScriptPath = Path.Combine(outputPaths.StellariumScriptsDirectory, $"{scene.SceneCode}.ssc");
+            var destinationScriptPath = Path.Combine(canonicalSscScriptsDirectory, $"{scene.SceneCode}.ssc");
             File.Copy(generated.ScriptPath, destinationScriptPath, true);
-            var expectedImagePath = Path.Combine(outputPaths.StellariumScenesDirectory, $"{scene.SceneCode}_{scene.OutputImageRole}.png");
+            var expectedImagePath = Path.Combine(canonicalStellariumCapturesDirectory, $"{scene.SceneCode}_{scene.OutputImageRole}.png");
             scriptResults.Add(new WeeklySkyForecastVisualAssetScriptResult(scene.SceneCode, destinationScriptPath, expectedImagePath, generated.Success, generated.ErrorMessage));
             if (string.IsNullOrWhiteSpace(scene.TargetObjectCode) is false && scene.TargetObjectCode != scene.TargetObjectCode.ToUpperInvariant())
                 errors.Add($"targetObjectCode must be uppercase for scene {scene.SceneCode}.");
@@ -90,12 +96,41 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
         }
         steps.Add(Step("CaptureStellariumScenes", sw.ElapsedMilliseconds));
 
+        var narrationManifestPath = Path.Combine(outputPaths.ManifestsDirectory, "NarrationManifest.json");
+        WeeklyNarrationManifest? narrationManifest = null;
+        if (File.Exists(narrationManifestPath))
+            narrationManifest = JsonSerializer.Deserialize<WeeklyNarrationManifest>(await File.ReadAllTextAsync(narrationManifestPath, cancellationToken));
+        var narrationBySegment = narrationManifest?.Segments.ToDictionary(x => x.SegmentCode, StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, WeeklyNarrationSegment>(StringComparer.OrdinalIgnoreCase);
+
+        var visualAssetManifest = new List<WeeklySkyForecastVisualAssetManifestItem>();
+        foreach (var scene in weeklyScenePlan.Scenes)
+        {
+            var audioPath = narrationBySegment.TryGetValue(scene.LinkedSegmentCode, out var narration)
+                ? Path.Combine(outputPaths.NarrationDirectory, narration.OutputFileName)
+                : string.Empty;
+            var script = scriptResults.First(x => x.SceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase));
+            var image = images.First(x => x.SceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase));
+            visualAssetManifest.Add(new(scene.LinkedSegmentCode, audioPath, scene.SceneCode, script.ScriptPath, image.ImagePath, scene.OutputRole, scene.TargetObjectCode, scene.CaptureTimeUtc));
+        }
+
+        foreach (var group in weeklyScenePlan.Scenes.GroupBy(x => new { x.TargetObjectCode, x.CaptureTimeUtc, x.FieldOfViewDegrees, x.OutputRole }))
+        {
+            if (group.Count() < 2)
+                continue;
+            var segmentCodes = group.Select(x => x.LinkedSegmentCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (segmentCodes.Count > 1)
+                warnings.Add($"Duplicate scene signature for target={group.Key.TargetObjectCode ?? "NONE"}, captureTimeUtc={group.Key.CaptureTimeUtc:O}, fov={group.Key.FieldOfViewDegrees}, outputRole={group.Key.OutputRole}; allowed because linked segments differ ({string.Join(",", segmentCodes)}).");
+            else
+                warnings.Add($"Potential duplicate scene detected for linked segment '{segmentCodes[0]}': target={group.Key.TargetObjectCode ?? "NONE"}, captureTimeUtc={group.Key.CaptureTimeUtc:O}, fov={group.Key.FieldOfViewDegrees}, outputRole={group.Key.OutputRole}.");
+        }
+
         var manifestPath = Path.Combine(outputPaths.ManifestsDirectory, "weekly-visual-assets-manifest.json");
-        var manifest = new { contentGenerationPlanId, contextSummary = context, sscScenes = weeklyScenePlan.Scenes, scripts = scriptResults, images, capture = captureResponse, warnings, errors };
+        var manifest = new { contentGenerationPlanId, canonicalSscScriptsDirectory, canonicalStellariumCapturesDirectory, visualAssetManifestPath = manifestPath, contextSummary = context, sscScenes = weeklyScenePlan.Scenes, scripts = scriptResults, images, visualAssetManifest, capture = captureResponse, warnings, errors };
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 
         var success = errors.Count == 0 && scriptResults.Count == weeklyScenePlan.Scenes.Count;
-        return new WeeklySkyForecastVisualAssetsResponse(contentGenerationPlanId, success, scriptResults.Count, images.Count(x => x.Exists), scriptResults, images, warnings, errors, steps);
+        return new WeeklySkyForecastVisualAssetsResponse(contentGenerationPlanId, success, scriptResults.Count, images.Count(x => x.Exists), canonicalSscScriptsDirectory, canonicalStellariumCapturesDirectory, manifestPath, scriptResults, images, visualAssetManifest, warnings, errors, steps);
     }
 
     private static CategoryProductionStepResult Step(string name, long durationMs)

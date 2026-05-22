@@ -272,7 +272,8 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
     IStellariumScriptGenerator scriptGenerator,
     IStellariumImageCaptureExecutor captureExecutor,
     IWeeklySkyForecastSegmentVideoRenderer segmentVideoRenderer,
-    IProcessRunner processRunner) : IWeeklySkyForecastPreparationOrchestrator
+    IProcessRunner processRunner,
+    IOptions<StellariumOptions> stellariumOptions) : IWeeklySkyForecastPreparationOrchestrator
 {
     private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
@@ -344,8 +345,10 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
         stopwatch.Restart();
         if (flagsUsed.GenerateSscScripts)
         {
-            Directory.CreateDirectory(outputPaths.StellariumScriptsDirectory);
-            Directory.CreateDirectory(outputPaths.StellariumScenesDirectory);
+            var canonicalSscScriptsDirectory = Path.Combine(stellariumOptions.Value.ScriptsDirectory, "content-plans", plan.Id.ToString());
+            var canonicalStellariumCapturesDirectory = Path.Combine(stellariumOptions.Value.CaptureDirectory, "content-plans", plan.Id.ToString(), "stellarium-scenes");
+            Directory.CreateDirectory(canonicalSscScriptsDirectory);
+            Directory.CreateDirectory(canonicalStellariumCapturesDirectory);
             var capturePlan = new StellariumSceneCapturePlan(plan.Id, "WeeklySkyForecast", context.RegionId, context.LocationName, context.Latitude, context.Longitude, context.Timezone, context.WeekStartDate, [], []);
             foreach (var scene in scenes.Scenes.OrderBy(x => x.SceneCode))
             {
@@ -355,9 +358,9 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
             foreach (var scene in capturePlan.Scenes)
             {
                 var generated = await scriptGenerator.GenerateAsync(capturePlan, scene, cancellationToken);
-                var destinationScriptPath = Path.Combine(outputPaths.StellariumScriptsDirectory, $"{scene.SceneCode}.ssc");
+                var destinationScriptPath = Path.Combine(canonicalSscScriptsDirectory, $"{scene.SceneCode}.ssc");
                 File.Copy(generated.ScriptPath, destinationScriptPath, true);
-                var expectedImagePath = Path.Combine(outputPaths.StellariumScenesDirectory, $"{scene.SceneCode}_{scene.OutputImageRole}.png");
+                var expectedImagePath = Path.Combine(canonicalStellariumCapturesDirectory, $"{scene.SceneCode}_{scene.OutputImageRole}.png");
                 sscScripts.Add(new WeeklySkyForecastSscScriptResult(scene.SceneCode, destinationScriptPath, expectedImagePath, generated.Success, generated.ErrorMessage));
                 visualAssets.Add(new WeeklySkyForecastVisualAssetResult(scene.SceneCode, expectedImagePath, scene.OutputImageRole, scene.Metadata.TryGetValue("linkedSegmentCode", out var linked) ? linked : string.Empty, scene.TargetObjectCode));
             }
