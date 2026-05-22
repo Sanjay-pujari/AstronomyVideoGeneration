@@ -103,7 +103,7 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
         if (File.Exists(narrationManifestPath))
             narrationManifest = JsonSerializer.Deserialize<WeeklyNarrationManifest>(await File.ReadAllTextAsync(narrationManifestPath, cancellationToken));
         var narrationBySegment = narrationManifest?.Segments.ToDictionary(x => x.SegmentCode, StringComparer.OrdinalIgnoreCase)
-            ?? new Dictionary<string, WeeklyNarrationSegment>(StringComparer.OrdinalIgnoreCase);
+            ?? new Dictionary<string, WeeklyNarrationAudioSegment>(StringComparer.OrdinalIgnoreCase);
 
         var segmentVisualMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {

@@ -516,12 +516,12 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
         Directory.CreateDirectory(outputPaths.NarrationDirectory);
         Directory.CreateDirectory(outputPaths.ManifestsDirectory);
         var allSegments = segmentPlan.LongSegments.Concat(segmentPlan.ShortSegments).ToList();
-        var narrationSegments = new List<WeeklyNarrationSegment>(allSegments.Count);
+        var narrationSegments = new List<WeeklyNarrationAudioSegment>(allSegments.Count);
         foreach (var segment in allSegments)
         {
             var narrationText = BuildNarrationText(segment, context);
             var fileName = $"{segment.SortOrder:00}-{segment.SegmentCode}.mp3";
-            narrationSegments.Add(new WeeklyNarrationSegment(
+            narrationSegments.Add(new WeeklyNarrationAudioSegment(
                 segment.SegmentCode,
                 segment.SegmentType,
                 narrationText,
