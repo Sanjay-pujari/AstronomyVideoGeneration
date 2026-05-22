@@ -623,7 +623,22 @@ public sealed record AssetAwarePreviewVideoResponse(
     double EstimatedDurationSeconds,
     List<AssetAwarePreviewSegmentResult> Segments,
     List<string> Warnings,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    string? FfmpegCommandLine = null,
+    int? FfmpegExitCode = null,
+    string? FfmpegStandardError = null,
+    string? FfmpegStandardOutput = null,
+    string? ResolvedFfmpegPath = null,
+    string? OutputFolder = null);
+
+public sealed record AssetAwarePreviewVideoComposeResult(
+    string? OutputVideoPath,
+    string? ThumbnailPath,
+    string? FfmpegCommandLine,
+    int? FfmpegExitCode,
+    string? FfmpegStandardError,
+    string? FfmpegStandardOutput,
+    string? ResolvedFfmpegPath);
 
 public interface IDailySkyGuideVisualAssetProvider
 {
@@ -667,7 +682,7 @@ public interface IDailySkyGuidePreviewVideoGenerator
 
 public interface IAssetAwarePreviewVideoComposer
 {
-    Task<string?> ComposeAsync(
+    Task<AssetAwarePreviewVideoComposeResult> ComposeAsync(
         AssetAwareVideoCompositionPlan plan,
         AssetAwarePreviewVideoRequest request,
         string outputVideoPath,
