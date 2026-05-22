@@ -995,6 +995,18 @@ public sealed record WeeklySkyForecastContext(
 public sealed record RecommendedObservationNight(DateOnly Date, double Score, string Reason, IReadOnlyList<string> BestObjects, DateTime BestStartUtc, DateTime BestEndUtc);
 public sealed record WeeklySkyForecastSegmentPlanItem(string SegmentCode, string SegmentType, int SortOrder, string Title, string NarrationPurpose, DateOnly? TargetDate, IReadOnlyList<string> TargetObjectCodes, string VisualRole, string SuggestedSceneType, int EstimatedDurationSeconds, double PriorityScore);
 public sealed record WeeklySkyForecastSegmentPlan(IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments);
+public sealed record WeeklySkyForecastNarrationPlanItem(string SegmentCode, string NarrationStyle, string NarrationTone, int EstimatedWords, int EstimatedDurationSeconds, double NarrationPriority);
+public sealed record WeeklySkyForecastNarrationPlan(IReadOnlyList<WeeklySkyForecastNarrationPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastNarrationPlanItem> ShortSegments);
+public sealed record WeeklyNarrationSegment(string SegmentCode, string SegmentType, string NarrationText, int EstimatedDurationSeconds, string Language, string VoiceStyle, string OutputFileName);
+public sealed record WeeklyNarrationManifest(
+    IReadOnlyList<WeeklyNarrationSegment> Segments,
+    DateTime GeneratedUtc,
+    string Language,
+    int EstimatedTotalRuntimeSeconds,
+    int NarrationSegmentCount,
+    int TotalNarrationDuration,
+    int GeneratedAudioCount,
+    int FailedNarrationCount);
 public sealed record WeeklySkyForecastSscScenePlanItem(string SceneCode, string SceneType, string? TargetObjectCode, DateTime CaptureTimeUtc, DateOnly TargetDate, double FieldOfViewDegrees, string OutputRole, bool IsThumbnailCandidate, string LinkedSegmentCode);
 public sealed record WeeklySkyForecastSscScenePlan(IReadOnlyList<WeeklySkyForecastSscScenePlanItem> Scenes);
 public sealed record CategoryOutputPaths(string RootDirectory, string NarrationDirectory, string ShortsDirectory, string ThumbnailsDirectory, string StellariumScenesDirectory, string StellariumScriptsDirectory, string ManifestsDirectory, string MetadataDirectory);
