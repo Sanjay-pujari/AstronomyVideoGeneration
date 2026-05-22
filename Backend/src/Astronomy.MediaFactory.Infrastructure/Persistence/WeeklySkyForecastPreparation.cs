@@ -252,7 +252,14 @@ public sealed class WeeklySkyForecastMetadataBuilder : IWeeklySkyForecastMetadat
     }
 }
 
-public sealed class WeeklySkyForecastPreparationOrchestrator(IContentPlanningService planning, IWeeklySkyForecastContextBuilder contextBuilder, IWeeklySkyForecastSegmentPlanner segmentPlanner, IWeeklySkyForecastSscScenePlanner scenePlanner, ICategoryOutputPathResolver pathResolver, IWeeklySkyForecastMetadataBuilder metadataBuilder) : IWeeklySkyForecastPreparationOrchestrator
+public sealed class WeeklySkyForecastPreparationOrchestrator(
+    IContentPlanningService planning,
+    IWeeklySkyForecastContextBuilder contextBuilder,
+    IWeeklySkyForecastSegmentPlanner segmentPlanner,
+    IWeeklySkyForecastSscScenePlanner scenePlanner,
+    ICategoryOutputPathResolver pathResolver,
+    IWeeklySkyForecastMetadataBuilder metadataBuilder,
+    ISpeechSynthesisService speechSynthesisService) : IWeeklySkyForecastPreparationOrchestrator
 {
     public async Task<WeeklySkyForecastPreparationResponse> RunAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken)
     {
@@ -275,6 +282,10 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(IContentPlanningSer
         stopwatch.Restart();
         var metadata = await metadataBuilder.BuildAsync(context, segmentPlan, cancellationToken);
         steps.Add(Step("BuildMetadataSkeleton", stopwatch.ElapsedMilliseconds));
+        stopwatch.Restart();
+        var narrationPlan = BuildNarrationPlan(segmentPlan);
+        var narrationManifest = await GenerateNarrationArtifactsAsync(context, segmentPlan, narrationPlan, outputPaths, cancellationToken);
+        steps.Add(Step("GenerateNarration", stopwatch.ElapsedMilliseconds));
         var warnings = context.Warnings.Concat(["Publishing disabled by policy.", "Analytics disabled by policy."]).Distinct().ToList();
         var validationWarnings = new List<string>();
         foreach (var scene in scenes.Scenes)
@@ -288,6 +299,9 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(IContentPlanningSer
         if (segmentPlan.ShortSegments.Count < 3) errors.Add("shortSegments must be >= 3.");
         if (scenes.Scenes.Count < 5) errors.Add("sscScenes must be >= 5.");
         if (context.DailyForecasts.Count == 0) errors.Add("weekly context missing.");
+        if (narrationManifest.Segments.Any(x => string.IsNullOrWhiteSpace(x.NarrationText))) errors.Add("narration text cannot be empty.");
+        if (narrationManifest.GeneratedAudioCount != narrationManifest.NarrationSegmentCount) errors.Add("audio generation incomplete.");
+        if (narrationManifest.FailedNarrationCount > 0) errors.Add("narration generation failures detected.");
         if (metadata.TitleCandidates.Count == 0) errors.Add("metadata skeleton missing.");
         if (string.IsNullOrWhiteSpace(outputPaths.RootDirectory)) errors.Add("output paths missing.");
         if (validationWarnings.Count > 0) errors.Add("scene timing mismatch detected.");
@@ -298,6 +312,95 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(IContentPlanningSer
         if (context.WeeklyHighlights.Any(h => h.BestTimeUtc.HasValue && DateOnly.FromDateTime(h.BestTimeUtc.Value) != h.Date)) errors.Add("highlight date/time mismatch.");
         var debugSummary = new WeeklyForecastDebugSummary(context.RegionId, request.RegionId, "/forecast/weekly-sky", context.DailyForecasts.Count, context.DailyForecasts.Sum(x => x.VisibleObjects.Count), context.RecommendedNights.Count, context.WeeklyHighlights.Count, WeeklySkyForecastPreparationDiagnostics.Get(WeeklySkyForecastContextBuilder.CategoryDebugNormalizedObjectCountKey), WeeklySkyForecastPreparationDiagnostics.Get(WeeklySkyForecastContextBuilder.CategoryDebugCorrectedHighlightCountKey), WeeklySkyForecastPreparationDiagnostics.Get(WeeklySkyForecastContextBuilder.CategoryDebugExcludedObjectCountKey), context.BestPlanetOfWeek, context.BestMoonNight, context.BestPhotographyNight);
         return new(plan.Id, "WeeklySkyForecast", context.WeekStartDate, context.WeekEndDate, context, segmentPlan.LongSegments, segmentPlan.ShortSegments, scenes.Scenes, outputPaths, metadata, preparationValidation, debugSummary, warnings, steps, false, false);
+    }
+
+    private WeeklySkyForecastNarrationPlan BuildNarrationPlan(WeeklySkyForecastSegmentPlan segmentPlan)
+    {
+        static WeeklySkyForecastNarrationPlanItem ToPlan(WeeklySkyForecastSegmentPlanItem segment, bool isShort)
+            => new(
+                segment.SegmentCode,
+                isShort ? "Fast Hook" : "Conversational Astronomy",
+                isShort ? "Energetic" : "Warm and Confident",
+                Math.Max(18, (int)Math.Round(segment.EstimatedDurationSeconds * (isShort ? 2.4 : 2.8))),
+                segment.EstimatedDurationSeconds,
+                segment.PriorityScore);
+
+        return new(
+            segmentPlan.LongSegments.Select(x => ToPlan(x, false)).ToList(),
+            segmentPlan.ShortSegments.Select(x => ToPlan(x, true)).ToList());
+    }
+
+    private async Task<WeeklyNarrationManifest> GenerateNarrationArtifactsAsync(WeeklySkyForecastContext context, WeeklySkyForecastSegmentPlan segmentPlan, WeeklySkyForecastNarrationPlan narrationPlan, CategoryOutputPaths outputPaths, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(outputPaths.NarrationDirectory);
+        Directory.CreateDirectory(outputPaths.ManifestsDirectory);
+        var allSegments = segmentPlan.LongSegments.Concat(segmentPlan.ShortSegments).ToList();
+        var narrationSegments = new List<WeeklyNarrationSegment>(allSegments.Count);
+        var generatedAudioCount = 0;
+        var failedNarrationCount = 0;
+
+        foreach (var segment in allSegments)
+        {
+            var narrationText = BuildNarrationText(segment, context);
+            var fileName = $"{segment.SortOrder:00}-{segment.SegmentCode}.mp3";
+            var segmentDirectory = Path.Combine(outputPaths.NarrationDirectory, segment.SegmentType.ToLowerInvariant(), segment.SegmentCode);
+            Directory.CreateDirectory(segmentDirectory);
+
+            try
+            {
+                var audioPath = await speechSynthesisService.SynthesizeAsync(narrationText, segmentDirectory, cancellationToken);
+                var targetPath = Path.Combine(outputPaths.NarrationDirectory, fileName);
+                if (!audioPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Copy(audioPath, targetPath, overwrite: true);
+                }
+                generatedAudioCount++;
+            }
+            catch
+            {
+                failedNarrationCount++;
+            }
+
+            narrationSegments.Add(new WeeklyNarrationSegment(
+                segment.SegmentCode,
+                segment.SegmentType,
+                narrationText,
+                segment.EstimatedDurationSeconds,
+                context.Language,
+                segment.SegmentType.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "EnergeticShort" : "WeeklyNarrator",
+                fileName));
+        }
+
+        var manifest = new WeeklyNarrationManifest(
+            narrationSegments,
+            DateTime.UtcNow,
+            context.Language,
+            narrationSegments.Sum(x => x.EstimatedDurationSeconds),
+            narrationSegments.Count,
+            narrationSegments.Sum(x => x.EstimatedDurationSeconds),
+            generatedAudioCount,
+            failedNarrationCount);
+        await File.WriteAllTextAsync(Path.Combine(outputPaths.ManifestsDirectory, "NarrationManifest.json"), System.Text.Json.JsonSerializer.Serialize(manifest, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(outputPaths.ManifestsDirectory, "NarrationPlan.json"), System.Text.Json.JsonSerializer.Serialize(narrationPlan, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        return manifest;
+    }
+
+    private static string BuildNarrationText(WeeklySkyForecastSegmentPlanItem segment, WeeklySkyForecastContext context)
+    {
+        var dates = $"{context.WeekStartDate:MMM d} to {context.WeekEndDate:MMM d}";
+        var topObjects = string.Join(", ", context.DailyForecasts.SelectMany(x => x.VisibleObjects).Where(x => x.Visible).OrderByDescending(x => x.VisibilityScore).Select(x => x.ObjectName).Distinct(StringComparer.OrdinalIgnoreCase).Take(3));
+        var bestNight = context.RecommendedNights.FirstOrDefault()?.Date.ToString("MMM d") ?? context.WeekStartDate.ToString("MMM d");
+        return segment.SegmentCode switch
+        {
+            "WeeklyIntro" => $"Welcome to your weekly sky forecast for {context.LocationName}. From {dates}, we’re tracking the best nights and the easiest targets like {topObjects}.",
+            "MoonPhaseForecast" => $"Moon watch this week: plan around {context.BestMoonNight?.ToString("MMM d") ?? bestNight} for the strongest phase views, and use evening twilight for smooth contrast.",
+            "BestPlanets" => $"Top planet picks this week feature {topObjects}. Prioritize steady skies and observe when each target climbs higher after dusk.",
+            "RecommendedNights" => $"Your best observing window lands around {bestNight}, with stronger visibility scores and cleaner object separation in the night sky.",
+            "WeeklyHighlights" => $"Weekly highlights combine the top events and viewing windows from {dates}. Keep your setup simple and focus on the highest-ranked moments first.",
+            "AstroPhotographyTip" => $"Astro photo tip: on your best night, lock a stable tripod, use a timer, and start with wide frames before zooming into bright targets like {topObjects}.",
+            "WeeklyOutro" => $"That’s your weekly sky plan for {context.LocationName}. Save this forecast, step outside on the top nights, and clear skies this week.",
+            _ => $"Quick sky update for {context.LocationName}: biggest opportunity is around {bestNight}. Catch {topObjects} early and share your view tonight."
+        };
     }
 
     private static CategoryProductionStepResult Step(string name, long durationMs)
