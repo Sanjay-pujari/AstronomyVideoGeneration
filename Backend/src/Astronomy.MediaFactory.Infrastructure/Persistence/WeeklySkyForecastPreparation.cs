@@ -71,14 +71,16 @@ public sealed class WeeklySkyForecastContextBuilder(
             .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        normalizedRegionId = RegionIdNormalizer.NormalizeRegionId(regionId);
+        var normalized = RegionIdNormalizer.NormalizeRegionId(regionId);
         region = regions.FirstOrDefault(r =>
-            string.Equals(RegionIdNormalizer.NormalizeRegionId(r.RegionId), normalizedRegionId, StringComparison.OrdinalIgnoreCase))!;
+            string.Equals(RegionIdNormalizer.NormalizeRegionId(r.RegionId), normalized, StringComparison.OrdinalIgnoreCase))!;
         if (region is not null)
         {
+            normalizedRegionId = normalized;
             return true;
         }
 
+        normalizedRegionId = normalized;
         region = new RegionScheduleOptions();
         return false;
     }
