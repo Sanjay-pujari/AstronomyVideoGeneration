@@ -74,7 +74,8 @@ public sealed class WeeklySkyForecastV2EventIntelligenceBuilder : IWeeklySkyFore
 public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastContextBuilder contextBuilder,
     IWeeklySkyForecastV2EventIntelligenceBuilder eventBuilder,
-    IWeeklySkyForecastV2EditorialIntelligenceBuilder editorialBuilder) : IWeeklySkyForecastV2IntelligenceService
+    IWeeklySkyForecastV2EditorialIntelligenceBuilder editorialBuilder,
+    IWeeklySkyForecastV2CinematicEditorialRefiner cinematicRefiner) : IWeeklySkyForecastV2IntelligenceService
 {
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
     {
@@ -99,10 +100,12 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             events,
             arc,
             null!,
+            null,
             events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             ctx.Warnings,
             [new CategoryProductionStepResult("weekly_skyfield_context", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Context built", null, []), new CategoryProductionStepResult("event_intelligence", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Event intelligence generated", null, [])]);
         var editorial = await editorialBuilder.BuildAsync(baseResponse, cancellationToken);
-        return baseResponse with { EditorialStoryPackage = editorial };
+        var cinematic = await cinematicRefiner.RefineAsync(editorial, baseResponse with { EditorialStoryPackage = editorial }, cancellationToken);
+        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic };
     }
 }

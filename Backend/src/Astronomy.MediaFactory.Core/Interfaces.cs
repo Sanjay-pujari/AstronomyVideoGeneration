@@ -1184,6 +1184,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> EventIntelligence,
     WeeklyStoryArc WeeklyStoryArc,
     WeeklyEditorialStoryPackage EditorialStoryPackage,
+    WeeklyCinematicStoryBlueprint? CinematicStoryBlueprint,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
@@ -1277,6 +1278,37 @@ public interface IWeeklySkyForecastV2IntelligenceService
 public interface IWeeklySkyForecastV2EditorialIntelligenceBuilder
 {
     Task<WeeklyEditorialStoryPackage> BuildAsync(WeeklySkyForecastV2IntelligenceResponse intelligence, CancellationToken cancellationToken);
+}
+
+public sealed record WeeklyCinematicStoryBlueprint(
+    string StoryId,
+    string Headline,
+    string Subtitle,
+    string OpeningHook,
+    string StoryPromise,
+    WeeklyHeroStory HeroStory,
+    IReadOnlyList<WeeklySupportingStory> SupportingStories,
+    IReadOnlyList<WeeklyCinematicNarrativeBeat> NarrativeBeats,
+    IReadOnlyList<WeeklyCinematicMomentBlueprint> CinematicMoments,
+    IReadOnlyList<WeeklyShortBlueprint> ShortsBlueprints,
+    WeeklyThumbnailBlueprint ThumbnailBlueprint,
+    string NarrationTone,
+    string VisualTone,
+    IReadOnlyList<string> Warnings);
+
+public sealed record WeeklyHeroStory(string Title, string Description, DateOnly PeakDate, IReadOnlyList<DateOnly> SupportingDates, DateTime? BestTimeUtc, IReadOnlyList<string> ObjectCodes, IReadOnlyList<string> ObjectNames, string StoryAngle, string ViewerBenefit, string VisualPromise, string RecommendedVisualStrategy, string SourceEventId);
+public sealed record WeeklySupportingStory(string StoryCode, string Title, string Description, DateOnly TargetDate, IReadOnlyList<string> ObjectCodes, string Purpose, string RecommendedVisualStrategy, string SourceEventId);
+public sealed record WeeklyCinematicNarrativeBeat(int BeatOrder, string BeatCode, string Title, string NarrationIntent, string EmotionalTone, string SourceStoryCode, DateOnly TargetDate, IReadOnlyList<string> ObjectCodes, string RecommendedVisualStrategy, string SuggestedVisualPurpose, bool ShouldReuseVisual, int EstimatedNarrationSeconds);
+public sealed record WeeklyCinematicMomentBlueprint(string MomentCode, string Title, string Description, IReadOnlyList<string> ObjectCodes, DateOnly TargetDate, DateTime? BestTimeUtc, string VisualType, string RecommendedVisualStrategy, string SuggestedAssetRole, bool ReuseAllowed, string VisualUniquenessKey);
+public sealed record WeeklyShortBlueprint(string ShortCode, string Title, string Hook, string StoryAngle, IReadOnlyList<string> ObjectCodes, DateOnly TargetDate, string RecommendedVisualStrategy, int SuggestedDurationSeconds, double PriorityScore);
+public sealed record WeeklyThumbnailBlueprint(IReadOnlyList<string> TitleTextCandidates, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string Emotion, string CompositionIdea, string BackgroundSuggestion, string OverlayTextSuggestion, string RecommendedVisualStrategy);
+
+public interface IWeeklySkyForecastV2CinematicEditorialRefiner
+{
+    Task<WeeklyCinematicStoryBlueprint> RefineAsync(
+        WeeklyEditorialStoryPackage editorialPackage,
+        WeeklySkyForecastV2IntelligenceResponse intelligence,
+        CancellationToken cancellationToken);
 }
 
 public interface IWeeklySkyForecastVisualAssetGenerationService

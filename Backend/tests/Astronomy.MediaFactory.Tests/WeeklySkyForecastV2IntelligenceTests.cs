@@ -7,45 +7,32 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class WeeklySkyForecastV2IntelligenceTests
 {
     [Fact]
-    public async Task V2_Intelligence_Generates_Editorial_Package()
+    public async Task V2_Intelligence_Generates_Cinematic_Blueprint()
     {
-        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder());
+        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner());
         var response = await service.PreviewAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "IN-RJ-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), Diagnostics: true), CancellationToken.None);
 
         Assert.True(response.Success);
+        Assert.NotNull(response.CinematicStoryBlueprint);
         Assert.NotNull(response.EditorialStoryPackage);
-        Assert.False(string.IsNullOrWhiteSpace(response.EditorialStoryPackage.Headline));
-        Assert.False(string.IsNullOrWhiteSpace(response.EditorialStoryPackage.OpeningHook));
-        Assert.True(response.EditorialStoryPackage.NarrativeArc.Count >= 5);
-        Assert.NotNull(response.EditorialStoryPackage.ThumbnailDirection);
-        Assert.True(response.EditorialStoryPackage.ShortsCandidates.Count >= 3);
-        Assert.Equal(response.EditorialStoryPackage.ShortsCandidates.Count, response.EditorialStoryPackage.ShortsCandidates.Select(x => x.Title).Distinct().Count());
+        Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Moon", response.CinematicStoryBlueprint.Headline, StringComparison.OrdinalIgnoreCase);
+        Assert.True(response.CinematicStoryBlueprint.NarrativeBeats.Count >= 6);
+        Assert.Equal(3, response.CinematicStoryBlueprint.ShortsBlueprints.Count);
     }
 
     [Fact]
-    public void V2_Intelligence_Grouping_Does_Not_Claim_Conjunction_And_Collapses()
+    public async Task V2_Cinematic_Refiner_Collapses_Repeated_Grouping_And_Keeps_Unique_Moments_And_Shorts()
     {
-        var service = new WeeklySkyForecastV2EditorialIntelligenceBuilder();
-        var events = new WeeklySkyForecastV2EventIntelligenceBuilder().Build(BuildContext());
-        var intelligence = BuildResponse(events);
-        var pkg = service.BuildAsync(intelligence, CancellationToken.None).Result;
+        var intelligence = BuildResponse(new WeeklySkyForecastV2EventIntelligenceBuilder().Build(BuildContext()));
+        var editorial = await new WeeklySkyForecastV2EditorialIntelligenceBuilder().BuildAsync(intelligence, CancellationToken.None);
+        var cinematic = await new WeeklySkyForecastV2CinematicEditorialRefiner().RefineAsync(editorial, intelligence with { EditorialStoryPackage = editorial }, CancellationToken.None);
 
-        Assert.Contains("same evening viewing window", pkg.HeroEvent.Description, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("conjunction", pkg.HeroEvent.Title, StringComparison.OrdinalIgnoreCase);
-        Assert.True((pkg.HeroEvent.SupportingDates?.Count ?? 0) > 1);
-    }
-
-    [Fact]
-    public void V2_Intelligence_Headline_Mentions_Hero_Objects_And_Required_Beats_Present()
-    {
-        var pkg = new WeeklySkyForecastV2EditorialIntelligenceBuilder().BuildAsync(BuildResponse(new WeeklySkyForecastV2EventIntelligenceBuilder().Build(BuildContext())), CancellationToken.None).Result;
-        Assert.Contains("Moon", pkg.Headline, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(pkg.NarrativeArc, x => x.BeatType == "hook");
-        Assert.Contains(pkg.NarrativeArc, x => x.BeatType == "hero_sky_event");
-        Assert.Contains(pkg.NarrativeArc, x => x.BeatType == "best_observation_night");
-        Assert.Contains(pkg.NarrativeArc, x => x.BeatType == "moon_planet_highlight");
-        Assert.Contains(pkg.NarrativeArc, x => x.BeatType == "photography_tip");
-        Assert.Contains(pkg.NarrativeArc, x => x.BeatType == "closing_recommendation");
+        Assert.True(cinematic.HeroStory.SupportingDates.Count > 1);
+        Assert.Equal(cinematic.CinematicMoments.Count, cinematic.CinematicMoments.Select(x => x.VisualUniquenessKey).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(3, cinematic.ShortsBlueprints.Count);
+        Assert.Equal(3, cinematic.ShortsBlueprints.Select(x => x.Title).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.DoesNotContain(cinematic.OpeningHook, new[] { "conjunction", "exact alignment", "rare alignment", "almost touching" }, StringComparer.OrdinalIgnoreCase);
     }
 
     private static WeeklySkyForecastV2IntelligenceResponse BuildResponse(IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> events)
@@ -55,6 +42,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             events,
             new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             null!,
+            null,
             ["Hybrid"],
             [],
             []);
