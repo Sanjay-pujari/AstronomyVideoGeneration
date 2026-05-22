@@ -1018,6 +1018,9 @@ public sealed record WeeklyForecastDebugSummary(
     int VisibleObjectCount,
     int RecommendedNightCount,
     int WeeklyHighlightCount,
+    int NormalizedObjectCount,
+    int CorrectedHighlightCount,
+    int ExcludedObjectCount,
     string? BestPlanetOfWeek,
     DateOnly? BestMoonNight,
     DateOnly? BestPhotographyNight);
