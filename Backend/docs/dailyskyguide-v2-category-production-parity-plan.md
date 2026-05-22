@@ -185,3 +185,66 @@ Suggested shape:
 - No edits to `/api/pipelines/run` behavior.
 - No replacement of existing render/audio/thumbnail/publish internals.
 - No schema/database migration.
+
+# Category Isolation & Production Safety Rules
+
+## Core Principle
+
+Each category must behave like an isolated production module/strategy.
+
+Changes in one category must not disturb:
+- other categories
+- DailySkyGuide v2
+- existing /api/pipelines/run behavior
+
+## Rules
+
+1. Category-specific logic must remain inside its own folder/namespace.
+
+Examples:
+- Categories/DailySkyGuide/*
+- Categories/WeeklySkyForecast/*
+
+2. Never place category-specific if/else logic inside another category.
+
+BAD:
+if(category == "WeeklySkyForecast") inside DailySkyGuide code.
+
+3. Shared services must remain generic and backward-compatible.
+
+Examples:
+- ThumbnailEngine
+- AudioEngine
+- VideoRenderer
+- SkyfieldClient
+- SscScriptGenerator
+
+4. If a shared service must change:
+- change must be backward-compatible
+- DailySkyGuide v2 regression tests must pass
+
+5. Each category must implement:
+- its own strategy
+- its own context builder
+- its own segment planner
+- its own SSC scene planner
+
+6. Category registration must happen only via strategy resolver/DI registration.
+
+7. Existing /api/pipelines/run behavior must remain untouched forever.
+
+8. Publishing remains disabled for new categories until manually approved.
+
+9. Every category must support:
+- long narration
+- short narration
+- long video
+- short video
+- long thumbnail
+- short thumbnail
+- metadata
+
+10. Output directory convention:
+
+/media-output/{categoryName}/{date}/{regionId}/{pipelineRunId}
+
