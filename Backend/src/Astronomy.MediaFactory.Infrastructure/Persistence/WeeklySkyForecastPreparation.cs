@@ -190,17 +190,24 @@ public sealed class WeeklySkyForecastSscScenePlanner(ILogger<WeeklySkyForecastSs
         }
         var moonDate = context.BestMoonNight ?? targetDate;
         var moonNight = bestNightByDate.GetValueOrDefault(moonDate);
-        var planetDate = context.DailyForecasts
+        var bestPlanetDate = context.WeeklyHighlights
+            .Where(h => h.HighlightType.Contains("planet", StringComparison.OrdinalIgnoreCase))
+            .Select(h => h.Date)
+            .FirstOrDefault();
+        var planetDate = (bestPlanetDate == default ? null : bestPlanetDate) ?? context.DailyForecasts
             .FirstOrDefault(x => x.VisibleObjects.Any(o => o.Visible && o.ObjectCode.Equals(context.BestPlanetOfWeek ?? string.Empty, StringComparison.OrdinalIgnoreCase)))?.Date
             ?? targetDate;
+        var bestPlanetCapture = context.WeeklyHighlights
+            .FirstOrDefault(h => h.Date == planetDate && h.ObjectCode.Equals(context.BestPlanetOfWeek ?? string.Empty, StringComparison.OrdinalIgnoreCase))?.BestTimeUtc
+            ?? ResolveCapture(planetDate, context.BestPlanetOfWeek, false);
         var summaryDate = targetDate;
         var recommendedDate = targetDate;
         var scenes = new List<WeeklySkyForecastSscScenePlanItem>
         {
             new("WeeklyIntroWideSky", "WideSky", null, ResolveCapture(context.WeekStartDate, null, true), context.WeekStartDate, 90, "long", false, "WeeklyIntro"),
             new("BestMoonNight", "Moon", "MOON", moonNight?.BestStartUtc ?? ResolveCapture(moonDate, "MOON", false), moonDate, 45, "both", false, "MoonPhaseForecast"),
-            new("BestPlanetOfWeek", "Planet", context.BestPlanetOfWeek, ResolveCapture(planetDate, context.BestPlanetOfWeek, false), planetDate, 35, "both", false, "BestPlanets"),
-            new("RecommendedObservationNight", "Night", bestObject, ResolveCapture(recommendedDate, bestObject, false), recommendedDate, 60, "both", false, "RecommendedNights"),
+            new("BestPlanetOfWeek", "Planet", context.BestPlanetOfWeek, bestPlanetCapture, planetDate, 35, "both", false, "BestPlanets"),
+            new("RecommendedObservationNight", "Night", null, ResolveCapture(recommendedDate, null, true), recommendedDate, 90, "both", false, "RecommendedNights"),
             new("WeeklyHighlight", "Highlight", context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, ResolveCapture(recommendedDate, context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, false), recommendedDate, 50, "both", false, "WeeklyHighlights"),
             new("WeeklySummaryMap", "Summary", null, ResolveCapture(summaryDate, null, true), summaryDate, 95, "long", false, "WeeklyOutro"),
             new("ThumbnailCandidate", "Thumbnail", thumb, ResolveCapture(recommendedDate, thumb, false), recommendedDate, 30, "thumbnail", true, "BiggestWeeklyHighlight")
@@ -263,6 +270,8 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
     IStellariumScriptGenerator scriptGenerator,
     IStellariumImageCaptureExecutor captureExecutor) : IWeeklySkyForecastPreparationOrchestrator
 {
+    private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
     public async Task<WeeklySkyForecastPreparationResponse> RunAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken)
     {
         var steps = new List<CategoryProductionStepResult>();
@@ -292,6 +301,7 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
             request.CaptureStellariumScenes,
             request.DryRun,
             request.OverwriteExisting);
+        var executionState = new WeeklySkyForecastExecutionState();
         WeeklyNarrationManifest? narrationManifest = null;
         string? narrationManifestPath = null;
         var audioSegments = new List<WeeklySkyForecastAudioSegmentResult>();
@@ -302,10 +312,24 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
         if (flagsUsed.GenerateNarration)
         {
             var narrationPlan = BuildNarrationPlan(segmentPlan);
-            (narrationManifest, narrationManifestPath, audioSegments) = await GenerateNarrationArtifactsAsync(context, segmentPlan, narrationPlan, outputPaths, flagsUsed.GenerateAudio, cancellationToken);
+            stopwatch.Restart();
+            (narrationManifest, narrationManifestPath) = await GenerateNarrationArtifactsAsync(context, segmentPlan, narrationPlan, outputPaths, flagsUsed.OverwriteExisting, cancellationToken);
+            executionState.GeneratedAssets["narrationManifest"] = narrationManifestPath;
+            executionState.Diagnostics["narrationGenerationMs"] = stopwatch.ElapsedMilliseconds;
+            MarkCompleted(executionState, "GenerateNarration");
         }
-        steps.Add(Step("GenerateNarration", stopwatch.ElapsedMilliseconds));
-        steps.Add(Step("GenerateAudio", Math.Max(1, stopwatch.ElapsedMilliseconds)));
+        else MarkSkipped(executionState, "GenerateNarration");
+        steps.Add(Step("GenerateNarration", executionState.Diagnostics.GetValueOrDefault("narrationGenerationMs", 1)));
+        if (flagsUsed.GenerateAudio)
+        {
+            stopwatch.Restart();
+            audioSegments = await GenerateAudioArtifactsAsync(narrationManifestPath, outputPaths, flagsUsed.OverwriteExisting, cancellationToken);
+            executionState.GeneratedAssets["audioManifest"] = Path.Combine(outputPaths.ManifestsDirectory, "AudioManifest.json");
+            executionState.Diagnostics["audioGenerationMs"] = stopwatch.ElapsedMilliseconds;
+            MarkCompleted(executionState, "GenerateAudio");
+        }
+        else MarkSkipped(executionState, "GenerateAudio");
+        steps.Add(Step("GenerateAudio", executionState.Diagnostics.GetValueOrDefault("audioGenerationMs", 1)));
         stopwatch.Restart();
         if (flagsUsed.GenerateSscScripts)
         {
@@ -326,8 +350,11 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
                 sscScripts.Add(new WeeklySkyForecastSscScriptResult(scene.SceneCode, destinationScriptPath, expectedImagePath, generated.Success, generated.ErrorMessage));
                 visualAssets.Add(new WeeklySkyForecastVisualAssetResult(scene.SceneCode, expectedImagePath, scene.OutputImageRole, scene.Metadata.TryGetValue("linkedSegmentCode", out var linked) ? linked : string.Empty, scene.TargetObjectCode));
             }
+            executionState.Diagnostics["sscGenerationMs"] = stopwatch.ElapsedMilliseconds;
+            MarkCompleted(executionState, "GenerateSscScripts");
             if (flagsUsed.CaptureStellariumScenes)
             {
+                stopwatch.Restart();
                 if (flagsUsed.DryRun)
                 {
                     captureResults.AddRange(visualAssets.Select(x => new WeeklySkyForecastCaptureResult(x.SceneCode, x.ExpectedImagePath, "Skipped/DryRun", false, null)));
@@ -341,10 +368,19 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
                         captureResults.Add(new WeeklySkyForecastCaptureResult(asset.SceneCode, asset.ExpectedImagePath, exists ? "Captured" : "Missing", exists, exists ? null : "PNG image file missing after capture."));
                     }
                 }
+                executionState.Diagnostics["captureExecutionMs"] = stopwatch.ElapsedMilliseconds;
+                MarkCompleted(executionState, "CaptureStellariumScenes");
             }
+            else MarkSkipped(executionState, "CaptureStellariumScenes");
         }
-        steps.Add(Step("GenerateSscScripts", Math.Max(1, stopwatch.ElapsedMilliseconds)));
-        steps.Add(Step("CaptureStellariumScenes", 1));
+        else
+        {
+            MarkSkipped(executionState, "GenerateSscScripts");
+            MarkSkipped(executionState, "CaptureStellariumScenes");
+        }
+        steps.Add(Step("GenerateSscScripts", executionState.Diagnostics.GetValueOrDefault("sscGenerationMs", 1)));
+        steps.Add(Step("CaptureStellariumScenes", executionState.Diagnostics.GetValueOrDefault("captureExecutionMs", 1)));
+        await PersistExecutionStateAsync(outputPaths, executionState, cancellationToken);
         var warnings = context.Warnings.Concat(["Publishing disabled by policy.", "Analytics disabled by policy."]).Distinct().ToList();
         var validationWarnings = new List<string>();
         foreach (var scene in scenes.Scenes)
@@ -389,40 +425,16 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
             segmentPlan.ShortSegments.Select(x => ToPlan(x, true)).ToList());
     }
 
-    private async Task<(WeeklyNarrationManifest Manifest, string ManifestPath, List<WeeklySkyForecastAudioSegmentResult> AudioSegments)> GenerateNarrationArtifactsAsync(WeeklySkyForecastContext context, WeeklySkyForecastSegmentPlan segmentPlan, WeeklySkyForecastNarrationPlan narrationPlan, CategoryOutputPaths outputPaths, bool generateAudio, CancellationToken cancellationToken)
+    private async Task<(WeeklyNarrationManifest Manifest, string ManifestPath)> GenerateNarrationArtifactsAsync(WeeklySkyForecastContext context, WeeklySkyForecastSegmentPlan segmentPlan, WeeklySkyForecastNarrationPlan narrationPlan, CategoryOutputPaths outputPaths, bool overwriteExisting, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(outputPaths.NarrationDirectory);
         Directory.CreateDirectory(outputPaths.ManifestsDirectory);
         var allSegments = segmentPlan.LongSegments.Concat(segmentPlan.ShortSegments).ToList();
         var narrationSegments = new List<WeeklyNarrationSegment>(allSegments.Count);
-        var audioSegments = new List<WeeklySkyForecastAudioSegmentResult>(allSegments.Count);
-        var generatedAudioCount = 0;
-        var failedNarrationCount = 0;
-
         foreach (var segment in allSegments)
         {
             var narrationText = BuildNarrationText(segment, context);
             var fileName = $"{segment.SortOrder:00}-{segment.SegmentCode}.mp3";
-            var segmentDirectory = Path.Combine(outputPaths.NarrationDirectory, segment.SegmentType.ToLowerInvariant(), segment.SegmentCode);
-            Directory.CreateDirectory(segmentDirectory);
-
-            var targetPath = Path.Combine(outputPaths.NarrationDirectory, fileName);
-            if (generateAudio) try
-            {
-                var audioPath = await speechSynthesisService.SynthesizeAsync(narrationText, segmentDirectory, cancellationToken);
-                if (!audioPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    File.Copy(audioPath, targetPath, overwrite: true);
-                }
-                generatedAudioCount++;
-                audioSegments.Add(new WeeklySkyForecastAudioSegmentResult(segment.SegmentCode, targetPath, segment.EstimatedDurationSeconds, true, null));
-            }
-            catch
-            {
-                failedNarrationCount++;
-                audioSegments.Add(new WeeklySkyForecastAudioSegmentResult(segment.SegmentCode, targetPath, segment.EstimatedDurationSeconds, false, "Audio synthesis failed."));
-            }
-
             narrationSegments.Add(new WeeklyNarrationSegment(
                 segment.SegmentCode,
                 segment.SegmentType,
@@ -440,13 +452,49 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
             narrationSegments.Sum(x => x.EstimatedDurationSeconds),
             narrationSegments.Count,
             narrationSegments.Sum(x => x.EstimatedDurationSeconds),
-            generatedAudioCount,
-            failedNarrationCount);
+            0,
+            0);
         var manifestPath = Path.Combine(outputPaths.ManifestsDirectory, "NarrationManifest.json");
-        await File.WriteAllTextAsync(manifestPath, System.Text.Json.JsonSerializer.Serialize(manifest, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(outputPaths.ManifestsDirectory, "NarrationPlan.json"), System.Text.Json.JsonSerializer.Serialize(narrationPlan, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }), cancellationToken);
-        return (manifest, manifestPath, audioSegments);
+        if (overwriteExisting || !File.Exists(manifestPath)) await File.WriteAllTextAsync(manifestPath, System.Text.Json.JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
+        var narrationPlanPath = Path.Combine(outputPaths.ManifestsDirectory, "NarrationPlan.json");
+        if (overwriteExisting || !File.Exists(narrationPlanPath)) await File.WriteAllTextAsync(narrationPlanPath, System.Text.Json.JsonSerializer.Serialize(narrationPlan, JsonOptions), cancellationToken);
+        return (manifest, manifestPath);
     }
+
+    private async Task<List<WeeklySkyForecastAudioSegmentResult>> GenerateAudioArtifactsAsync(string? narrationManifestPath, CategoryOutputPaths outputPaths, bool overwriteExisting, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(narrationManifestPath) || !File.Exists(narrationManifestPath)) return [];
+        var manifest = System.Text.Json.JsonSerializer.Deserialize<WeeklyNarrationManifest>(await File.ReadAllTextAsync(narrationManifestPath, cancellationToken)) ?? throw new InvalidOperationException("Narration manifest not readable.");
+        var audioSegments = new List<WeeklySkyForecastAudioSegmentResult>(manifest.Segments.Count);
+        Directory.CreateDirectory(outputPaths.NarrationDirectory);
+        foreach (var segment in manifest.Segments)
+        {
+            var targetPath = Path.Combine(outputPaths.NarrationDirectory, segment.AudioFileName);
+            if (!overwriteExisting && File.Exists(targetPath) && new FileInfo(targetPath).Length > 0)
+            {
+                audioSegments.Add(new WeeklySkyForecastAudioSegmentResult(segment.SegmentCode, targetPath, segment.EstimatedDurationSeconds, true, null));
+                continue;
+            }
+            var segmentDirectory = Path.Combine(outputPaths.NarrationDirectory, segment.SegmentType.ToLowerInvariant(), segment.SegmentCode);
+            Directory.CreateDirectory(segmentDirectory);
+            try
+            {
+                var audioPath = await speechSynthesisService.SynthesizeAsync(segment.NarrationText, segmentDirectory, cancellationToken);
+                if (!audioPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase)) File.Copy(audioPath, targetPath, overwrite: true);
+                audioSegments.Add(new WeeklySkyForecastAudioSegmentResult(segment.SegmentCode, targetPath, segment.EstimatedDurationSeconds, true, null));
+            }
+            catch { audioSegments.Add(new WeeklySkyForecastAudioSegmentResult(segment.SegmentCode, targetPath, segment.EstimatedDurationSeconds, false, "Audio synthesis failed.")); }
+        }
+        var audioManifestPath = Path.Combine(outputPaths.ManifestsDirectory, "AudioManifest.json");
+        await File.WriteAllTextAsync(audioManifestPath, System.Text.Json.JsonSerializer.Serialize(audioSegments, JsonOptions), cancellationToken);
+        return audioSegments;
+    }
+
+    private static Task PersistExecutionStateAsync(CategoryOutputPaths outputPaths, WeeklySkyForecastExecutionState state, CancellationToken cancellationToken)
+        => File.WriteAllTextAsync(Path.Combine(outputPaths.ManifestsDirectory, "ExecutionState.json"), System.Text.Json.JsonSerializer.Serialize(state, JsonOptions), cancellationToken);
+
+    private static void MarkCompleted(WeeklySkyForecastExecutionState state, string phase) => state.CompletedPhases.Add(phase);
+    private static void MarkSkipped(WeeklySkyForecastExecutionState state, string phase) => state.RetryablePhases.Add(phase);
 
     private static string BuildNarrationText(WeeklySkyForecastSegmentPlanItem segment, WeeklySkyForecastContext context)
     {
@@ -478,6 +526,16 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
         try { return TimeZoneInfo.FindSystemTimeZoneById(timezone); }
         catch { return TimeZoneInfo.Utc; }
     }
+}
+
+public sealed class WeeklySkyForecastExecutionState
+{
+    public List<string> CompletedPhases { get; init; } = [];
+    public List<string> FailedPhases { get; init; } = [];
+    public Dictionary<string, string> GeneratedAssets { get; init; } = [];
+    public Dictionary<string, long> Diagnostics { get; init; } = [];
+    public List<string> RetryablePhases { get; init; } = [];
+    public DateTime UpdatedUtc { get; init; } = DateTime.UtcNow;
 }
 
 internal static class WeeklySkyForecastObjectCodeResolver
