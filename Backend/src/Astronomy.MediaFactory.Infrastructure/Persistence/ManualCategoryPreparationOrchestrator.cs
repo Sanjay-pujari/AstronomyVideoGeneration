@@ -19,7 +19,10 @@ public sealed class ManualCategoryPreparationOrchestrator(
     public async Task<ManualCategoryPreparationResponse> RunAsync(ManualCategoryPreparationRequest request, CancellationToken cancellationToken)
     {
         var steps = new List<ManualCategoryPreparationStepResult>();
-        var warnings = new List<string>();
+        var warnings = new List<string>
+        {
+            "Publishing is disabled for category preparation flow until category output quality is verified."
+        };
         RunPipelineRequest? runPipelineRequest = null;
         Guid? planId = null;
         ContentGenerationPlan? plan = null;
@@ -118,7 +121,7 @@ public sealed class ManualCategoryPreparationOrchestrator(
         steps.Add(await ExecuteStepAsync("PipelineRequestPreview", async () =>
         {
             var preview = await planning.BuildPipelineRequestPreviewAsync(plan.Id, cancellationToken);
-            runPipelineRequest = preview.PipelineRequest;
+            runPipelineRequest = preview.PipelineRequest with { PublishToYouTube = false };
             return ("Pipeline request preview built.", null, preview.Warnings);
         }));
 
@@ -128,7 +131,29 @@ public sealed class ManualCategoryPreparationOrchestrator(
     }
 
     private static ManualCategoryPreparationResponse BuildResponse(bool success, string categoryCode, Guid? planId, IReadOnlyList<ManualCategoryPreparationStepResult> steps, RunPipelineRequest? runPipelineRequest, IReadOnlyList<string> warnings, string? error)
-        => new(planId, categoryCode, success, steps, runPipelineRequest, warnings, error);
+    {
+        var safetyWarnings = warnings.ToList();
+        const string publishingDisabledWarning = "Publishing is disabled for category preparation flow until category output quality is verified.";
+        if (!safetyWarnings.Contains(publishingDisabledWarning, StringComparer.Ordinal))
+            safetyWarnings.Add(publishingDisabledWarning);
+
+        var sanitizedRequest = runPipelineRequest is null
+            ? null
+            : runPipelineRequest with { PublishToYouTube = false };
+
+        return new(
+            planId,
+            categoryCode,
+            success,
+            steps,
+            sanitizedRequest,
+            safetyWarnings,
+            error,
+            PublishingEnabled: false,
+            PublishToYouTube: false,
+            PublishToFacebook: false,
+            PublishToInstagram: false);
+    }
 
     private static ManualCategoryPreparationStepResult Skipped(string name, string message) => new(name, "Skipped", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, message, null, []);
 

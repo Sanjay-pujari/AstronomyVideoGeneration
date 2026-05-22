@@ -836,7 +836,11 @@ public sealed record ManualCategoryPreparationResponse(
     IReadOnlyList<ManualCategoryPreparationStepResult> Steps,
     RunPipelineRequest? RunPipelineRequest,
     IReadOnlyList<string> Warnings,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    bool PublishingEnabled = false,
+    bool PublishToYouTube = false,
+    bool PublishToFacebook = false,
+    bool PublishToInstagram = false);
 
 public interface IManualCategoryPreparationOrchestrator
 {
