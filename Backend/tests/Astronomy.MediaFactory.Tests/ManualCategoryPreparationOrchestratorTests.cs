@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
