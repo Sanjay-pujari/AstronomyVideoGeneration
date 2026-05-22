@@ -49,11 +49,14 @@ public sealed class WeeklySkyForecastFoundationTests
         var ex = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "in-rj-udaipur", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None));
 
-        Assert.Equal("Region 'IN-RJ-UDAIPUR' is not configured in region settings.", ex.Message);
+        Assert.Contains("Region 'IN-RJ-UDAIPUR' is not configured in region settings.", ex.Message, StringComparison.Ordinal);
+        var resolutionEx = Assert.IsType<WeeklySkyForecastRegionResolutionException>(ex);
+        Assert.Equal("IN-RJ-UDAIPUR", resolutionEx.RequestedRegionId);
+        Assert.Empty(resolutionEx.AvailableRegionIds);
     }
 
     [Fact]
-    public async Task ContextBuilder_Duplicate_Region_Keys_LogWarning_And_DoNotThrow()
+    public async Task ContextBuilder_Uses_Configured_Region_Only_Without_Custom_Dictionary()
     {
         var scheduler = Options.Create(new SchedulerOptions
         {
@@ -73,7 +76,7 @@ public sealed class WeeklySkyForecastFoundationTests
         var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
 
         Assert.Equal("INDIA-UDAIPUR", context.RegionId);
-        Assert.Contains(logger.Messages, m => m.Contains("Duplicate region configuration found for regionId INDIA-UDAIPUR", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Messages, m => m.Contains("Duplicate region configuration found", StringComparison.Ordinal));
     }
 
     [Fact]

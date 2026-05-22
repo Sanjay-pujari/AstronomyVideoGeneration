@@ -206,6 +206,15 @@ app.MapPost("/api/content-planning/generate-plan", async (GenerateContentPlanReq
     }
     catch (KeyNotFoundException ex)
     {
+        if (ex is WeeklySkyForecastRegionResolutionException regionEx)
+        {
+            return Results.BadRequest(new
+            {
+                requestedRegionId = regionEx.RequestedRegionId,
+                availableRegionIds = regionEx.AvailableRegionIds,
+                message = regionEx.Message
+            });
+        }
         return Results.BadRequest(new { message = ex.Message });
     }
 });
@@ -232,6 +241,15 @@ app.MapPost("/api/content-planning/run-weekly-skyforecast-preparation", async (W
     }
     catch (KeyNotFoundException ex)
     {
+        if (ex is WeeklySkyForecastRegionResolutionException regionEx)
+        {
+            return Results.BadRequest(new
+            {
+                requestedRegionId = regionEx.RequestedRegionId,
+                availableRegionIds = regionEx.AvailableRegionIds,
+                message = regionEx.Message
+            });
+        }
         return Results.BadRequest(new { message = ex.Message });
     }
 });
