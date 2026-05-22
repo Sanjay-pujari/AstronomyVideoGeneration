@@ -442,6 +442,23 @@ app.MapPost("/api/content-planning/weekly-skyforecast/{contentGenerationPlanId:g
     }
 });
 
+
+app.MapPost("/api/content-planning/weekly-skyforecast/{contentGenerationPlanId:guid}/render-segments", async (Guid contentGenerationPlanId, WeeklySkyForecastSegmentVideoRenderRequest request, IWeeklySkyForecastSegmentVideoRenderer service, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await service.RenderAsync(contentGenerationPlanId, request, ct));
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapGet("/api/content-planning/plans/{id:guid}/asset-aware-manual-run-package", async (Guid id, IAssetAwareManualRunPreparationService preparation, CancellationToken ct) =>
 {
     try
