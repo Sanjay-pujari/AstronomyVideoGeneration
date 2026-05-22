@@ -955,6 +955,8 @@ public sealed record WeeklySkyForecastProductionRequest(
     bool GenerateAudio = false,
     bool GenerateSscScripts = false,
     bool CaptureStellariumScenes = false,
+    bool GenerateSegmentVideos = false,
+    bool GenerateFinalVideos = false,
     bool DryRun = true,
     bool OverwriteExisting = false,
     bool PublishToYouTube = false,
@@ -1047,9 +1049,11 @@ public sealed record WeeklySkyForecastAudioSegmentResult(string SegmentCode, str
 public sealed record WeeklySkyForecastSscScriptResult(string SceneCode, string ScriptPath, string ExpectedImagePath, bool Success, string? ErrorMessage);
 public sealed record WeeklySkyForecastVisualAssetResult(string SceneCode, string ExpectedImagePath, string OutputRole, string LinkedSegmentCode, string? TargetObjectCode);
 public sealed record WeeklySkyForecastCaptureResult(string SceneCode, string ImagePath, string Status, bool Exists, string? ErrorMessage);
-public sealed record WeeklySkyForecastExecutionFlags(bool GenerateNarration, bool GenerateAudio, bool GenerateSscScripts, bool CaptureStellariumScenes, bool DryRun, bool OverwriteExisting);
+public sealed record WeeklySkyForecastExecutionFlags(bool GenerateNarration, bool GenerateAudio, bool GenerateSscScripts, bool CaptureStellariumScenes, bool GenerateSegmentVideos, bool GenerateFinalVideos, bool DryRun, bool OverwriteExisting);
+public sealed record WeeklySkyForecastFinalVideoResult(string LongVideoPath, string ShortVideoPath, IReadOnlyList<string> SegmentVideoPaths, double DurationSeconds, string Resolution, string RenderStatus, string FfmpegCommandSummary, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record WeeklySkyForecastFinalVideoValidation(bool IsValid, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings, bool LongVideoExists, bool ShortVideoExists, double DurationSeconds);
 
-public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, string Category, DateOnly WeekStartDate, DateOnly WeekEndDate, WeeklySkyForecastContext ContextSummary, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, WeeklySkyForecastPreparationValidation PreparationValidation, WeeklyForecastDebugSummary DebugSummary, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults, bool PublishingEnabled, bool AnalyticsEnabled, string? NarrationManifestPath, IReadOnlyList<WeeklySkyForecastAudioSegmentResult> AudioSegments, IReadOnlyList<WeeklySkyForecastSscScriptResult> SscScripts, IReadOnlyList<WeeklySkyForecastVisualAssetResult> VisualAssets, IReadOnlyList<WeeklySkyForecastCaptureResult> CaptureResults, string ExecutionMode, WeeklySkyForecastExecutionFlags FlagsUsed);
+public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, string Category, DateOnly WeekStartDate, DateOnly WeekEndDate, WeeklySkyForecastContext ContextSummary, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, WeeklySkyForecastPreparationValidation PreparationValidation, WeeklyForecastDebugSummary DebugSummary, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults, bool PublishingEnabled, bool AnalyticsEnabled, string? NarrationManifestPath, IReadOnlyList<WeeklySkyForecastAudioSegmentResult> AudioSegments, IReadOnlyList<WeeklySkyForecastSscScriptResult> SscScripts, IReadOnlyList<WeeklySkyForecastVisualAssetResult> VisualAssets, IReadOnlyList<WeeklySkyForecastCaptureResult> CaptureResults, string? LongVideoPath, string? ShortVideoPath, string? FinalVideoManifestPath, WeeklySkyForecastFinalVideoResult? FinalVideoResults, WeeklySkyForecastFinalVideoValidation? FinalVideoValidation, string ExecutionMode, WeeklySkyForecastExecutionFlags FlagsUsed);
 
 public interface IWeeklySkyForecastContextBuilder { Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken); }
 public interface IRegionResolutionService

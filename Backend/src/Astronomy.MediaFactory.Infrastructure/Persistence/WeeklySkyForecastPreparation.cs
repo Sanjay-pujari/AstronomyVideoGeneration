@@ -268,7 +268,9 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
     IWeeklySkyForecastMetadataBuilder metadataBuilder,
     ISpeechSynthesisService speechSynthesisService,
     IStellariumScriptGenerator scriptGenerator,
-    IStellariumImageCaptureExecutor captureExecutor) : IWeeklySkyForecastPreparationOrchestrator
+    IStellariumImageCaptureExecutor captureExecutor,
+    IWeeklySkyForecastSegmentVideoRenderer segmentVideoRenderer,
+    IProcessRunner processRunner) : IWeeklySkyForecastPreparationOrchestrator
 {
     private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
@@ -299,6 +301,8 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
             request.GenerateAudio,
             request.GenerateSscScripts || request.CaptureStellariumScenes,
             request.CaptureStellariumScenes,
+            request.GenerateSegmentVideos || request.GenerateFinalVideos,
+            request.GenerateFinalVideos,
             request.DryRun,
             request.OverwriteExisting);
         var executionState = new WeeklySkyForecastExecutionState();
@@ -308,6 +312,11 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
         var sscScripts = new List<WeeklySkyForecastSscScriptResult>();
         var visualAssets = new List<WeeklySkyForecastVisualAssetResult>();
         var captureResults = new List<WeeklySkyForecastCaptureResult>();
+        string? longVideoPath = null;
+        string? shortVideoPath = null;
+        string? finalVideoManifestPath = null;
+        WeeklySkyForecastFinalVideoResult? finalVideoResults = null;
+        WeeklySkyForecastFinalVideoValidation? finalVideoValidation = null;
 
         if (flagsUsed.GenerateNarration)
         {
@@ -380,6 +389,53 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
         }
         steps.Add(Step("GenerateSscScripts", executionState.Diagnostics.GetValueOrDefault("sscGenerationMs", 1)));
         steps.Add(Step("CaptureStellariumScenes", executionState.Diagnostics.GetValueOrDefault("captureExecutionMs", 1)));
+
+        WeeklySkyForecastSegmentVideoRenderResponse? segmentRender = null;
+        if (flagsUsed.GenerateSegmentVideos && !flagsUsed.DryRun)
+        {
+            segmentRender = await segmentVideoRenderer.RenderAsync(plan.Id, new WeeklySkyForecastSegmentVideoRenderRequest(flagsUsed.OverwriteExisting, request.Diagnostics), cancellationToken);
+            steps.Add(Step("GenerateSegmentVideos", 1));
+        }
+        else
+        {
+            steps.Add(Step("GenerateSegmentVideos", 1, "Skipped"));
+        }
+
+        if (flagsUsed.GenerateFinalVideos && !flagsUsed.DryRun)
+        {
+            var manifestPath = Path.Combine(outputPaths.ManifestsDirectory, "SegmentVideoManifest.json");
+            var segmentManifest = JsonSerializer.Deserialize<List<WeeklySkyForecastSegmentVideoRenderItem>>(await File.ReadAllTextAsync(manifestPath, cancellationToken)) ?? [];
+            var renderByCode = segmentManifest.Where(x => string.Equals(x.Status, "Rendered", StringComparison.OrdinalIgnoreCase) || string.Equals(x.Status, "Skipped", StringComparison.OrdinalIgnoreCase)).ToDictionary(x => x.SegmentCode, StringComparer.OrdinalIgnoreCase);
+            var longSegmentPaths = segmentPlan.LongSegments.OrderBy(x => x.SortOrder).Select(x => renderByCode.TryGetValue(x.SegmentCode, out var it) ? it.VideoPath : string.Empty).ToList();
+            var shortSegmentPaths = segmentPlan.ShortSegments.OrderBy(x => x.SortOrder).Select(x => renderByCode.TryGetValue(x.SegmentCode, out var it) ? it.VideoPath : string.Empty).ToList();
+            var validationErrors = new List<string>();
+            ValidateSegments(longSegmentPaths, "long", validationErrors);
+            ValidateSegments(shortSegmentPaths, "short", validationErrors);
+            if (validationErrors.Count == 0)
+            {
+                Directory.CreateDirectory(Path.Combine(outputPaths.RootDirectory, "final"));
+                Directory.CreateDirectory(outputPaths.ShortsDirectory);
+                longVideoPath = Path.Combine(outputPaths.RootDirectory, "final", "weekly-skyforecast-long.mp4");
+                shortVideoPath = Path.Combine(outputPaths.ShortsDirectory, "weekly-skyforecast-short.mp4");
+                var longCmd = await ComposeConcatVideoAsync(longSegmentPaths, longVideoPath, outputPaths.ManifestsDirectory, "weekly-long", cancellationToken);
+                steps.Add(Step("ComposeLongVideo", 1));
+                var shortCmd = await ComposeConcatVideoAsync(shortSegmentPaths, shortVideoPath, outputPaths.ManifestsDirectory, "weekly-short", cancellationToken);
+                steps.Add(Step("ComposeShortVideo", 1));
+                var duration = await ProbeDurationSecondsAsync(longVideoPath, cancellationToken);
+                var validationWarnings = new List<string>();
+                finalVideoValidation = new WeeklySkyForecastFinalVideoValidation(validationErrors.Count == 0 && duration > 0, validationErrors, validationWarnings, File.Exists(longVideoPath), File.Exists(shortVideoPath), duration);
+                finalVideoResults = new WeeklySkyForecastFinalVideoResult(longVideoPath, shortVideoPath, longSegmentPaths.Concat(shortSegmentPaths).ToList(), duration, "1920x1080 / 1080x1920", finalVideoValidation.IsValid ? "Completed" : "CompletedWithErrors", $"{longCmd} | {shortCmd}", validationWarnings, validationErrors);
+                finalVideoManifestPath = Path.Combine(outputPaths.ManifestsDirectory, "FinalVideoManifest.json");
+                await File.WriteAllTextAsync(finalVideoManifestPath, JsonSerializer.Serialize(finalVideoResults, JsonOptions), cancellationToken);
+            }
+            else
+            {
+                steps.Add(Step("ComposeLongVideo", 1, "Failed"));
+                steps.Add(Step("ComposeShortVideo", 1, "Failed"));
+                finalVideoValidation = new WeeklySkyForecastFinalVideoValidation(false, validationErrors, [], false, false, 0);
+            }
+            steps.Add(Step("ValidateFinalVideos", 1, finalVideoValidation?.IsValid == true ? "Completed" : "Failed"));
+        }
         await PersistExecutionStateAsync(outputPaths, executionState, cancellationToken);
         var warnings = context.Warnings.Concat(["Publishing disabled by policy.", "Analytics disabled by policy."]).Distinct().ToList();
         var validationWarnings = new List<string>();
@@ -406,7 +462,31 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
         if (segmentPlan.LongSegments.Concat(segmentPlan.ShortSegments).Any(s => s.SegmentCode == "BestPlanets" && s.TargetObjectCodes.Any(code => code is "MOON" or "SUN"))) errors.Add("segment contains invalid object type.");
         if (context.WeeklyHighlights.Any(h => h.BestTimeUtc.HasValue && DateOnly.FromDateTime(h.BestTimeUtc.Value) != h.Date)) errors.Add("highlight date/time mismatch.");
         var debugSummary = new WeeklyForecastDebugSummary(context.RegionId, request.RegionId, "/forecast/weekly-sky", context.DailyForecasts.Count, context.DailyForecasts.Sum(x => x.VisibleObjects.Count), context.RecommendedNights.Count, context.WeeklyHighlights.Count, WeeklySkyForecastPreparationDiagnostics.Get(WeeklySkyForecastContextBuilder.CategoryDebugNormalizedObjectCountKey), WeeklySkyForecastPreparationDiagnostics.Get(WeeklySkyForecastContextBuilder.CategoryDebugCorrectedHighlightCountKey), WeeklySkyForecastPreparationDiagnostics.Get(WeeklySkyForecastContextBuilder.CategoryDebugExcludedObjectCountKey), context.BestPlanetOfWeek, context.BestMoonNight, context.BestPhotographyNight);
-        return new(plan.Id, "WeeklySkyForecast", context.WeekStartDate, context.WeekEndDate, context, segmentPlan.LongSegments, segmentPlan.ShortSegments, scenes.Scenes, outputPaths, metadata, preparationValidation, debugSummary, warnings, steps, false, false, narrationManifestPath, audioSegments, sscScripts, visualAssets, captureResults, request.DryRun ? "DryRun" : "Execute", flagsUsed);
+        return new(plan.Id, "WeeklySkyForecast", context.WeekStartDate, context.WeekEndDate, context, segmentPlan.LongSegments, segmentPlan.ShortSegments, scenes.Scenes, outputPaths, metadata, preparationValidation, debugSummary, warnings, steps, false, false, narrationManifestPath, audioSegments, sscScripts, visualAssets, captureResults, longVideoPath, shortVideoPath, finalVideoManifestPath, finalVideoResults, finalVideoValidation, request.DryRun ? "DryRun" : "Execute", flagsUsed);
+    }
+
+    private async Task<string> ComposeConcatVideoAsync(IReadOnlyList<string> segmentPaths, string outputPath, string manifestsDirectory, string filePrefix, CancellationToken cancellationToken)
+    {
+        var concatPath = Path.Combine(manifestsDirectory, $"{filePrefix}-concat.txt");
+        await File.WriteAllLinesAsync(concatPath, segmentPaths.Select(x => $"file '{x.Replace("'", "'\\''")}'"), cancellationToken);
+        var args = $"-y -f concat -safe 0 -i \"{concatPath}\" -c copy \"{outputPath}\"";
+        var result = await processRunner.ExecuteAsync("ffmpeg", args, cancellationToken, TimeSpan.FromSeconds(300));
+        if (result.ExitCode != 0 || !File.Exists(outputPath) || new FileInfo(outputPath).Length <= 0) throw new InvalidOperationException($"Failed to compose final video: {outputPath}");
+        return args;
+    }
+
+    private async Task<double> ProbeDurationSecondsAsync(string videoPath, CancellationToken cancellationToken)
+    {
+        var result = await processRunner.ExecuteAsync("ffprobe", $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{videoPath}\"", cancellationToken, TimeSpan.FromSeconds(30));
+        return result.ExitCode == 0 && double.TryParse(result.StandardOutput.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0;
+    }
+
+    private static void ValidateSegments(IEnumerable<string> paths, string bucket, List<string> errors)
+    {
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) || new FileInfo(path).Length <= 0) errors.Add($"Missing or empty {bucket} segment: {path}");
+        }
     }
 
     private WeeklySkyForecastNarrationPlan BuildNarrationPlan(WeeklySkyForecastSegmentPlan segmentPlan)
@@ -519,6 +599,12 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
         var started = DateTime.UtcNow.AddMilliseconds(-Math.Max(1, durationMs));
         var ended = DateTime.UtcNow;
         return new(name, "Completed", started, ended, Math.Max(1, durationMs), null, null, []);
+    }
+    private static CategoryProductionStepResult Step(string name, long durationMs, string status)
+    {
+        var started = DateTime.UtcNow.AddMilliseconds(-Math.Max(1, durationMs));
+        var ended = DateTime.UtcNow;
+        return new(name, status, started, ended, Math.Max(1, durationMs), null, null, []);
     }
 
     private static TimeZoneInfo ResolveTimeZoneOrUtc(string timezone)
