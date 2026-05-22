@@ -1186,6 +1186,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyEditorialStoryPackage EditorialStoryPackage,
     WeeklyCinematicStoryBlueprint? CinematicStoryBlueprint,
     WeeklyNarrativeAbstractionPackage? NarrativeAbstractionPackage,
+    WeeklyNarrationPlan? NarrationPlan,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
@@ -1334,12 +1335,35 @@ public sealed record NarrativeVisualConcept(string VisualCode, string VisualPurp
 public sealed record NarrativeShortConcept(string ShortCode, string Title, string NarrationHook, string ViewerPromise, IReadOnlyList<string> ObjectCodes, DateOnly TargetDate, string DistinctStoryAngle, string RecommendedVisualStrategy, int EstimatedDurationSeconds);
 public sealed record NarrativeThumbnailConcept(string EmotionalGoal, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string VisualStory, string CompositionNarrative, IReadOnlyList<string> TitleTextCandidates, string OverlayTextSuggestion, string RecommendedVisualStrategy);
 
+public sealed record WeeklyNarrationPlan(
+    string Language,
+    string NarrationTone,
+    WeeklyLongFormNarrationPlan LongFormPlan,
+    WeeklyShortNarrationPlan ShortsPlan,
+    IReadOnlyList<string> NarrationWarnings);
+public sealed record WeeklyLongFormNarrationPlan(int TargetDurationSeconds, int SegmentCount, IReadOnlyList<WeeklyNarrationSegment> Segments);
+public sealed record WeeklyNarrationSegment(string SegmentCode, int SegmentOrder, string SegmentTitle, string NarrationIntent, string EmotionalTone, string SourceBeatCode, IReadOnlyList<string> TargetObjects, DateOnly TargetDate, int EstimatedDurationSeconds, string RecommendedVisualStrategy, string VisualPurpose, IReadOnlyList<string> NarrationPromptHints);
+public sealed record WeeklyShortNarrationPlan(IReadOnlyList<WeeklyShortNarrationItem> Shorts);
+public sealed record WeeklyShortNarrationItem(string ShortCode, string Title, string Hook, IReadOnlyList<string> TargetObjects, DateOnly TargetDate, int EstimatedDurationSeconds, string NarrationIntent, string RecommendedVisualStrategy, double PriorityScore);
+
 public interface IWeeklySkyForecastV2NarrativeAbstractionBuilder
 {
     Task<WeeklyNarrativeAbstractionPackage> BuildAsync(
         WeeklyCinematicStoryBlueprint cinematicBlueprint,
         WeeklyEditorialStoryPackage editorialPackage,
         WeeklySkyForecastV2IntelligenceResponse intelligence,
+        CancellationToken cancellationToken);
+}
+
+public interface IWeeklySkyForecastV2NarrationPlanner
+{
+    Task<WeeklyNarrationPlan> BuildAsync(
+        WeeklyNarrativeAbstractionPackage narrativePackage,
+        WeeklyCinematicStoryBlueprint cinematicBlueprint,
+        WeeklySkyForecastV2SkyfieldSummary skyfieldSummary,
+        string regionId,
+        DateOnly weekStartDate,
+        string language,
         CancellationToken cancellationToken);
 }
 

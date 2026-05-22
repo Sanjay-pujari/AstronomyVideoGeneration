@@ -9,12 +9,13 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
     [Fact]
     public async Task V2_Intelligence_Generates_Cinematic_Blueprint()
     {
-        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder());
+        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner());
         var response = await service.PreviewAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "IN-RJ-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), Diagnostics: true), CancellationToken.None);
 
         Assert.True(response.Success);
         Assert.NotNull(response.CinematicStoryBlueprint);
         Assert.NotNull(response.NarrativeAbstractionPackage);
+        Assert.NotNull(response.NarrationPlan);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Moon", response.CinematicStoryBlueprint.Headline, StringComparison.OrdinalIgnoreCase);
@@ -22,6 +23,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Equal(3, response.CinematicStoryBlueprint.ShortsBlueprints.Count);
         Assert.Equal(7, response.NarrativeAbstractionPackage!.NarrativeFlow.Count);
         Assert.Equal(3, response.NarrativeAbstractionPackage.ShortsNarrativePlan.Count);
+        Assert.Equal(3, response.NarrationPlan!.ShortsPlan.Shorts.Count);
     }
 
     [Fact]
@@ -52,9 +54,30 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             null!,
             null,
             null,
+            null,
             ["Hybrid"],
             [],
             []);
+    }
+
+    [Fact]
+    public async Task V2_NarrationPlan_Has_Expected_Segments_Durations_And_Strategies()
+    {
+        var intelligence = BuildResponse(new WeeklySkyForecastV2EventIntelligenceBuilder().Build(BuildContext()));
+        var editorial = await new WeeklySkyForecastV2EditorialIntelligenceBuilder().BuildAsync(intelligence, CancellationToken.None);
+        var cinematic = await new WeeklySkyForecastV2CinematicEditorialRefiner().RefineAsync(editorial, intelligence with { EditorialStoryPackage = editorial }, CancellationToken.None);
+        var narrative = await new WeeklySkyForecastV2NarrativeAbstractionBuilder().BuildAsync(cinematic, editorial, intelligence with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic }, CancellationToken.None);
+        var narration = await new WeeklySkyForecastV2NarrationPlanner().BuildAsync(narrative, cinematic, intelligence.SkyfieldSummary, intelligence.Region, intelligence.WeekStartDate, "en", CancellationToken.None);
+
+        Assert.NotNull(narration);
+        Assert.InRange(narration.LongFormPlan.SegmentCount, 6, 7);
+        Assert.Equal(new[] { "OpeningHook", "HeroSkyStory", "WhyThisWeekMatters", "BestObservationNight", "MoonPlanetHighlight", "ViewingPhotographyTip", "ClosingCTA" }, narration.LongFormPlan.Segments.Select(x => x.SegmentCode).ToArray());
+        Assert.Equal(3, narration.ShortsPlan.Shorts.Count);
+        Assert.All(narration.LongFormPlan.Segments, s => Assert.False(string.IsNullOrWhiteSpace(s.RecommendedVisualStrategy)));
+        Assert.All(narration.LongFormPlan.Segments, s => Assert.DoesNotContain(s.NarrationPromptHints, h => h.Contains("conjunction", StringComparison.OrdinalIgnoreCase) && h.Contains("claim", StringComparison.OrdinalIgnoreCase)));
+        Assert.InRange(narration.LongFormPlan.TargetDurationSeconds, 90, 150);
+        Assert.All(narration.LongFormPlan.Segments, s => Assert.True(s.EstimatedDurationSeconds > 0));
+        Assert.All(narration.LongFormPlan.Segments, s => Assert.False(string.IsNullOrWhiteSpace(s.SourceBeatCode)));
     }
 
     private static WeeklySkyForecastContext BuildContext()
