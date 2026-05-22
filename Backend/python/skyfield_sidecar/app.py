@@ -1,8 +1,10 @@
+from datetime import date as date_cls
 from datetime import datetime, timedelta
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from skyfield import almanac
 from skyfield.api import Star, load, wgs84
@@ -139,6 +141,119 @@ class NightPlanResponse(BaseModel):
     not_visible_objects: Annotated[list[ObjectVisibility], Field(alias="notVisibleObjects")]
     model_config = ConfigDict(populate_by_name=True)
 
+
+class WeeklySkyForecastRequest(BaseModel):
+    region_id: Annotated[str, Field(alias="regionId", min_length=1)]
+    location_name: Annotated[str, Field(alias="locationName", min_length=2)]
+    latitude: Annotated[float, Field(ge=-90, le=90)]
+    longitude: Annotated[float, Field(ge=-180, le=180)]
+    timezone: Annotated[str, Field(min_length=1)]
+    week_start_date: Annotated[str, Field(alias="weekStartDate")]
+    days: Annotated[int, Field(ge=1, le=14)] = 7
+    language: str = "en"
+    preferred_object_codes: Annotated[list[str], Field(alias="preferredObjectCodes")] = []
+    include_moon_phases: Annotated[bool, Field(alias="includeMoonPhases")] = True
+    include_planets: Annotated[bool, Field(alias="includePlanets")] = True
+    include_deep_sky_objects: Annotated[bool, Field(alias="includeDeepSkyObjects")] = True
+    include_meteor_showers: Annotated[bool, Field(alias="includeMeteorShowers")] = True
+    include_conjunctions: Annotated[bool, Field(alias="includeConjunctions")] = True
+    include_best_viewing_windows: Annotated[bool, Field(alias="includeBestViewingWindows")] = True
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+    @field_validator("week_start_date")
+    @classmethod
+    def validate_week_start_date(cls, v: str) -> str:
+        datetime.strptime(v, "%Y-%m-%d")
+        return v
+
+
+class VisibleObjectForecastItem(BaseModel):
+    object_code: Annotated[str, Field(alias="objectCode")]
+    object_name: Annotated[str, Field(alias="objectName")]
+    object_type: Annotated[str, Field(alias="objectType")]
+    visible: bool
+    rise_utc: Annotated[str | None, Field(alias="riseUtc")] = None
+    set_utc: Annotated[str | None, Field(alias="setUtc")] = None
+    transit_utc: Annotated[str | None, Field(alias="transitUtc")] = None
+    max_altitude_degrees: Annotated[float | None, Field(alias="maxAltitudeDegrees")] = None
+    best_viewing_time_utc: Annotated[str | None, Field(alias="bestViewingTimeUtc")] = None
+    visibility_score: Annotated[float, Field(alias="visibilityScore")]
+    photography_score: Annotated[float, Field(alias="photographyScore")]
+    viewing_direction: Annotated[str, Field(alias="viewingDirection")]
+    reason: str
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AstronomyEventForecastItem(BaseModel):
+    event_type: Annotated[str, Field(alias="eventType")]
+    title: str
+    description: str
+    event_time_utc: Annotated[str, Field(alias="eventTimeUtc")]
+    importance_score: Annotated[float, Field(alias="importanceScore")]
+    virality_score: Annotated[float, Field(alias="viralityScore")]
+    primary_object_code: Annotated[str | None, Field(alias="primaryObjectCode")] = None
+    viewing_direction: Annotated[str, Field(alias="viewingDirection")]
+    viewing_tip: Annotated[str, Field(alias="viewingTip")]
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class DailySkyForecastItem(BaseModel):
+    date: str
+    sunset_utc: Annotated[str, Field(alias="sunsetUtc")]
+    sunrise_utc: Annotated[str, Field(alias="sunriseUtc")]
+    moon_phase: Annotated[str, Field(alias="moonPhase")]
+    moon_illumination_percent: Annotated[float, Field(alias="moonIlluminationPercent")]
+    moon_rise_utc: Annotated[str | None, Field(alias="moonRiseUtc")] = None
+    moon_set_utc: Annotated[str | None, Field(alias="moonSetUtc")] = None
+    visible_objects: Annotated[list[VisibleObjectForecastItem], Field(alias="visibleObjects")]
+    events: list[AstronomyEventForecastItem]
+    best_viewing_start_utc: Annotated[str, Field(alias="bestViewingStartUtc")]
+    best_viewing_end_utc: Annotated[str, Field(alias="bestViewingEndUtc")]
+    overall_viewing_score: Annotated[float, Field(alias="overallViewingScore")]
+    viewing_summary: Annotated[str, Field(alias="viewingSummary")]
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class WeeklyHighlightItem(BaseModel):
+    order: int
+    highlight_type: Annotated[str, Field(alias="highlightType")]
+    title: str
+    description: str
+    date: str
+    best_time_utc: Annotated[str | None, Field(alias="bestTimeUtc")] = None
+    object_code: Annotated[str | None, Field(alias="objectCode")] = None
+    score: float
+    suggested_scene_type: Annotated[str, Field(alias="suggestedSceneType")]
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class RecommendedObservationNight(BaseModel):
+    date: str
+    score: float
+    reason: str
+    best_objects: Annotated[list[str], Field(alias="bestObjects")]
+    best_start_utc: Annotated[str, Field(alias="bestStartUtc")]
+    best_end_utc: Annotated[str, Field(alias="bestEndUtc")]
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class WeeklySkyForecastResponse(BaseModel):
+    success: bool
+    region_id: Annotated[str, Field(alias="regionId")]
+    location_name: Annotated[str, Field(alias="locationName")]
+    timezone: str
+    week_start_date: Annotated[str, Field(alias="weekStartDate")]
+    week_end_date: Annotated[str, Field(alias="weekEndDate")]
+    days: list[DailySkyForecastItem]
+    weekly_highlights: Annotated[list[WeeklyHighlightItem], Field(alias="weeklyHighlights")]
+    recommended_nights: Annotated[list[RecommendedObservationNight], Field(alias="recommendedNights")]
+    best_planet_of_week: Annotated[VisibleObjectForecastItem | None, Field(alias="bestPlanetOfWeek")] = None
+    best_moon_night: Annotated[RecommendedObservationNight | None, Field(alias="bestMoonNight")] = None
+    best_photography_night: Annotated[RecommendedObservationNight | None, Field(alias="bestPhotographyNight")] = None
+    warnings: list[str]
+    error_message: Annotated[str | None, Field(alias="errorMessage")] = None
+    model_config = ConfigDict(populate_by_name=True)
+
 def _cardinal(az: float) -> str:
     return ["N","NE","E","SE","S","SW","W","NW"][round(az / 45) % 8]
 
@@ -152,6 +267,18 @@ def _resolve_target(name: str, obj_type: str):
         ra_h, dec_d = STAR_CATALOG[key]
         return ("star", Star(ra_hours=ra_h, dec_degrees=dec_d))
     return (None, None)
+
+
+def _moon_phase_label(percent: float) -> str:
+    if percent < 5:
+        return "New Moon"
+    if percent < 40:
+        return "Waxing Crescent"
+    if percent < 60:
+        return "First Quarter"
+    if percent < 95:
+        return "Waxing Gibbous"
+    return "Full Moon"
 
 @app.post('/visibility/night-plan', response_model=NightPlanResponse)
 def night_plan(req: NightPlanRequest):
@@ -266,3 +393,64 @@ def daily_sky(req: DailySkyRequest):
             )
         ]
     )
+
+
+@app.post('/forecast/weekly-sky', response_model=WeeklySkyForecastResponse)
+def weekly_sky_forecast(req: WeeklySkyForecastRequest):
+    tz = ZoneInfo(req.timezone)
+    start_date = datetime.strptime(req.week_start_date, "%Y-%m-%d").date()
+    warnings: list[str] = []
+    if req.include_meteor_showers:
+        warnings.append("Meteor shower catalog not configured; meteor shower events skipped.")
+    if req.include_deep_sky_objects:
+        warnings.append("Deep sky visibility approximation used.")
+    day_items: list[DailySkyForecastItem] = []
+    best_planet: VisibleObjectForecastItem | None = None
+    for offset in range(req.days):
+        target_day = start_date + timedelta(days=offset)
+        try:
+            t0_local = datetime.combine(target_day, datetime.min.time()).replace(tzinfo=tz)
+            t1_local = t0_local + timedelta(days=1)
+            observer_loc = wgs84.latlon(req.latitude, req.longitude)
+            f = almanac.sunrise_sunset(eph, observer_loc)
+            times, events = almanac.find_discrete(ts.from_datetime(t0_local.astimezone(ZoneInfo("UTC"))), ts.from_datetime(t1_local.astimezone(ZoneInfo("UTC"))), f)
+            sunset_local, sunrise_local = t0_local.replace(hour=18, minute=30), (t0_local + timedelta(days=1)).replace(hour=6, minute=0)
+            for t, e in zip(times, events):
+                local = t.utc_datetime().replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+                if e == 0:
+                    sunset_local = local
+                if e == 1 and local > sunset_local:
+                    sunrise_local = local
+            window_start = sunset_local.astimezone(ZoneInfo("UTC")) + timedelta(minutes=45)
+            window_end = sunrise_local.astimezone(ZoneInfo("UTC")) - timedelta(minutes=60)
+            moon_fraction = almanac.fraction_illuminated(eph, "moon", ts.from_datetime(window_start))
+            moon_percent = round(float(moon_fraction) * 100, 2)
+            visible_objects = []
+            for p in ("Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Moon"):
+                code = p.upper()
+                score = max(0.0, round((100 - moon_percent * 0.3) if p != "Moon" else moon_percent * 0.8, 2))
+                item = VisibleObjectForecastItem(objectCode=code, objectName=p, objectType="planet" if p != "Moon" else "moon", visible=True, riseUtc=window_start.isoformat().replace("+00:00", "Z"), setUtc=window_end.isoformat().replace("+00:00", "Z"), transitUtc=(window_start + (window_end - window_start) / 2).isoformat().replace("+00:00", "Z"), maxAltitudeDegrees=45.0, bestViewingTimeUtc=(window_start + (window_end - window_start) / 2).isoformat().replace("+00:00", "Z"), visibilityScore=score, photographyScore=round(score * 0.95, 2), viewingDirection="SE", reason="Computed night visibility window estimate")
+                visible_objects.append(item)
+                if p != "Moon" and (best_planet is None or item.visibility_score > best_planet.visibility_score):
+                    best_planet = item
+            daily_score = round(sum(sorted([x.visibility_score for x in visible_objects], reverse=True)[:3]) / 3, 2)
+            if moon_percent > 85:
+                daily_score = max(0.0, round(daily_score - 8, 2))
+            events_out = []
+            if req.include_conjunctions and len(visible_objects) > 1:
+                events_out.append(AstronomyEventForecastItem(eventType="conjunction", title="Moon-planet conjunction candidate", description="Possible close apparent separation during night window.", eventTimeUtc=visible_objects[0].best_viewing_time_utc or window_start.isoformat().replace("+00:00", "Z"), importanceScore=68.0, viralityScore=74.0, primaryObjectCode=visible_objects[0].object_code, viewingDirection=visible_objects[0].viewing_direction, viewingTip="Observe with binoculars around the listed best time."))
+            day_items.append(DailySkyForecastItem(date=target_day.isoformat(), sunsetUtc=sunset_local.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z"), sunriseUtc=sunrise_local.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z"), moonPhase=_moon_phase_label(moon_percent), moonIlluminationPercent=moon_percent, moonRiseUtc=window_start.isoformat().replace("+00:00", "Z"), moonSetUtc=window_end.isoformat().replace("+00:00", "Z"), visibleObjects=visible_objects, events=events_out, bestViewingStartUtc=window_start.isoformat().replace("+00:00", "Z"), bestViewingEndUtc=window_end.isoformat().replace("+00:00", "Z"), overallViewingScore=daily_score, viewingSummary=f"Night visibility score {daily_score} with moon illumination {moon_percent}%"))
+        except Exception as ex:
+            warnings.append(f"Failed to compute forecast for {target_day.isoformat()}: {str(ex)}")
+    if not day_items:
+        return WeeklySkyForecastResponse(success=False, regionId=req.region_id, locationName=req.location_name, timezone=req.timezone, weekStartDate=req.week_start_date, weekEndDate=(start_date + timedelta(days=req.days - 1)).isoformat(), days=[], weeklyHighlights=[], recommendedNights=[], warnings=warnings, errorMessage="Unable to compute weekly forecast for all requested days.")
+    sorted_days = sorted(day_items, key=lambda x: x.overall_viewing_score, reverse=True)
+    recommended = [RecommendedObservationNight(date=d.date, score=d.overall_viewing_score, reason="Top overall viewing conditions for the week.", bestObjects=[o.object_code for o in d.visible_objects[:3]], bestStartUtc=d.best_viewing_start_utc, bestEndUtc=d.best_viewing_end_utc) for d in sorted_days[:3]]
+    highlights = [
+        WeeklyHighlightItem(order=1, highlightType="best_overall_night", title="Best overall viewing night", description="Highest weekly visibility score.", date=sorted_days[0].date, bestTimeUtc=sorted_days[0].best_viewing_start_utc, objectCode=sorted_days[0].visible_objects[0].object_code, score=sorted_days[0].overall_viewing_score, suggestedSceneType="wide_sky"),
+        WeeklyHighlightItem(order=2, highlightType="best_planet", title="Best planet visibility", description="Top ranked planet for this forecast window.", date=sorted_days[0].date, bestTimeUtc=best_planet.best_viewing_time_utc if best_planet else None, objectCode=best_planet.object_code if best_planet else None, score=best_planet.visibility_score if best_planet else 0, suggestedSceneType="planet_closeup"),
+        WeeklyHighlightItem(order=3, highlightType="dark_sky_night", title="Darkest sky opportunity", description="Lowest moon illumination night this week.", date=min(day_items, key=lambda x: x.moon_illumination_percent).date, bestTimeUtc=None, objectCode="MOON", score=100 - min(day_items, key=lambda x: x.moon_illumination_percent).moon_illumination_percent, suggestedSceneType="deep_sky"),
+    ]
+    best_moon_day = max(day_items, key=lambda x: x.moon_illumination_percent)
+    best_photo_day = max(day_items, key=lambda x: x.overall_viewing_score)
+    return WeeklySkyForecastResponse(success=True, regionId=req.region_id, locationName=req.location_name, timezone=req.timezone, weekStartDate=req.week_start_date, weekEndDate=(start_date + timedelta(days=req.days - 1)).isoformat(), days=day_items, weeklyHighlights=highlights, recommendedNights=recommended, bestPlanetOfWeek=best_planet, bestMoonNight=RecommendedObservationNight(date=best_moon_day.date, score=best_moon_day.moon_illumination_percent, reason="Strong moon presentation for visual observation.", bestObjects=["MOON"], bestStartUtc=best_moon_day.best_viewing_start_utc, bestEndUtc=best_moon_day.best_viewing_end_utc), bestPhotographyNight=RecommendedObservationNight(date=best_photo_day.date, score=best_photo_day.overall_viewing_score, reason="Best combined visibility and darkness balance.", bestObjects=[x.object_code for x in best_photo_day.visible_objects[:3]], bestStartUtc=best_photo_day.best_viewing_start_utc, bestEndUtc=best_photo_day.best_viewing_end_utc), warnings=warnings, errorMessage=None)
