@@ -1191,6 +1191,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyNarrationQualityReport? NarrationQuality,
     WeeklyVisualRequirementPackage? VisualRequirementPackage,
     WeeklyHybridScenePlanPackage? HybridScenePlanPackage,
+    WeeklyPreviewStabilityReport? PreviewStability,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
@@ -1354,6 +1355,7 @@ public sealed record WeeklyGeneratedLongNarration(string FullNarration, int Esti
 public sealed record WeeklyGeneratedNarrationSegment(string SegmentCode, string SegmentTitle, string NarrationText, int EstimatedDurationSeconds, IReadOnlyList<string> TargetObjects, string RecommendedVisualStrategy, string VisualPurpose);
 public sealed record WeeklyGeneratedShortNarration(string ShortCode, string Title, string NarrationText, int EstimatedDurationSeconds, string RecommendedVisualStrategy);
 public sealed record WeeklyNarrationQualityReport(bool IsValid, IReadOnlyList<string> Warnings, IReadOnlyList<string> ForbiddenPhraseHits, IReadOnlyList<string> RepeatedPhraseWarnings, int WordCount, int EstimatedDurationSeconds, int TargetDurationSeconds, bool EmotionalProgressionDetected, bool ShortCtaUniquenessValid);
+public sealed record WeeklyPreviewStabilityReport(bool IsStable, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, bool ReadyForAssetResolution, bool ReadyForRendering);
 public sealed record WeeklyVisualRequirementPackage(IReadOnlyList<WeeklyVisualRequirement> VisualRequirements, IReadOnlyList<SegmentVisualMapping> SegmentVisualMappings, IReadOnlyList<VisualReusePlan> VisualReusePlan, ThumbnailVisualRequirement ThumbnailVisualRequirement, IReadOnlyList<string> VisualWarnings);
 public sealed record WeeklyVisualRequirement(string VisualRequirementId, string VisualCode, string VisualPurpose, IReadOnlyList<string> SourceSegmentCodes, IReadOnlyList<string> ObjectCodes, DateOnly TargetDate, DateTime? BestTimeUtc, string EmotionalTone, string VisualStrategy, string VisualSourceType, string SceneType, string CompositionDescription, string MotionStyle, IReadOnlyList<string> OverlayNeeds, bool ReuseAllowed, int Priority, string ExpectedAssetRole, string VisualUniquenessKey);
 public sealed record SegmentVisualMapping(string SegmentCode, string VisualCode, string UsageType, string TimingHint, bool ShouldReuse, string TransitionIn, string TransitionOut);
