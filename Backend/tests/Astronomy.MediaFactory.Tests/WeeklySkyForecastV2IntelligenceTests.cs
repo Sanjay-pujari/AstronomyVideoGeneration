@@ -17,6 +17,8 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.NarrativeAbstractionPackage);
         Assert.NotNull(response.NarrationPlan);
         Assert.NotNull(response.GeneratedNarrationPackage);
+        Assert.NotNull(response.NarrationQuality);
+        Assert.NotNull(response.VisualRequirementPackage);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Moon", response.CinematicStoryBlueprint.Headline, StringComparison.OrdinalIgnoreCase);
@@ -26,6 +28,13 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Equal(3, response.NarrativeAbstractionPackage.ShortsNarrativePlan.Count);
         Assert.Equal(3, response.NarrationPlan!.ShortsPlan.Shorts.Count);
         Assert.Equal(3, response.GeneratedNarrationPackage!.ShortNarrations.Count);
+        Assert.DoesNotContain("same viewing window", response.GeneratedNarrationPackage.LongFormNarration.FullNarration, StringComparison.OrdinalIgnoreCase);
+        Assert.True(response.NarrationQuality!.ShortCtaUniquenessValid);
+        Assert.InRange(response.VisualRequirementPackage!.VisualRequirements.Count, 4, 6);
+        Assert.Contains(response.VisualRequirementPackage.VisualRequirements, v => v.VisualSourceType == "Hybrid");
+        Assert.Contains(response.VisualRequirementPackage.VisualRequirements, v => v.VisualSourceType == "Stellarium");
+        Assert.Contains(response.VisualRequirementPackage.VisualRequirements, v => v.VisualSourceType == "CelestialAsset");
+        Assert.Equal(response.NarrationPlan.LongFormPlan.Segments.Count, response.VisualRequirementPackage.SegmentVisualMappings.Count);
     }
 
     [Fact]
@@ -54,6 +63,8 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             events,
             new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             null!,
+            null,
+            null,
             null,
             null,
             null,
