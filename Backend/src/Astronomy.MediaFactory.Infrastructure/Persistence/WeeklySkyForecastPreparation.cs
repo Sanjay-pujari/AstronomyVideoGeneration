@@ -140,17 +140,17 @@ public sealed class WeeklySkyForecastSegmentPlanner : IWeeklySkyForecastSegmentP
             new("WeeklyIntro", "Long", 1, "Weekly Intro", "Set weekly expectation", context.WeekStartDate, [], "Context", "WeeklyIntroWideSky", 35, 0.8),
             new("MoonPhaseForecast", "Long", 2, "Moon Phase Forecast", "Explain moon trend", context.BestMoonNight, ["MOON"], "Moon", "BestMoonNight", 45, 0.85),
             new("BestPlanets", "Long", 3, "Best Planets", "Rank top planets", bestNight?.Date, ((bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList()).Where(o => !string.IsNullOrWhiteSpace(o) && o is not "MOON" and not "SUN").ToList(), "Planet", "BestPlanetOfWeek", 50, 0.9),
-            new("RecommendedNights", "Long", 4, "Recommended Nights", "Highlight best nights", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Night", "RecommendedObservationNight", 40, 0.92),
-            new("WeeklyHighlights", "Long", 5, "Weekly Highlights", "Cover ranked events", context.WeekStartDate, context.WeeklyHighlights.Select(x => x.ObjectCode).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).Distinct().ToList(), "Event", "WeeklyHighlight", 45, 0.88),
-            new("AstroPhotographyTip", "Long", 6, "Astro Photography Tip", "Give practical tip", context.BestPhotographyNight, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Tip", "WeeklySummaryMap", 30, 0.7),
-            new("WeeklyOutro", "Long", 7, "Weekly Outro", "Close and CTA", context.WeekEndDate, [], "Outro", "WeeklySummaryMap", 25, 0.6)
+            new("RecommendedNights", "Long", 4, "Recommended Nights", "Highlight best nights", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Night", "BestObservationNightWide", 40, 0.92),
+            new("WeeklyHighlights", "Long", 5, "Weekly Highlights", "Cover ranked events", context.WeekStartDate, context.WeeklyHighlights.Select(x => x.ObjectCode).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).Distinct().ToList(), "Event", "BestObservationNightWide", 45, 0.88),
+            new("AstroPhotographyTip", "Long", 6, "Astro Photography Tip", "Give practical tip", context.BestPhotographyNight, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Tip", "BestObservationNightWide", 30, 0.7),
+            new("WeeklyOutro", "Long", 7, "Weekly Outro", "Close and CTA", context.WeekEndDate, [], "Outro", "WeeklyIntroWideSky", 25, 0.6)
         };
         var shortSegments = new List<WeeklySkyForecastSegmentPlanItem>
         {
-            new("BiggestWeeklyHighlight", "Short", 1, "Biggest Weekly Highlight", "Fast hook", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Highlight", "WeeklyHighlight", 20, 0.95),
-            new("BestViewingNight", "Short", 2, "Best Viewing Night", "Tell best night", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Night", "RecommendedObservationNight", 18, 0.92),
+            new("BiggestWeeklyHighlight", "Short", 1, "Biggest Weekly Highlight", "Fast hook", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Highlight", "BestObservationNightWide", 20, 0.95),
+            new("BestViewingNight", "Short", 2, "Best Viewing Night", "Tell best night", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Night", "BestObservationNightWide", 18, 0.92),
             new("BestPlanetOfWeek", "Short", 3, "Best Planet Of Week", "Focus top planet", bestNight?.Date, [context.BestPlanetOfWeek ?? "JUPITER"], "Planet", "BestPlanetOfWeek", 18, 0.9),
-            new("QuickOutro", "Short", 4, "Quick Outro", "CTA", context.WeekEndDate, [], "Outro", "WeeklySummaryMap", 10, 0.5)
+            new("QuickOutro", "Short", 4, "Quick Outro", "CTA", context.WeekEndDate, [], "Outro", "WeeklyIntroWideSky", 10, 0.5)
         };
         return Task.FromResult(new WeeklySkyForecastSegmentPlan(longSegments, shortSegments));
     }
@@ -158,6 +158,8 @@ public sealed class WeeklySkyForecastSegmentPlanner : IWeeklySkyForecastSegmentP
 
 public sealed class WeeklySkyForecastSscScenePlanner(ILogger<WeeklySkyForecastSscScenePlanner> logger) : IWeeklySkyForecastSscScenePlanner
 {
+    private const int MaxInitialWeeklyScenes = 5;
+
     public Task<WeeklySkyForecastSscScenePlan> BuildAsync(WeeklySkyForecastContext context, WeeklySkyForecastSegmentPlan segmentPlan, CancellationToken cancellationToken)
     {
         var visible = context.DailyForecasts.SelectMany(x => x.VisibleObjects).Where(x => x.Visible).ToList();
@@ -202,18 +204,17 @@ public sealed class WeeklySkyForecastSscScenePlanner(ILogger<WeeklySkyForecastSs
         var bestPlanetCapture = context.WeeklyHighlights
             .FirstOrDefault(h => h.Date == planetDate && h.ObjectCode.Equals(context.BestPlanetOfWeek ?? string.Empty, StringComparison.OrdinalIgnoreCase))?.BestTimeUtc
             ?? ResolveCapture(planetDate, context.BestPlanetOfWeek, false);
-        var summaryDate = targetDate;
         var recommendedDate = targetDate;
         var scenes = new List<WeeklySkyForecastSscScenePlanItem>
         {
             new("WeeklyIntroWideSky", "WideSky", null, ResolveCapture(context.WeekStartDate, null, true), context.WeekStartDate, 90, "long", false, "WeeklyIntro"),
             new("BestMoonNight", "Moon", "MOON", moonNight?.BestStartUtc ?? ResolveCapture(moonDate, "MOON", false), moonDate, 45, "both", false, "MoonPhaseForecast"),
             new("BestPlanetOfWeek", "Planet", context.BestPlanetOfWeek, bestPlanetCapture, planetDate, 35, "both", false, "BestPlanets"),
-            new("RecommendedObservationNight", "Night", null, ResolveCapture(recommendedDate, null, true), recommendedDate, 90, "both", false, "RecommendedNights"),
-            new("WeeklyHighlight", "Highlight", context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, ResolveCapture(recommendedDate, context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, false), recommendedDate, 50, "both", false, "WeeklyHighlights"),
-            new("WeeklySummaryMap", "Summary", null, ResolveCapture(summaryDate, null, true), summaryDate, 95, "long", false, "WeeklyOutro"),
+            new("BestObservationNightWide", "Night", null, ResolveCapture(recommendedDate, null, true), recommendedDate, 90, "both", false, "RecommendedNights"),
             new("ThumbnailCandidate", "Thumbnail", thumb, ResolveCapture(recommendedDate, thumb, false), recommendedDate, 30, "thumbnail", true, "BiggestWeeklyHighlight")
         };
+        if (scenes.Count > MaxInitialWeeklyScenes)
+            throw new InvalidOperationException($"WeeklySkyForecast initial production must generate at most {MaxInitialWeeklyScenes} scenes.");
 
         foreach (var scene in scenes)
         {
