@@ -484,6 +484,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastMetadataBuilder, WeeklySkyForecastMetadataBuilder>();
         services.AddScoped<IWeeklySkyForecastPreparationOrchestrator, WeeklySkyForecastPreparationOrchestrator>();
         services.AddScoped<IWeeklySkyForecastVisualAssetGenerationService, WeeklySkyForecastVisualAssetGenerationService>();
+        services.AddScoped<IWeeklySkyForecastSegmentVideoRenderer, WeeklySkyForecastSegmentVideoRenderer>();
 
         services.AddScoped<IContentCategoryPipelineStrategy, DailySkyGuidePipelineStrategy>();
         services.AddScoped<IContentCategoryPipelineStrategyResolver, ContentCategoryPipelineStrategyResolver>();

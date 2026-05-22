@@ -1109,6 +1109,42 @@ public interface IWeeklySkyForecastVisualAssetGenerationService
     Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, CancellationToken cancellationToken);
 }
 
+public sealed record WeeklySkyForecastSegmentVideoRenderRequest(
+    bool OverwriteExisting = true,
+    bool Diagnostics = true,
+    bool EnableFadeInOut = true,
+    double FadeDurationSeconds = 0.35d,
+    bool EnableZoomPan = true);
+
+public sealed record WeeklySkyForecastSegmentVideoRenderItem(
+    string SegmentCode,
+    string VideoPath,
+    string AudioPath,
+    string ScenePath,
+    string SubtitlePath,
+    double DurationSeconds,
+    string Status,
+    string? ErrorMessage,
+    long RenderTimeMs,
+    long FfmpegDurationMs);
+
+public sealed record WeeklySkyForecastSegmentVideoRenderResponse(
+    Guid ContentGenerationPlanId,
+    bool Success,
+    int RenderedSegments,
+    int SkippedSegments,
+    int FailedSegments,
+    string ManifestPath,
+    IReadOnlyList<WeeklySkyForecastSegmentVideoRenderItem> Segments,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<CategoryProductionStepResult> StepResults);
+
+public interface IWeeklySkyForecastSegmentVideoRenderer
+{
+    Task<WeeklySkyForecastSegmentVideoRenderResponse> RenderAsync(Guid contentGenerationPlanId, WeeklySkyForecastSegmentVideoRenderRequest request, CancellationToken cancellationToken);
+}
+
 public interface ICategoryProductionRunner
 {
     Task<CategoryProductionPreviewResponse> RunAsync(CategoryProductionPreviewRequest request, CancellationToken cancellationToken);
