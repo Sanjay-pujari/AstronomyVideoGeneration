@@ -842,6 +842,60 @@ public sealed record ManualCategoryPreparationResponse(
     bool PublishToFacebook = false,
     bool PublishToInstagram = false);
 
+
+public sealed record CategoryProductionPreviewRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    string RegionName,
+    DateTime ScheduledUtc,
+    string? PrimaryCelestialObjectCode,
+    bool PublishToYouTube = false,
+    bool PublishToFacebook = false,
+    bool PublishToInstagram = false,
+    bool UseAssetAwareVisuals = false,
+    bool Diagnostics = true);
+
+public sealed record CategoryProductionStepResult(
+    string StepName,
+    string Status,
+    DateTime StartedUtc,
+    DateTime FinishedUtc,
+    long DurationMs,
+    string? Message,
+    string? ErrorMessage,
+    IReadOnlyList<string> Warnings);
+
+public sealed record CategoryProductionPreviewResponse(
+    Guid? ContentGenerationPlanId,
+    string ContentCategoryCode,
+    bool Success,
+    bool PublishingEnabled,
+    bool PublishToYouTube,
+    bool PublishToFacebook,
+    bool PublishToInstagram,
+    string? LongAudioPath,
+    string? ShortAudioPath,
+    string? LongVideoPath,
+    string? ShortVideoPath,
+    string? LongThumbnailPath,
+    string? ShortThumbnailPath,
+    object? Metadata,
+    IReadOnlyList<CategoryProductionStepResult> Steps,
+    IReadOnlyList<string> Warnings,
+    string? ErrorMessage);
+
+public interface ICategoryProductionPipelineStrategy
+{
+    string ContentCategoryCode { get; }
+    Task<CategoryProductionPreviewResponse> RunAsync(CategoryProductionPreviewRequest request, CancellationToken cancellationToken);
+}
+
+public interface ICategoryProductionRunner
+{
+    Task<CategoryProductionPreviewResponse> RunAsync(CategoryProductionPreviewRequest request, CancellationToken cancellationToken);
+}
+
 public interface IManualCategoryPreparationOrchestrator
 {
     Task<ManualCategoryPreparationResponse> RunAsync(ManualCategoryPreparationRequest request, CancellationToken cancellationToken);
