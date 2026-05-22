@@ -951,6 +951,12 @@ public sealed record WeeklySkyForecastProductionRequest(
     string RegionId,
     string RegionName,
     DateTimeOffset ScheduledUtc,
+    bool GenerateNarration = false,
+    bool GenerateAudio = false,
+    bool GenerateSscScripts = false,
+    bool CaptureStellariumScenes = false,
+    bool DryRun = true,
+    bool OverwriteExisting = false,
     bool PublishToYouTube = false,
     bool PublishToFacebook = false,
     bool PublishToInstagram = false,
@@ -1037,7 +1043,13 @@ public sealed record WeeklyForecastDebugSummary(
     DateOnly? BestMoonNight,
     DateOnly? BestPhotographyNight);
 
-public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, string Category, DateOnly WeekStartDate, DateOnly WeekEndDate, WeeklySkyForecastContext ContextSummary, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, WeeklySkyForecastPreparationValidation PreparationValidation, WeeklyForecastDebugSummary DebugSummary, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults, bool PublishingEnabled, bool AnalyticsEnabled);
+public sealed record WeeklySkyForecastAudioSegmentResult(string SegmentCode, string AudioPath, int EstimatedDurationSeconds, bool Success, string? ErrorMessage);
+public sealed record WeeklySkyForecastSscScriptResult(string SceneCode, string ScriptPath, string ExpectedImagePath, bool Success, string? ErrorMessage);
+public sealed record WeeklySkyForecastVisualAssetResult(string SceneCode, string ExpectedImagePath, string OutputRole, string LinkedSegmentCode, string? TargetObjectCode);
+public sealed record WeeklySkyForecastCaptureResult(string SceneCode, string ImagePath, string Status, bool Exists, string? ErrorMessage);
+public sealed record WeeklySkyForecastExecutionFlags(bool GenerateNarration, bool GenerateAudio, bool GenerateSscScripts, bool CaptureStellariumScenes, bool DryRun, bool OverwriteExisting);
+
+public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, string Category, DateOnly WeekStartDate, DateOnly WeekEndDate, WeeklySkyForecastContext ContextSummary, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, WeeklySkyForecastPreparationValidation PreparationValidation, WeeklyForecastDebugSummary DebugSummary, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults, bool PublishingEnabled, bool AnalyticsEnabled, string? NarrationManifestPath, IReadOnlyList<WeeklySkyForecastAudioSegmentResult> AudioSegments, IReadOnlyList<WeeklySkyForecastSscScriptResult> SscScripts, IReadOnlyList<WeeklySkyForecastVisualAssetResult> VisualAssets, IReadOnlyList<WeeklySkyForecastCaptureResult> CaptureResults, string ExecutionMode, WeeklySkyForecastExecutionFlags FlagsUsed);
 
 public interface IWeeklySkyForecastContextBuilder { Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken); }
 public interface IRegionResolutionService
