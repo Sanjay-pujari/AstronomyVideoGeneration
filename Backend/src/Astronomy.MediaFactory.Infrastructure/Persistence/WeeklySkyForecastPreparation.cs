@@ -20,11 +20,28 @@ public sealed class WeeklySkyForecastContextBuilder(
 {
     public async Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken)
     {
-        if (!TryResolveRegion(request.RegionId, out var normalizedRegionId, out var region))
-            throw new KeyNotFoundException($"Region '{RegionIdNormalizer.NormalizeRegionId(request.RegionId)}' is not configured in region settings.");
+        logger.LogInformation("Resolving WeeklySkyForecast region using production region resolver.");
+        logger.LogInformation("Requested regionId: {RequestedRegionId}", request.RegionId);
+
+        if (!TryResolveRegionUsingProductionResolver(request.RegionId, out var normalizedRegionId, out var region, out var availableRegionIds))
+        {
+            throw new WeeklySkyForecastRegionResolutionException(
+                requestedRegionId: RegionIdNormalizer.NormalizeRegionId(request.RegionId),
+                availableRegionIds: availableRegionIds,
+                message: $"Region '{RegionIdNormalizer.NormalizeRegionId(request.RegionId)}' is not configured in region settings. Resolver: SchedulerOptions.Regions.Items + RegionIdNormalizer.");
+        }
+
+        logger.LogInformation(
+            "Resolved region: {RegionId} ({DisplayName}) lat={Latitude}, lon={Longitude}, tz={Timezone}",
+            normalizedRegionId,
+            region.DisplayName,
+            region.Latitude,
+            region.Longitude,
+            region.Timezone);
 
         var weekStart = DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
-        var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = normalizedRegionId, LocationName = request.RegionName, Latitude = region.Latitude, Longitude = region.Longitude, Timezone = region.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
+        var resolvedLocationName = string.IsNullOrWhiteSpace(region.DisplayName) ? request.RegionName : region.DisplayName;
+        var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = normalizedRegionId, LocationName = resolvedLocationName, Latitude = region.Latitude, Longitude = region.Longitude, Timezone = region.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
         var response = await sidecarClient.GetWeeklySkyForecastAsync(skyfieldRequest, cancellationToken) ?? throw new InvalidOperationException("Skyfield weekly forecast sidecar returned no response.");
         if (!response.Success)
         {
@@ -41,59 +58,36 @@ public sealed class WeeklySkyForecastContextBuilder(
         var bestMoonNight = daily.OrderByDescending(d => d.VisibleObjects.Where(o => o.ObjectCode.Equals("Moon", StringComparison.OrdinalIgnoreCase)).Select(o => o.VisibilityScore).DefaultIfEmpty(0).Max()).Select(d => (DateOnly?)d.Date).FirstOrDefault();
         var bestPhotoNight = daily.OrderByDescending(d => d.VisibleObjects.MaxBy(o => o.PhotographyScore)?.PhotographyScore ?? 0).Select(d => (DateOnly?)d.Date).FirstOrDefault();
 
-        return new(normalizedRegionId, response.LocationName, region.Latitude, region.Longitude, response.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
+        return new(normalizedRegionId, response.LocationName, region.Latitude, region.Longitude, region.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
     }
 
-    private bool TryResolveRegion(string regionId, out string normalizedRegionId, out RegionScheduleOptions region)
+    private bool TryResolveRegionUsingProductionResolver(string regionId, out string normalizedRegionId, out RegionScheduleOptions region, out IReadOnlyList<string> availableRegionIds)
     {
         var regions = schedulerOptions.Value.Regions.Items;
-        var groupedByRegionId = regions
+        availableRegionIds = regions
             .Where(r => !string.IsNullOrWhiteSpace(r.RegionId))
-            .GroupBy(
-                r => RegionIdNormalizer.NormalizeRegionId(r.RegionId),
-                StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        foreach (var duplicateGroup in groupedByRegionId.Where(g => g.Count() > 1))
-        {
-            logger.LogWarning(
-                "Duplicate region configuration found for regionId {RegionId}. Using first configured value.",
-                duplicateGroup.Key);
-        }
-
-        var regionLookup = groupedByRegionId
-            .ToDictionary(
-                g => g.Key,
-                g => g.First(),
-                StringComparer.OrdinalIgnoreCase);
-
-        var aliasLookup = regions
-            .Where(r => !string.IsNullOrWhiteSpace(r.RegionId))
-            .GroupBy(r => $"{r.Latitude:F4}|{r.Longitude:F4}|{r.Timezone}|{r.Language}", StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                g => g.Key,
-                g => RegionIdNormalizer.NormalizeRegionId(g.First().RegionId),
-                StringComparer.OrdinalIgnoreCase);
+            .Select(r => RegionIdNormalizer.NormalizeRegionId(r.RegionId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         normalizedRegionId = RegionIdNormalizer.NormalizeRegionId(regionId);
-        if (regionLookup.TryGetValue(normalizedRegionId, out region!))
-            return true;
-
-        var requestedRegionId = normalizedRegionId;
-        var aliasSource = regions.FirstOrDefault(r => RegionIdNormalizer.NormalizeRegionId(r.RegionId).Equals(requestedRegionId, StringComparison.OrdinalIgnoreCase));
-        if (aliasSource is not null)
+        region = regions.FirstOrDefault(r =>
+            string.Equals(RegionIdNormalizer.NormalizeRegionId(r.RegionId), normalizedRegionId, StringComparison.OrdinalIgnoreCase))!;
+        if (region is not null)
         {
-            var aliasKey = $"{aliasSource.Latitude:F4}|{aliasSource.Longitude:F4}|{aliasSource.Timezone}|{aliasSource.Language}";
-            if (aliasLookup.TryGetValue(aliasKey, out var canonicalRegionId)
-                && regionLookup.TryGetValue(canonicalRegionId, out region!))
-            {
-                normalizedRegionId = canonicalRegionId;
-                return true;
-            }
+            return true;
         }
 
+        region = new RegionScheduleOptions();
         return false;
     }
+}
+
+public sealed class WeeklySkyForecastRegionResolutionException(string requestedRegionId, IReadOnlyList<string> availableRegionIds, string message) : KeyNotFoundException(message)
+{
+    public string RequestedRegionId { get; } = requestedRegionId;
+    public IReadOnlyList<string> AvailableRegionIds { get; } = availableRegionIds;
 }
 
 public sealed class WeeklySkyForecastSegmentPlanner : IWeeklySkyForecastSegmentPlanner
