@@ -40,11 +40,11 @@ public sealed class CategoryProductionRunnerTests
             Called = true;
             return Task.FromResult(new CategoryProductionPreviewResponse(
                 Guid.NewGuid(), request.ContentCategoryCode, true, false,
-                request.PublishToYouTube, request.PublishToFacebook, request.PublishToInstagram,
+                request.PublishToYouTube, request.PublishToFacebook, request.PublishToInstagram, false,
                 "long-audio.mp3", "short-audio.mp3", "long.mp4", "short.mp4", "long.jpg", "short.jpg",
-                new { title = "t" },
+                null, null, null, new { title = "t" },
                 [new CategoryProductionStepResult("BuildRunPipelineRequest", "Completed", DateTime.UtcNow, DateTime.UtcNow, 1, "ok", null, [])],
-                [], null));
+                [], null, null));
         }
     }
 }
