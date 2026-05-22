@@ -55,7 +55,7 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
         steps.Add(await ExecuteStepAsync("ExecuteProductionPipelineParity", async () =>
         {
             run = await orchestrator.RunAsync(runRequest, cancellationToken);
-            return ("Pipeline execution completed.", run.Status == PipelineRunStatus.Completed ? null : run.FailureReason ?? "Pipeline did not complete.", Array.Empty<string>());
+            return ("Pipeline execution completed.", (run.Status is PipelineRunStatus.Succeeded or PipelineRunStatus.SuccessWithWarnings) ? null : run.FailureReason ?? "Pipeline did not complete successfully.", Array.Empty<string>());
         }, allowBusinessFailure: true));
 
         if (run is null)
@@ -67,7 +67,7 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
 
         var artifacts = ResolveArtifacts(run.OutputFolder);
         var metadata = ResolveMetadataObject(artifacts.MetadataPath);
-        var success = run.Status == PipelineRunStatus.Completed && File.Exists(artifacts.LongAudioPath ?? string.Empty);
+        var success = (run.Status is PipelineRunStatus.Succeeded or PipelineRunStatus.SuccessWithWarnings) && File.Exists(artifacts.LongAudioPath ?? string.Empty);
 
         return Build(success, request.ContentCategoryCode, plan.Id, steps, warnings, artifacts, success ? null : run.FailureReason ?? "One or more production steps failed.", metadata);
     }
