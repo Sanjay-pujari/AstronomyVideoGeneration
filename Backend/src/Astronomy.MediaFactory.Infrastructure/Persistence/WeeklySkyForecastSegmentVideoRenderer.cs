@@ -29,15 +29,15 @@ public sealed class WeeklySkyForecastSegmentVideoRenderer(
         if (!string.Equals(plan.ContentCategoryCode, "WeeklySkyForecast", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("This endpoint only supports WeeklySkyForecast plans.");
 
-        var weeklyRequest = new WeeklySkyForecastProductionRequest(plan.ContentCategoryCode, plan.Language, plan.RegionId, plan.RegionId, plan.ScheduledUtc ?? DateTimeOffset.UtcNow, false, false, false, true);
+        var weeklyRequest = new WeeklySkyForecastProductionRequest(plan.ContentCategoryCode, plan.Language, plan.RegionId, plan.RegionId, plan.ScheduledUtc ?? DateTimeOffset.UtcNow, false, false, false, true, false, false);
         var context = await contextBuilder.BuildAsync(weeklyRequest, cancellationToken);
         var segmentPlan = await segmentPlanner.BuildAsync(context, cancellationToken);
         var scenePlan = await scenePlanner.BuildAsync(context, segmentPlan, cancellationToken);
         var outputPaths = pathResolver.Resolve("WeeklySkyForecast", context.WeekStartDate, context.RegionId, contentGenerationPlanId);
 
-        Directory.CreateDirectory(outputPaths.RenderDirectory);
+        Directory.CreateDirectory(outputPaths.RootDirectory);
         Directory.CreateDirectory(outputPaths.ManifestsDirectory);
-        var segmentVideoDir = Path.Combine(outputPaths.RenderDirectory, "segments");
+        var segmentVideoDir = Path.Combine(outputPaths.RootDirectory, "segments");
         Directory.CreateDirectory(segmentVideoDir);
 
         var narrationManifestPath = Path.Combine(outputPaths.ManifestsDirectory, "NarrationManifest.json");
@@ -47,7 +47,7 @@ public sealed class WeeklySkyForecastSegmentVideoRenderer(
 
         var audioBySegment = narrationManifest.Segments.ToDictionary(x => x.SegmentCode, StringComparer.OrdinalIgnoreCase);
         var sceneBySegment = scenePlan.Scenes.GroupBy(x => x.LinkedSegmentCode, StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
-        var allSegments = segmentPlan.LongSegments.OrderBy(x => x.SortOrder).ToList();
+        var allSegments = segmentPlan.LongSegments.Concat(segmentPlan.ShortSegments).OrderBy(x => x.SegmentType).ThenBy(x => x.SortOrder).ToList();
         var segmentResults = new List<WeeklySkyForecastSegmentVideoRenderItem>(allSegments.Count);
 
         foreach (var segment in allSegments)
