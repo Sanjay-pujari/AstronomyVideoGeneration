@@ -455,6 +455,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IContentPlanningService, ContentPlanningService>();
         services.AddScoped<IManualCategoryPreparationOrchestrator, ManualCategoryPreparationOrchestrator>();
         services.AddScoped<ICategoryProductionPipelineStrategy, DailySkyGuideProductionPipelineStrategy>();
+        services.AddScoped<ICategoryProductionPipelineStrategy, WeeklySkyForecastProductionPipelineStrategy>();
         services.AddScoped<ICategoryProductionRunner, CategoryProductionRunner>();
         services.AddScoped<IProductionPreviewOutputValidator, ProductionPreviewOutputValidator>();
         services.AddScoped<IAssetAwareManualRunPreparationService, AssetAwareManualRunPreparationService>();
@@ -475,6 +476,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IStellariumScenePlanner, DailySkyGuideStellariumScenePlanner>();
         services.AddScoped<IStellariumScenePlannerResolver, StellariumScenePlannerResolver>();
         services.AddScoped<IDailySkyGuideContextBuilder, DailySkyGuideContextBuilder>();
+        services.AddScoped<IWeeklySkyForecastContextBuilder, WeeklySkyForecastContextBuilder>();
+        services.AddScoped<IWeeklySkyForecastSegmentPlanner, WeeklySkyForecastSegmentPlanner>();
+        services.AddScoped<IWeeklySkyForecastSscScenePlanner, WeeklySkyForecastSscScenePlanner>();
+        services.AddScoped<ICategoryOutputPathResolver, CategoryOutputPathResolver>();
+        services.AddScoped<IWeeklySkyForecastMetadataBuilder, WeeklySkyForecastMetadataBuilder>();
+        services.AddScoped<IWeeklySkyForecastPreparationOrchestrator, WeeklySkyForecastPreparationOrchestrator>();
+
         services.AddScoped<IContentCategoryPipelineStrategy, DailySkyGuidePipelineStrategy>();
         services.AddScoped<IContentCategoryPipelineStrategyResolver, ContentCategoryPipelineStrategyResolver>();
         services.AddScoped<IContentCategoryPipeline, DailySkyGuideContentPipeline>();
