@@ -40,29 +40,31 @@ public sealed class DailySkyGuidePreviewVideoGeneratorTests
 
         Assert.True(result.Success);
         Assert.Equal(before, db.ChangeTracker.Entries().Count());
+        Assert.Contains(Path.Combine("content-plans", planId.ToString("D"), "preview-videos"), result.OutputVideoPath!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(Path.Combine("content-plans", planId.ToString("D"), "thumbnails"), result.ThumbnailPath!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task PreviewInfo_UsesCaptureDirectory_WhenStellariumOutputRootIsDefault()
+    public async Task PreviewInfo_UsesRenderingWorkingDirectory()
     {
         await using var db = BuildDb();
         var planId = Guid.NewGuid();
         db.ContentGenerationPlans.Add(new ContentGenerationPlan { Id = planId, ContentCategoryCode = "DailySkyGuide", Language = "en", RegionId = "r" });
         await db.SaveChangesAsync();
 
-        var captureDirectory = Path.Combine(Path.GetTempPath(), "stellarium-captures");
+        var renderingDirectory = Path.Combine(Path.GetTempPath(), "media-output");
         var generator = new DailySkyGuidePreviewVideoGenerator(
             db,
             new FakePlanner(planId),
             new FakeComposer(),
-            Options.Create(new StellariumOptions { OutputRoot = "outputs/content-plans", CaptureDirectory = captureDirectory }));
+            Options.Create(new RenderingOptions { WorkingDirectory = renderingDirectory }));
 
         var info = await generator.GetPreviewInfoAsync(planId, CancellationToken.None);
-        Assert.StartsWith(Path.Combine(captureDirectory, "content-plans", planId.ToString("D"), "preview-videos"), info.OutputFolder, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(Path.Combine(renderingDirectory, "content-plans", planId.ToString("D"), "preview-videos"), info.OutputFolder, StringComparison.OrdinalIgnoreCase);
     }
 
     private static DailySkyGuidePreviewVideoGenerator BuildGenerator(MediaFactoryDbContext db, IDailySkyGuideAssetAwareCompositionPlanner planner)
-        => new(db, planner, new FakeComposer(), Options.Create(new StellariumOptions { OutputRoot = Path.GetTempPath(), CaptureDirectory = Path.GetTempPath() }));
+        => new(db, planner, new FakeComposer(), Options.Create(new RenderingOptions { WorkingDirectory = Path.GetTempPath() }));
 
     private static MediaFactoryDbContext BuildDb()
     {
@@ -78,7 +80,9 @@ public sealed class DailySkyGuidePreviewVideoGeneratorTests
         {
             Directory.CreateDirectory(Path.GetDirectoryName(outputVideoPath)!);
             File.WriteAllText(outputVideoPath, "x");
-            var thumbnailPath = Path.Combine(Path.GetDirectoryName(outputVideoPath)!, "daily-skyguide-preview-thumbnail.png");
+            var planRoot = Directory.GetParent(Path.GetDirectoryName(outputVideoPath)!)?.FullName ?? Path.GetDirectoryName(outputVideoPath)!;
+            var thumbnailPath = Path.Combine(planRoot, "thumbnails", "daily-skyguide-preview-thumbnail.png");
+            Directory.CreateDirectory(Path.GetDirectoryName(thumbnailPath)!);
             File.WriteAllText(thumbnailPath, "x");
             return Task.FromResult(new AssetAwarePreviewVideoComposeResult(outputVideoPath, thumbnailPath, "ffmpeg ...", 0, string.Empty, string.Empty, "ffmpeg"));
         }
