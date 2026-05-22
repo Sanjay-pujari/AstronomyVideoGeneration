@@ -78,7 +78,8 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastV2CinematicEditorialRefiner cinematicRefiner,
     IWeeklySkyForecastV2NarrativeAbstractionBuilder narrativeAbstractionBuilder,
     IWeeklySkyForecastV2NarrationPlanner narrationPlanner,
-    IWeeklySkyForecastV2NarrationTextGenerator narrationTextGenerator) : IWeeklySkyForecastV2IntelligenceService
+    IWeeklySkyForecastV2NarrationTextGenerator narrationTextGenerator,
+    IWeeklySkyForecastV2AssetResolver assetResolver) : IWeeklySkyForecastV2IntelligenceService
 {
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
     {
@@ -111,6 +112,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             null,
             null,
             null,
+            null,
             events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             ctx.Warnings,
             [new CategoryProductionStepResult("weekly_skyfield_context", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Context built", null, []), new CategoryProductionStepResult("event_intelligence", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Event intelligence generated", null, [])]);
@@ -122,8 +124,9 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var narrationQuality = WeeklySkyForecastV2NarrationQualityValidator.Validate(narrationPlan, generatedNarration);
         var visualRequirementPackage = WeeklySkyForecastV2VisualRequirementExtractor.Extract(narrationPlan, generatedNarration, narrative, cinematic, baseResponse.EventIntelligence);
         var hybridScenePlanPackage = WeeklySkyForecastV2HybridScenePlanBuilder.Build(narrationPlan, visualRequirementPackage, baseResponse.Region);
+        var sceneChoreographyPackage = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
         var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(narrationPlan, narrationQuality, visualRequirementPackage, hybridScenePlanPackage);
-        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, PreviewStability = previewStability };
+        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, SceneChoreographyPackage = sceneChoreographyPackage, PreviewStability = previewStability };
     }
 }
 
@@ -361,5 +364,63 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         if (hybridScenePlanPackage.ScenePlans.Count is < 4 or > 6) blocking.Add("Hybrid scene plan must contain 4-6 timeline scenes.");
         var readyForAssetResolution = blocking.Count == 0;
         return new WeeklyPreviewStabilityReport(readyForAssetResolution, blocking, warnings, readyForAssetResolution, false);
+    }
+}
+
+public sealed class WeeklySkyForecastV2AssetResolver : IWeeklySkyForecastV2AssetResolver
+{
+    public WeeklySceneChoreographyPackage Resolve(WeeklyNarrationPlan narrationPlan, WeeklyHybridScenePlanPackage hybridScenePlanPackage, WeeklyVisualRequirementPackage visualRequirementPackage, string regionId)
+    {
+        var resolvedScenes = hybridScenePlanPackage.ScenePlans.Select((s, i) =>
+        {
+            var camera = s.SceneCode.Contains("best_night", StringComparison.OrdinalIgnoreCase) ? new WeeklyCameraPlan("GentlePanRight", "CinematicFloat")
+                : s.SceneCode.Contains("hero", StringComparison.OrdinalIgnoreCase) ? new WeeklyCameraPlan("SlowPushIn", "ParallaxDepth")
+                : s.SceneCode.Contains("viewing", StringComparison.OrdinalIgnoreCase) ? new WeeklyCameraPlan("Static", "CinematicFloat")
+                : new WeeklyCameraPlan("SlowPullOut", null);
+            var motion = s.SceneCode.Contains("viewing", StringComparison.OrdinalIgnoreCase) ? "subtle_practical_minimal" : "subtle_cinematic_emotionally_calm";
+            return new ResolvedWeeklyScene(s.SceneCode, i + 1, BuildSceneTitle(s.SceneCode), s.SceneType, s.DurationSeconds, narrationPlan.LongFormPlan.Segments.Where(x => x.RecommendedVisualStrategy.Equals(s.VisualStrategy, StringComparison.OrdinalIgnoreCase)).Select(x => x.SegmentCode).DefaultIfEmpty("OpeningHook").ToList(), s.VisualSourceType, s.RenderIntent, "calm_awe", s.CompositionDescription, s.ObjectCodes, s.TargetDate, s.BestTimeUtc, motion, camera, string.Join(", ", s.OverlayInstructions), s.TransitionIn, s.TransitionOut, s.RequiredAssets, s.RequiredAssets, s.RequiresStellarium && s.SceneCode.Contains("best_night", StringComparison.OrdinalIgnoreCase), s.RequiresStellarium ? $"stellarium_plan_{s.SceneCode}" : null, "hybrid_layered_composition", s.ReuseAllowed ? 100 : 50);
+        }).Take(6).ToList();
+
+        var assets = hybridScenePlanPackage.AssetNeeds.Select(a => new ResolvedWeeklyAsset(
+            Guid.NewGuid().ToString("N"), a.AssetCode, a.AssetRole, a.PreferredAssetType,
+            "LocalAssetPack", a.ObjectCode, 90,
+            $"/assets/weeklyskyforecast/v2/{a.ObjectCode.ToLowerInvariant()}_{a.AssetRole.ToLowerInvariant()}.png",
+            "GeneratedImage>PublicImage>StockFootage", true, a.ObjectCode is "MOON" or "JUPITER", a.RequiredForSceneCodes)).ToList();
+
+        assets.AddRange([
+            new ResolvedWeeklyAsset(Guid.NewGuid().ToString("N"), "twilight_gradient_bg", "Background", "Image", "LocalAssetPack", "SKY", 85, "/assets/weeklyskyforecast/v2/backgrounds/twilight_gradient.png", "GeneratedImage>PublicImage>StockFootage", false, false, resolvedScenes.Select(x=>x.SceneCode).ToList()),
+            new ResolvedWeeklyAsset(Guid.NewGuid().ToString("N"), "tripod_overlay", "ViewingTipOverlay", "Overlay", "LocalAssetPack", "NONE", 70, "/assets/weeklyskyforecast/v2/overlays/tripod_frame.png", "GeneratedImage>PublicImage>StockFootage", true, false, resolvedScenes.Where(x=>x.SceneCode.Contains("viewing", StringComparison.OrdinalIgnoreCase)).Select(x=>x.SceneCode).ToList())
+        ]);
+
+        var timeline = BuildTimeline(resolvedScenes);
+        var overlays = new List<WeeklyOverlayTimeline>();
+        foreach (var t in timeline)
+        {
+            if (t.SceneCode.Contains("best_night", StringComparison.OrdinalIgnoreCase))
+            {
+                overlays.Add(new WeeklyOverlayTimeline(t.SceneCode, "DirectionArrow", "West", t.StartSecond + 2, t.EndSecond - 2, "FadeInGentle", "lower_third_safe"));
+                overlays.Add(new WeeklyOverlayTimeline(t.SceneCode, "TimeAnnotation", "Best time", t.StartSecond + 4, t.EndSecond - 1, "FadeInGentle", "upper_safe"));
+            }
+        }
+
+        var contracts = resolvedScenes.Select(s => new WeeklyRenderContract(s.SceneCode, s.RequiresStellarium ? "StellariumRenderer" : s.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", "timeline_driven", ["scene", "assets", "overlay", "timing", "transition"], ["composited_frames", "metadata_manifest"], s.ReusePriority > 80, true)).ToList();
+        contracts.Add(new WeeklyRenderContract("thumbnail_story", "ThumbnailCompositor", "hero_composition", ["hero_assets", "overlay_text"], ["thumbnail_image"], true, true));
+        var warnings = new List<string>();
+        if (resolvedScenes.Count is < 4 or > 6) warnings.Add("Resolved scene count should be between 4 and 6.");
+        return new WeeklySceneChoreographyPackage(resolvedScenes, assets, timeline, hybridScenePlanPackage.TransitionPlan, overlays, contracts, warnings);
+    }
+
+    private static string BuildSceneTitle(string code) => code.Replace("_", " ", StringComparison.Ordinal).Trim();
+    private static List<WeeklySceneTimeline> BuildTimeline(IReadOnlyList<ResolvedWeeklyScene> scenes)
+    {
+        var second = 0;
+        var list = new List<WeeklySceneTimeline>();
+        foreach (var s in scenes)
+        {
+            var end = second + s.DurationSeconds;
+            list.Add(new WeeklySceneTimeline(s.SceneCode, second, end, second, end, 1));
+            second = end - 1;
+        }
+        return list;
     }
 }

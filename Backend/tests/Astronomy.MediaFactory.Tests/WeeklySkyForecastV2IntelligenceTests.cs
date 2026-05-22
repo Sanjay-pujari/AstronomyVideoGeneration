@@ -9,7 +9,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
     [Fact]
     public async Task V2_Intelligence_Generates_Cinematic_Blueprint()
     {
-        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator());
+        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator(), new WeeklySkyForecastV2AssetResolver());
         var response = await service.PreviewAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "IN-RJ-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), Diagnostics: true), CancellationToken.None);
 
         Assert.True(response.Success);
@@ -20,6 +20,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.NarrationQuality);
         Assert.NotNull(response.VisualRequirementPackage);
         Assert.NotNull(response.HybridScenePlanPackage);
+        Assert.NotNull(response.SceneChoreographyPackage);
         Assert.NotNull(response.PreviewStability);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
@@ -52,6 +53,13 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.True(response.PreviewStability!.IsStable);
         Assert.True(response.PreviewStability.ReadyForAssetResolution);
         Assert.False(response.PreviewStability.ReadyForRendering);
+        Assert.InRange(response.SceneChoreographyPackage!.ResolvedScenes.Count, 4, 6);
+        Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.False(string.IsNullOrWhiteSpace(s.CameraPlan.PrimaryBehavior)));
+        Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.False(string.IsNullOrWhiteSpace(s.MotionPlan)));
+        Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.Contains(response.SceneChoreographyPackage.RenderContracts, c => c.SceneCode == s.SceneCode));
+        Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.Contains(response.SceneChoreographyPackage.SceneTimeline, t => t.SceneCode == s.SceneCode));
+        Assert.Contains(response.SceneChoreographyPackage.ResolvedAssets, a => a.FallbackPath.Contains("GeneratedImage", StringComparison.OrdinalIgnoreCase));
+        Assert.All(response.SceneChoreographyPackage.ResolvedScenes.Where(s => s.RequiresStellarium), s => Assert.Contains("best_night", s.SceneCode, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -80,6 +88,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             events,
             new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             null!,
+            null,
             null,
             null,
             null,
