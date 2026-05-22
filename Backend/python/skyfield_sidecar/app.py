@@ -571,8 +571,27 @@ def weekly_sky_forecast(req: WeeklySkyForecastRequest):
     if not day_items:
         return WeeklySkyForecastResponse(success=False, regionId=req.region_id, locationName=req.location_name, timezone=req.timezone, weekStartDate=req.week_start_date, weekEndDate=(start_date + timedelta(days=req.days - 1)).isoformat(), days=[], weeklyHighlights=[], recommendedNights=[], warnings=warnings, errorMessage="Unable to compute weekly forecast for all requested days.")
     sorted_days = sorted(day_items, key=lambda x: x.overall_viewing_score, reverse=True)
-    recommended = [RecommendedObservationNight(date=d.date, score=d.overall_viewing_score, reason="Top overall viewing conditions for the week.", bestObjects=[o.object_code for o in d.visible_objects[:3]], bestStartUtc=d.best_viewing_start_utc, bestEndUtc=d.best_viewing_end_utc) for d in sorted_days[:3]]
-    highlights = [WeeklyHighlightItem(order=1, highlightType="best_overall_night", title="Best overall viewing night", description="Highest weekly visibility score.", date=sorted_days[0].date, bestTimeUtc=sorted_days[0].best_viewing_start_utc, objectCode=sorted_days[0].visible_objects[0].object_code, score=sorted_days[0].overall_viewing_score, suggestedSceneType="wide_sky")]
+
+    def _top_visible_objects(day: DailySkyForecastItem, score_attr: str = "visibility_score") -> list[VisibleObjectForecastItem]:
+        ranked = [o for o in day.visible_objects if o.visible and getattr(o, score_attr, 0) > 0]
+        ranked.sort(key=lambda o: getattr(o, score_attr, 0), reverse=True)
+        return ranked
+
+    recommended = []
+    for d in sorted_days[:3]:
+        top_visible = _top_visible_objects(d)
+        if not top_visible:
+            warnings.append(f"No visible objects with positive visibility score for recommended night {d.date}.")
+        recommended.append(RecommendedObservationNight(date=d.date, score=d.overall_viewing_score, reason="Top overall viewing conditions for the week.", bestObjects=[o.object_code for o in top_visible[:3]], bestStartUtc=d.best_viewing_start_utc, bestEndUtc=d.best_viewing_end_utc))
+
+    best_overall_top = _top_visible_objects(sorted_days[0])
+    if best_overall_top:
+        best_overall_object_code = best_overall_top[0].object_code
+    else:
+        warnings.append(f"No visible objects with positive visibility score for best overall night {sorted_days[0].date}.")
+        best_overall_object_code = ""
+
+    highlights = [WeeklyHighlightItem(order=1, highlightType="best_overall_night", title="Best overall viewing night", description="Highest weekly visibility score.", date=sorted_days[0].date, bestTimeUtc=sorted_days[0].best_viewing_start_utc, objectCode=best_overall_object_code, score=sorted_days[0].overall_viewing_score, suggestedSceneType="wide_sky")]
     if best_planet is not None:
         highlights.append(WeeklyHighlightItem(order=2, highlightType="best_planet", title="Best planet of week", description="Highest real weekly planet visibility score.", date=sorted_days[0].date, bestTimeUtc=best_planet.best_viewing_time_utc, objectCode=best_planet.object_code, score=best_planet.visibility_score, suggestedSceneType="planet_closeup"))
     else:
@@ -589,7 +608,13 @@ def weekly_sky_forecast(req: WeeklySkyForecastRequest):
         warnings.append("Best Moon night could not be calculated.")
         best_moon_day = sorted_days[0]
     best_photo_day = max(day_items, key=lambda x: max((o.photography_score for o in x.visible_objects if o.visible), default=0.0))
-    highlights.append(WeeklyHighlightItem(order=4, highlightType="best_photography_night", title="Best photography night", description="Best combined altitude and sky darkness for imaging.", date=best_photo_day.date, bestTimeUtc=best_photo_day.best_viewing_start_utc, objectCode=best_photo_day.visible_objects[0].object_code, score=best_photo_day.overall_viewing_score, suggestedSceneType="astrophotography"))
+    best_photo_objects = _top_visible_objects(best_photo_day, score_attr="photography_score")
+    if best_photo_objects:
+        best_photo_object_code = best_photo_objects[0].object_code
+    else:
+        warnings.append(f"No visible objects with positive photography score for best photography night {best_photo_day.date}.")
+        best_photo_object_code = ""
+    highlights.append(WeeklyHighlightItem(order=4, highlightType="best_photography_night", title="Best photography night", description="Best combined altitude and sky darkness for imaging.", date=best_photo_day.date, bestTimeUtc=best_photo_day.best_viewing_start_utc, objectCode=best_photo_object_code, score=best_photo_day.overall_viewing_score, suggestedSceneType="astrophotography"))
     darkest_day = min(day_items, key=lambda x: x.moon_illumination_percent)
     highlights.append(WeeklyHighlightItem(order=5, highlightType="dark_sky_night", title="Darkest sky opportunity", description="Lowest moon illumination night this week.", date=darkest_day.date, bestTimeUtc=None, objectCode="MOON", score=100 - darkest_day.moon_illumination_percent, suggestedSceneType="deep_sky"))
-    return WeeklySkyForecastResponse(success=True, regionId=req.region_id, locationName=req.location_name, timezone=req.timezone, weekStartDate=req.week_start_date, weekEndDate=(start_date + timedelta(days=req.days - 1)).isoformat(), days=day_items, weeklyHighlights=highlights, recommendedNights=recommended, bestPlanetOfWeek=best_planet, bestMoonNight=RecommendedObservationNight(date=best_moon_day.date, score=best_moon_day.moon_illumination_percent, reason="Strong moon presentation for visual observation.", bestObjects=["MOON"], bestStartUtc=best_moon_day.best_viewing_start_utc, bestEndUtc=best_moon_day.best_viewing_end_utc), bestPhotographyNight=RecommendedObservationNight(date=best_photo_day.date, score=best_photo_day.overall_viewing_score, reason="Best combined visibility and darkness balance.", bestObjects=[x.object_code for x in best_photo_day.visible_objects[:3]], bestStartUtc=best_photo_day.best_viewing_start_utc, bestEndUtc=best_photo_day.best_viewing_end_utc), warnings=warnings, errorMessage=None)
+    return WeeklySkyForecastResponse(success=True, regionId=req.region_id, locationName=req.location_name, timezone=req.timezone, weekStartDate=req.week_start_date, weekEndDate=(start_date + timedelta(days=req.days - 1)).isoformat(), days=day_items, weeklyHighlights=highlights, recommendedNights=recommended, bestPlanetOfWeek=best_planet, bestMoonNight=RecommendedObservationNight(date=best_moon_day.date, score=best_moon_day.moon_illumination_percent, reason="Strong moon presentation for visual observation.", bestObjects=["MOON"], bestStartUtc=best_moon_day.best_viewing_start_utc, bestEndUtc=best_moon_day.best_viewing_end_utc), bestPhotographyNight=RecommendedObservationNight(date=best_photo_day.date, score=best_photo_day.overall_viewing_score, reason="Best combined visibility and darkness balance.", bestObjects=[x.object_code for x in best_photo_objects[:3]], bestStartUtc=best_photo_day.best_viewing_start_utc, bestEndUtc=best_photo_day.best_viewing_end_utc), warnings=warnings, errorMessage=None)
