@@ -1125,6 +1125,78 @@ public sealed record WeeklySkyForecastVisualAssetsResponse(
     IReadOnlyList<string> Errors,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
 
+
+public sealed record WeeklySkyForecastV2IntelligenceRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    string RegionName,
+    DateTimeOffset ScheduledUtc,
+    DateOnly? WeekStartDate = null,
+    bool Diagnostics = true);
+
+public sealed record WeeklySkyForecastV2EventIntelligenceItem(
+    string EventId,
+    string EventType,
+    string Title,
+    string Description,
+    DateOnly PrimaryDate,
+    DateTime? BestTimeUtc,
+    IReadOnlyList<string> ObjectCodes,
+    IReadOnlyList<string> VisibleObjectNames,
+    double ImportanceScore,
+    double VisualScore,
+    double StoryScore,
+    double RarityScore,
+    string RecommendedVisualStrategy,
+    string RecommendedScenePurpose,
+    string Reason,
+    string Source);
+
+public sealed record WeeklyStoryArc(
+    string Headline,
+    string Subtitle,
+    string StoryTheme,
+    string OpeningHook,
+    IReadOnlyList<string> NarrativeBeats,
+    string ClosingRecommendation,
+    IReadOnlyList<string> PrimaryObjects,
+    IReadOnlyList<string> PrimaryDates,
+    IReadOnlyList<string> SuggestedShorts);
+
+public sealed record WeeklySkyForecastV2SkyfieldSummary(
+    int DailyForecastCount,
+    int VisibleObjectCount,
+    int WeeklyHighlightsCount,
+    int RecommendedNightsCount,
+    string? BestPlanetOfWeek,
+    DateOnly? BestMoonNight,
+    DateOnly? BestPhotographyNight);
+
+public sealed record WeeklySkyForecastV2IntelligenceResponse(
+    Guid? ContentGenerationPlanId,
+    string Category,
+    bool Success,
+    DateOnly WeekStartDate,
+    DateOnly WeekEndDate,
+    string Region,
+    WeeklySkyForecastV2SkyfieldSummary SkyfieldSummary,
+    IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> EventIntelligence,
+    WeeklyStoryArc WeeklyStoryArc,
+    IReadOnlyList<string> RecommendedVisualStrategies,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<CategoryProductionStepResult> StepResults);
+
+public interface IWeeklySkyForecastV2EventIntelligenceBuilder
+{
+    IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> Build(WeeklySkyForecastContext context);
+}
+
+public interface IWeeklySkyForecastV2IntelligenceService
+{
+    Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken);
+}
+
 public interface IWeeklySkyForecastVisualAssetGenerationService
 {
     Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, CancellationToken cancellationToken);
