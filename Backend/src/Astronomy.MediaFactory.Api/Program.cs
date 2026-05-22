@@ -222,7 +222,7 @@ app.MapPost("/api/content-planning/run-category-production-preview", async (Cate
 });
 
 
-app.MapPost("/api/content-planning/run-weekly-skyforecast-preparation", async (WeeklySkyForecastPreparationRequest request, IWeeklySkyForecastPreparationOrchestrator orchestrator, CancellationToken ct) =>
+app.MapPost("/api/content-planning/run-weekly-skyforecast-preparation", async (WeeklySkyForecastProductionRequest request, IWeeklySkyForecastPreparationOrchestrator orchestrator, CancellationToken ct) =>
 {
     var safeRequest = request with { PublishToYouTube = false, PublishToFacebook = false, PublishToInstagram = false };
     var response = await orchestrator.RunAsync(safeRequest, ct);

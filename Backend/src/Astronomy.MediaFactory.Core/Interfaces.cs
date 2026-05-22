@@ -945,28 +945,68 @@ public sealed record WeeklySkyForecastSkyfieldRequest(
     bool IncludeConjunctions = true,
     bool IncludeBestViewingWindows = true);
 
+public sealed record WeeklySkyForecastProductionRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    string RegionName,
+    DateTimeOffset ScheduledUtc,
+    bool PublishToYouTube = false,
+    bool PublishToFacebook = false,
+    bool PublishToInstagram = false,
+    bool Diagnostics = true);
+
+public sealed record DailySkyForecastContextItem(
+    DateOnly Date,
+    DateTime SunsetUtc,
+    DateTime SunriseUtc,
+    string MoonPhase,
+    double MoonIlluminationPercent,
+    DateTime? MoonRiseUtc,
+    DateTime? MoonSetUtc,
+    IReadOnlyList<WeeklySkyForecastVisibleObjectItem> VisibleObjects,
+    IReadOnlyList<WeeklySkyForecastEventItem> Events,
+    DateTime BestViewingStartUtc,
+    DateTime BestViewingEndUtc,
+    double OverallViewingScore,
+    string ViewingSummary);
+
+public sealed record WeeklySkyForecastVisibleObjectItem(string ObjectCode, string ObjectName, string ObjectType, bool Visible, DateTime? RiseUtc, DateTime? SetUtc, DateTime? TransitUtc, double? MaxAltitudeDegrees, DateTime? BestViewingTimeUtc, double VisibilityScore, double PhotographyScore, string ViewingDirection, string Reason);
+public sealed record WeeklySkyForecastEventItem(string EventType, string Title, string Description, DateTime EventTimeUtc, double ImportanceScore, double ViralityScore, string? PrimaryObjectCode, string ViewingDirection, string ViewingTip);
+public sealed record WeeklySkyForecastHighlightItem(int Order, string HighlightType, string Title, string Description, DateOnly Date, DateTime? BestTimeUtc, string? ObjectCode, double Score, string SuggestedSceneType);
+
 public sealed record WeeklySkyForecastContext(
-    WeeklySkyForecastSkyfieldRequest Request,
+    string RegionId,
+    string LocationName,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    DateOnly WeekStartDate,
     DateOnly WeekEndDate,
-    IReadOnlyList<AstronomyVisibilityResult> DailyForecasts,
-    IReadOnlyList<string> WeeklyHighlights,
-    IReadOnlyList<RecommendedObservationNight> RecommendedObservationNights,
+    string Language,
+    IReadOnlyList<DailySkyForecastContextItem> DailyForecasts,
+    IReadOnlyList<WeeklySkyForecastHighlightItem> WeeklyHighlights,
+    IReadOnlyList<RecommendedObservationNight> RecommendedNights,
+    string? BestPlanetOfWeek,
+    DateOnly? BestMoonNight,
+    DateOnly? BestPhotographyNight,
     IReadOnlyList<string> Warnings);
 
 public sealed record RecommendedObservationNight(DateOnly Date, double Score, string Reason, IReadOnlyList<string> BestObjects, DateTime BestStartUtc, DateTime BestEndUtc);
-public sealed record WeeklySkyForecastSegmentPlanItem(string SegmentCode, string SegmentType, string NarrationPurpose, IReadOnlyList<string> TargetObjectCodes, DateOnly? TargetDate, string SuggestedSceneType, string SuggestedVisualRole, double PriorityScore);
-public sealed record WeeklySkyForecastSscScenePlanItem(string SceneCode, string SceneType, string? TargetObjectCode, DateTime CaptureTimeUtc, DateOnly TargetDate, string Fov, string OutputRole, bool ThumbnailCandidate);
+public sealed record WeeklySkyForecastSegmentPlanItem(string SegmentCode, string SegmentType, int SortOrder, string Title, string NarrationPurpose, DateOnly? TargetDate, IReadOnlyList<string> TargetObjectCodes, string VisualRole, string SuggestedSceneType, int EstimatedDurationSeconds, double PriorityScore);
+public sealed record WeeklySkyForecastSegmentPlan(IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments);
+public sealed record WeeklySkyForecastSscScenePlanItem(string SceneCode, string SceneType, string? TargetObjectCode, DateTime CaptureTimeUtc, DateOnly TargetDate, double FieldOfViewDegrees, string OutputRole, bool IsThumbnailCandidate, string LinkedSegmentCode);
+public sealed record WeeklySkyForecastSscScenePlan(IReadOnlyList<WeeklySkyForecastSscScenePlanItem> Scenes);
 public sealed record CategoryOutputPaths(string RootDirectory, string NarrationDirectory, string ShortsDirectory, string ThumbnailsDirectory, string StellariumScenesDirectory, string StellariumScriptsDirectory, string ManifestsDirectory, string MetadataDirectory);
-public sealed record WeeklySkyForecastMetadataSkeleton(IReadOnlyList<string> TitleCandidates, IReadOnlyList<string> ShortTitleCandidates, IReadOnlyList<string> Hashtags, IReadOnlyList<string> SeoTags, string WeeklySummary, IReadOnlyList<string> ObjectList, IReadOnlyList<string> EventList);
-public sealed record WeeklySkyForecastPreparationRequest(string ContentCategoryCode, string Language, string RegionId, string RegionName, DateTimeOffset ScheduledUtc, bool PublishToYouTube = false, bool PublishToFacebook = false, bool PublishToInstagram = false, bool Diagnostics = true);
-public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, DateOnly WeekStartDate, DateOnly WeekEndDate, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, IReadOnlyList<string> WeeklyHighlights, IReadOnlyList<RecommendedObservationNight> RecommendedObservationNights, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults);
+public sealed record WeeklySkyForecastMetadataSkeleton(IReadOnlyList<string> TitleCandidates, IReadOnlyList<string> ShortTitleCandidates, string DescriptionSkeleton, IReadOnlyList<string> Tags, IReadOnlyList<string> Hashtags, IReadOnlyList<string> KeyObjects, IReadOnlyList<string> KeyDates, string WeekRange, string RegionName, string Language);
+public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, string Category, DateOnly WeekStartDate, DateOnly WeekEndDate, WeeklySkyForecastContext ContextSummary, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults, bool PublishingEnabled, bool AnalyticsEnabled);
 
-public interface IWeeklySkyForecastContextBuilder { Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken); }
-public interface IWeeklySkyForecastSegmentPlanner { (IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments) Build(WeeklySkyForecastContext context); }
-public interface IWeeklySkyForecastSscScenePlanner { IReadOnlyList<WeeklySkyForecastSscScenePlanItem> Build(WeeklySkyForecastContext context, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> longSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> shortSegments); }
+public interface IWeeklySkyForecastContextBuilder { Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken); }
+public interface IWeeklySkyForecastSegmentPlanner { Task<WeeklySkyForecastSegmentPlan> BuildAsync(WeeklySkyForecastContext context, CancellationToken cancellationToken); }
+public interface IWeeklySkyForecastSscScenePlanner { Task<WeeklySkyForecastSscScenePlan> BuildAsync(WeeklySkyForecastContext context, WeeklySkyForecastSegmentPlan segmentPlan, CancellationToken cancellationToken); }
 public interface ICategoryOutputPathResolver { CategoryOutputPaths Resolve(string categoryName, DateOnly date, string regionId, Guid pipelineRunId); }
-public interface IWeeklySkyForecastMetadataBuilder { WeeklySkyForecastMetadataSkeleton Build(WeeklySkyForecastContext context, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> longSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> shortSegments); }
-public interface IWeeklySkyForecastPreparationOrchestrator { Task<WeeklySkyForecastPreparationResponse> RunAsync(WeeklySkyForecastPreparationRequest request, CancellationToken cancellationToken); }
+public interface IWeeklySkyForecastMetadataBuilder { Task<WeeklySkyForecastMetadataSkeleton> BuildAsync(WeeklySkyForecastContext context, WeeklySkyForecastSegmentPlan segmentPlan, CancellationToken cancellationToken); }
+public interface IWeeklySkyForecastPreparationOrchestrator { Task<WeeklySkyForecastPreparationResponse> RunAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken); }
 
 public interface ICategoryProductionRunner
 {
