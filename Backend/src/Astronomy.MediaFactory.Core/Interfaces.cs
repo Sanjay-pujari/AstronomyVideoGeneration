@@ -1089,6 +1089,16 @@ public sealed record WeeklySkyForecastVisualAssetScriptResult(
     bool Success,
     string? ErrorMessage);
 
+public sealed record WeeklySkyForecastVisualAssetManifestItem(
+    string SegmentCode,
+    string NarrationAudioPath,
+    string SceneCode,
+    string SscScriptPath,
+    string CapturedImagePath,
+    string OutputRole,
+    string? TargetObjectCode,
+    DateTime CaptureTimeUtc);
+
 public sealed record WeeklySkyForecastVisualAssetImageResult(
     string SceneCode,
     string ImagePath,
@@ -1102,8 +1112,12 @@ public sealed record WeeklySkyForecastVisualAssetsResponse(
     bool Success,
     int ScriptCount,
     int CapturedImageCount,
+    string CanonicalSscScriptsDirectory,
+    string CanonicalStellariumCapturesDirectory,
+    string VisualAssetManifestPath,
     IReadOnlyList<WeeklySkyForecastVisualAssetScriptResult> Scripts,
     IReadOnlyList<WeeklySkyForecastVisualAssetImageResult> Images,
+    IReadOnlyList<WeeklySkyForecastVisualAssetManifestItem> VisualAssetManifest,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<CategoryProductionStepResult> StepResults);

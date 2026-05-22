@@ -46,7 +46,14 @@ public sealed class WeeklySkyForecastSegmentVideoRenderer(
             ?? throw new InvalidOperationException("Narration manifest not readable.");
 
         var audioBySegment = narrationManifest.Segments.ToDictionary(x => x.SegmentCode, StringComparer.OrdinalIgnoreCase);
-        var sceneBySegment = scenePlan.Scenes.GroupBy(x => x.LinkedSegmentCode, StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
+        var visualAssetManifestPath = Path.Combine(outputPaths.ManifestsDirectory, "weekly-visual-assets-manifest.json");
+        if (!File.Exists(visualAssetManifestPath)) throw new InvalidOperationException("weekly-visual-assets-manifest.json is required before segment rendering.");
+        using var visualManifestDoc = JsonDocument.Parse(await File.ReadAllTextAsync(visualAssetManifestPath, cancellationToken));
+        var visualAssetManifest = JsonSerializer.Deserialize<List<WeeklySkyForecastVisualAssetManifestItem>>(visualManifestDoc.RootElement.GetProperty("visualAssetManifest").GetRawText()) ?? [];
+        var sceneAssetBySegment = visualAssetManifest
+            .Where(x => !string.IsNullOrWhiteSpace(x.SegmentCode))
+            .GroupBy(x => x.SegmentCode, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
         var allSegments = segmentPlan.LongSegments.Concat(segmentPlan.ShortSegments).OrderBy(x => x.SegmentType).ThenBy(x => x.SortOrder).ToList();
         var segmentResults = new List<WeeklySkyForecastSegmentVideoRenderItem>(allSegments.Count);
 
@@ -67,14 +74,14 @@ public sealed class WeeklySkyForecastSegmentVideoRenderer(
                 continue;
             }
 
-            if (!sceneBySegment.TryGetValue(segment.SegmentCode, out var scene))
+            if (!sceneAssetBySegment.TryGetValue(segment.SegmentCode, out var sceneAsset))
             {
                 errors.Add($"Missing linked scene for {segment.SegmentCode}.");
                 failed++;
                 continue;
             }
 
-            var scenePath = Path.Combine(outputPaths.StellariumScenesDirectory, $"{scene.SceneCode}_{scene.OutputRole}.png");
+            var scenePath = sceneAsset.CapturedImagePath;
             if (!File.Exists(scenePath))
             {
                 errors.Add($"Missing captured scene for {segment.SegmentCode}: {scenePath}");
