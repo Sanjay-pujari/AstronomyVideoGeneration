@@ -51,10 +51,45 @@ public sealed class FfmpegAssetAwarePreviewVideoComposer(
             return new(outputVideoPath, null, concatArgs, concatResult.ExitCode, concatResult.StandardError, concatResult.StandardOutput, _rendering.FfmpegPath);
 
         var thumbnailPath = Path.Combine(dir, "daily-skyguide-preview-thumbnail.png");
-        var thumbArgs = $"-y -i \"{outputVideoPath}\" -vf \"select=eq(n\\,0)\" -vframes 1 \"{thumbnailPath}\"";
+        var totalDurationSeconds = Math.Max(segments.Sum(x => x.SuggestedDurationSeconds), 0d);
+        var thumbnailTimestampSeconds = ResolveThumbnailTimestamp(totalDurationSeconds);
+        var thumbnailTimestamp = TimeSpan.FromSeconds(thumbnailTimestampSeconds).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
+        var thumbArgs = $"-y -ss {thumbnailTimestamp} -i \"{outputVideoPath}\" -frames:v 1 \"{thumbnailPath}\"";
         lastArgs = thumbArgs;
         var thumbResult = await processRunner.ExecuteAsync(_rendering.FfmpegPath, thumbArgs, cancellationToken, TimeSpan.FromSeconds(30));
         lastResult = thumbResult;
+        if (!File.Exists(thumbnailPath) || new FileInfo(thumbnailPath).Length <= 0 || await IsLikelyBlackFrameAsync(thumbnailPath, cancellationToken))
+        {
+            var thumbnailCandidatePath = segments
+                .FirstOrDefault(x => x.VisualRole.Equals("ThumbnailCandidate", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.ImagePath) && File.Exists(x.ImagePath))
+                ?.ImagePath;
+
+            if (!string.IsNullOrWhiteSpace(thumbnailCandidatePath))
+            {
+                File.Copy(thumbnailCandidatePath, thumbnailPath, overwrite: true);
+            }
+        }
+
         return new(outputVideoPath, thumbnailPath, lastArgs, lastResult.ExitCode, lastResult.StandardError, lastResult.StandardOutput, _rendering.FfmpegPath);
+    }
+
+    private static double ResolveThumbnailTimestamp(double totalDurationSeconds)
+    {
+        if (totalDurationSeconds < 3d)
+            return 1d;
+
+        const double preferredTimestamp = 2d;
+        if (preferredTimestamp < totalDurationSeconds)
+            return preferredTimestamp;
+
+        return Math.Max(1d, totalDurationSeconds * 0.1d);
+    }
+
+    private async Task<bool> IsLikelyBlackFrameAsync(string thumbnailPath, CancellationToken cancellationToken)
+    {
+        var args = $"-hide_banner -i \"{thumbnailPath}\" -vf \"blackframe=amount=98:threshold=32\" -f null -";
+        var result = await processRunner.ExecuteAsync(_rendering.FfmpegPath, args, cancellationToken, TimeSpan.FromSeconds(15));
+        var stderr = result.StandardError ?? string.Empty;
+        return stderr.Contains("pblack:", StringComparison.OrdinalIgnoreCase);
     }
 }
