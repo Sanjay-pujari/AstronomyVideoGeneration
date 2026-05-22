@@ -16,9 +16,15 @@ public sealed class WeeklySkyForecastContextBuilder(IOptions<SchedulerOptions> s
 {
     public async Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken)
     {
-        var region = schedulerOptions.Value.Regions.Items.FirstOrDefault(x => x.RegionId == request.RegionId) ?? throw new InvalidOperationException($"Region '{request.RegionId}' not configured.");
+        var normalizedRegionId = RegionIdNormalizer.NormalizeRegionId(request.RegionId);
+        var regions = schedulerOptions.Value.Regions.Items
+            .ToDictionary(x => RegionIdNormalizer.NormalizeRegionId(x.RegionId), x => x, StringComparer.OrdinalIgnoreCase);
+
+        if (!regions.TryGetValue(normalizedRegionId, out var region))
+            throw new KeyNotFoundException($"Region '{normalizedRegionId}' is not configured in region settings.");
+
         var weekStart = DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
-        var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = request.RegionId, LocationName = request.RegionName, Latitude = region.Latitude, Longitude = region.Longitude, Timezone = region.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
+        var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = normalizedRegionId, LocationName = request.RegionName, Latitude = region.Latitude, Longitude = region.Longitude, Timezone = region.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
         var response = await sidecarClient.GetWeeklySkyForecastAsync(skyfieldRequest, cancellationToken) ?? throw new InvalidOperationException("Skyfield weekly forecast sidecar returned no response.");
         if (!response.Success)
         {
@@ -35,7 +41,7 @@ public sealed class WeeklySkyForecastContextBuilder(IOptions<SchedulerOptions> s
         var bestMoonNight = daily.OrderByDescending(d => d.VisibleObjects.Where(o => o.ObjectCode.Equals("Moon", StringComparison.OrdinalIgnoreCase)).Select(o => o.VisibilityScore).DefaultIfEmpty(0).Max()).Select(d => (DateOnly?)d.Date).FirstOrDefault();
         var bestPhotoNight = daily.OrderByDescending(d => d.VisibleObjects.MaxBy(o => o.PhotographyScore)?.PhotographyScore ?? 0).Select(d => (DateOnly?)d.Date).FirstOrDefault();
 
-        return new(request.RegionId, response.LocationName, region.Latitude, region.Longitude, response.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
+        return new(normalizedRegionId, response.LocationName, region.Latitude, region.Longitude, response.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
     }
 }
 
@@ -92,7 +98,8 @@ public sealed class CategoryOutputPathResolver(IOptions<RenderingOptions> render
 {
     public CategoryOutputPaths Resolve(string categoryName, DateOnly date, string regionId, Guid pipelineRunId)
     {
-        var root = Path.Combine(renderingOptions.Value.WorkingDirectory, categoryName, date.ToString("yyyy-MM-dd"), regionId.ToLowerInvariant(), pipelineRunId.ToString());
+        var normalizedRegionId = RegionIdNormalizer.NormalizeRegionId(regionId);
+        var root = Path.Combine(renderingOptions.Value.WorkingDirectory, categoryName, date.ToString("yyyy-MM-dd"), normalizedRegionId.ToLowerInvariant(), pipelineRunId.ToString());
         return new(root, Path.Combine(root, "narration"), Path.Combine(root, "shorts"), Path.Combine(root, "thumbnails"), Path.Combine(root, "stellarium-scenes"), Path.Combine(root, "stellarium-scripts"), Path.Combine(root, "manifests"), Path.Combine(root, "metadata"));
     }
 }

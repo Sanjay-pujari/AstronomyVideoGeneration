@@ -14,6 +14,43 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class WeeklySkyForecastFoundationTests
 {
+    [Theory]
+    [InlineData("IN-RJ-UDAIPUR")]
+    [InlineData("in-rj-udaipur")]
+    [InlineData("In-Rj-Udaipur")]
+    public async Task ContextBuilder_Resolves_RegionId_Case_Insensitively(string inputRegionId)
+    {
+        var scheduler = Options.Create(new SchedulerOptions
+        {
+            Regions = new SchedulerRegionsOptions
+            {
+                Items =
+                [
+                    new SchedulerRegionOptions { RegionId = "IN-RJ-UDAIPUR", DisplayName = "Udaipur", Latitude = 24.58, Longitude = 73.68, Timezone = "Asia/Kolkata", Language = "en" }
+                ]
+            }
+        });
+        var sidecar = new StubSkyfieldSidecarClient();
+        var builder = new WeeklySkyForecastContextBuilder(scheduler, sidecar);
+
+        var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", inputRegionId, "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
+
+        Assert.Equal("IN-RJ-UDAIPUR", context.RegionId);
+        Assert.Equal("IN-RJ-UDAIPUR", sidecar.LastRequest!.RegionId);
+    }
+
+    [Fact]
+    public async Task ContextBuilder_Unknown_Region_Returns_Clear_Validation_Error()
+    {
+        var scheduler = Options.Create(new SchedulerOptions { Regions = new SchedulerRegionsOptions { Items = [] } });
+        var builder = new WeeklySkyForecastContextBuilder(scheduler, new StubSkyfieldSidecarClient());
+
+        var ex = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "in-rj-udaipur", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None));
+
+        Assert.Equal("Region 'IN-RJ-UDAIPUR' is not configured in region settings.", ex.Message);
+    }
+
     [Fact]
     public async Task SkyfieldClient_Calls_WeeklySky_Endpoint()
     {
@@ -64,5 +101,29 @@ public sealed class WeeklySkyForecastFoundationTests
     private sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, HttpResponseMessage> cb) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(cb(request, cancellationToken));
+    }
+
+    private sealed class StubSkyfieldSidecarClient : ISkyfieldSidecarClient
+    {
+        public WeeklySkyForecastSkyfieldRequest? LastRequest { get; private set; }
+        public Task<SkyfieldComputationResponse?> ComputeAsync(SkyfieldComputationRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<SunMoonComputationResponse?> ComputeSunMoonAsync(SunMoonComputationRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken)
+        {
+            LastRequest = request;
+            return Task.FromResult<WeeklySkyForecastSkyfieldResponse?>(new WeeklySkyForecastSkyfieldResponse
+            {
+                Success = true,
+                RegionId = request.RegionId,
+                LocationName = request.LocationName,
+                Timezone = request.Timezone,
+                WeekStartDate = request.WeekStartDate,
+                WeekEndDate = "2026-05-28",
+                Days = [],
+                WeeklyHighlights = [],
+                RecommendedNights = [],
+                Warnings = []
+            });
+        }
     }
 }
