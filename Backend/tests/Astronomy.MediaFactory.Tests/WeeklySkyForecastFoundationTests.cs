@@ -2,10 +2,10 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using Astronomy.MediaFactory.AstroData.Clients;
 using Astronomy.MediaFactory.Contracts;
-using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using CoreModel = Astronomy.MediaFactory.Core;
+using SidecarModel = Astronomy.MediaFactory.AstroData.Clients;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -90,8 +90,8 @@ public sealed class WeeklySkyForecastFoundationTests
                 Content = new StringContent("{\"success\":true,\"regionId\":\"IN-RJ-UDAIPUR\",\"locationName\":\"Udaipur\",\"timezone\":\"Asia/Kolkata\",\"weekStartDate\":\"2026-05-22\",\"weekEndDate\":\"2026-05-28\",\"days\":[],\"weeklyHighlights\":[],\"recommendedNights\":[],\"warnings\":[]}", Encoding.UTF8, "application/json")
             };
         });
-        var client = new SkyfieldSidecarClient(new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8010") }, NullLogger<SkyfieldSidecarClient>.Instance);
-        var response = await client.GetWeeklySkyForecastAsync(new WeeklySkyForecastSkyfieldRequest { RegionId = "IN-RJ-UDAIPUR", LocationName = "Udaipur", Latitude = 24, Longitude = 73, Timezone = "Asia/Kolkata", WeekStartDate = "2026-05-22", Language = "en" }, CancellationToken.None);
+        var client = new SidecarModel.SkyfieldSidecarClient(new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8010") }, NullLogger<SkyfieldSidecarClient>.Instance);
+        var response = await client.GetWeeklySkyForecastAsync(new SidecarModel.WeeklySkyForecastSkyfieldRequest { RegionId = "IN-RJ-UDAIPUR", LocationName = "Udaipur", Latitude = 24, Longitude = 73, Timezone = "Asia/Kolkata", WeekStartDate = "2026-05-22", Language = "en" }, CancellationToken.None);
         Assert.NotNull(response);
         Assert.True(response!.Success);
     }
@@ -127,17 +127,17 @@ public sealed class WeeklySkyForecastFoundationTests
         var moonTime = DateTime.Parse("2026-05-24T19:10:00Z");
         var recommendedStart = DateTime.Parse("2026-05-26T17:30:00Z");
 
-        var dayMoon = new DailySkyForecastContextItem(new DateOnly(2026, 5, 24), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 30, null, null,
-            [new WeeklySkyForecastVisibleObjectItem("Moon", "Moon", "Moon", true, null, null, null, null, moonTime, 80, 75, "E", "Great")], [], recommendedStart, recommendedStart, 80, "Good");
-        var dayJupiter = new DailySkyForecastContextItem(new DateOnly(2026, 5, 25), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 40, null, null,
-            [new WeeklySkyForecastVisibleObjectItem("Jupiter", "Jupiter", "Planet", true, null, null, null, null, jupiterTime, 90, 88, "SE", "Great")], [], recommendedStart, recommendedStart, 90, "Great");
-        var daySummary = new DailySkyForecastContextItem(new DateOnly(2026, 5, 26), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 50, null, null,
-            [new WeeklySkyForecastVisibleObjectItem("Saturn", "Saturn", "Planet", true, null, null, null, null, DateTime.Parse("2026-05-26T20:00:00Z"), 70, 70, "S", "Good")], [], recommendedStart, recommendedStart.AddHours(2), 86, "Great");
+        var dayMoon = new CoreModel.DailySkyForecastContextItem(new DateOnly(2026, 5, 24), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 30, null, null,
+            [new CoreModel.WeeklySkyForecastVisibleObjectItem("Moon", "Moon", "Moon", true, null, null, null, null, moonTime, 80, 75, "E", "Great")], [], recommendedStart, recommendedStart, 80, "Good");
+        var dayJupiter = new CoreModel.DailySkyForecastContextItem(new DateOnly(2026, 5, 25), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 40, null, null,
+            [new CoreModel.WeeklySkyForecastVisibleObjectItem("Jupiter", "Jupiter", "Planet", true, null, null, null, null, jupiterTime, 90, 88, "SE", "Great")], [], recommendedStart, recommendedStart, 90, "Great");
+        var daySummary = new CoreModel.DailySkyForecastContextItem(new DateOnly(2026, 5, 26), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 50, null, null,
+            [new CoreModel.WeeklySkyForecastVisibleObjectItem("Saturn", "Saturn", "Planet", true, null, null, null, null, DateTime.Parse("2026-05-26T20:00:00Z"), 70, 70, "S", "Good")], [], recommendedStart, recommendedStart.AddHours(2), 86, "Great");
 
-        var context = new WeeklySkyForecastContext("IN-RJ-UDAIPUR", "Udaipur", 24, 73, tz, new DateOnly(2026, 5, 22), new DateOnly(2026, 5, 28), "en",
+        var context = new CoreModel.WeeklySkyForecastContext("IN-RJ-UDAIPUR", "Udaipur", 24, 73, tz, new DateOnly(2026, 5, 22), new DateOnly(2026, 5, 28), "en",
             [dayMoon, dayJupiter, daySummary],
-            [new WeeklySkyForecastHighlightItem(1, "best_moon_night", "Best Moon", "Desc", new DateOnly(2026, 5, 24), moonTime, "Moon", 90, "moon_closeup")],
-            [new RecommendedObservationNight(new DateOnly(2026, 5, 25), 90, "Best Jupiter", ["Jupiter"], jupiterTime, jupiterTime.AddHours(1)), new RecommendedObservationNight(new DateOnly(2026, 5, 26), 88, "Best summary", ["Saturn"], recommendedStart, recommendedStart.AddHours(1))],
+            [new CoreModel.WeeklySkyForecastHighlightItem(1, "best_moon_night", "Best Moon", "Desc", new DateOnly(2026, 5, 24), moonTime, "Moon", 90, "moon_closeup")],
+            [new CoreModel.RecommendedObservationNight(new DateOnly(2026, 5, 25), 90, "Best Jupiter", ["Jupiter"], jupiterTime, jupiterTime.AddHours(1)), new CoreModel.RecommendedObservationNight(new DateOnly(2026, 5, 26), 88, "Best summary", ["Saturn"], recommendedStart, recommendedStart.AddHours(1))],
             "Jupiter", new DateOnly(2026, 5, 24), new DateOnly(2026, 5, 26), []);
 
         var planner = new WeeklySkyForecastSscScenePlanner(NullLogger<WeeklySkyForecastSscScenePlanner>.Instance);
@@ -157,12 +157,12 @@ public sealed class WeeklySkyForecastFoundationTests
         var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
         Assert.Equal(new DateOnly(2026, 5, 27), context.BestMoonNight);
     }
-private static WeeklySkyForecastContext BuildContext()
+private static CoreModel.WeeklySkyForecastContext BuildContext()
     {
-        var day = new DailySkyForecastContextItem(new DateOnly(2026, 5, 22), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 20, null, null,
-            [new WeeklySkyForecastVisibleObjectItem("JUP", "Jupiter", "Planet", true, null, null, null, null, DateTime.UtcNow, 90, 85, "SE", "Great")],
+        var day = new CoreModel.DailySkyForecastContextItem(new DateOnly(2026, 5, 22), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 20, null, null,
+            [new CoreModel.WeeklySkyForecastVisibleObjectItem("JUP", "Jupiter", "Planet", true, null, null, null, null, DateTime.UtcNow, 90, 85, "SE", "Great")],
             [], DateTime.UtcNow, DateTime.UtcNow, 80, "Good");
-        return new WeeklySkyForecastContext("IN-RJ-UDAIPUR", "Udaipur", 24, 73, "Asia/Kolkata", new DateOnly(2026, 5, 22), new DateOnly(2026, 5, 28), "en", [day, day, day, day, day, day, day], [new WeeklySkyForecastHighlightItem(1, "BestNight", "Title", "Desc", new DateOnly(2026, 5, 23), DateTime.UtcNow, "JUP", 90, "WeeklyHighlight")], [new RecommendedObservationNight(new DateOnly(2026, 5, 23), 90, "Reason", ["JUP"], DateTime.UtcNow, DateTime.UtcNow)], "JUP", new DateOnly(2026, 5, 23), new DateOnly(2026, 5, 24), []);
+        return new CoreModel.WeeklySkyForecastContext("IN-RJ-UDAIPUR", "Udaipur", 24, 73, "Asia/Kolkata", new DateOnly(2026, 5, 22), new DateOnly(2026, 5, 28), "en", [day, day, day, day, day, day, day], [new CoreModel.WeeklySkyForecastHighlightItem(1, "BestNight", "Title", "Desc", new DateOnly(2026, 5, 23), DateTime.UtcNow, "JUP", 90, "WeeklyHighlight")], [new CoreModel.RecommendedObservationNight(new DateOnly(2026, 5, 23), 90, "Reason", ["JUP"], DateTime.UtcNow, DateTime.UtcNow)], "JUP", new DateOnly(2026, 5, 23), new DateOnly(2026, 5, 24), []);
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, HttpResponseMessage> cb) : HttpMessageHandler
@@ -172,13 +172,13 @@ private static WeeklySkyForecastContext BuildContext()
 
     private sealed class StubSkyfieldSidecarClient : ISkyfieldSidecarClient
     {
-        public WeeklySkyForecastSkyfieldRequest? LastRequest { get; private set; }
-        public Task<SkyfieldComputationResponse?> ComputeAsync(SkyfieldComputationRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<SunMoonComputationResponse?> ComputeSunMoonAsync(SunMoonComputationRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken)
+        public SidecarModel.WeeklySkyForecastSkyfieldRequest? LastRequest { get; private set; }
+        public Task<SidecarModel.SkyfieldDailySkyResponse?> GetDailySkyAsync(SidecarModel.SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<SidecarModel.SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SidecarModel.SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<SidecarModel.WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(SidecarModel.WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken)
         {
             LastRequest = request;
-            return Task.FromResult<WeeklySkyForecastSkyfieldResponse?>(new WeeklySkyForecastSkyfieldResponse
+            return Task.FromResult<SidecarModel.WeeklySkyForecastSkyfieldResponse?>(new SidecarModel.WeeklySkyForecastSkyfieldResponse
             {
                 Success = true,
                 RegionId = request.RegionId,
@@ -197,10 +197,10 @@ private static WeeklySkyForecastContext BuildContext()
     
     private sealed class StubSkyfieldSidecarClientWithMoonNight : ISkyfieldSidecarClient
     {
-        public Task<SkyfieldComputationResponse?> ComputeAsync(SkyfieldComputationRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<SunMoonComputationResponse?> ComputeSunMoonAsync(SunMoonComputationRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
-        public Task<WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken)
-            => Task.FromResult<WeeklySkyForecastSkyfieldResponse?>(new WeeklySkyForecastSkyfieldResponse
+        public Task<SidecarModel.SkyfieldDailySkyResponse?> GetDailySkyAsync(SidecarModel.SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<SidecarModel.SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SidecarModel.SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<SidecarModel.WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(SidecarModel.WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken)
+            => Task.FromResult<SidecarModel.WeeklySkyForecastSkyfieldResponse?>(new SidecarModel.WeeklySkyForecastSkyfieldResponse
             {
                 Success = true,
                 RegionId = request.RegionId,
@@ -208,10 +208,10 @@ private static WeeklySkyForecastContext BuildContext()
                 Timezone = request.Timezone,
                 WeekStartDate = request.WeekStartDate,
                 WeekEndDate = "2026-05-28",
-                Days = [new DailySkyForecastItem { Date = "2026-05-24" }],
-                WeeklyHighlights = [new WeeklyHighlightItem { Order = 1, HighlightType = "best_moon_night", Date = "2026-05-24" }],
+                Days = [new SidecarModel.DailySkyForecastItem { Date = "2026-05-24" }],
+                WeeklyHighlights = [new SidecarModel.WeeklyHighlightItem { Order = 1, HighlightType = "best_moon_night", Date = "2026-05-24" }],
                 RecommendedNights = [],
-                BestMoonNight = new RecommendedObservationNight { Date = "2026-05-27", BestStartUtc = DateTime.Parse("2026-05-27T18:00:00Z"), BestEndUtc = DateTime.Parse("2026-05-27T20:00:00Z") },
+                BestMoonNight = new SidecarModel.RecommendedObservationNight { Date = "2026-05-27", BestStartUtc = DateTime.Parse("2026-05-27T18:00:00Z"), BestEndUtc = DateTime.Parse("2026-05-27T20:00:00Z") },
                 Warnings = []
             });
     }
