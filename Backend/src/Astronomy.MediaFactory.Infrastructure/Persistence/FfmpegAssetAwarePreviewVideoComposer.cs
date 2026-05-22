@@ -8,6 +8,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class FfmpegAssetAwarePreviewVideoComposer(
     IProcessRunner processRunner,
+    ICinematicThumbnailService cinematicThumbnailService,
     IOptions<RenderingOptions> renderingOptions) : IAssetAwarePreviewVideoComposer
 {
     private readonly RenderingOptions _rendering = renderingOptions.Value;
@@ -51,26 +52,86 @@ public sealed class FfmpegAssetAwarePreviewVideoComposer(
             return new(outputVideoPath, null, concatArgs, concatResult.ExitCode, concatResult.StandardError, concatResult.StandardOutput, _rendering.FfmpegPath);
 
         var thumbnailPath = Path.Combine(dir, "daily-skyguide-preview-thumbnail.png");
-        var totalDurationSeconds = Math.Max(segments.Sum(x => x.SuggestedDurationSeconds), 0d);
-        var thumbnailTimestampSeconds = ResolveThumbnailTimestamp(totalDurationSeconds);
-        var thumbnailTimestamp = TimeSpan.FromSeconds(thumbnailTimestampSeconds).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
-        var thumbArgs = $"-y -ss {thumbnailTimestamp} -i \"{outputVideoPath}\" -frames:v 1 \"{thumbnailPath}\"";
-        lastArgs = thumbArgs;
-        var thumbResult = await processRunner.ExecuteAsync(_rendering.FfmpegPath, thumbArgs, cancellationToken, TimeSpan.FromSeconds(30));
-        lastResult = thumbResult;
-        if (!File.Exists(thumbnailPath) || new FileInfo(thumbnailPath).Length <= 0 || await IsLikelyBlackFrameAsync(thumbnailPath, cancellationToken))
-        {
-            var thumbnailCandidatePath = segments
-                .FirstOrDefault(x => x.VisualRole.Equals("ThumbnailCandidate", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.ImagePath) && File.Exists(x.ImagePath))
-                ?.ImagePath;
+        var thumbnailCandidatePath = segments
+            .FirstOrDefault(x => x.VisualRole.Equals("ThumbnailCandidate", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.ImagePath) && File.Exists(x.ImagePath))
+            ?.ImagePath;
 
-            if (!string.IsNullOrWhiteSpace(thumbnailCandidatePath))
+        var moduleThumbnailGenerated = await TryGenerateThumbnailWithExistingModuleAsync(
+            plan,
+            dir,
+            segments,
+            thumbnailCandidatePath,
+            thumbnailPath,
+            cancellationToken);
+
+        if (!moduleThumbnailGenerated)
+        {
+            var totalDurationSeconds = Math.Max(segments.Sum(x => x.SuggestedDurationSeconds), 0d);
+            var thumbnailTimestampSeconds = ResolveThumbnailTimestamp(totalDurationSeconds);
+            var thumbnailTimestamp = TimeSpan.FromSeconds(thumbnailTimestampSeconds).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
+            var thumbArgs = $"-y -ss {thumbnailTimestamp} -i \"{outputVideoPath}\" -frames:v 1 \"{thumbnailPath}\"";
+            lastArgs = thumbArgs;
+            var thumbResult = await processRunner.ExecuteAsync(_rendering.FfmpegPath, thumbArgs, cancellationToken, TimeSpan.FromSeconds(30));
+            lastResult = thumbResult;
+
+            if (!File.Exists(thumbnailPath) || new FileInfo(thumbnailPath).Length <= 0 || await IsLikelyBlackFrameAsync(thumbnailPath, cancellationToken))
             {
-                File.Copy(thumbnailCandidatePath, thumbnailPath, overwrite: true);
+                if (!string.IsNullOrWhiteSpace(thumbnailCandidatePath))
+                    File.Copy(thumbnailCandidatePath, thumbnailPath, overwrite: true);
             }
         }
 
         return new(outputVideoPath, thumbnailPath, lastArgs, lastResult.ExitCode, lastResult.StandardError, lastResult.StandardOutput, _rendering.FfmpegPath);
+    }
+
+    private async Task<bool> TryGenerateThumbnailWithExistingModuleAsync(
+        AssetAwareVideoCompositionPlan plan,
+        string outputDirectory,
+        IReadOnlyCollection<AssetAwareVideoSegment> segments,
+        string? thumbnailCandidatePath,
+        string targetThumbnailPath,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(thumbnailCandidatePath))
+            return false;
+
+        var visuals = segments
+            .Where(x => !string.IsNullOrWhiteSpace(x.ImagePath) && File.Exists(x.ImagePath))
+            .Select(x => x.ImagePath!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (!visuals.Contains(thumbnailCandidatePath, StringComparer.OrdinalIgnoreCase))
+            visuals.Add(thumbnailCandidatePath);
+
+        var thumbnailRequest = new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = new AstronomyContext
+            {
+                Date = plan.TargetDate,
+                LocationName = plan.LocationName,
+                Localization = LocalizationContext.Resolve(plan.Language, null)
+            },
+            Metadata = new OptimizedVideoMetadata
+            {
+                PrimaryTitle = plan.Title ?? "Daily Sky Guide Preview",
+                HookLine = plan.Title,
+                ThumbnailTextSuggestions = string.IsNullOrWhiteSpace(plan.Title) ? [] : [plan.Title]
+            },
+            AvailableVisuals = visuals,
+            OutputDirectory = outputDirectory,
+            IsShortForm = false,
+            Scenes = []
+        };
+
+        var planResult = await cinematicThumbnailService.GenerateAsync(thumbnailRequest, cancellationToken);
+        var generatedPath = planResult.LongThumbnailPath ?? planResult.ThumbnailPath;
+        if (string.IsNullOrWhiteSpace(generatedPath) || !File.Exists(generatedPath) || new FileInfo(generatedPath).Length <= 0)
+            return false;
+
+        File.Copy(generatedPath, targetThumbnailPath, overwrite: true);
+        return File.Exists(targetThumbnailPath) && new FileInfo(targetThumbnailPath).Length > 0;
     }
 
     private static double ResolveThumbnailTimestamp(double totalDurationSeconds)
