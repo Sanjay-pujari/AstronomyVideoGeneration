@@ -25,7 +25,15 @@ public sealed class AnalyticsCollectionBackgroundService : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             var options = _options.CurrentValue;
-            if (options.Enabled)
+            if (!options.Enabled)
+            {
+                _logger.LogInformation("Analytics auto-collection disabled by configuration.");
+            }
+            else if (!options.AutoCollectionEnabled)
+            {
+                _logger.LogInformation("Analytics auto-collection disabled by configuration.");
+            }
+            else
             {
                 try
                 {

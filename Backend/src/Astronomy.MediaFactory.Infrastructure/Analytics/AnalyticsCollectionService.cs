@@ -37,6 +37,12 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
 
     public async Task CollectRecentAnalyticsAsync(CancellationToken cancellationToken)
     {
+        if (!_options.Enabled)
+        {
+            _logger.LogInformation("Analytics auto-collection disabled by configuration.");
+            return;
+        }
+
         var from = DateTimeOffset.UtcNow.AddDays(-Math.Clamp(_options.CollectForRecentDays, 1, 365));
         var runIds = await _db.PipelineRuns.AsNoTracking()
             .Where(x => (x.FinishedUtc ?? x.StartedUtc ?? x.CreatedUtc) >= from)
@@ -50,6 +56,12 @@ public sealed class AnalyticsCollectionService : IAnalyticsCollectionService
 
     public async Task CollectForPipelineRunAsync(Guid pipelineRunId, CancellationToken cancellationToken)
     {
+        if (!_options.Enabled)
+        {
+            _logger.LogInformation("Analytics auto-collection disabled by configuration.");
+            return;
+        }
+
         var contexts = await BuildContextsAsync(pipelineRunId, cancellationToken);
         var reports = new List<AnalyticsCollectionReport>();
         foreach (var group in contexts.GroupBy(x => x.Platform, StringComparer.OrdinalIgnoreCase))

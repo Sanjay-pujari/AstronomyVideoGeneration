@@ -290,6 +290,8 @@ public sealed class AnalyticsOptions
 {
     public const string SectionName = "Analytics";
     public bool Enabled { get; set; } = true;
+    public bool AutoCollectionEnabled { get; set; } = true;
+    public bool YouTubeAnalyticsEnabled { get; set; } = true;
     public int CollectEveryMinutes { get; set; } = 60;
     public bool ManualIngestionEnabled { get; set; } = true;
     public bool ExternalPlatformSyncEnabled { get; set; } = false;
