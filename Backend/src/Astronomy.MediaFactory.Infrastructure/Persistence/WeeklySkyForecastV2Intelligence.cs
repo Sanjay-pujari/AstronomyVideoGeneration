@@ -76,7 +76,8 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastV2EventIntelligenceBuilder eventBuilder,
     IWeeklySkyForecastV2EditorialIntelligenceBuilder editorialBuilder,
     IWeeklySkyForecastV2CinematicEditorialRefiner cinematicRefiner,
-    IWeeklySkyForecastV2NarrativeAbstractionBuilder narrativeAbstractionBuilder) : IWeeklySkyForecastV2IntelligenceService
+    IWeeklySkyForecastV2NarrativeAbstractionBuilder narrativeAbstractionBuilder,
+    IWeeklySkyForecastV2NarrationPlanner narrationPlanner) : IWeeklySkyForecastV2IntelligenceService
 {
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
     {
@@ -103,12 +104,58 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             null!,
             null,
             null,
+            null,
             events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             ctx.Warnings,
             [new CategoryProductionStepResult("weekly_skyfield_context", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Context built", null, []), new CategoryProductionStepResult("event_intelligence", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Event intelligence generated", null, [])]);
         var editorial = await editorialBuilder.BuildAsync(baseResponse, cancellationToken);
         var cinematic = await cinematicRefiner.RefineAsync(editorial, baseResponse with { EditorialStoryPackage = editorial }, cancellationToken);
         var narrative = await narrativeAbstractionBuilder.BuildAsync(cinematic, editorial, baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic }, cancellationToken);
-        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative };
+        var narrationPlan = await narrationPlanner.BuildAsync(narrative, cinematic, baseResponse.SkyfieldSummary, baseResponse.Region, baseResponse.WeekStartDate, request.Language, cancellationToken);
+        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan };
+    }
+}
+
+public sealed class WeeklySkyForecastV2NarrationPlanner : IWeeklySkyForecastV2NarrationPlanner
+{
+    private static readonly string[] SegmentCodes = ["OpeningHook", "HeroSkyStory", "WhyThisWeekMatters", "BestObservationNight", "MoonPlanetHighlight", "ViewingPhotographyTip", "ClosingCTA"];
+    private static readonly Dictionary<string, (int min, int max)> DurationGuidelines = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["OpeningHook"] = (10, 15), ["HeroSkyStory"] = (18, 25), ["WhyThisWeekMatters"] = (12, 18), ["BestObservationNight"] = (12, 18), ["MoonPlanetHighlight"] = (12, 18), ["ViewingPhotographyTip"] = (10, 15), ["ClosingCTA"] = (8, 12)
+    };
+
+    public Task<WeeklyNarrationPlan> BuildAsync(WeeklyNarrativeAbstractionPackage narrativePackage, WeeklyCinematicStoryBlueprint cinematicBlueprint, WeeklySkyForecastV2SkyfieldSummary skyfieldSummary, string regionId, DateOnly weekStartDate, string language, CancellationToken cancellationToken)
+    {
+        var flow = narrativePackage.NarrativeFlow.OrderBy(x => x.BeatOrder).ToList();
+        var segments = new List<WeeklyNarrationSegment>();
+        for (var i = 0; i < Math.Min(SegmentCodes.Length, flow.Count); i++)
+        {
+            var beat = flow[i];
+            var code = SegmentCodes[i];
+            var (minDur, maxDur) = DurationGuidelines[code];
+            var duration = Math.Clamp(beat.EstimatedNarrationSeconds, minDur, maxDur);
+            segments.Add(new WeeklyNarrationSegment(code, i + 1, beat.BeatTitle, beat.NarrationPurpose, beat.EmotionalIntent, beat.BeatCode, beat.TargetObjects, beat.TargetDate, duration, beat.RecommendedVisualStrategy, beat.VisualIntent,
+                [$"Use conversational cinematic language for {regionId}.", $"Mention {beat.TargetDate:yyyy-MM-dd} naturally in narration.", $"Mention objects naturally: {string.Join(", ", beat.TargetObjects)}.", "Avoid fake conjunction claims or exact-alignment wording.", "Keep pacing suitable for voiceover with short, vivid lines."]));
+        }
+
+        var total = segments.Sum(x => x.EstimatedDurationSeconds);
+        if (total < 90 && segments.Count > 0) segments[1] = segments[1] with { EstimatedDurationSeconds = segments[1].EstimatedDurationSeconds + Math.Min(150 - total, 90 - total) };
+        total = segments.Sum(x => x.EstimatedDurationSeconds);
+        var shorts = narrativePackage.ShortsNarrativePlan
+            .Take(3)
+            .Select((s, i) => new WeeklyShortNarrationItem(i switch { 0 => "HeroGroupingShort", 1 => "BestNightShort", _ => "MoonPlanetHighlightShort" }, s.Title, s.NarrationHook, s.ObjectCodes, s.TargetDate, Math.Clamp(s.EstimatedDurationSeconds, 20, 35), s.ViewerPromise, s.RecommendedVisualStrategy, 100 - i * 10))
+            .ToList();
+        while (shorts.Count < 3)
+        {
+            shorts.Add(new WeeklyShortNarrationItem(shorts.Count switch { 0 => "HeroGroupingShort", 1 => "BestNightShort", _ => "MoonPlanetHighlightShort" }, $"Weekly Sky Short {shorts.Count + 1}", narrativePackage.OpeningNarrationHook, narrativePackage.HeroNarrative.ObjectCodes, narrativePackage.HeroNarrative.PeakDate, 25, "Quick weekly sky update", narrativePackage.HeroNarrative.RecommendedVisualStrategy, 60 - shorts.Count * 5));
+        }
+
+        var warnings = new List<string>();
+        if (segments.Count is < 6 or > 7) warnings.Add("Long-form narration segment count should be between 6 and 7.");
+        if (segments.Select(x => x.SegmentCode).Distinct(StringComparer.OrdinalIgnoreCase).Count() != segments.Count) warnings.Add("Duplicate long-form segment codes detected.");
+        if (segments.Sum(x => x.EstimatedDurationSeconds) is < 90 or > 150) warnings.Add("Long-form total duration is outside 90-150 seconds.");
+
+        var longForm = new WeeklyLongFormNarrationPlan(segments.Sum(x => x.EstimatedDurationSeconds), segments.Count, segments);
+        return Task.FromResult(new WeeklyNarrationPlan(language, cinematicBlueprint.NarrationTone, longForm, new WeeklyShortNarrationPlan(shorts), warnings));
     }
 }
