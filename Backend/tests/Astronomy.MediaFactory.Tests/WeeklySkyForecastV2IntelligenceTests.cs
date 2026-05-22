@@ -9,13 +9,14 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
     [Fact]
     public async Task V2_Intelligence_Generates_Cinematic_Blueprint()
     {
-        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner());
+        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator());
         var response = await service.PreviewAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "IN-RJ-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), Diagnostics: true), CancellationToken.None);
 
         Assert.True(response.Success);
         Assert.NotNull(response.CinematicStoryBlueprint);
         Assert.NotNull(response.NarrativeAbstractionPackage);
         Assert.NotNull(response.NarrationPlan);
+        Assert.NotNull(response.GeneratedNarrationPackage);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Moon", response.CinematicStoryBlueprint.Headline, StringComparison.OrdinalIgnoreCase);
@@ -24,6 +25,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Equal(7, response.NarrativeAbstractionPackage!.NarrativeFlow.Count);
         Assert.Equal(3, response.NarrativeAbstractionPackage.ShortsNarrativePlan.Count);
         Assert.Equal(3, response.NarrationPlan!.ShortsPlan.Shorts.Count);
+        Assert.Equal(3, response.GeneratedNarrationPackage!.ShortNarrations.Count);
     }
 
     [Fact]
@@ -55,6 +57,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             null,
             null,
             null,
+            null,
             ["Hybrid"],
             [],
             []);
@@ -78,6 +81,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.InRange(narration.LongFormPlan.TargetDurationSeconds, 90, 150);
         Assert.All(narration.LongFormPlan.Segments, s => Assert.True(s.EstimatedDurationSeconds > 0));
         Assert.All(narration.LongFormPlan.Segments, s => Assert.False(string.IsNullOrWhiteSpace(s.SourceBeatCode)));
+        Assert.Equal(narration.LongFormPlan.Segments.Count, narration.LongFormPlan.Segments.Select(s => string.Join("|", s.NarrationPromptHints)).Distinct().Count());
     }
 
     private static WeeklySkyForecastContext BuildContext()

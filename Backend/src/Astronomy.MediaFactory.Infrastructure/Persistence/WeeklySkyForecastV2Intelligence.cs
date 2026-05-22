@@ -77,7 +77,8 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastV2EditorialIntelligenceBuilder editorialBuilder,
     IWeeklySkyForecastV2CinematicEditorialRefiner cinematicRefiner,
     IWeeklySkyForecastV2NarrativeAbstractionBuilder narrativeAbstractionBuilder,
-    IWeeklySkyForecastV2NarrationPlanner narrationPlanner) : IWeeklySkyForecastV2IntelligenceService
+    IWeeklySkyForecastV2NarrationPlanner narrationPlanner,
+    IWeeklySkyForecastV2NarrationTextGenerator narrationTextGenerator) : IWeeklySkyForecastV2IntelligenceService
 {
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
     {
@@ -105,6 +106,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             null,
             null,
             null,
+            null,
             events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             ctx.Warnings,
             [new CategoryProductionStepResult("weekly_skyfield_context", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Context built", null, []), new CategoryProductionStepResult("event_intelligence", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Event intelligence generated", null, [])]);
@@ -112,7 +114,8 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var cinematic = await cinematicRefiner.RefineAsync(editorial, baseResponse with { EditorialStoryPackage = editorial }, cancellationToken);
         var narrative = await narrativeAbstractionBuilder.BuildAsync(cinematic, editorial, baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic }, cancellationToken);
         var narrationPlan = await narrationPlanner.BuildAsync(narrative, cinematic, baseResponse.SkyfieldSummary, baseResponse.Region, baseResponse.WeekStartDate, request.Language, cancellationToken);
-        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan };
+        var generatedNarration = await narrationTextGenerator.GenerateAsync(narrationPlan, narrative, cancellationToken);
+        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration };
     }
 }
 
@@ -134,8 +137,7 @@ public sealed class WeeklySkyForecastV2NarrationPlanner : IWeeklySkyForecastV2Na
             var code = SegmentCodes[i];
             var (minDur, maxDur) = DurationGuidelines[code];
             var duration = Math.Clamp(beat.EstimatedNarrationSeconds, minDur, maxDur);
-            segments.Add(new WeeklyNarrationSegment(code, i + 1, beat.BeatTitle, beat.NarrationPurpose, beat.EmotionalIntent, beat.BeatCode, beat.TargetObjects, beat.TargetDate, duration, beat.RecommendedVisualStrategy, beat.VisualIntent,
-                [$"Use conversational cinematic language for {regionId}.", $"Mention {beat.TargetDate:yyyy-MM-dd} naturally in narration.", $"Mention objects naturally: {string.Join(", ", beat.TargetObjects)}.", "Avoid fake conjunction claims or exact-alignment wording.", "Keep pacing suitable for voiceover with short, vivid lines."]));
+            segments.Add(new WeeklyNarrationSegment(code, i + 1, beat.BeatTitle, beat.NarrationPurpose, beat.EmotionalIntent, beat.BeatCode, beat.TargetObjects, beat.TargetDate, duration, beat.RecommendedVisualStrategy, beat.VisualIntent, BuildHints(code, beat, regionId)));
         }
 
         var total = segments.Sum(x => x.EstimatedDurationSeconds);
@@ -157,5 +159,53 @@ public sealed class WeeklySkyForecastV2NarrationPlanner : IWeeklySkyForecastV2Na
 
         var longForm = new WeeklyLongFormNarrationPlan(segments.Sum(x => x.EstimatedDurationSeconds), segments.Count, segments);
         return Task.FromResult(new WeeklyNarrationPlan(language, cinematicBlueprint.NarrationTone, longForm, new WeeklyShortNarrationPlan(shorts), warnings));
+    }
+
+    private static IReadOnlyList<string> BuildHints(string segmentCode, WeeklyNarrationSegment beat, string regionId)
+        => segmentCode switch
+        {
+            "OpeningHook" => [$"Create curiosity immediately for viewers in {regionId}.", "Use short cinematic spoken sentences.", "Orient the viewer to the western sky after sunset."],
+            "HeroSkyStory" => ["Sound awe-driven and natural.", "Emphasize continuity across multiple evenings.", "Avoid technical astronomy jargon."],
+            "BestObservationNight" => [$"Sound practical and confident; recommend {beat.TargetDate:MMMM d}.", "Mention sunset timing organically.", "Provide one clear action the viewer can take."],
+            "MoonPlanetHighlight" => ["Use emotionally descriptive visual wording.", "Keep pacing slightly slower for cinematic effect.", "Prioritize image-rich but conversational language."],
+            "ViewingPhotographyTip" => ["Keep practical, concise, and casual-viewer friendly.", "Use one simple actionable setup tip.", "Avoid overexplaining camera settings."],
+            "ClosingCTA" => ["Use uplifting and emotionally warm tone.", "Encourage stepping outside this week.", "Close with human, optimistic voice."],
+            _ => ["Use conversational cinematic language.", "Avoid fake conjunction claims or exact-alignment wording.", "Keep pacing suitable for voiceover with vivid lines."]
+        };
+}
+
+public sealed class WeeklySkyForecastV2NarrationTextGenerator : IWeeklySkyForecastV2NarrationTextGenerator
+{
+    private static readonly string[] Forbidden = ["conjunction", "exact alignment", "nearly touching", "rare alignment", "close approach"];
+    public Task<WeeklyGeneratedNarrationPackage> GenerateAsync(WeeklyNarrationPlan narrationPlan, WeeklyNarrativeAbstractionPackage abstractionPackage, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var segments = narrationPlan.LongFormPlan.Segments.Select(BuildLongSegment).ToList();
+        var full = string.Join("\n\n", segments.Select(x => x.NarrationText));
+        var shorts = narrationPlan.ShortsPlan.Shorts.Select(BuildShort).ToList();
+        var warnings = new List<string>(narrationPlan.NarrationWarnings);
+        if (Forbidden.Any(f => full.Contains(f, StringComparison.OrdinalIgnoreCase))) warnings.Add("Forbidden conjunction-like wording detected.");
+        return Task.FromResult(new WeeklyGeneratedNarrationPackage(narrationPlan.Language, abstractionPackage.EmotionalTone, new WeeklyGeneratedLongNarration(full, segments.Sum(x => x.EstimatedDurationSeconds), segments), shorts, warnings));
+    }
+    private static WeeklyGeneratedNarrationSegment BuildLongSegment(WeeklyNarrationSegment s)
+    {
+        var objects = WeeklySkyForecastV2TextHelpers.FormatCelestialList(s.TargetObjects);
+        var text = s.SegmentCode switch
+        {
+            "OpeningHook" => $"Step outside after sunset, look west, and you'll immediately spot {objects} sharing the same evening sky.",
+            "HeroSkyStory" => $"Over several evenings, {objects} return like a repeating scene, building one continuous sky story that's easy to follow.",
+            "BestObservationNight" => $"If you choose just one evening, make it {s.TargetDate:MMMM d}. The post-sunset window is clean, practical, and worth planning around.",
+            "MoonPlanetHighlight" => $"On this highlight night, the Moon adds glow and depth while {objects} hold the frame, giving the western sky a rich cinematic feel.",
+            "ViewingPhotographyTip" => $"For an easy shot, use a stable phone tripod, keep a wide frame, and include a bit of horizon for scale.",
+            "ClosingCTA" => $"Before the week ends, give yourself ten quiet minutes outside. This is the kind of sky that rewards attention.",
+            _ => $"{objects} remain visible in the same viewing window after sunset."
+        };
+        return new WeeklyGeneratedNarrationSegment(s.SegmentCode, s.SegmentTitle, text, s.EstimatedDurationSeconds, s.TargetObjects, s.RecommendedVisualStrategy, s.VisualPurpose);
+    }
+    private static WeeklyGeneratedShortNarration BuildShort(WeeklyShortNarrationItem s)
+    {
+        var objects = WeeklySkyForecastV2TextHelpers.FormatCelestialList(s.TargetObjects);
+        var text = $"{s.Hook} Tonight, {objects} are visible in one western-sky window after sunset. Save this and step outside.";
+        return new WeeklyGeneratedShortNarration(s.ShortCode, s.Title, text, s.EstimatedDurationSeconds, s.RecommendedVisualStrategy);
     }
 }

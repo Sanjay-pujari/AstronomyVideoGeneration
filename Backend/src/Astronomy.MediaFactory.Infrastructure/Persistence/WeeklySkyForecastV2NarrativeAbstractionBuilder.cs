@@ -13,7 +13,7 @@ public sealed class WeeklySkyForecastV2NarrativeAbstractionBuilder : IWeeklySkyF
 
         var heroObjects = cinematicBlueprint.HeroStory.ObjectCodes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var heroNames = cinematicBlueprint.HeroStory.ObjectNames.Any() ? cinematicBlueprint.HeroStory.ObjectNames : heroObjects;
-        var heroNamesText = JoinNatural(heroNames);
+        var heroNamesText = WeeklySkyForecastV2TextHelpers.FormatCelestialList(heroNames);
         var heroNarrativeText = $"{heroNamesText} share the western evening sky throughout the week, with one standout night that makes the whole story feel cinematic.";
 
         var support = cinematicBlueprint.SupportingStories
@@ -27,7 +27,7 @@ public sealed class WeeklySkyForecastV2NarrativeAbstractionBuilder : IWeeklySkyF
         var moonNight = intelligence.SkyfieldSummary.BestMoonNight ?? cinematicBlueprint.HeroStory.PeakDate;
 
         var headline = $"{heroNamesText} light up this week's evening sky";
-        var hook = $"If you look west after sunset this week, {heroNamesText.ToLowerInvariant()} will dominate the evening sky in a way that feels effortless to follow.";
+        var hook = "Step outside after sunset this week, and the western sky will immediately reward your attention.";
 
         var hero = new NarrativeHeroConcept(
             "hero_weekly_grouping_story",
@@ -102,14 +102,6 @@ public sealed class WeeklySkyForecastV2NarrativeAbstractionBuilder : IWeeklySkyF
             warnings);
 
         return Task.FromResult(package);
-    }
-
-    private static string JoinNatural(IReadOnlyList<string> names)
-    {
-        if (names.Count == 0) return "The evening sky";
-        if (names.Count == 1) return names[0];
-        if (names.Count == 2) return $"{names[0]} and {names[1]}";
-        return $"{string.Join(", ", names.Take(names.Count - 1))} and {names[^1]}";
     }
 
     private static string HumanizeTitle(string value)
