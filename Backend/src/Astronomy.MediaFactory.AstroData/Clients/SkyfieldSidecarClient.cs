@@ -8,6 +8,7 @@ public interface ISkyfieldSidecarClient
 {
     Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken);
     Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken);
+    Task<WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken);
 }
 
 public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
@@ -85,6 +86,26 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
         catch (Exception ex)
         {
             _logger.LogError(ex, "Skyfield sidecar night-plan call failed.");
+            return null;
+        }
+    }
+
+    public async Task<WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _httpClient.PostAsJsonAsync("/forecast/weekly-sky", request, JsonOptions, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Skyfield weekly-sky returned non-success status code {StatusCode}.", (int)response.StatusCode);
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync<WeeklySkyForecastSkyfieldResponse>(JsonOptions, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Skyfield sidecar weekly-sky call failed.");
             return null;
         }
     }
@@ -190,6 +211,110 @@ public sealed class SkyfieldDailySkyRequest
         validationError = string.Empty;
         return true;
     }
+}
+
+public sealed class WeeklySkyForecastSkyfieldRequest
+{
+    public string RegionId { get; set; } = "";
+    public string LocationName { get; set; } = "";
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public string Timezone { get; set; } = "UTC";
+    public string WeekStartDate { get; set; } = "";
+    public int Days { get; set; } = 7;
+    public string Language { get; set; } = "en";
+    public List<string>? PreferredObjectCodes { get; set; } = new();
+    public bool IncludeMoonPhases { get; set; } = true;
+    public bool IncludePlanets { get; set; } = true;
+    public bool IncludeDeepSkyObjects { get; set; } = true;
+    public bool IncludeMeteorShowers { get; set; } = true;
+    public bool IncludeConjunctions { get; set; } = true;
+    public bool IncludeBestViewingWindows { get; set; } = true;
+}
+
+public sealed class WeeklySkyForecastSkyfieldResponse
+{
+    public bool Success { get; set; }
+    public string RegionId { get; set; } = "";
+    public string LocationName { get; set; } = "";
+    public string Timezone { get; set; } = "UTC";
+    public string WeekStartDate { get; set; } = "";
+    public string WeekEndDate { get; set; } = "";
+    public List<DailySkyForecastItem> Days { get; set; } = new();
+    public List<WeeklyHighlightItem> WeeklyHighlights { get; set; } = new();
+    public List<RecommendedObservationNight> RecommendedNights { get; set; } = new();
+    public List<string> Warnings { get; set; } = new();
+    public string? ErrorMessage { get; set; }
+}
+
+public sealed class DailySkyForecastItem
+{
+    public string Date { get; set; } = "";
+    public DateTime SunsetUtc { get; set; }
+    public DateTime SunriseUtc { get; set; }
+    public string MoonPhase { get; set; } = "";
+    public double MoonIlluminationPercent { get; set; }
+    public DateTime? MoonRiseUtc { get; set; }
+    public DateTime? MoonSetUtc { get; set; }
+    public List<VisibleObjectForecastItem> VisibleObjects { get; set; } = new();
+    public List<AstronomyEventForecastItem> Events { get; set; } = new();
+    public DateTime BestViewingStartUtc { get; set; }
+    public DateTime BestViewingEndUtc { get; set; }
+    public double OverallViewingScore { get; set; }
+    public string ViewingSummary { get; set; } = "";
+}
+
+public sealed class VisibleObjectForecastItem
+{
+    public string ObjectCode { get; set; } = "";
+    public string ObjectName { get; set; } = "";
+    public string ObjectType { get; set; } = "";
+    public bool Visible { get; set; }
+    public DateTime? RiseUtc { get; set; }
+    public DateTime? SetUtc { get; set; }
+    public DateTime? TransitUtc { get; set; }
+    public double? MaxAltitudeDegrees { get; set; }
+    public DateTime? BestViewingTimeUtc { get; set; }
+    public double VisibilityScore { get; set; }
+    public double PhotographyScore { get; set; }
+    public string ViewingDirection { get; set; } = "";
+    public string Reason { get; set; } = "";
+}
+
+public sealed class AstronomyEventForecastItem
+{
+    public string EventType { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Description { get; set; } = "";
+    public DateTime EventTimeUtc { get; set; }
+    public double ImportanceScore { get; set; }
+    public double ViralityScore { get; set; }
+    public string? PrimaryObjectCode { get; set; }
+    public string ViewingDirection { get; set; } = "";
+    public string ViewingTip { get; set; } = "";
+}
+
+public sealed class WeeklyHighlightItem
+{
+    public int Order { get; set; }
+    public string HighlightType { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string Date { get; set; } = "";
+    public DateTime? BestTimeUtc { get; set; }
+    public string? ObjectCode { get; set; }
+    public double Score { get; set; }
+    public string SuggestedSceneType { get; set; } = "";
+}
+
+public sealed class RecommendedObservationNight
+{
+    public string Date { get; set; } = "";
+    public double Score { get; set; }
+    public string Reason { get; set; } = "";
+    public List<string> BestObjects { get; set; } = new();
+    public DateTime BestStartUtc { get; set; }
+    public DateTime BestEndUtc { get; set; }
 }
 
 public sealed class SkyfieldDailySkyResponse
