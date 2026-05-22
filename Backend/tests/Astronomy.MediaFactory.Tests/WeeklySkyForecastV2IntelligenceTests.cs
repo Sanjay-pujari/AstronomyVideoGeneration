@@ -9,7 +9,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
     [Fact]
     public async Task V2_Intelligence_Generates_Cinematic_Blueprint()
     {
-        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator(), new WeeklySkyForecastV2AssetResolver());
+        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator(), new WeeklySkyForecastV2AssetResolver(), new WeeklySkyForecastV2EditorialNormalizer());
         var response = await service.PreviewAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "IN-RJ-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), Diagnostics: true), CancellationToken.None);
 
         Assert.True(response.Success);
@@ -20,6 +20,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.NarrationQuality);
         Assert.NotNull(response.VisualRequirementPackage);
         Assert.NotNull(response.HybridScenePlanPackage);
+        Assert.NotNull(response.NormalizedEditorialPackage);
         Assert.NotNull(response.SceneChoreographyPackage);
         Assert.NotNull(response.PreviewStability);
         Assert.NotNull(response.EditorialStoryPackage);

@@ -1191,6 +1191,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyNarrationQualityReport? NarrationQuality,
     WeeklyVisualRequirementPackage? VisualRequirementPackage,
     WeeklyHybridScenePlanPackage? HybridScenePlanPackage,
+    WeeklyNormalizedEditorialPackage? NormalizedEditorialPackage,
     WeeklySceneChoreographyPackage? SceneChoreographyPackage,
     WeeklyPreviewStabilityReport? PreviewStability,
     IReadOnlyList<string> RecommendedVisualStrategies,
@@ -1356,7 +1357,12 @@ public sealed record WeeklyGeneratedLongNarration(string FullNarration, int Esti
 public sealed record WeeklyGeneratedNarrationSegment(string SegmentCode, string SegmentTitle, string NarrationText, int EstimatedDurationSeconds, IReadOnlyList<string> TargetObjects, string RecommendedVisualStrategy, string VisualPurpose);
 public sealed record WeeklyGeneratedShortNarration(string ShortCode, string Title, string NarrationText, int EstimatedDurationSeconds, string RecommendedVisualStrategy);
 public sealed record WeeklyNarrationQualityReport(bool IsValid, IReadOnlyList<string> Warnings, IReadOnlyList<string> ForbiddenPhraseHits, IReadOnlyList<string> RepeatedPhraseWarnings, int WordCount, int EstimatedDurationSeconds, int TargetDurationSeconds, bool EmotionalProgressionDetected, bool ShortCtaUniquenessValid);
-public sealed record WeeklyPreviewStabilityReport(bool IsStable, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, bool ReadyForAssetResolution, bool ReadyForRendering);
+public sealed record WeeklyPreviewStabilityReport(bool IsStable, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, bool ReadyForAssetResolution, bool ReadyForSceneChoreography, bool ReadyForRendering);
+public sealed record WeeklyNormalizedEditorialEvent(string NormalizedEventId, string NormalizedEventType, string Title, string HumanDescription, IReadOnlyList<string> PrimaryObjects, DateOnly PeakDate, IReadOnlyList<DateOnly> SupportingDates, string HumanTimeWindow, IReadOnlyList<string> SourceEventIds, int EditorialImportance, string RecommendedVisualStrategy);
+public sealed record WeeklyNormalizedStoryArc(string Headline, string Hook, string StoryTheme, string HeroStory, IReadOnlyList<string> SupportingStoryPoints, string BestNightRecommendation, string EmotionalProgression, string ViewerPromise);
+public sealed record WeeklyNormalizedTimeWindow(DateOnly Date, string HumanLabel, DateTime? RawBestTimeUtc, double Confidence);
+public sealed record WeeklyNormalizedVisualStoryInput(string VisualCode, string StoryRole, string HumanScenePurpose, IReadOnlyList<string> PrimaryObjects, DateOnly TargetDate, string HumanTimeWindow, string RecommendedVisualStrategy);
+public sealed record WeeklyNormalizedEditorialPackage(IReadOnlyList<WeeklyNormalizedEditorialEvent> NormalizedEvents, WeeklyNormalizedEditorialEvent HeroNormalizedEvent, WeeklyNormalizedStoryArc NormalizedStoryArc, IReadOnlyList<WeeklyNormalizedTimeWindow> NormalizedTimeWindows, IReadOnlyList<WeeklyNormalizedVisualStoryInput> NormalizedVisualStoryInputs, IReadOnlyList<string> NormalizationWarnings);
 public sealed record WeeklyVisualRequirementPackage(IReadOnlyList<WeeklyVisualRequirement> VisualRequirements, IReadOnlyList<SegmentVisualMapping> SegmentVisualMappings, IReadOnlyList<VisualReusePlan> VisualReusePlan, ThumbnailVisualRequirement ThumbnailVisualRequirement, IReadOnlyList<string> VisualWarnings);
 public sealed record WeeklyVisualRequirement(string VisualRequirementId, string VisualCode, string VisualPurpose, IReadOnlyList<string> SourceSegmentCodes, IReadOnlyList<string> ObjectCodes, DateOnly TargetDate, DateTime? BestTimeUtc, string EmotionalTone, string VisualStrategy, string VisualSourceType, string SceneType, string CompositionDescription, string MotionStyle, IReadOnlyList<string> OverlayNeeds, bool ReuseAllowed, int Priority, string ExpectedAssetRole, string VisualUniquenessKey);
 public sealed record SegmentVisualMapping(string SegmentCode, string VisualCode, string UsageType, string TimingHint, bool ShouldReuse, string TransitionIn, string TransitionOut);
@@ -1406,6 +1412,15 @@ public interface IWeeklySkyForecastV2NarrationPlanner
         string regionId,
         DateOnly weekStartDate,
         string language,
+        CancellationToken cancellationToken);
+}
+public interface IWeeklySkyForecastV2EditorialNormalizer
+{
+    Task<WeeklyNormalizedEditorialPackage> NormalizeAsync(
+        WeeklySkyForecastV2IntelligenceResponse intelligence,
+        WeeklyEditorialStoryPackage editorialPackage,
+        WeeklyCinematicStoryBlueprint cinematicBlueprint,
+        WeeklyNarrativeAbstractionPackage abstractionPackage,
         CancellationToken cancellationToken);
 }
 
