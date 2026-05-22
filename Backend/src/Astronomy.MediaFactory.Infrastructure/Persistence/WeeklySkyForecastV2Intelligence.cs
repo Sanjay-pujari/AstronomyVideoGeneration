@@ -115,7 +115,9 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var narrative = await narrativeAbstractionBuilder.BuildAsync(cinematic, editorial, baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic }, cancellationToken);
         var narrationPlan = await narrationPlanner.BuildAsync(narrative, cinematic, baseResponse.SkyfieldSummary, baseResponse.Region, baseResponse.WeekStartDate, request.Language, cancellationToken);
         var generatedNarration = await narrationTextGenerator.GenerateAsync(narrationPlan, narrative, cancellationToken);
-        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration };
+        var narrationQuality = WeeklySkyForecastV2NarrationQualityValidator.Validate(narrationPlan, generatedNarration);
+        var visualRequirementPackage = WeeklySkyForecastV2VisualRequirementExtractor.Extract(narrationPlan, generatedNarration, narrative, cinematic, baseResponse.EventIntelligence);
+        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage };
     }
 }
 
@@ -176,36 +178,111 @@ public sealed class WeeklySkyForecastV2NarrationPlanner : IWeeklySkyForecastV2Na
 
 public sealed class WeeklySkyForecastV2NarrationTextGenerator : IWeeklySkyForecastV2NarrationTextGenerator
 {
-    private static readonly string[] Forbidden = ["conjunction", "exact alignment", "nearly touching", "rare alignment", "close approach"];
+    private static readonly string[] Forbidden = ["conjunction", "exact alignment", "nearly touching", "rare alignment", "close approach", "same viewing window", "observation event", "visibility momentum", "high-value weekly observation event"];
+    private const int SpokenWordsPerMinute = 145;
+    private static readonly string[] CtaVariants = ["Tonight is worth a look.", "Keep your eyes on the western sky.", "Don’t miss this week’s best sky moment.", "Watch the western horizon after sunset.", "This is your best skywatching pick of the week.", "Look west before the week slips away."];
     public Task<WeeklyGeneratedNarrationPackage> GenerateAsync(WeeklyNarrationPlan narrationPlan, WeeklyNarrativeAbstractionPackage abstractionPackage, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var segments = narrationPlan.LongFormPlan.Segments.Select(BuildLongSegment).ToList();
+        var phraseDiversifier = new PhraseDiversifier();
+        var segments = narrationPlan.LongFormPlan.Segments.Select(s => BuildLongSegment(s, phraseDiversifier)).ToList();
         var full = string.Join("\n\n", segments.Select(x => x.NarrationText));
-        var shorts = narrationPlan.ShortsPlan.Shorts.Select(BuildShort).ToList();
+        var shorts = narrationPlan.ShortsPlan.Shorts.Select((s, i) => BuildShort(s, i)).ToList();
         var warnings = new List<string>(narrationPlan.NarrationWarnings);
         if (Forbidden.Any(f => full.Contains(f, StringComparison.OrdinalIgnoreCase))) warnings.Add("Forbidden conjunction-like wording detected.");
-        return Task.FromResult(new WeeklyGeneratedNarrationPackage(narrationPlan.Language, abstractionPackage.EmotionalTone, new WeeklyGeneratedLongNarration(full, segments.Sum(x => x.EstimatedDurationSeconds), segments), shorts, warnings));
+        var estimatedLongDuration = EstimateDurationSeconds(full);
+        if (narrationPlan.LongFormPlan.TargetDurationSeconds == 90 && estimatedLongDuration < 75) warnings.Add("Generated long narration is shorter than target duration.");
+        return Task.FromResult(new WeeklyGeneratedNarrationPackage(narrationPlan.Language, abstractionPackage.EmotionalTone, new WeeklyGeneratedLongNarration(full, estimatedLongDuration, segments), shorts, warnings));
     }
-    private static WeeklyGeneratedNarrationSegment BuildLongSegment(WeeklyNarrationSegment s)
+    private static WeeklyGeneratedNarrationSegment BuildLongSegment(WeeklyNarrationSegment s, PhraseDiversifier diversifier)
     {
         var objects = WeeklySkyForecastV2TextHelpers.FormatCelestialList(s.TargetObjects);
         var text = s.SegmentCode switch
         {
-            "OpeningHook" => $"Step outside after sunset, look west, and you'll immediately spot {objects} sharing the same evening sky.",
-            "HeroSkyStory" => $"Over several evenings, {objects} return like a repeating scene, building one continuous sky story that's easy to follow.",
-            "BestObservationNight" => $"If you choose just one evening, make it {s.TargetDate:MMMM d}. The post-sunset window is clean, practical, and worth planning around.",
-            "MoonPlanetHighlight" => $"On this highlight night, the Moon adds glow and depth while {objects} hold the frame, giving the western sky a rich cinematic feel.",
-            "ViewingPhotographyTip" => $"For an easy shot, use a stable phone tripod, keep a wide frame, and include a bit of horizon for scale.",
-            "ClosingCTA" => $"Before the week ends, give yourself ten quiet minutes outside. This is the kind of sky that rewards attention.",
-            _ => $"{objects} remain visible in the same viewing window after sunset."
+            "OpeningHook" => $"What if one glance after sunset could reveal the week’s full sky story? {objects} {diversifier.Next("appear_together_after_sunset")}.",
+            "HeroSkyStory" => $"Night after night, {objects} {diversifier.Next("return_evening_after_evening")}, and they {diversifier.Next("share_western_sky")} in a way that feels surprisingly cinematic.",
+            "WhyThisWeekMatters" => $"This matters because these targets {diversifier.Next("create_easy_target")}: you can find them quickly, track them confidently, and enjoy a reliable west-facing view.",
+            "BestObservationNight" => $"Circle {s.TargetDate:MMMM d}. The sky is cleaner after sunset, and this timing gives you the most practical chance to spot the full grouping with confidence.",
+            "MoonPlanetHighlight" => $"The Moon brings a calm silver glow while {objects} add warm contrast, creating quiet beauty that lingers long after twilight.",
+            "ViewingPhotographyTip" => $"Use a steady phone tripod, keep the horizon low in frame, and let the brighter objects guide focus—simple choices that make your shot feel intentional.",
+            "ClosingCTA" => $"Before the week slips by, take ten peaceful minutes outside and look west—you might find this becomes your favorite sky memory of the week.",
+            _ => $"{objects} {diversifier.Next("visible_west_after_sunset")}."
         };
-        return new WeeklyGeneratedNarrationSegment(s.SegmentCode, s.SegmentTitle, text, s.EstimatedDurationSeconds, s.TargetObjects, s.RecommendedVisualStrategy, s.VisualPurpose);
+        return new WeeklyGeneratedNarrationSegment(s.SegmentCode, s.SegmentTitle, text, EstimateDurationSeconds(text), s.TargetObjects, s.RecommendedVisualStrategy, s.VisualPurpose);
     }
-    private static WeeklyGeneratedShortNarration BuildShort(WeeklyShortNarrationItem s)
+    private static WeeklyGeneratedShortNarration BuildShort(WeeklyShortNarrationItem s, int index)
     {
         var objects = WeeklySkyForecastV2TextHelpers.FormatCelestialList(s.TargetObjects);
-        var text = $"{s.Hook} Tonight, {objects} are visible in one western-sky window after sunset. Save this and step outside.";
-        return new WeeklyGeneratedShortNarration(s.ShortCode, s.Title, text, s.EstimatedDurationSeconds, s.RecommendedVisualStrategy);
+        var cta = CtaVariants[index % CtaVariants.Length];
+        var text = $"{s.Hook} Tonight, {objects} {PhraseDiversifier.ShortVariant(index)}. {cta}";
+        return new WeeklyGeneratedShortNarration(s.ShortCode, s.Title, text, EstimateDurationSeconds(text), s.RecommendedVisualStrategy);
     }
+    private static int EstimateDurationSeconds(string text) => (int)Math.Ceiling(CountWords(text) / (double)SpokenWordsPerMinute * 60d);
+    private static int CountWords(string text) => text.Split([' ', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries).Length;
+    private sealed class PhraseDiversifier
+    {
+        private readonly Dictionary<string, int> _index = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, string[]> Variants = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["share_western_sky"] = ["share the western sky", "gather in the twilight view", "brighten the western horizon"],
+            ["appear_together_after_sunset"] = ["appear together after sunset", "line up in twilight soon after sunset"],
+            ["return_evening_after_evening"] = ["return evening after evening", "come back in view night after night"],
+            ["create_easy_target"] = ["create one easy skywatching target", "form this week’s strongest evening view"],
+            ["visible_west_after_sunset"] = ["are visible in the west after sunset", "hold steady in the western twilight"]
+        };
+        public string Next(string key){ var list = Variants[key]; var i = _index.TryGetValue(key, out var current) ? current : 0; _index[key] = i + 1; return list[Math.Min(i, list.Length - 1)]; }
+        public static string ShortVariant(int index) => index switch { 0 => "appear together after sunset", 1 => "share the western sky", _ => "are visible in the west after sunset" };
+    }
+}
+
+internal static class WeeklySkyForecastV2NarrationQualityValidator
+{
+    public static WeeklyNarrationQualityReport Validate(WeeklyNarrationPlan plan, WeeklyGeneratedNarrationPackage generated)
+    {
+        var forbidden = new[] { "same viewing window", "observation event", "visibility momentum", "high-value weekly observation event" };
+        var text = generated.LongFormNarration.FullNarration;
+        var forbiddenHits = forbidden.Where(f => text.Contains(f, StringComparison.OrdinalIgnoreCase) || generated.ShortNarrations.Any(s => s.NarrationText.Contains(f, StringComparison.OrdinalIgnoreCase))).ToList();
+        var repeatedWarnings = new List<string>();
+        foreach (var phrase in new[] { "western sky", "step outside", "after sunset" })
+            if (Count(text, phrase) > 1) repeatedWarnings.Add($"Repeated phrase detected: {phrase}");
+        var uniqueCtas = generated.ShortNarrations.Select(s => s.NarrationText.Split('.').LastOrDefault()?.Trim()).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var shortUnique = uniqueCtas == generated.ShortNarrations.Count;
+        var warnings = new List<string>(generated.Warnings);
+        warnings.AddRange(repeatedWarnings);
+        var emotionalProgressionDetected = plan.LongFormPlan.Segments.Select(s => s.EmotionalTone).Distinct(StringComparer.OrdinalIgnoreCase).Count() >= 5;
+        return new WeeklyNarrationQualityReport(forbiddenHits.Count == 0 && shortUnique, warnings, forbiddenHits, repeatedWarnings, WordCount(text), generated.LongFormNarration.EstimatedDurationSeconds, plan.LongFormPlan.TargetDurationSeconds, emotionalProgressionDetected, shortUnique);
+    }
+    private static int Count(string text, string token) => text.Split(token, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length - 1;
+    private static int WordCount(string text) => text.Split([' ', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries).Length;
+}
+
+internal static class WeeklySkyForecastV2VisualRequirementExtractor
+{
+    public static WeeklyVisualRequirementPackage Extract(WeeklyNarrationPlan plan, WeeklyGeneratedNarrationPackage generated, WeeklyNarrativeAbstractionPackage narrative, WeeklyCinematicStoryBlueprint cinematic, IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> intelligence)
+    {
+        var mappings = new List<SegmentVisualMapping>
+        {
+            new("OpeningHook","hero_western_grouping","Primary","0-15s",false,"fade-in","cut"),
+            new("HeroSkyStory","hero_western_grouping","Reuse","15-40s",true,"cut","cut"),
+            new("WhyThisWeekMatters","hero_western_grouping","Reuse","40-55s",true,"cut","cut"),
+            new("BestObservationNight","best_night_wide","Primary","55-75s",false,"cut","crossfade"),
+            new("MoonPlanetHighlight","moon_jupiter_hero","Primary","75-100s",false,"crossfade","cut"),
+            new("ViewingPhotographyTip","viewing_tip_wide","Primary","100-120s",false,"cut","fade"),
+            new("ClosingCTA","best_night_wide","Reuse","120-140s",true,"fade","fade-out")
+        };
+        var reqs = new List<WeeklyVisualRequirement>
+        {
+            Build("hero_western_grouping","Core grouping visual for opening and story body",["OpeningHook","HeroSkyStory","WhyThisWeekMatters"],["MOON","JUPITER","VENUS"],narrative.HeroNarrative.PeakDate,null,"Curious wonder","Hybrid","Hybrid","GroupingComposite","Western twilight scene with the Moon glowing large, Jupiter nearby as a bright golden point, and Venus lower toward the horizon.","slow parallax",["object labels"],true,100,"LongFormHero","hero_grouping"),
+            Build("best_night_wide","Best night orientation and sky confirmation",["BestObservationNight","ClosingCTA"],["MOON","JUPITER","VENUS"],plan.LongFormPlan.Segments.FirstOrDefault(s=>s.SegmentCode=="BestObservationNight")?.TargetDate ?? narrative.HeroNarrative.PeakDate,null,"Anticipation and practical confidence","Stellarium","Stellarium","ObservationMap","Realistic Stellarium-style wide sky view after sunset, showing the visible Moon and bright planets in context.","slow pan",["west arrow","time annotation"],true,95,"LongFormOrientation","best_night_map"),
+            Build("moon_jupiter_hero","Emotional detail hero shot",["MoonPlanetHighlight"],["MOON","JUPITER"],narrative.HeroNarrative.PeakDate,null,"Quiet beauty","CelestialAsset","CelestialAsset","MoonHero","Cinematic close-up composition using Moon and Jupiter assets, with slow depth movement and soft starfield background.","push-in",["none"],false,90,"LongFormDetail","moon_jupiter_hero"),
+            Build("viewing_tip_wide","Practical viewing and photography guidance",["ViewingPhotographyTip"],["MOON","JUPITER","VENUS"],narrative.HeroNarrative.PeakDate,null,"Practical confidence","Hybrid","Hybrid","TipVisual","Wide horizon composition with subtle tripod/phone framing overlay, designed to support practical viewing advice.","static",["tripod framing guide"],false,80,"LongFormTip","viewing_tip")
+        };
+        var thumb = new ThumbnailVisualRequirement("thumbnail_story", narrative.ThumbnailNarrativeDirection.PrimaryObjects, narrative.ThumbnailNarrativeDirection.SecondaryObjects, "High-contrast hybrid thumbnail with glowing Moon, Jupiter and Venus, clear western twilight background, and bold overlay text.", cinematic.ThumbnailBlueprint.OverlayTextSuggestion, "Hybrid", "Hybrid");
+        var warnings = new List<string>();
+        if (plan.LongFormPlan.Segments.Any(s => mappings.All(m => !m.SegmentCode.Equals(s.SegmentCode, StringComparison.OrdinalIgnoreCase)))) warnings.Add("At least one long-form segment has no visual mapping.");
+        if (generated.ShortNarrations.Any(s => s.ShortCode is not ("HeroGroupingShort" or "BestNightShort" or "MoonPlanetHighlightShort"))) warnings.Add("Unexpected short code detected for visual mapping.");
+        return new WeeklyVisualRequirementPackage(reqs, mappings, [new VisualReusePlan("hero_western_grouping", ["HeroSkyStory", "WhyThisWeekMatters"], "Keep narrative continuity"), new VisualReusePlan("best_night_wide", ["ClosingCTA"], "Return to practical orientation for close")], thumb, warnings);
+    }
+    private static WeeklyVisualRequirement Build(string code, string purpose, IReadOnlyList<string> source, IReadOnlyList<string> objects, DateOnly date, DateTime? bestTimeUtc, string tone, string strategy, string sourceType, string sceneType, string composition, string motion, IReadOnlyList<string> overlays, bool reuse, int priority, string role, string uniq)
+        => new(Guid.NewGuid().ToString("N"), code, purpose, source, objects, date, bestTimeUtc, tone, strategy, sourceType, sceneType, composition, motion, overlays, reuse, priority, role, uniq);
 }

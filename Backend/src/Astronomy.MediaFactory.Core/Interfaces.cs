@@ -1188,6 +1188,8 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyNarrativeAbstractionPackage? NarrativeAbstractionPackage,
     WeeklyNarrationPlan? NarrationPlan,
     WeeklyGeneratedNarrationPackage? GeneratedNarrationPackage,
+    WeeklyNarrationQualityReport? NarrationQuality,
+    WeeklyVisualRequirementPackage? VisualRequirementPackage,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
@@ -1350,6 +1352,12 @@ public sealed record WeeklyGeneratedNarrationPackage(string Language, string Nar
 public sealed record WeeklyGeneratedLongNarration(string FullNarration, int EstimatedDurationSeconds, IReadOnlyList<WeeklyGeneratedNarrationSegment> Segments);
 public sealed record WeeklyGeneratedNarrationSegment(string SegmentCode, string SegmentTitle, string NarrationText, int EstimatedDurationSeconds, IReadOnlyList<string> TargetObjects, string RecommendedVisualStrategy, string VisualPurpose);
 public sealed record WeeklyGeneratedShortNarration(string ShortCode, string Title, string NarrationText, int EstimatedDurationSeconds, string RecommendedVisualStrategy);
+public sealed record WeeklyNarrationQualityReport(bool IsValid, IReadOnlyList<string> Warnings, IReadOnlyList<string> ForbiddenPhraseHits, IReadOnlyList<string> RepeatedPhraseWarnings, int WordCount, int EstimatedDurationSeconds, int TargetDurationSeconds, bool EmotionalProgressionDetected, bool ShortCtaUniquenessValid);
+public sealed record WeeklyVisualRequirementPackage(IReadOnlyList<WeeklyVisualRequirement> VisualRequirements, IReadOnlyList<SegmentVisualMapping> SegmentVisualMappings, IReadOnlyList<VisualReusePlan> VisualReusePlan, ThumbnailVisualRequirement ThumbnailVisualRequirement, IReadOnlyList<string> VisualWarnings);
+public sealed record WeeklyVisualRequirement(string VisualRequirementId, string VisualCode, string VisualPurpose, IReadOnlyList<string> SourceSegmentCodes, IReadOnlyList<string> ObjectCodes, DateOnly TargetDate, DateTime? BestTimeUtc, string EmotionalTone, string VisualStrategy, string VisualSourceType, string SceneType, string CompositionDescription, string MotionStyle, IReadOnlyList<string> OverlayNeeds, bool ReuseAllowed, int Priority, string ExpectedAssetRole, string VisualUniquenessKey);
+public sealed record SegmentVisualMapping(string SegmentCode, string VisualCode, string UsageType, string TimingHint, bool ShouldReuse, string TransitionIn, string TransitionOut);
+public sealed record VisualReusePlan(string ReusedVisualCode, IReadOnlyList<string> ReusedBySegments, string ReuseReason);
+public sealed record ThumbnailVisualRequirement(string VisualCode, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string CompositionDescription, string OverlayText, string VisualStrategy, string VisualSourceType);
 
 public interface IWeeklySkyForecastV2NarrativeAbstractionBuilder
 {
