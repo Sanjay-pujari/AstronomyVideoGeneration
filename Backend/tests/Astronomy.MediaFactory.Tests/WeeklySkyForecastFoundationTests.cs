@@ -34,7 +34,7 @@ public sealed class WeeklySkyForecastFoundationTests
         var sidecar = new StubSkyfieldSidecarClient();
         var builder = new WeeklySkyForecastContextBuilder(scheduler, new RegionResolutionService(scheduler), sidecar, NullLogger<WeeklySkyForecastContextBuilder>.Instance);
 
-        var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", inputRegionId, "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
+        var context = await builder.BuildAsync(new CoreModel.WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", inputRegionId, "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
 
         Assert.Equal("INDIA-UDAIPUR", context.RegionId);
         Assert.Equal("INDIA-UDAIPUR", sidecar.LastRequest!.RegionId);
@@ -47,7 +47,7 @@ public sealed class WeeklySkyForecastFoundationTests
         var builder = new WeeklySkyForecastContextBuilder(scheduler, new RegionResolutionService(scheduler), new StubSkyfieldSidecarClient(), NullLogger<WeeklySkyForecastContextBuilder>.Instance);
 
         var ex = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
-            builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "in-rj-udaipur", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None));
+            builder.BuildAsync(new CoreModel.WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "in-rj-udaipur", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None));
 
         Assert.Contains("Region 'IN-RJ-UDAIPUR' is not configured in region settings.", ex.Message, StringComparison.Ordinal);
         var resolutionEx = Assert.IsType<WeeklySkyForecastRegionResolutionException>(ex);
@@ -73,7 +73,7 @@ public sealed class WeeklySkyForecastFoundationTests
         var logger = new TestLogger<WeeklySkyForecastContextBuilder>();
         var builder = new WeeklySkyForecastContextBuilder(scheduler, new RegionResolutionService(scheduler), sidecar, logger);
 
-        var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
+        var context = await builder.BuildAsync(new CoreModel.WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
 
         Assert.Equal("INDIA-UDAIPUR", context.RegionId);
         Assert.DoesNotContain(logger.Messages, m => m.Contains("Duplicate region configuration found", StringComparison.Ordinal));
@@ -90,7 +90,7 @@ public sealed class WeeklySkyForecastFoundationTests
                 Content = new StringContent("{\"success\":true,\"regionId\":\"IN-RJ-UDAIPUR\",\"locationName\":\"Udaipur\",\"timezone\":\"Asia/Kolkata\",\"weekStartDate\":\"2026-05-22\",\"weekEndDate\":\"2026-05-28\",\"days\":[],\"weeklyHighlights\":[],\"recommendedNights\":[],\"warnings\":[]}", Encoding.UTF8, "application/json")
             };
         });
-        var client = new SidecarModel.SkyfieldSidecarClient(new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8010") }, NullLogger<SkyfieldSidecarClient>.Instance);
+        var client = new SidecarModel.SkyfieldSidecarClient(new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8010") }, NullLogger<SidecarModel.SkyfieldSidecarClient>.Instance);
         var response = await client.GetWeeklySkyForecastAsync(new SidecarModel.WeeklySkyForecastSkyfieldRequest { RegionId = "IN-RJ-UDAIPUR", LocationName = "Udaipur", Latitude = 24, Longitude = 73, Timezone = "Asia/Kolkata", WeekStartDate = "2026-05-22", Language = "en" }, CancellationToken.None);
         Assert.NotNull(response);
         Assert.True(response!.Success);
@@ -154,7 +154,7 @@ public sealed class WeeklySkyForecastFoundationTests
     {
         var scheduler = Options.Create(new SchedulerOptions { Regions = new RegionSchedulingOptions { Items = [new RegionScheduleOptions { RegionId = "INDIA-UDAIPUR", DisplayName = "Udaipur", Latitude = 24.58, Longitude = 73.68, Timezone = "Asia/Kolkata", Language = "en" }] } });
         var builder = new WeeklySkyForecastContextBuilder(scheduler, new RegionResolutionService(scheduler), new StubSkyfieldSidecarClientWithMoonNight(), NullLogger<WeeklySkyForecastContextBuilder>.Instance);
-        var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
+        var context = await builder.BuildAsync(new CoreModel.WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
         Assert.Equal(new DateOnly(2026, 5, 27), context.BestMoonNight);
     }
 private static CoreModel.WeeklySkyForecastContext BuildContext()
@@ -170,7 +170,7 @@ private static CoreModel.WeeklySkyForecastContext BuildContext()
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(cb(request, cancellationToken));
     }
 
-    private sealed class StubSkyfieldSidecarClient : ISkyfieldSidecarClient
+    private sealed class StubSkyfieldSidecarClient : SidecarModel.ISkyfieldSidecarClient
     {
         public SidecarModel.WeeklySkyForecastSkyfieldRequest? LastRequest { get; private set; }
         public Task<SidecarModel.SkyfieldDailySkyResponse?> GetDailySkyAsync(SidecarModel.SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
@@ -195,7 +195,7 @@ private static CoreModel.WeeklySkyForecastContext BuildContext()
     }
 
     
-    private sealed class StubSkyfieldSidecarClientWithMoonNight : ISkyfieldSidecarClient
+    private sealed class StubSkyfieldSidecarClientWithMoonNight : SidecarModel.ISkyfieldSidecarClient
     {
         public Task<SidecarModel.SkyfieldDailySkyResponse?> GetDailySkyAsync(SidecarModel.SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<SidecarModel.SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SidecarModel.SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
