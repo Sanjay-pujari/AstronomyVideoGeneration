@@ -12,16 +12,35 @@ namespace Astronomy.MediaFactory.Publishing;
 public sealed class YouTubeAnalyticsCollector : IYouTubeAnalyticsCollector
 {
     private readonly IYouTubeAnalyticsService _analyticsService;
+    private readonly AnalyticsOptions _options;
+    private readonly ILogger<YouTubeAnalyticsCollector> _logger;
 
     public string Platform => "YouTube";
 
-    public YouTubeAnalyticsCollector(IYouTubeAnalyticsService analyticsService)
+    public YouTubeAnalyticsCollector(
+        IYouTubeAnalyticsService analyticsService,
+        IOptions<AnalyticsOptions> options,
+        ILogger<YouTubeAnalyticsCollector> logger)
     {
         _analyticsService = analyticsService;
+        _options = options.Value;
+        _logger = logger;
     }
 
     public async Task<PlatformContentAnalytics> CollectAsync(PlatformAnalyticsCollectionContext context, CancellationToken cancellationToken)
     {
+        if (!_options.Enabled)
+        {
+            _logger.LogInformation("Analytics auto-collection disabled by configuration.");
+            return FromContext(context, false, "Analytics is disabled by configuration.");
+        }
+
+        if (!_options.YouTubeAnalyticsEnabled)
+        {
+            _logger.LogInformation("YouTube analytics disabled by configuration.");
+            return FromContext(context, false, "YouTube analytics is disabled by configuration.");
+        }
+
         var snapshot = await _analyticsService.GetVideoAnalyticsAsync(context.PlatformMediaId, cancellationToken);
         if (snapshot is null)
             return FromContext(context, false, "YouTube analytics unavailable or permissions are missing.");

@@ -16,7 +16,7 @@ public sealed class PlatformContentAnalyticsTests
     [Fact]
     public async Task YouTubeAnalyticsCollector_CollectsMetricsSafely()
     {
-        var collector = new YouTubeAnalyticsCollector(new FakeYouTubeAnalyticsService());
+        var collector = new YouTubeAnalyticsCollector(new FakeYouTubeAnalyticsService(), Options.Create(new AnalyticsOptions()), NullLogger<YouTubeAnalyticsCollector>.Instance);
         var result = await collector.CollectAsync(Context("YouTube", "Short", "yt1"), CancellationToken.None);
 
         Assert.True(result.IsAnalyticsAvailable);
@@ -94,6 +94,23 @@ public sealed class PlatformContentAnalyticsTests
     }
 
     [Fact]
+    public async Task BackgroundCollectionScheduler_SkipsWhenAutoCollectionDisabled()
+    {
+        var fake = new FakeAnalyticsCollectionService();
+        var services = new ServiceCollection();
+        services.AddSingleton<IAnalyticsCollectionService>(fake);
+        using var provider = services.BuildServiceProvider();
+        var background = new AnalyticsCollectionBackgroundService(provider.GetRequiredService<IServiceScopeFactory>(), new FakeOptionsMonitor(new AnalyticsOptions { Enabled = true, AutoCollectionEnabled = false, CollectEveryMinutes = 1 }), NullLogger<AnalyticsCollectionBackgroundService>.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        await background.StartAsync(cts.Token);
+        await Task.Delay(50);
+        await background.StopAsync(CancellationToken.None);
+
+        Assert.Equal(0, fake.Calls);
+    }
+
+    [Fact]
     public async Task DashboardSummary_AggregatesMetrics()
     {
         await using var db = CreateDb();
@@ -126,6 +143,42 @@ public sealed class PlatformContentAnalyticsTests
         Assert.Contains(db.PlatformContentAnalytics, x => !x.IsAnalyticsAvailable);
     }
 
+    [Fact]
+    public async Task CollectForPipelineRunAsync_ExitsEarlyWhenAnalyticsDisabled()
+    {
+        await using var db = CreateDb();
+        var output = Path.Combine(Path.GetTempPath(), "analytics-tests", Guid.NewGuid().ToString("N"));
+        var run = SeedPublishedRun(db, output);
+        await db.SaveChangesAsync();
+        var service = new AnalyticsCollectionService(
+            db,
+            new EfPipelineRepository(db),
+            [new SuccessCollector("YouTube")],
+            Options.Create(new AnalyticsOptions { Enabled = false }),
+            Options.Create(new MaintenanceOptions { WorkingDirectory = Path.GetTempPath() }),
+            NullLogger<AnalyticsCollectionService>.Instance);
+
+        await service.CollectForPipelineRunAsync(run.Id, CancellationToken.None);
+
+        Assert.Empty(db.PlatformContentAnalytics);
+    }
+
+    [Fact]
+    public async Task YouTubeCollector_SkipsWhenDisabledByConfiguration()
+    {
+        var service = new FakeYouTubeAnalyticsService();
+        var collector = new YouTubeAnalyticsCollector(
+            service,
+            Options.Create(new AnalyticsOptions { Enabled = true, YouTubeAnalyticsEnabled = false }),
+            NullLogger<YouTubeAnalyticsCollector>.Instance);
+
+        var result = await collector.CollectAsync(Context("YouTube", "Short", "yt1"), CancellationToken.None);
+
+        Assert.False(result.IsAnalyticsAvailable);
+        Assert.Contains("disabled", result.LastError!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, service.Calls);
+    }
+
     private static MediaFactoryDbContext CreateDb() => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 
     private static PipelineRun SeedPublishedRun(MediaFactoryDbContext db, string output)
@@ -150,8 +203,12 @@ public sealed class PlatformContentAnalyticsTests
 
     private sealed class FakeYouTubeAnalyticsService : IYouTubeAnalyticsService
     {
+        public int Calls { get; private set; }
         public Task<YouTubeVideoAnalyticsSnapshot?> GetVideoAnalyticsAsync(string videoId, CancellationToken cancellationToken)
-            => Task.FromResult<YouTubeVideoAnalyticsSnapshot?>(new YouTubeVideoAnalyticsSnapshot { VideoId = videoId, Views = 123, Likes = 12, Comments = 3, DurationSeconds = 60, AverageViewDurationSeconds = 42, EstimatedMinutesWatched = 10 });
+        {
+            Calls++;
+            return Task.FromResult<YouTubeVideoAnalyticsSnapshot?>(new YouTubeVideoAnalyticsSnapshot { VideoId = videoId, Views = 123, Likes = 12, Comments = 3, DurationSeconds = 60, AverageViewDurationSeconds = 42, EstimatedMinutesWatched = 10 });
+        }
     }
 
     private sealed class SuccessCollector : IPlatformAnalyticsCollector
