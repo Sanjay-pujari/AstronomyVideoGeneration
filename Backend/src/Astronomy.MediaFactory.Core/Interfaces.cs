@@ -596,6 +596,35 @@ public sealed record AssetAwareVideoCompositionPlan(
     List<string> Warnings,
     bool ReadyForComposition);
 
+public sealed record AssetAwarePreviewVideoRequest(
+    bool OverwriteExisting = false,
+    bool IncludeTransitions = true,
+    bool IncludePlaceholderNarration = false,
+    bool IncludeTextOverlay = true,
+    bool Diagnostics = true);
+
+public sealed record AssetAwarePreviewSegmentResult(
+    int SortOrder,
+    string SegmentCode,
+    string SegmentType,
+    string? ImagePath,
+    bool ImageExists,
+    double DurationSeconds,
+    bool IncludedInVideo,
+    string? FilterChain,
+    string? ErrorMessage);
+
+public sealed record AssetAwarePreviewVideoResponse(
+    Guid ContentGenerationPlanId,
+    bool Success,
+    string? OutputVideoPath,
+    string? ThumbnailPath,
+    int SegmentCount,
+    double EstimatedDurationSeconds,
+    List<AssetAwarePreviewSegmentResult> Segments,
+    List<string> Warnings,
+    string? ErrorMessage);
+
 public interface IDailySkyGuideVisualAssetProvider
 {
     Task<IReadOnlyList<DailySkyGuideVisualAsset>> GetAssetsAsync(
@@ -624,6 +653,25 @@ public interface IAssetAwareCompositionPlanner
 public interface IAssetAwareCompositionPlannerResolver
 {
     IAssetAwareCompositionPlanner? Resolve(string contentCategoryCode);
+}
+
+public interface IDailySkyGuidePreviewVideoGenerator
+{
+    Task<AssetAwarePreviewVideoResponse> GenerateAsync(
+        Guid contentGenerationPlanId,
+        AssetAwarePreviewVideoRequest request,
+        CancellationToken cancellationToken);
+
+    Task<AssetAwarePreviewVideoResponse> GetPreviewInfoAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken);
+}
+
+public interface IAssetAwarePreviewVideoComposer
+{
+    Task<string?> ComposeAsync(
+        AssetAwareVideoCompositionPlan plan,
+        AssetAwarePreviewVideoRequest request,
+        string outputVideoPath,
+        CancellationToken cancellationToken);
 }
 
 public interface IDailySkyGuideVisualAssetConsumer
