@@ -194,7 +194,7 @@ public sealed class WeeklySkyForecastSscScenePlanner(ILogger<WeeklySkyForecastSs
             .Where(h => h.HighlightType.Contains("planet", StringComparison.OrdinalIgnoreCase))
             .Select(h => h.Date)
             .FirstOrDefault();
-        var planetDate = (bestPlanetDate == default ? null : bestPlanetDate) ?? context.DailyForecasts
+        var planetDate = (bestPlanetDate == default ? (DateOnly?)null : bestPlanetDate) ?? context.DailyForecasts
             .FirstOrDefault(x => x.VisibleObjects.Any(o => o.Visible && o.ObjectCode.Equals(context.BestPlanetOfWeek ?? string.Empty, StringComparison.OrdinalIgnoreCase)))?.Date
             ?? targetDate;
         var bestPlanetCapture = context.WeeklyHighlights
@@ -469,7 +469,7 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
         Directory.CreateDirectory(outputPaths.NarrationDirectory);
         foreach (var segment in manifest.Segments)
         {
-            var targetPath = Path.Combine(outputPaths.NarrationDirectory, segment.AudioFileName);
+            var targetPath = Path.Combine(outputPaths.NarrationDirectory, segment.OutputFileName);
             if (!overwriteExisting && File.Exists(targetPath) && new FileInfo(targetPath).Length > 0)
             {
                 audioSegments.Add(new WeeklySkyForecastAudioSegmentResult(segment.SegmentCode, targetPath, segment.EstimatedDurationSeconds, true, null));
