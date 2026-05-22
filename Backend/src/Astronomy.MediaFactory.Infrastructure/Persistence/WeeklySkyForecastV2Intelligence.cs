@@ -107,6 +107,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             null,
             null,
             null,
+            null,
             events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             ctx.Warnings,
             [new CategoryProductionStepResult("weekly_skyfield_context", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Context built", null, []), new CategoryProductionStepResult("event_intelligence", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Event intelligence generated", null, [])]);
