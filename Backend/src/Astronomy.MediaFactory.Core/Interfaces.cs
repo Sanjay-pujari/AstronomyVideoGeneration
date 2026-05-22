@@ -1183,9 +1183,86 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklySkyForecastV2SkyfieldSummary SkyfieldSummary,
     IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> EventIntelligence,
     WeeklyStoryArc WeeklyStoryArc,
+    WeeklyEditorialStoryPackage EditorialStoryPackage,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
+
+public sealed record WeeklyEditorialStoryPackage(
+    WeeklyHeroEvent HeroEvent,
+    IReadOnlyList<WeeklyHeroEvent> SecondaryEvents,
+    string Headline,
+    string Subtitle,
+    string OpeningHook,
+    string StoryTheme,
+    IReadOnlyList<WeeklyNarrativeBeat> NarrativeArc,
+    IReadOnlyList<WeeklyCinematicMoment> CinematicMoments,
+    WeeklyThumbnailDirection ThumbnailDirection,
+    IReadOnlyList<WeeklyShortCandidate> ShortsCandidates,
+    string VisualStrategySummary,
+    IReadOnlyList<string> Warnings);
+
+public sealed record WeeklyHeroEvent(
+    string EventId,
+    string EventType,
+    string Title,
+    string Description,
+    DateOnly PeakDate,
+    DateTime? BestTimeUtc,
+    IReadOnlyList<string> ObjectCodes,
+    IReadOnlyList<string> ObjectNames,
+    double SignificanceScore,
+    double EmotionalScore,
+    double VisualScore,
+    string RecommendedVisualStrategy,
+    string WhyThisIsHero,
+    IReadOnlyList<DateOnly>? SupportingDates = null);
+
+public sealed record WeeklyNarrativeBeat(
+    int BeatOrder,
+    string BeatType,
+    string Title,
+    string Purpose,
+    string SourceEventId,
+    IReadOnlyList<string> TargetObjects,
+    DateOnly TargetDate,
+    string EmotionalTone,
+    string SuggestedVisualStrategy,
+    string SuggestedScenePurpose);
+
+public sealed record WeeklyCinematicMoment(
+    string MomentId,
+    string MomentType,
+    string Title,
+    string Description,
+    IReadOnlyList<string> ObjectCodes,
+    DateOnly TargetDate,
+    DateTime? BestTimeUtc,
+    int VisualPriority,
+    string RecommendedVisualStrategy,
+    bool ReuseAllowed,
+    string SuggestedScenePurpose);
+
+public sealed record WeeklyThumbnailDirection(
+    IReadOnlyList<string> TitleTextCandidates,
+    IReadOnlyList<string> PrimaryObjects,
+    IReadOnlyList<string> SecondaryObjects,
+    string Emotion,
+    string RecommendedVisualStrategy,
+    string CompositionIdea,
+    string BackgroundSuggestion,
+    string OverlayTextSuggestion);
+
+public sealed record WeeklyShortCandidate(
+    string ShortCode,
+    string Title,
+    string Hook,
+    string SourceEventId,
+    IReadOnlyList<string> ObjectCodes,
+    DateOnly TargetDate,
+    int RecommendedDurationSeconds,
+    string RecommendedVisualStrategy,
+    double PriorityScore);
 
 public interface IWeeklySkyForecastV2EventIntelligenceBuilder
 {
@@ -1195,6 +1272,11 @@ public interface IWeeklySkyForecastV2EventIntelligenceBuilder
 public interface IWeeklySkyForecastV2IntelligenceService
 {
     Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken);
+}
+
+public interface IWeeklySkyForecastV2EditorialIntelligenceBuilder
+{
+    Task<WeeklyEditorialStoryPackage> BuildAsync(WeeklySkyForecastV2IntelligenceResponse intelligence, CancellationToken cancellationToken);
 }
 
 public interface IWeeklySkyForecastVisualAssetGenerationService

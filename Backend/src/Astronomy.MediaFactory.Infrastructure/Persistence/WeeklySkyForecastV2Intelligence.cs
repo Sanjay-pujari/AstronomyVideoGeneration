@@ -73,7 +73,8 @@ public sealed class WeeklySkyForecastV2EventIntelligenceBuilder : IWeeklySkyFore
 
 public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastContextBuilder contextBuilder,
-    IWeeklySkyForecastV2EventIntelligenceBuilder eventBuilder) : IWeeklySkyForecastV2IntelligenceService
+    IWeeklySkyForecastV2EventIntelligenceBuilder eventBuilder,
+    IWeeklySkyForecastV2EditorialIntelligenceBuilder editorialBuilder) : IWeeklySkyForecastV2IntelligenceService
 {
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
     {
@@ -93,12 +94,15 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             primaryObjects,
             events.Select(e => e.PrimaryDate.ToString("yyyy-MM-dd")).Distinct().Take(6).ToList(),
             events.OrderByDescending(e => e.StoryScore).Take(3).Select(e => e.Title).ToList());
-        return new WeeklySkyForecastV2IntelligenceResponse(null, "WeeklySkyForecast", true, ctx.WeekStartDate, ctx.WeekEndDate, ctx.RegionId,
+        var baseResponse = new WeeklySkyForecastV2IntelligenceResponse(null, "WeeklySkyForecast", true, ctx.WeekStartDate, ctx.WeekEndDate, ctx.RegionId,
             new WeeklySkyForecastV2SkyfieldSummary(ctx.DailyForecasts.Count, ctx.DailyForecasts.SelectMany(d => d.VisibleObjects).Count(v => v.Visible), ctx.WeeklyHighlights.Count, ctx.RecommendedNights.Count, ctx.BestPlanetOfWeek, ctx.BestMoonNight, ctx.BestPhotographyNight),
             events,
             arc,
+            null!,
             events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             ctx.Warnings,
             [new CategoryProductionStepResult("weekly_skyfield_context", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Context built", null, []), new CategoryProductionStepResult("event_intelligence", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Event intelligence generated", null, [])]);
+        var editorial = await editorialBuilder.BuildAsync(baseResponse, cancellationToken);
+        return baseResponse with { EditorialStoryPackage = editorial };
     }
 }
