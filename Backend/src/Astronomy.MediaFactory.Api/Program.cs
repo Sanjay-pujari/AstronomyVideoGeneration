@@ -221,6 +221,14 @@ app.MapPost("/api/content-planning/run-category-production-preview", async (Cate
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
+
+app.MapPost("/api/content-planning/run-weekly-skyforecast-preparation", async (WeeklySkyForecastPreparationRequest request, IWeeklySkyForecastPreparationOrchestrator orchestrator, CancellationToken ct) =>
+{
+    var safeRequest = request with { PublishToYouTube = false, PublishToFacebook = false, PublishToInstagram = false };
+    var response = await orchestrator.RunAsync(safeRequest, ct);
+    return Results.Ok(response);
+});
+
 app.MapPost("/api/content-planning/generate-daily-plan", async (GenerateDailyPlanRequest request, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
