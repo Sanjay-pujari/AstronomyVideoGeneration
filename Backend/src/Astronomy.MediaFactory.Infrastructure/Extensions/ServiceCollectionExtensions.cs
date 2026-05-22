@@ -475,6 +475,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDailySkyGuideVisualAssetConsumer, NoOpDailySkyGuideVisualAssetConsumer>();
         services.AddScoped<IStellariumScenePlanner, DailySkyGuideStellariumScenePlanner>();
         services.AddScoped<IStellariumScenePlannerResolver, StellariumScenePlannerResolver>();
+        services.AddScoped<IRegionResolutionService, RegionResolutionService>();
         services.AddScoped<IDailySkyGuideContextBuilder, DailySkyGuideContextBuilder>();
         services.AddScoped<IWeeklySkyForecastContextBuilder, WeeklySkyForecastContextBuilder>();
         services.AddScoped<IWeeklySkyForecastSegmentPlanner, WeeklySkyForecastSegmentPlanner>();

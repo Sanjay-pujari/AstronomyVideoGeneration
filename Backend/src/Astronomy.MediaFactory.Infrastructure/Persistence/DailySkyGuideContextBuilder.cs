@@ -5,14 +5,14 @@ using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptions<SchedulerOptions> schedulerOptions, IAstronomyVisibilityService visibilityService, IStellariumScenePlannerResolver scenePlannerResolver) : IDailySkyGuideContextBuilder
+public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IRegionResolutionService regionResolutionService, IAstronomyVisibilityService visibilityService, IStellariumScenePlannerResolver scenePlannerResolver) : IDailySkyGuideContextBuilder
 {
     public async Task<DailySkyGuideContext> BuildAsync(ContentGenerationPlan plan, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
         var warnings = new List<string>();
-        var region = ResolveRegion(plan.RegionId, warnings);
+        var region = await ResolveRegionAsync(plan.RegionId, plan.Title, warnings, cancellationToken);
 
         var scheduledUtc = plan.ScheduledUtc ?? DateTimeOffset.UtcNow;
         if (plan.ScheduledUtc is null) warnings.Add("scheduled_utc missing on plan; used current UTC date as fallback target date.");
@@ -92,18 +92,17 @@ public sealed class DailySkyGuideContextBuilder(MediaFactoryDbContext db, IOptio
         return "MultiObjectCollage";
     }
 
-    private RegionResolution ResolveRegion(string regionId, List<string> warnings)
+    private async Task<RegionResolution> ResolveRegionAsync(string regionId, string? regionName, List<string> warnings, CancellationToken cancellationToken)
     {
-        var region = schedulerOptions.Value.Regions.Items.FirstOrDefault(x => x.RegionId.Equals(regionId, StringComparison.OrdinalIgnoreCase));
+        var region = await regionResolutionService.TryResolveAsync(regionId, regionName, cancellationToken);
         if (region is not null)
         {
-            return new RegionResolution(region.DisplayName, region.Latitude, region.Longitude, region.Timezone);
-        }
+            if (!string.Equals(region.CanonicalRegionId, region.RequestedRegionId, StringComparison.OrdinalIgnoreCase))
+            {
+                warnings.Add($"region alias resolved: requested '{region.RequestedRegionId}' mapped to canonical '{region.CanonicalRegionId}'.");
+            }
 
-        if (regionId.Equals("IN-RJ-UDAIPUR", StringComparison.OrdinalIgnoreCase))
-        {
-            warnings.Add("region fallback applied: hardcoded Udaipur mapping used.");
-            return new RegionResolution("Udaipur", 24.5854, 73.7125, "Asia/Kolkata");
+            return new RegionResolution(region.LocationName, region.Latitude, region.Longitude, region.Timezone);
         }
 
         warnings.Add($"region '{regionId}' not found; defaulted to hardcoded Udaipur mapping.");

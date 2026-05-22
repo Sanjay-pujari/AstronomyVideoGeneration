@@ -15,6 +15,7 @@ public sealed class WeeklySkyForecastProductionPipelineStrategy : ICategoryProdu
 
 public sealed class WeeklySkyForecastContextBuilder(
     IOptions<SchedulerOptions> schedulerOptions,
+    IRegionResolutionService regionResolutionService,
     ISkyfieldSidecarClient sidecarClient,
     ILogger<WeeklySkyForecastContextBuilder> logger) : IWeeklySkyForecastContextBuilder
 {
@@ -23,25 +24,32 @@ public sealed class WeeklySkyForecastContextBuilder(
         logger.LogInformation("Resolving WeeklySkyForecast region using production region resolver.");
         logger.LogInformation("Requested regionId: {RequestedRegionId}", request.RegionId);
 
-        if (!TryResolveRegionUsingProductionResolver(request.RegionId, out var normalizedRegionId, out var region, out var availableRegionIds))
+        var resolution = await regionResolutionService.TryResolveAsync(request.RegionId, request.RegionName, cancellationToken);
+        var availableRegionIds = schedulerOptions.Value.Regions.Items
+            .Where(r => !string.IsNullOrWhiteSpace(r.RegionId))
+            .Select(r => RegionIdNormalizer.NormalizeRegionId(r.RegionId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (resolution is null)
         {
             throw new WeeklySkyForecastRegionResolutionException(
                 requestedRegionId: RegionIdNormalizer.NormalizeRegionId(request.RegionId),
                 availableRegionIds: availableRegionIds,
-                message: $"Region '{RegionIdNormalizer.NormalizeRegionId(request.RegionId)}' is not configured in region settings. Resolver: SchedulerOptions.Regions.Items + RegionIdNormalizer.");
+                message: $"Region '{RegionIdNormalizer.NormalizeRegionId(request.RegionId)}' is not configured in region settings. Resolver: IRegionResolutionService.");
         }
 
         logger.LogInformation(
             "Resolved region: {RegionId} ({DisplayName}) lat={Latitude}, lon={Longitude}, tz={Timezone}",
-            normalizedRegionId,
-            region.DisplayName,
-            region.Latitude,
-            region.Longitude,
-            region.Timezone);
+            resolution.CanonicalRegionId,
+            resolution.LocationName,
+            resolution.Latitude,
+            resolution.Longitude,
+            resolution.Timezone);
 
         var weekStart = DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
-        var resolvedLocationName = string.IsNullOrWhiteSpace(region.DisplayName) ? request.RegionName : region.DisplayName;
-        var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = normalizedRegionId, LocationName = resolvedLocationName, Latitude = region.Latitude, Longitude = region.Longitude, Timezone = region.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
+        var resolvedLocationName = string.IsNullOrWhiteSpace(resolution.LocationName) ? request.RegionName : resolution.LocationName;
+        var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = resolution.CanonicalRegionId, LocationName = resolvedLocationName, Latitude = resolution.Latitude, Longitude = resolution.Longitude, Timezone = resolution.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
         var response = await sidecarClient.GetWeeklySkyForecastAsync(skyfieldRequest, cancellationToken) ?? throw new InvalidOperationException("Skyfield weekly forecast sidecar returned no response.");
         if (!response.Success)
         {
@@ -58,31 +66,7 @@ public sealed class WeeklySkyForecastContextBuilder(
         var bestMoonNight = daily.OrderByDescending(d => d.VisibleObjects.Where(o => o.ObjectCode.Equals("Moon", StringComparison.OrdinalIgnoreCase)).Select(o => o.VisibilityScore).DefaultIfEmpty(0).Max()).Select(d => (DateOnly?)d.Date).FirstOrDefault();
         var bestPhotoNight = daily.OrderByDescending(d => d.VisibleObjects.MaxBy(o => o.PhotographyScore)?.PhotographyScore ?? 0).Select(d => (DateOnly?)d.Date).FirstOrDefault();
 
-        return new(normalizedRegionId, response.LocationName, region.Latitude, region.Longitude, region.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
-    }
-
-    private bool TryResolveRegionUsingProductionResolver(string regionId, out string normalizedRegionId, out RegionScheduleOptions region, out IReadOnlyList<string> availableRegionIds)
-    {
-        var regions = schedulerOptions.Value.Regions.Items;
-        availableRegionIds = regions
-            .Where(r => !string.IsNullOrWhiteSpace(r.RegionId))
-            .Select(r => RegionIdNormalizer.NormalizeRegionId(r.RegionId))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        var normalized = RegionIdNormalizer.NormalizeRegionId(regionId);
-        region = regions.FirstOrDefault(r =>
-            string.Equals(RegionIdNormalizer.NormalizeRegionId(r.RegionId), normalized, StringComparison.OrdinalIgnoreCase))!;
-        if (region is not null)
-        {
-            normalizedRegionId = normalized;
-            return true;
-        }
-
-        normalizedRegionId = normalized;
-        region = new RegionScheduleOptions();
-        return false;
+        return new(resolution.CanonicalRegionId, response.LocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
     }
 }
 
