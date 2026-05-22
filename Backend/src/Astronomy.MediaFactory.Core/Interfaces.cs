@@ -1185,6 +1185,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyStoryArc WeeklyStoryArc,
     WeeklyEditorialStoryPackage EditorialStoryPackage,
     WeeklyCinematicStoryBlueprint? CinematicStoryBlueprint,
+    WeeklyNarrativeAbstractionPackage? NarrativeAbstractionPackage,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
@@ -1306,6 +1307,37 @@ public sealed record WeeklyThumbnailBlueprint(IReadOnlyList<string> TitleTextCan
 public interface IWeeklySkyForecastV2CinematicEditorialRefiner
 {
     Task<WeeklyCinematicStoryBlueprint> RefineAsync(
+        WeeklyEditorialStoryPackage editorialPackage,
+        WeeklySkyForecastV2IntelligenceResponse intelligence,
+        CancellationToken cancellationToken);
+}
+
+public sealed record WeeklyNarrativeAbstractionPackage(
+    string AbstractionId,
+    string StoryHeadline,
+    string StorySubtitle,
+    string OpeningNarrationHook,
+    NarrativeHeroConcept HeroNarrative,
+    IReadOnlyList<NarrativeSupportConcept> SupportingNarratives,
+    IReadOnlyList<NarrativeFlowBeat> NarrativeFlow,
+    IReadOnlyList<NarrativeVisualConcept> CinematicVisualPlan,
+    IReadOnlyList<NarrativeShortConcept> ShortsNarrativePlan,
+    NarrativeThumbnailConcept ThumbnailNarrativeDirection,
+    string EmotionalTone,
+    string ViewerPromise,
+    IReadOnlyList<string> Warnings);
+
+public sealed record NarrativeHeroConcept(string ConceptCode, string Title, string HumanNarrative, string ViewerExperience, IReadOnlyList<string> ObjectCodes, IReadOnlyList<string> ObjectNames, DateOnly PeakDate, IReadOnlyList<DateOnly> SupportingDates, string RecommendedVisualStrategy, double EmotionalWeight, double CinematicImportance, IReadOnlyList<string> SourceEventIds);
+public sealed record NarrativeSupportConcept(string SupportCode, string Title, string NarrativePurpose, DateOnly TargetDate, IReadOnlyList<string> ObjectCodes, string ViewerValue, string RecommendedVisualStrategy, IReadOnlyList<string> SourceEventIds);
+public sealed record NarrativeFlowBeat(int BeatOrder, string BeatCode, string BeatTitle, string NarrationPurpose, string EmotionalIntent, string VisualIntent, IReadOnlyList<string> TargetObjects, DateOnly TargetDate, int EstimatedNarrationSeconds, string RecommendedVisualStrategy, bool ShouldReuseVisual);
+public sealed record NarrativeVisualConcept(string VisualCode, string VisualPurpose, string VisualNarrativeRole, IReadOnlyList<string> ObjectCodes, string VisualUniquenessKey, string RecommendedVisualStrategy, int CinematicPriority, bool ReuseAllowed);
+public sealed record NarrativeShortConcept(string ShortCode, string Title, string NarrationHook, string ViewerPromise, IReadOnlyList<string> ObjectCodes, DateOnly TargetDate, string DistinctStoryAngle, string RecommendedVisualStrategy, int EstimatedDurationSeconds);
+public sealed record NarrativeThumbnailConcept(string EmotionalGoal, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string VisualStory, string CompositionNarrative, IReadOnlyList<string> TitleTextCandidates, string OverlayTextSuggestion, string RecommendedVisualStrategy);
+
+public interface IWeeklySkyForecastV2NarrativeAbstractionBuilder
+{
+    Task<WeeklyNarrativeAbstractionPackage> BuildAsync(
+        WeeklyCinematicStoryBlueprint cinematicBlueprint,
         WeeklyEditorialStoryPackage editorialPackage,
         WeeklySkyForecastV2IntelligenceResponse intelligence,
         CancellationToken cancellationToken);
