@@ -161,7 +161,7 @@ public sealed class WeeklySkyForecastV2NarrationPlanner : IWeeklySkyForecastV2Na
         return Task.FromResult(new WeeklyNarrationPlan(language, cinematicBlueprint.NarrationTone, longForm, new WeeklyShortNarrationPlan(shorts), warnings));
     }
 
-    private static IReadOnlyList<string> BuildHints(string segmentCode, WeeklyNarrationSegment beat, string regionId)
+    private static IReadOnlyList<string> BuildHints(string segmentCode, NarrativeFlowBeat beat, string regionId)
         => segmentCode switch
         {
             "OpeningHook" => [$"Create curiosity immediately for viewers in {regionId}.", "Use short cinematic spoken sentences.", "Orient the viewer to the western sky after sunset."],
