@@ -19,6 +19,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.GeneratedNarrationPackage);
         Assert.NotNull(response.NarrationQuality);
         Assert.NotNull(response.VisualRequirementPackage);
+        Assert.NotNull(response.HybridScenePlanPackage);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Moon", response.CinematicStoryBlueprint.Headline, StringComparison.OrdinalIgnoreCase);
@@ -35,6 +36,13 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Contains(response.VisualRequirementPackage.VisualRequirements, v => v.VisualSourceType == "Stellarium");
         Assert.Contains(response.VisualRequirementPackage.VisualRequirements, v => v.VisualSourceType == "CelestialAsset");
         Assert.Equal(response.NarrationPlan.LongFormPlan.Segments.Count, response.VisualRequirementPackage.SegmentVisualMappings.Count);
+        Assert.InRange(response.HybridScenePlanPackage!.ScenePlans.Count, 4, 6);
+        Assert.Contains(response.HybridScenePlanPackage.ScenePlans, s => s.VisualSourceType == "Hybrid");
+        Assert.Contains(response.HybridScenePlanPackage.ScenePlans, s => s.VisualSourceType == "Stellarium");
+        Assert.Contains(response.HybridScenePlanPackage.ScenePlans, s => s.VisualSourceType == "CelestialAsset");
+        Assert.Contains(response.HybridScenePlanPackage.AssetNeeds, a => a.ObjectCode == "MOON");
+        Assert.Contains(response.HybridScenePlanPackage.AssetNeeds, a => a.ObjectCode == "JUPITER");
+        Assert.Contains(response.HybridScenePlanPackage.AssetNeeds, a => a.ObjectCode == "VENUS");
     }
 
     [Fact]
@@ -63,6 +71,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             events,
             new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             null!,
+            null,
             null,
             null,
             null,
