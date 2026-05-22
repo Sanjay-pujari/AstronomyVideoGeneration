@@ -62,8 +62,12 @@ public sealed class WeeklySkyForecastContextBuilder(
             d.BestViewingStartUtc, d.BestViewingEndUtc, d.OverallViewingScore, d.ViewingSummary)).ToList();
         var highlights = response.WeeklyHighlights.Select(x => new WeeklySkyForecastHighlightItem(x.Order, x.HighlightType, x.Title, x.Description, DateOnly.Parse(x.Date), x.BestTimeUtc, x.ObjectCode, x.Score, x.SuggestedSceneType)).ToList();
         var recommended = response.RecommendedNights.Select(x => new Astronomy.MediaFactory.Core.RecommendedObservationNight(DateOnly.Parse(x.Date), x.Score, x.Reason, x.BestObjects, x.BestStartUtc, x.BestEndUtc)).ToList();
-        var bestPlanet = daily.SelectMany(d => d.VisibleObjects).Where(o => o.Visible && o.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.VisibilityScore).Select(x => x.ObjectCode).FirstOrDefault();
-        var bestMoonNight = daily.OrderByDescending(d => d.VisibleObjects.Where(o => o.ObjectCode.Equals("Moon", StringComparison.OrdinalIgnoreCase)).Select(o => o.VisibilityScore).DefaultIfEmpty(0).Max()).Select(d => (DateOnly?)d.Date).FirstOrDefault();
+        var bestPlanet = !string.IsNullOrWhiteSpace(response.BestPlanetOfWeek)
+            ? response.BestPlanetOfWeek
+            : daily.SelectMany(d => d.VisibleObjects).Where(o => o.Visible && o.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.VisibilityScore).Select(x => x.ObjectCode).FirstOrDefault();
+        var bestMoonNight = response.BestMoonNight is not null
+            ? DateOnly.Parse(response.BestMoonNight.Date)
+            : highlights.FirstOrDefault(x => x.HighlightType.Equals("best_moon_night", StringComparison.OrdinalIgnoreCase))?.Date;
         var bestPhotoNight = daily.OrderByDescending(d => d.VisibleObjects.MaxBy(o => o.PhotographyScore)?.PhotographyScore ?? 0).Select(d => (DateOnly?)d.Date).FirstOrDefault();
 
         return new(resolution.CanonicalRegionId, response.LocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
@@ -102,7 +106,7 @@ public sealed class WeeklySkyForecastSegmentPlanner : IWeeklySkyForecastSegmentP
     }
 }
 
-public sealed class WeeklySkyForecastSscScenePlanner : IWeeklySkyForecastSscScenePlanner
+public sealed class WeeklySkyForecastSscScenePlanner(ILogger<WeeklySkyForecastSscScenePlanner> logger) : IWeeklySkyForecastSscScenePlanner
 {
     public Task<WeeklySkyForecastSscScenePlan> BuildAsync(WeeklySkyForecastContext context, WeeklySkyForecastSegmentPlan segmentPlan, CancellationToken cancellationToken)
     {
@@ -110,18 +114,66 @@ public sealed class WeeklySkyForecastSscScenePlanner : IWeeklySkyForecastSscScen
         var bestObject = visible.OrderByDescending(x => x.VisibilityScore).FirstOrDefault()?.ObjectCode;
         var thumb = context.BestPlanetOfWeek ?? (visible.Any(x => x.ObjectCode == "Moon") ? "Moon" : bestObject);
         var targetDate = context.RecommendedNights.FirstOrDefault()?.Date ?? context.WeekStartDate;
-        var capture = visible.FirstOrDefault(x => x.ObjectCode == thumb)?.BestViewingTimeUtc ?? DateTime.UtcNow;
+        var targetTimeZone = ResolveTimeZoneOrUtc(context.Timezone);
+        var bestNightByDate = context.RecommendedNights.ToDictionary(x => x.Date, x => x);
+
+        DateTime ResolveCapture(DateOnly sceneTargetDate, string? targetObjectCode, bool isSummaryOrWide)
+        {
+            if (isSummaryOrWide && bestNightByDate.TryGetValue(sceneTargetDate, out var recommendedNight))
+            {
+                return recommendedNight.BestStartUtc;
+            }
+
+            var matchedObject = context.DailyForecasts
+                .Where(x => x.Date == sceneTargetDate)
+                .SelectMany(x => x.VisibleObjects)
+                .FirstOrDefault(x => x.Visible && !string.IsNullOrWhiteSpace(x.BestViewingTimeUtc?.ToString()) && x.ObjectCode.Equals(targetObjectCode ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+            if (matchedObject?.BestViewingTimeUtc is not null)
+            {
+                return matchedObject.BestViewingTimeUtc.Value;
+            }
+
+            if (bestNightByDate.TryGetValue(sceneTargetDate, out var fallbackNight))
+            {
+                return fallbackNight.BestStartUtc;
+            }
+
+            return context.DailyForecasts.FirstOrDefault(x => x.Date == sceneTargetDate)?.BestViewingStartUtc ?? DateTime.UtcNow;
+        }
+        var moonDate = context.BestMoonNight ?? targetDate;
+        var summaryDate = bestNightByDate.ContainsKey(context.WeekEndDate) ? context.WeekEndDate : targetDate;
         var scenes = new List<WeeklySkyForecastSscScenePlanItem>
         {
-            new("WeeklyIntroWideSky", "WideSky", null, capture, context.WeekStartDate, 90, "long", false, "WeeklyIntro"),
-            new("BestMoonNight", "Moon", "Moon", capture, context.BestMoonNight ?? targetDate, 45, "both", false, "MoonPhaseForecast"),
-            new("BestPlanetOfWeek", "Planet", context.BestPlanetOfWeek, capture, targetDate, 35, "both", false, "BestPlanets"),
-            new("RecommendedObservationNight", "Night", bestObject, capture, targetDate, 60, "both", false, "RecommendedNights"),
-            new("WeeklyHighlight", "Highlight", context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, capture, targetDate, 50, "both", false, "WeeklyHighlights"),
-            new("WeeklySummaryMap", "Summary", null, capture, context.WeekEndDate, 95, "long", false, "WeeklyOutro"),
-            new("ThumbnailCandidate", "Thumbnail", thumb, capture, targetDate, 30, "thumbnail", true, "BiggestWeeklyHighlight")
+            new("WeeklyIntroWideSky", "WideSky", null, ResolveCapture(context.WeekStartDate, null, true), context.WeekStartDate, 90, "long", false, "WeeklyIntro"),
+            new("BestMoonNight", "Moon", "Moon", ResolveCapture(moonDate, "Moon", false), moonDate, 45, "both", false, "MoonPhaseForecast"),
+            new("BestPlanetOfWeek", "Planet", context.BestPlanetOfWeek, ResolveCapture(targetDate, context.BestPlanetOfWeek, false), targetDate, 35, "both", false, "BestPlanets"),
+            new("RecommendedObservationNight", "Night", bestObject, ResolveCapture(targetDate, bestObject, false), targetDate, 60, "both", false, "RecommendedNights"),
+            new("WeeklyHighlight", "Highlight", context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, ResolveCapture(targetDate, context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, false), targetDate, 50, "both", false, "WeeklyHighlights"),
+            new("WeeklySummaryMap", "Summary", null, ResolveCapture(summaryDate, null, true), summaryDate, 95, "long", false, "WeeklyOutro"),
+            new("ThumbnailCandidate", "Thumbnail", thumb, ResolveCapture(targetDate, thumb, false), targetDate, 30, "thumbnail", true, "BiggestWeeklyHighlight")
         };
+
+        foreach (var scene in scenes)
+        {
+            var localDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(scene.CaptureTimeUtc.ToUniversalTime(), targetTimeZone));
+            if (localDate != scene.TargetDate)
+            {
+                logger.LogWarning("WeeklySkyForecast scene targetDate mismatch: {SceneCode} targetDate={TargetDate} captureTimeUtc={CaptureTimeUtc} localDate={LocalDate}", scene.SceneCode, scene.TargetDate, scene.CaptureTimeUtc, localDate);
+            }
+        }
         return Task.FromResult(new WeeklySkyForecastSscScenePlan(scenes));
+    }
+
+    private static TimeZoneInfo ResolveTimeZoneOrUtc(string timezone)
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(timezone);
+        }
+        catch
+        {
+            return TimeZoneInfo.Utc;
+        }
     }
 }
 
