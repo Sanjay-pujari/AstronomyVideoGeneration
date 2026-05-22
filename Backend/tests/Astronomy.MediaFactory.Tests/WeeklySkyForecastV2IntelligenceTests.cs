@@ -9,16 +9,19 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
     [Fact]
     public async Task V2_Intelligence_Generates_Cinematic_Blueprint()
     {
-        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner());
+        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder());
         var response = await service.PreviewAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "IN-RJ-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), Diagnostics: true), CancellationToken.None);
 
         Assert.True(response.Success);
         Assert.NotNull(response.CinematicStoryBlueprint);
+        Assert.NotNull(response.NarrativeAbstractionPackage);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Moon", response.CinematicStoryBlueprint.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.True(response.CinematicStoryBlueprint.NarrativeBeats.Count >= 6);
         Assert.Equal(3, response.CinematicStoryBlueprint.ShortsBlueprints.Count);
+        Assert.Equal(7, response.NarrativeAbstractionPackage!.NarrativeFlow.Count);
+        Assert.Equal(3, response.NarrativeAbstractionPackage.ShortsNarrativePlan.Count);
     }
 
     [Fact]
@@ -27,12 +30,17 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         var intelligence = BuildResponse(new WeeklySkyForecastV2EventIntelligenceBuilder().Build(BuildContext()));
         var editorial = await new WeeklySkyForecastV2EditorialIntelligenceBuilder().BuildAsync(intelligence, CancellationToken.None);
         var cinematic = await new WeeklySkyForecastV2CinematicEditorialRefiner().RefineAsync(editorial, intelligence with { EditorialStoryPackage = editorial }, CancellationToken.None);
+        var narrative = await new WeeklySkyForecastV2NarrativeAbstractionBuilder().BuildAsync(cinematic, editorial, intelligence with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic }, CancellationToken.None);
 
         Assert.True(cinematic.HeroStory.SupportingDates.Count > 1);
         Assert.Equal(cinematic.CinematicMoments.Count, cinematic.CinematicMoments.Select(x => x.VisualUniquenessKey).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Equal(3, cinematic.ShortsBlueprints.Count);
         Assert.Equal(3, cinematic.ShortsBlueprints.Select(x => x.Title).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.DoesNotContain(cinematic.OpeningHook, new[] { "conjunction", "exact alignment", "rare alignment", "almost touching" }, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(narrative.CinematicVisualPlan.Count, narrative.CinematicVisualPlan.Select(x => x.VisualUniquenessKey).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(3, narrative.ShortsNarrativePlan.Select(x => x.DistinctStoryAngle).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.DoesNotContain(narrative.StoryHeadline, new[] { "same viewing window grouping", "grouping event", "visibility momentum" }, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(narrative.OpeningNarrationHook, new[] { "conjunction", "exact alignment", "rare alignment", "nearly touching", "extremely close" }, StringComparer.OrdinalIgnoreCase);
     }
 
     private static WeeklySkyForecastV2IntelligenceResponse BuildResponse(IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> events)
@@ -42,6 +50,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             events,
             new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             null!,
+            null,
             null,
             ["Hybrid"],
             [],
