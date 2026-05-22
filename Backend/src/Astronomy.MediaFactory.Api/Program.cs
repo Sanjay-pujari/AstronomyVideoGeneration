@@ -215,6 +215,12 @@ app.MapPost("/api/content-planning/run-category-preparation", async (ManualCateg
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
+app.MapPost("/api/content-planning/run-category-production-preview", async (CategoryProductionPreviewRequest request, ICategoryProductionRunner runner, CancellationToken ct) =>
+{
+    var response = await runner.RunAsync(request, ct);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
 app.MapPost("/api/content-planning/generate-daily-plan", async (GenerateDailyPlanRequest request, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
