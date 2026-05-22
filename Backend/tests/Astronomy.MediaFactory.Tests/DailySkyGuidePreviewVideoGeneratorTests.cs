@@ -13,8 +13,9 @@ public sealed class DailySkyGuidePreviewVideoGeneratorTests
     public async Task PreviewInfo_SkipsMissingAssets_AndPreservesOrder()
     {
         await using var db = BuildDb();
-        var planId = Guid.NewGuid();
-        db.ContentGenerationPlans.Add(new ContentGenerationPlan { Id = planId, ContentCategoryCode = "DailySkyGuide", Language = "en", RegionId = "r" });
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Language = "en", RegionId = "r" };
+        db.ContentGenerationPlans.Add(plan);
+        var planId = plan.Id;
         await db.SaveChangesAsync();
 
         var generator = BuildGenerator(db, new FakePlanner(planId));
@@ -30,8 +31,9 @@ public sealed class DailySkyGuidePreviewVideoGeneratorTests
     public async Task Generate_DoesNotTouchDbState()
     {
         await using var db = BuildDb();
-        var planId = Guid.NewGuid();
-        db.ContentGenerationPlans.Add(new ContentGenerationPlan { Id = planId, ContentCategoryCode = "DailySkyGuide", Language = "en", RegionId = "r" });
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Language = "en", RegionId = "r" };
+        db.ContentGenerationPlans.Add(plan);
+        var planId = plan.Id;
         await db.SaveChangesAsync();
         var before = db.ChangeTracker.Entries().Count();
 
@@ -48,8 +50,9 @@ public sealed class DailySkyGuidePreviewVideoGeneratorTests
     public async Task PreviewInfo_UsesRenderingWorkingDirectory()
     {
         await using var db = BuildDb();
-        var planId = Guid.NewGuid();
-        db.ContentGenerationPlans.Add(new ContentGenerationPlan { Id = planId, ContentCategoryCode = "DailySkyGuide", Language = "en", RegionId = "r" });
+        var plan = new ContentGenerationPlan { ContentCategoryCode = "DailySkyGuide", Language = "en", RegionId = "r" };
+        db.ContentGenerationPlans.Add(plan);
+        var planId = plan.Id;
         await db.SaveChangesAsync();
 
         var renderingDirectory = Path.Combine(Path.GetTempPath(), "media-output");
