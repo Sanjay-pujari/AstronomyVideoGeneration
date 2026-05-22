@@ -806,6 +806,43 @@ public sealed record PrepareManualRunResponse(
     object? PipelineRequest,
     IReadOnlyList<string> Warnings);
 
+
+public sealed record ManualCategoryPreparationRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    string RegionName,
+    DateTimeOffset ScheduledUtc,
+    string? PrimaryCelestialObjectCode,
+    bool OverwriteExisting = false,
+    bool GeneratePreviewVideo = true,
+    bool CaptureStellariumScenes = true,
+    bool Diagnostics = true);
+
+public sealed record ManualCategoryPreparationStepResult(
+    string StepName,
+    string Status,
+    DateTimeOffset? StartedUtc,
+    DateTimeOffset? FinishedUtc,
+    long? DurationMs,
+    string? Message,
+    string? ErrorMessage,
+    IReadOnlyList<string> Warnings);
+
+public sealed record ManualCategoryPreparationResponse(
+    Guid? ContentGenerationPlanId,
+    string ContentCategoryCode,
+    bool Success,
+    IReadOnlyList<ManualCategoryPreparationStepResult> Steps,
+    RunPipelineRequest? RunPipelineRequest,
+    IReadOnlyList<string> Warnings,
+    string? ErrorMessage);
+
+public interface IManualCategoryPreparationOrchestrator
+{
+    Task<ManualCategoryPreparationResponse> RunAsync(ManualCategoryPreparationRequest request, CancellationToken cancellationToken);
+}
+
 public interface IAnalyticsIngestionService
 {
     Task IngestManualAsync(IReadOnlyCollection<Astronomy.MediaFactory.Analytics.AnalyticsIngestionDto> records, CancellationToken cancellationToken);

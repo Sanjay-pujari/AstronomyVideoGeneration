@@ -209,6 +209,12 @@ app.MapPost("/api/content-planning/generate-plan", async (GenerateContentPlanReq
         return Results.BadRequest(new { message = ex.Message });
     }
 });
+app.MapPost("/api/content-planning/run-category-preparation", async (ManualCategoryPreparationRequest request, IManualCategoryPreparationOrchestrator orchestrator, CancellationToken ct) =>
+{
+    var response = await orchestrator.RunAsync(request, ct);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
 app.MapPost("/api/content-planning/generate-daily-plan", async (GenerateDailyPlanRequest request, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
