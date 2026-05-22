@@ -231,6 +231,19 @@ app.MapPost("/api/content-planning/run-category-production-preview", async (Cate
 });
 
 
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/intelligence-preview", async (WeeklySkyForecastV2IntelligenceRequest request, IWeeklySkyForecastV2IntelligenceService service, CancellationToken ct) =>
+{
+    try
+    {
+        var response = await service.PreviewAsync(request, ct);
+        return Results.Ok(response);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
 app.MapPost("/api/content-planning/run-weekly-skyforecast-preparation", async (WeeklySkyForecastProductionRequest request, IWeeklySkyForecastPreparationOrchestrator orchestrator, CancellationToken ct) =>
 {
     try
