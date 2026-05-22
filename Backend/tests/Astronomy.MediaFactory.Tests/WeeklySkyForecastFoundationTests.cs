@@ -6,6 +6,7 @@ using Astronomy.MediaFactory.AstroData.Clients;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -22,16 +23,16 @@ public sealed class WeeklySkyForecastFoundationTests
     {
         var scheduler = Options.Create(new SchedulerOptions
         {
-            Regions = new SchedulerRegionsOptions
+            Regions = new RegionSchedulingOptions
             {
                 Items =
                 [
-                    new SchedulerRegionOptions { RegionId = "IN-RJ-UDAIPUR", DisplayName = "Udaipur", Latitude = 24.58, Longitude = 73.68, Timezone = "Asia/Kolkata", Language = "en" }
+                    new RegionScheduleOptions { RegionId = "IN-RJ-UDAIPUR", DisplayName = "Udaipur", Latitude = 24.58, Longitude = 73.68, Timezone = "Asia/Kolkata", Language = "en" }
                 ]
             }
         });
         var sidecar = new StubSkyfieldSidecarClient();
-        var builder = new WeeklySkyForecastContextBuilder(scheduler, sidecar);
+        var builder = new WeeklySkyForecastContextBuilder(scheduler, sidecar, NullLogger<WeeklySkyForecastContextBuilder>.Instance);
 
         var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", inputRegionId, "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
 
@@ -42,13 +43,37 @@ public sealed class WeeklySkyForecastFoundationTests
     [Fact]
     public async Task ContextBuilder_Unknown_Region_Returns_Clear_Validation_Error()
     {
-        var scheduler = Options.Create(new SchedulerOptions { Regions = new SchedulerRegionsOptions { Items = [] } });
-        var builder = new WeeklySkyForecastContextBuilder(scheduler, new StubSkyfieldSidecarClient());
+        var scheduler = Options.Create(new SchedulerOptions { Regions = new RegionSchedulingOptions { Items = [] } });
+        var builder = new WeeklySkyForecastContextBuilder(scheduler, new StubSkyfieldSidecarClient(), NullLogger<WeeklySkyForecastContextBuilder>.Instance);
 
         var ex = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "in-rj-udaipur", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None));
 
         Assert.Equal("Region 'IN-RJ-UDAIPUR' is not configured in region settings.", ex.Message);
+    }
+
+    [Fact]
+    public async Task ContextBuilder_Duplicate_Region_Keys_LogWarning_And_DoNotThrow()
+    {
+        var scheduler = Options.Create(new SchedulerOptions
+        {
+            Regions = new RegionSchedulingOptions
+            {
+                Items =
+                [
+                    new RegionScheduleOptions { RegionId = "INDIA-UDAIPUR", DisplayName = "Udaipur", Latitude = 24.58, Longitude = 73.68, Timezone = "Asia/Kolkata", Language = "en" },
+                    new RegionScheduleOptions { RegionId = "india-udaipur", DisplayName = "Udaipur Duplicate", Latitude = 24.58, Longitude = 73.68, Timezone = "Asia/Kolkata", Language = "en" }
+                ]
+            }
+        });
+        var sidecar = new StubSkyfieldSidecarClient();
+        var logger = new TestLogger<WeeklySkyForecastContextBuilder>();
+        var builder = new WeeklySkyForecastContextBuilder(scheduler, sidecar, logger);
+
+        var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
+
+        Assert.Equal("INDIA-UDAIPUR", context.RegionId);
+        Assert.Contains(logger.Messages, m => m.Contains("Duplicate region configuration found for regionId INDIA-UDAIPUR", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -125,5 +150,20 @@ public sealed class WeeklySkyForecastFoundationTests
                 Warnings = []
             });
         }
+    }
+
+    private sealed class TestLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Messages.Add(formatter(state, exception));
+    }
+
+    private sealed class NullScope : IDisposable
+    {
+        public static NullScope Instance { get; } = new();
+        public void Dispose() { }
     }
 }

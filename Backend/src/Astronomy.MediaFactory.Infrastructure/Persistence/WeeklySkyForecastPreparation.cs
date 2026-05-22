@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.AstroData.Clients;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -12,16 +13,15 @@ public sealed class WeeklySkyForecastProductionPipelineStrategy : ICategoryProdu
         => Task.FromResult(new CategoryProductionPreviewResponse(null, ContentCategoryCode, false, false, false, false, false, false, null, null, null, null, null, null, null, null, null, null, [], ["WeeklySkyForecast production preview execution is intentionally disabled in this phase."], "Not implemented in planning foundation phase.", null));
 }
 
-public sealed class WeeklySkyForecastContextBuilder(IOptions<SchedulerOptions> schedulerOptions, ISkyfieldSidecarClient sidecarClient) : IWeeklySkyForecastContextBuilder
+public sealed class WeeklySkyForecastContextBuilder(
+    IOptions<SchedulerOptions> schedulerOptions,
+    ISkyfieldSidecarClient sidecarClient,
+    ILogger<WeeklySkyForecastContextBuilder> logger) : IWeeklySkyForecastContextBuilder
 {
     public async Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken)
     {
-        var normalizedRegionId = RegionIdNormalizer.NormalizeRegionId(request.RegionId);
-        var regions = schedulerOptions.Value.Regions.Items
-            .ToDictionary(x => RegionIdNormalizer.NormalizeRegionId(x.RegionId), x => x, StringComparer.OrdinalIgnoreCase);
-
-        if (!regions.TryGetValue(normalizedRegionId, out var region))
-            throw new KeyNotFoundException($"Region '{normalizedRegionId}' is not configured in region settings.");
+        if (!TryResolveRegion(request.RegionId, out var normalizedRegionId, out var region))
+            throw new KeyNotFoundException($"Region '{RegionIdNormalizer.NormalizeRegionId(request.RegionId)}' is not configured in region settings.");
 
         var weekStart = DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
         var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = normalizedRegionId, LocationName = request.RegionName, Latitude = region.Latitude, Longitude = region.Longitude, Timezone = region.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
@@ -42,6 +42,56 @@ public sealed class WeeklySkyForecastContextBuilder(IOptions<SchedulerOptions> s
         var bestPhotoNight = daily.OrderByDescending(d => d.VisibleObjects.MaxBy(o => o.PhotographyScore)?.PhotographyScore ?? 0).Select(d => (DateOnly?)d.Date).FirstOrDefault();
 
         return new(normalizedRegionId, response.LocationName, region.Latitude, region.Longitude, response.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
+    }
+
+    private bool TryResolveRegion(string regionId, out string normalizedRegionId, out RegionScheduleOptions region)
+    {
+        var regions = schedulerOptions.Value.Regions.Items;
+        var groupedByRegionId = regions
+            .Where(r => !string.IsNullOrWhiteSpace(r.RegionId))
+            .GroupBy(
+                r => RegionIdNormalizer.NormalizeRegionId(r.RegionId),
+                StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var duplicateGroup in groupedByRegionId.Where(g => g.Count() > 1))
+        {
+            logger.LogWarning(
+                "Duplicate region configuration found for regionId {RegionId}. Using first configured value.",
+                duplicateGroup.Key);
+        }
+
+        var regionLookup = groupedByRegionId
+            .ToDictionary(
+                g => g.Key,
+                g => g.First(),
+                StringComparer.OrdinalIgnoreCase);
+
+        var aliasLookup = regions
+            .Where(r => !string.IsNullOrWhiteSpace(r.RegionId))
+            .GroupBy(r => $"{r.Latitude:F4}|{r.Longitude:F4}|{r.Timezone}|{r.Language}", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => RegionIdNormalizer.NormalizeRegionId(g.First().RegionId),
+                StringComparer.OrdinalIgnoreCase);
+
+        normalizedRegionId = RegionIdNormalizer.NormalizeRegionId(regionId);
+        if (regionLookup.TryGetValue(normalizedRegionId, out region!))
+            return true;
+
+        var aliasSource = regions.FirstOrDefault(r => RegionIdNormalizer.NormalizeRegionId(r.RegionId).Equals(normalizedRegionId, StringComparison.OrdinalIgnoreCase));
+        if (aliasSource is not null)
+        {
+            var aliasKey = $"{aliasSource.Latitude:F4}|{aliasSource.Longitude:F4}|{aliasSource.Timezone}|{aliasSource.Language}";
+            if (aliasLookup.TryGetValue(aliasKey, out var canonicalRegionId)
+                && regionLookup.TryGetValue(canonicalRegionId, out region!))
+            {
+                normalizedRegionId = canonicalRegionId;
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
