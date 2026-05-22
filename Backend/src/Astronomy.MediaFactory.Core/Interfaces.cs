@@ -1187,6 +1187,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyCinematicStoryBlueprint? CinematicStoryBlueprint,
     WeeklyNarrativeAbstractionPackage? NarrativeAbstractionPackage,
     WeeklyNarrationPlan? NarrationPlan,
+    WeeklyGeneratedNarrationPackage? GeneratedNarrationPackage,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
@@ -1345,6 +1346,10 @@ public sealed record WeeklyLongFormNarrationPlan(int TargetDurationSeconds, int 
 public sealed record WeeklyNarrationSegment(string SegmentCode, int SegmentOrder, string SegmentTitle, string NarrationIntent, string EmotionalTone, string SourceBeatCode, IReadOnlyList<string> TargetObjects, DateOnly TargetDate, int EstimatedDurationSeconds, string RecommendedVisualStrategy, string VisualPurpose, IReadOnlyList<string> NarrationPromptHints);
 public sealed record WeeklyShortNarrationPlan(IReadOnlyList<WeeklyShortNarrationItem> Shorts);
 public sealed record WeeklyShortNarrationItem(string ShortCode, string Title, string Hook, IReadOnlyList<string> TargetObjects, DateOnly TargetDate, int EstimatedDurationSeconds, string NarrationIntent, string RecommendedVisualStrategy, double PriorityScore);
+public sealed record WeeklyGeneratedNarrationPackage(string Language, string NarrationStyle, WeeklyGeneratedLongNarration LongFormNarration, IReadOnlyList<WeeklyGeneratedShortNarration> ShortNarrations, IReadOnlyList<string> Warnings);
+public sealed record WeeklyGeneratedLongNarration(string FullNarration, int EstimatedDurationSeconds, IReadOnlyList<WeeklyGeneratedNarrationSegment> Segments);
+public sealed record WeeklyGeneratedNarrationSegment(string SegmentCode, string SegmentTitle, string NarrationText, int EstimatedDurationSeconds, IReadOnlyList<string> TargetObjects, string RecommendedVisualStrategy, string VisualPurpose);
+public sealed record WeeklyGeneratedShortNarration(string ShortCode, string Title, string NarrationText, int EstimatedDurationSeconds, string RecommendedVisualStrategy);
 
 public interface IWeeklySkyForecastV2NarrativeAbstractionBuilder
 {
@@ -1352,6 +1357,13 @@ public interface IWeeklySkyForecastV2NarrativeAbstractionBuilder
         WeeklyCinematicStoryBlueprint cinematicBlueprint,
         WeeklyEditorialStoryPackage editorialPackage,
         WeeklySkyForecastV2IntelligenceResponse intelligence,
+        CancellationToken cancellationToken);
+}
+public interface IWeeklySkyForecastV2NarrationTextGenerator
+{
+    Task<WeeklyGeneratedNarrationPackage> GenerateAsync(
+        WeeklyNarrationPlan narrationPlan,
+        WeeklyNarrativeAbstractionPackage abstractionPackage,
         CancellationToken cancellationToken);
 }
 
