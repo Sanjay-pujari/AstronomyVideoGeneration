@@ -27,24 +27,24 @@ public sealed class WeeklySkyForecastFoundationTests
             {
                 Items =
                 [
-                    new RegionScheduleOptions { RegionId = "IN-RJ-UDAIPUR", DisplayName = "Udaipur", Latitude = 24.58, Longitude = 73.68, Timezone = "Asia/Kolkata", Language = "en" }
+                    new RegionScheduleOptions { RegionId = "INDIA-UDAIPUR", DisplayName = "Udaipur", Latitude = 24.58, Longitude = 73.68, Timezone = "Asia/Kolkata", Language = "en" }
                 ]
             }
         });
         var sidecar = new StubSkyfieldSidecarClient();
-        var builder = new WeeklySkyForecastContextBuilder(scheduler, sidecar, NullLogger<WeeklySkyForecastContextBuilder>.Instance);
+        var builder = new WeeklySkyForecastContextBuilder(scheduler, new RegionResolutionService(scheduler), sidecar, NullLogger<WeeklySkyForecastContextBuilder>.Instance);
 
         var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", inputRegionId, "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
 
-        Assert.Equal("IN-RJ-UDAIPUR", context.RegionId);
-        Assert.Equal("IN-RJ-UDAIPUR", sidecar.LastRequest!.RegionId);
+        Assert.Equal("INDIA-UDAIPUR", context.RegionId);
+        Assert.Equal("INDIA-UDAIPUR", sidecar.LastRequest!.RegionId);
     }
 
     [Fact]
     public async Task ContextBuilder_Unknown_Region_Returns_Clear_Validation_Error()
     {
         var scheduler = Options.Create(new SchedulerOptions { Regions = new RegionSchedulingOptions { Items = [] } });
-        var builder = new WeeklySkyForecastContextBuilder(scheduler, new StubSkyfieldSidecarClient(), NullLogger<WeeklySkyForecastContextBuilder>.Instance);
+        var builder = new WeeklySkyForecastContextBuilder(scheduler, new RegionResolutionService(scheduler), new StubSkyfieldSidecarClient(), NullLogger<WeeklySkyForecastContextBuilder>.Instance);
 
         var ex = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "in-rj-udaipur", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None));
@@ -71,7 +71,7 @@ public sealed class WeeklySkyForecastFoundationTests
         });
         var sidecar = new StubSkyfieldSidecarClient();
         var logger = new TestLogger<WeeklySkyForecastContextBuilder>();
-        var builder = new WeeklySkyForecastContextBuilder(scheduler, sidecar, logger);
+        var builder = new WeeklySkyForecastContextBuilder(scheduler, new RegionResolutionService(scheduler), sidecar, logger);
 
         var context = await builder.BuildAsync(new WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
 

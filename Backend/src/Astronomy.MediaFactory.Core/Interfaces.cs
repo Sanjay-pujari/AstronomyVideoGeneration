@@ -1002,6 +1002,20 @@ public sealed record WeeklySkyForecastMetadataSkeleton(IReadOnlyList<string> Tit
 public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, string Category, DateOnly WeekStartDate, DateOnly WeekEndDate, WeeklySkyForecastContext ContextSummary, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults, bool PublishingEnabled, bool AnalyticsEnabled);
 
 public interface IWeeklySkyForecastContextBuilder { Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken); }
+public interface IRegionResolutionService
+{
+    Task<RegionResolutionResult?> TryResolveAsync(string regionId, string? regionName, CancellationToken cancellationToken);
+}
+
+public sealed record RegionResolutionResult(
+    string CanonicalRegionId,
+    string RequestedRegionId,
+    string LocationName,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    IReadOnlyList<string> Aliases,
+    string OutputFolderRegionSegment);
 public interface IWeeklySkyForecastSegmentPlanner { Task<WeeklySkyForecastSegmentPlan> BuildAsync(WeeklySkyForecastContext context, CancellationToken cancellationToken); }
 public interface IWeeklySkyForecastSscScenePlanner { Task<WeeklySkyForecastSscScenePlan> BuildAsync(WeeklySkyForecastContext context, WeeklySkyForecastSegmentPlan segmentPlan, CancellationToken cancellationToken); }
 public interface ICategoryOutputPathResolver { CategoryOutputPaths Resolve(string categoryName, DateOnly date, string regionId, Guid pipelineRunId); }
