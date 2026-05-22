@@ -43,6 +43,8 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
         var context = await contextBuilder.BuildAsync(weeklyRequest, cancellationToken);
         var segmentPlan = await segmentPlanner.BuildAsync(context, cancellationToken);
         var weeklyScenePlan = await scenePlanner.BuildAsync(context, segmentPlan, cancellationToken);
+        if (!request.AllowExtraScenes && weeklyScenePlan.Scenes.Count > 5)
+            throw new InvalidOperationException($"WeeklySkyForecast visual planning generated {weeklyScenePlan.Scenes.Count} scenes. Maximum allowed is 5 unless allowExtraScenes=true.");
         var outputPaths = pathResolver.Resolve("WeeklySkyForecast", context.WeekStartDate, context.RegionId, contentGenerationPlanId);
         var canonicalSscScriptsDirectory = Path.Combine(stellariumOptions.Value.ScriptsDirectory, "content-plans", contentGenerationPlanId.ToString());
         var canonicalStellariumCapturesDirectory = Path.Combine(stellariumOptions.Value.CaptureDirectory, "content-plans", contentGenerationPlanId.ToString(), "stellarium-scenes");
@@ -103,26 +105,43 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
         var narrationBySegment = narrationManifest?.Segments.ToDictionary(x => x.SegmentCode, StringComparer.OrdinalIgnoreCase)
             ?? new Dictionary<string, WeeklyNarrationSegment>(StringComparer.OrdinalIgnoreCase);
 
-        var visualAssetManifest = new List<WeeklySkyForecastVisualAssetManifestItem>();
-        foreach (var scene in weeklyScenePlan.Scenes)
+        var segmentVisualMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            var audioPath = narrationBySegment.TryGetValue(scene.LinkedSegmentCode, out var narration)
+            ["WeeklyIntro"] = "WeeklyIntroWideSky",
+            ["MoonPhaseForecast"] = "BestMoonNight",
+            ["BestPlanets"] = "BestPlanetOfWeek",
+            ["RecommendedNights"] = "BestObservationNightWide",
+            ["WeeklyHighlights"] = "BestObservationNightWide",
+            ["AstroPhotographyTip"] = "BestObservationNightWide",
+            ["WeeklyOutro"] = "WeeklyIntroWideSky"
+        };
+        var allSegments = segmentPlan.LongSegments.Concat(segmentPlan.ShortSegments).ToList();
+        var visualAssetManifest = new List<WeeklySkyForecastVisualAssetManifestItem>();
+        foreach (var segment in allSegments)
+        {
+            if (!segmentVisualMap.TryGetValue(segment.SegmentCode, out var sceneCode))
+                sceneCode = segment.SuggestedSceneType;
+            var scene = weeklyScenePlan.Scenes.FirstOrDefault(x => x.SceneCode.Equals(sceneCode, StringComparison.OrdinalIgnoreCase));
+            if (scene is null)
+            {
+                warnings.Add($"Segment '{segment.SegmentCode}' has no visual mapping.");
+                continue;
+            }
+
+            var audioPath = narrationBySegment.TryGetValue(segment.SegmentCode, out var narration)
                 ? Path.Combine(outputPaths.NarrationDirectory, narration.OutputFileName)
                 : string.Empty;
             var script = scriptResults.First(x => x.SceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase));
             var image = images.First(x => x.SceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase));
-            visualAssetManifest.Add(new(scene.LinkedSegmentCode, audioPath, scene.SceneCode, script.ScriptPath, image.ImagePath, scene.OutputRole, scene.TargetObjectCode, scene.CaptureTimeUtc));
+            var reuseAllowed = !scene.IsThumbnailCandidate;
+            visualAssetManifest.Add(new(segment.SegmentCode, audioPath, scene.SceneCode, script.ScriptPath, image.ImagePath, reuseAllowed, segment.NarrationPurpose, scene.OutputRole, scene.TargetObjectCode, scene.CaptureTimeUtc));
         }
 
-        foreach (var group in weeklyScenePlan.Scenes.GroupBy(x => new { x.TargetObjectCode, x.CaptureTimeUtc, x.FieldOfViewDegrees, x.OutputRole }))
+        foreach (var group in weeklyScenePlan.Scenes.GroupBy(x => new { x.TargetObjectCode, x.CaptureTimeUtc, x.FieldOfViewDegrees }))
         {
             if (group.Count() < 2)
                 continue;
-            var segmentCodes = group.Select(x => x.LinkedSegmentCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            if (segmentCodes.Count > 1)
-                warnings.Add($"Duplicate scene signature for target={group.Key.TargetObjectCode ?? "NONE"}, captureTimeUtc={group.Key.CaptureTimeUtc:O}, fov={group.Key.FieldOfViewDegrees}, outputRole={group.Key.OutputRole}; allowed because linked segments differ ({string.Join(",", segmentCodes)}).");
-            else
-                warnings.Add($"Potential duplicate scene detected for linked segment '{segmentCodes[0]}': target={group.Key.TargetObjectCode ?? "NONE"}, captureTimeUtc={group.Key.CaptureTimeUtc:O}, fov={group.Key.FieldOfViewDegrees}, outputRole={group.Key.OutputRole}.");
+            warnings.Add($"Duplicate scene signature: target={group.Key.TargetObjectCode ?? "NONE"}, captureTimeUtc={group.Key.CaptureTimeUtc:O}, fov={group.Key.FieldOfViewDegrees}.");
         }
 
         var manifestPath = Path.Combine(outputPaths.ManifestsDirectory, "weekly-visual-assets-manifest.json");

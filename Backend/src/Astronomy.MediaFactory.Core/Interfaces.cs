@@ -1080,7 +1080,8 @@ public sealed record WeeklySkyForecastVisualAssetsGenerateRequest(
     bool DryRun = false,
     bool OverwriteExisting = true,
     bool CaptureStellariumScenes = true,
-    bool Diagnostics = true);
+    bool Diagnostics = true,
+    bool AllowExtraScenes = false);
 
 public sealed record WeeklySkyForecastVisualAssetScriptResult(
     string SceneCode,
@@ -1095,6 +1096,8 @@ public sealed record WeeklySkyForecastVisualAssetManifestItem(
     string SceneCode,
     string SscScriptPath,
     string CapturedImagePath,
+    bool ReuseAllowed,
+    string VisualPurpose,
     string OutputRole,
     string? TargetObjectCode,
     DateTime CaptureTimeUtc);
