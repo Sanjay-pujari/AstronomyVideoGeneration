@@ -429,6 +429,19 @@ app.MapGet("/api/content-planning/plans/{id:guid}/daily-skyguide-composition-pla
     }
 });
 
+
+app.MapPost("/api/content-planning/plans/{id:guid}/generate-preview-video", async (Guid id, AssetAwarePreviewVideoRequest request, IDailySkyGuidePreviewVideoGenerator generator, CancellationToken ct) =>
+{
+    var response = await generator.GenerateAsync(id, request, ct);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
+app.MapGet("/api/content-planning/plans/{id:guid}/preview-video-info", async (Guid id, IDailySkyGuidePreviewVideoGenerator generator, CancellationToken ct) =>
+{
+    var response = await generator.GetPreviewInfoAsync(id, ct);
+    return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+});
+
 app.MapPost("/api/content-planning/plans/{id:guid}/prepare-manual-run", async (Guid id, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
