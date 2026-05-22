@@ -1005,9 +1005,9 @@ public sealed record WeeklySkyForecastSegmentPlanItem(string SegmentCode, string
 public sealed record WeeklySkyForecastSegmentPlan(IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments);
 public sealed record WeeklySkyForecastNarrationPlanItem(string SegmentCode, string NarrationStyle, string NarrationTone, int EstimatedWords, int EstimatedDurationSeconds, double NarrationPriority);
 public sealed record WeeklySkyForecastNarrationPlan(IReadOnlyList<WeeklySkyForecastNarrationPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastNarrationPlanItem> ShortSegments);
-public sealed record WeeklyNarrationSegment(string SegmentCode, string SegmentType, string NarrationText, int EstimatedDurationSeconds, string Language, string VoiceStyle, string OutputFileName);
+public sealed record WeeklyNarrationAudioSegment(string SegmentCode, string SegmentType, string NarrationText, int EstimatedDurationSeconds, string Language, string VoiceStyle, string OutputFileName);
 public sealed record WeeklyNarrationManifest(
-    IReadOnlyList<WeeklyNarrationSegment> Segments,
+    IReadOnlyList<WeeklyNarrationAudioSegment> Segments,
     DateTime GeneratedUtc,
     string Language,
     int EstimatedTotalRuntimeSeconds,
