@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -68,6 +69,14 @@ public sealed class WeeklySkyForecastContextBuilder(
         var bestMoonNight = response.BestMoonNight is not null
             ? DateOnly.Parse(response.BestMoonNight.Date)
             : highlights.FirstOrDefault(x => x.HighlightType.Equals("best_moon_night", StringComparison.OrdinalIgnoreCase))?.Date;
+        if (bestMoonNight is not null)
+        {
+            highlights = highlights
+                .Where(x => !x.HighlightType.Equals("best_moon_night", StringComparison.OrdinalIgnoreCase))
+                .Append(new WeeklySkyForecastHighlightItem(2, "best_moon_night", "Best moon night", "Strong moon presentation for visual observation.", bestMoonNight.Value, response.BestMoonNight?.BestStartUtc, "Moon", response.BestMoonNight?.Score ?? 0, "moon_closeup"))
+                .OrderBy(x => x.Order)
+                .ToList();
+        }
         var bestPhotoNight = daily.OrderByDescending(d => d.VisibleObjects.MaxBy(o => o.PhotographyScore)?.PhotographyScore ?? 0).Select(d => (DateOnly?)d.Date).FirstOrDefault();
 
         return new(resolution.CanonicalRegionId, response.LocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
@@ -141,16 +150,21 @@ public sealed class WeeklySkyForecastSscScenePlanner(ILogger<WeeklySkyForecastSs
             return context.DailyForecasts.FirstOrDefault(x => x.Date == sceneTargetDate)?.BestViewingStartUtc ?? DateTime.UtcNow;
         }
         var moonDate = context.BestMoonNight ?? targetDate;
-        var summaryDate = bestNightByDate.ContainsKey(context.WeekEndDate) ? context.WeekEndDate : targetDate;
+        var moonNight = bestNightByDate.GetValueOrDefault(moonDate);
+        var planetDate = context.DailyForecasts
+            .FirstOrDefault(x => x.VisibleObjects.Any(o => o.Visible && o.ObjectCode.Equals(context.BestPlanetOfWeek ?? string.Empty, StringComparison.OrdinalIgnoreCase)))?.Date
+            ?? targetDate;
+        var summaryDate = targetDate;
+        var recommendedDate = targetDate;
         var scenes = new List<WeeklySkyForecastSscScenePlanItem>
         {
             new("WeeklyIntroWideSky", "WideSky", null, ResolveCapture(context.WeekStartDate, null, true), context.WeekStartDate, 90, "long", false, "WeeklyIntro"),
-            new("BestMoonNight", "Moon", "Moon", ResolveCapture(moonDate, "Moon", false), moonDate, 45, "both", false, "MoonPhaseForecast"),
-            new("BestPlanetOfWeek", "Planet", context.BestPlanetOfWeek, ResolveCapture(targetDate, context.BestPlanetOfWeek, false), targetDate, 35, "both", false, "BestPlanets"),
-            new("RecommendedObservationNight", "Night", bestObject, ResolveCapture(targetDate, bestObject, false), targetDate, 60, "both", false, "RecommendedNights"),
-            new("WeeklyHighlight", "Highlight", context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, ResolveCapture(targetDate, context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, false), targetDate, 50, "both", false, "WeeklyHighlights"),
+            new("BestMoonNight", "Moon", "Moon", moonNight?.BestStartUtc ?? ResolveCapture(moonDate, "Moon", false), moonDate, 45, "both", false, "MoonPhaseForecast"),
+            new("BestPlanetOfWeek", "Planet", context.BestPlanetOfWeek, ResolveCapture(planetDate, context.BestPlanetOfWeek, false), planetDate, 35, "both", false, "BestPlanets"),
+            new("RecommendedObservationNight", "Night", bestObject, ResolveCapture(recommendedDate, bestObject, false), recommendedDate, 60, "both", false, "RecommendedNights"),
+            new("WeeklyHighlight", "Highlight", context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, ResolveCapture(recommendedDate, context.WeeklyHighlights.FirstOrDefault()?.ObjectCode, false), recommendedDate, 50, "both", false, "WeeklyHighlights"),
             new("WeeklySummaryMap", "Summary", null, ResolveCapture(summaryDate, null, true), summaryDate, 95, "long", false, "WeeklyOutro"),
-            new("ThumbnailCandidate", "Thumbnail", thumb, ResolveCapture(targetDate, thumb, false), targetDate, 30, "thumbnail", true, "BiggestWeeklyHighlight")
+            new("ThumbnailCandidate", "Thumbnail", thumb, ResolveCapture(recommendedDate, thumb, false), recommendedDate, 30, "thumbnail", true, "BiggestWeeklyHighlight")
         };
 
         foreach (var scene in scenes)
@@ -204,21 +218,55 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(IContentPlanningSer
     public async Task<WeeklySkyForecastPreparationResponse> RunAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken)
     {
         var steps = new List<CategoryProductionStepResult>();
+        var stopwatch = Stopwatch.StartNew();
         var plan = await planning.GenerateDailyPlanAsync("WeeklySkyForecast", request.Language, request.RegionId, request.ScheduledUtc, null, cancellationToken);
-        steps.Add(Step("BuildContentGenerationPlan"));
+        steps.Add(Step("BuildContentGenerationPlan", stopwatch.ElapsedMilliseconds));
+        stopwatch.Restart();
         var context = await contextBuilder.BuildAsync(request, cancellationToken);
-        steps.Add(Step("BuildWeeklyAstronomyContext"));
+        steps.Add(Step("BuildWeeklyAstronomyContext", stopwatch.ElapsedMilliseconds));
+        stopwatch.Restart();
         var segmentPlan = await segmentPlanner.BuildAsync(context, cancellationToken);
-        steps.Add(Step("GenerateSegmentPlans"));
+        steps.Add(Step("GenerateSegmentPlans", stopwatch.ElapsedMilliseconds));
+        stopwatch.Restart();
         var scenes = await scenePlanner.BuildAsync(context, segmentPlan, cancellationToken);
-        steps.Add(Step("GenerateSscScenePlan"));
+        steps.Add(Step("GenerateSscScenePlan", stopwatch.ElapsedMilliseconds));
+        stopwatch.Restart();
         var outputPaths = pathResolver.Resolve("WeeklySkyForecast", context.WeekStartDate, context.RegionId, plan.Id);
-        steps.Add(Step("BuildOutputPaths"));
+        steps.Add(Step("BuildOutputPaths", stopwatch.ElapsedMilliseconds));
+        stopwatch.Restart();
         var metadata = await metadataBuilder.BuildAsync(context, segmentPlan, cancellationToken);
-        steps.Add(Step("BuildMetadataSkeleton"));
+        steps.Add(Step("BuildMetadataSkeleton", stopwatch.ElapsedMilliseconds));
         var warnings = context.Warnings.Concat(["Publishing disabled by policy.", "Analytics disabled by policy."]).Distinct().ToList();
-        return new(plan.Id, "WeeklySkyForecast", context.WeekStartDate, context.WeekEndDate, context, segmentPlan.LongSegments, segmentPlan.ShortSegments, scenes.Scenes, outputPaths, metadata, warnings, steps, false, false);
+        var validationWarnings = new List<string>();
+        foreach (var scene in scenes.Scenes)
+        {
+            var localDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(scene.CaptureTimeUtc.ToUniversalTime(), ResolveTimeZoneOrUtc(context.Timezone)));
+            if (localDate != scene.TargetDate)
+                validationWarnings.Add($"Scene timing mismatch for {scene.SceneCode}: targetDate={scene.TargetDate:yyyy-MM-dd} localCaptureDate={localDate:yyyy-MM-dd}.");
+        }
+        var errors = new List<string>();
+        if (segmentPlan.LongSegments.Count < 6) errors.Add("longSegments must be >= 6.");
+        if (segmentPlan.ShortSegments.Count < 3) errors.Add("shortSegments must be >= 3.");
+        if (scenes.Scenes.Count < 5) errors.Add("sscScenes must be >= 5.");
+        if (context.DailyForecasts.Count == 0) errors.Add("weekly context missing.");
+        if (metadata.TitleCandidates.Count == 0) errors.Add("metadata skeleton missing.");
+        if (string.IsNullOrWhiteSpace(outputPaths.RootDirectory)) errors.Add("output paths missing.");
+        if (validationWarnings.Count > 0) errors.Add("scene timing mismatch detected.");
+        var preparationValidation = new WeeklySkyForecastPreparationValidation(errors.Count == 0, errors, validationWarnings, segmentPlan.LongSegments.Count, segmentPlan.ShortSegments.Count, scenes.Scenes.Count, context.DailyForecasts.Count > 0, metadata.TitleCandidates.Count > 0, !string.IsNullOrWhiteSpace(outputPaths.RootDirectory));
+        var debugSummary = new WeeklyForecastDebugSummary(context.RegionId, request.RegionId, "/forecast/weekly-sky", context.DailyForecasts.Count, context.DailyForecasts.Sum(x => x.VisibleObjects.Count), context.RecommendedNights.Count, context.WeeklyHighlights.Count, context.BestPlanetOfWeek, context.BestMoonNight, context.BestPhotographyNight);
+        return new(plan.Id, "WeeklySkyForecast", context.WeekStartDate, context.WeekEndDate, context, segmentPlan.LongSegments, segmentPlan.ShortSegments, scenes.Scenes, outputPaths, metadata, preparationValidation, debugSummary, warnings, steps, false, false);
     }
 
-    private static CategoryProductionStepResult Step(string name) => new(name, "Completed", DateTime.UtcNow, DateTime.UtcNow, 0, null, null, []);
+    private static CategoryProductionStepResult Step(string name, long durationMs)
+    {
+        var started = DateTime.UtcNow.AddMilliseconds(-Math.Max(1, durationMs));
+        var ended = DateTime.UtcNow;
+        return new(name, "Completed", started, ended, Math.Max(1, durationMs), null, null, []);
+    }
+
+    private static TimeZoneInfo ResolveTimeZoneOrUtc(string timezone)
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById(timezone); }
+        catch { return TimeZoneInfo.Utc; }
+    }
 }
