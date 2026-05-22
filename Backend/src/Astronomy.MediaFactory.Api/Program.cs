@@ -425,6 +425,23 @@ app.MapGet("/api/content-planning/plans/{id:guid}/stellarium-capture-diagnostics
     var response = await executor.GetDiagnosticsAsync(id, ct);
     return Results.Ok(response);
 });
+
+app.MapPost("/api/content-planning/weekly-skyforecast/{contentGenerationPlanId:guid}/generate-visual-assets", async (Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, IWeeklySkyForecastVisualAssetGenerationService service, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await service.GenerateAsync(contentGenerationPlanId, request, ct));
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapGet("/api/content-planning/plans/{id:guid}/asset-aware-manual-run-package", async (Guid id, IAssetAwareManualRunPreparationService preparation, CancellationToken ct) =>
 {
     try

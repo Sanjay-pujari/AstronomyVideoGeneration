@@ -1060,6 +1060,43 @@ public interface ICategoryOutputPathResolver { CategoryOutputPaths Resolve(strin
 public interface IWeeklySkyForecastMetadataBuilder { Task<WeeklySkyForecastMetadataSkeleton> BuildAsync(WeeklySkyForecastContext context, WeeklySkyForecastSegmentPlan segmentPlan, CancellationToken cancellationToken); }
 public interface IWeeklySkyForecastPreparationOrchestrator { Task<WeeklySkyForecastPreparationResponse> RunAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken); }
 
+public sealed record WeeklySkyForecastVisualAssetsGenerateRequest(
+    bool DryRun = false,
+    bool OverwriteExisting = true,
+    bool CaptureStellariumScenes = true,
+    bool Diagnostics = true);
+
+public sealed record WeeklySkyForecastVisualAssetScriptResult(
+    string SceneCode,
+    string ScriptPath,
+    string ExpectedImagePath,
+    bool Success,
+    string? ErrorMessage);
+
+public sealed record WeeklySkyForecastVisualAssetImageResult(
+    string SceneCode,
+    string ImagePath,
+    bool Exists,
+    string OutputRole,
+    string LinkedSegmentCode,
+    string? TargetObjectCode);
+
+public sealed record WeeklySkyForecastVisualAssetsResponse(
+    Guid ContentGenerationPlanId,
+    bool Success,
+    int ScriptCount,
+    int CapturedImageCount,
+    IReadOnlyList<WeeklySkyForecastVisualAssetScriptResult> Scripts,
+    IReadOnlyList<WeeklySkyForecastVisualAssetImageResult> Images,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<CategoryProductionStepResult> StepResults);
+
+public interface IWeeklySkyForecastVisualAssetGenerationService
+{
+    Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, CancellationToken cancellationToken);
+}
+
 public interface ICategoryProductionRunner
 {
     Task<CategoryProductionPreviewResponse> RunAsync(CategoryProductionPreviewRequest request, CancellationToken cancellationToken);
