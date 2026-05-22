@@ -42,6 +42,25 @@ public sealed class DailySkyGuidePreviewVideoGeneratorTests
         Assert.Equal(before, db.ChangeTracker.Entries().Count());
     }
 
+    [Fact]
+    public async Task PreviewInfo_UsesCaptureDirectory_WhenStellariumOutputRootIsDefault()
+    {
+        await using var db = BuildDb();
+        var planId = Guid.NewGuid();
+        db.ContentGenerationPlans.Add(new ContentGenerationPlan { Id = planId, ContentCategoryCode = "DailySkyGuide", Language = "en", RegionId = "r" });
+        await db.SaveChangesAsync();
+
+        var captureDirectory = Path.Combine(Path.GetTempPath(), "stellarium-captures");
+        var generator = new DailySkyGuidePreviewVideoGenerator(
+            db,
+            new FakePlanner(planId),
+            new FakeComposer(),
+            Options.Create(new StellariumOptions { OutputRoot = "outputs/content-plans", CaptureDirectory = captureDirectory }));
+
+        var info = await generator.GetPreviewInfoAsync(planId, CancellationToken.None);
+        Assert.StartsWith(Path.Combine(captureDirectory, "content-plans", planId.ToString("D"), "preview-videos"), info.OutputFolder, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static DailySkyGuidePreviewVideoGenerator BuildGenerator(MediaFactoryDbContext db, IDailySkyGuideAssetAwareCompositionPlanner planner)
         => new(db, planner, new FakeComposer(), Options.Create(new StellariumOptions { OutputRoot = Path.GetTempPath(), CaptureDirectory = Path.GetTempPath() }));
 
@@ -55,11 +74,13 @@ public sealed class DailySkyGuidePreviewVideoGeneratorTests
 
     private sealed class FakeComposer : IAssetAwarePreviewVideoComposer
     {
-        public Task<string?> ComposeAsync(AssetAwareVideoCompositionPlan plan, AssetAwarePreviewVideoRequest request, string outputVideoPath, CancellationToken cancellationToken)
+        public Task<AssetAwarePreviewVideoComposeResult> ComposeAsync(AssetAwareVideoCompositionPlan plan, AssetAwarePreviewVideoRequest request, string outputVideoPath, CancellationToken cancellationToken)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(outputVideoPath)!);
             File.WriteAllText(outputVideoPath, "x");
-            return Task.FromResult<string?>(outputVideoPath);
+            var thumbnailPath = Path.Combine(Path.GetDirectoryName(outputVideoPath)!, "daily-skyguide-preview-thumbnail.png");
+            File.WriteAllText(thumbnailPath, "x");
+            return Task.FromResult(new AssetAwarePreviewVideoComposeResult(outputVideoPath, thumbnailPath, "ffmpeg ...", 0, string.Empty, string.Empty, "ffmpeg"));
         }
     }
 

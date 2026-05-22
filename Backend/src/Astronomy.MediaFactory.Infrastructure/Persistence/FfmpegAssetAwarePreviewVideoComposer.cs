@@ -12,14 +12,17 @@ public sealed class FfmpegAssetAwarePreviewVideoComposer(
 {
     private readonly RenderingOptions _rendering = renderingOptions.Value;
 
-    public async Task<string?> ComposeAsync(AssetAwareVideoCompositionPlan plan, AssetAwarePreviewVideoRequest request, string outputVideoPath, CancellationToken cancellationToken)
+    public async Task<AssetAwarePreviewVideoComposeResult> ComposeAsync(AssetAwareVideoCompositionPlan plan, AssetAwarePreviewVideoRequest request, string outputVideoPath, CancellationToken cancellationToken)
     {
         var dir = Path.GetDirectoryName(outputVideoPath)!;
         Directory.CreateDirectory(dir);
         var segments = plan.Segments.Where(x => x.ImageExists && !string.IsNullOrWhiteSpace(x.ImagePath)).OrderBy(x => x.SortOrder).ToList();
-        if (segments.Count == 0) return null;
+        if (segments.Count == 0)
+            return new(null, null, null, null, "No valid image segments found.", null, _rendering.FfmpegPath);
 
         var segmentFiles = new List<string>();
+        string? lastArgs = null;
+        ProcessExecutionResult? lastResult = null;
         for (var i = 0; i < segments.Count; i++)
         {
             var s = segments[i];
@@ -30,20 +33,28 @@ public sealed class FfmpegAssetAwarePreviewVideoComposer(
             if (request.IncludeTransitions)
                 filter += $",fade=t=in:st=0:d=0.5,fade=t=out:st={fadeOutStart}:d=0.5";
             var args = $"-y -loop 1 -i \"{s.ImagePath}\" -vf \"{filter}\" -t {duration} -r 25 -pix_fmt yuv420p -an \"{segPath}\"";
+            lastArgs = args;
             var result = await processRunner.ExecuteAsync(_rendering.FfmpegPath, args, cancellationToken, TimeSpan.FromSeconds(_rendering.FfmpegSegmentTimeoutSeconds));
-            if (result.ExitCode != 0 || !File.Exists(segPath)) return null;
+            lastResult = result;
+            if (result.ExitCode != 0 || !File.Exists(segPath) || new FileInfo(segPath).Length <= 0)
+                return new(outputVideoPath, null, args, result.ExitCode, result.StandardError, result.StandardOutput, _rendering.FfmpegPath);
             segmentFiles.Add(segPath);
         }
 
         var concatFile = Path.Combine(dir, "preview-concat.txt");
         await File.WriteAllLinesAsync(concatFile, segmentFiles.Select(x => $"file '{x.Replace("'", "''")}'"), cancellationToken);
         var concatArgs = $"-y -f concat -safe 0 -i \"{concatFile}\" -c copy \"{outputVideoPath}\"";
+        lastArgs = concatArgs;
         var concatResult = await processRunner.ExecuteAsync(_rendering.FfmpegPath, concatArgs, cancellationToken, TimeSpan.FromSeconds(_rendering.FfmpegTimeoutSeconds));
-        if (concatResult.ExitCode != 0 || !File.Exists(outputVideoPath)) return null;
+        lastResult = concatResult;
+        if (concatResult.ExitCode != 0 || !File.Exists(outputVideoPath) || new FileInfo(outputVideoPath).Length <= 0)
+            return new(outputVideoPath, null, concatArgs, concatResult.ExitCode, concatResult.StandardError, concatResult.StandardOutput, _rendering.FfmpegPath);
 
         var thumbnailPath = Path.Combine(dir, "daily-skyguide-preview-thumbnail.png");
         var thumbArgs = $"-y -i \"{outputVideoPath}\" -vf \"select=eq(n\\,0)\" -vframes 1 \"{thumbnailPath}\"";
-        await processRunner.ExecuteAsync(_rendering.FfmpegPath, thumbArgs, cancellationToken, TimeSpan.FromSeconds(30));
-        return outputVideoPath;
+        lastArgs = thumbArgs;
+        var thumbResult = await processRunner.ExecuteAsync(_rendering.FfmpegPath, thumbArgs, cancellationToken, TimeSpan.FromSeconds(30));
+        lastResult = thumbResult;
+        return new(outputVideoPath, thumbnailPath, lastArgs, lastResult.ExitCode, lastResult.StandardError, lastResult.StandardOutput, _rendering.FfmpegPath);
     }
 }

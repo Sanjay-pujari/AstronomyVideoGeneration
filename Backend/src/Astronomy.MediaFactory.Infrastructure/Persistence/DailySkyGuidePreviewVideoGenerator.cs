@@ -25,15 +25,43 @@ public sealed class DailySkyGuidePreviewVideoGenerator(
             return preview;
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(preview.OutputVideoPath)!);
         var plan = await planner.BuildAsync(contentGenerationPlanId, cancellationToken);
         var composed = await composer.ComposeAsync(plan, request, preview.OutputVideoPath, cancellationToken);
-        if (string.IsNullOrWhiteSpace(composed) || !File.Exists(composed))
+        var outputPath = composed.OutputVideoPath ?? preview.OutputVideoPath;
+        var outputExists = !string.IsNullOrWhiteSpace(outputPath) && File.Exists(outputPath) && new FileInfo(outputPath).Length > 0;
+        var thumbnailExists = !string.IsNullOrWhiteSpace(composed.ThumbnailPath) && File.Exists(composed.ThumbnailPath) && new FileInfo(composed.ThumbnailPath).Length > 0;
+
+        if (!outputExists)
         {
-            return preview with { Success = false, ErrorMessage = "Preview composition failed.", OutputVideoPath = composed ?? preview.OutputVideoPath };
+            var ffmpegErrorSummary = string.IsNullOrWhiteSpace(composed.FfmpegStandardError)
+                ? "Preview composition failed."
+                : $"Preview composition failed: {composed.FfmpegStandardError.Trim()}";
+            return preview with
+            {
+                Success = false,
+                ErrorMessage = ffmpegErrorSummary,
+                OutputVideoPath = outputPath,
+                ThumbnailPath = composed.ThumbnailPath ?? preview.ThumbnailPath,
+                FfmpegCommandLine = request.Diagnostics ? composed.FfmpegCommandLine : null,
+                FfmpegExitCode = request.Diagnostics ? composed.FfmpegExitCode : null,
+                FfmpegStandardError = request.Diagnostics ? composed.FfmpegStandardError : null,
+                FfmpegStandardOutput = request.Diagnostics ? composed.FfmpegStandardOutput : null,
+                ResolvedFfmpegPath = request.Diagnostics ? composed.ResolvedFfmpegPath : null
+            };
         }
 
-        return preview with { Success = true, OutputVideoPath = composed };
+        return preview with
+        {
+            Success = true,
+            OutputVideoPath = outputPath,
+            ThumbnailPath = thumbnailExists ? composed.ThumbnailPath : preview.ThumbnailPath,
+            Warnings = thumbnailExists ? preview.Warnings : [.. preview.Warnings, "Preview thumbnail does not exist or is empty."],
+            FfmpegCommandLine = request.Diagnostics ? composed.FfmpegCommandLine : null,
+            FfmpegExitCode = request.Diagnostics ? composed.FfmpegExitCode : null,
+            FfmpegStandardError = request.Diagnostics ? composed.FfmpegStandardError : null,
+            FfmpegStandardOutput = request.Diagnostics ? composed.FfmpegStandardOutput : null,
+            ResolvedFfmpegPath = request.Diagnostics ? composed.ResolvedFfmpegPath : null
+        };
     }
 
     public Task<AssetAwarePreviewVideoResponse> GetPreviewInfoAsync(Guid contentGenerationPlanId, CancellationToken cancellationToken)
@@ -44,12 +72,12 @@ public sealed class DailySkyGuidePreviewVideoGenerator(
         var entity = await db.ContentGenerationPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Id == contentGenerationPlanId, cancellationToken);
         if (entity is null)
         {
-            return new(contentGenerationPlanId, false, null, null, 0, 0, [], ["Plan not found."], "Plan not found.");
+            return new(contentGenerationPlanId, false, null, null, 0, 0, [], ["Plan not found."], "Plan not found.", OutputFolder: ResolveOutputDirectory(contentGenerationPlanId));
         }
 
         if (!string.Equals(entity.ContentCategoryCode, "DailySkyGuide", StringComparison.OrdinalIgnoreCase))
         {
-            return new(contentGenerationPlanId, false, null, null, 0, 0, [], ["Plan category is not DailySkyGuide."], "Invalid category.");
+            return new(contentGenerationPlanId, false, null, null, 0, 0, [], ["Plan category is not DailySkyGuide."], "Invalid category.", OutputFolder: ResolveOutputDirectory(contentGenerationPlanId));
         }
 
         var plan = await planner.BuildAsync(contentGenerationPlanId, cancellationToken);
@@ -64,17 +92,18 @@ public sealed class DailySkyGuidePreviewVideoGenerator(
         var included = segments.Where(x => x.IncludedInVideo).ToList();
         if (included.Count == 0)
         {
-            return new(contentGenerationPlanId, false, outputVideoPath, thumbnailPath, 0, 0, segments, ["No valid image assets found."], "No valid image assets found.");
+            return new(contentGenerationPlanId, false, outputVideoPath, thumbnailPath, 0, 0, segments, ["No valid image assets found."], "No valid image assets found.", OutputFolder: outputDirectory);
         }
 
         var warnings = new List<string>(plan.Warnings);
         if (!File.Exists(outputVideoPath)) warnings.Add("Preview video does not exist yet.");
-        return new(contentGenerationPlanId, true, outputVideoPath, thumbnailPath, included.Count, included.Sum(x => x.DurationSeconds), segments, warnings, null);
+        return new(contentGenerationPlanId, true, outputVideoPath, thumbnailPath, included.Count, included.Sum(x => x.DurationSeconds), segments, warnings, null, OutputFolder: outputDirectory);
     }
 
     private string ResolveOutputDirectory(Guid planId)
     {
-        if (!string.IsNullOrWhiteSpace(_stellariumOptions.OutputRoot))
+        if (!string.IsNullOrWhiteSpace(_stellariumOptions.OutputRoot)
+            && !string.Equals(_stellariumOptions.OutputRoot.Replace('\\', '/').TrimEnd('/'), "outputs/content-plans", StringComparison.OrdinalIgnoreCase))
             return Path.Combine(_stellariumOptions.OutputRoot, planId.ToString("D"), "preview-videos");
         return Path.Combine(_stellariumOptions.CaptureDirectory, "content-plans", planId.ToString("D"), "preview-videos");
     }
