@@ -118,7 +118,7 @@ public sealed class FfmpegAssetAwarePreviewVideoComposer(
             {
                 Date = plan.TargetDate,
                 LocationName = plan.LocationName,
-                Localization = LocalizationContext.Resolve(plan.Language, null)
+                Localization = LocalizationResolver.Resolve(plan.Language, null)
             },
             Metadata = new OptimizedVideoMetadata
             {
