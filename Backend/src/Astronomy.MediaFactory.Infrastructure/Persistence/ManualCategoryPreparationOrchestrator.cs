@@ -122,8 +122,16 @@ public sealed class ManualCategoryPreparationOrchestrator(
         steps.Add(await ExecuteStepAsync("PipelineRequestPreview", async () =>
         {
             var preview = await planning.BuildPipelineRequestPreviewAsync(plan.Id, cancellationToken);
-            runPipelineRequest = preview.PipelineRequest with { PublishToYouTube = false };
-            return ("Pipeline request preview built.", null, preview.Warnings);
+            if (preview.PipelineRequest is RunPipelineRequest pipelineRequest)
+            {
+                runPipelineRequest = pipelineRequest with { PublishToYouTube = false };
+                return ("Pipeline request preview built.", null, preview.Warnings);
+            }
+
+            var pipelineWarnings = preview.Warnings
+                .Concat(["Pipeline request preview did not return a typed RunPipelineRequest."])
+                .ToArray();
+            return ("Pipeline request preview built without a runnable request.", null, pipelineWarnings);
         }));
 
         var success = steps.All(s => s.Status is "Completed" or "Skipped");
