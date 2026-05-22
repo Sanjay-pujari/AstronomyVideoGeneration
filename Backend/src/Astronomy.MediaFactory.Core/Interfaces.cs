@@ -999,7 +999,30 @@ public sealed record WeeklySkyForecastSscScenePlanItem(string SceneCode, string 
 public sealed record WeeklySkyForecastSscScenePlan(IReadOnlyList<WeeklySkyForecastSscScenePlanItem> Scenes);
 public sealed record CategoryOutputPaths(string RootDirectory, string NarrationDirectory, string ShortsDirectory, string ThumbnailsDirectory, string StellariumScenesDirectory, string StellariumScriptsDirectory, string ManifestsDirectory, string MetadataDirectory);
 public sealed record WeeklySkyForecastMetadataSkeleton(IReadOnlyList<string> TitleCandidates, IReadOnlyList<string> ShortTitleCandidates, string DescriptionSkeleton, IReadOnlyList<string> Tags, IReadOnlyList<string> Hashtags, IReadOnlyList<string> KeyObjects, IReadOnlyList<string> KeyDates, string WeekRange, string RegionName, string Language);
-public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, string Category, DateOnly WeekStartDate, DateOnly WeekEndDate, WeeklySkyForecastContext ContextSummary, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults, bool PublishingEnabled, bool AnalyticsEnabled);
+public sealed record WeeklySkyForecastPreparationValidation(
+    bool IsValid,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<string> Warnings,
+    int LongSegmentCount,
+    int ShortSegmentCount,
+    int SscSceneCount,
+    bool HasWeeklyContext,
+    bool HasMetadataSkeleton,
+    bool HasOutputPaths);
+
+public sealed record WeeklyForecastDebugSummary(
+    string ResolvedRegionId,
+    string RequestedRegionId,
+    string SkyfieldEndpoint,
+    int SkyfieldDaysReturned,
+    int VisibleObjectCount,
+    int RecommendedNightCount,
+    int WeeklyHighlightCount,
+    string? BestPlanetOfWeek,
+    DateOnly? BestMoonNight,
+    DateOnly? BestPhotographyNight);
+
+public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, string Category, DateOnly WeekStartDate, DateOnly WeekEndDate, WeeklySkyForecastContext ContextSummary, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, WeeklySkyForecastPreparationValidation PreparationValidation, WeeklyForecastDebugSummary DebugSummary, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults, bool PublishingEnabled, bool AnalyticsEnabled);
 
 public interface IWeeklySkyForecastContextBuilder { Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken); }
 public interface IRegionResolutionService
