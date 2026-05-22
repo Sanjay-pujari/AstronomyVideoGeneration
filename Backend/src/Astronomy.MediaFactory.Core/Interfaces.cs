@@ -874,6 +874,7 @@ public sealed record CategoryProductionPreviewResponse(
     bool PublishToYouTube,
     bool PublishToFacebook,
     bool PublishToInstagram,
+    bool AnalyticsEnabled,
     string? LongAudioPath,
     string? ShortAudioPath,
     string? LongVideoPath,
@@ -883,7 +884,8 @@ public sealed record CategoryProductionPreviewResponse(
     object? Metadata,
     IReadOnlyList<CategoryProductionStepResult> Steps,
     IReadOnlyList<string> Warnings,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    RunPipelineRequest? RunPipelineRequest);
 
 public interface ICategoryProductionPipelineStrategy
 {

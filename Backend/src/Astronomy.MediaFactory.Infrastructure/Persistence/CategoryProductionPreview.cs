@@ -2,6 +2,7 @@ using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -21,13 +22,14 @@ public sealed class CategoryProductionRunner(IEnumerable<ICategoryProductionPipe
     }
 
     private static CategoryProductionPreviewResponse Failed(string? category, string message) =>
-        new(null, category ?? string.Empty, false, false, false, false, false, null, null, null, null, null, null, null, [], [], message);
+        new(null, category ?? string.Empty, false, false, false, false, false, false, null, null, null, null, null, null, null, [], [], message, null);
 }
 
 public sealed class DailySkyGuideProductionPipelineStrategy(
     IContentPlanningService planning,
     PipelineOrchestrator orchestrator,
     IPipelineRepository repository,
+    IOptions<SchedulerOptions> schedulerOptions,
     ILogger<DailySkyGuideProductionPipelineStrategy> logger) : ICategoryProductionPipelineStrategy
 {
     public string ContentCategoryCode => "DailySkyGuide";
@@ -35,7 +37,12 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
     public async Task<CategoryProductionPreviewResponse> RunAsync(CategoryProductionPreviewRequest request, CancellationToken cancellationToken)
     {
         var steps = new List<CategoryProductionStepResult>();
-        var warnings = new List<string> { "Publishing is disabled by policy for category production preview." };
+        var warnings = new List<string>
+        {
+            "Publishing is disabled by policy for category production preview.",
+            "Publishing and analytics disabled for category production preview."
+        };
+        logger.LogInformation("Publishing and analytics disabled for category production preview.");
         ContentGenerationPlan? plan = null;
         RunPipelineRequest? runRequest = null;
         PipelineRun? run = null;
@@ -43,10 +50,22 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
         steps.Add(await ExecuteStepAsync("BuildRunPipelineRequest", async () =>
         {
             plan = await planning.GenerateDailyPlanAsync(request.ContentCategoryCode, request.Language, request.RegionId, new DateTimeOffset(request.ScheduledUtc, TimeSpan.Zero), request.PrimaryCelestialObjectCode, cancellationToken);
-            var preview = await planning.BuildPipelineRequestPreviewAsync(plan.Id, cancellationToken);
-            runRequest = (preview.PipelineRequest as RunPipelineRequest) ?? throw new InvalidOperationException("Failed to build typed RunPipelineRequest.");
-            runRequest = runRequest with { PublishToYouTube = false };
-            return ("RunPipelineRequest built.", (string?)null, preview.Warnings);
+            var scheduledDate = DateOnly.FromDateTime(request.ScheduledUtc.Date);
+            var region = schedulerOptions.Value.Regions.Items.FirstOrDefault(x => string.Equals(x.RegionId, request.RegionId, StringComparison.OrdinalIgnoreCase));
+            var locationName = region?.DisplayName?.Split(",", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
+                ?? (!string.IsNullOrWhiteSpace(request.RegionName) ? request.RegionName : request.RegionId);
+            runRequest = new RunPipelineRequest(
+                scheduledDate,
+                ContentType.DailySkyGuide,
+                locationName,
+                TimeZone: region?.Timezone ?? "Asia/Kolkata",
+                PublishToYouTube: false,
+                UseTopicPlanner: false,
+                Latitude: region?.Latitude,
+                Longitude: region?.Longitude,
+                RegionId: request.RegionId,
+                Language: request.Language);
+            return ("RunPipelineRequest built.", (string?)null, Array.Empty<string>());
         }));
 
         if (steps.Any(s => s.Status == "Failed") || runRequest is null || plan is null)
@@ -69,7 +88,7 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
         var metadata = ResolveMetadataObject(artifacts.MetadataPath);
         var success = (run.Status is PipelineRunStatus.Succeeded or PipelineRunStatus.SuccessWithWarnings) && File.Exists(artifacts.LongAudioPath ?? string.Empty);
 
-        return Build(success, request.ContentCategoryCode, plan.Id, steps, warnings, artifacts, success ? null : run.FailureReason ?? "One or more production steps failed.", metadata);
+        return Build(success, request.ContentCategoryCode, plan.Id, steps, warnings, artifacts, success ? null : run.FailureReason ?? "One or more production steps failed.", metadata, runRequest);
     }
 
     private async Task<IReadOnlyList<CategoryProductionStepResult>> BuildStepResultsFromStagesAsync(Guid pipelineRunId, CancellationToken ct)
@@ -102,9 +121,9 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
         return (pick("narration", ".mp3") ?? pick("long", "audio"), pick("short", "audio"), pick("final", ".mp4") ?? pick("long", "video"), pick("short", "final") ?? pick("short", "video"), pick("thumbnail", "long"), pick("thumbnail", "short"), pick("metadata", ".json"));
     }
 
-    private static CategoryProductionPreviewResponse Build(bool success, string category, Guid? planId, IReadOnlyList<CategoryProductionStepResult> steps, IReadOnlyList<string> warnings, (string? LongAudioPath, string? ShortAudioPath, string? LongVideoPath, string? ShortVideoPath, string? LongThumbnailPath, string? ShortThumbnailPath, string? MetadataPath)? artifacts, string? error, object? metadata=null)
+    private static CategoryProductionPreviewResponse Build(bool success, string category, Guid? planId, IReadOnlyList<CategoryProductionStepResult> steps, IReadOnlyList<string> warnings, (string? LongAudioPath, string? ShortAudioPath, string? LongVideoPath, string? ShortVideoPath, string? LongThumbnailPath, string? ShortThumbnailPath, string? MetadataPath)? artifacts, string? error, object? metadata=null, RunPipelineRequest? runPipelineRequest = null)
     {
-        return new(planId, category, success, false, false, false, false, artifacts?.LongAudioPath, artifacts?.ShortAudioPath, artifacts?.LongVideoPath, artifacts?.ShortVideoPath, artifacts?.LongThumbnailPath, artifacts?.ShortThumbnailPath, metadata, steps, warnings, error);
+        return new(planId, category, success, false, false, false, false, false, artifacts?.LongAudioPath, artifacts?.ShortAudioPath, artifacts?.LongVideoPath, artifacts?.ShortVideoPath, artifacts?.LongThumbnailPath, artifacts?.ShortThumbnailPath, metadata, steps, warnings, error, runPipelineRequest);
     }
 
     private async Task<CategoryProductionStepResult> ExecuteStepAsync(string name, Func<Task<(string Message, string? Error, IReadOnlyCollection<string> Warnings)>> action, bool allowBusinessFailure = false)
