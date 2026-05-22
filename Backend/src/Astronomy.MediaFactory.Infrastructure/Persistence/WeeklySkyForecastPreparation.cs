@@ -18,7 +18,7 @@ public sealed class WeeklySkyForecastContextBuilder(IOptions<SchedulerOptions> s
     {
         var region = schedulerOptions.Value.Regions.Items.FirstOrDefault(x => x.RegionId == request.RegionId) ?? throw new InvalidOperationException($"Region '{request.RegionId}' not configured.");
         var weekStart = DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
-        var skyfieldRequest = new WeeklySkyForecastSkyfieldRequest { RegionId = request.RegionId, LocationName = request.RegionName, Latitude = region.Latitude, Longitude = region.Longitude, Timezone = region.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
+        var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = request.RegionId, LocationName = request.RegionName, Latitude = region.Latitude, Longitude = region.Longitude, Timezone = region.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
         var response = await sidecarClient.GetWeeklySkyForecastAsync(skyfieldRequest, cancellationToken) ?? throw new InvalidOperationException("Skyfield weekly forecast sidecar returned no response.");
         if (!response.Success)
         {
@@ -30,7 +30,7 @@ public sealed class WeeklySkyForecastContextBuilder(IOptions<SchedulerOptions> s
             d.Events.Select(e => new WeeklySkyForecastEventItem(e.EventType, e.Title, e.Description, e.EventTimeUtc, e.ImportanceScore, e.ViralityScore, e.PrimaryObjectCode, e.ViewingDirection, e.ViewingTip)).ToList(),
             d.BestViewingStartUtc, d.BestViewingEndUtc, d.OverallViewingScore, d.ViewingSummary)).ToList();
         var highlights = response.WeeklyHighlights.Select(x => new WeeklySkyForecastHighlightItem(x.Order, x.HighlightType, x.Title, x.Description, DateOnly.Parse(x.Date), x.BestTimeUtc, x.ObjectCode, x.Score, x.SuggestedSceneType)).ToList();
-        var recommended = response.RecommendedNights.Select(x => new RecommendedObservationNight(DateOnly.Parse(x.Date), x.Score, x.Reason, x.BestObjects, x.BestStartUtc, x.BestEndUtc)).ToList();
+        var recommended = response.RecommendedNights.Select(x => new Astronomy.MediaFactory.Core.RecommendedObservationNight(DateOnly.Parse(x.Date), x.Score, x.Reason, x.BestObjects, x.BestStartUtc, x.BestEndUtc)).ToList();
         var bestPlanet = daily.SelectMany(d => d.VisibleObjects).Where(o => o.Visible && o.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.VisibilityScore).Select(x => x.ObjectCode).FirstOrDefault();
         var bestMoonNight = daily.OrderByDescending(d => d.VisibleObjects.Where(o => o.ObjectCode.Equals("Moon", StringComparison.OrdinalIgnoreCase)).Select(o => o.VisibilityScore).DefaultIfEmpty(0).Max()).Select(d => (DateOnly?)d.Date).FirstOrDefault();
         var bestPhotoNight = daily.OrderByDescending(d => d.VisibleObjects.MaxBy(o => o.PhotographyScore)?.PhotographyScore ?? 0).Select(d => (DateOnly?)d.Date).FirstOrDefault();
