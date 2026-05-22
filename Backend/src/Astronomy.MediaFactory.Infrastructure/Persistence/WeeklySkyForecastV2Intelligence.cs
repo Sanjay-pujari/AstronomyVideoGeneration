@@ -121,7 +121,8 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var narrationQuality = WeeklySkyForecastV2NarrationQualityValidator.Validate(narrationPlan, generatedNarration);
         var visualRequirementPackage = WeeklySkyForecastV2VisualRequirementExtractor.Extract(narrationPlan, generatedNarration, narrative, cinematic, baseResponse.EventIntelligence);
         var hybridScenePlanPackage = WeeklySkyForecastV2HybridScenePlanBuilder.Build(narrationPlan, visualRequirementPackage, baseResponse.Region);
-        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage };
+        var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(narrationPlan, narrationQuality, visualRequirementPackage, hybridScenePlanPackage);
+        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, PreviewStability = previewStability };
     }
 }
 
@@ -249,12 +250,26 @@ internal static class WeeklySkyForecastV2NarrationQualityValidator
         var repeatedWarnings = new List<string>();
         foreach (var phrase in new[] { "western sky", "step outside", "after sunset" })
             if (Count(text, phrase) > 1) repeatedWarnings.Add($"Repeated phrase detected: {phrase}");
-        var uniqueCtas = generated.ShortNarrations.Select(s => s.NarrationText.Split('.').LastOrDefault()?.Trim()).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        var shortUnique = uniqueCtas == generated.ShortNarrations.Count;
+        var normalizedFinalCtas = generated.ShortNarrations.Select(s => NormalizeFinalSentence(s.NarrationText)).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+        var uniqueCtas = normalizedFinalCtas.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var shortUnique = uniqueCtas == normalizedFinalCtas.Count;
+        var allCtasIdentical = normalizedFinalCtas.Count > 1 && uniqueCtas == 1;
         var warnings = new List<string>(generated.Warnings);
         warnings.AddRange(repeatedWarnings);
+        if (!shortUnique) warnings.Add("Short CTA endings are similar; improve variation if possible.");
         var emotionalProgressionDetected = plan.LongFormPlan.Segments.Select(s => s.EmotionalTone).Distinct(StringComparer.OrdinalIgnoreCase).Count() >= 5;
-        return new WeeklyNarrationQualityReport(forbiddenHits.Count == 0 && shortUnique, warnings, forbiddenHits, repeatedWarnings, WordCount(text), generated.LongFormNarration.EstimatedDurationSeconds, plan.LongFormPlan.TargetDurationSeconds, emotionalProgressionDetected, shortUnique);
+        var allSegmentsNonEmpty = generated.LongFormNarration.Segments.All(s => !string.IsNullOrWhiteSpace(s.NarrationText));
+        var hasFakeConjunctionWording = text.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
+        var durationInRange = generated.LongFormNarration.EstimatedDurationSeconds is >= 85 and <= 125;
+        var isValid = forbiddenHits.Count == 0 && durationInRange && allSegmentsNonEmpty && !hasFakeConjunctionWording && !allCtasIdentical;
+        return new WeeklyNarrationQualityReport(isValid, warnings, forbiddenHits, repeatedWarnings, WordCount(text), generated.LongFormNarration.EstimatedDurationSeconds, plan.LongFormPlan.TargetDurationSeconds, emotionalProgressionDetected, shortUnique);
+    }
+    private static string NormalizeFinalSentence(string text)
+    {
+        var parts = text.Split(['.', '!', '?'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var final = parts.LastOrDefault() ?? string.Empty;
+        var normalized = new string(final.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        return normalized;
     }
     private static int Count(string text, string token) => text.Split(token, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length - 1;
     private static int WordCount(string text) => text.Split([' ', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries).Length;
@@ -295,7 +310,7 @@ internal static class WeeklySkyForecastV2HybridScenePlanBuilder
 {
     public static WeeklyHybridScenePlanPackage Build(WeeklyNarrationPlan narrationPlan, WeeklyVisualRequirementPackage visualPackage, string regionId)
     {
-        var scenePlans = visualPackage.VisualRequirements.Select((v, i) => BuildScene(v, i + 1)).Append(BuildThumbnailScene(visualPackage.ThumbnailVisualRequirement, visualPackage.VisualRequirements.Count + 1)).ToList();
+        var scenePlans = visualPackage.VisualRequirements.Select((v, i) => BuildScene(v, i + 1)).ToList();
         var mappingByVisual = visualPackage.SegmentVisualMappings.GroupBy(x => x.VisualCode, StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.Key, x => x.ToList(), StringComparer.OrdinalIgnoreCase);
         var segmentMappings = visualPackage.SegmentVisualMappings.Select(m => new WeeklySegmentSceneMapping(m.SegmentCode, $"{m.VisualCode}_scene", m.TimingHint, m.ShouldReuse)).ToList();
         var assetNeeds = BuildAssetNeeds();
@@ -316,9 +331,6 @@ internal static class WeeklySkyForecastV2HybridScenePlanBuilder
     private static WeeklyScenePlan BuildScene(WeeklyVisualRequirement v, int order)
         => new($"{v.VisualCode}_scene", v.VisualCode, order, v.SceneType, v.VisualSourceType, v.VisualStrategy, v.TargetDate, v.BestTimeUtc, v.ObjectCodes, Math.Max(10, v.SourceSegmentCodes.Count * 15), v.CompositionDescription, v.MotionStyle, v.MotionStyle.Contains("pan", StringComparison.OrdinalIgnoreCase) ? "slow_pan_camera" : "gentle_push_or_static", v.OverlayNeeds, order == 1 ? "fade-in" : "cut", "soft-cut", v.ReuseAllowed, v.ExpectedAssetRole, [..v.ObjectCodes], v.VisualSourceType.Equals("Stellarium", StringComparison.OrdinalIgnoreCase) || v.VisualCode.Equals("hero_western_grouping", StringComparison.OrdinalIgnoreCase), v.VisualSourceType is "CelestialAsset" or "Hybrid", v.SceneType is "TipVisual" or "ThumbnailComposite");
 
-    private static WeeklyScenePlan BuildThumbnailScene(ThumbnailVisualRequirement thumb, int order)
-        => new("thumbnail_story_scene", thumb.VisualCode, order, "ThumbnailComposite", "Hybrid", thumb.VisualStrategy, DateOnly.FromDateTime(DateTime.UtcNow), null, thumb.PrimaryObjects.Concat(thumb.SecondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToList(), 12, thumb.CompositionDescription, "very-slow-parallax", "static_thumbnail_frame", ["thumbnail overlay text"], "none", "none", true, "ThumbnailStory", ["thumbnail_overlay_assets", "twilight_starfield_bg"], false, true, true);
-
     private static List<WeeklyAssetNeed> BuildAssetNeeds() =>
     [
         new("moon_hero_image","MOON","HeroObject","CelestialAsset","Fallback to generated or stock moon asset.",["moon_jupiter_hero_scene","thumbnail_story_scene"]),
@@ -328,4 +340,25 @@ internal static class WeeklySkyForecastV2HybridScenePlanBuilder
         new("tripod_phone_overlay","NONE","GuideOverlay","OverlayGraphic","Fallback to simple vector frame overlay.",["viewing_tip_wide_scene"]),
         new("thumbnail_overlay_assets","NONE","ThumbnailTextOverlay","OverlayGraphic","Fallback to native text layer in compositor.",["thumbnail_story_scene"])
     ];
+}
+
+internal static class WeeklySkyForecastV2PreviewStabilityValidator
+{
+    public static WeeklyPreviewStabilityReport Validate(WeeklyNarrationPlan narrationPlan, WeeklyNarrationQualityReport narrationQuality, WeeklyVisualRequirementPackage visualRequirementPackage, WeeklyHybridScenePlanPackage hybridScenePlanPackage)
+    {
+        var blocking = new List<string>();
+        var warnings = new List<string>();
+        if (!narrationQuality.IsValid) blocking.Add("Narration quality failed required checks.");
+        if (visualRequirementPackage is null) blocking.Add("Visual requirement package is missing.");
+        if (hybridScenePlanPackage is null) blocking.Add("Hybrid scene plan package is missing.");
+        if (narrationPlan.LongFormPlan.Segments.Any(s => visualRequirementPackage.SegmentVisualMappings.All(m => !m.SegmentCode.Equals(s.SegmentCode, StringComparison.OrdinalIgnoreCase))))
+            blocking.Add("Every narration segment must map to a visual requirement.");
+        if (visualRequirementPackage.SegmentVisualMappings.Any(m => hybridScenePlanPackage.ScenePlans.All(s => !s.VisualCode.Equals(m.VisualCode, StringComparison.OrdinalIgnoreCase))))
+            blocking.Add("Every visual requirement mapping must resolve to a scene.");
+        if (narrationQuality.ForbiddenPhraseHits.Count > 0) blocking.Add("Forbidden wording detected.");
+        if (!narrationQuality.ShortCtaUniquenessValid) warnings.Add("Short CTA endings need better differentiation.");
+        if (hybridScenePlanPackage.ScenePlans.Count is < 4 or > 6) blocking.Add("Hybrid scene plan must contain 4-6 timeline scenes.");
+        var readyForAssetResolution = blocking.Count == 0;
+        return new WeeklyPreviewStabilityReport(readyForAssetResolution, blocking, warnings, readyForAssetResolution, false);
+    }
 }

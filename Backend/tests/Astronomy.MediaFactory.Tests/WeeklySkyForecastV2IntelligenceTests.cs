@@ -20,6 +20,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.NarrationQuality);
         Assert.NotNull(response.VisualRequirementPackage);
         Assert.NotNull(response.HybridScenePlanPackage);
+        Assert.NotNull(response.PreviewStability);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Moon", response.CinematicStoryBlueprint.Headline, StringComparison.OrdinalIgnoreCase);
@@ -31,11 +32,15 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Equal(3, response.GeneratedNarrationPackage!.ShortNarrations.Count);
         Assert.DoesNotContain("same viewing window", response.GeneratedNarrationPackage.LongFormNarration.FullNarration, StringComparison.OrdinalIgnoreCase);
         Assert.True(response.NarrationQuality!.ShortCtaUniquenessValid);
+        Assert.True(response.NarrationQuality.IsValid);
+        Assert.Empty(response.NarrationQuality.ForbiddenPhraseHits);
+        Assert.InRange(response.GeneratedNarrationPackage.LongFormNarration.EstimatedDurationSeconds, 85, 125);
         Assert.InRange(response.VisualRequirementPackage!.VisualRequirements.Count, 4, 6);
         Assert.Contains(response.VisualRequirementPackage.VisualRequirements, v => v.VisualSourceType == "Hybrid");
         Assert.Contains(response.VisualRequirementPackage.VisualRequirements, v => v.VisualSourceType == "Stellarium");
         Assert.Contains(response.VisualRequirementPackage.VisualRequirements, v => v.VisualSourceType == "CelestialAsset");
         Assert.Equal(response.NarrationPlan.LongFormPlan.Segments.Count, response.VisualRequirementPackage.SegmentVisualMappings.Count);
+        Assert.All(response.NarrationPlan.LongFormPlan.Segments, seg => Assert.Contains(response.VisualRequirementPackage.SegmentVisualMappings, m => m.SegmentCode == seg.SegmentCode));
         Assert.InRange(response.HybridScenePlanPackage!.ScenePlans.Count, 4, 6);
         Assert.Contains(response.HybridScenePlanPackage.ScenePlans, s => s.VisualSourceType == "Hybrid");
         Assert.Contains(response.HybridScenePlanPackage.ScenePlans, s => s.VisualSourceType == "Stellarium");
@@ -43,6 +48,10 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Contains(response.HybridScenePlanPackage.AssetNeeds, a => a.ObjectCode == "MOON");
         Assert.Contains(response.HybridScenePlanPackage.AssetNeeds, a => a.ObjectCode == "JUPITER");
         Assert.Contains(response.HybridScenePlanPackage.AssetNeeds, a => a.ObjectCode == "VENUS");
+        Assert.All(response.VisualRequirementPackage.SegmentVisualMappings, map => Assert.Contains(response.HybridScenePlanPackage.ScenePlans, s => s.VisualCode == map.VisualCode));
+        Assert.True(response.PreviewStability!.IsStable);
+        Assert.True(response.PreviewStability.ReadyForAssetResolution);
+        Assert.False(response.PreviewStability.ReadyForRendering);
     }
 
     [Fact]
@@ -71,6 +80,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             events,
             new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             null!,
+            null,
             null,
             null,
             null,
