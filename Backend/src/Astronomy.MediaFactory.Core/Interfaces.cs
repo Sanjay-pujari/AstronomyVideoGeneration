@@ -881,11 +881,46 @@ public sealed record CategoryProductionPreviewResponse(
     string? ShortVideoPath,
     string? LongThumbnailPath,
     string? ShortThumbnailPath,
+    IReadOnlyList<string>? ShortAudioSegments,
+    CategoryProductionPreviewDiagnostics? Diagnostics,
+    CategoryProductionExecutionSummary? ExecutionSummary,
     object? Metadata,
     IReadOnlyList<CategoryProductionStepResult> Steps,
     IReadOnlyList<string> Warnings,
     string? ErrorMessage,
     RunPipelineRequest? RunPipelineRequest);
+
+public sealed record CategoryProductionPreviewDiagnostics(
+    string? ShortAudioManifestPath,
+    string? ShortVideoDiagnosticsPath,
+    string? RenderManifestPath,
+    string? NarrationContextPath,
+    string? SeoMetadataPath,
+    string? ValidationReportPath,
+    string? ObservationWindowPath,
+    string? SkyfieldResponsePath);
+
+public sealed record CategoryProductionExecutionSummary(
+    double TotalDurationSeconds,
+    bool GeneratedLongVideo,
+    bool GeneratedShortVideo,
+    bool GeneratedLongThumbnail,
+    bool GeneratedShortThumbnail,
+    bool PublishingAttempted,
+    bool AnalyticsAttempted,
+    int TotalCompletedSteps,
+    int TotalFailedSteps,
+    int TotalSkippedSteps);
+
+public sealed record ProductionPreviewValidationResult(
+    bool IsValid,
+    IReadOnlyList<string> Errors,
+    string? ValidationReportPath);
+
+public interface IProductionPreviewOutputValidator
+{
+    Task<ProductionPreviewValidationResult> ValidateAsync(string? outputFolder, string? longAudioPath, string? longVideoPath, string? shortVideoPath, string? longThumbnailPath, string? shortThumbnailPath, CancellationToken cancellationToken);
+}
 
 public interface ICategoryProductionPipelineStrategy
 {

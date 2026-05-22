@@ -22,13 +22,14 @@ public sealed class CategoryProductionRunner(IEnumerable<ICategoryProductionPipe
     }
 
     private static CategoryProductionPreviewResponse Failed(string? category, string message) =>
-        new(null, category ?? string.Empty, false, false, false, false, false, false, null, null, null, null, null, null, null, [], [], message, null);
+        new(null, category ?? string.Empty, false, false, false, false, false, false, null, null, null, null, null, null, null, null, null, null, [], [], message, null);
 }
 
 public sealed class DailySkyGuideProductionPipelineStrategy(
     IContentPlanningService planning,
     PipelineOrchestrator orchestrator,
     IPipelineRepository repository,
+    IProductionPreviewOutputValidator outputValidator,
     IOptions<SchedulerOptions> schedulerOptions,
     ILogger<DailySkyGuideProductionPipelineStrategy> logger) : ICategoryProductionPipelineStrategy
 {
@@ -85,10 +86,14 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
         steps.Add(new CategoryProductionStepResult("PublishingSkipped", "Skipped", DateTime.UtcNow, DateTime.UtcNow, 0, "Publishing disabled by policy.", null, []));
 
         var artifacts = ResolveArtifacts(run.OutputFolder);
+        var validation = await outputValidator.ValidateAsync(run.OutputFolder, artifacts.LongAudioPath, artifacts.LongVideoPath, artifacts.ShortVideoPath, artifacts.LongThumbnailPath, artifacts.ShortThumbnailPath, cancellationToken);
+        warnings.AddRange(validation.Errors);
         var metadata = ResolveMetadataObject(artifacts.MetadataPath);
-        var success = (run.Status is PipelineRunStatus.Succeeded or PipelineRunStatus.SuccessWithWarnings) && File.Exists(artifacts.LongAudioPath ?? string.Empty);
+        var success = (run.Status is PipelineRunStatus.Succeeded or PipelineRunStatus.SuccessWithWarnings) && validation.IsValid;
+        var diagnostics = BuildDiagnostics(artifacts, validation.ValidationReportPath);
+        var summary = BuildExecutionSummary(steps);
 
-        return Build(success, request.ContentCategoryCode, plan.Id, steps, warnings, artifacts, success ? null : run.FailureReason ?? "One or more production steps failed.", metadata, runRequest);
+        return Build(success, request.ContentCategoryCode, plan.Id, steps, warnings, artifacts, success ? null : run.FailureReason ?? "One or more production steps failed.", metadata, runRequest, diagnostics, summary);
     }
 
     private async Task<IReadOnlyList<CategoryProductionStepResult>> BuildStepResultsFromStagesAsync(Guid pipelineRunId, CancellationToken ct)
@@ -105,7 +110,12 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
             [])).ToList();
     }
 
-    private static string NormalizeStatus(string status) => status.Equals("Completed", StringComparison.OrdinalIgnoreCase) ? "Completed" : status.Equals("Failed", StringComparison.OrdinalIgnoreCase) ? "Failed" : "Skipped";
+    private static string NormalizeStatus(string status)
+    {
+        if (status.Equals("Failed", StringComparison.OrdinalIgnoreCase)) return "Failed";
+        if (status.Equals("Skipped", StringComparison.OrdinalIgnoreCase)) return "Skipped";
+        return "Completed";
+    }
     private static object? ResolveMetadataObject(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
@@ -113,17 +123,47 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
         catch { return new { path }; }
     }
 
-    private static (string? LongAudioPath, string? ShortAudioPath, string? LongVideoPath, string? ShortVideoPath, string? LongThumbnailPath, string? ShortThumbnailPath, string? MetadataPath) ResolveArtifacts(string? outputFolder)
+    private static (string? LongAudioPath, string? ShortAudioPath, IReadOnlyList<string>? ShortAudioSegments, string? ShortAudioManifestPath, string? LongVideoPath, string? ShortVideoPath, string? ShortVideoDiagnosticsPath, string? LongThumbnailPath, string? ShortThumbnailPath, string? MetadataPath, string? RenderManifestPath, string? NarrationContextPath, string? SeoMetadataPath, string? ObservationWindowPath, string? SkyfieldResponsePath) ResolveArtifacts(string? outputFolder)
     {
-        if (string.IsNullOrWhiteSpace(outputFolder) || !Directory.Exists(outputFolder)) return (null, null, null, null, null, null, null);
+        if (string.IsNullOrWhiteSpace(outputFolder) || !Directory.Exists(outputFolder)) return (null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         var files = Directory.GetFiles(outputFolder, "*", SearchOption.AllDirectories);
         string? pick(params string[] terms) => files.FirstOrDefault(f => terms.All(t => f.Contains(t, StringComparison.OrdinalIgnoreCase)));
-        return (pick("narration", ".mp3") ?? pick("long", "audio"), pick("short", "audio"), pick("final", ".mp4") ?? pick("long", "video"), pick("short", "final") ?? pick("short", "video"), pick("thumbnail", "long"), pick("thumbnail", "short"), pick("metadata", ".json"));
+        var shortPlayableAudio = files.FirstOrDefault(f => f.Contains("short", StringComparison.OrdinalIgnoreCase) && (f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase)));
+        var shortManifest = pick("shorts", "audio-concat-list.txt");
+        var shortSegments = files.Where(f => f.Contains("shorts", StringComparison.OrdinalIgnoreCase) && f.Contains("audio", StringComparison.OrdinalIgnoreCase) && (f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase))).OrderBy(f => f).ToList();
+        var shortVideo = pick("shorts", "final-short", ".mp4") ?? pick("shorts", "short-video", ".mp4") ?? pick("short", ".mp4");
+        return (
+            pick("narration", ".mp3") ?? pick("long", "audio"),
+            shortPlayableAudio,
+            shortSegments.Count > 1 ? shortSegments : null,
+            shortManifest,
+            pick("final", ".mp4") ?? pick("long", "video"),
+            shortVideo,
+            pick("short-video-diagnostics.json") ?? pick("final-render-diagnostics.json"),
+            pick("thumbnail", "long"),
+            pick("thumbnail", "short"),
+            pick("metadata", ".json"),
+            pick("render-manifest", ".json"),
+            pick("narration-context", ".json"),
+            pick("seo", "metadata", ".json"),
+            pick("observation-window", ".json"),
+            pick("skyfield", ".json"));
     }
 
-    private static CategoryProductionPreviewResponse Build(bool success, string category, Guid? planId, IReadOnlyList<CategoryProductionStepResult> steps, IReadOnlyList<string> warnings, (string? LongAudioPath, string? ShortAudioPath, string? LongVideoPath, string? ShortVideoPath, string? LongThumbnailPath, string? ShortThumbnailPath, string? MetadataPath)? artifacts, string? error, object? metadata=null, RunPipelineRequest? runPipelineRequest = null)
+    private static CategoryProductionPreviewResponse Build(bool success, string category, Guid? planId, IReadOnlyList<CategoryProductionStepResult> steps, IReadOnlyList<string> warnings, (string? LongAudioPath, string? ShortAudioPath, IReadOnlyList<string>? ShortAudioSegments, string? ShortAudioManifestPath, string? LongVideoPath, string? ShortVideoPath, string? ShortVideoDiagnosticsPath, string? LongThumbnailPath, string? ShortThumbnailPath, string? MetadataPath, string? RenderManifestPath, string? NarrationContextPath, string? SeoMetadataPath, string? ObservationWindowPath, string? SkyfieldResponsePath)? artifacts, string? error, object? metadata=null, RunPipelineRequest? runPipelineRequest = null, CategoryProductionPreviewDiagnostics? diagnostics = null, CategoryProductionExecutionSummary? summary = null)
     {
-        return new(planId, category, success, false, false, false, false, false, artifacts?.LongAudioPath, artifacts?.ShortAudioPath, artifacts?.LongVideoPath, artifacts?.ShortVideoPath, artifacts?.LongThumbnailPath, artifacts?.ShortThumbnailPath, metadata, steps, warnings, error, runPipelineRequest);
+        return new(planId, category, success, false, false, false, false, false, artifacts?.LongAudioPath, artifacts?.ShortAudioPath, artifacts?.LongVideoPath, artifacts?.ShortVideoPath, artifacts?.LongThumbnailPath, artifacts?.ShortThumbnailPath, artifacts?.ShortAudioSegments, diagnostics, summary, metadata, steps, warnings, error, runPipelineRequest);
+    }
+    private static CategoryProductionPreviewDiagnostics BuildDiagnostics((string? LongAudioPath, string? ShortAudioPath, IReadOnlyList<string>? ShortAudioSegments, string? ShortAudioManifestPath, string? LongVideoPath, string? ShortVideoPath, string? ShortVideoDiagnosticsPath, string? LongThumbnailPath, string? ShortThumbnailPath, string? MetadataPath, string? RenderManifestPath, string? NarrationContextPath, string? SeoMetadataPath, string? ObservationWindowPath, string? SkyfieldResponsePath) artifacts, string? validationReportPath)
+        => new(artifacts.ShortAudioManifestPath, artifacts.ShortVideoDiagnosticsPath, artifacts.RenderManifestPath, artifacts.NarrationContextPath, artifacts.SeoMetadataPath, validationReportPath, artifacts.ObservationWindowPath, artifacts.SkyfieldResponsePath);
+
+    private static CategoryProductionExecutionSummary BuildExecutionSummary(IReadOnlyCollection<CategoryProductionStepResult> steps)
+    {
+        var completed = steps.Count(x => string.Equals(x.Status, "Completed", StringComparison.OrdinalIgnoreCase));
+        var failed = steps.Count(x => string.Equals(x.Status, "Failed", StringComparison.OrdinalIgnoreCase));
+        var skipped = steps.Count(x => string.Equals(x.Status, "Skipped", StringComparison.OrdinalIgnoreCase));
+        var duration = steps.Sum(x => x.DurationMs) / 1000d;
+        return new(duration, completed > 0, completed > 0, completed > 0, completed > 0, false, false, completed, failed, skipped);
     }
 
     private async Task<CategoryProductionStepResult> ExecuteStepAsync(string name, Func<Task<(string Message, string? Error, IReadOnlyCollection<string> Warnings)>> action, bool allowBusinessFailure = false)
