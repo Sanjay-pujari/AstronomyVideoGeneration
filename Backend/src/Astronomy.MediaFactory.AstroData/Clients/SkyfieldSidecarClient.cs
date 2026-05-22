@@ -243,7 +243,7 @@ public sealed class WeeklySkyForecastSkyfieldResponse
     public List<DailySkyForecastItem> Days { get; set; } = new();
     public List<WeeklyHighlightItem> WeeklyHighlights { get; set; } = new();
     public List<RecommendedObservationNight> RecommendedNights { get; set; } = new();
-    public string? BestPlanetOfWeek { get; set; }
+    public VisibleObjectForecastItem? BestPlanetOfWeek { get; set; }
     public RecommendedObservationNight? BestMoonNight { get; set; }
     public RecommendedObservationNight? BestPhotographyNight { get; set; }
     public List<string> Warnings { get; set; } = new();

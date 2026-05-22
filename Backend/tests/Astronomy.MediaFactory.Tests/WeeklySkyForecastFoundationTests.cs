@@ -97,6 +97,24 @@ public sealed class WeeklySkyForecastFoundationTests
     }
 
     [Fact]
+    public async Task SkyfieldClient_Deserializes_BestPlanet_Object_Response()
+    {
+        var handler = new StubHandler((req, _) =>
+        {
+            Assert.Equal("/forecast/weekly-sky", req.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"success\":true,\"regionId\":\"IN-RJ-UDAIPUR\",\"locationName\":\"Udaipur\",\"timezone\":\"Asia/Kolkata\",\"weekStartDate\":\"2026-05-22\",\"weekEndDate\":\"2026-05-28\",\"days\":[],\"weeklyHighlights\":[],\"recommendedNights\":[],\"bestPlanetOfWeek\":{\"objectCode\":\"JUPITER\",\"objectName\":\"Jupiter\",\"objectType\":\"Planet\",\"visible\":true,\"visibilityScore\":95,\"photographyScore\":90,\"viewingDirection\":\"SE\",\"reason\":\"Excellent\"},\"bestMoonNight\":{\"date\":\"2026-05-24\",\"score\":87,\"reason\":\"Moon visibility\",\"bestObjects\":[\"MOON\"],\"bestStartUtc\":\"2026-05-24T18:00:00Z\",\"bestEndUtc\":\"2026-05-24T20:00:00Z\"},\"bestPhotographyNight\":{\"date\":\"2026-05-26\",\"score\":92,\"reason\":\"Dark sky window\",\"bestObjects\":[\"JUPITER\"],\"bestStartUtc\":\"2026-05-26T18:00:00Z\",\"bestEndUtc\":\"2026-05-26T20:00:00Z\"},\"warnings\":[]}", Encoding.UTF8, "application/json")
+            };
+        });
+        var client = new SidecarModel.SkyfieldSidecarClient(new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8010") }, NullLogger<SidecarModel.SkyfieldSidecarClient>.Instance);
+        var response = await client.GetWeeklySkyForecastAsync(new SidecarModel.WeeklySkyForecastSkyfieldRequest { RegionId = "IN-RJ-UDAIPUR", LocationName = "Udaipur", Latitude = 24, Longitude = 73, Timezone = "Asia/Kolkata", WeekStartDate = "2026-05-22", Language = "en" }, CancellationToken.None);
+
+        Assert.NotNull(response);
+        Assert.Equal("JUPITER", response!.BestPlanetOfWeek?.ObjectCode);
+    }
+
+    [Fact]
     public async Task Segment_Metadata_Path_Disables_Publishing_And_Analytics()
     {
         var planner = new WeeklySkyForecastSegmentPlanner();
@@ -157,6 +175,18 @@ public sealed class WeeklySkyForecastFoundationTests
         var context = await builder.BuildAsync(new CoreModel.WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
         Assert.Equal(new DateOnly(2026, 5, 27), context.BestMoonNight);
     }
+
+    [Fact]
+    public async Task ContextBuilder_Maps_BestPlanet_And_BestNights_From_Sidecar_Objects()
+    {
+        var scheduler = Options.Create(new SchedulerOptions { Regions = new RegionSchedulingOptions { Items = [new RegionScheduleOptions { RegionId = "INDIA-UDAIPUR", DisplayName = "Udaipur", Latitude = 24.58, Longitude = 73.68, Timezone = "Asia/Kolkata", Language = "en" }] } });
+        var builder = new WeeklySkyForecastContextBuilder(scheduler, new RegionResolutionService(scheduler), new StubSkyfieldSidecarClientWithBestObjects(), NullLogger<WeeklySkyForecastContextBuilder>.Instance);
+        var context = await builder.BuildAsync(new CoreModel.WeeklySkyForecastProductionRequest("WeeklySkyForecast", "en", "INDIA-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), false, false, false, true), CancellationToken.None);
+
+        Assert.Equal("JUPITER", context.BestPlanetOfWeek);
+        Assert.Equal(new DateOnly(2026, 5, 27), context.BestMoonNight);
+        Assert.Equal(new DateOnly(2026, 5, 28), context.BestPhotographyNight);
+    }
 private static CoreModel.WeeklySkyForecastContext BuildContext()
     {
         var day = new CoreModel.DailySkyForecastContextItem(new DateOnly(2026, 5, 22), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 20, null, null,
@@ -212,6 +242,29 @@ private static CoreModel.WeeklySkyForecastContext BuildContext()
                 WeeklyHighlights = [new SidecarModel.WeeklyHighlightItem { Order = 1, HighlightType = "best_moon_night", Date = "2026-05-24" }],
                 RecommendedNights = [],
                 BestMoonNight = new SidecarModel.RecommendedObservationNight { Date = "2026-05-27", BestStartUtc = DateTime.Parse("2026-05-27T18:00:00Z"), BestEndUtc = DateTime.Parse("2026-05-27T20:00:00Z") },
+                Warnings = []
+            });
+    }
+
+    private sealed class StubSkyfieldSidecarClientWithBestObjects : SidecarModel.ISkyfieldSidecarClient
+    {
+        public Task<SidecarModel.SkyfieldDailySkyResponse?> GetDailySkyAsync(SidecarModel.SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<SidecarModel.SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SidecarModel.SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<SidecarModel.WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(SidecarModel.WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken)
+            => Task.FromResult<SidecarModel.WeeklySkyForecastSkyfieldResponse?>(new SidecarModel.WeeklySkyForecastSkyfieldResponse
+            {
+                Success = true,
+                RegionId = request.RegionId,
+                LocationName = request.LocationName,
+                Timezone = request.Timezone,
+                WeekStartDate = request.WeekStartDate,
+                WeekEndDate = "2026-05-28",
+                Days = [],
+                WeeklyHighlights = [],
+                RecommendedNights = [],
+                BestPlanetOfWeek = new SidecarModel.VisibleObjectForecastItem { ObjectCode = "JUPITER", ObjectName = "Jupiter", ObjectType = "Planet", Visible = true },
+                BestMoonNight = new SidecarModel.RecommendedObservationNight { Date = "2026-05-27", BestStartUtc = DateTime.Parse("2026-05-27T18:00:00Z"), BestEndUtc = DateTime.Parse("2026-05-27T20:00:00Z") },
+                BestPhotographyNight = new SidecarModel.RecommendedObservationNight { Date = "2026-05-28", BestStartUtc = DateTime.Parse("2026-05-28T18:00:00Z"), BestEndUtc = DateTime.Parse("2026-05-28T20:00:00Z") },
                 Warnings = []
             });
     }

@@ -63,8 +63,8 @@ public sealed class WeeklySkyForecastContextBuilder(
             d.BestViewingStartUtc, d.BestViewingEndUtc, d.OverallViewingScore, d.ViewingSummary)).ToList();
         var highlights = response.WeeklyHighlights.Select(x => new WeeklySkyForecastHighlightItem(x.Order, x.HighlightType, x.Title, x.Description, DateOnly.Parse(x.Date), x.BestTimeUtc, x.ObjectCode, x.Score, x.SuggestedSceneType)).ToList();
         var recommended = response.RecommendedNights.Select(x => new Astronomy.MediaFactory.Core.RecommendedObservationNight(DateOnly.Parse(x.Date), x.Score, x.Reason, x.BestObjects, x.BestStartUtc, x.BestEndUtc)).ToList();
-        var bestPlanet = !string.IsNullOrWhiteSpace(response.BestPlanetOfWeek)
-            ? response.BestPlanetOfWeek
+        var bestPlanet = !string.IsNullOrWhiteSpace(response.BestPlanetOfWeek?.ObjectCode)
+            ? response.BestPlanetOfWeek.ObjectCode
             : daily.SelectMany(d => d.VisibleObjects).Where(o => o.Visible && o.ObjectType.Equals("Planet", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.VisibilityScore).Select(x => x.ObjectCode).FirstOrDefault();
         var bestMoonNight = response.BestMoonNight is not null
             ? DateOnly.Parse(response.BestMoonNight.Date)
@@ -77,7 +77,9 @@ public sealed class WeeklySkyForecastContextBuilder(
                 .OrderBy(x => x.Order)
                 .ToList();
         }
-        var bestPhotoNight = daily.OrderByDescending(d => d.VisibleObjects.MaxBy(o => o.PhotographyScore)?.PhotographyScore ?? 0).Select(d => (DateOnly?)d.Date).FirstOrDefault();
+        var bestPhotoNight = response.BestPhotographyNight is not null
+            ? DateOnly.Parse(response.BestPhotographyNight.Date)
+            : daily.OrderByDescending(d => d.VisibleObjects.MaxBy(o => o.PhotographyScore)?.PhotographyScore ?? 0).Select(d => (DateOnly?)d.Date).FirstOrDefault();
 
         return new(resolution.CanonicalRegionId, response.LocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights, recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
     }
