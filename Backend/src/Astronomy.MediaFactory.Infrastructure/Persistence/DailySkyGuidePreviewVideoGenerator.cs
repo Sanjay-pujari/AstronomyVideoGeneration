@@ -9,9 +9,9 @@ public sealed class DailySkyGuidePreviewVideoGenerator(
     MediaFactoryDbContext db,
     IDailySkyGuideAssetAwareCompositionPlanner planner,
     IAssetAwarePreviewVideoComposer composer,
-    IOptions<StellariumOptions> stellariumOptions) : IDailySkyGuidePreviewVideoGenerator
+    IOptions<RenderingOptions> renderingOptions) : IDailySkyGuidePreviewVideoGenerator
 {
-    private readonly StellariumOptions _stellariumOptions = stellariumOptions.Value;
+    private readonly RenderingOptions _renderingOptions = renderingOptions.Value;
 
     public async Task<AssetAwarePreviewVideoResponse> GenerateAsync(Guid contentGenerationPlanId, AssetAwarePreviewVideoRequest request, CancellationToken cancellationToken)
     {
@@ -102,9 +102,9 @@ public sealed class DailySkyGuidePreviewVideoGenerator(
 
     private string ResolveOutputDirectory(Guid planId)
     {
-        if (!string.IsNullOrWhiteSpace(_stellariumOptions.OutputRoot)
-            && !string.Equals(_stellariumOptions.OutputRoot.Replace('\\', '/').TrimEnd('/'), "outputs/content-plans", StringComparison.OrdinalIgnoreCase))
-            return Path.Combine(_stellariumOptions.OutputRoot, planId.ToString("D"), "preview-videos");
-        return Path.Combine(_stellariumOptions.CaptureDirectory, "content-plans", planId.ToString("D"), "preview-videos");
+        var renderingRoot = string.IsNullOrWhiteSpace(_renderingOptions.WorkingDirectory)
+            ? Directory.GetCurrentDirectory()
+            : _renderingOptions.WorkingDirectory;
+        return Path.Combine(renderingRoot, "content-plans", planId.ToString("D"), "preview-videos");
     }
 }

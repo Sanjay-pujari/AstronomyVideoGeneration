@@ -15,8 +15,13 @@ public sealed class FfmpegAssetAwarePreviewVideoComposer(
 
     public async Task<AssetAwarePreviewVideoComposeResult> ComposeAsync(AssetAwareVideoCompositionPlan plan, AssetAwarePreviewVideoRequest request, string outputVideoPath, CancellationToken cancellationToken)
     {
-        var dir = Path.GetDirectoryName(outputVideoPath)!;
-        Directory.CreateDirectory(dir);
+        var previewDirectory = Path.GetDirectoryName(outputVideoPath)!;
+        Directory.CreateDirectory(previewDirectory);
+        var planRootDirectory = Directory.GetParent(previewDirectory)?.FullName ?? previewDirectory;
+        var segmentDirectory = Path.Combine(planRootDirectory, "segments");
+        var manifestDirectory = Path.Combine(planRootDirectory, "manifests");
+        Directory.CreateDirectory(segmentDirectory);
+        Directory.CreateDirectory(manifestDirectory);
         var segments = plan.Segments.Where(x => x.ImageExists && !string.IsNullOrWhiteSpace(x.ImagePath)).OrderBy(x => x.SortOrder).ToList();
         if (segments.Count == 0)
             return new(null, null, null, null, "No valid image segments found.", null, _rendering.FfmpegPath);
@@ -27,7 +32,7 @@ public sealed class FfmpegAssetAwarePreviewVideoComposer(
         for (var i = 0; i < segments.Count; i++)
         {
             var s = segments[i];
-            var segPath = Path.Combine(dir, $"preview-segment-{i:000}.mp4");
+            var segPath = Path.Combine(segmentDirectory, $"preview-segment-{i:000}.mp4");
             var duration = Math.Max(1d, s.SuggestedDurationSeconds).ToString("0.###", CultureInfo.InvariantCulture);
             var fadeOutStart = Math.Max(0, s.SuggestedDurationSeconds - 0.7d).ToString("0.###", CultureInfo.InvariantCulture);
             var filter = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0008,1.12)':d=25*" + duration + ":s=1920x1080";
@@ -42,7 +47,7 @@ public sealed class FfmpegAssetAwarePreviewVideoComposer(
             segmentFiles.Add(segPath);
         }
 
-        var concatFile = Path.Combine(dir, "preview-concat.txt");
+        var concatFile = Path.Combine(manifestDirectory, "preview-concat.txt");
         await File.WriteAllLinesAsync(concatFile, segmentFiles.Select(x => $"file '{x.Replace("'", "''")}'"), cancellationToken);
         var concatArgs = $"-y -f concat -safe 0 -i \"{concatFile}\" -c copy \"{outputVideoPath}\"";
         lastArgs = concatArgs;
@@ -51,14 +56,16 @@ public sealed class FfmpegAssetAwarePreviewVideoComposer(
         if (concatResult.ExitCode != 0 || !File.Exists(outputVideoPath) || new FileInfo(outputVideoPath).Length <= 0)
             return new(outputVideoPath, null, concatArgs, concatResult.ExitCode, concatResult.StandardError, concatResult.StandardOutput, _rendering.FfmpegPath);
 
-        var thumbnailPath = Path.Combine(dir, "daily-skyguide-preview-thumbnail.png");
+        var thumbnailDirectory = Path.Combine(planRootDirectory, "thumbnails");
+        Directory.CreateDirectory(thumbnailDirectory);
+        var thumbnailPath = Path.Combine(thumbnailDirectory, "daily-skyguide-preview-thumbnail.png");
         var thumbnailCandidatePath = segments
             .FirstOrDefault(x => x.VisualRole.Equals("ThumbnailCandidate", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.ImagePath) && File.Exists(x.ImagePath))
             ?.ImagePath;
 
         var moduleThumbnailGenerated = await TryGenerateThumbnailWithExistingModuleAsync(
             plan,
-            dir,
+            thumbnailDirectory,
             segments,
             thumbnailCandidatePath,
             thumbnailPath,
