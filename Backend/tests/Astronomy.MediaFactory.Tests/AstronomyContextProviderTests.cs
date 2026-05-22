@@ -326,6 +326,7 @@ public sealed class AstronomyContextProviderTests
             LastNightPlanRequest = request;
             return Task.FromResult(_response);
         }
+        public Task<WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken) => Task.FromResult<WeeklySkyForecastSkyfieldResponse?>(null);
     }
 
     private static SkyfieldObjectVisibility CreateVisible(string objectName, string objectType, string bestLocalTime, double altitudeDegrees, List<SkyfieldVisibilitySample> samples)
