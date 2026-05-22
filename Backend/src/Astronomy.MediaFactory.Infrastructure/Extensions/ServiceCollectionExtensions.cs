@@ -491,6 +491,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastV2NarrativeAbstractionBuilder, WeeklySkyForecastV2NarrativeAbstractionBuilder>();
         services.AddScoped<IWeeklySkyForecastV2NarrationPlanner, WeeklySkyForecastV2NarrationPlanner>();
         services.AddScoped<IWeeklySkyForecastV2NarrationTextGenerator, WeeklySkyForecastV2NarrationTextGenerator>();
+        services.AddScoped<IWeeklySkyForecastV2AssetResolver, WeeklySkyForecastV2AssetResolver>();
         services.AddScoped<IWeeklySkyForecastV2IntelligenceService, WeeklySkyForecastV2IntelligenceService>();
 
         services.AddScoped<IContentCategoryPipelineStrategy, DailySkyGuidePipelineStrategy>();

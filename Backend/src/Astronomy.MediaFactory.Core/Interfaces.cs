@@ -1191,6 +1191,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyNarrationQualityReport? NarrationQuality,
     WeeklyVisualRequirementPackage? VisualRequirementPackage,
     WeeklyHybridScenePlanPackage? HybridScenePlanPackage,
+    WeeklySceneChoreographyPackage? SceneChoreographyPackage,
     WeeklyPreviewStabilityReport? PreviewStability,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
@@ -1368,6 +1369,17 @@ public sealed record WeeklyStellariumNeed(string SceneCode, DateOnly TargetDate,
 public sealed record WeeklyOverlayPlan(string SceneCode, IReadOnlyList<string> Overlays, string LabelStyle, string Timing, string SafeArea);
 public sealed record WeeklyTransitionPlan(string FromSceneCode, string ToSceneCode, string TransitionType, int DurationSeconds);
 public sealed record ThumbnailVisualRequirement(string VisualCode, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string CompositionDescription, string OverlayText, string VisualStrategy, string VisualSourceType);
+public sealed record WeeklySceneChoreographyPackage(IReadOnlyList<ResolvedWeeklyScene> ResolvedScenes, IReadOnlyList<ResolvedWeeklyAsset> ResolvedAssets, IReadOnlyList<WeeklySceneTimeline> SceneTimeline, IReadOnlyList<WeeklyTransitionPlan> SceneTransitions, IReadOnlyList<WeeklyOverlayTimeline> OverlayTimeline, IReadOnlyList<WeeklyRenderContract> RenderContracts, IReadOnlyList<string> ChoreographyWarnings);
+public sealed record ResolvedWeeklyScene(string SceneCode, int SceneOrder, string SceneTitle, string SceneType, int DurationSeconds, IReadOnlyList<string> NarrationSegmentCodes, string VisualSourceType, string RenderIntent, string EmotionalTone, string CinematicPurpose, IReadOnlyList<string> TargetObjects, DateOnly TargetDate, DateTime? BestTimeUtc, string MotionPlan, WeeklyCameraPlan CameraPlan, string OverlayPlan, string TransitionIn, string TransitionOut, IReadOnlyList<string> ResolvedAssetIds, IReadOnlyList<string> ResolvedAssetRoles, bool RequiresStellarium, string? StellariumPlanId, string RenderStrategy, int ReusePriority);
+public sealed record WeeklyCameraPlan(string PrimaryBehavior, string? SecondaryBehavior);
+public sealed record ResolvedWeeklyAsset(string AssetId, string AssetCode, string AssetRole, string AssetType, string SourceType, string ObjectCode, int UsagePriority, string PreferredPath, string FallbackPath, bool SupportsTransparency, bool SupportsAnimation, IReadOnlyList<string> UsableForScenes);
+public sealed record WeeklySceneTimeline(string SceneCode, int StartSecond, int EndSecond, int NarrationStartSecond, int NarrationEndSecond, int TransitionLeadSeconds);
+public sealed record WeeklyOverlayTimeline(string SceneCode, string OverlayType, string OverlayText, int StartSecond, int EndSecond, string AnimationStyle, string SafeArea);
+public sealed record WeeklyRenderContract(string SceneCode, string RendererType, string RenderMode, IReadOnlyList<string> ExpectedInputs, IReadOnlyList<string> ExpectedOutputs, bool SupportsReuse, bool RequiresCompositing);
+public interface IWeeklySkyForecastV2AssetResolver
+{
+    WeeklySceneChoreographyPackage Resolve(WeeklyNarrationPlan narrationPlan, WeeklyHybridScenePlanPackage hybridScenePlanPackage, WeeklyVisualRequirementPackage visualRequirementPackage, string regionId);
+}
 
 public interface IWeeklySkyForecastV2NarrativeAbstractionBuilder
 {
