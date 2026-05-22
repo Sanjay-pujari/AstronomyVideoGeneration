@@ -52,19 +52,37 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
         {
             plan = await planning.GenerateDailyPlanAsync(request.ContentCategoryCode, request.Language, request.RegionId, new DateTimeOffset(request.ScheduledUtc, TimeSpan.Zero), request.PrimaryCelestialObjectCode, cancellationToken);
             var scheduledDate = DateOnly.FromDateTime(request.ScheduledUtc.Date);
-            var region = schedulerOptions.Value.Regions.Items.FirstOrDefault(x => string.Equals(x.RegionId, request.RegionId, StringComparison.OrdinalIgnoreCase));
+            var resolvedRegionId = ResolveRegionId(request, plan);
+            var region = schedulerOptions.Value.Regions.Items.FirstOrDefault(x => string.Equals(x.RegionId, resolvedRegionId, StringComparison.OrdinalIgnoreCase));
+
+            double? latitude = region?.Latitude;
+            double? longitude = region?.Longitude;
+            var timezone = region?.Timezone ?? "Asia/Kolkata";
             var locationName = region?.DisplayName?.Split(",", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
-                ?? (!string.IsNullOrWhiteSpace(request.RegionName) ? request.RegionName : request.RegionId);
+                ?? (!string.IsNullOrWhiteSpace(request.RegionName) ? request.RegionName : resolvedRegionId);
+
+            if (region is null && resolvedRegionId.Equals("IN-RJ-UDAIPUR", StringComparison.OrdinalIgnoreCase))
+            {
+                latitude = 24.5854;
+                longitude = 73.7125;
+                timezone = "Asia/Kolkata";
+                locationName = "Udaipur";
+            }
+            else if (latitude is null || longitude is null)
+            {
+                warnings.Add("Latitude/longitude could not be resolved for region.");
+            }
+
             runRequest = new RunPipelineRequest(
                 scheduledDate,
                 ContentType.DailySkyGuide,
                 locationName,
-                TimeZone: region?.Timezone ?? "Asia/Kolkata",
+                TimeZone: timezone,
                 PublishToYouTube: false,
                 UseTopicPlanner: false,
-                Latitude: region?.Latitude,
-                Longitude: region?.Longitude,
-                RegionId: request.RegionId,
+                Latitude: latitude,
+                Longitude: longitude,
+                RegionId: resolvedRegionId,
                 Language: request.Language);
             return ("RunPipelineRequest built.", (string?)null, Array.Empty<string>());
         }));
@@ -94,6 +112,18 @@ public sealed class DailySkyGuideProductionPipelineStrategy(
         var summary = BuildExecutionSummary(steps);
 
         return Build(success, request.ContentCategoryCode, plan.Id, steps, warnings, artifacts, success ? null : run.FailureReason ?? "One or more production steps failed.", metadata, runRequest, diagnostics, summary);
+    }
+
+
+    private static string ResolveRegionId(CategoryProductionPreviewRequest request, ContentGenerationPlan plan)
+    {
+        if (!string.IsNullOrWhiteSpace(plan.RegionId))
+            return plan.RegionId;
+
+        if (!string.IsNullOrWhiteSpace(request.RegionId))
+            return request.RegionId;
+
+        return "IN-RJ-UDAIPUR";
     }
 
     private async Task<IReadOnlyList<CategoryProductionStepResult>> BuildStepResultsFromStagesAsync(Guid pipelineRunId, CancellationToken ct)
