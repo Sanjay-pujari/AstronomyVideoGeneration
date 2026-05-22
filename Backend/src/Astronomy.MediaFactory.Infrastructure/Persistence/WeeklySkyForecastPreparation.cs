@@ -1,9 +1,11 @@
 using Astronomy.MediaFactory.AstroData.Clients;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -137,16 +139,16 @@ public sealed class WeeklySkyForecastSegmentPlanner : IWeeklySkyForecastSegmentP
         {
             new("WeeklyIntro", "Long", 1, "Weekly Intro", "Set weekly expectation", context.WeekStartDate, [], "Context", "WeeklyIntroWideSky", 35, 0.8),
             new("MoonPhaseForecast", "Long", 2, "Moon Phase Forecast", "Explain moon trend", context.BestMoonNight, ["MOON"], "Moon", "BestMoonNight", 45, 0.85),
-            new("BestPlanets", "Long", 3, "Best Planets", "Rank top planets", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => o is not "MOON" and not "SUN").ToList(), "Planet", "BestPlanetOfWeek", 50, 0.9),
-            new("RecommendedNights", "Long", 4, "Recommended Nights", "Highlight best nights", bestNight?.Date, bestNight?.BestObjects ?? [], "Night", "RecommendedObservationNight", 40, 0.92),
-            new("WeeklyHighlights", "Long", 5, "Weekly Highlights", "Cover ranked events", context.WeekStartDate, context.WeeklyHighlights.Select(x => x.ObjectCode).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().Distinct().ToList(), "Event", "WeeklyHighlight", 45, 0.88),
-            new("AstroPhotographyTip", "Long", 6, "Astro Photography Tip", "Give practical tip", context.BestPhotographyNight, bestNight?.BestObjects ?? [], "Tip", "WeeklySummaryMap", 30, 0.7),
+            new("BestPlanets", "Long", 3, "Best Planets", "Rank top planets", bestNight?.Date, ((bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList()).Where(o => !string.IsNullOrWhiteSpace(o) && o is not "MOON" and not "SUN").ToList(), "Planet", "BestPlanetOfWeek", 50, 0.9),
+            new("RecommendedNights", "Long", 4, "Recommended Nights", "Highlight best nights", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Night", "RecommendedObservationNight", 40, 0.92),
+            new("WeeklyHighlights", "Long", 5, "Weekly Highlights", "Cover ranked events", context.WeekStartDate, context.WeeklyHighlights.Select(x => x.ObjectCode).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).Distinct().ToList(), "Event", "WeeklyHighlight", 45, 0.88),
+            new("AstroPhotographyTip", "Long", 6, "Astro Photography Tip", "Give practical tip", context.BestPhotographyNight, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Tip", "WeeklySummaryMap", 30, 0.7),
             new("WeeklyOutro", "Long", 7, "Weekly Outro", "Close and CTA", context.WeekEndDate, [], "Outro", "WeeklySummaryMap", 25, 0.6)
         };
         var shortSegments = new List<WeeklySkyForecastSegmentPlanItem>
         {
-            new("BiggestWeeklyHighlight", "Short", 1, "Biggest Weekly Highlight", "Fast hook", bestNight?.Date, bestNight?.BestObjects ?? [], "Highlight", "WeeklyHighlight", 20, 0.95),
-            new("BestViewingNight", "Short", 2, "Best Viewing Night", "Tell best night", bestNight?.Date, bestNight?.BestObjects ?? [], "Night", "RecommendedObservationNight", 18, 0.92),
+            new("BiggestWeeklyHighlight", "Short", 1, "Biggest Weekly Highlight", "Fast hook", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Highlight", "WeeklyHighlight", 20, 0.95),
+            new("BestViewingNight", "Short", 2, "Best Viewing Night", "Tell best night", bestNight?.Date, (bestNight?.BestObjects ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).ToList(), "Night", "RecommendedObservationNight", 18, 0.92),
             new("BestPlanetOfWeek", "Short", 3, "Best Planet Of Week", "Focus top planet", bestNight?.Date, [context.BestPlanetOfWeek ?? "JUPITER"], "Planet", "BestPlanetOfWeek", 18, 0.9),
             new("QuickOutro", "Short", 4, "Quick Outro", "CTA", context.WeekEndDate, [], "Outro", "WeeklySummaryMap", 10, 0.5)
         };
@@ -422,9 +424,9 @@ public sealed class WeeklySkyForecastPreparationOrchestrator(
                 var shortCmd = await ComposeConcatVideoAsync(shortSegmentPaths, shortVideoPath, outputPaths.ManifestsDirectory, "weekly-short", cancellationToken);
                 steps.Add(Step("ComposeShortVideo", 1));
                 var duration = await ProbeDurationSecondsAsync(longVideoPath, cancellationToken);
-                var validationWarnings = new List<string>();
-                finalVideoValidation = new WeeklySkyForecastFinalVideoValidation(validationErrors.Count == 0 && duration > 0, validationErrors, validationWarnings, File.Exists(longVideoPath), File.Exists(shortVideoPath), duration);
-                finalVideoResults = new WeeklySkyForecastFinalVideoResult(longVideoPath, shortVideoPath, longSegmentPaths.Concat(shortSegmentPaths).ToList(), duration, "1920x1080 / 1080x1920", finalVideoValidation.IsValid ? "Completed" : "CompletedWithErrors", $"{longCmd} | {shortCmd}", validationWarnings, validationErrors);
+                var finalVideoWarnings = new List<string>();
+                finalVideoValidation = new WeeklySkyForecastFinalVideoValidation(validationErrors.Count == 0 && duration > 0, validationErrors, finalVideoWarnings, File.Exists(longVideoPath), File.Exists(shortVideoPath), duration);
+                finalVideoResults = new WeeklySkyForecastFinalVideoResult(longVideoPath, shortVideoPath, longSegmentPaths.Concat(shortSegmentPaths).ToList(), duration, "1920x1080 / 1080x1920", finalVideoValidation.IsValid ? "Completed" : "CompletedWithErrors", $"{longCmd} | {shortCmd}", finalVideoWarnings, validationErrors);
                 finalVideoManifestPath = Path.Combine(outputPaths.ManifestsDirectory, "FinalVideoManifest.json");
                 await File.WriteAllTextAsync(finalVideoManifestPath, JsonSerializer.Serialize(finalVideoResults, JsonOptions), cancellationToken);
             }
