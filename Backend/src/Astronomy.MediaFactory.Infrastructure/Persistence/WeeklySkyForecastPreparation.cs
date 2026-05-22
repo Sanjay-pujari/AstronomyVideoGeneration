@@ -79,7 +79,8 @@ public sealed class WeeklySkyForecastContextBuilder(
         if (regionLookup.TryGetValue(normalizedRegionId, out region!))
             return true;
 
-        var aliasSource = regions.FirstOrDefault(r => RegionIdNormalizer.NormalizeRegionId(r.RegionId).Equals(normalizedRegionId, StringComparison.OrdinalIgnoreCase));
+        var requestedRegionId = normalizedRegionId;
+        var aliasSource = regions.FirstOrDefault(r => RegionIdNormalizer.NormalizeRegionId(r.RegionId).Equals(requestedRegionId, StringComparison.OrdinalIgnoreCase));
         if (aliasSource is not null)
         {
             var aliasKey = $"{aliasSource.Latitude:F4}|{aliasSource.Longitude:F4}|{aliasSource.Timezone}|{aliasSource.Language}";
