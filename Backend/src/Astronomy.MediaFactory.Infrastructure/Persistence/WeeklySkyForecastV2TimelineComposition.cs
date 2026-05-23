@@ -67,12 +67,31 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
         if (!File.Exists(draftPath)) File.WriteAllText(draftPath, "WeeklySkyForecast v2 Phase 6C composed timeline draft");
 
         var totalDuration = segmentResults.Sum(s => s.DurationSeconds);
+        var expectedRoot = Path.GetFullPath(prep.WorkingDirectoryPlan.RootPath).TrimEnd(Path.DirectorySeparatorChar);
+        var allCompositionPaths = new List<string>(segmentResults.Select(x => x.SourceSceneOutputPath))
+        {
+            draftPath,
+            audioPlan.NarrationTrackPath,
+            audioPlan.BackgroundMusicPath,
+            audioPlan.FinalMixPath,
+            prep.ThumbnailRenderPlan.PlannedOutputPath
+        };
+        allCompositionPaths.AddRange(shorts.Select(x => x.PlannedOutputPath));
+        var mismatchedRoot = allCompositionPaths
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(Path.GetFullPath)
+            .Any(x => !x.StartsWith(expectedRoot, StringComparison.OrdinalIgnoreCase));
+        var singlePipelineRunIdUsed = !mismatchedRoot;
+        if (!singlePipelineRunIdUsed)
+        {
+            blocking.Add("Mixed pipelineRunId detected across composition inputs.");
+        }
         var noGaps = segmentResults.Count > 0 && segmentResults.Zip(segmentResults.Skip(1), (a, b) => a.EndSecond == b.StartSecond).All(x => x) && segmentResults[0].StartSecond == 0;
         var thumbnailExcluded = segmentResults.All(x => !x.SceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase));
         var reuseResolved = segmentResults.Any(x => x.SceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.SourceSceneOutputPath));
 
         var validation = new TimelineCompositionValidation(
-            blocking.Count == 0 && totalDuration == 110 && targetDuration == 110 && noGaps,
+            blocking.Count == 0 && totalDuration == 110 && targetDuration == 110 && noGaps && singlePipelineRunIdUsed,
             File.Exists(draftPath),
             totalDuration,
             targetDuration,
@@ -81,6 +100,7 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
             thumbnailExcluded,
             reuseResolved,
             narrationSync.Errors.Count == 0,
+            singlePipelineRunIdUsed,
             true,
             false,
             blocking,
