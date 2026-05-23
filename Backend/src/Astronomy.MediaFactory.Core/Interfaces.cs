@@ -1195,6 +1195,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklySceneChoreographyPackage? SceneChoreographyPackage,
     WeeklyCinematicChoreographyPackage? CinematicChoreographyPackage,
     WeeklyRenderExecutionPackage? RenderExecutionPackage,
+    WeeklyExecutionValidationReport? ExecutionValidation,
     WeeklyPreviewStabilityReport? PreviewStability,
     WeeklyPhase5FoundationStatus? Phase5FoundationStatus,
     bool LegacyEditorialPackageDeprecated,
@@ -1409,6 +1410,15 @@ public sealed record TransitionExecutionDirective(string FromSceneCode, string T
 public sealed record RendererExecutionContract(string ContractId, string SceneCode, string RendererType, string SelectedSourceType, IReadOnlyList<string> RequiredInputs, IReadOnlyList<string> ExpectedOutputs, string MotionDirectiveCode, IReadOnlyList<string> OverlayDirectiveCodes, IReadOnlyList<string> TransitionDirectiveCodes, string FallbackPolicy, int RenderPriority, bool RendererDecisionLocked);
 public sealed record ThumbnailExecutionContract(string RendererType, string VisualSourceType, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string FocalHierarchy, string EyeFlowDirection, string EmotionalFocus, string OverlaySafeArea, string MobileSafeFraming, string ShortsCropStrategy, IReadOnlyList<string> RequiredAssets, string FallbackPolicy, string OutputRole);
 public sealed record WeeklyPhase5FoundationStatus(bool IsFrozen, bool IsReadyForPhase6, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, IReadOnlyList<string> VerifiedChecks);
+public sealed record WeeklyExecutionValidationReport(
+    bool OverlaysValidated,
+    bool TransitionsValidated,
+    bool TimelineValidated,
+    bool RendererContractsValidated,
+    bool ThumbnailContractsValidated,
+    double NarrationTimelineCoveragePercent,
+    IReadOnlyList<string> DuplicateSceneReuseIssues,
+    IReadOnlyList<string> MissingExecutionFields);
 public sealed record WeeklyCinematicChoreographyPackage(
     IReadOnlyList<WeeklyCinematicScene> Scenes,
     IReadOnlyList<WeeklySceneTimeline> SceneTimeline,

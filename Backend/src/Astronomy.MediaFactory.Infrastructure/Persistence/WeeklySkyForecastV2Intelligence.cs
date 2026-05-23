@@ -93,13 +93,13 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var arc = new WeeklyStoryArc(
             "This week has a standout sky story",
             "Best windows, moon/planet moments, and visual priorities",
-            "Weekly skywatching progression",
-            "Start with the strongest shared evening view and anchor the rest of the week around it.",
-            ["Hook the week with a story headline", "Cover the main sky event", "Recommend the best night", "Highlight moon or planet hero", "Share a practical photography tip", "Close with a clear call-to-action"],
-            "Plan one primary observation night and one alternate window.",
+            "One beautiful evening anchors the week",
+            "Start with one beautiful evening that anchors the week, then enjoy nearby evenings with ease.",
+            ["Hook the week with a cinematic sky promise", "Cover the hero evening grouping", "Recommend the best night", "Show Jupiter adding scale and presence", "Show the Moon bringing calm visual beauty", "Close with simple viewing guidance"],
+            "Step outside shortly after sunset for simple viewing guidance.",
             primaryObjects,
             events.Select(e => e.PrimaryDate.ToString("yyyy-MM-dd")).Distinct().Take(6).ToList(),
-            events.OrderByDescending(e => e.StoryScore).Take(3).Select(e => e.Title).ToList());
+            events.OrderByDescending(e => e.StoryScore).Select(e => e.Title).Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList());
         var stepResults = new List<CategoryProductionStepResult>
         {
             new("weekly_skyfield_context", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Context built", null, []),
@@ -135,6 +135,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             SceneChoreographyPackage: null,
             CinematicChoreographyPackage: null,
             RenderExecutionPackage: null,
+            ExecutionValidation: null,
             PreviewStability: null,
             Phase5FoundationStatus: null,
             LegacyEditorialPackageDeprecated: false,
@@ -154,16 +155,17 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         {
             Headline = normalizedEditorialPackage.HeroNormalizedEvent.Title,
             Subtitle = $"Peak night: {normalizedEditorialPackage.HeroNormalizedEvent.PeakDate:yyyy-MM-dd}",
-            StoryTheme = "Best night anticipation, Jupiter scale, Moon calm beauty, and practical viewing confidence."
+            StoryTheme = "One beautiful evening anchors the week, nearby evenings remain easy to enjoy, Jupiter adds scale and presence, and the Moon brings calm visual beauty."
         };
         baseResponse = baseResponse with { WeeklyStoryArc = arc };
         var (sceneChoreographyPackage, cinematicChoreographyPackage) = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
         var renderExecutionPackage = WeeklySkyForecastV2RenderExecutionBuilder.Build(narrationPlan, hybridScenePlanPackage, cinematicChoreographyPackage, baseResponse.Region);
         var deprecatedLegacyEditorialPackage = BuildDeprecatedLegacyEditorialPackage(normalizedEditorialPackage);
         var fullResponse = baseResponse with { EditorialStoryPackage = deprecatedLegacyEditorialPackage, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, LegacyEditorialPackageDeprecated = true };
-        var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(fullResponse);
-        var phase5 = WeeklySkyForecastV2PreviewStabilityValidator.BuildFoundationStatus(fullResponse with { PreviewStability = previewStability });
-        return fullResponse with { PreviewStability = previewStability, Phase5FoundationStatus = phase5 };
+        var executionValidation = WeeklySkyForecastV2PreviewStabilityValidator.ValidateExecution(fullResponse);
+        var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(fullResponse with { ExecutionValidation = executionValidation });
+        var phase5 = WeeklySkyForecastV2PreviewStabilityValidator.BuildFoundationStatus(fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability });
+        return fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability, Phase5FoundationStatus = phase5 };
     }
 
     private static WeeklyEditorialStoryPackage BuildDeprecatedLegacyEditorialPackage(WeeklyNormalizedEditorialPackage normalized)
@@ -182,7 +184,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             EmotionalScore: 88,
             VisualScore: 90,
             RecommendedVisualStrategy: hero.RecommendedVisualStrategy,
-            WhyThisIsHero: "Legacy package rebuilt from normalized editorial package.",
+            WhyThisIsHero: "Deprecated legacy package rebuilt from normalized editorial package.",
             SupportingDates: hero.SupportingDates);
         return new WeeklyEditorialStoryPackage(
             HeroEvent: heroEvent,
@@ -195,7 +197,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             CinematicMoments: [],
             ThumbnailDirection: new WeeklyThumbnailDirection(["Weekly Sky Forecast"], hero.PrimaryObjects, [], "Calm awe", hero.RecommendedVisualStrategy, "Legacy package points to normalized thumbnail direction.", "Twilight west sky", "Look west this week"),
             ShortsCandidates: [],
-            VisualStrategySummary: "Deprecated legacy package rebuilt from normalizedEditorialPackage.",
+            VisualStrategySummary: "Deprecated legacy package rebuilt from normalizedEditorialPackage using cinematic viewer language.",
             Warnings: ["Deprecated: Use normalizedEditorialPackage as authoritative source."]
         );
     }
@@ -520,7 +522,19 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         return new WeeklyPhase5FoundationStatus(frozen, frozen, blocking, response.PreviewStability?.Warnings ?? [], checks);
     }
 
-    private static readonly string[] ForbiddenStoryPhrases = ["evening sky lineup", "same viewing window grouping", "high-value weekly observation event", "weekly visibility momentum", "backup opportunities", "observation event", "grouping event", "practical planning value", "grouping story", "one continuous evening sky story"];
+    private static readonly string[] ForbiddenStoryPhrases = ["evening sky lineup", "same viewing window grouping", "high-value weekly observation event", "weekly visibility momentum", "backup opportunities", "observation event", "grouping event", "practical planning value", "grouping story", "one continuous evening sky story", "alternate window", "practical planning", "visibility and timing", "momentum through the week"];
+    public static WeeklyExecutionValidationReport ValidateExecution(WeeklySkyForecastV2IntelligenceResponse response)
+    {
+        var pkg = response.RenderExecutionPackage!;
+        var overlaysValidated = pkg.OverlayExecutionDirectives.All(x => !string.IsNullOrWhiteSpace(x.DirectiveId) && !string.IsNullOrWhiteSpace(x.SceneCode) && !string.IsNullOrWhiteSpace(x.OverlayType) && !string.IsNullOrWhiteSpace(x.OverlayText) && !string.IsNullOrWhiteSpace(x.Animation) && !string.IsNullOrWhiteSpace(x.SafeArea) && !string.IsNullOrWhiteSpace(x.TypographyRole));
+        var transitionsValidated = pkg.TransitionExecutionDirectives.All(x => !string.IsNullOrWhiteSpace(x.DirectiveId) && !string.IsNullOrWhiteSpace(x.FromSceneCode) && !string.IsNullOrWhiteSpace(x.ToSceneCode) && !string.IsNullOrWhiteSpace(x.TransitionType) && !string.IsNullOrWhiteSpace(x.EmotionalPurpose) && x.DurationSeconds > 0);
+        var timeline = pkg.ExecutionTimeline.OrderBy(x => x.StartSecond).ToList();
+        var timelineValidated = timeline.Count > 0 && timeline.First().StartSecond == 0 && timeline.Last().EndSecond == 110 && timeline.Zip(timeline.Skip(1), (a, b) => b.StartSecond - a.EndSecond).All(x => x == 0) && timeline.All(x => !x.IsThumbnailOnly);
+        var rendererContractsValidated = pkg.RendererExecutionContracts.Count == pkg.ExecutionScenes.Count && pkg.RendererExecutionContracts.All(x => x.RendererDecisionLocked && !string.IsNullOrWhiteSpace(x.ContractId) && !string.IsNullOrWhiteSpace(x.SceneCode));
+        var thumbnailContractsValidated = !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.RendererType) && !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.VisualSourceType) && pkg.ThumbnailExecutionContract.PrimaryObjects.Count > 0 && !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.FocalHierarchy);
+        var coverage = timelineValidated ? 100d : Math.Round((timeline.Sum(x => Math.Max(0, x.EndSecond - x.StartSecond)) / 110d) * 100d, 2);
+        return new WeeklyExecutionValidationReport(overlaysValidated, transitionsValidated, timelineValidated, rendererContractsValidated, thumbnailContractsValidated, coverage, [], []);
+    }
     public static WeeklyPreviewStabilityReport Validate(WeeklySkyForecastV2IntelligenceResponse response)
     {
         var narrationPlan = response.NarrationPlan!;
@@ -568,11 +582,14 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         }
         var hasTimelineCoverage = renderExecutionPackage.ExecutionTimeline.Count > 0
             && renderExecutionPackage.ExecutionTimeline.Min(x => x.StartSecond) == 0
+            && renderExecutionPackage.ExecutionTimeline.Max(x => x.EndSecond) == 110
             && renderExecutionPackage.ExecutionTimeline.OrderBy(x => x.StartSecond).Zip(renderExecutionPackage.ExecutionTimeline.OrderBy(x => x.StartSecond).Skip(1), (a, b) => b.StartSecond - a.EndSecond).All(g => g == 0);
         if (!hasTimelineCoverage) { blocking.Add("Long-form timeline has gaps or overlaps."); affectedPaths.Add("RenderExecutionPackage.ExecutionTimeline"); }
         if (renderExecutionPackage.OverlayExecutionDirectives.Any(o => string.IsNullOrWhiteSpace(o.SafeArea))) { blocking.Add("Overlay directives must include safe area."); affectedPaths.Add("RenderExecutionPackage.OverlayExecutionDirectives"); }
         if (renderExecutionPackage.MotionExecutionDirectives.Any(m => string.IsNullOrWhiteSpace(m.CameraBehavior) || string.IsNullOrWhiteSpace(m.MotionStyle))) { blocking.Add("Motion directives must define cameraBehavior and motionStyle."); affectedPaths.Add("RenderExecutionPackage.MotionExecutionDirectives"); }
         if (renderExecutionPackage.TransitionExecutionDirectives.Count < renderExecutionPackage.ExecutionScenes.Count + 1) { blocking.Add("Transition directives missing scene boundary coverage."); affectedPaths.Add("RenderExecutionPackage.TransitionExecutionDirectives"); }
+        if (response.ExecutionValidation is null || !response.ExecutionValidation.OverlaysValidated || !response.ExecutionValidation.TransitionsValidated || !response.ExecutionValidation.TimelineValidated || !response.ExecutionValidation.RendererContractsValidated || !response.ExecutionValidation.ThumbnailContractsValidated || response.ExecutionValidation.NarrationTimelineCoveragePercent < 100d)
+        { blocking.Add("Execution validation failed."); affectedPaths.Add("ExecutionValidation"); }
         var readyForAssetResolution = blocking.Count == 0;
         var readyForSceneChoreography = readyForAssetResolution && hybridScenePlanPackage.ScenePlans.Count <= 6;
         var readyForRenderPreparation = readyForSceneChoreography
