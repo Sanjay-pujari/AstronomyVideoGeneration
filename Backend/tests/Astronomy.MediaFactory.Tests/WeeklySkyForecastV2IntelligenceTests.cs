@@ -121,6 +121,12 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         });
         Assert.Equal(pathList.Length, pathList.Distinct(StringComparer.Ordinal).Count());
         Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.IsValid);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.SceneRequestsGenerated);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.AssetResolutionPlanned);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.StellariumJobsPlanned);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.OverlayJobsPlanned);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.TimelinePlanValid);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.ThumbnailPlanValid);
         Assert.Empty(response.RenderPreparationPackage.RenderPreparationValidation.BlockingIssues);
         Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.ReadyForSceneRendering);
         Assert.False(response.RenderPreparationPackage.RenderPreparationValidation.ReadyForRendering);
@@ -179,6 +185,8 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.True(response.Phase5FoundationStatus.IsReadyForPhase6);
         Assert.True(response.RenderPreparationFreezeStatus!.IsFrozen);
         Assert.True(response.RenderPreparationFreezeStatus.IsReadyForPhase6B);
+        Assert.NotEmpty(response.RenderPreparationFreezeStatus.VerifiedChecks);
+        Assert.Empty(response.RenderPreparationFreezeStatus.BlockingIssues);
         Assert.True(response.PreviewStability.ReadyForRenderPreparation);
         Assert.False(response.PreviewStability.ReadyForRendering);
         Assert.DoesNotContain("DailySkyGuide", response.Category, StringComparison.OrdinalIgnoreCase);
