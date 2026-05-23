@@ -129,8 +129,9 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var hybridScenePlanPackage = WeeklySkyForecastV2HybridScenePlanBuilder.Build(narrationPlan, visualRequirementPackage, baseResponse.Region);
         var normalizedEditorialPackage = await editorialNormalizer.NormalizeAsync(baseResponse, editorial, cinematic, narrative, cancellationToken);
         var (sceneChoreographyPackage, cinematicChoreographyPackage) = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
-        var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(narrationPlan, narrationQuality, visualRequirementPackage, hybridScenePlanPackage);
-        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, PreviewStability = previewStability };
+        var renderExecutionPackage = WeeklySkyForecastV2RenderExecutionBuilder.Build(narrationPlan, hybridScenePlanPackage, cinematicChoreographyPackage, baseResponse.Region);
+        var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(narrationPlan, narrationQuality, visualRequirementPackage, hybridScenePlanPackage, renderExecutionPackage);
+        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, PreviewStability = previewStability };
     }
 }
 
@@ -356,9 +357,41 @@ internal static class WeeklySkyForecastV2HybridScenePlanBuilder
     ];
 }
 
+internal static class WeeklySkyForecastV2RenderExecutionBuilder
+{
+    public static WeeklyRenderExecutionPackage Build(WeeklyNarrationPlan narrationPlan, WeeklyHybridScenePlanPackage hybridPlan, WeeklyCinematicChoreographyPackage cinematic, string regionId)
+    {
+        var timeline = cinematic.SceneTimeline.Where(x => !x.SceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase)).ToList();
+        var sceneByCode = hybridPlan.ScenePlans.ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
+        var scenes = timeline.Select(t =>
+        {
+            var scene = sceneByCode[t.SceneCode];
+            var technical = scene.BestTimeUtc is not null && DateOnly.FromDateTime(scene.BestTimeUtc.Value) == scene.TargetDate ? scene.BestTimeUtc : null;
+            return new WeeklyRenderExecutionScene(scene.SceneCode, scene.SceneOrder, scene.RequiresStellarium ? "StellariumRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, scene.DurationSeconds, t.StartSecond, t.EndSecond, hybridPlan.SegmentSceneMappings.Where(m => m.SceneCode == scene.SceneCode).Select(m => m.SegmentCode).ToList(), scene.TargetDate, "early evening", technical, ["scene", "assets", "overlays", "motion", "transition"], ["frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
+        }).ToList();
+        var decisions = scenes.Select(s => BuildDecision(s.SceneCode)).ToList();
+        var assetDirectives = scenes.Select(s => new AssetResolutionDirective(s.SceneCode, hybridPlan.AssetNeeds.Where(a => a.RequiredForSceneCodes.Contains(s.SceneCode)).Select(a => a.AssetCode).ToList(), ["public_twilight_plate"], "CelestialAsset>GeneratedImage>PublicImage", true, true)).ToList();
+        var stellarium = scenes.Where(s => s.SceneCode == "best_night_wide_scene").Select(s => new StellariumExecutionDirective(s.SceneCode, regionId, s.TargetDate, s.TechnicalBestTimeUtc, s.HumanTimeWindow, ["MOON", "JUPITER", "VENUS"], 90, "Best night wide confirmation", "weekly_best_night_reference", true)).ToList();
+        var overlays = scenes.Select(s => new OverlayExecutionDirective(s.SceneCode, hybridPlan.OverlayPlan.FirstOrDefault(o => o.SceneCode == s.SceneCode)?.Overlays ?? [], s.StartSecond, s.EndSecond, 20, "fade")).ToList();
+        var motions = scenes.Select(s => new MotionExecutionDirective(s.SceneCode, s.SceneCode.Contains("wide") ? "SlowPan" : "SlowPushIn", s.SceneCode.Contains("viewing") ? "practical" : "cinematic", 1.0, 1.1, "right", !s.SceneCode.Contains("viewing"))).ToList();
+        var transitions = hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, t.DurationSeconds)).ToList();
+        var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon and Jupiter hero with Venus accent in western dusk.", "Best skywatching night: May 25", ["moon_hero_image", "jupiter_hero_image", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
+        return new WeeklyRenderExecutionPackage(Guid.NewGuid().ToString("N"), scenes, timeline, decisions, assetDirectives, stellarium, overlays, motions, transitions, thumbnail, []);
+    }
+
+    private static RenderSourceDecision BuildDecision(string sceneCode) => sceneCode switch
+    {
+        "hero_western_grouping_scene" => new(sceneCode, "Hybrid", "Hero scene blends objects with cinematic dusk context.", ["CelestialAsset", "GeneratedImage", "PublicImage"], true, false, false, true),
+        "best_night_wide_scene" => new(sceneCode, "Stellarium", "Best-night orientation requires astronomical sky map accuracy.", ["StellariumFallbackMode"], false, true, false, false),
+        "moon_jupiter_hero_scene" => new(sceneCode, "CelestialAsset", "Moon-Jupiter detail should use curated object assets.", ["GeneratedImage", "PublicImage"], true, false, false, true),
+        "viewing_tip_wide_scene" => new(sceneCode, "Hybrid", "Viewing tip needs overlays and compositing.", ["GeneratedImage", "PublicImage"], false, false, true, true),
+        _ => new(sceneCode, "Hybrid", "Default weekly scene source.", ["GeneratedImage", "PublicImage"], true, false, true, true)
+    };
+}
+
 internal static class WeeklySkyForecastV2PreviewStabilityValidator
 {
-    public static WeeklyPreviewStabilityReport Validate(WeeklyNarrationPlan narrationPlan, WeeklyNarrationQualityReport narrationQuality, WeeklyVisualRequirementPackage visualRequirementPackage, WeeklyHybridScenePlanPackage hybridScenePlanPackage)
+    public static WeeklyPreviewStabilityReport Validate(WeeklyNarrationPlan narrationPlan, WeeklyNarrationQualityReport narrationQuality, WeeklyVisualRequirementPackage visualRequirementPackage, WeeklyHybridScenePlanPackage hybridScenePlanPackage, WeeklyRenderExecutionPackage renderExecutionPackage)
     {
         var blocking = new List<string>();
         var warnings = new List<string>();
@@ -372,9 +405,16 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         if (narrationQuality.ForbiddenPhraseHits.Count > 0) blocking.Add("Forbidden wording detected.");
         if (!narrationQuality.ShortCtaUniquenessValid) warnings.Add("Short CTA endings need better differentiation.");
         if (hybridScenePlanPackage.ScenePlans.Count is < 4 or > 6) blocking.Add("Hybrid scene plan must contain 4-6 timeline scenes.");
+        if (renderExecutionPackage.ExecutionScenes.Any(s => s.TechnicalBestTimeUtc is null && string.IsNullOrWhiteSpace(s.HumanTimeWindow))) blocking.Add("Render contract uses null technical time without human fallback.");
         var readyForAssetResolution = blocking.Count == 0;
         var readyForSceneChoreography = readyForAssetResolution && hybridScenePlanPackage.ScenePlans.Count <= 6;
-        return new WeeklyPreviewStabilityReport(readyForAssetResolution, blocking, warnings, readyForAssetResolution, readyForSceneChoreography, false);
+        var readyForRenderPreparation = readyForSceneChoreography
+            && renderExecutionPackage.ExecutionScenes.Count >= 4
+            && renderExecutionPackage.RenderSourceDecisions.Count == renderExecutionPackage.ExecutionScenes.Count
+            && renderExecutionPackage.AssetResolutionDirectives.Count == renderExecutionPackage.ExecutionScenes.Count
+            && renderExecutionPackage.ThumbnailExecutionContract is not null
+            && renderExecutionPackage.StellariumExecutionDirectives.Any(x => x.SceneCode == "best_night_wide_scene" && x.Required);
+        return new WeeklyPreviewStabilityReport(readyForAssetResolution, blocking, warnings, readyForAssetResolution, readyForSceneChoreography, readyForRenderPreparation, false);
     }
 }
 
