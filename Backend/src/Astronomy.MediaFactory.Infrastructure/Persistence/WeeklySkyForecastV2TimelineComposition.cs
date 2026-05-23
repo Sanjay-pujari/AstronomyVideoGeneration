@@ -72,8 +72,27 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
             Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-final-mix.wav"),
             false, false, false, "Planned");
 
+        var segmentCodes = segmentResults.Select(x => x.SceneCode).ToArray();
+        static string[] ResolveShortSourceScenes(string shortCode, IReadOnlyList<string> allSceneCodes)
+        {
+            var unique = allSceneCodes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            string[] Pick(params string[] preferred)
+                => preferred.Where(p => unique.Contains(p, StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+            var selected = shortCode switch
+            {
+                "short_hero" => Pick("hero_western_grouping_scene", "moon_planet_highlight_scene"),
+                "short_best_night" => Pick("best_night_wide_scene", "viewing_photography_tip_scene"),
+                "short_moon" => Pick("moon_planet_highlight_scene", "hero_western_grouping_scene"),
+                _ => Array.Empty<string>()
+            };
+
+            if (selected.Length > 0) return selected;
+            return unique.Take(2).ToArray();
+        }
+
         var shorts = preview.CinematicStoryBlueprint?.ShortsBlueprints.Select(s =>
-            new ShortsCompositionPlan(s.ShortCode, s.Title, segmentResults.Select(x => x.SceneCode).Take(2).ToArray(), [s.ShortCode], s.SuggestedDurationSeconds, "9:16", "center-safe-crop", Path.Combine(prep.WorkingDirectoryPlan.FinalPath, $"short-{s.ShortCode}.mp4"), "Planned")).ToList()
+            new ShortsCompositionPlan(s.ShortCode, s.Title, ResolveShortSourceScenes(s.ShortCode, segmentCodes), [s.ShortCode], s.SuggestedDurationSeconds, "9:16", "center-safe-crop", Path.Combine(prep.WorkingDirectoryPlan.FinalPath, $"short-{s.ShortCode}.mp4"), "Planned")).ToList()
             ?? [];
 
         var draftPath = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, "weekly-skyforecast-longform-draft.mp4");

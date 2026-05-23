@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -115,7 +116,12 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         foreach (var shortPlan in timeline.ShortsCompositionPlans)
         {
             var sourceSceneCode = shortPlan.SourceSceneCodes.FirstOrDefault() ?? string.Empty;
-            var match = scenes.SceneRenderResults.FirstOrDefault(x => x.SceneCode == sourceSceneCode);
+            var sceneMatches = shortPlan.SourceSceneCodes
+                .Select(code => scenes.SceneRenderResults.FirstOrDefault(x => x.SceneCode.Equals(code, StringComparison.OrdinalIgnoreCase)))
+                .Where(x => x is not null)
+                .Select(x => x!)
+                .ToList();
+            var match = sceneMatches.FirstOrDefault();
             var source = match?.OutputPath ?? shortPlan.PlannedOutputPath;
             var output = Path.Combine(shortsFinalDir, $"{shortPlan.ShortCode}.mp4");
             var shortNarrationText = BuildShortNarrationText(shortPlan, preview, orchestrationContext.Request.RegionName ?? orchestrationContext.Request.RegionId ?? "your region");
@@ -124,25 +130,22 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             await speechSynthesisService.SynthesizeToFileAsync(shortNarrationText, shortNarrationPath, cancellationToken);
             await BuildFinalMixAsync(shortNarrationPath, shortFinalMixPath, ffmpegService, mediaValidationService, blocking, cancellationToken);
             var coverPath = Path.Combine(shortsThumbsDir, $"{shortPlan.ShortCode}-cover.jpg");
-            if (!string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
-            {
-                CopyFile(thumbnailPath, coverPath, blocking, $"short-cover-{shortPlan.ShortCode}");
-            }
+            await BuildShortCoverAsync(coverPath, source, shortPlan, ffmpegService, blocking, cancellationToken);
             var encoded = await RenderShortAsync(output, source, shortFinalMixPath, shortPlan.TargetDurationSeconds, ffmpegService, blocking, shortPlan.ShortCode, cancellationToken);
             var ok = encoded && await ValidateMp4Async(output, 1, mediaValidationService, blocking, $"short {shortPlan.ShortCode}", cancellationToken);
             var metadataPath = Path.Combine(shortsMetadataDir, $"{shortPlan.ShortCode}.json");
+            var focusObjects = ResolveFocusObjects(shortPlan.ShortCode);
             var shortMeta = new
             {
                 shortCode = shortPlan.ShortCode,
-                platformTitle = shortPlan.Title,
+                title = shortPlan.Title,
                 description = shortNarrationText,
                 hashtags = new[] { "#Astronomy", "#NightSky", "#Moon", "#Jupiter", "#Venus", "#SkyWatching", $"#{(orchestrationContext.Request.RegionName ?? orchestrationContext.Request.RegionId ?? "Region").Replace(" ", string.Empty)}" },
-                durationSeconds = shortPlan.TargetDurationSeconds,
-                aspectRatio = "9:16",
-                narrationPath = shortNarrationPath,
-                finalMixPath = shortFinalMixPath,
+                focusObjects,
+                narrationText = shortNarrationText,
                 videoPath = output,
                 coverPath = coverPath,
+                audioPath = shortFinalMixPath,
                 targetPlatforms = new[] { "YouTubeShorts", "InstagramReels", "FacebookReels" }
             };
             await File.WriteAllTextAsync(metadataPath, JsonSerializer.Serialize(shortMeta, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
@@ -345,19 +348,36 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         var bestNight = preview.SkyfieldSummary.BestMoonNight?.ToString("dddd", CultureInfo.InvariantCulture)
                         ?? preview.EventIntelligence.OrderByDescending(x => x.VisualScore).FirstOrDefault()?.PrimaryDate.ToString("dddd", CultureInfo.InvariantCulture)
                         ?? "this week";
-        var objectNames = preview.EventIntelligence
-            .SelectMany(x => x.VisibleObjectNames ?? [])
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(3)
-            .ToList();
-        var objects = objectNames.Count > 0 ? string.Join(", ", objectNames) : "the Moon, bright planets, and star clusters";
-        var hook = shortPlan.ShortCode.Contains("best_night", StringComparison.OrdinalIgnoreCase)
-            ? "Stop scrolling—this is your best sky night."
-            : shortPlan.ShortCode.Contains("moon", StringComparison.OrdinalIgnoreCase)
-                ? "Tonight, the Moon steals the show."
-                : "Look up tonight—your sky has a lineup.";
-        return $"{hook} This week over {regionName}, {objects} are visible after sunset. Best viewing peaks on {bestNight}. Face west after sunset, wait ten minutes for darker skies, and track bright objects near the Moon. Follow for tomorrow's sky guide.";
+        return shortPlan.ShortCode switch
+        {
+            "short_hero" => $"Look west after sunset this week over {regionName}. The Moon, Jupiter, and Venus create a beautiful evening lineup. Step outside after dusk, find a clear western horizon, and watch the brightest objects appear together. Follow AstroPulse for your next sky guide.",
+            "short_best_night" => $"The best sky-watching moment this week comes on {bestNight} after sunset, when the western sky is still glowing over {regionName}. Look for the Moon near Jupiter, with Venus shining nearby. Give your eyes a few minutes to adjust and enjoy the view. Follow AstroPulse for more weekly sky timing guides.",
+            "short_moon" => $"This week, the Moon appears close to Jupiter in the evening sky over {regionName}. The bright Moon makes the scene easy to find, while Jupiter glows nearby like a golden planet. Look west after sunset and hold the view for a few quiet minutes. Follow AstroPulse for more sky events.",
+            _ => $"Look west after sunset this week over {regionName}. Bright evening targets are easy to spot, and {bestNight} offers a great viewing window. Step outside after dusk, let your eyes adjust, and enjoy the sky. Follow AstroPulse for your next sky guide."
+        };
+    }
+
+    private static IReadOnlyList<string> ResolveFocusObjects(string shortCode)
+        => shortCode switch
+        {
+            "short_hero" => ["Moon", "Jupiter", "Venus"],
+            "short_best_night" => ["Moon", "Jupiter", "Venus"],
+            "short_moon" => ["Moon", "Jupiter"],
+            _ => ["Moon", "Jupiter", "Venus"]
+        };
+
+    private static async Task BuildShortCoverAsync(string coverPath, string sourceVideoPath, ShortsCompositionPlan shortPlan, IFFmpegService ffmpegService, List<string> blocking, CancellationToken cancellationToken)
+    {
+        var text = shortPlan.ShortCode switch
+        {
+            "short_hero" => "Moon, Jupiter & Venus",
+            "short_best_night" => "Best Night To Watch",
+            "short_moon" => "Moon Meets Jupiter",
+            _ => shortPlan.Title
+        };
+        var safeText = Regex.Replace(text, @"[^a-zA-Z0-9,\-& ]", string.Empty);
+        var filter = $"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,drawbox=x=0:y=1560:w=1080:h=260:color=black@0.58:t=fill,drawtext=text='{safeText}':fontcolor=white:fontsize=66:x=(w-text_w)/2:y=1640";
+        await RunFfmpegAsync(ffmpegService, $"-y -i \"{sourceVideoPath}\" -vf \"{filter}\" -frames:v 1 \"{coverPath}\"", coverPath, blocking, $"short-cover-{shortPlan.ShortCode}", cancellationToken);
     }
 
     private static bool CopyFile(string source, string destination, List<string> blocking, string label)
