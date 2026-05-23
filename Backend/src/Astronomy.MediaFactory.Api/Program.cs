@@ -301,6 +301,31 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/compose-timeline", asyn
     return Results.Ok(result);
 });
 
+
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastFinalMediaOrchestrator finalMediaOrchestrator, IWeeklySkyForecastTimelineCompositionOrchestrator timelineOrchestrator, IContentPlanningService planning, CancellationToken ct) =>
+{
+    var contentPlanId = request.ContentGenerationPlanId;
+    if (!contentPlanId.HasValue)
+    {
+        var plan = await planning.GeneratePlanAsync(new GenerateContentPlanRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc.UtcDateTime, GeneratedByAi: true), ct);
+        contentPlanId = plan.ContentGenerationPlanId;
+    }
+
+    var pipelineRunId = request.PipelineRunId ?? contentPlanId.Value;
+    var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, request.WeekStartDate, request.Diagnostics, pipelineRunId, contentPlanId);
+    var timeline = await timelineOrchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
+    var finalMedia = await finalMediaOrchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
+
+    return Results.Ok(new
+    {
+        contentGenerationPlanId = contentPlanId,
+        pipelineRunId,
+        workingDirectoryRoot = Path.GetDirectoryName(timeline.LongFormTimelineResult.OutputPath),
+        timelineCompositionPackage = timeline,
+        finalMediaPackage = finalMedia
+    });
+});
+
 app.MapPost("/api/content-planning/weekly-skyforecast-v2/run-through-timeline", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastV2IntelligenceService intelligenceService, IWeeklySkyForecastSceneRenderingOrchestrator sceneOrchestrator, IWeeklySkyForecastTimelineCompositionOrchestrator timelineOrchestrator, IContentPlanningService planning, CancellationToken ct) =>
 {
     var contentPlanId = request.ContentGenerationPlanId;

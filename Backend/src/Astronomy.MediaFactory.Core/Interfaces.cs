@@ -1315,6 +1315,32 @@ public interface IWeeklySkyForecastTimelineCompositionOrchestrator
     Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken);
 }
 
+
+public interface IWeeklySkyForecastFinalMediaOrchestrator
+{
+    Task<FinalMediaPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken);
+}
+
+public sealed record FinalMediaPackage(
+    FinalLongFormVideoResult LongFormFinalVideo,
+    NarrationAudioResult NarrationAudioResult,
+    BackgroundMusicResult BackgroundMusicResult,
+    FinalAudioMixResult FinalAudioMixResult,
+    IReadOnlyList<ShortFinalResult> ShortsFinalResults,
+    ThumbnailFinalResult ThumbnailFinalResult,
+    SubtitleResult SubtitleResult,
+    FinalMediaValidation FinalMediaValidation,
+    FinalMediaFreezeStatus FinalMediaFreezeStatus);
+public sealed record FinalLongFormVideoResult(string OutputPath, double DurationSeconds, string Resolution, int Fps, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record NarrationAudioResult(string NarrationAudioPath, string Language, string VoiceCode, double DurationSeconds, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record BackgroundMusicResult(string? MusicPath, string Mode, double DurationSeconds, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record FinalAudioMixResult(string FinalMixedAudioPath, double DurationSeconds, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record ShortFinalResult(string ShortCode, string OutputPath, double DurationSeconds, string AspectRatio, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record ThumbnailFinalResult(string OutputPath, string Status, bool ReusedFromPhase6B, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record SubtitleResult(string SrtPath, string VttPath, string Status, bool CaptionsRendered, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record FinalMediaValidation(bool IsValid, bool NarrationAudioRendered, bool FinalAudioMixed, bool LongFormVideoRendered, bool ShortsRendered, bool ThumbnailAvailable, bool SubtitlesReady, bool DurationValid, bool OutputFilesExist, bool ReadyForHumanReview, bool ReadyForPublishing, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
+public sealed record FinalMediaFreezeStatus(bool IsFrozen, bool IsReadyForPhase7, IReadOnlyList<string> VerifiedChecks, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
+
 public interface IWeeklySkyForecastV2EditorialIntelligenceBuilder
 {
     Task<WeeklyEditorialStoryPackage> BuildAsync(WeeklySkyForecastV2IntelligenceResponse intelligence, CancellationToken cancellationToken);
