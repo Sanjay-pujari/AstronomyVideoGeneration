@@ -458,7 +458,7 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
         {
             var scene = sceneByCode[t.SceneCode];
             var technical = scene.TargetDate == new DateOnly(2026, 5, 25) ? DateTime.Parse("2026-05-25T18:00:00Z") : (scene.BestTimeUtc is not null && DateOnly.FromDateTime(scene.BestTimeUtc.Value) == scene.TargetDate ? scene.BestTimeUtc : null);
-            return new WeeklyRenderExecutionScene(scene.SceneCode, index + 1, scene.RequiresStellarium ? "StellariumSceneRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, t.EndSecond - t.StartSecond, t.StartSecond, t.EndSecond, t.NarrationSegmentCodes ?? [], scene.TargetDate, "early evening", technical, ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"], ["composited_frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
+            return new WeeklyRenderExecutionScene(scene.SceneCode, index + 1, scene.VisualSourceType == "Hybrid" ? "HybridCompositor" : scene.RequiresStellarium ? "StellariumSceneRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, t.EndSecond - t.StartSecond, t.StartSecond, t.EndSecond, t.NarrationSegmentCodes ?? [], scene.TargetDate, "early evening", technical, ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"], ["composited_frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
         }).ToList();
         var decisions = scenes.Select(s => BuildDecision(s.SceneCode)).ToList();
         var assetDirectives = scenes.Select(s => new AssetResolutionDirective(s.SceneCode, hybridPlan.AssetNeeds.Where(a => a.RequiredForSceneCodes.Contains(s.SceneCode)).Select(a => a.AssetCode).ToList(), ["public_twilight_plate"], "CelestialAsset>GeneratedImage>PublicImage", true, true)).ToList();
@@ -502,8 +502,11 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
             var sceneOverlays = overlays.Where(o => o.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).Select(o => o.DirectiveId).ToList();
             var sceneTransitions = transitions.Where(t => t.FromSceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase) || t.ToSceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).Select(t => t.DirectiveId).ToList();
             var motionId = motions.First(m => m.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).DirectiveId;
+            var contractId = s.SceneCode == "best_night_wide_scene" && timeline.Any(t => t.SceneCode == s.SceneCode && t.StartSecond == s.StartSecond && (t.NarrationSegmentCodes ?? []).Contains("ClosingCTA"))
+                ? "rc_best_night_wide_closing_reuse"
+                : $"rc_{s.SceneCode}";
             return new RendererExecutionContract(
-                $"rc_{s.SceneCode}",
+                contractId,
                 s.SceneCode,
                 s.RendererType,
                 decisions.First(d => d.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).SelectedSourceType,
