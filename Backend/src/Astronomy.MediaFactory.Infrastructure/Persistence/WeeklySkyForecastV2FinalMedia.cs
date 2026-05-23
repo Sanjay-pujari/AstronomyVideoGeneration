@@ -108,7 +108,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             var sourceSceneCode = shortPlan.SourceSceneCodes.FirstOrDefault() ?? string.Empty;
             var match = scenes.SceneRenderResults.FirstOrDefault(x => x.SceneCode == sourceSceneCode);
             var source = match?.OutputPath ?? shortPlan.PlannedOutputPath;
-            var output = Path.Combine(prep.WorkingDirectoryPlan.ShortsPath, $"short-{shortPlan.ShortCode}.mp4");
+            var output = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, $"short-{shortPlan.ShortCode}.mp4");
             var encoded = ffmpegPath is not null && RenderShort(output, source, narrationMp3Path, shortPlan.TargetDurationSeconds, ffmpegPath, blocking, shortPlan.ShortCode);
             var ok = encoded && ValidateMp4(output, 10 * 1024, ffmpegPath, blocking, $"short {shortPlan.ShortCode}");
             shorts.Add(new ShortFinalResult(shortPlan.ShortCode, output, shortPlan.TargetDurationSeconds, "9:16", ok ? "Rendered" : "Failed", [], ok ? [] : ["Short validation failed."]));
@@ -121,7 +121,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         logger.LogInformation("Audio mix completed");
 
         logger.LogInformation("Starting long-form assembly");
-        var longFormPath = Path.Combine(prep.WorkingDirectoryPlan.LongFormPath, "weekly-skyforecast-longform-draft.mp4");
+        var longFormPath = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, "weekly-skyforecast-longform-draft.mp4");
         var longFormRendered = ffmpegPath is not null && AssembleLongForm(scenes.SceneRenderResults.Select(x => x.OutputPath).ToList(), mixPath, longFormPath, ffmpegPath, blocking);
         var longFormOk = longFormRendered && ValidateMp4(longFormPath, 10 * 1024, ffmpegPath, blocking, "long-form");
         logger.LogInformation("Long-form assembly completed");
