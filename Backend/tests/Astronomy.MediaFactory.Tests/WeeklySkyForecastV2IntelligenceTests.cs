@@ -25,6 +25,8 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.CinematicChoreographyPackage);
         Assert.NotNull(response.RenderExecutionPackage);
         Assert.NotNull(response.PreviewStability);
+        Assert.Empty(response.PreviewStability!.BlockingIssues);
+        Assert.Empty(response.PreviewStability.AffectedFieldPaths);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Moon", response.CinematicStoryBlueprint.Headline, StringComparison.OrdinalIgnoreCase);
@@ -79,6 +81,19 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         }
         Assert.DoesNotContain(response.CinematicStoryBlueprint.OpeningHook, new[] { "Same viewing window grouping", "High-value weekly observation event", "visibility momentum", "backup opportunities", "observation event", "grouping event" }, StringComparer.OrdinalIgnoreCase);
         Assert.Equal(response.NormalizedEditorialPackage!.HeroNormalizedEvent.PeakDate, new DateOnly(2026, 5, 25));
+        Assert.Equal("Venus, Jupiter and the Moon share the evening sky", response.NormalizedEditorialPackage.HeroNormalizedEvent.Title);
+        Assert.DoesNotContain(response.EventIntelligence.Where(x => x.Source != "grouping_trace_same_window").Select(x => x.Title), t => t.Contains("Evening sky lineup", StringComparison.OrdinalIgnoreCase));
+        Assert.All(response.RenderExecutionPackage.ExecutionScenes, s =>
+        {
+            if (s.TechnicalBestTimeUtc is not null)
+                Assert.Equal(s.TargetDate, DateOnly.FromDateTime(s.TechnicalBestTimeUtc.Value));
+        });
+        Assert.NotNull(response.NarrativeAbstractionPackage.ThumbnailNarrativeDirection);
+        Assert.DoesNotContain(response.GeneratedNarrationPackage.ShortNarrations.Select(x => x.NarrationText), t => t.StartsWith("Tonight", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(response.RenderExecutionPackage.ExecutionScenes.Count, response.RenderExecutionPackage.MotionExecutionDirectives.Count);
+        Assert.Equal(response.RenderExecutionPackage.ExecutionScenes.Count, response.RenderExecutionPackage.OverlayExecutionDirectives.Count);
+        Assert.True(response.PreviewStability.ReadyForRenderPreparation);
+        Assert.False(response.PreviewStability.ReadyForRendering);
         Assert.DoesNotContain("DailySkyGuide", response.Category, StringComparison.OrdinalIgnoreCase);
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.False(string.IsNullOrWhiteSpace(s.CameraPlan.PrimaryBehavior)));
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.False(string.IsNullOrWhiteSpace(s.MotionPlan)));
