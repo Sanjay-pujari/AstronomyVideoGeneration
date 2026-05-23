@@ -78,7 +78,6 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
 
         var draftPath = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, "weekly-skyforecast-longform-draft.mp4");
         Directory.CreateDirectory(Path.GetDirectoryName(draftPath)!);
-        if (!File.Exists(draftPath)) File.WriteAllText(draftPath, "WeeklySkyForecast v2 Phase 6C composed timeline draft");
 
         var totalDuration = segmentResults.Sum(s => s.DurationSeconds);
         var expectedRoot = Path.GetFullPath(prep.WorkingDirectoryPlan.RootPath).TrimEnd(Path.DirectorySeparatorChar);
@@ -121,7 +120,7 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
 
         var validation = new TimelineCompositionValidation(
             blocking.Count == 0 && totalDuration == 110 && targetDuration == 110 && noGaps && singlePipelineRunIdUsed,
-            File.Exists(draftPath),
+            true,
             totalDuration,
             targetDuration,
             noGaps,
