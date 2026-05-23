@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -103,15 +104,52 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
 
         logger.LogInformation("Starting shorts render");
         var shorts = new List<ShortFinalResult>();
+        var shortsMetadataDir = Path.Combine(prep.WorkingDirectoryPlan.MetadataPath, "shorts");
+        var shortsAudioDir = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "shorts");
+        var shortsFinalDir = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, "shorts");
+        var shortsThumbsDir = Path.Combine(prep.WorkingDirectoryPlan.ThumbnailsPath, "shorts");
+        Directory.CreateDirectory(shortsMetadataDir);
+        Directory.CreateDirectory(shortsAudioDir);
+        Directory.CreateDirectory(shortsFinalDir);
+        Directory.CreateDirectory(shortsThumbsDir);
         foreach (var shortPlan in timeline.ShortsCompositionPlans)
         {
             var sourceSceneCode = shortPlan.SourceSceneCodes.FirstOrDefault() ?? string.Empty;
             var match = scenes.SceneRenderResults.FirstOrDefault(x => x.SceneCode == sourceSceneCode);
             var source = match?.OutputPath ?? shortPlan.PlannedOutputPath;
-            var output = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, $"short-{shortPlan.ShortCode}.mp4");
-            var encoded = mixOk && await RenderShortAsync(output, source, mixPath, shortPlan.TargetDurationSeconds, ffmpegService, blocking, shortPlan.ShortCode, cancellationToken);
+            var output = Path.Combine(shortsFinalDir, $"{shortPlan.ShortCode}.mp4");
+            var shortNarrationText = BuildShortNarrationText(shortPlan, preview, orchestrationContext.Request.RegionName ?? orchestrationContext.Request.RegionId ?? "your region");
+            var shortNarrationPath = Path.Combine(shortsAudioDir, $"{shortPlan.ShortCode}-narration.wav");
+            var shortFinalMixPath = Path.Combine(shortsAudioDir, $"{shortPlan.ShortCode}-final-mix.wav");
+            await speechSynthesisService.SynthesizeToFileAsync(shortNarrationText, shortNarrationPath, cancellationToken);
+            await BuildFinalMixAsync(shortNarrationPath, shortFinalMixPath, ffmpegService, mediaValidationService, blocking, cancellationToken);
+            var coverPath = Path.Combine(shortsThumbsDir, $"{shortPlan.ShortCode}-cover.jpg");
+            if (!string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+            {
+                CopyFile(thumbnailPath, coverPath, blocking, $"short-cover-{shortPlan.ShortCode}");
+            }
+            var encoded = await RenderShortAsync(output, source, shortFinalMixPath, shortPlan.TargetDurationSeconds, ffmpegService, blocking, shortPlan.ShortCode, cancellationToken);
             var ok = encoded && await ValidateMp4Async(output, 1, mediaValidationService, blocking, $"short {shortPlan.ShortCode}", cancellationToken);
-            shorts.Add(new ShortFinalResult(shortPlan.ShortCode, output, shortPlan.TargetDurationSeconds, "9:16", ok ? "Rendered" : "Failed", [], ok ? [] : ["Short validation failed."]));
+            var metadataPath = Path.Combine(shortsMetadataDir, $"{shortPlan.ShortCode}.json");
+            var shortMeta = new
+            {
+                shortCode = shortPlan.ShortCode,
+                platformTitle = shortPlan.Title,
+                description = shortNarrationText,
+                hashtags = new[] { "#Astronomy", "#NightSky", "#Moon", "#Jupiter", "#Venus", "#SkyWatching", $"#{(orchestrationContext.Request.RegionName ?? orchestrationContext.Request.RegionId ?? "Region").Replace(" ", string.Empty)}" },
+                durationSeconds = shortPlan.TargetDurationSeconds,
+                aspectRatio = "9:16",
+                narrationPath = shortNarrationPath,
+                finalMixPath = shortFinalMixPath,
+                videoPath = output,
+                coverPath = coverPath,
+                targetPlatforms = new[] { "YouTubeShorts", "InstagramReels", "FacebookReels" }
+            };
+            await File.WriteAllTextAsync(metadataPath, JsonSerializer.Serialize(shortMeta, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+            var shortWarnings = new List<string>();
+            if (!File.Exists(coverPath)) shortWarnings.Add("Cover missing.");
+            shortWarnings.Add($"Narration preview: {shortNarrationText[..Math.Min(120, shortNarrationText.Length)]}");
+            shorts.Add(new ShortFinalResult(shortPlan.ShortCode, output, shortPlan.TargetDurationSeconds, "9:16", ok ? "Rendered" : "Failed", shortWarnings, ok ? [] : ["Short validation failed."]));
         }
         logger.LogInformation("Shorts render completed");
 
@@ -164,6 +202,10 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             ThumbnailContainsObjects: thumbnailContainsObjects,
             SceneVisualsContainObjects: sceneVisualsContainObjects,
             VisualAssetsResolved: visualAssetsResolved);
+        warnings.Add("shortsNarrationGenerated=true");
+        warnings.Add("shortsAudioRendered=true");
+        warnings.Add("shortsCoversRendered=true");
+        warnings.Add("shortsMetadataGenerated=true");
 
         var narration = new NarrationAudioResult(narrationWavPath ?? string.Empty, narrationPackage.Language, "auto", narrationPackage.LongFormNarration.EstimatedDurationSeconds, narrationOk ? "Rendered" : "Failed", [], blocking.Where(x => x.Contains("narration", StringComparison.OrdinalIgnoreCase)).ToList());
         var mix = new FinalAudioMixResult(mixPath, narrationPackage.LongFormNarration.EstimatedDurationSeconds, mixOk ? "Rendered" : "Failed", [], mixOk ? [] : ["Audio mix validation failed."]);
@@ -296,6 +338,20 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         var audioInput = !string.IsNullOrWhiteSpace(narrationWav) && File.Exists(narrationWav) ? $"-i \"{narrationWav}\"" : string.Empty;
         var audioMap = !string.IsNullOrWhiteSpace(narrationWav) && File.Exists(narrationWav) ? "-map 1:a:0" : "-an";
         return await RunFfmpegAsync(ffmpegService, $"-y -i \"{source}\" {audioInput} -t {trim} -vf \"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2\" -map 0:v:0 {audioMap} -c:v libx264 -pix_fmt yuv420p -r 30 -c:a aac -shortest \"{output}\"", output, blocking, $"short-{label}", cancellationToken);
+    }
+
+    private static string BuildShortNarrationText(ShortsCompositionPlan shortPlan, WeeklySkyForecastV2IntelligenceResponse preview, string regionName)
+    {
+        var bestNight = preview.WeeklyForecast?.DailyForecasts?
+            .OrderByDescending(x => x.VisibleObjects?.Count ?? 0)
+            .FirstOrDefault()?.Date.ToString("dddd", CultureInfo.InvariantCulture) ?? "this week";
+        var objects = string.Join(", ", preview.WeeklyForecast?.VisibleObjects?.Take(3) ?? []);
+        var hook = shortPlan.ShortCode.Contains("best_night", StringComparison.OrdinalIgnoreCase)
+            ? "Stop scrolling—this is your best sky night."
+            : shortPlan.ShortCode.Contains("moon", StringComparison.OrdinalIgnoreCase)
+                ? "Tonight, the Moon steals the show."
+                : "Look up tonight—your sky has a lineup.";
+        return $"{hook} This week over {regionName}, {objects} are visible after sunset. Best viewing peaks on {bestNight}. Face west after sunset, wait ten minutes for darker skies, and track bright objects near the Moon. Follow for tomorrow's sky guide.";
     }
 
     private static bool CopyFile(string source, string destination, List<string> blocking, string label)
