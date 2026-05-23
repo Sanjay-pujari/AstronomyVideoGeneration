@@ -159,10 +159,45 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         baseResponse = baseResponse with { WeeklyStoryArc = arc };
         var (sceneChoreographyPackage, cinematicChoreographyPackage) = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
         var renderExecutionPackage = WeeklySkyForecastV2RenderExecutionBuilder.Build(narrationPlan, hybridScenePlanPackage, cinematicChoreographyPackage, baseResponse.Region);
-        var fullResponse = baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, LegacyEditorialPackageDeprecated = true };
+        var deprecatedLegacyEditorialPackage = BuildDeprecatedLegacyEditorialPackage(normalizedEditorialPackage);
+        var fullResponse = baseResponse with { EditorialStoryPackage = deprecatedLegacyEditorialPackage, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, LegacyEditorialPackageDeprecated = true };
         var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(fullResponse);
         var phase5 = WeeklySkyForecastV2PreviewStabilityValidator.BuildFoundationStatus(fullResponse with { PreviewStability = previewStability });
         return fullResponse with { PreviewStability = previewStability, Phase5FoundationStatus = phase5 };
+    }
+
+    private static WeeklyEditorialStoryPackage BuildDeprecatedLegacyEditorialPackage(WeeklyNormalizedEditorialPackage normalized)
+    {
+        var hero = normalized.HeroNormalizedEvent;
+        var heroEvent = new WeeklyHeroEvent(
+            EventId: hero.NormalizedEventId,
+            EventType: hero.NormalizedEventType,
+            Title: hero.Title,
+            Description: hero.HumanDescription,
+            PeakDate: hero.PeakDate,
+            BestTimeUtc: null,
+            ObjectCodes: hero.PrimaryObjects,
+            ObjectNames: hero.PrimaryObjects,
+            SignificanceScore: hero.EditorialImportance,
+            EmotionalScore: 88,
+            VisualScore: 90,
+            RecommendedVisualStrategy: hero.RecommendedVisualStrategy,
+            WhyThisIsHero: "Legacy package rebuilt from normalized editorial package.",
+            SupportingDates: hero.SupportingDates);
+        return new WeeklyEditorialStoryPackage(
+            HeroEvent: heroEvent,
+            SecondaryEvents: [],
+            Headline: normalized.NormalizedStoryArc.Headline,
+            Subtitle: $"Peak night: {hero.PeakDate:yyyy-MM-dd}",
+            OpeningHook: normalized.NormalizedStoryArc.Hook,
+            StoryTheme: normalized.NormalizedStoryArc.StoryTheme,
+            NarrativeArc: [],
+            CinematicMoments: [],
+            ThumbnailDirection: new WeeklyThumbnailDirection(["Weekly Sky Forecast"], hero.PrimaryObjects, [], "Calm awe", hero.RecommendedVisualStrategy, "Legacy package points to normalized thumbnail direction.", "Twilight west sky", "Look west this week"),
+            ShortsCandidates: [],
+            VisualStrategySummary: "Deprecated legacy package rebuilt from normalizedEditorialPackage.",
+            Warnings: ["Deprecated: Use normalizedEditorialPackage as authoritative source."]
+        );
     }
 }
 
