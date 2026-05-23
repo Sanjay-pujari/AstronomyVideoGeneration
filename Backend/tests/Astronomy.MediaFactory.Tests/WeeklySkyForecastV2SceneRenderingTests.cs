@@ -103,7 +103,40 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
             new RenderPreparationValidation(true,true,true,true,true,true,true,true,true,true,[] ,[]),
             new RenderPreparationFreezeStatus(true,true,[],[],[]));
 
-            return Task.FromResult(new WeeklySkyForecastV2IntelligenceResponse(null,"WeeklySkyForecast",true,DateOnly.FromDateTime(DateTime.UtcNow),DateOnly.FromDateTime(DateTime.UtcNow),"US",new WeeklySkyForecastV2SkyfieldSummary(0,0,0,0,null,null,null),[],new WeeklyStoryArc("h","s","t","o",[],"c",[],[],[]),new WeeklyEditorialStoryPackage(new WeeklyHeroEvent("e","t","t","d",DateOnly.FromDateTime(DateTime.UtcNow),null,[],[],0,0,0,"v","w"),[],"h","s","o","t",[],[],new WeeklyThumbnailDirection([],[],[],"e","v","c","b","o"),[],"",[]),null,null,null,null,null,null,null,null,null,prep,null,null,null,null,true,true,false,true,[],[],[]));
+            return Task.FromResult(new WeeklySkyForecastV2IntelligenceResponse(
+                ContentGenerationPlanId: null,
+                Category: "WeeklySkyForecast",
+                Success: true,
+                WeekStartDate: DateOnly.FromDateTime(DateTime.UtcNow),
+                WeekEndDate: DateOnly.FromDateTime(DateTime.UtcNow),
+                Region: "US",
+                SkyfieldSummary: new WeeklySkyForecastV2SkyfieldSummary(0,0,0,0,null,null,null),
+                EventIntelligence: [],
+                WeeklyStoryArc: new WeeklyStoryArc("h","s","t","o",[],"c",[],[],[]),
+                EditorialStoryPackage: new WeeklyEditorialStoryPackage(new WeeklyHeroEvent("e","t","t","d",DateOnly.FromDateTime(DateTime.UtcNow),null,[],[],0,0,0,"v","w"),[],"h","s","o","t",[],[],new WeeklyThumbnailDirection([],[],[],"e","v","c","b","o"),[],"",[]),
+                CinematicStoryBlueprint: null,
+                NarrativeAbstractionPackage: null,
+                NarrationPlan: null,
+                GeneratedNarrationPackage: null,
+                NarrationQuality: null,
+                VisualRequirementPackage: null,
+                HybridScenePlanPackage: null,
+                NormalizedEditorialPackage: null,
+                SceneChoreographyPackage: null,
+                CinematicChoreographyPackage: null,
+                RenderExecutionPackage: null,
+                RenderPreparationPackage: prep,
+                ExecutionValidation: null,
+                PreviewStability: null,
+                Phase5FoundationStatus: null,
+                RenderPreparationFreezeStatus: null,
+                ReadyForRenderPreparation: true,
+                ReadyForSceneRendering: true,
+                ReadyForRendering: false,
+                LegacyEditorialPackageDeprecated: true,
+                RecommendedVisualStrategies: [],
+                Warnings: [],
+                StepResults: []));
         }
     }
 }
