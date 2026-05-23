@@ -15,11 +15,38 @@ public sealed class ExternalProcessRunner(ILogger<ExternalProcessRunner> logger)
         var started = DateTime.UtcNow;
         var psi = new ProcessStartInfo(executablePath, arguments) { WorkingDirectory = workingDirectory, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         using var p = Process.Start(psi) ?? throw new InvalidOperationException($"Unable to start process: {executablePath}");
-        var stdout = await p.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = await p.StandardError.ReadToEndAsync(cancellationToken);
-        await p.WaitForExitAsync(cancellationToken);
+        var stdOutBuilder = new System.Text.StringBuilder();
+        var stdErrBuilder = new System.Text.StringBuilder();
+        var stdOutClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stdErrClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        p.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is null) stdOutClosed.TrySetResult();
+            else stdOutBuilder.AppendLine(e.Data);
+        };
+        p.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is null) stdErrClosed.TrySetResult();
+            else stdErrBuilder.AppendLine(e.Data);
+        };
+        p.BeginOutputReadLine();
+        p.BeginErrorReadLine();
+        try
+        {
+            await p.WaitForExitAsync(cancellationToken);
+            await Task.WhenAll(stdOutClosed.Task, stdErrClosed.Task).WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!p.HasExited)
+            {
+                p.Kill(entireProcessTree: true);
+                await p.WaitForExitAsync(CancellationToken.None);
+            }
+            throw;
+        }
         var completed = DateTime.UtcNow;
-        var result = new ExternalProcessExecutionResult(executablePath, arguments, workingDirectory, started, completed, (long)(completed - started).TotalMilliseconds, p.ExitCode, stdout, stderr, outputPath, outputPath is not null && File.Exists(outputPath) ? new FileInfo(outputPath).Length : 0);
+        var result = new ExternalProcessExecutionResult(executablePath, arguments, workingDirectory, started, completed, (long)(completed - started).TotalMilliseconds, p.ExitCode, stdOutBuilder.ToString(), stdErrBuilder.ToString(), outputPath, outputPath is not null && File.Exists(outputPath) ? new FileInfo(outputPath).Length : 0);
         logger.LogInformation("External process executed {@Result}", result);
         return result;
     }

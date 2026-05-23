@@ -17,6 +17,8 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     IOptions<RenderingOptions> renderingOptions,
     ILogger<WeeklySkyForecastSceneRenderingOrchestrator> logger) : IWeeklySkyForecastSceneRenderingOrchestrator
 {
+    private static readonly TimeSpan SceneRenderTimeout = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan ImageCompositionTimeout = TimeSpan.FromSeconds(30);
     public async Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
         => await RunAsync(new WeeklySkyForecastV2OrchestrationContext(
             ContentGenerationPlanId: contentGenerationPlanId ?? request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid(),
@@ -44,8 +46,10 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
 
         foreach (var req in prep.SceneRenderRequests)
         {
+            var sceneStartedAt = DateTime.UtcNow;
             var requestWarnings = new List<string>();
             var requestErrors = new List<string>();
+            logger.LogInformation("Starting scene render: {SceneCode}, rendererType={RendererType}, requestId={RequestId}", req.SceneCode, req.RendererType, req.RequestId);
             if (!req.RendererDecisionLocked) requestErrors.Add("rendererDecisionLocked must be true.");
             if (string.IsNullOrWhiteSpace(req.OutputPath)) requestErrors.Add("outputPath is required.");
             Directory.CreateDirectory(Path.GetDirectoryName(req.MetadataOutputPath)!);
@@ -61,30 +65,47 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
                 continue;
             }
 
-            switch (req.RendererType)
+            try
             {
-                case "StellariumSceneRenderer":
-                    await ExecuteStellariumSceneAsync(req, prep, requestWarnings, requestErrors, stellariumResults, cancellationToken);
-                    break;
-                case "CelestialAssetCompositor":
-                    await ExecuteCelestialAssetSceneAsync(req, prep, requestWarnings, requestErrors, assetResults, cancellationToken);
-                    break;
-                case "HybridCompositor":
-                    await ExecuteHybridSceneAsync(req, prep, requestWarnings, requestErrors, hybridResults, cancellationToken);
-                    break;
-                case "OverlayCompositor":
-                    await ExecuteOverlaySceneAsync(req, requestWarnings, requestErrors, cancellationToken);
-                    break;
-                case "ThumbnailCompositor":
-                    await ExecuteThumbnailSceneAsync(req, prep, requestWarnings, requestErrors, cancellationToken);
-                    break;
-                default:
-                    requestErrors.Add($"Unsupported rendererType '{req.RendererType}'.");
-                    break;
+                using var sceneTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                sceneTimeoutCts.CancelAfter(SceneRenderTimeout);
+                switch (req.RendererType)
+                {
+                    case "StellariumSceneRenderer":
+                        await ExecuteStellariumSceneAsync(req, prep, requestWarnings, requestErrors, stellariumResults, sceneTimeoutCts.Token);
+                        break;
+                    case "CelestialAssetCompositor":
+                        await ExecuteCelestialAssetSceneAsync(req, prep, requestWarnings, requestErrors, assetResults, sceneTimeoutCts.Token);
+                        break;
+                    case "HybridCompositor":
+                        await ExecuteHybridSceneAsync(req, prep, requestWarnings, requestErrors, hybridResults, sceneTimeoutCts.Token);
+                        break;
+                    case "OverlayCompositor":
+                        await ExecuteOverlaySceneAsync(req, requestWarnings, requestErrors, sceneTimeoutCts.Token);
+                        break;
+                    case "ThumbnailCompositor":
+                        await ExecuteThumbnailSceneAsync(req, prep, requestWarnings, requestErrors, sceneTimeoutCts.Token);
+                        break;
+                    default:
+                        requestErrors.Add($"Unsupported rendererType '{req.RendererType}'.");
+                        break;
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                requestErrors.Add($"Scene render timeout: {req.SceneCode}");
+                logger.LogError("Failed scene render: {SceneCode}, error={Error}", req.SceneCode, $"Scene render timeout: {req.SceneCode}");
+            }
+            catch (Exception ex)
+            {
+                requestErrors.Add(ex.Message);
+                logger.LogError(ex, "Failed scene render: {SceneCode}, error={Error}", req.SceneCode, ex.Message);
             }
 
             if (requestErrors.Count > 0) blocking.AddRange(requestErrors.Select(e => $"{req.SceneCode}: {e}"));
-            sceneResults.Add(new SceneRenderResult(req.RequestId, req.SceneCode, req.RendererType, req.OutputPath, requestErrors.Count == 0 ? "Rendered" : "Failed", requestWarnings, requestErrors));
+            var status = requestErrors.Count == 0 ? "Rendered" : "Failed";
+            sceneResults.Add(new SceneRenderResult(req.RequestId, req.SceneCode, req.RendererType, req.OutputPath, status, requestWarnings, requestErrors));
+            logger.LogInformation("Completed scene render: {SceneCode}, status={Status}, elapsedMs={ElapsedMs}", req.SceneCode, status, (DateTime.UtcNow - sceneStartedAt).TotalMilliseconds);
         }
 
         foreach (var overlay in prep.OverlayRenderPlan.Jobs)
@@ -156,10 +177,26 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var o = renderingOptions.Value;
         var framePath = Path.Combine(Path.GetDirectoryName(outputPath)!, $"{Path.GetFileNameWithoutExtension(outputPath)}.scene-frame.png");
-        await RenderSceneFrameAsync(framePath, label, o.VideoWidth, o.VideoHeight, ct);
+        logger.LogInformation("Preparing C# background frame");
+        logger.LogInformation("C# image composition started");
+        using (var imageCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            imageCts.CancelAfter(ImageCompositionTimeout);
+            await RenderSceneFrameAsync(framePath, label, o.VideoWidth, o.VideoHeight, imageCts.Token);
+        }
+        logger.LogInformation("C# image composition completed");
         var args = $"-y -loop 1 -i \"{framePath}\" -t {Math.Max(1, duration):0.##} -r {Math.Max(1, o.FrameRate)} -c:v libx264 -pix_fmt yuv420p \"{outputPath}\"";
         ValidateNoDrawText(args);
-        await ffmpegService.ExecuteAsync(args, Directory.GetCurrentDirectory(), outputPath, ct);
+        logger.LogInformation("FFmpeg encode started");
+        using (var ffmpegCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            ffmpegCts.CancelAfter(SceneRenderTimeout);
+            await ffmpegService.ExecuteAsync(args, Directory.GetCurrentDirectory(), outputPath, ffmpegCts.Token);
+        }
+        logger.LogInformation("FFmpeg encode completed");
+        logger.LogInformation("ffprobe validation started");
+        await mediaValidationService.ValidateMp4Async(outputPath, 1024, ct);
+        logger.LogInformation("ffprobe validation completed");
     }
     private async Task RenderOverlayAsync(string outputPath, string label, CancellationToken ct)
     {
