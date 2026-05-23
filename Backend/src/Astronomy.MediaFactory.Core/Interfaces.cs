@@ -1134,6 +1134,15 @@ public sealed record WeeklySkyForecastV2IntelligenceRequest(
     DateTimeOffset ScheduledUtc,
     DateOnly? WeekStartDate = null,
     bool Diagnostics = true);
+public sealed record WeeklySkyForecastV2RenderScenesRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    string RegionName,
+    DateTimeOffset ScheduledUtc,
+    DateOnly? WeekStartDate = null,
+    bool Diagnostics = true,
+    Guid? ContentGenerationPlanId = null);
 
 public sealed record WeeklySkyForecastV2EventIntelligenceItem(
     string EventId,
@@ -1293,6 +1302,10 @@ public interface IWeeklySkyForecastV2IntelligenceService
 {
     Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken);
 }
+public interface IWeeklySkyForecastSceneRenderingOrchestrator
+{
+    Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken);
+}
 
 public interface IWeeklySkyForecastV2EditorialIntelligenceBuilder
 {
@@ -1441,6 +1454,23 @@ public sealed record TimelineRenderSegment(string SegmentId, string SceneCode, s
 public sealed record ThumbnailRenderPlan(string ThumbnailRequestId, string RendererType, string VisualSourceType, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string FocalHierarchy, string EyeFlowDirection, string EmotionalFocus, string OverlaySafeArea, string MobileSafeFraming, string ShortsCropStrategy, IReadOnlyList<string> RequiredAssets, string PlannedOutputPath, string PlannedMetadataPath, string PlannedDebugPath, string Status);
 public sealed record RenderPreparationValidation(bool IsValid, bool SceneRequestsGenerated, bool AssetResolutionPlanned, bool StellariumJobsPlanned, bool OverlayJobsPlanned, bool TimelinePlanValid, bool ThumbnailPlanValid, bool WorkingDirectoryPlanValid, bool ReadyForSceneRendering, bool ReadyForRendering, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 public sealed record RenderPreparationFreezeStatus(bool IsFrozen, bool IsReadyForPhase6B, IReadOnlyList<string> VerifiedChecks, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
+public sealed record SceneRenderingPackage(
+    IReadOnlyList<SceneRenderResult> SceneRenderResults,
+    IReadOnlyList<StellariumSceneRenderResult> StellariumRenderResults,
+    IReadOnlyList<CelestialAssetSceneRenderResult> CelestialAssetRenderResults,
+    IReadOnlyList<HybridSceneCompositeResult> HybridCompositeResults,
+    IReadOnlyList<OverlayRenderResult> OverlayRenderResults,
+    ThumbnailSceneRenderResult? ThumbnailRenderResult,
+    SceneRenderingValidation SceneRenderingValidation,
+    SceneRenderingFreezeStatus SceneRenderingFreezeStatus);
+public sealed record SceneRenderResult(string RequestId, string SceneCode, string RendererType, string OutputPath, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record StellariumSceneRenderResult(string JobId, string SceneCode, string RequestId, string SscPath, string OutputPath, string Status, int DurationSeconds, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record CelestialAssetSceneRenderResult(string SceneCode, string RequestId, IReadOnlyList<string> UsedAssets, string OutputPath, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record HybridSceneCompositeResult(string SceneCode, string RequestId, IReadOnlyList<string> SourceLayers, string OutputPath, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record OverlayRenderResult(string JobId, string SceneCode, string OverlayType, string OutputPath, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record ThumbnailSceneRenderResult(string RequestId, string OutputPath, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record SceneRenderingValidation(bool IsValid, bool AllSceneRequestsProcessed, bool StellariumScenesRendered, bool AssetScenesRendered, bool HybridScenesRendered, bool OverlaysRendered, bool ThumbnailRendered, bool ReadyForTimelineComposition, bool ReadyForPublishing, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
+public sealed record SceneRenderingFreezeStatus(bool IsFrozen, IReadOnlyList<string> VerifiedChecks, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 public sealed record WeeklyExecutionValidationReport(
     bool OverlaysValidated,
     bool TransitionsValidated,
