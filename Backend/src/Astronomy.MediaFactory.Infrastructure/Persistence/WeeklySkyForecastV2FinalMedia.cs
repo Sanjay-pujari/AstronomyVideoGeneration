@@ -197,23 +197,10 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         var synthesized = false;
         try
         {
-            var narrationPath = await speechSynthesisService.SynthesizeAsync(narrationText, audioDirectory, cancellationToken);
-            if (!string.IsNullOrWhiteSpace(narrationPath) && File.Exists(narrationPath))
-            {
-                if (!string.Equals(narrationPath, narrationWavPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (Path.GetExtension(narrationPath).Equals(".wav", StringComparison.OrdinalIgnoreCase))
-                    {
-                        File.Copy(narrationPath, narrationWavPath, true);
-                    }
-                    else if (ffmpegPath is not null)
-                    {
-                        RunProcess(ffmpegPath, $"-y -i \"{narrationPath}\" -ac 2 -ar 44100 -c:a pcm_s16le \"{narrationWavPath}\"", blocking, "narration wav transcode");
-                    }
-                }
-
-                synthesized = File.Exists(narrationWavPath);
-            }
+            await speechSynthesisService.SynthesizeToFileAsync(narrationText, narrationWavPath, cancellationToken);
+            if (!File.Exists(narrationWavPath))
+                throw new InvalidOperationException($"Narration synthesis did not produce output at '{narrationWavPath}'.");
+            synthesized = true;
         }
         catch (Exception ex)
         {

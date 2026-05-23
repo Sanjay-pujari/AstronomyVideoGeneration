@@ -49,6 +49,20 @@ public sealed class AzureSpeechSynthesisService : ISpeechSynthesisService
         }
     }
 
+    public async Task SynthesizeToFileAsync(string script, string outputPath, CancellationToken cancellationToken)
+    {
+        var outputDirectory = Path.GetDirectoryName(outputPath);
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+            throw new InvalidOperationException("Narration output directory is invalid.");
+
+        _fileSystem.CreateDirectory(outputDirectory);
+        var synthesizedPath = await SynthesizeAsync(script, outputDirectory, cancellationToken);
+        if (!File.Exists(synthesizedPath))
+            throw new InvalidOperationException($"Speech synthesis did not produce an output file at '{synthesizedPath}'.");
+
+        File.Copy(synthesizedPath, outputPath, true);
+    }
+
     private async Task<byte[]> SynthesizeWithFallbackAsync(string script, CancellationToken cancellationToken)
     {
         _options.PrimaryVoice ??= "en-US-AriaNeural";
