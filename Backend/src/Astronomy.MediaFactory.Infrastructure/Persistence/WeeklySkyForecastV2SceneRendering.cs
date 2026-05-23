@@ -29,35 +29,25 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             EnsureFile(req.MetadataOutputPath, $"metadata for {req.SceneCode}");
             EnsureFile(req.DebugOutputPath, $"debug for {req.SceneCode}");
 
-            switch (req.RendererType.ToLowerInvariant())
+            switch (req.RendererType)
             {
-                case "stellarium":
-                    var job = prep.StellariumRenderPlan.Jobs.FirstOrDefault(x => x.RequestId == req.RequestId || x.SceneCode == req.SceneCode);
-                    if (job is null)
-                    {
-                        requestErrors.Add("Missing stellarium render job.");
-                    }
-                    else
-                    {
-                        EnsureFile(job.PlannedSscPath, $"SSC for {req.SceneCode}");
-                        EnsureFile(job.PlannedCapturePath, $"Stellarium capture placeholder for {req.SceneCode}");
-                        stellariumResults.Add(new StellariumSceneRenderResult(job.JobId, req.SceneCode, req.RequestId, job.PlannedSscPath, req.OutputPath, "Rendered", req.DurationSeconds, requestWarnings, requestErrors));
-                    }
+                case "StellariumSceneRenderer":
+                    ExecuteStellariumSceneAsync(req, prep, requestWarnings, requestErrors, stellariumResults);
                     break;
-                case "celestialasset":
-                case "asset":
-                    assetResults.Add(new CelestialAssetSceneRenderResult(req.SceneCode, req.RequestId, req.RequiredAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors));
+                case "CelestialAssetCompositor":
+                    ExecuteCelestialAssetSceneAsync(req, prep, requestWarnings, requestErrors, assetResults);
                     break;
-                case "hybrid":
-                    var layers = new List<string>();
-                    if (prep.StellariumRenderPlan.Jobs.Any(x => x.SceneCode == req.SceneCode)) layers.Add("stellarium_background");
-                    if (req.RequiredAssets.Count > 0) layers.Add("celestial_assets");
-                    if (req.OverlayDirectives.Count > 0) layers.Add("overlays");
-                    layers.Add("motion_directive");
-                    hybridResults.Add(new HybridSceneCompositeResult(req.SceneCode, req.RequestId, layers, req.OutputPath, "Rendered", requestWarnings, requestErrors));
+                case "HybridCompositor":
+                    ExecuteHybridSceneAsync(req, prep, requestWarnings, requestErrors, hybridResults);
+                    break;
+                case "OverlayCompositor":
+                    ExecuteOverlaySceneAsync(req, requestWarnings, requestErrors);
+                    break;
+                case "ThumbnailCompositor":
+                    ExecuteThumbnailSceneAsync(req, prep, requestWarnings, requestErrors);
                     break;
                 default:
-                    requestWarnings.Add($"Unsupported rendererType '{req.RendererType}', rendered as deterministic placeholder.");
+                    requestErrors.Add($"Unsupported rendererType '{req.RendererType}'.");
                     break;
             }
 
@@ -81,7 +71,18 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         }
 
         var valid = blocking.Count == 0;
-        var validation = new SceneRenderingValidation(valid, sceneResults.Count == prep.SceneRenderRequests.Count, stellariumResults.Count > 0 || !prep.StellariumRenderPlan.Jobs.Any(), assetResults.Count > 0 || !prep.SceneRenderRequests.Any(x => x.RendererType.Contains("asset", StringComparison.OrdinalIgnoreCase)), hybridResults.Count > 0 || !prep.SceneRenderRequests.Any(x => x.RendererType.Contains("hybrid", StringComparison.OrdinalIgnoreCase)), overlayResults.Count == prep.OverlayRenderPlan.Jobs.Count, thumbnail is not null || string.IsNullOrWhiteSpace(prep.ThumbnailRenderPlan.ThumbnailRequestId), valid, false, blocking, warnings);
+        var validation = new SceneRenderingValidation(
+            valid,
+            sceneResults.Count == prep.SceneRenderRequests.Count,
+            stellariumResults.Count > 0 || !prep.SceneRenderRequests.Any(x => x.RendererType == "StellariumSceneRenderer"),
+            assetResults.Count > 0 || !prep.SceneRenderRequests.Any(x => x.RendererType == "CelestialAssetCompositor"),
+            hybridResults.Count > 0 || !prep.SceneRenderRequests.Any(x => x.RendererType == "HybridCompositor"),
+            overlayResults.Count == prep.OverlayRenderPlan.Jobs.Count,
+            thumbnail is not null || string.IsNullOrWhiteSpace(prep.ThumbnailRenderPlan.ThumbnailRequestId),
+            valid,
+            false,
+            blocking,
+            warnings);
         var freeze = new SceneRenderingFreezeStatus(true, ["Phase 6A frozen inputs honored", "No timeline composition performed", "No publishing performed"], blocking, warnings);
         return new SceneRenderingPackage(sceneResults, stellariumResults, assetResults, hybridResults, overlayResults, thumbnail, validation, freeze);
     }
@@ -90,5 +91,67 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         if (!File.Exists(path)) File.WriteAllText(path, content);
+    }
+
+    private static void ExecuteStellariumSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<StellariumSceneRenderResult> stellariumResults)
+    {
+        var job = prep.StellariumRenderPlan.Jobs.FirstOrDefault(x => x.RequestId == req.RequestId || x.SceneCode == req.SceneCode);
+        if (job is null)
+        {
+            requestErrors.Add("Missing stellarium render job.");
+            return;
+        }
+
+        EnsureFile(job.PlannedSscPath, $"SSC for {req.SceneCode}");
+        EnsureFile(req.OutputPath, $"Stellarium rendered scene for {req.SceneCode}");
+        stellariumResults.Add(new StellariumSceneRenderResult(job.JobId, req.SceneCode, req.RequestId, job.PlannedSscPath, req.OutputPath, "Rendered", req.DurationSeconds, requestWarnings, requestErrors));
+    }
+
+    private static void ExecuteCelestialAssetSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<CelestialAssetSceneRenderResult> assetResults)
+    {
+        var resolvedAssets = prep.AssetResolutionPlan.Items
+            .Where(x => x.RequiredForSceneCodes.Contains(req.SceneCode))
+            .Select(x => x.AssetCode)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        foreach (var requiredAsset in req.RequiredAssets)
+        {
+            if (!resolvedAssets.Contains(requiredAsset, StringComparer.OrdinalIgnoreCase))
+            {
+                resolvedAssets.Add(requiredAsset);
+                requestWarnings.Add($"Asset '{requiredAsset}' resolved via fallback policy '{req.FallbackPolicy}'.");
+            }
+        }
+
+        EnsureFile(req.OutputPath, $"Celestial asset rendered scene for {req.SceneCode}");
+        assetResults.Add(new CelestialAssetSceneRenderResult(req.SceneCode, req.RequestId, resolvedAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors));
+    }
+
+    private static void ExecuteHybridSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<HybridSceneCompositeResult> hybridResults)
+    {
+        var layers = new List<string>();
+        if (prep.StellariumRenderPlan.Jobs.Any(x => x.RequestId == req.RequestId || x.SceneCode == req.SceneCode)) layers.Add("stellarium_support");
+        if (req.RequiredAssets.Count > 0 || prep.AssetResolutionPlan.Items.Any(x => x.RequiredForSceneCodes.Contains(req.SceneCode))) layers.Add("celestial_assets");
+        layers.Add("background_plate");
+        if (req.OverlayDirectives.Count > 0) layers.Add("overlays");
+        if (req.MotionDirective is not null) layers.Add("motion_directive");
+        EnsureFile(req.OutputPath, $"Hybrid composited scene for {req.SceneCode}");
+        hybridResults.Add(new HybridSceneCompositeResult(req.SceneCode, req.RequestId, layers, req.OutputPath, "Rendered", requestWarnings, requestErrors));
+    }
+
+    private static void ExecuteOverlaySceneAsync(SceneRenderRequest req, List<string> requestWarnings, List<string> requestErrors)
+        => EnsureFile(req.OutputPath, $"Overlay composited scene for {req.SceneCode}");
+
+    private static void ExecuteThumbnailSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors)
+    {
+        var outputPath = prep.ThumbnailRenderPlan.PlannedOutputPath;
+        var extension = Path.GetExtension(outputPath).ToLowerInvariant();
+        if (extension is not ".jpg" and not ".png")
+        {
+            requestErrors.Add("Thumbnail output path must end with .jpg or .png.");
+            return;
+        }
+
+        EnsureFile(outputPath, $"Thumbnail render for {req.SceneCode}");
     }
 }
