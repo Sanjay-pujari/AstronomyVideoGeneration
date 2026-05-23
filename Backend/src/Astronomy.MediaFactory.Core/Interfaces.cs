@@ -1307,6 +1307,11 @@ public interface IWeeklySkyForecastSceneRenderingOrchestrator
     Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken);
 }
 
+public interface IWeeklySkyForecastTimelineCompositionOrchestrator
+{
+    Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken);
+}
+
 public interface IWeeklySkyForecastV2EditorialIntelligenceBuilder
 {
     Task<WeeklyEditorialStoryPackage> BuildAsync(WeeklySkyForecastV2IntelligenceResponse intelligence, CancellationToken cancellationToken);
@@ -1471,6 +1476,24 @@ public sealed record OverlayRenderResult(string JobId, string SceneCode, string 
 public sealed record ThumbnailSceneRenderResult(string RequestId, string OutputPath, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
 public sealed record SceneRenderingValidation(bool IsValid, bool AllSceneRequestsProcessed, bool StellariumScenesRendered, bool AssetScenesRendered, bool HybridScenesRendered, bool OverlaysRendered, bool ThumbnailRendered, bool ReadyForTimelineComposition, bool ReadyForPublishing, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 public sealed record SceneRenderingFreezeStatus(bool IsFrozen, IReadOnlyList<string> VerifiedChecks, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
+public sealed record TimelineCompositionPackage(
+    LongFormTimelineResult LongFormTimelineResult,
+    IReadOnlyList<SegmentCompositionResult> SegmentCompositionResults,
+    IReadOnlyList<TransitionCompositionResult> TransitionCompositionResults,
+    NarrationSyncResult NarrationSyncResult,
+    AudioCompositionPlan AudioCompositionPlan,
+    IReadOnlyList<ShortsCompositionPlan> ShortsCompositionPlans,
+    TimelineCompositionValidation TimelineCompositionValidation,
+    TimelineCompositionFreezeStatus TimelineCompositionFreezeStatus);
+public sealed record LongFormTimelineResult(string OutputPath, int TotalDurationSeconds, string Status, bool ThumbnailExcluded, bool ReuseSceneResolved, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record SegmentCompositionResult(string SegmentId, string SceneCode, string RequestId, string SourceSceneOutputPath, int StartSecond, int EndSecond, int DurationSeconds, IReadOnlyList<string> NarrationSegmentCodes, string TransitionIn, string TransitionOut, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record TransitionCompositionResult(string TransitionId, string FromSceneCode, string ToSceneCode, string TransitionType, int StartSecond, int DurationSeconds, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record NarrationSyncResult(bool NarrationTrackPlanned, string NarrationSource, int NarrationDurationSeconds, int TargetDurationSeconds, bool AudioRendered, string SyncStatus, IReadOnlyList<NarrationSegmentSync> SegmentSync, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record NarrationSegmentSync(string SegmentCode, int StartSecond, int EndSecond, int TargetDurationSeconds, int NarrationEstimatedDurationSeconds, string Status);
+public sealed record AudioCompositionPlan(string NarrationAudioPath, string BackgroundMusicPath, string FinalMixedAudioPath, bool AudioRendered, bool MusicRendered, bool MixRendered, string Status);
+public sealed record ShortsCompositionPlan(string ShortCode, string Title, IReadOnlyList<string> SourceSceneCodes, IReadOnlyList<string> SourceNarrationCodes, int TargetDurationSeconds, string AspectRatio, string CropStrategy, string PlannedOutputPath, string Status);
+public sealed record TimelineCompositionValidation(bool IsValid, bool LongFormTimelineComposed, int TotalDurationSeconds, int ExpectedDurationSeconds, bool TimelineHasNoGaps, bool TransitionsValid, bool ThumbnailExcluded, bool ReuseSceneResolved, bool NarrationSyncValid, bool ReadyForFinalVideoReview, bool ReadyForPublishing, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
+public sealed record TimelineCompositionFreezeStatus(bool IsFrozen, bool IsReadyForPhase6D, IReadOnlyList<string> VerifiedChecks, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 public sealed record WeeklyExecutionValidationReport(
     bool OverlaysValidated,
     bool TransitionsValidated,
