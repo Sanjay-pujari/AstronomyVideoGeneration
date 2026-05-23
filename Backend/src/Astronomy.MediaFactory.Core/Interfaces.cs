@@ -1195,9 +1195,12 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklySceneChoreographyPackage? SceneChoreographyPackage,
     WeeklyCinematicChoreographyPackage? CinematicChoreographyPackage,
     WeeklyRenderExecutionPackage? RenderExecutionPackage,
+    RenderPreparationPackage? RenderPreparationPackage,
     WeeklyExecutionValidationReport? ExecutionValidation,
     WeeklyPreviewStabilityReport? PreviewStability,
     WeeklyPhase5FoundationStatus? Phase5FoundationStatus,
+    bool ReadyForRenderPreparation,
+    bool ReadyForRendering,
     bool LegacyEditorialPackageDeprecated,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
@@ -1410,6 +1413,30 @@ public sealed record TransitionExecutionDirective(string FromSceneCode, string T
 public sealed record RendererExecutionContract(string ContractId, string SceneCode, string RendererType, string SelectedSourceType, IReadOnlyList<string> RequiredInputs, IReadOnlyList<string> ExpectedOutputs, string MotionDirectiveCode, IReadOnlyList<string> OverlayDirectiveCodes, IReadOnlyList<string> TransitionDirectiveCodes, string FallbackPolicy, int RenderPriority, bool RendererDecisionLocked);
 public sealed record ThumbnailExecutionContract(string RendererType, string VisualSourceType, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string FocalHierarchy, string EyeFlowDirection, string EmotionalFocus, string OverlaySafeArea, string MobileSafeFraming, string ShortsCropStrategy, IReadOnlyList<string> RequiredAssets, string FallbackPolicy, string OutputRole);
 public sealed record WeeklyPhase5FoundationStatus(bool IsFrozen, bool IsReadyForPhase6, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, IReadOnlyList<string> VerifiedChecks);
+public sealed record RenderPreparationPackage(
+    string PreparationId,
+    RenderWorkingDirectoryPlan WorkingDirectoryPlan,
+    IReadOnlyList<SceneRenderRequest> SceneRenderRequests,
+    AssetResolutionPlan AssetResolutionPlan,
+    StellariumRenderPlan StellariumRenderPlan,
+    OverlayRenderPlan OverlayRenderPlan,
+    TimelineRenderPlan TimelineRenderPlan,
+    ThumbnailRenderPlan ThumbnailRenderPlan,
+    RenderPreparationValidation Validation);
+public sealed record RenderWorkingDirectoryPlan(string RootPath, string SceneRendersPath, string AudioPath, string OverlaysPath, string ThumbnailsPath, string TimelinePath, string FinalPath, string DebugPath, string MetadataPath, string AssetsPath, string StellariumPath);
+public sealed record SceneRenderRequest(string RequestId, string SceneCode, string RendererType, string SelectedSourceType, DateOnly TargetDate, DateTime? BestTimeUtc, int DurationSeconds, IReadOnlyList<string> NarrationSegmentCodes, IReadOnlyList<SceneRenderRequestInput> RequiredInputs, IReadOnlyList<SceneRenderExpectedOutput> ExpectedOutputs, IReadOnlyList<string> RequiredAssets, MotionExecutionDirective? MotionDirective, IReadOnlyList<OverlayExecutionDirective> OverlayDirectives, IReadOnlyList<TransitionExecutionDirective> TransitionDirectives, string FallbackPolicy, string OutputPath, string DebugMetadataPath, bool RendererDecisionLocked, bool IsThumbnailOnly = false);
+public sealed record SceneRenderRequestInput(string InputType, string InputCode, string Description, bool IsRequired);
+public sealed record SceneRenderExpectedOutput(string OutputType, string OutputCode, string Description);
+public sealed record AssetResolutionPlan(IReadOnlyList<AssetResolutionItem> Items);
+public sealed record AssetResolutionItem(string AssetCode, string ObjectCode, string AssetRole, string PreferredAssetType, IReadOnlyList<string> RequiredForSceneCodes, IReadOnlyList<string> CandidateLocalPaths, string FallbackStrategy, bool IsRequired, string ResolutionStatus);
+public sealed record StellariumRenderPlan(IReadOnlyList<StellariumRenderJob> Jobs);
+public sealed record StellariumRenderJob(string JobId, string SceneCode, DateOnly TargetDate, DateTime? BestTimeUtc, string RegionId, double Latitude, double Longitude, string Timezone, IReadOnlyList<string> ObjectCodes, string CameraIntent, string OutputResolution, string PlannedSscPath, string PlannedCapturePath, int CaptureDurationSeconds, IReadOnlyList<string> RequiredOverlays, string Status);
+public sealed record OverlayRenderPlan(IReadOnlyList<OverlayRenderJob> Jobs);
+public sealed record OverlayRenderJob(string JobId, string SceneCode, string OverlayType, string OverlayText, int StartSecond, int EndSecond, int ZIndex, string Animation, string SafeArea, string TypographyRole, string OutputOverlayPath, string Status);
+public sealed record TimelineRenderPlan(IReadOnlyList<TimelineRenderSegment> LongFormSegments);
+public sealed record TimelineRenderSegment(string SceneCode, int StartSecond, int EndSecond, int DurationSeconds, IReadOnlyList<string> NarrationSegmentCodes, string TransitionIn, string TransitionOut, string SceneRenderRequestId, bool IsThumbnailOnly);
+public sealed record ThumbnailRenderPlan(string ThumbnailRequestId, string RendererType, string VisualSourceType, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string FocalHierarchy, string EyeFlowDirection, string EmotionalFocus, string OverlaySafeArea, string MobileSafeFraming, string ShortsCropStrategy, IReadOnlyList<string> RequiredAssets, string PlannedOutputPath, string PlannedDebugPath, string Status);
+public sealed record RenderPreparationValidation(bool IsValid, bool SceneRequestsGenerated, bool AssetResolutionPlanned, bool StellariumJobsPlanned, bool OverlayJobsPlanned, bool TimelinePlanValid, bool ThumbnailPlanValid, bool ReadyForSceneRendering, bool ReadyForRendering, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 public sealed record WeeklyExecutionValidationReport(
     bool OverlaysValidated,
     bool TransitionsValidated,

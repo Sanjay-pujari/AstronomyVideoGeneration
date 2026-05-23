@@ -1,4 +1,6 @@
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Contracts;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -83,7 +85,8 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastV2NarrationPlanner narrationPlanner,
     IWeeklySkyForecastV2NarrationTextGenerator narrationTextGenerator,
     IWeeklySkyForecastV2AssetResolver assetResolver,
-    IWeeklySkyForecastV2EditorialNormalizer editorialNormalizer) : IWeeklySkyForecastV2IntelligenceService
+    IWeeklySkyForecastV2EditorialNormalizer editorialNormalizer,
+    IOptions<RenderingOptions> renderingOptions) : IWeeklySkyForecastV2IntelligenceService
 {
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
     {
@@ -138,9 +141,12 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             SceneChoreographyPackage: null,
             CinematicChoreographyPackage: null,
             RenderExecutionPackage: null,
+            RenderPreparationPackage: null,
             ExecutionValidation: null,
             PreviewStability: null,
             Phase5FoundationStatus: null,
+            ReadyForRenderPreparation: false,
+            ReadyForRendering: false,
             LegacyEditorialPackageDeprecated: false,
             RecommendedVisualStrategies: events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             Warnings: ctx.Warnings,
@@ -163,12 +169,13 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         baseResponse = baseResponse with { WeeklyStoryArc = arc };
         var (sceneChoreographyPackage, cinematicChoreographyPackage) = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
         var renderExecutionPackage = WeeklySkyForecastV2RenderExecutionBuilder.Build(narrationPlan, hybridScenePlanPackage, cinematicChoreographyPackage, baseResponse.Region);
+        var renderPreparationPackage = WeeklySkyForecastV2RenderPreparationBuilder.Build(renderExecutionPackage, hybridScenePlanPackage, narrationPlan, ctx, "WeeklySkyForecast", renderingOptions.Value.WorkingDirectory);
         var deprecatedLegacyEditorialPackage = BuildDeprecatedLegacyEditorialPackage(normalizedEditorialPackage);
-        var fullResponse = baseResponse with { EditorialStoryPackage = deprecatedLegacyEditorialPackage, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, LegacyEditorialPackageDeprecated = true };
+        var fullResponse = baseResponse with { EditorialStoryPackage = deprecatedLegacyEditorialPackage, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, RenderPreparationPackage = renderPreparationPackage, LegacyEditorialPackageDeprecated = true, ReadyForRenderPreparation = true, ReadyForRendering = false };
         var executionValidation = WeeklySkyForecastV2PreviewStabilityValidator.ValidateExecution(fullResponse);
         var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(fullResponse with { ExecutionValidation = executionValidation });
         var phase5 = WeeklySkyForecastV2PreviewStabilityValidator.BuildFoundationStatus(fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability });
-        return fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability, Phase5FoundationStatus = phase5 };
+        return fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability, Phase5FoundationStatus = phase5, ReadyForRenderPreparation = true, ReadyForRendering = false };
     }
 
     private static WeeklyEditorialStoryPackage BuildDeprecatedLegacyEditorialPackage(WeeklyNormalizedEditorialPackage normalized)
@@ -766,5 +773,67 @@ public sealed class WeeklySkyForecastV2AssetResolver : IWeeklySkyForecastV2Asset
             second = end;
         }
         return list;
+    }
+}
+
+internal static class WeeklySkyForecastV2RenderPreparationBuilder
+{
+    public static RenderPreparationPackage Build(WeeklyRenderExecutionPackage execution, WeeklyHybridScenePlanPackage hybrid, WeeklyNarrationPlan narration, WeeklySkyForecastContext context, string categoryName, string workingDirectory)
+    {
+        var pipelineRunId = BuildDeterministicGuid($"{execution.ExecutionId}|{context.RegionId}|{context.WeekStartDate:yyyy-MM-dd}");
+        var root = Path.Combine(string.IsNullOrWhiteSpace(workingDirectory) ? "./media-output" : workingDirectory, categoryName, context.WeekStartDate.ToString("yyyy-MM-dd"), context.RegionId.ToLowerInvariant(), pipelineRunId.ToString("N"));
+        var dirs = new RenderWorkingDirectoryPlan(root, Path.Combine(root, "scene-renders"), Path.Combine(root, "audio"), Path.Combine(root, "overlays"), Path.Combine(root, "thumbnails"), Path.Combine(root, "timeline"), Path.Combine(root, "final"), Path.Combine(root, "debug"), Path.Combine(root, "metadata"), Path.Combine(root, "assets"), Path.Combine(root, "stellarium"));
+
+        var sceneRequests = execution.RendererExecutionContracts.Select((c, i) =>
+        {
+            var scene = execution.ExecutionScenes.First(s => s.SceneCode == c.SceneCode);
+            return new SceneRenderRequest(
+                $"rr-{i + 1:00}-{c.SceneCode}", c.SceneCode, c.RendererType, c.SelectedSourceType, scene.TargetDate, scene.TechnicalBestTimeUtc, scene.DurationSeconds,
+                scene.NarrationSegmentCodes,
+                c.RequiredInputs.Select(x => new SceneRenderRequestInput("contract", x, $"Required input {x}", true)).ToList(),
+                c.ExpectedOutputs.Select(x => new SceneRenderExpectedOutput("render", x, $"Expected output {x}")).ToList(),
+                hybrid.AssetNeeds.Where(a => a.RequiredForSceneCodes.Contains(c.SceneCode)).Select(a => a.AssetCode).Distinct().ToList(),
+                execution.MotionExecutionDirectives.FirstOrDefault(x => x.SceneCode == c.SceneCode),
+                execution.OverlayExecutionDirectives.Where(x => x.SceneCode == c.SceneCode).ToList(),
+                execution.TransitionExecutionDirectives.Where(x => x.FromSceneCode == c.SceneCode || x.ToSceneCode == c.SceneCode).ToList(),
+                c.FallbackPolicy,
+                Path.Combine(dirs.SceneRendersPath, $"{c.SceneCode}.mp4"),
+                Path.Combine(dirs.DebugPath, $"{c.SceneCode}.json"),
+                c.RendererDecisionLocked,
+                false);
+        }).ToList();
+
+        var thumbnailRequestId = "rr-thumb-thumbnail_story_scene";
+        var assetItems = hybrid.AssetNeeds.Select(a => new AssetResolutionItem(a.AssetCode, a.ObjectCode, a.AssetRole, a.PreferredAssetType, a.RequiredForSceneCodes, [Path.Combine(dirs.AssetsPath, $"{a.AssetCode}.png")], a.FallbackStrategy, true, "Planned")).ToList();
+        var thumbAssets = execution.ThumbnailExecutionContract.RequiredAssets.Except(assetItems.Select(x => x.AssetCode), StringComparer.OrdinalIgnoreCase).Select(a => new AssetResolutionItem(a, "THUMBNAIL", "ThumbnailOverlay", "Png", ["thumbnail_story_scene"], [Path.Combine(dirs.AssetsPath, $"{a}.png")], execution.ThumbnailExecutionContract.FallbackPolicy, true, "Planned"));
+        assetItems.AddRange(thumbAssets);
+
+        var stellariumJobs = execution.StellariumExecutionDirectives.Where(d => d.Required).Select(d => new StellariumRenderJob(
+            $"st-{d.SceneCode}", d.SceneCode, d.TargetDate, d.TechnicalBestTimeUtc, context.RegionId, context.Latitude, context.Longitude, context.Timezone, d.ObjectCodes, d.CapturePurpose, "1920x1080",
+            Path.Combine(dirs.StellariumPath, $"{d.SceneCode}.ssc"), Path.Combine(dirs.StellariumPath, $"{d.SceneCode}.png"),
+            execution.ExecutionScenes.First(s => s.SceneCode == d.SceneCode).DurationSeconds,
+            execution.OverlayExecutionDirectives.Where(o => o.SceneCode == d.SceneCode).Select(o => o.OverlayType).Distinct().ToList(), "Planned")).ToList();
+
+        var overlayJobs = execution.OverlayExecutionDirectives.Select(o => new OverlayRenderJob($"ov-{o.SceneCode}-{o.DirectiveId}", o.SceneCode, o.OverlayType, o.OverlayText, o.StartSecond, o.EndSecond, o.ZIndex, o.Animation, o.SafeArea, o.TypographyRole, Path.Combine(dirs.OverlaysPath, $"{o.SceneCode}-{o.DirectiveId}.png"), "Planned")).ToList();
+
+        var timelineSegments = execution.ExecutionTimeline.Select(t => new TimelineRenderSegment(t.SceneCode, t.StartSecond, t.EndSecond, t.EndSecond - t.StartSecond, t.NarrationSegmentCodes ?? [], execution.TransitionExecutionDirectives.FirstOrDefault(x => x.ToSceneCode == t.SceneCode)?.TransitionType ?? "cut", execution.TransitionExecutionDirectives.FirstOrDefault(x => x.FromSceneCode == t.SceneCode)?.TransitionType ?? "cut", t.IsThumbnailOnly ? thumbnailRequestId : sceneRequests.First(x => x.SceneCode == t.SceneCode).RequestId, t.IsThumbnailOnly)).ToList();
+
+        var thumbnail = execution.ThumbnailExecutionContract;
+        var thumbnailPlan = new ThumbnailRenderPlan(thumbnailRequestId, thumbnail.RendererType, thumbnail.VisualSourceType, thumbnail.PrimaryObjects, thumbnail.SecondaryObjects, thumbnail.FocalHierarchy, thumbnail.EyeFlowDirection, thumbnail.EmotionalFocus, thumbnail.OverlaySafeArea, thumbnail.MobileSafeFraming, thumbnail.ShortsCropStrategy, thumbnail.RequiredAssets, Path.Combine(dirs.ThumbnailsPath, "thumbnail_story_scene.jpg"), Path.Combine(dirs.DebugPath, "thumbnail_story_scene.json"), "Planned");
+
+        var longForm = timelineSegments.Where(x => !x.IsThumbnailOnly).OrderBy(x => x.StartSecond).ToList();
+        var timelineValid = longForm.First().StartSecond == 0 && longForm.Last().EndSecond == 110 && longForm.Zip(longForm.Skip(1)).All(x => x.First.EndSecond == x.Second.StartSecond);
+        var blocking = new List<string>();
+        if (sceneRequests.Any(x => !x.RendererDecisionLocked)) blocking.Add("One or more scene render requests are not renderer decision locked.");
+        if (!timelineValid) blocking.Add("Long-form timeline must cover 0-110 without gaps or overlaps.");
+        var validation = new RenderPreparationValidation(blocking.Count == 0, sceneRequests.Count > 0, assetItems.Count > 0, stellariumJobs.Count > 0, overlayJobs.Count > 0, timelineValid, true, blocking.Count == 0, false, blocking, []);
+
+        return new RenderPreparationPackage($"prep-{execution.ExecutionId}", dirs, sceneRequests, new AssetResolutionPlan(assetItems), new StellariumRenderPlan(stellariumJobs), new OverlayRenderPlan(overlayJobs), new TimelineRenderPlan(longForm), thumbnailPlan, validation);
+    }
+
+    private static Guid BuildDeterministicGuid(string value)
+    {
+        var bytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(value));
+        return new Guid(bytes);
     }
 }

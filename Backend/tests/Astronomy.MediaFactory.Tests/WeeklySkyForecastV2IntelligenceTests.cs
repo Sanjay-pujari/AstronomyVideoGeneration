@@ -1,5 +1,7 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Astronomy.MediaFactory.Contracts;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -9,7 +11,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
     [Fact]
     public async Task V2_Intelligence_Generates_Cinematic_Blueprint()
     {
-        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator(), new WeeklySkyForecastV2AssetResolver(), new WeeklySkyForecastV2EditorialNormalizer());
+        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator(), new WeeklySkyForecastV2AssetResolver(), new WeeklySkyForecastV2EditorialNormalizer(), Options.Create(new RenderingOptions { WorkingDirectory = "./media-output" }));
         var response = await service.PreviewAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "IN-RJ-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), Diagnostics: true), CancellationToken.None);
 
         Assert.True(response.Success);
@@ -24,6 +26,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.SceneChoreographyPackage);
         Assert.NotNull(response.CinematicChoreographyPackage);
         Assert.NotNull(response.RenderExecutionPackage);
+        Assert.NotNull(response.RenderPreparationPackage);
         Assert.NotNull(response.ExecutionValidation);
         Assert.True(response.ExecutionValidation!.OverlaysValidated);
         Assert.True(response.ExecutionValidation.TransitionsValidated);
@@ -89,6 +92,20 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.RenderExecutionPackage.ThumbnailExecutionContract);
         Assert.Equal("WeeklySkyForecastThumbnail", response.RenderExecutionPackage.ThumbnailExecutionContract.OutputRole);
         Assert.Contains(response.RenderExecutionPackage.StellariumExecutionDirectives, d => d.SceneCode == "best_night_wide_scene" && d.Required);
+        Assert.All(response.RenderPreparationPackage!.SceneRenderRequests, r => Assert.True(r.RendererDecisionLocked));
+        Assert.Contains(response.RenderPreparationPackage.SceneRenderRequests, r => r.SceneCode == "moon_jupiter_hero_scene");
+        Assert.DoesNotContain(response.RenderPreparationPackage.StellariumRenderPlan.Jobs, j => j.SceneCode == "moon_jupiter_hero_scene");
+        Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "moon_hero_image");
+        Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "jupiter_hero_image");
+        Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "venus_glow_point");
+        Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "twilight_starfield_bg");
+        Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "tripod_phone_overlay");
+        Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "thumbnail_overlay_assets");
+        Assert.True(response.RenderPreparationPackage.Validation.IsValid);
+        Assert.True(response.RenderPreparationPackage.Validation.ReadyForSceneRendering);
+        Assert.False(response.RenderPreparationPackage.Validation.ReadyForRendering);
+        Assert.True(response.ReadyForRenderPreparation);
+        Assert.False(response.ReadyForRendering);
         Assert.InRange(response.SceneChoreographyPackage!.ResolvedScenes.Count, 4, 6);
         Assert.InRange(response.CinematicChoreographyPackage!.Scenes.Count, 4, 6);
         Assert.All(response.CinematicChoreographyPackage.Scenes, s => Assert.Contains(response.CinematicChoreographyPackage.SceneTimeline, t => t.SceneCode == s.SceneCode));
@@ -184,6 +201,9 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             null,
             null,
             null,
+            null,
+            false,
+            false,
             false,
             ["Hybrid"],
             [],
