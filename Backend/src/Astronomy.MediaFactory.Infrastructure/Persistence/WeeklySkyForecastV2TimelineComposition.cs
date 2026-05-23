@@ -71,9 +71,9 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
         var allCompositionPaths = new List<string>(segmentResults.Select(x => x.SourceSceneOutputPath))
         {
             draftPath,
-            audioPlan.NarrationTrackPath,
+            audioPlan.NarrationAudioPath,
             audioPlan.BackgroundMusicPath,
-            audioPlan.FinalMixPath,
+            audioPlan.FinalMixedAudioPath,
             prep.ThumbnailRenderPlan.PlannedOutputPath
         };
         allCompositionPaths.AddRange(shorts.Select(x => x.PlannedOutputPath));
