@@ -48,7 +48,7 @@ public sealed class WeeklySkyForecastV2EventIntelligenceBuilder : IWeeklySkyFore
                 if (close.Any())
                 {
                     var codes = close.Select(x => x.ObjectCode).Append("MOON").Distinct().ToList();
-                    events.Add(BuildEvent(codes.Count >= 3 ? "planetary_grouping" : "moon_planet_pairing", "Same viewing window grouping", day.Date, moon.BestViewingTimeUtc, codes, context, 90, "Hybrid", "grouping_story", "same_window_grouping_only_no_angular_separation"));
+                    events.Add(BuildEvent(codes.Count >= 3 ? "planetary_grouping" : "moon_planet_pairing", "Evening sky lineup", day.Date, moon.BestViewingTimeUtc, codes, context, 90, "Hybrid", "grouping_story", "same_window_grouping_only_no_angular_separation"));
                 }
             }
         }
@@ -65,8 +65,8 @@ public sealed class WeeklySkyForecastV2EventIntelligenceBuilder : IWeeklySkyFore
         var story = Math.Min(100, baseStory + (type.Contains("group", StringComparison.OrdinalIgnoreCase) ? 6 : 0));
         var rarity = type.Contains("group", StringComparison.OrdinalIgnoreCase) ? 70 : 55;
         var description = type.Contains("group", StringComparison.OrdinalIgnoreCase)
-            ? "Objects share the same viewing window grouping. This is not labeled as a conjunction without angular separation data."
-            : "High-value weekly observation event.";
+            ? "Objects remain visible in the same evening period; this is a practical viewing storyline, not a precision-separation claim."
+            : "Weekly skywatching highlight.";
         return new WeeklySkyForecastV2EventIntelligenceItem(Guid.NewGuid().ToString("N"), type, title, description, date, bestTimeUtc, objectCodes, visibleNames, importance, visual, story, rarity, visualStrategy, scenePurpose, "Derived from weekly skyfield forecast.", source);
     }
 }
@@ -93,10 +93,10 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var arc = new WeeklyStoryArc(
             "This week has a standout sky story",
             "Best windows, moon/planet moments, and visual priorities",
-            "Weekly visibility momentum",
-            "Start with the strongest shared viewing window and anchor the rest of the week around it.",
+            "Weekly skywatching progression",
+            "Start with the strongest shared evening view and anchor the rest of the week around it.",
             ["Hook the week with a story headline", "Cover the main sky event", "Recommend the best night", "Highlight moon or planet hero", "Share a practical photography tip", "Close with a clear call-to-action"],
-            "Plan one primary observation night and one backup.",
+            "Plan one primary observation night and one alternate window.",
             primaryObjects,
             events.Select(e => e.PrimaryDate.ToString("yyyy-MM-dd")).Distinct().Take(6).ToList(),
             events.OrderByDescending(e => e.StoryScore).Take(3).Select(e => e.Title).ToList());
@@ -148,10 +148,18 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var visualRequirementPackage = WeeklySkyForecastV2VisualRequirementExtractor.Extract(narrationPlan, generatedNarration, narrative, cinematic, baseResponse.EventIntelligence);
         var hybridScenePlanPackage = WeeklySkyForecastV2HybridScenePlanBuilder.Build(narrationPlan, visualRequirementPackage, baseResponse.Region);
         var normalizedEditorialPackage = await editorialNormalizer.NormalizeAsync(baseResponse, editorial, cinematic, narrative, cancellationToken);
+        arc = arc with
+        {
+            Headline = normalizedEditorialPackage.HeroNormalizedEvent.Title,
+            SupportingNarrative = $"Peak night: {normalizedEditorialPackage.HeroNormalizedEvent.PeakDate:yyyy-MM-dd}",
+            StoryTheme = "Best night anticipation, Jupiter scale, Moon calm beauty, and practical viewing confidence."
+        };
+        baseResponse = baseResponse with { WeeklyStoryArc = arc };
         var (sceneChoreographyPackage, cinematicChoreographyPackage) = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
         var renderExecutionPackage = WeeklySkyForecastV2RenderExecutionBuilder.Build(narrationPlan, hybridScenePlanPackage, cinematicChoreographyPackage, baseResponse.Region);
-        var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(narrationPlan, narrationQuality, visualRequirementPackage, hybridScenePlanPackage, renderExecutionPackage);
-        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, PreviewStability = previewStability };
+        var fullResponse = baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage };
+        var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(fullResponse);
+        return fullResponse with { PreviewStability = previewStability };
     }
 }
 
@@ -411,8 +419,14 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
 
 internal static class WeeklySkyForecastV2PreviewStabilityValidator
 {
-    public static WeeklyPreviewStabilityReport Validate(WeeklyNarrationPlan narrationPlan, WeeklyNarrationQualityReport narrationQuality, WeeklyVisualRequirementPackage visualRequirementPackage, WeeklyHybridScenePlanPackage hybridScenePlanPackage, WeeklyRenderExecutionPackage renderExecutionPackage)
+    private static readonly string[] ForbiddenStoryPhrases = ["same viewing window grouping", "high-value weekly observation event", "weekly visibility momentum", "backup opportunities", "observation event", "grouping event"];
+    public static WeeklyPreviewStabilityReport Validate(WeeklySkyForecastV2IntelligenceResponse response)
     {
+        var narrationPlan = response.NarrationPlan!;
+        var narrationQuality = response.NarrationQuality!;
+        var visualRequirementPackage = response.VisualRequirementPackage!;
+        var hybridScenePlanPackage = response.HybridScenePlanPackage!;
+        var renderExecutionPackage = response.RenderExecutionPackage!;
         var blocking = new List<string>();
         var warnings = new List<string>();
         if (!narrationQuality.IsValid) blocking.Add("Narration quality failed required checks.");
@@ -426,6 +440,22 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         if (!narrationQuality.ShortCtaUniquenessValid) warnings.Add("Short CTA endings need better differentiation.");
         if (hybridScenePlanPackage.ScenePlans.Count is < 4 or > 6) blocking.Add("Hybrid scene plan must contain 4-6 timeline scenes.");
         if (renderExecutionPackage.ExecutionScenes.Any(s => s.TechnicalBestTimeUtc is null && string.IsNullOrWhiteSpace(s.HumanTimeWindow))) blocking.Add("Render contract uses null technical time without human fallback.");
+        foreach (var scene in renderExecutionPackage.ExecutionScenes)
+        {
+            if (scene.TechnicalBestTimeUtc is not null && DateOnly.FromDateTime(scene.TechnicalBestTimeUtc.Value) != scene.TargetDate)
+                blocking.Add($"RenderExecutionPackage.ExecutionScenes[{scene.SceneCode}].TechnicalBestTimeUtc date mismatch.");
+        }
+        var storyFacingChecks = new Dictionary<string, string?>
+        {
+            ["WeeklyStoryArc.ThemeLine"] = response.WeeklyStoryArc.ThemeLine,
+            ["WeeklyStoryArc.SupportingNarrative"] = response.WeeklyStoryArc.SupportingNarrative,
+            ["EditorialStoryPackage.Headline"] = response.EditorialStoryPackage?.Headline,
+            ["CinematicStoryBlueprint.Headline"] = response.CinematicStoryBlueprint?.Headline,
+            ["NarrativeAbstractionPackage.StoryHeadline"] = response.NarrativeAbstractionPackage?.StoryHeadline
+        };
+        foreach (var kv in storyFacingChecks)
+            foreach (var phrase in ForbiddenStoryPhrases.Where(p => (kv.Value ?? "").Contains(p, StringComparison.OrdinalIgnoreCase)))
+                blocking.Add($"{kv.Key} contains forbidden phrase: {phrase}");
         var readyForAssetResolution = blocking.Count == 0;
         var readyForSceneChoreography = readyForAssetResolution && hybridScenePlanPackage.ScenePlans.Count <= 6;
         var readyForRenderPreparation = readyForSceneChoreography
