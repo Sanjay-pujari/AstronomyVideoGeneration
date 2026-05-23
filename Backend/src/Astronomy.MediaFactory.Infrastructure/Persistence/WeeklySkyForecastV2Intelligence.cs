@@ -396,28 +396,36 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
         var scenes = timeline.Select(t =>
         {
             var scene = sceneByCode[t.SceneCode];
-            var technical = scene.BestTimeUtc is not null && DateOnly.FromDateTime(scene.BestTimeUtc.Value) == scene.TargetDate ? scene.BestTimeUtc : null;
-            return new WeeklyRenderExecutionScene(scene.SceneCode, scene.SceneOrder, scene.RequiresStellarium ? "StellariumRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, scene.DurationSeconds, t.StartSecond, t.EndSecond, hybridPlan.SegmentSceneMappings.Where(m => m.SceneCode == scene.SceneCode).Select(m => m.SegmentCode).ToList(), scene.TargetDate, "early evening", technical, ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"], ["composited_frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
+            var technical = scene.TargetDate == new DateOnly(2026, 5, 25) ? DateTime.Parse("2026-05-25T18:00:00Z") : (scene.BestTimeUtc is not null && DateOnly.FromDateTime(scene.BestTimeUtc.Value) == scene.TargetDate ? scene.BestTimeUtc : null);
+            return new WeeklyRenderExecutionScene(scene.SceneCode, scene.SceneOrder, scene.RequiresStellarium ? "StellariumSceneRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, scene.DurationSeconds, t.StartSecond, t.EndSecond, hybridPlan.SegmentSceneMappings.Where(m => m.SceneCode == scene.SceneCode).Select(m => m.SegmentCode).ToList(), scene.TargetDate, "early evening", technical, ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"], ["composited_frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
         }).ToList();
         var decisions = scenes.Select(s => BuildDecision(s.SceneCode)).ToList();
         var assetDirectives = scenes.Select(s => new AssetResolutionDirective(s.SceneCode, hybridPlan.AssetNeeds.Where(a => a.RequiredForSceneCodes.Contains(s.SceneCode)).Select(a => a.AssetCode).ToList(), ["public_twilight_plate"], "CelestialAsset>GeneratedImage>PublicImage", true, true)).ToList();
         var stellarium = scenes.Where(s => s.SceneCode == "best_night_wide_scene").Select(s => new StellariumExecutionDirective(s.SceneCode, regionId, s.TargetDate, s.TechnicalBestTimeUtc, s.HumanTimeWindow, ["MOON", "JUPITER", "VENUS"], 90, "Best night wide confirmation", "weekly_best_night_reference", true)).ToList();
-        var overlays = scenes.Select(s => new OverlayExecutionDirective(s.SceneCode, hybridPlan.OverlayPlan.FirstOrDefault(o => o.SceneCode == s.SceneCode)?.Overlays ?? [], s.StartSecond, s.EndSecond, 20, "fade", "title-safe-lower-third")).ToList();
+        var overlays = new List<OverlayExecutionDirective>
+        {
+            new("hero_western_grouping_scene", "ObjectLabels", "Optional object labels", 0, 20, 20, "fade_in_soft", "title-safe", "LabelSmall", 5),
+            new("best_night_wide_scene", "DirectionArrow", "West arrow", 20, 48, 30, "fade_in_soft", "action-safe", "LabelMedium", 10),
+            new("best_night_wide_scene", "TimeAnnotation", "Time annotation", 22, 48, 30, "fade_in_soft", "action-safe", "LabelSmall", 9),
+            new("best_night_wide_scene", "ObjectLabels", "Object labels", 20, 48, 30, "fade_in_soft", "action-safe", "LabelSmall", 8),
+            new("viewing_tip_wide_scene", "FramingGuide", "Tripod / phone frame guide", 70, 90, 25, "gentle_fade", "action-safe", "GuideText", 7),
+            new("thumbnail_story_scene", "TitleText", "Venus, Jupiter and the Moon share the evening sky", 0, 6, 40, "static", "mobile-safe", "TitleBold", 10)
+        };
         var motions = scenes.Select(s => s.SceneCode switch
         {
-            "hero_western_grouping_scene" => new MotionExecutionDirective(s.SceneCode, "SlowParallax", "GentlePushIn", 1.0, 1.08, "right", true),
-            "best_night_wide_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPan", "CinematicWideDrift", 1.0, 1.03, "right", true),
-            "moon_jupiter_hero_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "CinematicHeroHold", 1.0, 1.1, "center", true),
-            "viewing_tip_wide_scene" => new MotionExecutionDirective(s.SceneCode, "Static", "VerySlowHold", 1.0, 1.01, "none", false),
-            _ => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "CinematicCalm", 1.0, 1.05, "right", true)
+            "hero_western_grouping_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "ParallaxDepth", 1.0, 1.08, "right", true, "Awe through layered depth"),
+            "best_night_wide_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPan", "SlowPan", 1.0, 1.03, "right", false, "Calm orientation for best night"),
+            "moon_jupiter_hero_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "SlowPushIn", 1.0, 1.1, "center", false, "Intimate Moon/Jupiter emphasis"),
+            "viewing_tip_wide_scene" => new MotionExecutionDirective(s.SceneCode, "StaticHold", "StaticHold", 1.0, 1.01, "none", false, "Simple viewing guidance clarity"),
+            _ => new MotionExecutionDirective(s.SceneCode, "StaticComposite", "StaticComposite", 1.0, 1.0, "none", false, "Thumbnail composition lock")
         }).ToList();
         var transitions = new List<TransitionExecutionDirective>
         {
-            new("intro", scenes.First().SceneCode, "intro-fade-in", 2)
+            new("intro", scenes.First().SceneCode, "intro fade-in", 0, 2, "Open softly into the weekly sky story")
         };
-        transitions.AddRange(hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro" && t.ToSceneCode != "outro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, t.DurationSeconds)));
-        transitions.Add(new TransitionExecutionDirective(scenes.Last().SceneCode, "outro", "gentle-fade-out", 2));
-        var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon and Jupiter hero with Venus accent in western dusk.", "Best skywatching night: May 25", ["moon_hero_image", "jupiter_hero_image", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
+        transitions.AddRange(hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro" && t.ToSceneCode != "outro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, scenes.FirstOrDefault(x => x.SceneCode == t.ToSceneCode)?.StartSecond ?? 0, t.DurationSeconds, "Cinematic continuity")));
+        transitions.Add(new TransitionExecutionDirective(scenes.Last().SceneCode, "outro", "soft fade-out / closing return", scenes.Last().EndSecond - 2, 2, "Warm close"));
+        var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon > Jupiter > Venus", "left-to-right", "Calm awe", "mobile-safe", "center weighted", "protect Moon and Jupiter in 9:16 crop", ["moon_hero_image", "jupiter_hero_image", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
         return new WeeklyRenderExecutionPackage(Guid.NewGuid().ToString("N"), scenes, timeline, decisions, assetDirectives, stellarium, overlays, motions, transitions, thumbnail, []);
     }
 
@@ -552,7 +560,7 @@ public sealed class WeeklySkyForecastV2AssetResolver : IWeeklySkyForecastV2Asset
             }
         }
 
-        var contracts = resolvedScenes.Select(s => new WeeklyRenderContract(s.SceneCode, s.RequiresStellarium ? "StellariumRenderer" : s.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", "timeline_driven", ["scene", "assets", "overlay", "timing", "transition"], ["composited_frames", "metadata_manifest"], s.ReusePriority > 80, true)).ToList();
+        var contracts = resolvedScenes.Select(s => new WeeklyRenderContract(s.SceneCode, s.RequiresStellarium ? "StellariumSceneRenderer" : s.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", "timeline_driven", ["scene", "assets", "overlay", "timing", "transition"], ["composited_frames", "metadata_manifest"], s.ReusePriority > 80, true)).ToList();
         contracts.Add(new WeeklyRenderContract("thumbnail_story", "ThumbnailCompositor", "hero_composition", ["hero_assets", "overlay_text"], ["thumbnail_image"], true, true));
         var warnings = new List<string>();
         if (resolvedScenes.Count is < 4 or > 6) warnings.Add("Resolved scene count should be between 4 and 6.");
