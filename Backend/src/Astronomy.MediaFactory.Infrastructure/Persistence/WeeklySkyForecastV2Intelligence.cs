@@ -151,7 +151,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         arc = arc with
         {
             Headline = normalizedEditorialPackage.HeroNormalizedEvent.Title,
-            SupportingNarrative = $"Peak night: {normalizedEditorialPackage.HeroNormalizedEvent.PeakDate:yyyy-MM-dd}",
+            Subtitle = $"Peak night: {normalizedEditorialPackage.HeroNormalizedEvent.PeakDate:yyyy-MM-dd}",
             StoryTheme = "Best night anticipation, Jupiter scale, Moon calm beauty, and practical viewing confidence."
         };
         baseResponse = baseResponse with { WeeklyStoryArc = arc };
@@ -447,8 +447,8 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         }
         var storyFacingChecks = new Dictionary<string, string?>
         {
-            ["WeeklyStoryArc.ThemeLine"] = response.WeeklyStoryArc.ThemeLine,
-            ["WeeklyStoryArc.SupportingNarrative"] = response.WeeklyStoryArc.SupportingNarrative,
+            ["WeeklyStoryArc.StoryTheme"] = response.WeeklyStoryArc.StoryTheme,
+            ["WeeklyStoryArc.Subtitle"] = response.WeeklyStoryArc.Subtitle,
             ["EditorialStoryPackage.Headline"] = response.EditorialStoryPackage?.Headline,
             ["CinematicStoryBlueprint.Headline"] = response.CinematicStoryBlueprint?.Headline,
             ["NarrativeAbstractionPackage.StoryHeadline"] = response.NarrativeAbstractionPackage?.StoryHeadline
