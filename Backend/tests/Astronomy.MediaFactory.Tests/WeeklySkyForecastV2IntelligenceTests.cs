@@ -24,6 +24,14 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.SceneChoreographyPackage);
         Assert.NotNull(response.CinematicChoreographyPackage);
         Assert.NotNull(response.RenderExecutionPackage);
+        Assert.NotNull(response.ExecutionValidation);
+        Assert.True(response.ExecutionValidation!.OverlaysValidated);
+        Assert.True(response.ExecutionValidation.TransitionsValidated);
+        Assert.True(response.ExecutionValidation.TimelineValidated);
+        Assert.True(response.ExecutionValidation.RendererContractsValidated);
+        Assert.True(response.ExecutionValidation.ThumbnailContractsValidated);
+        Assert.Equal(100d, response.ExecutionValidation.NarrationTimelineCoveragePercent);
+        Assert.Empty(response.ExecutionValidation.MissingExecutionFields);
         Assert.True(response.LegacyEditorialPackageDeprecated);
         Assert.NotNull(response.PreviewStability);
         Assert.Empty(response.PreviewStability!.BlockingIssues);

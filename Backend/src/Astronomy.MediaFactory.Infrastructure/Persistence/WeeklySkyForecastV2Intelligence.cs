@@ -562,8 +562,17 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         var timeline = pkg.ExecutionTimeline.OrderBy(x => x.StartSecond).ToList();
         var longTimeline = timeline.Where(x => !x.IsThumbnailOnly).ToList();
         var timelineValidated = longTimeline.Count > 0 && longTimeline.First().StartSecond == 0 && longTimeline.Last().EndSecond == 110 && longTimeline.Zip(longTimeline.Skip(1), (a, b) => b.StartSecond - a.EndSecond).All(x => x == 0) && timeline.Any(x => x.SceneCode == "thumbnail_story_scene" && x.IsThumbnailOnly);
-        var rendererContractsValidated = pkg.RendererExecutionContracts.Count == pkg.ExecutionScenes.Count && pkg.RendererExecutionContracts.All(x => x.RendererDecisionLocked && !string.IsNullOrWhiteSpace(x.ContractId) && !string.IsNullOrWhiteSpace(x.SceneCode));
+        var rendererContractsValidated = pkg.RendererExecutionContracts.Count == pkg.ExecutionScenes.Count && pkg.RendererExecutionContracts.All(x => x.RendererDecisionLocked && !string.IsNullOrWhiteSpace(x.ContractId) && !string.IsNullOrWhiteSpace(x.SceneCode) && !string.IsNullOrWhiteSpace(x.MotionDirectiveCode) && x.RequiredInputs.Count > 0 && x.ExpectedOutputs.Count > 0);
         var thumbnailContractsValidated = !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.RendererType) && !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.VisualSourceType) && pkg.ThumbnailExecutionContract.PrimaryObjects.Count > 0 && !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.FocalHierarchy);
+        var dumbRendererContractsValidated = pkg.RendererExecutionContracts.All(x => x.RendererDecisionLocked && !string.IsNullOrWhiteSpace(x.SelectedSourceType));
+        var sceneContractsValidated = pkg.ExecutionScenes.All(scene =>
+            pkg.RenderSourceDecisions.Any(d => d.SceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase))
+            && pkg.MotionExecutionDirectives.Any(m => m.SceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.DirectiveId))
+            && pkg.RendererExecutionContracts.Any(c => c.SceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase))
+            && pkg.TransitionExecutionDirectives.Any(t => t.FromSceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase) || t.ToSceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase))
+            && (scene.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase)
+                ? pkg.OverlayExecutionDirectives.Any(o => o.SceneCode.Equals(scene.SceneCode, StringComparison.OrdinalIgnoreCase) && o.Required)
+                : true));
         var coverage = timelineValidated ? 100d : Math.Round((timeline.Sum(x => Math.Max(0, x.EndSecond - x.StartSecond)) / 110d) * 100d, 2);
         var missing = new List<string>();
         if (!overlaysValidated) missing.Add("RenderExecutionPackage.OverlayExecutionDirectives");
@@ -571,6 +580,8 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         if (!timelineValidated) missing.Add("RenderExecutionPackage.ExecutionTimeline");
         if (!rendererContractsValidated) missing.Add("RenderExecutionPackage.RendererExecutionContracts");
         if (!thumbnailContractsValidated) missing.Add("RenderExecutionPackage.ThumbnailExecutionContract");
+        if (!dumbRendererContractsValidated) missing.Add("RenderExecutionPackage.RendererExecutionContracts.DumbExecutorRule");
+        if (!sceneContractsValidated) missing.Add("RenderExecutionPackage.SceneContractCoverage");
         var blocking = missing.Count > 0 ? new List<string> { "Execution contracts are incomplete." } : new List<string>();
         return new WeeklyExecutionValidationReport(overlaysValidated, transitionsValidated, timelineValidated, rendererContractsValidated, thumbnailContractsValidated, coverage, [], missing, blocking, []);
     }
