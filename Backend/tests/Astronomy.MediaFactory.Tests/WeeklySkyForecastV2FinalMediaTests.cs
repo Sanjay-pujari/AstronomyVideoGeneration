@@ -40,7 +40,7 @@ public sealed class WeeklySkyForecastV2FinalMediaTests
     [Fact]
     public async Task FinalMediaOrchestrator_Renders_FinalAssets_WithoutPublishing()
     {
-        var orchestrator = new WeeklySkyForecastFinalMediaOrchestrator(new FakeIntelligenceServiceFor6C(), new WeeklySkyForecastSceneRenderingOrchestrator(new FakeIntelligenceServiceFor6C(), new Microsoft.Extensions.Logging.Abstractions.NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>()), new WeeklySkyForecastTimelineCompositionOrchestrator(new FakeIntelligenceServiceFor6C(), new WeeklySkyForecastSceneRenderingOrchestrator(new FakeIntelligenceServiceFor6C(), new Microsoft.Extensions.Logging.Abstractions.NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>())), new FakeSpeechSynthesisService());
+        var orchestrator = new WeeklySkyForecastFinalMediaOrchestrator(new FakeIntelligenceServiceFor6C(), new WeeklySkyForecastSceneRenderingOrchestrator(new FakeIntelligenceServiceFor6C(), new Microsoft.Extensions.Logging.Abstractions.NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>()), new WeeklySkyForecastTimelineCompositionOrchestrator(new FakeIntelligenceServiceFor6C(), new WeeklySkyForecastSceneRenderingOrchestrator(new FakeIntelligenceServiceFor6C(), new Microsoft.Extensions.Logging.Abstractions.NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>())), new FakeSpeechSynthesisService(), new Microsoft.Extensions.Logging.Abstractions.NullLogger<WeeklySkyForecastFinalMediaOrchestrator>());
         var request = new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "us", "US", DateTimeOffset.UtcNow, Diagnostics: true);
 
         var result = await orchestrator.RunAsync(request, null, CancellationToken.None);
@@ -54,7 +54,7 @@ public sealed class WeeklySkyForecastV2FinalMediaTests
     private sealed class FakeFinalMediaOrchestrator : IWeeklySkyForecastFinalMediaOrchestrator
     {
         public Task<FinalMediaPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
-            => Task.FromResult(new FinalMediaPackage(new FinalLongFormVideoResult("out.mp4",110,"1920x1080",30,"Rendered",[],[]), new NarrationAudioResult("n.wav","en","auto",110,"Rendered",[],[]), new BackgroundMusicResult(null,"NoMusic",0,"Rendered",[],[]), new FinalAudioMixResult("mix.wav",110,"Rendered",[],[]), [], new ThumbnailFinalResult("thumb.jpg","Rendered",true,[],[]), new SubtitleResult("a.srt","a.vtt","Planned",false,[],[]), new FinalMediaValidation(true,true,true,true,true,true,true,true,true,true,false,true,true,[],[]), new FinalMediaFreezeStatus(true,true,[],[],[])));
+            => Task.FromResult(new FinalMediaPackage(new FinalLongFormVideoResult("out.mp4",110,"1920x1080",30,"Rendered",[],[]), new NarrationAudioResult("n.wav","en","auto",110,"Rendered",[],[]), new BackgroundMusicResult(null,"NoMusic",0,"Rendered",[],[]), new FinalAudioMixResult("mix.wav",110,"Rendered",[],[]), [], new ThumbnailFinalResult("thumb.jpg","Rendered",true,[],[]), new SubtitleResult("a.srt","a.vtt","Planned",false,[],[]), new FinalMediaValidation(true,true,true,true,true,true,true,true,true,true,false,true,true,[],[],true,true,true,true,true,true,true), new FinalMediaFreezeStatus(true,true,[],[],[])));
     }
 
     private sealed class FakeTimelineOrchestrator : IWeeklySkyForecastTimelineCompositionOrchestrator
