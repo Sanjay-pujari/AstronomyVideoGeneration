@@ -101,9 +101,10 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "twilight_starfield_bg");
         Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "tripod_phone_overlay");
         Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "thumbnail_overlay_assets");
-        Assert.True(response.RenderPreparationPackage.Validation.IsValid);
-        Assert.True(response.RenderPreparationPackage.Validation.ReadyForSceneRendering);
-        Assert.False(response.RenderPreparationPackage.Validation.ReadyForRendering);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.IsValid);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.ReadyForSceneRendering);
+        Assert.False(response.RenderPreparationPackage.RenderPreparationValidation.ReadyForRendering);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.WorkingDirectoryPlanValid);
         Assert.True(response.ReadyForRenderPreparation);
         Assert.False(response.ReadyForRendering);
         Assert.InRange(response.SceneChoreographyPackage!.ResolvedScenes.Count, 4, 6);
@@ -151,6 +152,8 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.DoesNotContain(response.RenderExecutionPackage.ExecutionScenes, x => x.SceneCode == "thumbnail_story_scene");
         Assert.True(response.Phase5FoundationStatus!.IsFrozen);
         Assert.True(response.Phase5FoundationStatus.IsReadyForPhase6);
+        Assert.True(response.RenderPreparationFreezeStatus!.IsFrozen);
+        Assert.True(response.RenderPreparationFreezeStatus.IsReadyForPhase6B);
         Assert.True(response.PreviewStability.ReadyForRenderPreparation);
         Assert.False(response.PreviewStability.ReadyForRendering);
         Assert.DoesNotContain("DailySkyGuide", response.Category, StringComparison.OrdinalIgnoreCase);
@@ -188,6 +191,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             events,
             new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             null!,
+            null,
             null,
             null,
             null,
