@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
@@ -18,6 +19,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 {
     private const string ApiVersion = "2024-10-21";
     private const int MaxGenerationAttempts = 3;
+    private const int AzureOpenAiTimeoutSeconds = 90;
 
     private readonly HttpClient _httpClient;
     private readonly AzureOpenAiOptions _options;
@@ -205,7 +207,36 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        var startedUtc = DateTimeOffset.UtcNow;
+        var stopwatch = Stopwatch.StartNew();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(AzureOpenAiTimeoutSeconds));
+        _logger.LogInformation(
+            "Azure OpenAI call starting. modelOrDeployment={Deployment}; promptPurpose={PromptPurpose}; startedUtc={StartedUtc:o}; timeoutSeconds={TimeoutSeconds}",
+            _options.ChatDeployment,
+            "chat-completion-json",
+            startedUtc,
+            AzureOpenAiTimeoutSeconds);
+        HttpResponseMessage response;
+        try
+        {
+            response = await _httpClient.SendAsync(request, timeoutCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Azure OpenAI call failed. modelOrDeployment={Deployment}; promptPurpose={PromptPurpose}; startedUtc={StartedUtc:o}; timeoutSeconds={TimeoutSeconds}; exception={Exception}; elapsedMs={ElapsedMs}",
+                _options.ChatDeployment,
+                "chat-completion-json",
+                startedUtc,
+                AzureOpenAiTimeoutSeconds,
+                ex.Message,
+                stopwatch.ElapsedMilliseconds);
+            throw;
+        }
+        using (response)
+        {
         if (!response.IsSuccessStatusCode)
         {
             var errorPayload = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -216,7 +247,17 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         }
 
         var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+        stopwatch.Stop();
+        _logger.LogInformation(
+            "Azure OpenAI call completed. modelOrDeployment={Deployment}; promptPurpose={PromptPurpose}; startedUtc={StartedUtc:o}; completedUtc={CompletedUtc:o}; elapsedMs={ElapsedMs}; responseLength={ResponseLength}",
+            _options.ChatDeployment,
+            "chat-completion-json",
+            startedUtc,
+            DateTimeOffset.UtcNow,
+            stopwatch.ElapsedMilliseconds,
+            payload.Length);
         return ExtractAssistantContent(payload);
+        }
     }
 
     private static string ExtractAssistantContent(string payload)

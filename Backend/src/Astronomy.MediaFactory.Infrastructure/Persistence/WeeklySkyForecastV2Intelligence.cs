@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -86,7 +87,8 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastV2NarrationTextGenerator narrationTextGenerator,
     IWeeklySkyForecastV2AssetResolver assetResolver,
     IWeeklySkyForecastV2EditorialNormalizer editorialNormalizer,
-    IOptions<RenderingOptions> renderingOptions) : IWeeklySkyForecastV2IntelligenceService
+    IOptions<RenderingOptions> renderingOptions,
+    ILogger<WeeklySkyForecastV2IntelligenceService> logger) : IWeeklySkyForecastV2IntelligenceService
 {
     public Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
         => PreviewAsync(new WeeklySkyForecastV2OrchestrationContext(
@@ -103,7 +105,18 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
     {
         var request = orchestrationContext.Request;
-        var ctx = await contextBuilder.BuildAsync(orchestrationContext, cancellationToken);
+        logger.LogInformation("Starting intelligence preview");
+        WeeklySkyForecastContext ctx;
+        try
+        {
+            using var skyfieldTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            skyfieldTimeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+            ctx = await contextBuilder.BuildAsync(orchestrationContext, skyfieldTimeoutCts.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new InvalidOperationException("Validation failed: stuck phase 'weekly_skyfield_context' timed out after 30 seconds.");
+        }
         if (ctx.DailyForecasts.Count != 7)
             throw new InvalidOperationException("Skyfield weekly response must include 7 days.");
         var events = eventBuilder.Build(ctx);
@@ -167,14 +180,26 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             RecommendedVisualStrategies: events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             Warnings: ctx.Warnings,
             StepResults: stepResults);
+        logger.LogInformation("Starting editorial story generation");
         var editorial = await editorialBuilder.BuildAsync(baseResponse, cancellationToken);
+        logger.LogInformation("Completed editorial story generation");
+        logger.LogInformation("Starting cinematic blueprint generation");
         var cinematic = await cinematicRefiner.RefineAsync(editorial, baseResponse with { EditorialStoryPackage = editorial }, cancellationToken);
+        logger.LogInformation("Completed cinematic blueprint generation");
+        logger.LogInformation("Starting narration plan generation");
         var narrative = await narrativeAbstractionBuilder.BuildAsync(cinematic, editorial, baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic }, cancellationToken);
         var narrationPlan = await narrationPlanner.BuildAsync(narrative, cinematic, baseResponse.SkyfieldSummary, baseResponse.Region, baseResponse.WeekStartDate, request.Language, cancellationToken);
+        logger.LogInformation("Completed narration plan generation");
+        logger.LogInformation("Starting narration text generation");
         var generatedNarration = await narrationTextGenerator.GenerateAsync(narrationPlan, narrative, cancellationToken);
+        logger.LogInformation("Completed narration text generation");
         var narrationQuality = WeeklySkyForecastV2NarrationQualityValidator.Validate(narrationPlan, generatedNarration);
+        logger.LogInformation("Starting visual requirement generation");
         var visualRequirementPackage = WeeklySkyForecastV2VisualRequirementExtractor.Extract(narrationPlan, generatedNarration, narrative, cinematic, baseResponse.EventIntelligence);
+        logger.LogInformation("Completed visual requirement generation");
+        logger.LogInformation("Starting hybrid scene planning");
         var hybridScenePlanPackage = WeeklySkyForecastV2HybridScenePlanBuilder.Build(narrationPlan, visualRequirementPackage, baseResponse.Region);
+        logger.LogInformation("Completed hybrid scene planning");
         var normalizedEditorialPackage = await editorialNormalizer.NormalizeAsync(baseResponse, editorial, cinematic, narrative, cancellationToken);
         arc = arc with
         {
@@ -206,6 +231,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             BlockingIssues = []
         };
         var freezeStatus = new RenderPreparationFreezeStatus(true, true, ["working_directory_plan", "scene_render_requests", "asset_resolution_plan", "stellarium_render_plan", "overlay_render_plan", "timeline_render_plan", "thumbnail_render_plan", "render_preparation_validation"], [], []);
+        logger.LogInformation("Completed intelligence preview");
         return fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability, Phase5FoundationStatus = phase5, RenderPreparationFreezeStatus = freezeStatus, ReadyForRenderPreparation = true, ReadyForSceneRendering = true, ReadyForRendering = false };
     }
 

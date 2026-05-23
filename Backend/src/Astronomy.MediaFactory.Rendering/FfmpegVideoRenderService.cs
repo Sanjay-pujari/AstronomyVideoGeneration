@@ -1197,8 +1197,9 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
 
     public static int CalculateEffectiveSegmentTimeoutSeconds(int configuredSegmentTimeoutSeconds, double sceneDurationSeconds)
     {
-        var effectiveSegmentTimeoutSeconds = Math.Max(configuredSegmentTimeoutSeconds, (int)Math.Ceiling(sceneDurationSeconds * 10d));
-        effectiveSegmentTimeoutSeconds = Math.Max(effectiveSegmentTimeoutSeconds, 300);
+        var effectiveSegmentTimeoutSeconds = Math.Max(configuredSegmentTimeoutSeconds, (int)Math.Ceiling(sceneDurationSeconds * 6d));
+        effectiveSegmentTimeoutSeconds = Math.Max(effectiveSegmentTimeoutSeconds, 30);
+        effectiveSegmentTimeoutSeconds = Math.Min(effectiveSegmentTimeoutSeconds, 120);
         return effectiveSegmentTimeoutSeconds;
     }
 
@@ -1206,7 +1207,7 @@ public sealed class FfmpegVideoRenderService : IVideoRenderService
         => Math.Max(1, configuredTimeoutSeconds);
 
     private static int CalculateEffectiveFinalRenderTimeoutSeconds(VideoRenderProfileKind profileKind, bool isShortManifest, int configuredTimeoutSeconds, double videoDurationSeconds)
-        => Math.Max(1, configuredTimeoutSeconds);
+        => Math.Min(120, Math.Max(1, configuredTimeoutSeconds));
 
     private int GetConfiguredFinalRenderTimeoutSeconds(VideoRenderProfileKind profileKind, bool isShortManifest)
         => profileKind switch
