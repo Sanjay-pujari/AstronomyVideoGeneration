@@ -29,6 +29,14 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             EnsureFile(req.MetadataOutputPath, $"metadata for {req.SceneCode}");
             EnsureFile(req.DebugOutputPath, $"debug for {req.SceneCode}");
 
+            if (IsReuseScene(req))
+            {
+                var reused = ExecuteReuseScene(req, prep, requestWarnings, requestErrors);
+                if (requestErrors.Count > 0) blocking.AddRange(requestErrors.Select(e => $"{req.SceneCode}: {e}"));
+                sceneResults.Add(new SceneRenderResult(req.RequestId, req.SceneCode, req.RendererType, req.OutputPath, requestErrors.Count == 0 ? "Rendered" : "Failed", requestWarnings, requestErrors, reused?.SceneCode, reused?.RequestId, reused?.OutputPath));
+                continue;
+            }
+
             switch (req.RendererType)
             {
                 case "StellariumSceneRenderer":
@@ -83,8 +91,41 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             false,
             blocking,
             warnings);
-        var freeze = new SceneRenderingFreezeStatus(true, ["Phase 6A frozen inputs honored", "No timeline composition performed", "No publishing performed"], blocking, warnings);
+        var freeze = new SceneRenderingFreezeStatus(true, ["Phase 6A frozen inputs honored", "No timeline composition performed", "No publishing performed"], [], warnings);
         return new SceneRenderingPackage(sceneResults, stellariumResults, assetResults, hybridResults, overlayResults, thumbnail, validation, freeze);
+    }
+
+    private static bool IsReuseScene(SceneRenderRequest req)
+        => req.IsReuseScene
+           || req.SceneCode.EndsWith("_reuse", StringComparison.OrdinalIgnoreCase)
+           || !string.IsNullOrWhiteSpace(req.ReuseSourceSceneCode);
+
+    private static SceneRenderRequest? ExecuteReuseScene(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors)
+    {
+        var sourceSceneCode = !string.IsNullOrWhiteSpace(req.ReuseSourceSceneCode)
+            ? req.ReuseSourceSceneCode!
+            : req.SceneCode.EndsWith("_reuse", StringComparison.OrdinalIgnoreCase)
+                ? req.SceneCode[..^"_reuse".Length]
+                : null;
+        if (string.IsNullOrWhiteSpace(sourceSceneCode))
+        {
+            requestErrors.Add("Reuse scene is missing reuseSourceSceneCode.");
+            return null;
+        }
+
+        var sourceRequest = prep.SceneRenderRequests.FirstOrDefault(x => x.SceneCode.Equals(sourceSceneCode, StringComparison.OrdinalIgnoreCase));
+        if (sourceRequest is null)
+        {
+            requestErrors.Add($"Reuse source scene '{sourceSceneCode}' could not be found.");
+            return null;
+        }
+
+        EnsureFile(sourceRequest.OutputPath, $"source scene output for {sourceRequest.SceneCode}");
+        EnsureFile(req.OutputPath, File.ReadAllText(sourceRequest.OutputPath));
+        requestWarnings.Add($"Reused rendered output from '{sourceRequest.SceneCode}'.");
+        if (req.DurationSeconds != sourceRequest.DurationSeconds) requestWarnings.Add($"Duration adjusted via timeline composition: source={sourceRequest.DurationSeconds}s target={req.DurationSeconds}s.");
+        if (req.OverlayDirectives.Count > 0) requestWarnings.Add("Overlay directives preserved for reuse scene.");
+        return sourceRequest;
     }
 
     private static void EnsureFile(string path, string content)
