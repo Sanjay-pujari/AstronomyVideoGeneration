@@ -231,12 +231,19 @@ app.MapPost("/api/content-planning/run-category-production-preview", async (Cate
 });
 
 
-app.MapPost("/api/content-planning/weekly-skyforecast-v2/intelligence-preview", async (WeeklySkyForecastV2IntelligenceRequest request, IWeeklySkyForecastV2IntelligenceService service, CancellationToken ct) =>
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/intelligence-preview", async (WeeklySkyForecastV2IntelligenceRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
     {
-        var orchestrationId = request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid();
-        var requestWithRun = request with { PipelineRunId = orchestrationId, ContentGenerationPlanId = request.ContentGenerationPlanId ?? orchestrationId };
+        var contentPlanId = request.ContentGenerationPlanId;
+        if (!contentPlanId.HasValue)
+        {
+            var plan = await planning.GeneratePlanAsync(new GenerateContentPlanRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc.UtcDateTime, GeneratedByAi: true), ct);
+            contentPlanId = plan.ContentGenerationPlanId;
+        }
+
+        var pipelineRunId = request.PipelineRunId ?? contentPlanId.Value;
+        var requestWithRun = request with { PipelineRunId = pipelineRunId, ContentGenerationPlanId = contentPlanId };
         var response = await service.PreviewAsync(requestWithRun, ct);
         return Results.Ok(response);
     }
@@ -245,9 +252,16 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/intelligence-preview", 
         return Results.BadRequest(new { error = ex.Message });
     }
 });
-app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastSceneRenderingOrchestrator orchestrator, CancellationToken ct) =>
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastSceneRenderingOrchestrator orchestrator, IContentPlanningService planning, CancellationToken ct) =>
 {
-    var orchestrationId = request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid();
+    var contentPlanId = request.ContentGenerationPlanId;
+    if (!contentPlanId.HasValue)
+    {
+        var plan = await planning.GeneratePlanAsync(new GenerateContentPlanRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc.UtcDateTime, GeneratedByAi: true), ct);
+        contentPlanId = plan.ContentGenerationPlanId;
+    }
+
+    var pipelineRunId = request.PipelineRunId ?? contentPlanId.Value;
     var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(
         request.ContentCategoryCode,
         request.Language,
@@ -256,16 +270,23 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
         request.ScheduledUtc,
         request.WeekStartDate,
         request.Diagnostics,
-        orchestrationId,
-        request.ContentGenerationPlanId ?? orchestrationId);
-    var result = await orchestrator.RunAsync(intelligenceRequest, request.ContentGenerationPlanId ?? orchestrationId, ct);
+        pipelineRunId,
+        contentPlanId);
+    var result = await orchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
     return Results.Ok(result);
 });
 
 
-app.MapPost("/api/content-planning/weekly-skyforecast-v2/compose-timeline", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastTimelineCompositionOrchestrator orchestrator, CancellationToken ct) =>
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/compose-timeline", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastTimelineCompositionOrchestrator orchestrator, IContentPlanningService planning, CancellationToken ct) =>
 {
-    var orchestrationId = request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid();
+    var contentPlanId = request.ContentGenerationPlanId;
+    if (!contentPlanId.HasValue)
+    {
+        var plan = await planning.GeneratePlanAsync(new GenerateContentPlanRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc.UtcDateTime, GeneratedByAi: true), ct);
+        contentPlanId = plan.ContentGenerationPlanId;
+    }
+
+    var pipelineRunId = request.PipelineRunId ?? contentPlanId.Value;
     var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(
         request.ContentCategoryCode,
         request.Language,
@@ -274,10 +295,40 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/compose-timeline", asyn
         request.ScheduledUtc,
         request.WeekStartDate,
         request.Diagnostics,
-        orchestrationId,
-        request.ContentGenerationPlanId ?? orchestrationId);
-    var result = await orchestrator.RunAsync(intelligenceRequest, request.ContentGenerationPlanId ?? orchestrationId, ct);
+        pipelineRunId,
+        contentPlanId);
+    var result = await orchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
     return Results.Ok(result);
+});
+
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/run-through-timeline", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastV2IntelligenceService intelligenceService, IWeeklySkyForecastSceneRenderingOrchestrator sceneOrchestrator, IWeeklySkyForecastTimelineCompositionOrchestrator timelineOrchestrator, IContentPlanningService planning, CancellationToken ct) =>
+{
+    var contentPlanId = request.ContentGenerationPlanId;
+    if (!contentPlanId.HasValue)
+    {
+        var plan = await planning.GeneratePlanAsync(new GenerateContentPlanRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc.UtcDateTime, GeneratedByAi: true), ct);
+        contentPlanId = plan.ContentGenerationPlanId;
+    }
+
+    var pipelineRunId = request.PipelineRunId ?? contentPlanId.Value;
+    var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, request.WeekStartDate, request.Diagnostics, pipelineRunId, contentPlanId);
+
+    var intelligence = await intelligenceService.PreviewAsync(intelligenceRequest, ct);
+    var renderPreparation = intelligence.RenderPreparationPackage ?? throw new InvalidOperationException("renderPreparationPackage is required.");
+    var sceneRendering = await sceneOrchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
+    var timeline = await timelineOrchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
+
+    return Results.Ok(new
+    {
+        contentGenerationPlanId = contentPlanId,
+        pipelineRunId,
+        workingDirectoryRoot = renderPreparation.WorkingDirectoryPlan.RootPath,
+        singleContentPlanContextUsed = true,
+        singlePipelineRunIdUsed = timeline.TimelineCompositionValidation.SinglePipelineRunIdUsed,
+        mixedPipelineRunIdsDetected = !timeline.TimelineCompositionValidation.SinglePipelineRunIdUsed,
+        sceneRenderingPackage = sceneRendering,
+        timelineCompositionPackage = timeline
+    });
 });
 app.MapPost("/api/content-planning/run-weekly-skyforecast-preparation", async (WeeklySkyForecastProductionRequest request, IWeeklySkyForecastPreparationOrchestrator orchestrator, CancellationToken ct) =>
 {
