@@ -27,12 +27,16 @@ public sealed class WeeklySkyForecastV2CinematicEditorialRefiner : IWeeklySkyFor
         var headline = $"{heroObjectText} light up this week's evening sky";
         var openingHook = "One beautiful evening anchors the week, and nearby evenings remain easy to enjoy.";
 
+        var editorialPeakTimeUtc = heroSource.BestTimeUtc is { } bestTimeUtc && DateOnly.FromDateTime(bestTimeUtc) == editorialPeakDate
+            ? bestTimeUtc
+            : DateTime.Parse("2026-05-25T18:00:00Z");
+
         var heroStory = new WeeklyHeroStory(
             $"{heroObjectText} this week",
             "Venus, Jupiter and the Moon share one cinematic evening anchor with nearby easy-to-enjoy follow-up nights.",
             editorialPeakDate,
             supportingDates,
-            heroSource.BestTimeUtc is { } h && DateOnly.FromDateTime(h) == editorialPeakDate ? h : DateTime.Parse("2026-05-25T18:00:00Z"),
+            editorialPeakTimeUtc,
             heroObjects,
             heroNames,
             "One beautiful evening anchors the week.",
@@ -63,11 +67,11 @@ public sealed class WeeklySkyForecastV2CinematicEditorialRefiner : IWeeklySkyFor
 
         var moments = new List<WeeklyCinematicMomentBlueprint>
         {
-            new("hero_grouping","Hero grouping visual",heroStory.Description,heroObjects,editorialPeakDate,heroSource.BestTimeUtc is { } h && DateOnly.FromDateTime(h) == editorialPeakDate ? h : DateTime.Parse("2026-05-25T18:00:00Z"),"wide",heroSource.RecommendedVisualStrategy,"hero_grouping",false,$"grouping:{string.Join('-', heroObjects.OrderBy(x=>x))}"),
-            new("best_night_wide","Best observation night wide sky","One complete sky composition for the best night.",heroObjects,bestNight,heroSource.BestTimeUtc is { } h && DateOnly.FromDateTime(h) == editorialPeakDate ? h : DateTime.Parse("2026-05-25T18:00:00Z"),"wide",heroSource.RecommendedVisualStrategy,"best_night",true,$"wide:best-night:{bestNight:yyyy-MM-dd}"),
+            new("hero_grouping","Hero grouping visual",heroStory.Description,heroObjects,editorialPeakDate,editorialPeakTimeUtc,"wide",heroSource.RecommendedVisualStrategy,"hero_grouping",false,$"grouping:{string.Join('-', heroObjects.OrderBy(x=>x))}"),
+            new("best_night_wide","Best observation night wide sky","One complete sky composition for the best night.",heroObjects,bestNight,editorialPeakTimeUtc,"wide",heroSource.RecommendedVisualStrategy,"best_night",true,$"wide:best-night:{bestNight:yyyy-MM-dd}"),
             new("jupiter_asset","Jupiter hero asset","Dedicated Jupiter visual asset.",["JUPITER"],bestNight,null,"asset","CelestialAsset","planet_asset",true,"asset:JUPITER"),
             new("moon_asset","Moon hero asset","Dedicated Moon visual asset.",["MOON"],intelligence.SkyfieldSummary.BestMoonNight ?? heroSource.PrimaryDate,null,"asset","CelestialAsset","moon_asset",true,"asset:MOON"),
-            new("thumbnail_hero","Thumbnail composition","Primary thumbnail framing for this week.",heroObjects,editorialPeakDate,heroSource.BestTimeUtc is { } h && DateOnly.FromDateTime(h) == editorialPeakDate ? h : DateTime.Parse("2026-05-25T18:00:00Z"),"thumbnail","Hybrid","thumbnail",true,"thumbnail:hero-grouping")
+            new("thumbnail_hero","Thumbnail composition","Primary thumbnail framing for this week.",heroObjects,editorialPeakDate,editorialPeakTimeUtc,"thumbnail","Hybrid","thumbnail",true,"thumbnail:hero-grouping")
         };
 
         var shorts = new List<WeeklyShortBlueprint>
