@@ -302,7 +302,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/compose-timeline", asyn
 });
 
 
-app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastFinalMediaOrchestrator finalMediaOrchestrator, IWeeklySkyForecastTimelineCompositionOrchestrator timelineOrchestrator, IContentPlanningService planning, IWeeklySkyForecastContextBuilderV2 contextBuilder, ILoggerFactory loggerFactory, CancellationToken ct) =>
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastFinalMediaOrchestrator finalMediaOrchestrator, IWeeklySkyForecastTimelineCompositionOrchestrator timelineOrchestrator, IWeeklySkyForecastSceneRenderingOrchestrator sceneOrchestrator, IWeeklySkyForecastV2IntelligenceService intelligenceService, IContentPlanningService planning, IWeeklySkyForecastContextBuilderV2 contextBuilder, ILoggerFactory loggerFactory, CancellationToken ct) =>
 {
     var logger = loggerFactory.CreateLogger("WeeklySkyForecastRenderFinalMediaEndpoint");
     var contentPlanId = request.ContentGenerationPlanId;
@@ -331,9 +331,32 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", as
         RegionResolveCalls: 1,
         ContextReusedAcrossPhases: true);
     logger.LogInformation("Starting intelligence preview");
-    var timeline = await timelineOrchestrator.RunAsync(orchestrationContext, ct);
+    var intelligence = await intelligenceService.PreviewAsync(orchestrationContext, ct);
     logger.LogInformation("Completed intelligence preview");
-    var finalMedia = await finalMediaOrchestrator.RunAsync(orchestrationContext, ct);
+
+    var phaseContext = orchestrationContext with
+    {
+        IntelligencePreviewCalls = 1,
+        IntelligencePreviewResult = intelligence,
+        RenderPreparationPackage = intelligence.RenderPreparationPackage
+    };
+
+    logger.LogInformation("Starting Phase 6A render preparation");
+    logger.LogInformation("Completed Phase 6A render preparation");
+
+    logger.LogInformation("Starting Phase 6B scene rendering");
+    var sceneRendering = await sceneOrchestrator.RunAsync(phaseContext, ct);
+    logger.LogInformation("Completed Phase 6B scene rendering");
+
+    var phaseContextB = phaseContext with { SceneRenderingPackage = sceneRendering };
+    logger.LogInformation("Starting Phase 6C timeline composition");
+    var timeline = await timelineOrchestrator.RunAsync(phaseContextB, ct);
+    logger.LogInformation("Completed Phase 6C timeline composition");
+
+    var phaseContextC = phaseContextB with { TimelineCompositionPackage = timeline };
+    logger.LogInformation("Starting Phase 6D final media realization");
+    var finalMedia = await finalMediaOrchestrator.RunAsync(phaseContextC, ct);
+    logger.LogInformation("Completed Phase 6D final media realization");
 
     var finalDirectory = Path.GetDirectoryName(timeline.LongFormTimelineResult.OutputPath);
     var workingDirectoryRoot = string.IsNullOrWhiteSpace(finalDirectory)
@@ -350,6 +373,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", as
             skyfieldWeeklyForecastCalls = 1,
             regionResolveCalls = 1,
             contextReusedAcrossPhases = true,
+            intelligencePreviewCalls = 1,
             warning = 1 > 1 ? "WeeklySkyForecast sidecar called multiple times in one pipeline run." : null
         },
         timelineCompositionPackage = timeline,

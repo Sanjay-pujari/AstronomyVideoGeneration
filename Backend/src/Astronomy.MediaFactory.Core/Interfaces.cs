@@ -1163,7 +1163,12 @@ public sealed record WeeklySkyForecastV2OrchestrationContext(
     DateTime GeneratedAtUtc,
     int SkyfieldWeeklyForecastCalls = 0,
     int RegionResolveCalls = 0,
-    bool ContextReusedAcrossPhases = false);
+    bool ContextReusedAcrossPhases = false,
+    int IntelligencePreviewCalls = 0,
+    WeeklySkyForecastV2IntelligenceResponse? IntelligencePreviewResult = null,
+    RenderPreparationPackage? RenderPreparationPackage = null,
+    SceneRenderingPackage? SceneRenderingPackage = null,
+    TimelineCompositionPackage? TimelineCompositionPackage = null);
 
 public sealed record WeeklySkyForecastV2EventIntelligenceItem(
     string EventId,

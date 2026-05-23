@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -90,6 +91,8 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     IOptions<RenderingOptions> renderingOptions,
     ILogger<WeeklySkyForecastV2IntelligenceService> logger) : IWeeklySkyForecastV2IntelligenceService
 {
+    private static readonly ConcurrentDictionary<Guid, int> PreviewCallCounts = new();
+
     public Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
         => PreviewAsync(new WeeklySkyForecastV2OrchestrationContext(
             ContentGenerationPlanId: request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid(),
@@ -105,6 +108,15 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
     {
         var request = orchestrationContext.Request;
+        var previewCalls = PreviewCallCounts.AddOrUpdate(orchestrationContext.PipelineRunId, 1, (_, current) => current + 1);
+        if (previewCalls > 1)
+        {
+            logger.LogError("PreviewAsync called more than once for pipelineRunId {PipelineRunId}. calls={PreviewCalls}", orchestrationContext.PipelineRunId, previewCalls);
+            if (request.Diagnostics)
+            {
+                throw new InvalidOperationException($"Validation failed: PreviewAsync called {previewCalls} times for pipelineRunId {orchestrationContext.PipelineRunId}.");
+            }
+        }
         logger.LogInformation("Starting intelligence preview");
         WeeklySkyForecastContext ctx;
         try

@@ -6,7 +6,6 @@ using System.Globalization;
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class WeeklySkyForecastFinalMediaOrchestrator(
-    IWeeklySkyForecastV2IntelligenceService intelligenceService,
     IWeeklySkyForecastSceneRenderingOrchestrator sceneOrchestrator,
     IWeeklySkyForecastTimelineCompositionOrchestrator timelineOrchestrator,
     ISpeechSynthesisService speechSynthesisService,
@@ -29,15 +28,18 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         logger.LogInformation("Content plan created");
         logger.LogInformation("Pipeline run created");
 
-        var preview = await intelligenceService.PreviewAsync(orchestrationContext, cancellationToken);
-        var prep = preview.RenderPreparationPackage ?? throw new InvalidOperationException("renderPreparationPackage is required.");
+        var preview = orchestrationContext.IntelligencePreviewResult
+            ?? throw new InvalidOperationException("intelligencePreviewResult is required on orchestration context.");
+        var prep = orchestrationContext.RenderPreparationPackage
+            ?? preview.RenderPreparationPackage
+            ?? throw new InvalidOperationException("renderPreparationPackage is required on orchestration context.");
         var narrationPackage = preview.GeneratedNarrationPackage ?? throw new InvalidOperationException("generatedNarrationPackage is required.");
         logger.LogInformation("Working root selected: {Root}", prep.WorkingDirectoryPlan.RootPath);
         logger.LogInformation("Skyfield request started");
         logger.LogInformation("Skyfield request completed");
 
-        var scenes = await sceneOrchestrator.RunAsync(orchestrationContext, cancellationToken);
-        var timeline = await timelineOrchestrator.RunAsync(orchestrationContext, cancellationToken);
+        var scenes = orchestrationContext.SceneRenderingPackage ?? await sceneOrchestrator.RunAsync(orchestrationContext, cancellationToken);
+        var timeline = orchestrationContext.TimelineCompositionPackage ?? await timelineOrchestrator.RunAsync(orchestrationContext, cancellationToken);
         logger.LogInformation("Scene render request count: {Count}", scenes.SceneRenderResults.Count);
         logger.LogInformation("Stellarium SSC generated");
 
