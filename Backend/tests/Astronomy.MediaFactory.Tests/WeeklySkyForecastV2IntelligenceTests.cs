@@ -24,6 +24,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.SceneChoreographyPackage);
         Assert.NotNull(response.CinematicChoreographyPackage);
         Assert.NotNull(response.RenderExecutionPackage);
+        Assert.True(response.LegacyEditorialPackageDeprecated);
         Assert.NotNull(response.PreviewStability);
         Assert.Empty(response.PreviewStability!.BlockingIssues);
         Assert.Empty(response.PreviewStability.AffectedFieldPaths);
@@ -107,7 +108,22 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.NarrativeAbstractionPackage.ThumbnailNarrativeDirection);
         Assert.DoesNotContain(response.GeneratedNarrationPackage.ShortNarrations.Select(x => x.NarrationText), t => t.StartsWith("Tonight", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(response.RenderExecutionPackage.ExecutionScenes.Count, response.RenderExecutionPackage.MotionExecutionDirectives.Count);
-        Assert.Equal(response.RenderExecutionPackage.ExecutionScenes.Count, response.RenderExecutionPackage.OverlayExecutionDirectives.Count);
+        Assert.Contains(response.RenderExecutionPackage.OverlayExecutionDirectives, o => o.SceneCode == "hero_western_grouping_scene" && o.OverlayType == "ObjectLabels" && !o.Required);
+        Assert.Contains(response.RenderExecutionPackage.OverlayExecutionDirectives, o => o.SceneCode == "best_night_wide_scene" && o.OverlayType == "DirectionArrow");
+        Assert.Contains(response.RenderExecutionPackage.OverlayExecutionDirectives, o => o.SceneCode == "best_night_wide_scene" && o.OverlayType == "TimeAnnotation");
+        Assert.Contains(response.RenderExecutionPackage.OverlayExecutionDirectives, o => o.SceneCode == "viewing_tip_wide_scene" && o.OverlayType == "FramingGuide");
+        Assert.Contains(response.RenderExecutionPackage.OverlayExecutionDirectives, o => o.SceneCode == "thumbnail_story_scene" && o.SafeArea == "mobile-safe");
+        Assert.Contains(response.RenderExecutionPackage.TransitionExecutionDirectives, t => t.TransitionType.Contains("intro fade-in", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(response.RenderExecutionPackage.TransitionExecutionDirectives, t => t.FromSceneCode == "hero_western_grouping_scene" && t.ToSceneCode == "best_night_wide_scene");
+        Assert.Contains(response.RenderExecutionPackage.TransitionExecutionDirectives, t => t.FromSceneCode == "best_night_wide_scene" && t.ToSceneCode == "moon_jupiter_hero_scene");
+        Assert.Contains(response.RenderExecutionPackage.TransitionExecutionDirectives, t => t.FromSceneCode == "moon_jupiter_hero_scene" && t.ToSceneCode == "viewing_tip_wide_scene");
+        Assert.Contains(response.RenderExecutionPackage.TransitionExecutionDirectives, t => t.ToSceneCode == "outro");
+        Assert.Equal(response.RenderExecutionPackage.ExecutionScenes.Count, response.RenderExecutionPackage.RendererExecutionContracts.Count);
+        Assert.All(response.RenderExecutionPackage.RendererExecutionContracts, c => Assert.True(c.RendererDecisionLocked));
+        Assert.DoesNotContain(response.RenderExecutionPackage.ExecutionTimeline, x => x.SceneCode == "thumbnail_story_scene");
+        Assert.DoesNotContain(response.RenderExecutionPackage.ExecutionScenes, x => x.SceneCode == "thumbnail_story_scene");
+        Assert.True(response.Phase5FoundationStatus!.IsFrozen);
+        Assert.True(response.Phase5FoundationStatus.IsReadyForPhase6);
         Assert.True(response.PreviewStability.ReadyForRenderPreparation);
         Assert.False(response.PreviewStability.ReadyForRendering);
         Assert.DoesNotContain("DailySkyGuide", response.Category, StringComparison.OrdinalIgnoreCase);
@@ -157,6 +173,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             null,
             null,
             null,
+            false,
             ["Hybrid"],
             [],
             []);

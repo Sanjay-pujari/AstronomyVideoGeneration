@@ -1197,6 +1197,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyRenderExecutionPackage? RenderExecutionPackage,
     WeeklyPreviewStabilityReport? PreviewStability,
     WeeklyPhase5FoundationStatus? Phase5FoundationStatus,
+    bool LegacyEditorialPackageDeprecated,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
@@ -1395,6 +1396,7 @@ public sealed record WeeklyRenderExecutionPackage(
     IReadOnlyList<OverlayExecutionDirective> OverlayExecutionDirectives,
     IReadOnlyList<MotionExecutionDirective> MotionExecutionDirectives,
     IReadOnlyList<TransitionExecutionDirective> TransitionExecutionDirectives,
+    IReadOnlyList<RendererExecutionContract> RendererExecutionContracts,
     ThumbnailExecutionContract ThumbnailExecutionContract,
     IReadOnlyList<string> ExecutionWarnings);
 public sealed record WeeklyRenderExecutionScene(string SceneCode, int SceneOrder, string RendererType, string VisualSourceType, string SceneType, int DurationSeconds, int StartSecond, int EndSecond, IReadOnlyList<string> NarrationSegmentCodes, DateOnly TargetDate, string HumanTimeWindow, DateTime? TechnicalBestTimeUtc, IReadOnlyList<string> InputContracts, IReadOnlyList<string> OutputContract, int ExecutionPriority, string ReusePolicy);
@@ -1404,6 +1406,7 @@ public sealed record StellariumExecutionDirective(string SceneCode, string Regio
 public sealed record OverlayExecutionDirective(string SceneCode, string OverlayType, string OverlayText, int StartSecond, int EndSecond, int ZIndex, string Animation, string SafeArea, string TypographyRole, int Priority, string DirectiveId = "", bool Required = true);
 public sealed record MotionExecutionDirective(string SceneCode, string CameraBehavior, string MotionStyle, double ZoomStart, double ZoomEnd, string PanDirection, bool ParallaxEnabled, string EmotionalPurpose, string DirectiveId = "");
 public sealed record TransitionExecutionDirective(string FromSceneCode, string ToSceneCode, string TransitionType, int StartSecond, int DurationSeconds, string EmotionalPurpose, string DirectiveId = "");
+public sealed record RendererExecutionContract(string ContractId, string SceneCode, string RendererType, string SelectedSourceType, IReadOnlyList<string> RequiredInputs, IReadOnlyList<string> ExpectedOutputs, string MotionDirectiveCode, IReadOnlyList<string> OverlayDirectiveCodes, IReadOnlyList<string> TransitionDirectiveCodes, string FallbackPolicy, int RenderPriority, bool RendererDecisionLocked);
 public sealed record ThumbnailExecutionContract(string RendererType, string VisualSourceType, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string FocalHierarchy, string EyeFlowDirection, string EmotionalFocus, string OverlaySafeArea, string MobileSafeFraming, string ShortsCropStrategy, IReadOnlyList<string> RequiredAssets, string FallbackPolicy, string OutputRole);
 public sealed record WeeklyPhase5FoundationStatus(bool IsFrozen, bool IsReadyForPhase6, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, IReadOnlyList<string> VerifiedChecks);
 public sealed record WeeklyCinematicChoreographyPackage(

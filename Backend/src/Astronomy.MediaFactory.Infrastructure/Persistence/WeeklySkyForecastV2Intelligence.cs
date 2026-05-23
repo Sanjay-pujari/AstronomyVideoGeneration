@@ -137,6 +137,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             RenderExecutionPackage: null,
             PreviewStability: null,
             Phase5FoundationStatus: null,
+            LegacyEditorialPackageDeprecated: false,
             RecommendedVisualStrategies: events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             Warnings: ctx.Warnings,
             StepResults: stepResults);
@@ -158,7 +159,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         baseResponse = baseResponse with { WeeklyStoryArc = arc };
         var (sceneChoreographyPackage, cinematicChoreographyPackage) = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
         var renderExecutionPackage = WeeklySkyForecastV2RenderExecutionBuilder.Build(narrationPlan, hybridScenePlanPackage, cinematicChoreographyPackage, baseResponse.Region);
-        var fullResponse = baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage };
+        var fullResponse = baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, LegacyEditorialPackageDeprecated = true };
         var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(fullResponse);
         var phase5 = WeeklySkyForecastV2PreviewStabilityValidator.BuildFoundationStatus(fullResponse with { PreviewStability = previewStability });
         return fullResponse with { PreviewStability = previewStability, Phase5FoundationStatus = phase5 };
@@ -428,7 +429,26 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
         transitions.AddRange(hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro" && t.ToSceneCode != "outro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, scenes.FirstOrDefault(x => x.SceneCode == t.ToSceneCode)?.StartSecond ?? 0, t.DurationSeconds, "Cinematic continuity", $"tr_{t.FromSceneCode}_to_{t.ToSceneCode}")));
         transitions.Add(new TransitionExecutionDirective(scenes.Last().SceneCode, "outro", "soft fade-out / closing return", scenes.Last().EndSecond - 2, 2, "Warm close", "tr_outro"));
         var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon > Jupiter > Venus", "left-to-right", "Calm awe", "mobile-safe", "center weighted", "protect Moon and Jupiter in 9:16 crop", ["moon_hero_image", "jupiter_hero_image", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
-        return new WeeklyRenderExecutionPackage(Guid.NewGuid().ToString("N"), scenes, timeline, decisions, assetDirectives, stellarium, overlays, motions, transitions, thumbnail, []);
+        var rendererContracts = scenes.Select(s =>
+        {
+            var sceneOverlays = overlays.Where(o => o.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).Select(o => o.DirectiveId).ToList();
+            var sceneTransitions = transitions.Where(t => t.FromSceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase) || t.ToSceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).Select(t => t.DirectiveId).ToList();
+            var motionId = motions.First(m => m.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).DirectiveId;
+            return new RendererExecutionContract(
+                $"rc_{s.SceneCode}",
+                s.SceneCode,
+                s.RendererType,
+                decisions.First(d => d.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).SelectedSourceType,
+                ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"],
+                ["composited_frames", "scene_manifest"],
+                motionId,
+                sceneOverlays,
+                sceneTransitions,
+                "CelestialAsset>GeneratedImage>PublicImage",
+                s.ExecutionPriority,
+                true);
+        }).ToList();
+        return new WeeklyRenderExecutionPackage(Guid.NewGuid().ToString("N"), scenes, timeline, decisions, assetDirectives, stellarium, overlays, motions, transitions, rendererContracts, thumbnail, []);
     }
 
     private static RenderSourceDecision BuildDecision(string sceneCode) => sceneCode switch
@@ -448,9 +468,16 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         var checks = new List<string>();
         var blocking = new List<string>();
         if (response.EditorialStoryPackage.SecondaryEvents.All(x => !x.Title.Contains("continuous evening sky story", StringComparison.OrdinalIgnoreCase))) checks.Add("no old editorial leakage"); else blocking.Add("old editorial leakage detected");
+        if (response.LegacyEditorialPackageDeprecated) checks.Add("legacy editorial package deprecated"); else blocking.Add("legacy editorial package not deprecated");
         if (response.NormalizedEditorialPackage is not null) checks.Add("normalized package is authoritative"); else blocking.Add("normalized package missing");
         if (response.CinematicStoryBlueprint is not null && response.CinematicStoryBlueprint.SupportingStories.Count(s=>s.Title.Contains("grouping", StringComparison.OrdinalIgnoreCase))<=0) checks.Add("one hero grouping story only"); else blocking.Add("grouping leaked downstream");
         if (response.RenderExecutionPackage is not null && response.RenderExecutionPackage.ExecutionScenes.All(s => s.TechnicalBestTimeUtc is null || DateOnly.FromDateTime(s.TechnicalBestTimeUtc.Value)==s.TargetDate)) checks.Add("no date/time mismatches"); else blocking.Add("date/time mismatch");
+        if (response.RenderExecutionPackage?.OverlayExecutionDirectives.Count > 0) checks.Add("overlay directives complete"); else blocking.Add("overlay directives incomplete");
+        if (response.RenderExecutionPackage?.MotionExecutionDirectives.Count > 0) checks.Add("motion directives complete"); else blocking.Add("motion directives incomplete");
+        if (response.RenderExecutionPackage?.TransitionExecutionDirectives.Count > 0) checks.Add("transition directives complete"); else blocking.Add("transition directives incomplete");
+        if (response.RenderExecutionPackage?.ExecutionTimeline.Count > 0) checks.Add("execution timeline complete"); else blocking.Add("execution timeline incomplete");
+        if (response.RenderExecutionPackage?.RendererExecutionContracts.Count == response.RenderExecutionPackage?.ExecutionScenes.Count) checks.Add("renderer contracts complete"); else blocking.Add("renderer contracts incomplete");
+        if (response.RenderExecutionPackage?.ThumbnailExecutionContract is not null) checks.Add("thumbnail execution contract complete"); else blocking.Add("thumbnail contract missing");
         if (response.PreviewStability?.IsStable == true) checks.Add("previewStability.isStable=true"); else blocking.Add("preview unstable");
         if (response.PreviewStability?.ReadyForRenderPreparation == true) checks.Add("readyForRenderPreparation=true"); else blocking.Add("not ready for render preparation");
         if (response.PreviewStability?.ReadyForRendering == false) checks.Add("readyForRendering=false"); else blocking.Add("readyForRendering must be false in phase 5");
