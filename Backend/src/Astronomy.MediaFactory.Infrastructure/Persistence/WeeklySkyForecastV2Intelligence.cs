@@ -444,13 +444,21 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
 {
     public static WeeklyRenderExecutionPackage Build(WeeklyNarrationPlan narrationPlan, WeeklyHybridScenePlanPackage hybridPlan, WeeklyCinematicChoreographyPackage cinematic, string regionId)
     {
-        var timeline = cinematic.SceneTimeline.Where(x => !x.SceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase)).ToList();
+        var timeline = new List<WeeklySceneTimeline>
+        {
+            new("hero_western_grouping_scene", 0, 48, 0, 48, 1, ["OpeningHook", "HeroSkyStory", "WhyThisWeekMatters"], 0, 1, false, false, false),
+            new("best_night_wide_scene", 48, 67, 48, 67, 1, ["BestObservationNight"], 1, 1, false, false, false),
+            new("moon_jupiter_hero_scene", 67, 85, 67, 85, 1, ["MoonPlanetHighlight"], 1, 1, false, false, false),
+            new("viewing_tip_wide_scene", 85, 96, 85, 96, 1, ["ViewingPhotographyTip"], 1, 1, false, false, false),
+            new("best_night_wide_scene", 96, 110, 96, 110, 1, ["ClosingCTA"], 1, 1, false, false, false),
+            new("thumbnail_story_scene", 0, 6, 0, 0, 0, ["ThumbnailTitle"], 0, 0, true, false, false)
+        };
         var sceneByCode = hybridPlan.ScenePlans.ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
-        var scenes = timeline.Select(t =>
+        var scenes = timeline.Where(t => !t.IsThumbnailOnly).Select((t, index) =>
         {
             var scene = sceneByCode[t.SceneCode];
             var technical = scene.TargetDate == new DateOnly(2026, 5, 25) ? DateTime.Parse("2026-05-25T18:00:00Z") : (scene.BestTimeUtc is not null && DateOnly.FromDateTime(scene.BestTimeUtc.Value) == scene.TargetDate ? scene.BestTimeUtc : null);
-            return new WeeklyRenderExecutionScene(scene.SceneCode, scene.SceneOrder, scene.RequiresStellarium ? "StellariumSceneRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, scene.DurationSeconds, t.StartSecond, t.EndSecond, hybridPlan.SegmentSceneMappings.Where(m => m.SceneCode == scene.SceneCode).Select(m => m.SegmentCode).ToList(), scene.TargetDate, "early evening", technical, ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"], ["composited_frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
+            return new WeeklyRenderExecutionScene(scene.SceneCode, index + 1, scene.RequiresStellarium ? "StellariumSceneRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, t.EndSecond - t.StartSecond, t.StartSecond, t.EndSecond, t.NarrationSegmentCodes ?? [], scene.TargetDate, "early evening", technical, ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"], ["composited_frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
         }).ToList();
         var decisions = scenes.Select(s => BuildDecision(s.SceneCode)).ToList();
         var assetDirectives = scenes.Select(s => new AssetResolutionDirective(s.SceneCode, hybridPlan.AssetNeeds.Where(a => a.RequiredForSceneCodes.Contains(s.SceneCode)).Select(a => a.AssetCode).ToList(), ["public_twilight_plate"], "CelestialAsset>GeneratedImage>PublicImage", true, true)).ToList();
@@ -458,11 +466,12 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
         var overlays = new List<OverlayExecutionDirective>
         {
             new("hero_western_grouping_scene", "ObjectLabels", "Optional object labels", 0, 20, 20, "fade_in_soft", "title-safe", "LabelSmall", 5, "ovl_hero_labels", false),
-            new("best_night_wide_scene", "DirectionArrow", "West arrow", 20, 48, 30, "fade_in_soft", "action-safe", "LabelMedium", 10, "ovl_best_night_west", true),
-            new("best_night_wide_scene", "TimeAnnotation", "Time annotation", 22, 48, 30, "fade_in_soft", "action-safe", "LabelSmall", 9, "ovl_best_night_time", true),
-            new("best_night_wide_scene", "ObjectLabels", "Object labels", 20, 48, 30, "fade_in_soft", "action-safe", "LabelSmall", 8, "ovl_best_night_labels", true),
-            new("viewing_tip_wide_scene", "FramingGuide", "Tripod / phone frame guide", 70, 90, 25, "gentle_fade", "action-safe", "GuideText", 7, "ovl_viewing_tip", true),
-            new("thumbnail_story_scene", "TitleText", "Venus, Jupiter and the Moon share the evening sky", 0, 6, 40, "static", "mobile-safe", "TitleBold", 10, "ovl_thumbnail_title", true)
+            new("best_night_wide_scene", "DirectionArrow", "West arrow", 48, 110, 30, "fade_in_soft", "action-safe", "LabelMedium", 10, "ovl_best_night_west", true),
+            new("best_night_wide_scene", "TimeAnnotation", "Best time shortly after sunset", 50, 109, 30, "fade_in_soft", "action-safe", "LabelSmall", 9, "ovl_best_night_time", true),
+            new("best_night_wide_scene", "ObjectLabels", "Moon, Jupiter, Venus labels", 48, 110, 30, "fade_in_soft", "action-safe", "LabelSmall", 8, "ovl_best_night_labels", true),
+            new("viewing_tip_wide_scene", "FramingGuide", "Tripod / phone framing guide", 85, 96, 25, "gentle_fade", "action-safe", "GuideText", 7, "ovl_viewing_tip", true),
+            new("thumbnail_story_scene", "TitleText", "Venus, Jupiter and the Moon share the evening sky", 0, 6, 40, "static", "mobile-safe", "TitleBold", 10, "ovl_thumbnail_title", true),
+            new("thumbnail_story_scene", "MobileSafeArea", "Title-safe overlay area", 0, 6, 39, "static", "mobile-safe", "GuideText", 9, "ovl_thumbnail_mobile_safe", true)
         };
         foreach (var scene in scenes.Where(s => overlays.All(o => !o.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase))))
         {
@@ -480,9 +489,14 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
         {
             new("intro", scenes.First().SceneCode, "intro fade-in", 0, 2, "Open softly into the weekly sky story", "tr_intro")
         };
-        transitions.AddRange(hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro" && t.ToSceneCode != "outro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, scenes.FirstOrDefault(x => x.SceneCode == t.ToSceneCode)?.StartSecond ?? 0, t.DurationSeconds, "Cinematic continuity", $"tr_{t.FromSceneCode}_to_{t.ToSceneCode}")));
-        transitions.Add(new TransitionExecutionDirective(scenes.Last().SceneCode, "outro", "soft fade-out / closing return", scenes.Last().EndSecond - 2, 2, "Warm close", "tr_outro"));
-        var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon > Jupiter > Venus", "left-to-right", "Calm awe", "mobile-safe", "center weighted", "protect Moon and Jupiter in 9:16 crop", ["moon_hero_image", "jupiter_hero_image", "venus_support_image", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
+        transitions.AddRange([
+            new TransitionExecutionDirective("hero_western_grouping_scene", "best_night_wide_scene", "soft crossfade", 48, 1, "Shift from story promise to practical orientation", "tr_hero_to_best_night"),
+            new TransitionExecutionDirective("best_night_wide_scene", "moon_jupiter_hero_scene", "cinematic push", 67, 1, "Increase intimacy and emotional focus", "tr_best_night_to_moon_jupiter"),
+            new TransitionExecutionDirective("moon_jupiter_hero_scene", "viewing_tip_wide_scene", "gentle dissolve", 85, 1, "Move from awe to practical guidance", "tr_moon_jupiter_to_viewing_tip"),
+            new TransitionExecutionDirective("viewing_tip_wide_scene", "best_night_wide_scene", "closing soft fade-out / return", 96, 1, "Return to broad closing memory", "tr_viewing_tip_to_closing_best_night"),
+            new TransitionExecutionDirective("best_night_wide_scene", "outro", "soft fade-out", 109, 1, "Warm close", "tr_outro")
+        ]);
+        var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon as emotional anchor, Jupiter as balance point, Venus as depth guide", "Moon → Jupiter → Venus → title text", "Calm awe and invitation", "right/upper-right or lower third depending composition", "safe for 16:9 and shorts crop", "center-weight celestial objects, preserve title-safe area", ["moon_hero_image", "jupiter_hero_image", "venus_glow_point", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
         var rendererContracts = scenes.Select(s =>
         {
             var sceneOverlays = overlays.Where(o => o.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).Select(o => o.DirectiveId).ToList();
@@ -546,7 +560,8 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         var overlaysValidated = pkg.OverlayExecutionDirectives.All(x => !string.IsNullOrWhiteSpace(x.DirectiveId) && !string.IsNullOrWhiteSpace(x.SceneCode) && !string.IsNullOrWhiteSpace(x.OverlayType) && !string.IsNullOrWhiteSpace(x.OverlayText) && !string.IsNullOrWhiteSpace(x.Animation) && !string.IsNullOrWhiteSpace(x.SafeArea) && !string.IsNullOrWhiteSpace(x.TypographyRole));
         var transitionsValidated = pkg.TransitionExecutionDirectives.All(x => !string.IsNullOrWhiteSpace(x.DirectiveId) && !string.IsNullOrWhiteSpace(x.FromSceneCode) && !string.IsNullOrWhiteSpace(x.ToSceneCode) && !string.IsNullOrWhiteSpace(x.TransitionType) && !string.IsNullOrWhiteSpace(x.EmotionalPurpose) && x.DurationSeconds > 0);
         var timeline = pkg.ExecutionTimeline.OrderBy(x => x.StartSecond).ToList();
-        var timelineValidated = timeline.Count > 0 && timeline.First().StartSecond == 0 && timeline.Last().EndSecond == 110 && timeline.Zip(timeline.Skip(1), (a, b) => b.StartSecond - a.EndSecond).All(x => x == 0) && timeline.All(x => !x.IsThumbnailOnly);
+        var longTimeline = timeline.Where(x => !x.IsThumbnailOnly).ToList();
+        var timelineValidated = longTimeline.Count > 0 && longTimeline.First().StartSecond == 0 && longTimeline.Last().EndSecond == 110 && longTimeline.Zip(longTimeline.Skip(1), (a, b) => b.StartSecond - a.EndSecond).All(x => x == 0) && timeline.Any(x => x.SceneCode == "thumbnail_story_scene" && x.IsThumbnailOnly);
         var rendererContractsValidated = pkg.RendererExecutionContracts.Count == pkg.ExecutionScenes.Count && pkg.RendererExecutionContracts.All(x => x.RendererDecisionLocked && !string.IsNullOrWhiteSpace(x.ContractId) && !string.IsNullOrWhiteSpace(x.SceneCode));
         var thumbnailContractsValidated = !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.RendererType) && !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.VisualSourceType) && pkg.ThumbnailExecutionContract.PrimaryObjects.Count > 0 && !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.FocalHierarchy);
         var coverage = timelineValidated ? 100d : Math.Round((timeline.Sum(x => Math.Max(0, x.EndSecond - x.StartSecond)) / 110d) * 100d, 2);
@@ -556,7 +571,8 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         if (!timelineValidated) missing.Add("RenderExecutionPackage.ExecutionTimeline");
         if (!rendererContractsValidated) missing.Add("RenderExecutionPackage.RendererExecutionContracts");
         if (!thumbnailContractsValidated) missing.Add("RenderExecutionPackage.ThumbnailExecutionContract");
-        return new WeeklyExecutionValidationReport(overlaysValidated, transitionsValidated, timelineValidated, rendererContractsValidated, thumbnailContractsValidated, coverage, [], missing);
+        var blocking = missing.Count > 0 ? ["Execution contracts are incomplete."] : [];
+        return new WeeklyExecutionValidationReport(overlaysValidated, transitionsValidated, timelineValidated, rendererContractsValidated, thumbnailContractsValidated, coverage, [], missing, blocking, []);
     }
     public static WeeklyPreviewStabilityReport Validate(WeeklySkyForecastV2IntelligenceResponse response)
     {
@@ -603,10 +619,12 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
             blocking.Add("Repeated grouping story leaked into supporting stories.");
             affectedPaths.Add("CinematicStoryBlueprint.SupportingStories");
         }
-        var hasTimelineCoverage = renderExecutionPackage.ExecutionTimeline.Count > 0
-            && renderExecutionPackage.ExecutionTimeline.Min(x => x.StartSecond) == 0
-            && renderExecutionPackage.ExecutionTimeline.Max(x => x.EndSecond) == 110
-            && renderExecutionPackage.ExecutionTimeline.OrderBy(x => x.StartSecond).Zip(renderExecutionPackage.ExecutionTimeline.OrderBy(x => x.StartSecond).Skip(1), (a, b) => b.StartSecond - a.EndSecond).All(g => g == 0);
+        var longTimeline = renderExecutionPackage.ExecutionTimeline.Where(x => !x.IsThumbnailOnly).OrderBy(x => x.StartSecond).ToList();
+        var hasTimelineCoverage = longTimeline.Count > 0
+            && longTimeline.Min(x => x.StartSecond) == 0
+            && longTimeline.Max(x => x.EndSecond) == 110
+            && longTimeline.Zip(longTimeline.Skip(1), (a, b) => b.StartSecond - a.EndSecond).All(g => g == 0)
+            && renderExecutionPackage.ExecutionTimeline.Any(x => x.SceneCode == "thumbnail_story_scene" && x.IsThumbnailOnly);
         if (!hasTimelineCoverage) { blocking.Add("Long-form timeline has gaps or overlaps."); affectedPaths.Add("RenderExecutionPackage.ExecutionTimeline"); }
         if (renderExecutionPackage.OverlayExecutionDirectives.Any(o => string.IsNullOrWhiteSpace(o.SafeArea))) { blocking.Add("Overlay directives must include safe area."); affectedPaths.Add("RenderExecutionPackage.OverlayExecutionDirectives"); }
         if (renderExecutionPackage.MotionExecutionDirectives.Any(m => string.IsNullOrWhiteSpace(m.CameraBehavior) || string.IsNullOrWhiteSpace(m.MotionStyle))) { blocking.Add("Motion directives must define cameraBehavior and motionStyle."); affectedPaths.Add("RenderExecutionPackage.MotionExecutionDirectives"); }

@@ -1418,7 +1418,9 @@ public sealed record WeeklyExecutionValidationReport(
     bool ThumbnailContractsValidated,
     double NarrationTimelineCoveragePercent,
     IReadOnlyList<string> DuplicateSceneReuseIssues,
-    IReadOnlyList<string> MissingExecutionFields);
+    IReadOnlyList<string> MissingExecutionFields,
+    IReadOnlyList<string> BlockingIssues,
+    IReadOnlyList<string> Warnings);
 public sealed record WeeklyCinematicChoreographyPackage(
     IReadOnlyList<WeeklyCinematicScene> Scenes,
     IReadOnlyList<WeeklySceneTimeline> SceneTimeline,
