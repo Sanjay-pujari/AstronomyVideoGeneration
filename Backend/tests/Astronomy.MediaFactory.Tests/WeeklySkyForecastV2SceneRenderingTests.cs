@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using System.Net;
 using System.Net.Http.Json;
 using Xunit;
@@ -36,7 +37,12 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
     [Fact]
     public async Task Orchestrator_DispatchesPhase6BRenderers_WithoutPlaceholderFallback()
     {
-        var orchestrator = new WeeklySkyForecastSceneRenderingOrchestrator(new FakeIntelligenceService(), NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>.Instance);
+        var orchestrator = new WeeklySkyForecastSceneRenderingOrchestrator(
+            new FakeIntelligenceService(),
+            new FakeFfmpegService(),
+            new FakeMediaValidationService(),
+            Options.Create(new RenderingOptions()),
+            NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>.Instance);
         var result = await orchestrator.RunAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "us", "US", DateTimeOffset.UtcNow), null, CancellationToken.None);
 
         Assert.True(result.SceneRenderingValidation.IsValid);
@@ -57,7 +63,12 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
     [Fact]
     public async Task Orchestrator_UnknownRendererType_ReturnsValidationError()
     {
-        var orchestrator = new WeeklySkyForecastSceneRenderingOrchestrator(new FakeIntelligenceService(includeUnsupportedRenderer: true), NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>.Instance);
+        var orchestrator = new WeeklySkyForecastSceneRenderingOrchestrator(
+            new FakeIntelligenceService(includeUnsupportedRenderer: true),
+            new FakeFfmpegService(),
+            new FakeMediaValidationService(),
+            Options.Create(new RenderingOptions()),
+            NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>.Instance);
         var result = await orchestrator.RunAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "us", "US", DateTimeOffset.UtcNow), null, CancellationToken.None);
 
         Assert.False(result.SceneRenderingValidation.IsValid);
@@ -68,10 +79,16 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
     {
         public Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
             => Task.FromResult(new SceneRenderingPackage([], [], [], [], [], null, new SceneRenderingValidation(true, true, true, true, true, true, true, true, false, [], []), new SceneRenderingFreezeStatus(true, [], [], [])));
+
+        public Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
+            => RunAsync(orchestrationContext.Request, orchestrationContext.ContentGenerationPlanId, cancellationToken);
     }
 
     private sealed class FakeIntelligenceService(bool includeUnsupportedRenderer = false) : IWeeklySkyForecastV2IntelligenceService
     {
+        public Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
+            => PreviewAsync(orchestrationContext.Request, cancellationToken);
+
         public Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
         {
             var root = Path.Combine(Path.GetTempPath(), "weekly-v2-render-tests", Guid.NewGuid().ToString("N"));
@@ -138,5 +155,17 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
                 Warnings: [],
                 StepResults: []));
         }
+    }
+
+    private sealed class FakeFfmpegService : IFFmpegService
+    {
+        public Task<ExternalProcessExecutionResult> ExecuteAsync(string arguments, string workingDirectory, string? outputPath, CancellationToken cancellationToken)
+            => Task.FromResult(new ExternalProcessExecutionResult("ffmpeg", arguments, workingDirectory, DateTime.UtcNow, DateTime.UtcNow, 1, 0, string.Empty, string.Empty, outputPath, 0));
+    }
+
+    private sealed class FakeMediaValidationService : IMediaValidationService
+    {
+        public Task<MediaValidationResult> ValidateAsync(string path, string mediaType, CancellationToken cancellationToken)
+            => Task.FromResult(new MediaValidationResult(true, path, mediaType, []));
     }
 }

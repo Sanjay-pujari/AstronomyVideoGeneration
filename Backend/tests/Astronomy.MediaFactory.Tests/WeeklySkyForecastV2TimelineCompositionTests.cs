@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using System.Net;
 using System.Net.Http.Json;
 using Xunit;
@@ -32,7 +33,14 @@ public sealed class WeeklySkyForecastV2TimelineCompositionTests
     [Fact]
     public async Task Orchestrator_ComposesDeterministic110SecondTimeline()
     {
-        var orchestrator = new WeeklySkyForecastTimelineCompositionOrchestrator(new FakeIntelligenceServiceFor6C(), new WeeklySkyForecastSceneRenderingOrchestrator(new FakeIntelligenceServiceFor6C(), NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>.Instance));
+        var orchestrator = new WeeklySkyForecastTimelineCompositionOrchestrator(
+            new FakeIntelligenceServiceFor6C(),
+            new WeeklySkyForecastSceneRenderingOrchestrator(
+                new FakeIntelligenceServiceFor6C(),
+                new FakeFfmpegService(),
+                new FakeMediaValidationService(),
+                Options.Create(new RenderingOptions()),
+                NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>.Instance));
         var result = await orchestrator.RunAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "us", "US", DateTimeOffset.UtcNow), null, CancellationToken.None);
 
         Assert.Equal(110, result.TimelineCompositionValidation.TotalDurationSeconds);
@@ -55,11 +63,17 @@ public sealed class WeeklySkyForecastV2TimelineCompositionTests
     {
         public Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
             => Task.FromResult(new TimelineCompositionPackage(new LongFormTimelineResult("/tmp/out.mp4", 110, "Composed", true, true, [], []), [], [], new NarrationSyncResult(true, "generated", 100, 110, false, "Planned", [], [], []), new AudioCompositionPlan("a", "b", "c", false, false, false, "Planned"), [], new TimelineCompositionValidation(true, true, 110, 110, true, true, true, true, true, true, true, false, [], []), new TimelineCompositionFreezeStatus(true, true, [], [], [])));
+
+        public Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
+            => RunAsync(orchestrationContext.Request, orchestrationContext.ContentGenerationPlanId, cancellationToken);
     }
 }
 
 internal sealed class FakeIntelligenceServiceFor6C : IWeeklySkyForecastV2IntelligenceService
 {
+    public Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
+        => PreviewAsync(orchestrationContext.Request, cancellationToken);
+
     public Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
     {
         var root = Path.Combine(Path.GetTempPath(), "weekly-v2-compose-tests", Guid.NewGuid().ToString("N"));
@@ -134,4 +148,16 @@ internal sealed class FakeIntelligenceServiceFor6C : IWeeklySkyForecastV2Intelli
             Warnings: [],
             StepResults: []));
     }
+}
+
+internal sealed class FakeFfmpegService : IFFmpegService
+{
+    public Task<ExternalProcessExecutionResult> ExecuteAsync(string arguments, string workingDirectory, string? outputPath, CancellationToken cancellationToken)
+        => Task.FromResult(new ExternalProcessExecutionResult("ffmpeg", arguments, workingDirectory, DateTime.UtcNow, DateTime.UtcNow, 1, 0, string.Empty, string.Empty, outputPath, 0));
+}
+
+internal sealed class FakeMediaValidationService : IMediaValidationService
+{
+    public Task<MediaValidationResult> ValidateAsync(string path, string mediaType, CancellationToken cancellationToken)
+        => Task.FromResult(new MediaValidationResult(true, path, mediaType, []));
 }
