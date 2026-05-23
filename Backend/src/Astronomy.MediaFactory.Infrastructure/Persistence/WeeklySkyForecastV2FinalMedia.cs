@@ -78,8 +78,9 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         var shorts = new List<ShortFinalResult>();
         foreach (var shortPlan in timeline.ShortsCompositionPlans)
         {
-            var match = scenes.SceneRenderResults.FirstOrDefault(x => x.SceneCode == shortPlan.SceneCode);
-            var output = match?.OutputPath ?? string.Empty;
+            var sourceSceneCode = shortPlan.SourceSceneCodes.FirstOrDefault() ?? string.Empty;
+            var match = scenes.SceneRenderResults.FirstOrDefault(x => x.SceneCode == sourceSceneCode);
+            var output = match?.OutputPath ?? shortPlan.PlannedOutputPath;
             var ok = ValidateMp4(output, 100 * 1024, ffmpegPath, blocking, $"short {shortPlan.ShortCode}");
             shorts.Add(new ShortFinalResult(shortPlan.ShortCode, output, shortPlan.TargetDurationSeconds, "9:16", ok ? "Rendered" : "Failed", [], ok ? [] : ["Short validation failed."]));
         }
@@ -119,7 +120,6 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             blocking,
             warnings,
             outputFilesExist,
-            final,
             ffmpegPath is not null,
             stellariumExecuted,
             overlaysValid,
@@ -151,7 +151,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
     private static bool ValidateImage(string path, long minBytes, List<string> blocking, string label)
     {
         if (!ValidateBasic(path, minBytes, blocking, label)) return false;
-        try { using var img = SixLabors.ImageSharp.Image.Identify(path, out var fmt); return img is not null && img.Width > 0 && img.Height > 0; }
+        try { var img = SixLabors.ImageSharp.Image.Identify(path); return img is not null && img.Width > 0 && img.Height > 0; }
         catch (Exception ex) { blocking.Add($"{label}: image decode failed for '{path}'. {ex.Message}"); return false; }
     }
     private static bool ValidateBasic(string path, long minBytes, List<string> blocking, string label)
