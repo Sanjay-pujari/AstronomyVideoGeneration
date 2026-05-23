@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Logging;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
@@ -20,6 +21,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     private static readonly TimeSpan SceneRenderTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan ImageCompositionTimeout = TimeSpan.FromSeconds(30);
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
+    private static readonly string[] PriorityObjects = ["moon", "jupiter", "venus", "saturn", "mars", "milky-way", "milky_way", "starfield", "background"];
     public async Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
         => await RunAsync(new WeeklySkyForecastV2OrchestrationContext(
             ContentGenerationPlanId: contentGenerationPlanId ?? request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid(),
@@ -46,6 +48,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         var overlayResults = new List<OverlayRenderResult>();
 
         var visualPlans = new List<CelestialObjectVisualPlan>();
+        var assetResolver = new CelestialAssetResolver(renderingOptions.Value.CelestialAssetsRoot);
         var diagnosticsFallbackUsed = false;
         foreach (var req in prep.SceneRenderRequests)
         {
@@ -57,7 +60,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             if (string.IsNullOrWhiteSpace(req.OutputPath)) requestErrors.Add("outputPath is required.");
             Directory.CreateDirectory(Path.GetDirectoryName(req.MetadataOutputPath)!);
             Directory.CreateDirectory(Path.GetDirectoryName(req.DebugOutputPath)!);
-            var visualPlan = ResolveVisualPlan(req, prep);
+            var visualPlan = ResolveVisualPlan(req, prep, assetResolver);
             visualPlans.Add(visualPlan);
 
             if (IsReuseScene(req))
@@ -114,10 +117,9 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             {
                 req.SceneCode,
                 RequiredObjects = visualPlan.RequiredObjects,
-                SelectedAssetPaths = visualPlan.SelectedAssets,
-                MissingObjects = visualPlan.RequiredObjects.Except(visualPlan.SelectedAssets.Select(Path.GetFileNameWithoutExtension), StringComparer.OrdinalIgnoreCase),
+                SelectedAssets = visualPlan.SelectedAssets,
+                MissingAssets = visualPlan.RequiredObjects.Except(visualPlan.SelectedAssets.Select(Path.GetFileNameWithoutExtension), StringComparer.OrdinalIgnoreCase),
                 visualPlan.VisualLayoutType,
-                BackgroundAssetPath = visualPlan.SelectedAssets.FirstOrDefault(),
                 visualPlan.FallbackUsed,
                 RenderedFramePath = Path.Combine(Path.GetDirectoryName(req.OutputPath)!, $"{Path.GetFileNameWithoutExtension(req.OutputPath)}.scene-frame.png"),
                 RenderedVideoPath = req.OutputPath
@@ -134,7 +136,11 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         ThumbnailSceneRenderResult? thumbnail = null;
         if (!string.IsNullOrWhiteSpace(prep.ThumbnailRenderPlan.ThumbnailRequestId))
         {
-            await RenderThumbnailAsync(prep.ThumbnailRenderPlan.PlannedOutputPath, "weekly story", cancellationToken);
+            var thumbAssets = prep.ThumbnailRenderPlan.PrimaryObjects
+                .SelectMany(o => assetResolver.ResolveForObject(o).Take(1))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            await RenderThumbnailAsync(prep.ThumbnailRenderPlan.PlannedOutputPath, "WEEKLY SKY FORECAST", thumbAssets, orchestrationContext.Request.RegionName, cancellationToken);
             Directory.CreateDirectory(Path.GetDirectoryName(prep.ThumbnailRenderPlan.PlannedMetadataPath)!);
             await File.WriteAllTextAsync(prep.ThumbnailRenderPlan.PlannedMetadataPath, "thumbnail metadata", cancellationToken);
             Directory.CreateDirectory(Path.GetDirectoryName(prep.ThumbnailRenderPlan.PlannedDebugPath)!);
@@ -159,7 +165,7 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             visualPlans.Any(v => v.SelectedAssets.Count > 0),
             hasVisuals,
             thumbnailContainsObjects,
-            !hasVisuals,
+            !hasVisuals || sceneResults.Any(s => File.Exists(Path.Combine(Path.GetDirectoryName(s.OutputPath)!, $"{Path.GetFileNameWithoutExtension(s.OutputPath)}.scene-frame.png")) == false),
             diagnosticsFallbackUsed,
             blocking,
             warnings);
@@ -194,9 +200,9 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
     private async Task ExecuteCelestialAssetSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<CelestialAssetSceneRenderResult> assetResults, CelestialObjectVisualPlan visualPlan, CancellationToken ct)
     { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, visualPlan.SelectedAssets, ct); assetResults.Add(new CelestialAssetSceneRenderResult(req.SceneCode, req.RequestId, req.RequiredAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
     private async Task ExecuteHybridSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<HybridSceneCompositeResult> hybridResults, CancellationToken ct)
-    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, [] , ct); hybridResults.Add(new HybridSceneCompositeResult(req.SceneCode, req.RequestId, ["fallback_visual"], req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
-    private async Task ExecuteOverlaySceneAsync(SceneRenderRequest req, List<string> requestWarnings, List<string> requestErrors, CancellationToken ct) => await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, [], ct);
-    private async Task ExecuteThumbnailSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, CancellationToken ct) => await RenderThumbnailAsync(prep.ThumbnailRenderPlan.PlannedOutputPath, req.SceneCode, ct);
+    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, req.RequiredAssets, ct); hybridResults.Add(new HybridSceneCompositeResult(req.SceneCode, req.RequestId, req.RequiredAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
+    private async Task ExecuteOverlaySceneAsync(SceneRenderRequest req, List<string> requestWarnings, List<string> requestErrors, CancellationToken ct) => await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, req.RequiredAssets, ct);
+    private async Task ExecuteThumbnailSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, CancellationToken ct) => await RenderThumbnailAsync(prep.ThumbnailRenderPlan.PlannedOutputPath, req.SceneCode, req.RequiredAssets, null, ct);
     private async Task RenderSceneVideoAsync(string outputPath, string label, double duration, IReadOnlyList<string> objectAssets, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -228,10 +234,10 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         await RenderOverlayImageAsync(outputPath, label, 1920, 1080, ct);
     }
-    private async Task RenderThumbnailAsync(string outputPath, string label, CancellationToken ct)
+    private async Task RenderThumbnailAsync(string outputPath, string label, IReadOnlyList<string> objectAssets, string? regionName, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-        await RenderThumbnailImageAsync(outputPath, label, 1280, 720, ct);
+        await RenderThumbnailImageAsync(outputPath, label, 1280, 720, objectAssets, regionName, ct);
     }
 
     private static async Task RenderSceneFrameAsync(string path, string label, int width, int height, IReadOnlyList<string> objectAssets, CancellationToken ct)
@@ -246,6 +252,19 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             var options = new RichTextOptions(font) { Origin = new PointF(40, 60), WrappingLength = width - 80 };
             ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(44, 64) }, text, Color.Black.WithAlpha(0.85f));
             ctx.DrawText(options, text, Color.White);
+            for (var i = 0; i < Math.Min(3, objectAssets.Count); i++)
+            {
+                var heroX = 90 + (i * 365);
+                var heroBounds = new RectangleF(heroX, 180, 320, 320);
+                DrawAssetTile(ctx, objectAssets[i], heroBounds, Path.GetFileNameWithoutExtension(objectAssets[i]), font);
+            }
+            ctx.Fill(Color.ParseHex("#000000").WithAlpha(0.40f), new RectangleF(width - 280, 24, 240, 72));
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(width - 260, 44), WrappingLength = 210 }, "UDAIPUR", Color.White);
+            ctx.Fill(Color.ParseHex("#F59E0B").WithAlpha(0.88f), new RectangleF(width - 280, 106, 240, 58));
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(width - 250, 120), WrappingLength = 200 }, "WEEKLY", Color.Black);
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(48, height - 150), WrappingLength = width - 96 }, "Best viewing: face south-west after sunset", Color.White.WithAlpha(0.88f));
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(48, height - 100), WrappingLength = width - 96 }, "Timing: 19:30-22:00 local time", Color.ParseHex("#FBBF24"));
+
             var cardY = height * 0.52f;
             for (var i = 0; i < Math.Min(3, objectAssets.Count); i++)
             {
@@ -258,21 +277,24 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate generated scene frame '{path}'.");
         if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid generated scene frame '{path}'.");
     }
-    private static CelestialObjectVisualPlan ResolveVisualPlan(SceneRenderRequest req, RenderPreparationPackage prep)
+    private static CelestialObjectVisualPlan ResolveVisualPlan(SceneRenderRequest req, RenderPreparationPackage prep, CelestialAssetResolver resolver)
     {
-        var root = Directory.GetCurrentDirectory();
-        var candidateRoots = new[] { Path.Combine(root, "Backend", "src", "Astronomy.MediaFactory.Api", "assets", "celestial"), Path.Combine(root, "assets", "celestial") };
-        var requiredObjects = req.RequiredAssets.Count > 0 ? req.RequiredAssets : req.SceneCode.Split('_', StringSplitOptions.RemoveEmptyEntries).Where(s => s.Length > 2).Take(3).ToList();
+        var inferredObjects = Regex.Matches(req.SceneCode, "[A-Za-z][A-Za-z_\-]{2,}")
+            .Select(m => m.Value)
+            .Where(v => PriorityObjects.Any(p => v.Contains(p, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        var requiredObjects = req.RequiredAssets.Count > 0 ? req.RequiredAssets.Distinct(StringComparer.OrdinalIgnoreCase).ToList() : inferredObjects;
+        if (requiredObjects.Count == 0) requiredObjects = ["starfield"];
         var selected = new List<string>();
         var warnings = new List<string>();
         foreach (var obj in requiredObjects)
         {
-            var aliases = new[] { obj, obj.Replace("_", "-"), obj.Replace("planet_", "") };
-            var found = candidateRoots.SelectMany(r => aliases.Select(a => Path.Combine(r, a.ToLowerInvariant()))).FirstOrDefault(Directory.Exists);
-            var asset = found is null ? null : Directory.GetFiles(found).FirstOrDefault(f => ImageExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase));
+            var asset = resolver.ResolveForObject(obj).FirstOrDefault();
             if (asset is null) warnings.Add($"No asset resolved for object '{obj}'."); else selected.Add(asset);
         }
-        return new CelestialObjectVisualPlan(req.SceneCode, req.SceneCode, req.NarrationSegmentCodes, requiredObjects, requiredObjects, [], selected, requiredObjects.Count > 1 ? "SkyGroupingCollage" : "HeroObject", selected.Count == 0, selected.Count == 0 ? "No assets resolved, diagnostics fallback required." : null, warnings);
+        var layout = requiredObjects.Count > 1 || requiredObjects.Any(x => x.Contains("jupiter", StringComparison.OrdinalIgnoreCase) || x.Contains("venus", StringComparison.OrdinalIgnoreCase))
+            ? "SkyGroupingCollage" : "HeroObject";
+        return new CelestialObjectVisualPlan(req.SceneCode, req.SceneCode, req.NarrationSegmentCodes, requiredObjects, requiredObjects, [], selected, layout, selected.Count == 0, selected.Count == 0 ? "No assets resolved, diagnostics fallback required." : null, warnings);
     }
 
     private static async Task RenderOverlayImageAsync(string path, string label, int width, int height, CancellationToken ct)
@@ -291,21 +313,86 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid overlay image '{path}'.");
     }
 
-    private static async Task RenderThumbnailImageAsync(string path, string label, int width, int height, CancellationToken ct)
+    private static async Task RenderThumbnailImageAsync(string path, string label, int width, int height, IReadOnlyList<string> objectAssets, string? regionName, CancellationToken ct)
     {
         var font = ResolveFont(Math.Max(40f, width * 0.045f));
         using var image = new Image<Rgba32>(width, height, new Rgba32(6, 8, 16));
         image.Mutate(ctx =>
         {
             ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#14264F")), new ColorStop(1, Color.ParseHex("#060810"))]));
-            var text = string.IsNullOrWhiteSpace(label) ? "Weekly story" : label;
+            var text = string.IsNullOrWhiteSpace(label) ? "WEEKLY SKY" : label;
             var options = new RichTextOptions(font) { Origin = new PointF(42, 48), WrappingLength = width - 84 };
             ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(46, 52) }, text, Color.Black.WithAlpha(0.82f));
             ctx.DrawText(options, text, Color.White);
+            for (var i = 0; i < Math.Min(3, objectAssets.Count); i++)
+            {
+                var heroX = 90 + (i * 365);
+                var heroBounds = new RectangleF(heroX, 180, 320, 320);
+                DrawAssetTile(ctx, objectAssets[i], heroBounds, Path.GetFileNameWithoutExtension(objectAssets[i]), font);
+            }
+            ctx.Fill(Color.ParseHex("#000000").WithAlpha(0.40f), new RectangleF(width - 280, 24, 240, 72));
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(width - 260, 44), WrappingLength = 210 }, "UDAIPUR", Color.White);
+            ctx.Fill(Color.ParseHex("#F59E0B").WithAlpha(0.88f), new RectangleF(width - 280, 106, 240, 58));
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(width - 250, 120), WrappingLength = 200 }, "WEEKLY", Color.Black);
         });
         await image.SaveAsJpegAsync(path, new JpegEncoder { Quality = 92 }, ct);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate thumbnail image '{path}'.");
         if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid thumbnail image '{path}'.");
+    }
+
+
+    private static void DrawAssetTile(IImageProcessingContext ctx, string assetPath, RectangleF bounds, string fallbackLabel, Font font)
+    {
+        if (File.Exists(assetPath))
+        {
+            using var assetImage = Image.Load(assetPath);
+            assetImage.Mutate(x => x.Resize(new ResizeOptions { Size = new Size((int)bounds.Width, (int)bounds.Height), Mode = ResizeMode.Crop }));
+            ctx.DrawImage(assetImage, new Point((int)bounds.X, (int)bounds.Y), 1f);
+            ctx.Draw(Color.White.WithAlpha(0.85f), 3f, bounds);
+            return;
+        }
+
+        ctx.Fill(Color.ParseHex("#1B264A").WithAlpha(0.82f), bounds);
+        ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(bounds.X + 20, bounds.Y + (bounds.Height * 0.45f)), WrappingLength = bounds.Width - 40 }, fallbackLabel, Color.White);
+    }
+
+    private sealed class CelestialAssetResolver(string configuredRoot)
+    {
+        private readonly string[] _roots = BuildRoots(configuredRoot);
+        public IReadOnlyList<string> ResolveForObject(string objectCode)
+        {
+            var aliases = BuildAliases(objectCode);
+            var assets = new List<string>();
+            foreach (var root in _roots.Where(Directory.Exists))
+            {
+                foreach (var alias in aliases)
+                {
+                    var dir = Path.Combine(root, alias);
+                    if (!Directory.Exists(dir)) continue;
+                    assets.AddRange(Directory.GetFiles(dir).Where(f => ImageExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase)));
+                }
+            }
+            return assets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static string[] BuildRoots(string configuredRoot)
+        {
+            var roots = new List<string>();
+            if (!string.IsNullOrWhiteSpace(configuredRoot)) roots.Add(configuredRoot);
+            var cwd = Directory.GetCurrentDirectory();
+            roots.Add(Path.Combine(cwd, "Backend", "src", "Astronomy.MediaFactory.Api", "assets", "celestial"));
+            roots.Add(Path.Combine(cwd, "assets", "celestial"));
+            return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        private static IEnumerable<string> BuildAliases(string value)
+        {
+            var baseName = value.Trim().ToLowerInvariant().Replace("planet_", string.Empty);
+            yield return baseName;
+            yield return baseName.Replace("_", "-");
+            if (baseName == "milky way") yield return "milky-way";
+            if (baseName.Contains("background")) yield return "starfield";
+        }
     }
 
     private static Font ResolveFont(float size)

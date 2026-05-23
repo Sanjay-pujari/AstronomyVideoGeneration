@@ -41,6 +41,7 @@ public sealed class MaintenanceOptions
     public int AnalyticsRetentionDays { get; set; } = 90;
     public int StaleJobThresholdMinutes { get; set; } = 60;
     public string WorkingDirectory { get; set; } = "./media-output";
+    public string CelestialAssetsRoot { get; set; } = "./assets/celestial";
 }
 
 public sealed class AlertingOptions
@@ -323,6 +324,7 @@ public sealed class RenderingOptions
     public string FfmpegPath { get; set; } = "ffmpeg";
     public string? FfprobePath { get; set; }
     public string WorkingDirectory { get; set; } = "./media-output";
+    public string CelestialAssetsRoot { get; set; } = "./assets/celestial";
     public int VideoWidth { get; set; } = 1280;
     public int VideoHeight { get; set; } = 720;
     public int FrameRate { get; set; } = 30;
