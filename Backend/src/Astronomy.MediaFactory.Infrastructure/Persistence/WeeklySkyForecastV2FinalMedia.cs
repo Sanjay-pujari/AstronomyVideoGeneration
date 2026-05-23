@@ -60,7 +60,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         logger.LogInformation("Narration voice: {VoiceCode}", resolvedVoiceCode);
         logger.LogInformation("Narration output path: {Path}", narrationWavPath);
 
-        var narrationGenerated = await ExecuteNarrationSynthesisAsync(narrationText, prep.WorkingDirectoryPlan.AudioPath, narrationWavPath, ffmpegPath, request.Diagnostics, speechSynthesisService, blocking, warnings, cancellationToken);
+        var narrationGenerated = await ExecuteNarrationSynthesisAsync(narrationText, prep.WorkingDirectoryPlan.AudioPath, narrationWavPath, ffmpegPath, orchestrationContext.Request.Diagnostics, speechSynthesisService, blocking, warnings, cancellationToken);
         logger.LogInformation("Narration synthesis completed");
         logger.LogInformation("Narration validation started");
         logger.LogInformation("Narration validation completed");
