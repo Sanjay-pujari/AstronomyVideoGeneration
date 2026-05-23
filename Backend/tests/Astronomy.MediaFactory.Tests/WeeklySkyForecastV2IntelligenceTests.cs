@@ -299,8 +299,10 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         return new WeeklySkyForecastContext("IN-RJ-UDAIPUR", "Udaipur", 24, 73, "Asia/Kolkata", start, start.AddDays(6), "en", days, [], [new RecommendedObservationNight(new DateOnly(2026, 5, 24), 95, "Best", ["MOON", "JUPITER", "VENUS"], DateTime.Parse("2026-05-24T18:00:00Z"), DateTime.Parse("2026-05-24T20:00:00Z"))], "JUPITER", new DateOnly(2026, 5, 24), new DateOnly(2026, 5, 25), []);
     }
 
-    private sealed class StubContextBuilder : IWeeklySkyForecastContextBuilder
+    private sealed class StubContextBuilder : IWeeklySkyForecastContextBuilderV2
     {
         public Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken) => Task.FromResult(BuildContext());
+
+        public Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastV2OrchestrationContext context, CancellationToken cancellationToken) => Task.FromResult(BuildContext());
     }
 }
