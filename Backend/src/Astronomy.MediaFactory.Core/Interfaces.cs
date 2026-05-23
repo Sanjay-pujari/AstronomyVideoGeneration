@@ -54,7 +54,11 @@ public interface IContentMonetizationService
 {
     Task<MonetizationPlan> BuildPlanAsync(MonetizationInput input, CancellationToken cancellationToken);
 }
-public interface ISpeechSynthesisService { Task<string> SynthesizeAsync(string script, string outputDirectory, CancellationToken cancellationToken); }
+public interface ISpeechSynthesisService
+{
+    Task<string> SynthesizeAsync(string script, string outputDirectory, CancellationToken cancellationToken);
+    Task SynthesizeToFileAsync(string script, string outputPath, CancellationToken cancellationToken);
+}
 public interface IVideoRenderService { Task<string> RenderAsync(RenderManifest manifest, CancellationToken cancellationToken); }
 public interface IShortsVideoRenderService { Task<ShortVideoRenderResult> RenderAsync(ContentType contentType, AstronomyContext context, IReadOnlyCollection<string> sourceVisuals, string outputDirectory, bool publishToYouTube, CancellationToken cancellationToken); }
 public interface IShortFormPlatformMetadataFormatter { PlatformPublicationTarget FormatTarget(ShortFormPlatform platform, ShortFormPublicationRequest request); }
