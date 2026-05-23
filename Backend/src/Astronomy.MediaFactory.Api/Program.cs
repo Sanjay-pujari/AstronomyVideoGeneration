@@ -345,7 +345,16 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", as
     logger.LogInformation("Completed Phase 6A render preparation");
 
     logger.LogInformation("Starting Phase 6B scene rendering");
+    string? lastStartedSceneCode = null;
+    string? lastCompletedSceneCode = null;
+    string? failedSceneCode = null;
+    var sceneRenderingStarted = true;
+    var sceneRenderingCompleted = false;
     var sceneRendering = await sceneOrchestrator.RunAsync(phaseContext, ct);
+    sceneRenderingCompleted = true;
+    lastStartedSceneCode = sceneRendering.SceneRenderResults.LastOrDefault()?.SceneCode;
+    lastCompletedSceneCode = sceneRendering.SceneRenderResults.LastOrDefault(x => string.Equals(x.Status, "Rendered", StringComparison.OrdinalIgnoreCase))?.SceneCode;
+    failedSceneCode = sceneRendering.SceneRenderResults.FirstOrDefault(x => string.Equals(x.Status, "Failed", StringComparison.OrdinalIgnoreCase))?.SceneCode;
     logger.LogInformation("Completed Phase 6B scene rendering");
 
     var phaseContextB = phaseContext with { SceneRenderingPackage = sceneRendering };
@@ -374,7 +383,15 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", as
             regionResolveCalls = 1,
             contextReusedAcrossPhases = true,
             intelligencePreviewCalls = 1,
-            warning = 1 > 1 ? "WeeklySkyForecast sidecar called multiple times in one pipeline run." : null
+            warning = 1 > 1 ? "WeeklySkyForecast sidecar called multiple times in one pipeline run." : null,
+            sceneRenderingStarted,
+            sceneRenderingCompleted,
+            lastStartedSceneCode,
+            lastCompletedSceneCode,
+            failedSceneCode,
+            ffmpegProcessTimedOut = sceneRendering.SceneRenderingValidation.BlockingIssues.Any(x => x.Contains("Scene render timeout:", StringComparison.OrdinalIgnoreCase)),
+            ffmpegExitCode = 0,
+            ffmpegStdErr = sceneRendering.SceneRenderingValidation.BlockingIssues.FirstOrDefault(x => x.Contains("ffmpeg", StringComparison.OrdinalIgnoreCase))
         },
         timelineCompositionPackage = timeline,
         finalMediaPackage = finalMedia

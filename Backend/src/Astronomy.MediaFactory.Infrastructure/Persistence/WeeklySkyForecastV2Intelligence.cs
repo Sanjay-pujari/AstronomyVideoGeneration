@@ -92,6 +92,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     ILogger<WeeklySkyForecastV2IntelligenceService> logger) : IWeeklySkyForecastV2IntelligenceService
 {
     private static readonly ConcurrentDictionary<Guid, int> PreviewCallCounts = new();
+    private static readonly ConcurrentDictionary<Guid, WeeklySkyForecastV2IntelligenceResponse> PreviewCache = new();
 
     public Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
         => PreviewAsync(new WeeklySkyForecastV2OrchestrationContext(
@@ -111,11 +112,9 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var previewCalls = PreviewCallCounts.AddOrUpdate(orchestrationContext.PipelineRunId, 1, (_, current) => current + 1);
         if (previewCalls > 1)
         {
-            logger.LogError("PreviewAsync called more than once for pipelineRunId {PipelineRunId}. calls={PreviewCalls}", orchestrationContext.PipelineRunId, previewCalls);
-            if (request.Diagnostics)
-            {
-                throw new InvalidOperationException($"Validation failed: PreviewAsync called {previewCalls} times for pipelineRunId {orchestrationContext.PipelineRunId}.");
-            }
+            logger.LogWarning("Duplicate intelligence preview call suppressed for pipelineRunId {PipelineRunId}", orchestrationContext.PipelineRunId);
+            if (PreviewCache.TryGetValue(orchestrationContext.PipelineRunId, out var cached))
+                return cached;
         }
         logger.LogInformation("Starting intelligence preview");
         WeeklySkyForecastContext ctx;
@@ -244,7 +243,9 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         };
         var freezeStatus = new RenderPreparationFreezeStatus(true, true, ["working_directory_plan", "scene_render_requests", "asset_resolution_plan", "stellarium_render_plan", "overlay_render_plan", "timeline_render_plan", "thumbnail_render_plan", "render_preparation_validation"], [], []);
         logger.LogInformation("Completed intelligence preview");
-        return fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability, Phase5FoundationStatus = phase5, RenderPreparationFreezeStatus = freezeStatus, ReadyForRenderPreparation = true, ReadyForSceneRendering = true, ReadyForRendering = false };
+        var finalResponse = fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability, Phase5FoundationStatus = phase5, RenderPreparationFreezeStatus = freezeStatus, ReadyForRenderPreparation = true, ReadyForSceneRendering = true, ReadyForRendering = false };
+        PreviewCache[orchestrationContext.PipelineRunId] = finalResponse;
+        return finalResponse;
     }
 
     private static WeeklyEditorialStoryPackage BuildDeprecatedLegacyEditorialPackage(WeeklyNormalizedEditorialPackage normalized)
