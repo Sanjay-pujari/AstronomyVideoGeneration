@@ -316,11 +316,16 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", as
     var timeline = await timelineOrchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
     var finalMedia = await finalMediaOrchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
 
+    var finalDirectory = Path.GetDirectoryName(timeline.LongFormTimelineResult.OutputPath);
+    var workingDirectoryRoot = string.IsNullOrWhiteSpace(finalDirectory)
+        ? finalDirectory
+        : Path.GetDirectoryName(finalDirectory);
+
     return Results.Ok(new
     {
         contentGenerationPlanId = contentPlanId,
         pipelineRunId,
-        workingDirectoryRoot = Path.GetDirectoryName(timeline.LongFormTimelineResult.OutputPath),
+        workingDirectoryRoot,
         timelineCompositionPackage = timeline,
         finalMediaPackage = finalMedia
     });
