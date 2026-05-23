@@ -279,7 +279,7 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
     }
     private static CelestialObjectVisualPlan ResolveVisualPlan(SceneRenderRequest req, RenderPreparationPackage prep, CelestialAssetResolver resolver)
     {
-        var inferredObjects = Regex.Matches(req.SceneCode, "[A-Za-z][A-Za-z_\-]{2,}")
+        var inferredObjects = Regex.Matches(req.SceneCode, @"[A-Za-z][A-Za-z_\-]{2,}")
             .Select(m => m.Value)
             .Where(v => PriorityObjects.Any(p => v.Contains(p, StringComparison.OrdinalIgnoreCase)))
             .ToList();
