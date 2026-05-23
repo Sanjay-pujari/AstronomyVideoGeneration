@@ -99,6 +99,39 @@ internal sealed class FakeIntelligenceServiceFor6C : IWeeklySkyForecastV2Intelli
         var exec = new WeeklyRenderExecutionPackage("e",[],timeline.TimelineSegments.Select(s=>new WeeklySceneTimeline(s.SceneCode,s.StartSecond,s.EndSecond,s.StartSecond,s.EndSecond,0,s.NarrationSegmentCodes,s.TransitionInSeconds,s.TransitionOutSeconds,s.IsThumbnailOnly,false,false)).ToList(),[],[],[],[],[],transitions,[],new ThumbnailExecutionContract("t","v",[],[],"f","e","em","s","m","c",[],"f","o"),[]);
         var generated = new WeeklyGeneratedNarrationPackage("en","tone",new WeeklyGeneratedLongNarration("full",110,[new WeeklyGeneratedNarrationSegment("hero_narr","h","x",48,[],"",""),new WeeklyGeneratedNarrationSegment("best_narr","b","x",19,[],"",""),new WeeklyGeneratedNarrationSegment("moon_narr","m","x",18,[],"",""),new WeeklyGeneratedNarrationSegment("tip_narr","t","x",11,[],"","") ,new WeeklyGeneratedNarrationSegment("close_narr","c","x",14,[],"","")]),[],[]);
 
-        return Task.FromResult(new WeeklySkyForecastV2IntelligenceResponse(null,"WeeklySkyForecast",true,now,now,"US",new WeeklySkyForecastV2SkyfieldSummary(0,0,0,0,null,null,null),[],new WeeklyStoryArc("h","s","t","o",[],"c",[],[],[]),new WeeklyEditorialStoryPackage(new WeeklyHeroEvent("e","t","t","d",now,null,[],[],0,0,0,"v","w"),[],"h","s","o","t",[],[],new WeeklyThumbnailDirection([],[],[],"e","v","c","b","o"),[] ,"",[]),new WeeklyCinematicStoryBlueprint("id","h","s","o","p",new WeeklyHeroStory("t","d",now,[],null,[],[],"a","b","c","v","s"),[],[],[],[new WeeklyShortBlueprint("short_hero","Hero Short","Hook","Angle",[],now,"v",30,1)],new WeeklyThumbnailBlueprint([],[],[],"e","c","b","o","v"),"n","v",[]),null,null,generated,null,null,null,null,null,exec,prep,null,null,null,null,true,true,true,true,[],[],[]));
+        return Task.FromResult(new WeeklySkyForecastV2IntelligenceResponse(
+            ContentGenerationPlanId: null,
+            Category: "WeeklySkyForecast",
+            Success: true,
+            WeekStartDate: now,
+            WeekEndDate: now,
+            Region: "US",
+            SkyfieldSummary: new WeeklySkyForecastV2SkyfieldSummary(0,0,0,0,null,null,null),
+            EventIntelligence: [],
+            WeeklyStoryArc: new WeeklyStoryArc("h","s","t","o",[],"c",[],[],[]),
+            EditorialStoryPackage: new WeeklyEditorialStoryPackage(new WeeklyHeroEvent("e","t","t","d",now,null,[],[],0,0,0,"v","w"),[],"h","s","o","t",[],[],new WeeklyThumbnailDirection([],[],[],"e","v","c","b","o"),[],"",[]),
+            CinematicStoryBlueprint: new WeeklyCinematicStoryBlueprint("id","h","s","o","p",new WeeklyHeroStory("t","d",now,[],null,[],[],"a","b","c","v","s"),[],[],[],[new WeeklyShortBlueprint("short_hero","Hero Short","Hook","Angle",[],now,"v",30,1)],new WeeklyThumbnailBlueprint([],[],[],"e","c","b","o","v"),"n","v",[]),
+            NarrativeAbstractionPackage: null,
+            NarrationPlan: null,
+            GeneratedNarrationPackage: generated,
+            NarrationQuality: null,
+            VisualRequirementPackage: null,
+            HybridScenePlanPackage: null,
+            NormalizedEditorialPackage: null,
+            SceneChoreographyPackage: null,
+            CinematicChoreographyPackage: null,
+            RenderExecutionPackage: exec,
+            RenderPreparationPackage: prep,
+            ExecutionValidation: null,
+            PreviewStability: null,
+            Phase5FoundationStatus: null,
+            RenderPreparationFreezeStatus: null,
+            ReadyForRenderPreparation: true,
+            ReadyForSceneRendering: true,
+            ReadyForRendering: true,
+            LegacyEditorialPackageDeprecated: true,
+            RecommendedVisualStrategies: [],
+            Warnings: [],
+            StepResults: []));
     }
 }
