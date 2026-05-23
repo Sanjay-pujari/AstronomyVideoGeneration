@@ -53,13 +53,17 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         }
 
         logger.LogInformation("Starting narration synthesis");
-        string? narrationMp3Path = null;
         var narrationWavPath = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-narration.wav");
         var narrationText = narrationPackage.LongFormNarration.FullNarration?.Trim() ?? string.Empty;
+        var resolvedVoiceCode = "auto";
+        logger.LogInformation("Narration text length: {Length}", narrationText.Length);
+        logger.LogInformation("Narration voice: {VoiceCode}", resolvedVoiceCode);
+        logger.LogInformation("Narration output path: {Path}", narrationWavPath);
 
-        var narrationGenerated = await ExecuteNarrationSynthesisAsync(narrationText, prep.WorkingDirectoryPlan.AudioPath, narrationWavPath, ffmpegPath, speechSynthesisService, blocking, warnings, cancellationToken);
-        narrationMp3Path = narrationGenerated.NarrationMp3Path;
+        var narrationGenerated = await ExecuteNarrationSynthesisAsync(narrationText, prep.WorkingDirectoryPlan.AudioPath, narrationWavPath, ffmpegPath, request.Diagnostics, speechSynthesisService, blocking, warnings, cancellationToken);
         logger.LogInformation("Narration synthesis completed");
+        logger.LogInformation("Narration validation started");
+        logger.LogInformation("Narration validation completed");
 
         var thumbnailPath = scenes.ThumbnailRenderResult?.OutputPath ?? prep.ThumbnailRenderPlan.PlannedOutputPath;
         logger.LogInformation("Thumbnail render started");
@@ -101,9 +105,9 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         }
         logger.LogInformation("Shorts render completed");
 
-        logger.LogInformation("Starting audio mix");
+        logger.LogInformation("Starting final audio mix");
         var mixOk = BuildFinalMix(narrationWavPath, mixPath, ffmpegPath, blocking);
-        logger.LogInformation("Audio mix completed");
+        logger.LogInformation("Final audio mix completed");
 
         logger.LogInformation("Starting long-form assembly");
         var longFormPath = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, "weekly-skyforecast-longform-draft.mp4");
@@ -112,9 +116,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         logger.LogInformation("Long-form assembly completed");
 
         logger.LogInformation("Validation started");
-        var narrationWavOk = !string.IsNullOrWhiteSpace(narrationWavPath) && ValidateWav(narrationWavPath, ffmpegPath, blocking, "narration wav");
-        var narrationMp3Ok = !string.IsNullOrWhiteSpace(narrationMp3Path) && ValidateAudio(narrationMp3Path!, ffmpegPath, blocking, "narration mp3");
-        var narrationOk = narrationWavOk;
+        var narrationOk = narrationGenerated.WavReady;
         var outputFilesExist = longFormOk && mixOk && narrationOk;
         var allShortsValid = shorts.All(s => s.Status == "Rendered");
         var thumbnailContainsObjects = scenes.SceneRenderingValidation.ThumbnailContainsObjects;
@@ -159,80 +161,73 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
 
 
 
-    private sealed record NarrationSynthesisOutcome(string? NarrationMp3Path, bool WavReady);
+    private sealed record NarrationSynthesisOutcome(bool WavReady);
 
     private static async Task<NarrationSynthesisOutcome> ExecuteNarrationSynthesisAsync(
         string narrationText,
         string audioDirectory,
         string narrationWavPath,
         string? ffmpegPath,
+        bool diagnosticsEnabled,
         ISpeechSynthesisService speechSynthesisService,
         List<string> blocking,
         List<string> warnings,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(audioDirectory);
-        var narrationDisabled = string.IsNullOrWhiteSpace(narrationText);
-        string? narrationMp3Path = null;
-
-        if (!narrationDisabled)
+        if (string.IsNullOrWhiteSpace(narrationText))
         {
-            try
+            blocking.Add("Generated narration text missing; cannot synthesize narration audio.");
+            return new NarrationSynthesisOutcome(false);
+        }
+
+        var synthesized = false;
+        try
+        {
+            var narrationPath = await speechSynthesisService.SynthesizeAsync(narrationText, audioDirectory, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(narrationPath) && File.Exists(narrationPath))
             {
-                narrationMp3Path = await speechSynthesisService.SynthesizeAsync(narrationText, audioDirectory, cancellationToken);
-                var canonicalMp3Path = Path.Combine(audioDirectory, "weekly-skyforecast-narration.mp3");
-                if (!string.Equals(narrationMp3Path, canonicalMp3Path, StringComparison.OrdinalIgnoreCase) && File.Exists(narrationMp3Path))
+                if (!string.Equals(narrationPath, narrationWavPath, StringComparison.OrdinalIgnoreCase))
                 {
-                    File.Copy(narrationMp3Path, canonicalMp3Path, true);
-                    narrationMp3Path = canonicalMp3Path;
+                    if (Path.GetExtension(narrationPath).Equals(".wav", StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Copy(narrationPath, narrationWavPath, true);
+                    }
+                    else if (ffmpegPath is not null)
+                    {
+                        RunProcess(ffmpegPath, $"-y -i \"{narrationPath}\" -ac 2 -ar 44100 -c:a pcm_s16le \"{narrationWavPath}\"", blocking, "narration wav transcode");
+                    }
                 }
 
-                if (ffmpegPath is not null && !string.IsNullOrWhiteSpace(narrationMp3Path) && File.Exists(narrationMp3Path))
-                {
-                    RunProcess(ffmpegPath, $"-y -i \"{narrationMp3Path}\" -ac 2 -ar 48000 \"{narrationWavPath}\"", blocking, "narration wav transcode");
-                }
+                synthesized = File.Exists(narrationWavPath);
             }
-            catch (Exception ex)
+        }
+        catch (Exception ex)
+        {
+            if (!diagnosticsEnabled)
             {
-                warnings.Add($"Narration generation fallback activated: {ex.Message}");
+                blocking.Add($"Narration synthesis failed: {ex.Message}");
+                return new NarrationSynthesisOutcome(false);
             }
-        }
-        else
-        {
-            warnings.Add("Narration generation disabled (empty narration text); fallback wav will be generated.");
-        }
 
-        var narrationValidation = new List<string>();
-        var narrationOk = ValidateWav(narrationWavPath, ffmpegPath, narrationValidation, "narration wav");
-        if (narrationOk)
-        {
-            return new NarrationSynthesisOutcome(narrationMp3Path, true);
-        }
-
-        warnings.AddRange(narrationValidation);
-
-        if (ffmpegPath is not null)
-        {
-            var fallbackArgs = narrationDisabled
-                ? $"-y -f lavfi -i anullsrc=r=48000:cl=stereo -t 3 -c:a pcm_s16le \"{narrationWavPath}\""
-                : $"-y -f lavfi -i \"sine=frequency=440:duration=3\" -ac 2 -ar 48000 \"{narrationWavPath}\"";
-            var fallbackLabel = narrationDisabled ? "narration fallback silent wav" : "narration fallback diagnostics wav";
-            if (RunProcess(ffmpegPath, fallbackArgs, blocking, fallbackLabel))
+            if (ffmpegPath is null || !RunProcess(ffmpegPath, $"-y -f lavfi -i anullsrc=r=44100:cl=stereo -t 110 -c:a pcm_s16le \"{narrationWavPath}\"", blocking, "diagnostics silent narration"))
             {
-                warnings.Add(narrationDisabled
-                    ? "Narration fallback silent wav generated."
-                    : "Narration fallback diagnostics wav generated.");
+                blocking.Add($"Narration synthesis failed and diagnostics fallback could not be generated: {ex.Message}");
+                return new NarrationSynthesisOutcome(false);
             }
+
+            warnings.Add("Diagnostics silent narration generated because Azure Speech is not configured.");
+            synthesized = true;
         }
 
-        var postFallbackValidation = new List<string>();
-        var fallbackOk = ValidateWav(narrationWavPath, ffmpegPath, postFallbackValidation, "narration wav");
-        if (!fallbackOk)
+        if (!synthesized)
         {
-            blocking.AddRange(postFallbackValidation);
+            blocking.Add("Narration synthesis did not produce output.");
+            return new NarrationSynthesisOutcome(false);
         }
 
-        return new NarrationSynthesisOutcome(narrationMp3Path, fallbackOk);
+        var narrationOk = ValidateWav(narrationWavPath, ffmpegPath, blocking, "narration wav");
+        return new NarrationSynthesisOutcome(narrationOk);
     }
 
     private static string? ResolveFfmpegPath() => File.Exists("/usr/bin/ffmpeg") ? "/usr/bin/ffmpeg" : (File.Exists("/bin/ffmpeg") ? "/bin/ffmpeg" : null);
@@ -245,7 +240,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
     }
     private static bool ValidateWav(string path, string? ffmpegPath, List<string> blocking, string label)
     {
-        if (!ValidateBasic(path, 1, blocking, label)) return false;
+        if (!ValidateBasic(path, 10 * 1024, blocking, label)) return false;
         if (ffmpegPath is null) return false;
         return ProbeDuration(path, ffmpegPath, blocking, label) > 0;
     }
