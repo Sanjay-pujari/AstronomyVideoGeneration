@@ -857,10 +857,20 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
         var pathList = new[] { dirs.RootPath, dirs.SceneRendersPath, dirs.AudioPath, dirs.OverlaysPath, dirs.ThumbnailsPath, dirs.TimelinePath, dirs.FinalPath, dirs.MetadataPath, dirs.DebugPath, dirs.StellariumPath, dirs.AssetsPath };
         var workingDirValid = pathList.All(p => !string.IsNullOrWhiteSpace(p) && Path.IsPathRooted(p)) && pathList.Distinct(StringComparer.Ordinal).Count() == pathList.Length;
         var blocking = new List<string>();
+        var requestIdsUnique = sceneRequests.Select(x => x.RequestId).Distinct(StringComparer.Ordinal).Count() == sceneRequests.Count;
+        var sceneRequestCountValid = sceneRequests.Count == requiredSceneCodes.Length;
+        var thumbnailRequestValid = sceneRequests.Any(x => x.SceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase) && x.IsThumbnailOnly);
+        var closingReuseRequestValid = sceneRequests.Where(x => x.SceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase)).Select(x => x.RequestId).Distinct(StringComparer.Ordinal).Count() == 1;
+        var requestPathsValid = sceneRequests.All(x => !string.IsNullOrWhiteSpace(x.OutputPath) && !string.IsNullOrWhiteSpace(x.MetadataOutputPath) && !string.IsNullOrWhiteSpace(x.DebugOutputPath));
         if (sceneRequests.Any(x => !x.RendererDecisionLocked)) blocking.Add("One or more scene render requests are not renderer decision locked.");
+        if (!requestIdsUnique) blocking.Add("Scene render requests must use unique request IDs.");
+        if (!sceneRequestCountValid) blocking.Add("Render preparation must generate exactly 6 scene render requests.");
+        if (!thumbnailRequestValid) blocking.Add("thumbnail_story_scene request must be marked thumbnail-only.");
+        if (!closingReuseRequestValid) blocking.Add("best_night_wide_closing_reuse request must resolve to one unique request ID.");
+        if (!requestPathsValid) blocking.Add("All scene render requests must include output, metadata, and debug output paths.");
         if (!timelineValid) blocking.Add("Long-form timeline must cover 0-110 without gaps or overlaps.");
         var thumbnailPlanValid = !string.IsNullOrWhiteSpace(thumbnailPlan.ThumbnailRequestId) && !string.IsNullOrWhiteSpace(thumbnailPlan.PlannedOutputPath);
-        var validation = new RenderPreparationValidation(blocking.Count == 0, sceneRequests.Count == requiredSceneCodes.Length, assetItems.Count > 0, stellariumJobs.Count > 0, overlayJobs.Count > 0, timelineValid, thumbnailPlanValid, workingDirValid, blocking.Count == 0, false, blocking, []);
+        var validation = new RenderPreparationValidation(blocking.Count == 0, sceneRequestCountValid, assetItems.Count > 0, stellariumJobs.Count > 0, overlayJobs.Count > 0, timelineValid, thumbnailPlanValid, workingDirValid, blocking.Count == 0, false, blocking, []);
         var freezeStatus = new RenderPreparationFreezeStatus(true, true, ["working_directory_plan", "scene_render_requests", "asset_resolution_plan", "stellarium_render_plan", "overlay_render_plan", "timeline_render_plan", "thumbnail_render_plan", "render_preparation_validation"], [], []);
 
         return new RenderPreparationPackage($"prep-{execution.ExecutionId}", dirs, sceneRequests, new AssetResolutionPlan(assetItems), new StellariumRenderPlan(stellariumJobs), new OverlayRenderPlan(overlayJobs), new TimelineRenderPlan(110, longForm.Count, longForm.Count - 1, longForm.Count(s => s.HasOverlap), 100, longForm), thumbnailPlan, validation, freezeStatus);
