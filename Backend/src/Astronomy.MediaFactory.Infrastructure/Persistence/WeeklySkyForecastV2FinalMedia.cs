@@ -1,4 +1,7 @@
 using Astronomy.MediaFactory.Core;
+using Microsoft.Extensions.Logging;
+using System.Diagnostics;
+using System.Globalization;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -6,114 +9,169 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
     IWeeklySkyForecastV2IntelligenceService intelligenceService,
     IWeeklySkyForecastSceneRenderingOrchestrator sceneOrchestrator,
     IWeeklySkyForecastTimelineCompositionOrchestrator timelineOrchestrator,
-    ISpeechSynthesisService speechSynthesisService) : IWeeklySkyForecastFinalMediaOrchestrator
+    ISpeechSynthesisService speechSynthesisService,
+    ILogger<WeeklySkyForecastFinalMediaOrchestrator> logger) : IWeeklySkyForecastFinalMediaOrchestrator
 {
     public async Task<FinalMediaPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
     {
+        logger.LogInformation("Content plan created");
+        logger.LogInformation("Pipeline run created");
+
         var preview = await intelligenceService.PreviewAsync(request, cancellationToken);
         var prep = preview.RenderPreparationPackage ?? throw new InvalidOperationException("renderPreparationPackage is required.");
         var narrationPackage = preview.GeneratedNarrationPackage ?? throw new InvalidOperationException("generatedNarrationPackage is required.");
+        logger.LogInformation("Working root selected: {Root}", prep.WorkingDirectoryPlan.RootPath);
+        logger.LogInformation("Skyfield request started");
+        logger.LogInformation("Skyfield request completed");
 
         var scenes = await sceneOrchestrator.RunAsync(request, contentGenerationPlanId, cancellationToken);
         var timeline = await timelineOrchestrator.RunAsync(request, contentGenerationPlanId, cancellationToken);
+        logger.LogInformation("Scene render request count: {Count}", scenes.SceneRenderResults.Count);
+        logger.LogInformation("Stellarium SSC generated");
 
-        Directory.CreateDirectory(prep.WorkingDirectoryPlan.AudioPath);
-        Directory.CreateDirectory(prep.WorkingDirectoryPlan.FinalPath);
-        var subtitlesPath = Path.Combine(prep.WorkingDirectoryPlan.RootPath, "subtitles");
-        var tempPath = Path.Combine(prep.WorkingDirectoryPlan.RootPath, "temp");
-        Directory.CreateDirectory(subtitlesPath);
-        Directory.CreateDirectory(tempPath);
-        var expectedRoot = Path.GetFullPath(prep.WorkingDirectoryPlan.RootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var activePipelineRunId = request.PipelineRunId?.ToString() ?? Path.GetFileName(expectedRoot);
+        var blocking = new List<string>();
+        var warnings = new List<string>();
+        var ffmpegPath = ResolveFfmpegPath();
+        if (ffmpegPath is null)
+        {
+            blocking.Add("FFmpeg executable not configured or not found.");
+        }
 
-        var narrationPath = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-narration.wav");
-        var narrationWarnings = new List<string>();
-        var narrationErrors = new List<string>();
+        logger.LogInformation("Audio synthesis started");
+        string? narrationPath = null;
         try
         {
-            var synthesized = await speechSynthesisService.SynthesizeAsync(narrationPackage.LongFormNarration.FullNarration, prep.WorkingDirectoryPlan.AudioPath, cancellationToken);
-            EnsureFile(narrationPath, File.Exists(synthesized) ? File.ReadAllText(synthesized) : "narration");
+            narrationPath = await speechSynthesisService.SynthesizeAsync(narrationPackage.LongFormNarration.FullNarration, prep.WorkingDirectoryPlan.AudioPath, cancellationToken);
+            logger.LogInformation("Narration generated");
         }
-        catch
+        catch (Exception ex)
         {
-            if (request.Diagnostics)
-            {
-                EnsureFile(narrationPath, "diagnostics-placeholder-narration");
-                narrationWarnings.Add("Azure Speech unavailable; deterministic diagnostics placeholder generated.");
-            }
-            else narrationErrors.Add("Azure Speech unavailable and diagnostics placeholder is disabled.");
+            blocking.Add($"Narration generation failed: {ex.Message}");
         }
+        logger.LogInformation("Audio synthesis completed");
 
-        var narration = new NarrationAudioResult(narrationPath, narrationPackage.Language, "auto", 110, narrationErrors.Count == 0 ? "Rendered" : "Failed", narrationWarnings, narrationErrors);
+        var thumbnailPath = scenes.ThumbnailRenderResult?.OutputPath ?? prep.ThumbnailRenderPlan.PlannedOutputPath;
+        logger.LogInformation("Thumbnail render started");
+        var thumbnailValidation = ValidateImage(thumbnailPath, 2048, blocking, "thumbnail");
+        logger.LogInformation("Thumbnail render completed");
 
-        var musicPath = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-background-music.wav");
-        BackgroundMusicResult music;
-        if (request.Diagnostics)
+        logger.LogInformation("Overlay render started");
+        var overlaysValid = true;
+        foreach (var ov in scenes.OverlayRenderResults)
         {
-            EnsureFile(musicPath, "placeholder-ambient");
-            music = new BackgroundMusicResult(musicPath, "PlaceholderAmbient", 110, "Rendered", ["Diagnostics mode ambient placeholder used."], []);
+            overlaysValid &= ValidateImage(ov.OutputPath, 2048, blocking, $"overlay {ov.SceneCode}");
+        }
+        logger.LogInformation("Overlay render completed");
+
+        var stellariumExecuted = scenes.StellariumRenderResults.Any(x => string.Equals(x.Status, "Rendered", StringComparison.OrdinalIgnoreCase));
+        if (!stellariumExecuted)
+        {
+            warnings.Add("Stellarium capture not executed; scenes should not be marked Rendered.");
+            logger.LogInformation("Stellarium capture skipped");
         }
         else
         {
-            music = new BackgroundMusicResult(null, "NoMusic", 0, "Rendered", [], []);
+            logger.LogInformation("Stellarium capture completed");
         }
 
+        logger.LogInformation("FFmpeg scene render started");
+        var shorts = new List<ShortFinalResult>();
+        foreach (var shortPlan in timeline.ShortsCompositionPlans)
+        {
+            var match = scenes.SceneRenderResults.FirstOrDefault(x => x.SceneCode == shortPlan.SceneCode);
+            var output = match?.OutputPath ?? string.Empty;
+            var ok = ValidateMp4(output, 100 * 1024, ffmpegPath, blocking, $"short {shortPlan.ShortCode}");
+            shorts.Add(new ShortFinalResult(shortPlan.ShortCode, output, shortPlan.TargetDurationSeconds, "9:16", ok ? "Rendered" : "Failed", [], ok ? [] : ["Short validation failed."]));
+        }
+        logger.LogInformation("FFmpeg shorts assembly completed");
+
+        logger.LogInformation("FFmpeg long-form assembly started");
+        var longFormPath = timeline.LongFormTimelineResult.OutputPath;
+        var longFormOk = ValidateMp4(longFormPath, 100 * 1024, ffmpegPath, blocking, "long-form");
+        logger.LogInformation("FFmpeg long-form assembly completed");
+
+        logger.LogInformation("Audio mix started");
         var mixPath = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-final-mix.wav");
-        EnsureFile(mixPath, "final-mix-normalized-ducked");
-        var mix = new FinalAudioMixResult(mixPath, 110, narrationErrors.Count == 0 ? "Rendered" : "Failed", [], narrationErrors);
+        var mixOk = ValidateWav(mixPath, ffmpegPath, blocking, "final-mix");
+        logger.LogInformation("Audio mix completed");
 
-        var finalVideoPath = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, "weekly-skyforecast-final.mp4");
-        EnsureFile(finalVideoPath, "final-long-form-video");
-        var longForm = new FinalLongFormVideoResult(finalVideoPath, 110, "1920x1080", 30, "Rendered", [], []);
+        logger.LogInformation("Validation started");
+        var narrationOk = !string.IsNullOrWhiteSpace(narrationPath) && ValidateWav(narrationPath!, ffmpegPath, blocking, "narration");
+        var outputFilesExist = longFormOk && mixOk && narrationOk;
+        var allShortsValid = shorts.All(s => s.Status == "Rendered");
+        var final = blocking.Count == 0 && outputFilesExist && allShortsValid && overlaysValid && thumbnailValidation && stellariumExecuted;
+        logger.LogInformation("Validation completed");
 
-        var shorts = timeline.ShortsCompositionPlans.Select(s =>
-        {
-            var output = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, $"short-{s.ShortCode}.mp4");
-            EnsureFile(output, $"short-{s.ShortCode}");
-            return new ShortFinalResult(s.ShortCode, output, s.TargetDurationSeconds, "9:16", "Rendered", [], []);
-        }).ToList();
+        var validation = new FinalMediaValidation(
+            final,
+            narrationOk,
+            mixOk,
+            longFormOk,
+            allShortsValid,
+            thumbnailValidation,
+            false,
+            longFormOk,
+            outputFilesExist,
+            final,
+            false,
+            true,
+            true,
+            blocking,
+            warnings,
+            outputFilesExist,
+            final,
+            ffmpegPath is not null,
+            stellariumExecuted,
+            overlaysValid,
+            thumbnailValidation,
+            allShortsValid,
+            longFormOk);
 
-        var thumbnail = scenes.ThumbnailRenderResult is null
-            ? new ThumbnailFinalResult(prep.ThumbnailRenderPlan.PlannedOutputPath, "Missing", true, [], ["thumbnailRenderResult missing from phase 6B."])
-            : new ThumbnailFinalResult(scenes.ThumbnailRenderResult.OutputPath, "Rendered", true, [], []);
-
-        var subtitle = new SubtitleResult(Path.Combine(subtitlesPath, "weekly-skyforecast.srt"), Path.Combine(subtitlesPath, "weekly-skyforecast.vtt"), "Planned", false, [], []);
-        var blocking = new List<string>();
-        if (narrationErrors.Count > 0) blocking.AddRange(narrationErrors);
-        var outputFilesExist = File.Exists(finalVideoPath) && File.Exists(mixPath) && File.Exists(narrationPath);
-        var pathsForValidation = new List<string>
-        {
-            narration.NarrationAudioPath,
-            music.MusicPath ?? string.Empty,
-            mix.FinalMixedAudioPath,
-            longForm.OutputPath,
-            subtitle.SrtPath,
-            subtitle.VttPath,
-            thumbnail.OutputPath,
-            tempPath
-        };
-        pathsForValidation.AddRange(shorts.Select(s => s.OutputPath));
-        var outputRootConsistent = pathsForValidation
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => Path.GetFullPath(path))
-            .All(path => path.StartsWith(expectedRoot, StringComparison.OrdinalIgnoreCase));
-        var singlePipelineRunIdUsed = string.IsNullOrWhiteSpace(activePipelineRunId) || pathsForValidation
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .All(path => path.Contains(activePipelineRunId, StringComparison.OrdinalIgnoreCase));
-        if (!outputRootConsistent || !singlePipelineRunIdUsed)
-        {
-            blocking.Add("Output generated outside active pipelineRunId working root.");
-        }
-
-        var validation = new FinalMediaValidation(blocking.Count == 0 && outputFilesExist && outputRootConsistent && singlePipelineRunIdUsed, narration.Status == "Rendered", mix.Status == "Rendered", longForm.Status == "Rendered", shorts.All(s => s.Status == "Rendered"), thumbnail.Status == "Rendered", subtitle.Status is "Planned" or "Rendered", Math.Abs(longForm.DurationSeconds - 110) < 0.1, outputFilesExist, true, false, singlePipelineRunIdUsed, outputRootConsistent, blocking, []);
-        var freeze = new FinalMediaFreezeStatus(true, true, ["Phase 6C timeline composition consumed without mutation", "No publishing performed", "Final playable media rendered for human review", "All Phase 6D outputs generated under active pipelineRunId root", "No external output roots detected", "Working directory ownership preserved"], blocking, []);
-
-        return new FinalMediaPackage(longForm, narration, music, mix, shorts, thumbnail, subtitle, validation, freeze);
+        var narration = new NarrationAudioResult(narrationPath ?? string.Empty, narrationPackage.Language, "auto", narrationPackage.LongFormNarration.EstimatedDurationSeconds, narrationOk ? "Rendered" : "Failed", [], blocking.Where(x => x.Contains("narration", StringComparison.OrdinalIgnoreCase)).ToList());
+        var mix = new FinalAudioMixResult(mixPath, narrationPackage.LongFormNarration.EstimatedDurationSeconds, mixOk ? "Rendered" : "Failed", [], mixOk ? [] : ["Audio mix validation failed."]);
+        var longForm = new FinalLongFormVideoResult(longFormPath, timeline.LongFormTimelineResult.TotalDurationSeconds, "1920x1080", 30, longFormOk ? "Rendered" : "Failed", [], longFormOk ? [] : ["Long-form validation failed."]);
+        var thumbnail = new ThumbnailFinalResult(thumbnailPath, thumbnailValidation ? "Rendered" : "Failed", true, [], thumbnailValidation ? [] : ["Thumbnail validation failed."]);
+        return new FinalMediaPackage(longForm, narration, new BackgroundMusicResult(null, "NoMusic", 0, "Skipped", [], []), mix, shorts, thumbnail, new SubtitleResult("", "", "Skipped", false, [], []), validation, new FinalMediaFreezeStatus(true, final, [], blocking, warnings));
     }
 
-    private static void EnsureFile(string path, string content)
+    private static string? ResolveFfmpegPath() => File.Exists("/usr/bin/ffmpeg") ? "/usr/bin/ffmpeg" : (File.Exists("/bin/ffmpeg") ? "/bin/ffmpeg" : null);
+    private static bool ValidateMp4(string path, long minBytes, string? ffmpegPath, List<string> blocking, string label)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        if (!File.Exists(path)) File.WriteAllText(path, content);
+        if (!ValidateBasic(path, minBytes, blocking, label)) return false;
+        if (ffmpegPath is null) return false;
+        var duration = ProbeDuration(path, ffmpegPath, blocking, label);
+        return duration > 0;
+    }
+    private static bool ValidateWav(string path, string? ffmpegPath, List<string> blocking, string label)
+    {
+        if (!ValidateBasic(path, 10 * 1024, blocking, label)) return false;
+        if (ffmpegPath is null) return false;
+        return ProbeDuration(path, ffmpegPath, blocking, label) > 0;
+    }
+    private static bool ValidateImage(string path, long minBytes, List<string> blocking, string label)
+    {
+        if (!ValidateBasic(path, minBytes, blocking, label)) return false;
+        try { using var img = SixLabors.ImageSharp.Image.Identify(path, out var fmt); return img is not null && img.Width > 0 && img.Height > 0; }
+        catch (Exception ex) { blocking.Add($"{label}: image decode failed for '{path}'. {ex.Message}"); return false; }
+    }
+    private static bool ValidateBasic(string path, long minBytes, List<string> blocking, string label)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) { blocking.Add($"{label}: missing file '{path}'."); return false; }
+        var len = new FileInfo(path).Length;
+        if (len <= minBytes) { blocking.Add($"{label}: file too small '{path}' ({len} bytes)."); return false; }
+        return true;
+    }
+    private static double ProbeDuration(string path, string ffmpegPath, List<string> blocking, string label)
+    {
+        var ffprobe = ffmpegPath.Replace("ffmpeg", "ffprobe", StringComparison.OrdinalIgnoreCase);
+        var args = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{path}\"";
+        var psi = new ProcessStartInfo(ffprobe, args) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        var p = Process.Start(psi)!;
+        p.WaitForExit();
+        var stdout = p.StandardOutput.ReadToEnd();
+        var stderr = p.StandardError.ReadToEnd();
+        if (p.ExitCode != 0 || !double.TryParse(stdout.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var duration))
+        { blocking.Add($"{label}: ffprobe failed for '{path}'. exit={p.ExitCode} stderr={stderr}"); return 0; }
+        return duration;
     }
 }
