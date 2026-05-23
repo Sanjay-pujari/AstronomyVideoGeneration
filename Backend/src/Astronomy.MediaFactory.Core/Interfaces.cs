@@ -1397,13 +1397,13 @@ public sealed record WeeklyRenderExecutionPackage(
     ThumbnailExecutionContract ThumbnailExecutionContract,
     IReadOnlyList<string> ExecutionWarnings);
 public sealed record WeeklyRenderExecutionScene(string SceneCode, int SceneOrder, string RendererType, string VisualSourceType, string SceneType, int DurationSeconds, int StartSecond, int EndSecond, IReadOnlyList<string> NarrationSegmentCodes, DateOnly TargetDate, string HumanTimeWindow, DateTime? TechnicalBestTimeUtc, IReadOnlyList<string> InputContracts, IReadOnlyList<string> OutputContract, int ExecutionPriority, string ReusePolicy);
-public sealed record RenderSourceDecision(string SceneCode, string SelectedSourceType, string Reason, IReadOnlyList<string> FallbackSourceTypes, bool RequiresAssetResolution, bool RequiresStellarium, bool RequiresOverlayComposite, bool CanRenderWithoutStellarium);
+public sealed record RenderSourceDecision(string SceneCode, string SelectedSourceType, string DecisionReason, IReadOnlyList<string> FallbackSourceTypes, bool RequiresAssetResolution, bool RequiresStellarium, bool RequiresOverlayComposite, bool CanRenderWithoutStellarium);
 public sealed record AssetResolutionDirective(string SceneCode, IReadOnlyList<string> RequiredAssets, IReadOnlyList<string> OptionalAssets, string FallbackPolicy, bool AllowPublicImageFallback, bool AllowGeneratedImageFallback);
 public sealed record StellariumExecutionDirective(string SceneCode, string RegionId, DateOnly TargetDate, DateTime? TechnicalBestTimeUtc, string HumanTimeWindow, IReadOnlyList<string> ObjectCodes, int FieldOfViewDegrees, string CapturePurpose, string FutureSscScriptRole, bool Required);
-public sealed record OverlayExecutionDirective(string SceneCode, IReadOnlyList<string> Overlays, int StartSecond, int EndSecond, int ZIndex, string Animation, string SafeArea);
-public sealed record MotionExecutionDirective(string SceneCode, string CameraBehavior, string MotionStyle, double ZoomStart, double ZoomEnd, string PanDirection, bool ParallaxEnabled);
-public sealed record TransitionExecutionDirective(string FromSceneCode, string ToSceneCode, string TransitionType, int DurationSeconds);
-public sealed record ThumbnailExecutionContract(string RendererType, string VisualSourceType, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string CompositionDescription, string OverlayText, IReadOnlyList<string> RequiredAssets, string FallbackPolicy, string OutputRole);
+public sealed record OverlayExecutionDirective(string SceneCode, string OverlayType, string OverlayText, int StartSecond, int EndSecond, int ZIndex, string Animation, string SafeArea, string TypographyRole, int Priority);
+public sealed record MotionExecutionDirective(string SceneCode, string CameraBehavior, string MotionStyle, double ZoomStart, double ZoomEnd, string PanDirection, bool ParallaxEnabled, string EmotionalPurpose);
+public sealed record TransitionExecutionDirective(string FromSceneCode, string ToSceneCode, string TransitionType, int StartSecond, int DurationSeconds, string EmotionalPurpose);
+public sealed record ThumbnailExecutionContract(string RendererType, string VisualSourceType, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string FocalHierarchy, string EyeFlowDirection, string EmotionalFocus, string OverlaySafeArea, string MobileSafeFraming, string ShortsCropStrategy, IReadOnlyList<string> RequiredAssets, string FallbackPolicy, string OutputRole);
 public sealed record WeeklyCinematicChoreographyPackage(
     IReadOnlyList<WeeklyCinematicScene> Scenes,
     IReadOnlyList<WeeklySceneTimeline> SceneTimeline,
