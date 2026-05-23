@@ -844,7 +844,9 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
                 Path.Combine(dirs.DebugPath, $"{sceneCode}.debug.json"),
                 contract.RenderPriority,
                 sceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase),
-                true);
+                true,
+                sceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase),
+                sceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase) ? "best_night_wide_scene" : null);
         }).ToList();
 
         var thumbnailRequestId = "rr-thumb-thumbnail_story_scene";
