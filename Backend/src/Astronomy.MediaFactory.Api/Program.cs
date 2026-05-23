@@ -257,6 +257,20 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
+
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/compose-timeline", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastTimelineCompositionOrchestrator orchestrator, CancellationToken ct) =>
+{
+    var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(
+        request.ContentCategoryCode,
+        request.Language,
+        request.RegionId,
+        request.RegionName,
+        request.ScheduledUtc,
+        request.WeekStartDate,
+        request.Diagnostics);
+    var result = await orchestrator.RunAsync(intelligenceRequest, request.ContentGenerationPlanId, ct);
+    return Results.Ok(result);
+});
 app.MapPost("/api/content-planning/run-weekly-skyforecast-preparation", async (WeeklySkyForecastProductionRequest request, IWeeklySkyForecastPreparationOrchestrator orchestrator, CancellationToken ct) =>
 {
     try
