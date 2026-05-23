@@ -353,8 +353,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         image.Mutate(ctx =>
         {
             DrawCinematicBackground(ctx, width, height, scene.Contains("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) ? "sunset-horizon" : "deep-space-blue");
-            DrawStars(ctx, width, height, 220);
-            DrawNebulaCloud(ctx, width, height);
+            DrawDepthLayerStack(ctx, width, height);
 
             var placements = BuildDynamicPlacements(scene, width, height, objectAssets);
             for (var i = 0; i < placements.Count; i++)
@@ -445,8 +444,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         image.Mutate(ctx =>
         {
             DrawCinematicBackground(ctx, width, height, "nebula-purple");
-            DrawStars(ctx, width, height, 320);
-            DrawNebulaCloud(ctx, width, height);
+            DrawDepthLayerStack(ctx, width, height);
 
             var placements = BuildDynamicPlacements("hero_western_grouping_scene", width, height, objectAssets);
             for (var i = 0; i < placements.Count; i++)
@@ -462,6 +460,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             ctx.DrawText(new RichTextOptions(titleOptions) { Origin = new PointF(74, 62) }, headline, Color.Black.WithAlpha(0.88f));
             ctx.DrawText(titleOptions, headline, Color.White);
             ctx.DrawText(new RichTextOptions(subtitleFont) { Origin = new PointF(76, 145), WrappingLength = width - 150 }, subtitle, Color.ParseHex("#F9B24E"));
+            DrawThumbnailStoryBadges(ctx, width, height, subtitleFont);
         });
         await image.SaveAsJpegAsync(path, new JpegEncoder { Quality = 92 }, ct);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate thumbnail image '{path}'.");
@@ -535,6 +534,15 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         ctx.Fill(Color.ParseHex("#C25FFF").WithAlpha(0.07f), new EllipsePolygon(width * 0.7f, height * 0.36f, width * 0.27f));
         ctx.Fill(Color.ParseHex("#FF9B4D").WithAlpha(0.06f), new EllipsePolygon(width * 0.52f, height * 0.66f, width * 0.25f));
     }
+    private static void DrawDepthLayerStack(IImageProcessingContext ctx, int width, int height)
+    {
+        DrawStars(ctx, width, height, 300); // far background stars
+        DrawNebulaCloud(ctx, width, height); // nebula fog layer
+        ctx.Fill(Color.ParseHex("#7AB3FF").WithAlpha(0.06f), new EllipsePolygon(width * 0.45f, height * 0.15f, width * 0.52f)); // cinematic light rays proxy
+        ctx.Fill(Color.ParseHex("#B896FF").WithAlpha(0.05f), new EllipsePolygon(width * 0.8f, height * 0.25f, width * 0.28f)); // constellation haze
+        ctx.Fill(Color.ParseHex("#FFB26A").WithAlpha(0.04f), new EllipsePolygon(width * 0.18f, height * 0.75f, width * 0.35f)); // atmospheric glow
+        DrawStars(ctx, width, height, 60); // foreground dust particles
+    }
     private static void DrawVignette(IImageProcessingContext ctx, int width, int height)
     {
         ctx.Fill(Color.Black.WithAlpha(0.33f), new RectangleF(0, 0, width, 70));
@@ -550,11 +558,31 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         return count switch
         {
             1 => [new RectangleF(width * 0.15f, height * 0.08f, width * 0.72f, height * 0.82f)],
-            2 => [new RectangleF(width * 0.04f, height * 0.16f, width * 0.42f, height * 0.68f), new RectangleF(width * 0.53f, height * 0.20f, width * 0.34f, height * 0.58f)],
-            3 => [new RectangleF(-90, 100, 470, 470), new RectangleF(width - 470, 210, 290, 290), new RectangleF(width - 240, 140, 110, 110)],
-            4 => [new RectangleF(40, 170, 260, 260), new RectangleF(320, 120, 270, 270), new RectangleF(640, 130, 250, 250), new RectangleF(930, 190, 220, 220)],
-            _ => Enumerable.Range(0, Math.Min(6, count)).Select(i => new RectangleF(120 + (i % 3) * 320, 110 + (i / 3) * 280, 240, 240)).ToList()
+            2 => [new RectangleF(-100, height * 0.10f, width * 0.52f, height * 0.78f), new RectangleF(width * 0.58f, height * 0.28f, width * 0.30f, height * 0.50f)],
+            3 => [new RectangleF(-120, 80, 560, 560), new RectangleF(width - 500, 230, 320, 320), new RectangleF(width - 210, 140, 130, 130)],
+            4 => [new RectangleF(-90, 110, 460, 460), new RectangleF(width * 0.46f, 250, 280, 280), new RectangleF(width * 0.66f, 140, 210, 210), new RectangleF(width * 0.79f, 300, 150, 150)],
+            _ => Enumerable.Range(0, Math.Min(6, count)).Select(i => new RectangleF(80 + (i * 150), 90 + ((i % 2 == 0) ? i * 28 : i * 44), Math.Max(120, 380 - (i * 35)), Math.Max(120, 380 - (i * 35)))).ToList()
         };
+    }
+    private static void DrawThumbnailStoryBadges(IImageProcessingContext ctx, int width, int height, Font font)
+    {
+        var badges = new[]
+        {
+            ("BEST NIGHT", "#F9B24E"),
+            ("Moon meets Jupiter", "#8FD2FF"),
+            ("Rare Evening Alignment", "#C5A3FF"),
+            ("Visible This Week", "#FFFFFF"),
+            ("Look West After Sunset", "#9AE7C8")
+        };
+        var y = height - 220f;
+        foreach (var (text, color) in badges)
+        {
+            var panel = new RectangleF(width - 470, y, 410, 34);
+            ctx.Fill(Color.ParseHex("#050911").WithAlpha(0.68f), panel);
+            ctx.Draw(Color.ParseHex(color).WithAlpha(0.7f), 1.2f, panel);
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(panel.X + 10, panel.Y + 7), WrappingLength = panel.Width - 16 }, text, Color.ParseHex(color));
+            y += 38;
+        }
     }
     private static CinematicVisualPlan BuildCinematicVisualPlan(SceneRenderRequest req, CelestialObjectVisualPlan visualPlan) => new(
         req.SceneCode, req.SceneCode, visualPlan.RequiredObjects, visualPlan.SelectedAssets, "EpicReveal", visualPlan.VisualLayoutType,
