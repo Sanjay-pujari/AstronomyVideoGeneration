@@ -478,6 +478,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRegionResolutionService, RegionResolutionService>();
         services.AddScoped<IDailySkyGuideContextBuilder, DailySkyGuideContextBuilder>();
         services.AddScoped<IWeeklySkyForecastContextBuilder, WeeklySkyForecastContextBuilder>();
+        services.AddScoped<IWeeklySkyForecastContextBuilderV2, WeeklySkyForecastContextBuilder>();
         services.AddScoped<IWeeklySkyForecastSegmentPlanner, WeeklySkyForecastSegmentPlanner>();
         services.AddScoped<IWeeklySkyForecastSscScenePlanner, WeeklySkyForecastSscScenePlanner>();
         services.AddScoped<ICategoryOutputPathResolver, CategoryOutputPathResolver>();
