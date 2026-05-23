@@ -97,10 +97,13 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
         var hasLegacyClosingReuseSegment = segmentResults.Any(x => x.SceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.SourceSceneOutputPath));
         var closingSourceExistsInPipeline = closingSegment is not null && File.Exists(closingSegment.SourceSceneOutputPath)
             && Path.GetFullPath(closingSegment.SourceSceneOutputPath).StartsWith(expectedRoot, StringComparison.OrdinalIgnoreCase);
-        var duplicateClosingReuseRenderCreated = prep.SceneRenderRequests.Any(x =>
+        var hasReuseEntryInRenderingPackage = sceneRendering.SceneRenderResults.Any(x =>
             x.SceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase)
-            || (x.IsReuseScene && x.ReuseSourceSceneCode?.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) == true && !x.RequestId.Equals("rr-02-best_night_wide_scene", StringComparison.OrdinalIgnoreCase)));
-        var reuseResolved = (hasExpectedClosingSegment && closingSourceExistsInPipeline && !duplicateClosingReuseRenderCreated) || hasLegacyClosingReuseSegment;
+            && x.ReusedFromSceneCode?.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) == true);
+        var duplicateClosingReuseRenderCreated = sceneRendering.SceneRenderResults.Any(x =>
+            x.SceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(x.ReusedFromSceneCode));
+        var reuseResolved = (hasExpectedClosingSegment && closingSourceExistsInPipeline && hasReuseEntryInRenderingPackage && !duplicateClosingReuseRenderCreated) || hasLegacyClosingReuseSegment;
 
         var validation = new TimelineCompositionValidation(
             blocking.Count == 0 && totalDuration == 110 && targetDuration == 110 && noGaps && singlePipelineRunIdUsed,
@@ -118,7 +121,9 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
             blocking,
             []);
 
-        var freeze = new TimelineCompositionFreezeStatus(true, true, ["Phase 6A frozen inputs honored", "Phase 6B rendered outputs consumed", "Deterministic timeline composition completed", "No publishing performed"], [], []);
+        var verifiedChecks = new List<string> { "Phase 6A frozen inputs honored", "Phase 6B rendered outputs consumed", "Deterministic timeline composition completed", "No publishing performed" };
+        if (reuseResolved) verifiedChecks.Add("Reuse scene resolved using rendered best_night_wide_scene output");
+        var freeze = new TimelineCompositionFreezeStatus(true, true, verifiedChecks, [], []);
 
         var longForm = new LongFormTimelineResult(draftPath, totalDuration, validation.IsValid ? "Composed" : "Failed", thumbnailExcluded, reuseResolved, [], blocking);
         return new TimelineCompositionPackage(longForm, segmentResults, transitionResults, narrationSync, audioPlan, shorts, validation, freeze);
