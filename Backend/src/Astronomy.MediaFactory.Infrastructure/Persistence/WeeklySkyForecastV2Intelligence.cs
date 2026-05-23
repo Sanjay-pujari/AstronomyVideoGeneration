@@ -799,7 +799,9 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
         var sceneRequests = requiredSceneCodes.Select((sceneCode, i) =>
         {
             var timelineItem = sceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase)
-                ? execution.ExecutionTimeline.Last(t => t.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) && (t.NarrationSegmentCodes ?? []).Contains("ClosingCTA", StringComparer.OrdinalIgnoreCase))
+                ? execution.ExecutionTimeline
+                    .LastOrDefault(t => t.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) && (t.NarrationSegmentCodes ?? []).Contains("ClosingCTA", StringComparer.OrdinalIgnoreCase))
+                    ?? execution.ExecutionTimeline.Last(t => t.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase))
                 : execution.ExecutionTimeline.First(t => t.SceneCode.Equals(sceneCode, StringComparison.OrdinalIgnoreCase));
             var canonicalSceneCode = timelineItem.SceneCode;
             var scene = execution.ExecutionScenes.First(s => s.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase));
