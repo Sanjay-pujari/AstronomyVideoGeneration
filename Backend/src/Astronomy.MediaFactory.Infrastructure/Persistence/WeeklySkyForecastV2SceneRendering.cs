@@ -363,6 +363,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             }
 
             DrawVignette(ctx, width, height);
+            DrawAtmosphericHaze(ctx, width, height);
             DrawSceneOverlay(ctx, scene, width, height, titleFont, bodyFont);
         });
         await image.SaveAsPngAsync(path, ct);
@@ -414,7 +415,6 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             ctx.DrawText(new RichTextOptions(body) { Origin = new PointF(panel.X + 24, panel.Y + 62), WrappingLength = panel.Width - 48 }, $"Viewing: {overlay.SafeArea} • {overlay.Animation}", Color.ParseHex("#8FD2FF"));
             ctx.DrawText(new RichTextOptions(body) { Origin = new PointF(panel.X + 24, panel.Y + 92), WrappingLength = panel.Width - 48 }, $"Time: {overlay.StartSecond}s–{overlay.EndSecond}s • Best Night", Color.ParseHex("#F9B24E"));
             ctx.DrawText(new RichTextOptions(body) { Origin = new PointF(panel.X + 24, panel.Y + 124), WrappingLength = panel.Width - 48 }, "CTA: Look up tonight and follow for tomorrow's targets.", Color.ParseHex("#D5F3FF"));
-            if (diagnosticsEnabled) ctx.Draw(Color.Lime.WithAlpha(0.55f), 2f, new RectangleF(width * 0.1f, height * 0.1f, width * 0.8f, height * 0.8f));
         });
         await image.SaveAsPngAsync(path, ct);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate overlay image '{path}'.");
@@ -454,6 +454,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             }
 
             DrawVignette(ctx, width, height);
+            DrawAtmosphericHaze(ctx, width, height);
             var headline = "WEEKLY SKY FORECAST";
             var subtitle = $"{(regionName ?? "UDAIPUR").ToUpperInvariant()} • MAY 23–30";
             var titleOptions = new RichTextOptions(titleFont) { Origin = new PointF(70, 58), WrappingLength = width - 140 };
@@ -470,16 +471,18 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
 
     private static void DrawCelestialBody(IImageProcessingContext ctx, string assetPath, RectangleF bounds, string fallbackLabel, Font font, string sceneCode)
     {
-        ctx.Fill(Color.White.WithAlpha(0.07f), new EllipsePolygon(bounds.X + bounds.Width / 2f, bounds.Y + bounds.Height / 2f, Math.Max(bounds.Width, bounds.Height) * 0.58f));
+        ctx.Fill(Color.ParseHex("#A4CFFF").WithAlpha(0.07f), new EllipsePolygon(bounds.X + bounds.Width / 2f, bounds.Y + bounds.Height / 2f, Math.Max(bounds.Width, bounds.Height) * 0.62f));
+        ctx.Fill(Color.ParseHex("#A46DFF").WithAlpha(0.04f), new EllipsePolygon(bounds.X + bounds.Width * 0.52f, bounds.Y + bounds.Height * 0.55f, Math.Max(bounds.Width, bounds.Height) * 0.78f));
         if (File.Exists(assetPath))
         {
             using var assetImage = Image.Load<Rgba32>(assetPath);
             MakeBlackTransparent(assetImage, BlackThresholdDefault);
             FeatherAlphaEdges(assetImage, 2);
-            ApplyOuterGlow(assetImage, Color.ParseHex("#85C9FF"), 9, 0.5f);
+            ApplyOuterGlow(assetImage, Color.ParseHex("#85C9FF"), 12, 0.52f);
             assetImage.Mutate(x => x.Resize(new ResizeOptions { Size = new Size((int)bounds.Width, (int)bounds.Height), Mode = ResizeMode.Crop }));
             ctx.DrawImage(assetImage, new Point((int)bounds.X, (int)bounds.Y), 1f);
-            ctx.Draw(Color.White.WithAlpha(0.4f), 2f, new EllipsePolygon(bounds.X + bounds.Width / 2f, bounds.Y + bounds.Height / 2f, bounds.Width / 2f));
+            ctx.Draw(Color.White.WithAlpha(0.38f), 1.4f, new EllipsePolygon(bounds.X + bounds.Width / 2f, bounds.Y + bounds.Height / 2f, bounds.Width / 2.02f));
+            ctx.DrawLines(Color.ParseHex("#F8BE73").WithAlpha(0.18f), 2f, [new PointF(bounds.X + bounds.Width * 0.22f, bounds.Y + bounds.Height * 0.27f), new PointF(bounds.X + bounds.Width * 0.68f, bounds.Y + bounds.Height * 0.10f)]);
             return;
         }
 
@@ -530,18 +533,29 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     }
     private static void DrawNebulaCloud(IImageProcessingContext ctx, int width, int height)
     {
-        ctx.Fill(Color.ParseHex("#5B6EFF").WithAlpha(0.1f), new EllipsePolygon(width * 0.28f, height * 0.3f, width * 0.32f));
-        ctx.Fill(Color.ParseHex("#C25FFF").WithAlpha(0.07f), new EllipsePolygon(width * 0.7f, height * 0.36f, width * 0.27f));
-        ctx.Fill(Color.ParseHex("#FF9B4D").WithAlpha(0.06f), new EllipsePolygon(width * 0.52f, height * 0.66f, width * 0.25f));
+        var bandTop = new RectangleF(0, height * 0.08f, width, height * 0.24f);
+        var bandMid = new RectangleF(0, height * 0.32f, width, height * 0.30f);
+        var bandBottom = new RectangleF(0, height * 0.62f, width, height * 0.28f);
+        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.02f, bandTop.Top), new PointF(width * 0.88f, bandTop.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#0E2348").WithAlpha(0.0f)), new ColorStop(0.48f, Color.ParseHex("#2B4C7A").WithAlpha(0.15f)), new ColorStop(1, Color.ParseHex("#6D3E8F").WithAlpha(0.09f))]), bandTop);
+        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.12f, bandMid.Top), new PointF(width * 0.94f, bandMid.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#17386A").WithAlpha(0.02f)), new ColorStop(0.55f, Color.ParseHex("#3A5B9E").WithAlpha(0.13f)), new ColorStop(1, Color.ParseHex("#7E479E").WithAlpha(0.10f))]), bandMid);
+        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.01f, bandBottom.Top), new PointF(width * 0.96f, bandBottom.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#0A1A36").WithAlpha(0.0f)), new ColorStop(0.56f, Color.ParseHex("#295E88").WithAlpha(0.11f)), new ColorStop(1, Color.ParseHex("#C6864E").WithAlpha(0.08f))]), bandBottom);
+        ctx.ApplyGaussianBlur(22f);
     }
     private static void DrawDepthLayerStack(IImageProcessingContext ctx, int width, int height)
     {
-        DrawStars(ctx, width, height, 300); // far background stars
-        DrawNebulaCloud(ctx, width, height); // nebula fog layer
-        ctx.Fill(Color.ParseHex("#7AB3FF").WithAlpha(0.06f), new EllipsePolygon(width * 0.45f, height * 0.15f, width * 0.52f)); // cinematic light rays proxy
-        ctx.Fill(Color.ParseHex("#B896FF").WithAlpha(0.05f), new EllipsePolygon(width * 0.8f, height * 0.25f, width * 0.28f)); // constellation haze
-        ctx.Fill(Color.ParseHex("#FFB26A").WithAlpha(0.04f), new EllipsePolygon(width * 0.18f, height * 0.75f, width * 0.35f)); // atmospheric glow
-        DrawStars(ctx, width, height, 60); // foreground dust particles
+        DrawStars(ctx, width, height, 420);
+        DrawNebulaCloud(ctx, width, height);
+        DrawStars(ctx, width, height, 180);
+        ctx.Fill(Color.ParseHex("#7AB3FF").WithAlpha(0.035f), new RectangleF(0, 0, width, height * 0.42f));
+        ctx.Fill(Color.ParseHex("#B896FF").WithAlpha(0.03f), new RectangleF(width * 0.28f, height * 0.18f, width * 0.62f, height * 0.48f));
+        ctx.Fill(Color.ParseHex("#FFB26A").WithAlpha(0.024f), new RectangleF(0, height * 0.55f, width * 0.56f, height * 0.45f));
+        DrawStars(ctx, width, height, 75);
+    }
+    private static void DrawAtmosphericHaze(IImageProcessingContext ctx, int width, int height)
+    {
+        var hazeBand = new RectangleF(0, height * 0.50f, width, height * 0.45f);
+        ctx.Fill(new LinearGradientBrush(new PointF(0, hazeBand.Top), new PointF(width, hazeBand.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#7CA6FF").WithAlpha(0.0f)), new ColorStop(0.6f, Color.ParseHex("#6CB9D8").WithAlpha(0.05f)), new ColorStop(1f, Color.ParseHex("#E1A35E").WithAlpha(0.08f))]), hazeBand);
+        ctx.ApplyGaussianBlur(12f);
     }
     private static void DrawVignette(IImageProcessingContext ctx, int width, int height)
     {
@@ -620,9 +634,9 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     private sealed record CinematicVisualPlan(string SceneCode, string ScenePurpose, IReadOnlyList<string> RequiredObjects, IReadOnlyList<string> SelectedAssets, string VisualMood, string LayoutType, string CameraMotion, string TransitionIn, string TransitionOut, IReadOnlyList<object> ObjectPlacements, IReadOnlyList<string> Effects, IReadOnlyList<object> OverlayMoments, double StartSecond, double EndSecond, double DurationSeconds);
     private static void DrawSceneOverlay(IImageProcessingContext ctx, string scene, int width, int height, Font titleFont, Font bodyFont)
     {
-        var panel = new RectangleF(55, height - 210, width - 110, 150);
-        ctx.Fill(Color.ParseHex("#050910").WithAlpha(0.52f), panel);
-        ctx.Draw(Color.White.WithAlpha(0.2f), 1.8f, panel);
+        var panel = new RectangleF(62, height - 160, width * 0.58f, 112);
+        ctx.Fill(Color.ParseHex("#050910").WithAlpha(0.35f), panel);
+        ctx.Draw(Color.White.WithAlpha(0.14f), 1.1f, panel);
         var title = scene switch
         {
             "hero_western_grouping_scene" => "Look west after sunset this week...",
@@ -631,8 +645,8 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             "viewing_tip_wide_scene" => "Bring binoculars and let your eyes adapt",
             _ => "Weekly Sky Forecast"
         };
-        ctx.DrawText(new RichTextOptions(titleFont) { Origin = new PointF(panel.X + 24, panel.Y + 20), WrappingLength = panel.Width - 40 }, title, Color.White);
-        ctx.DrawText(new RichTextOptions(bodyFont) { Origin = new PointF(panel.X + 24, panel.Y + 88), WrappingLength = panel.Width - 40 }, "Direction: West • Time: 19:30–22:00 • Objects: Moon, Jupiter, Venus", Color.ParseHex("#8FD2FF"));
+        ctx.DrawText(new RichTextOptions(titleFont) { Origin = new PointF(panel.X + 16, panel.Y + 14), WrappingLength = panel.Width - 28 }, title, Color.White.WithAlpha(0.95f));
+        ctx.DrawText(new RichTextOptions(bodyFont) { Origin = new PointF(panel.X + 16, panel.Y + 58), WrappingLength = panel.Width - 28 }, "BEST NIGHT • WESTERN SKY • LOOK UP TONIGHT", Color.ParseHex("#8FD2FF").WithAlpha(0.95f));
     }
 
 
