@@ -136,6 +136,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             CinematicChoreographyPackage: null,
             RenderExecutionPackage: null,
             PreviewStability: null,
+            Phase5FoundationStatus: null,
             RecommendedVisualStrategies: events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             Warnings: ctx.Warnings,
             StepResults: stepResults);
@@ -159,7 +160,8 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var renderExecutionPackage = WeeklySkyForecastV2RenderExecutionBuilder.Build(narrationPlan, hybridScenePlanPackage, cinematicChoreographyPackage, baseResponse.Region);
         var fullResponse = baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage };
         var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(fullResponse);
-        return fullResponse with { PreviewStability = previewStability };
+        var phase5 = WeeklySkyForecastV2PreviewStabilityValidator.BuildFoundationStatus(fullResponse with { PreviewStability = previewStability });
+        return fullResponse with { PreviewStability = previewStability, Phase5FoundationStatus = phase5 };
     }
 }
 
@@ -404,27 +406,27 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
         var stellarium = scenes.Where(s => s.SceneCode == "best_night_wide_scene").Select(s => new StellariumExecutionDirective(s.SceneCode, regionId, s.TargetDate, s.TechnicalBestTimeUtc, s.HumanTimeWindow, ["MOON", "JUPITER", "VENUS"], 90, "Best night wide confirmation", "weekly_best_night_reference", true)).ToList();
         var overlays = new List<OverlayExecutionDirective>
         {
-            new("hero_western_grouping_scene", "ObjectLabels", "Optional object labels", 0, 20, 20, "fade_in_soft", "title-safe", "LabelSmall", 5),
-            new("best_night_wide_scene", "DirectionArrow", "West arrow", 20, 48, 30, "fade_in_soft", "action-safe", "LabelMedium", 10),
-            new("best_night_wide_scene", "TimeAnnotation", "Time annotation", 22, 48, 30, "fade_in_soft", "action-safe", "LabelSmall", 9),
-            new("best_night_wide_scene", "ObjectLabels", "Object labels", 20, 48, 30, "fade_in_soft", "action-safe", "LabelSmall", 8),
-            new("viewing_tip_wide_scene", "FramingGuide", "Tripod / phone frame guide", 70, 90, 25, "gentle_fade", "action-safe", "GuideText", 7),
-            new("thumbnail_story_scene", "TitleText", "Venus, Jupiter and the Moon share the evening sky", 0, 6, 40, "static", "mobile-safe", "TitleBold", 10)
+            new("hero_western_grouping_scene", "ObjectLabels", "Optional object labels", 0, 20, 20, "fade_in_soft", "title-safe", "LabelSmall", 5, "ovl_hero_labels", false),
+            new("best_night_wide_scene", "DirectionArrow", "West arrow", 20, 48, 30, "fade_in_soft", "action-safe", "LabelMedium", 10, "ovl_best_night_west", true),
+            new("best_night_wide_scene", "TimeAnnotation", "Time annotation", 22, 48, 30, "fade_in_soft", "action-safe", "LabelSmall", 9, "ovl_best_night_time", true),
+            new("best_night_wide_scene", "ObjectLabels", "Object labels", 20, 48, 30, "fade_in_soft", "action-safe", "LabelSmall", 8, "ovl_best_night_labels", true),
+            new("viewing_tip_wide_scene", "FramingGuide", "Tripod / phone frame guide", 70, 90, 25, "gentle_fade", "action-safe", "GuideText", 7, "ovl_viewing_tip", true),
+            new("thumbnail_story_scene", "TitleText", "Venus, Jupiter and the Moon share the evening sky", 0, 6, 40, "static", "mobile-safe", "TitleBold", 10, "ovl_thumbnail_title", true)
         };
         var motions = scenes.Select(s => s.SceneCode switch
         {
-            "hero_western_grouping_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "ParallaxDepth", 1.0, 1.08, "right", true, "Awe through layered depth"),
-            "best_night_wide_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPan", "SlowPan", 1.0, 1.03, "right", false, "Calm orientation for best night"),
-            "moon_jupiter_hero_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "SlowPushIn", 1.0, 1.1, "center", false, "Intimate Moon/Jupiter emphasis"),
-            "viewing_tip_wide_scene" => new MotionExecutionDirective(s.SceneCode, "StaticHold", "StaticHold", 1.0, 1.01, "none", false, "Simple viewing guidance clarity"),
-            _ => new MotionExecutionDirective(s.SceneCode, "StaticComposite", "StaticComposite", 1.0, 1.0, "none", false, "Thumbnail composition lock")
+            "hero_western_grouping_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "ParallaxDepth", 1.0, 1.08, "right", true, "Awe through layered depth", "mot_hero"),
+            "best_night_wide_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPan", "SlowPan", 1.0, 1.03, "right", false, "Calm orientation for best night", "mot_best_night"),
+            "moon_jupiter_hero_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "SlowPushIn", 1.0, 1.1, "center", false, "Intimate Moon/Jupiter emphasis", "mot_moon_jupiter"),
+            "viewing_tip_wide_scene" => new MotionExecutionDirective(s.SceneCode, "StaticHold", "StaticHold", 1.0, 1.01, "none", false, "Simple viewing guidance clarity", "mot_viewing_tip"),
+            _ => new MotionExecutionDirective(s.SceneCode, "StaticComposite", "StaticComposite", 1.0, 1.0, "none", false, "Thumbnail composition lock", "mot_thumbnail")
         }).ToList();
         var transitions = new List<TransitionExecutionDirective>
         {
-            new("intro", scenes.First().SceneCode, "intro fade-in", 0, 2, "Open softly into the weekly sky story")
+            new("intro", scenes.First().SceneCode, "intro fade-in", 0, 2, "Open softly into the weekly sky story", "tr_intro")
         };
-        transitions.AddRange(hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro" && t.ToSceneCode != "outro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, scenes.FirstOrDefault(x => x.SceneCode == t.ToSceneCode)?.StartSecond ?? 0, t.DurationSeconds, "Cinematic continuity")));
-        transitions.Add(new TransitionExecutionDirective(scenes.Last().SceneCode, "outro", "soft fade-out / closing return", scenes.Last().EndSecond - 2, 2, "Warm close"));
+        transitions.AddRange(hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro" && t.ToSceneCode != "outro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, scenes.FirstOrDefault(x => x.SceneCode == t.ToSceneCode)?.StartSecond ?? 0, t.DurationSeconds, "Cinematic continuity", $"tr_{t.FromSceneCode}_to_{t.ToSceneCode}")));
+        transitions.Add(new TransitionExecutionDirective(scenes.Last().SceneCode, "outro", "soft fade-out / closing return", scenes.Last().EndSecond - 2, 2, "Warm close", "tr_outro"));
         var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon > Jupiter > Venus", "left-to-right", "Calm awe", "mobile-safe", "center weighted", "protect Moon and Jupiter in 9:16 crop", ["moon_hero_image", "jupiter_hero_image", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
         return new WeeklyRenderExecutionPackage(Guid.NewGuid().ToString("N"), scenes, timeline, decisions, assetDirectives, stellarium, overlays, motions, transitions, thumbnail, []);
     }
@@ -441,6 +443,21 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
 
 internal static class WeeklySkyForecastV2PreviewStabilityValidator
 {
+    public static WeeklyPhase5FoundationStatus BuildFoundationStatus(WeeklySkyForecastV2IntelligenceResponse response)
+    {
+        var checks = new List<string>();
+        var blocking = new List<string>();
+        if (response.EditorialStoryPackage.SecondaryEvents.All(x => !x.Title.Contains("continuous evening sky story", StringComparison.OrdinalIgnoreCase))) checks.Add("no old editorial leakage"); else blocking.Add("old editorial leakage detected");
+        if (response.NormalizedEditorialPackage is not null) checks.Add("normalized package is authoritative"); else blocking.Add("normalized package missing");
+        if (response.CinematicStoryBlueprint is not null && response.CinematicStoryBlueprint.SupportingStories.Count(s=>s.Title.Contains("grouping", StringComparison.OrdinalIgnoreCase))<=0) checks.Add("one hero grouping story only"); else blocking.Add("grouping leaked downstream");
+        if (response.RenderExecutionPackage is not null && response.RenderExecutionPackage.ExecutionScenes.All(s => s.TechnicalBestTimeUtc is null || DateOnly.FromDateTime(s.TechnicalBestTimeUtc.Value)==s.TargetDate)) checks.Add("no date/time mismatches"); else blocking.Add("date/time mismatch");
+        if (response.PreviewStability?.IsStable == true) checks.Add("previewStability.isStable=true"); else blocking.Add("preview unstable");
+        if (response.PreviewStability?.ReadyForRenderPreparation == true) checks.Add("readyForRenderPreparation=true"); else blocking.Add("not ready for render preparation");
+        if (response.PreviewStability?.ReadyForRendering == false) checks.Add("readyForRendering=false"); else blocking.Add("readyForRendering must be false in phase 5");
+        var frozen = blocking.Count == 0;
+        return new WeeklyPhase5FoundationStatus(frozen, frozen, blocking, response.PreviewStability?.Warnings ?? [], checks);
+    }
+
     private static readonly string[] ForbiddenStoryPhrases = ["evening sky lineup", "same viewing window grouping", "high-value weekly observation event", "weekly visibility momentum", "backup opportunities", "observation event", "grouping event", "practical planning value", "grouping story", "one continuous evening sky story"];
     public static WeeklyPreviewStabilityReport Validate(WeeklySkyForecastV2IntelligenceResponse response)
     {
