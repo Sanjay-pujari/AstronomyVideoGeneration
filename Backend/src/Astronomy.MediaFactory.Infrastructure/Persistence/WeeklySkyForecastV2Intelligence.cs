@@ -550,7 +550,7 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         if (response.PreviewStability?.ReadyForRenderPreparation == true) checks.Add("readyForRenderPreparation=true"); else blocking.Add("not ready for render preparation");
         if (response.PreviewStability?.ReadyForRendering == false) checks.Add("readyForRendering=false"); else blocking.Add("readyForRendering must be false in phase 5");
         var frozen = blocking.Count == 0;
-        return new WeeklyPhase5FoundationStatus(frozen, frozen, blocking, response.PreviewStability?.Warnings ?? [], checks);
+        return new WeeklyPhase5FoundationStatus(frozen, frozen, blocking, response.PreviewStability?.Warnings ?? Array.Empty<string>(), checks);
     }
 
     private static readonly string[] ForbiddenStoryPhrases = ["evening sky lineup", "same viewing window grouping", "high-value weekly observation event", "weekly visibility momentum", "backup opportunities", "observation event", "grouping event", "practical planning value", "grouping story", "one continuous evening sky story", "alternate window", "practical planning", "visibility and timing", "momentum through the week"];
@@ -571,7 +571,7 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         if (!timelineValidated) missing.Add("RenderExecutionPackage.ExecutionTimeline");
         if (!rendererContractsValidated) missing.Add("RenderExecutionPackage.RendererExecutionContracts");
         if (!thumbnailContractsValidated) missing.Add("RenderExecutionPackage.ThumbnailExecutionContract");
-        var blocking = missing.Count > 0 ? ["Execution contracts are incomplete."] : [];
+        var blocking = missing.Count > 0 ? new List<string> { "Execution contracts are incomplete." } : new List<string>();
         return new WeeklyExecutionValidationReport(overlaysValidated, transitionsValidated, timelineValidated, rendererContractsValidated, thumbnailContractsValidated, coverage, [], missing, blocking, []);
     }
     public static WeeklyPreviewStabilityReport Validate(WeeklySkyForecastV2IntelligenceResponse response)
