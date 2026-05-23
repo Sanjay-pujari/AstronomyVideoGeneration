@@ -787,25 +787,39 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
         var root = Path.GetFullPath(Path.Combine(workingRoot, categoryName, context.WeekStartDate.ToString("yyyy-MM-dd"), context.RegionId.ToLowerInvariant(), pipelineRunId.ToString("N")));
         var dirs = new RenderWorkingDirectoryPlan(root, Path.Combine(root, "scene-renders"), Path.Combine(root, "audio"), Path.Combine(root, "overlays"), Path.Combine(root, "thumbnails"), Path.Combine(root, "timeline"), Path.Combine(root, "final"), Path.Combine(root, "metadata"), Path.Combine(root, "debug"), Path.Combine(root, "stellarium"), Path.Combine(root, "assets"), "v2", "Rendering:WorkingDirectory");
 
-        var sceneRequests = execution.RendererExecutionContracts.Select((c, i) =>
+        var requiredSceneCodes = new[]
         {
-            var scene = execution.ExecutionScenes.First(s => s.SceneCode == c.SceneCode);
+            "hero_western_grouping_scene",
+            "best_night_wide_scene",
+            "moon_jupiter_hero_scene",
+            "viewing_tip_wide_scene",
+            "thumbnail_story_scene",
+            "best_night_wide_closing_reuse"
+        };
+        var sceneRequests = requiredSceneCodes.Select((sceneCode, i) =>
+        {
+            var timelineItem = sceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase)
+                ? execution.ExecutionTimeline.Last(t => t.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) && (t.NarrationSegmentCodes ?? []).Contains("ClosingCTA", StringComparer.OrdinalIgnoreCase))
+                : execution.ExecutionTimeline.First(t => t.SceneCode.Equals(sceneCode, StringComparison.OrdinalIgnoreCase));
+            var canonicalSceneCode = timelineItem.SceneCode;
+            var scene = execution.ExecutionScenes.First(s => s.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase));
+            var contract = execution.RendererExecutionContracts.First(c => c.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase));
             return new SceneRenderRequest(
-                $"rr-{i + 1:00}-{c.SceneCode}", c.SceneCode, c.RendererType, c.SelectedSourceType, scene.TargetDate, scene.TechnicalBestTimeUtc, scene.DurationSeconds,
-                scene.NarrationSegmentCodes,
-                c.RequiredInputs.Select(x => new SceneRenderRequestInput("contract", x, $"Required input {x}", true)).ToList(),
-                c.ExpectedOutputs.Select(x => new SceneRenderExpectedOutput("render", x, $"Expected output {x}")).ToList(),
-                hybrid.AssetNeeds.Where(a => a.RequiredForSceneCodes.Contains(c.SceneCode)).Select(a => a.AssetCode).Distinct().ToList(),
-                execution.MotionExecutionDirectives.FirstOrDefault(x => x.SceneCode == c.SceneCode),
-                execution.OverlayExecutionDirectives.Where(x => x.SceneCode == c.SceneCode).ToList(),
-                execution.TransitionExecutionDirectives.Where(x => x.FromSceneCode == c.SceneCode || x.ToSceneCode == c.SceneCode).ToList(),
-                c.FallbackPolicy,
-                Path.Combine(dirs.SceneRendersPath, $"{c.SceneCode}.mp4"),
-                Path.Combine(dirs.MetadataPath, $"{c.SceneCode}.metadata.json"),
-                Path.Combine(dirs.DebugPath, $"{c.SceneCode}.debug.json"),
-                c.RenderPriority,
-                false,
-                c.RendererDecisionLocked);
+                $"rr-{i + 1:00}-{sceneCode}", sceneCode, contract.RendererType, contract.SelectedSourceType, scene.TargetDate, scene.TechnicalBestTimeUtc, timelineItem.EndSecond - timelineItem.StartSecond,
+                timelineItem.NarrationSegmentCodes ?? [],
+                contract.RequiredInputs.Select(x => new SceneRenderRequestInput("contract", x, $"Required input {x}", true)).ToList(),
+                contract.ExpectedOutputs.Select(x => new SceneRenderExpectedOutput("render", x, $"Expected output {x}")).ToList(),
+                hybrid.AssetNeeds.Where(a => a.RequiredForSceneCodes.Contains(canonicalSceneCode)).Select(a => a.AssetCode).Distinct().ToList(),
+                execution.MotionExecutionDirectives.FirstOrDefault(x => x.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase)),
+                execution.OverlayExecutionDirectives.Where(x => x.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase)).ToList(),
+                execution.TransitionExecutionDirectives.Where(x => x.FromSceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase) || x.ToSceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase)).ToList(),
+                contract.FallbackPolicy,
+                Path.Combine(dirs.SceneRendersPath, $"{sceneCode}.mp4"),
+                Path.Combine(dirs.MetadataPath, $"{sceneCode}.metadata.json"),
+                Path.Combine(dirs.DebugPath, $"{sceneCode}.debug.json"),
+                contract.RenderPriority,
+                sceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase),
+                true);
         }).ToList();
 
         var thumbnailRequestId = "rr-thumb-thumbnail_story_scene";
@@ -834,7 +848,8 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
         var blocking = new List<string>();
         if (sceneRequests.Any(x => !x.RendererDecisionLocked)) blocking.Add("One or more scene render requests are not renderer decision locked.");
         if (!timelineValid) blocking.Add("Long-form timeline must cover 0-110 without gaps or overlaps.");
-        var validation = new RenderPreparationValidation(blocking.Count == 0, sceneRequests.Count > 0, assetItems.Count > 0, stellariumJobs.Count > 0, overlayJobs.Count > 0, timelineValid, true, workingDirValid, blocking.Count == 0, false, blocking, []);
+        var thumbnailPlanValid = !string.IsNullOrWhiteSpace(thumbnailPlan.ThumbnailRequestId) && !string.IsNullOrWhiteSpace(thumbnailPlan.PlannedOutputPath);
+        var validation = new RenderPreparationValidation(blocking.Count == 0, sceneRequests.Count == requiredSceneCodes.Length, assetItems.Count > 0, stellariumJobs.Count > 0, overlayJobs.Count > 0, timelineValid, thumbnailPlanValid, workingDirValid, blocking.Count == 0, false, blocking, []);
 
         return new RenderPreparationPackage($"prep-{execution.ExecutionId}", dirs, sceneRequests, new AssetResolutionPlan(assetItems), new StellariumRenderPlan(stellariumJobs), new OverlayRenderPlan(overlayJobs), new TimelineRenderPlan(110, longForm.Count, longForm.Count - 1, longForm.Count(s => s.HasOverlap), 100, longForm), thumbnailPlan, validation);
     }
