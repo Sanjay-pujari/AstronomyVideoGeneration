@@ -100,25 +100,45 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             primaryObjects,
             events.Select(e => e.PrimaryDate.ToString("yyyy-MM-dd")).Distinct().Take(6).ToList(),
             events.OrderByDescending(e => e.StoryScore).Take(3).Select(e => e.Title).ToList());
-        var baseResponse = new WeeklySkyForecastV2IntelligenceResponse(null, "WeeklySkyForecast", true, ctx.WeekStartDate, ctx.WeekEndDate, ctx.RegionId,
-            new WeeklySkyForecastV2SkyfieldSummary(ctx.DailyForecasts.Count, ctx.DailyForecasts.SelectMany(d => d.VisibleObjects).Count(v => v.Visible), ctx.WeeklyHighlights.Count, ctx.RecommendedNights.Count, ctx.BestPlanetOfWeek, ctx.BestMoonNight, ctx.BestPhotographyNight),
-            events,
-            arc,
-            null!,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
-            ctx.Warnings,
-            [new CategoryProductionStepResult("weekly_skyfield_context", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Context built", null, []), new CategoryProductionStepResult("event_intelligence", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Event intelligence generated", null, [])]);
+        var stepResults = new List<CategoryProductionStepResult>
+        {
+            new("weekly_skyfield_context", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Context built", null, []),
+            new("event_intelligence", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Event intelligence generated", null, [])
+        };
+
+        var baseResponse = new WeeklySkyForecastV2IntelligenceResponse(
+            ContentGenerationPlanId: null,
+            Category: "WeeklySkyForecast",
+            Success: true,
+            WeekStartDate: ctx.WeekStartDate,
+            WeekEndDate: ctx.WeekEndDate,
+            Region: ctx.RegionId,
+            SkyfieldSummary: new WeeklySkyForecastV2SkyfieldSummary(
+                ctx.DailyForecasts.Count,
+                ctx.DailyForecasts.SelectMany(d => d.VisibleObjects).Count(v => v.Visible),
+                ctx.WeeklyHighlights.Count,
+                ctx.RecommendedNights.Count,
+                ctx.BestPlanetOfWeek,
+                ctx.BestMoonNight,
+                ctx.BestPhotographyNight),
+            EventIntelligence: events,
+            WeeklyStoryArc: arc,
+            EditorialStoryPackage: null!,
+            CinematicStoryBlueprint: null,
+            NarrativeAbstractionPackage: null,
+            NarrationPlan: null,
+            GeneratedNarrationPackage: null,
+            NarrationQuality: null,
+            VisualRequirementPackage: null,
+            HybridScenePlanPackage: null,
+            NormalizedEditorialPackage: null,
+            SceneChoreographyPackage: null,
+            CinematicChoreographyPackage: null,
+            RenderExecutionPackage: null,
+            PreviewStability: null,
+            RecommendedVisualStrategies: events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
+            Warnings: ctx.Warnings,
+            StepResults: stepResults);
         var editorial = await editorialBuilder.BuildAsync(baseResponse, cancellationToken);
         var cinematic = await cinematicRefiner.RefineAsync(editorial, baseResponse with { EditorialStoryPackage = editorial }, cancellationToken);
         var narrative = await narrativeAbstractionBuilder.BuildAsync(cinematic, editorial, baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic }, cancellationToken);
