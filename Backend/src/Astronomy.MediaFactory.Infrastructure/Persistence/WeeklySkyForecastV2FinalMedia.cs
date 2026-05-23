@@ -132,6 +132,11 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         var narrationOk = narrationWavOk && narrationMp3Ok;
         var outputFilesExist = longFormOk && mixOk && narrationOk;
         var allShortsValid = shorts.All(s => s.Status == "Rendered");
+        var thumbnailContainsObjects = scenes.SceneRenderingValidation.ThumbnailContainsObjects;
+        var sceneVisualsContainObjects = scenes.SceneRenderingValidation.SceneVisualsContainObjects;
+        var visualAssetsResolved = scenes.SceneRenderingValidation.VisualAssetsResolved;
+        if (!thumbnailContainsObjects) blocking.Add("Thumbnail has no visual object assets.");
+        if (!sceneVisualsContainObjects) blocking.Add("Scene visuals did not resolve object imagery.");
         var final = blocking.Count == 0 && outputFilesExist && allShortsValid && overlaysValid && thumbnailValidation && stellariumExecuted;
         logger.LogInformation("Final validation completed");
 
@@ -157,7 +162,10 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             overlaysValid,
             thumbnailValidation,
             allShortsValid,
-            longFormOk);
+            longFormOk,
+            ThumbnailContainsObjects: thumbnailContainsObjects,
+            SceneVisualsContainObjects: sceneVisualsContainObjects,
+            VisualAssetsResolved: visualAssetsResolved);
 
         var narration = new NarrationAudioResult(narrationWavPath ?? string.Empty, narrationPackage.Language, "auto", narrationPackage.LongFormNarration.EstimatedDurationSeconds, narrationOk ? "Rendered" : "Failed", [], blocking.Where(x => x.Contains("narration", StringComparison.OrdinalIgnoreCase)).ToList());
         var mix = new FinalAudioMixResult(mixPath, narrationPackage.LongFormNarration.EstimatedDurationSeconds, mixOk ? "Rendered" : "Failed", [], mixOk ? [] : ["Audio mix validation failed."]);

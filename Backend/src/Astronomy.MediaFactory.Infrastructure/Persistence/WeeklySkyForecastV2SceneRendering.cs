@@ -19,6 +19,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
 {
     private static readonly TimeSpan SceneRenderTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan ImageCompositionTimeout = TimeSpan.FromSeconds(30);
+    private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
     public async Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
         => await RunAsync(new WeeklySkyForecastV2OrchestrationContext(
             ContentGenerationPlanId: contentGenerationPlanId ?? request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid(),
@@ -44,6 +45,8 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         var hybridResults = new List<HybridSceneCompositeResult>();
         var overlayResults = new List<OverlayRenderResult>();
 
+        var visualPlans = new List<CelestialObjectVisualPlan>();
+        var diagnosticsFallbackUsed = false;
         foreach (var req in prep.SceneRenderRequests)
         {
             var sceneStartedAt = DateTime.UtcNow;
@@ -54,8 +57,8 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             if (string.IsNullOrWhiteSpace(req.OutputPath)) requestErrors.Add("outputPath is required.");
             Directory.CreateDirectory(Path.GetDirectoryName(req.MetadataOutputPath)!);
             Directory.CreateDirectory(Path.GetDirectoryName(req.DebugOutputPath)!);
-            await File.WriteAllTextAsync(req.MetadataOutputPath, $"{req.SceneCode} metadata", cancellationToken);
-            await File.WriteAllTextAsync(req.DebugOutputPath, $"{req.SceneCode} debug", cancellationToken);
+            var visualPlan = ResolveVisualPlan(req, prep);
+            visualPlans.Add(visualPlan);
 
             if (IsReuseScene(req))
             {
@@ -72,10 +75,11 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
                 switch (req.RendererType)
                 {
                     case "StellariumSceneRenderer":
-                        await ExecuteStellariumSceneAsync(req, prep, requestWarnings, requestErrors, stellariumResults, sceneTimeoutCts.Token);
+                        await ExecuteStellariumSceneAsync(req, prep, requestWarnings, requestErrors, stellariumResults, visualPlan, sceneTimeoutCts.Token);
+                        diagnosticsFallbackUsed = true;
                         break;
                     case "CelestialAssetCompositor":
-                        await ExecuteCelestialAssetSceneAsync(req, prep, requestWarnings, requestErrors, assetResults, sceneTimeoutCts.Token);
+                        await ExecuteCelestialAssetSceneAsync(req, prep, requestWarnings, requestErrors, assetResults, visualPlan, sceneTimeoutCts.Token);
                         break;
                     case "HybridCompositor":
                         await ExecuteHybridSceneAsync(req, prep, requestWarnings, requestErrors, hybridResults, sceneTimeoutCts.Token);
@@ -105,6 +109,19 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             if (requestErrors.Count > 0) blocking.AddRange(requestErrors.Select(e => $"{req.SceneCode}: {e}"));
             var status = requestErrors.Count == 0 ? "Rendered" : "Failed";
             sceneResults.Add(new SceneRenderResult(req.RequestId, req.SceneCode, req.RendererType, req.OutputPath, status, requestWarnings, requestErrors));
+            await File.WriteAllTextAsync(req.MetadataOutputPath, $"{req.SceneCode} metadata", cancellationToken);
+            await File.WriteAllTextAsync(req.DebugOutputPath, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                req.SceneCode,
+                RequiredObjects = visualPlan.RequiredObjects,
+                SelectedAssetPaths = visualPlan.SelectedAssets,
+                MissingObjects = visualPlan.RequiredObjects.Except(visualPlan.SelectedAssets.Select(Path.GetFileNameWithoutExtension), StringComparer.OrdinalIgnoreCase),
+                visualPlan.VisualLayoutType,
+                BackgroundAssetPath = visualPlan.SelectedAssets.FirstOrDefault(),
+                visualPlan.FallbackUsed,
+                RenderedFramePath = Path.Combine(Path.GetDirectoryName(req.OutputPath)!, $"{Path.GetFileNameWithoutExtension(req.OutputPath)}.scene-frame.png"),
+                RenderedVideoPath = req.OutputPath
+            }), cancellationToken);
             logger.LogInformation("Completed scene render: {SceneCode}, status={Status}, elapsedMs={ElapsedMs}", req.SceneCode, status, (DateTime.UtcNow - sceneStartedAt).TotalMilliseconds);
         }
 
@@ -125,7 +142,10 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             thumbnail = new ThumbnailSceneRenderResult(prep.ThumbnailRenderPlan.ThumbnailRequestId, prep.ThumbnailRenderPlan.PlannedOutputPath, "Rendered", [], []);
         }
 
-        var valid = blocking.Count == 0;
+        var hasVisuals = visualPlans.All(v => v.SelectedAssets.Count > 0);
+        var thumbnailContainsObjects = thumbnail is not null && prep.ThumbnailRenderPlan.PrimaryObjects.Count > 0;
+        if (!thumbnailContainsObjects) blocking.Add("Thumbnail has no visual object assets.");
+        var valid = blocking.Count == 0 && hasVisuals;
         var validation = new SceneRenderingValidation(
             valid,
             sceneResults.Count == prep.SceneRenderRequests.Count,
@@ -136,6 +156,11 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             thumbnail is not null || string.IsNullOrWhiteSpace(prep.ThumbnailRenderPlan.ThumbnailRequestId),
             valid,
             false,
+            visualPlans.Any(v => v.SelectedAssets.Count > 0),
+            hasVisuals,
+            thumbnailContainsObjects,
+            !hasVisuals,
+            diagnosticsFallbackUsed,
             blocking,
             warnings);
         var freeze = new SceneRenderingFreezeStatus(true, ["Phase 6A frozen inputs honored", "No timeline composition performed", "No publishing performed"], [], warnings);
@@ -159,20 +184,20 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
     private static bool IsReuseScene(SceneRenderRequest req)
         => req.IsReuseScene || req.SceneCode.EndsWith("_reuse", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(req.ReuseSourceSceneCode);
 
-    private async Task ExecuteStellariumSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<StellariumSceneRenderResult> stellariumResults, CancellationToken ct)
+    private async Task ExecuteStellariumSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<StellariumSceneRenderResult> stellariumResults, CelestialObjectVisualPlan visualPlan, CancellationToken ct)
     {
         requestWarnings.Add("Stellarium capture not implemented; diagnostics fallback visual used.");
-        await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, ct);
+        await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, visualPlan.SelectedAssets, ct);
         var job = prep.StellariumRenderPlan.Jobs.FirstOrDefault(x => x.RequestId == req.RequestId || x.SceneCode == req.SceneCode);
         if (job is not null) stellariumResults.Add(new StellariumSceneRenderResult(job.JobId, req.SceneCode, req.RequestId, job.PlannedSscPath, req.OutputPath, "DiagnosticsFallbackVisual", req.DurationSeconds, requestWarnings, requestErrors));
     }
-    private async Task ExecuteCelestialAssetSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<CelestialAssetSceneRenderResult> assetResults, CancellationToken ct)
-    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, ct); assetResults.Add(new CelestialAssetSceneRenderResult(req.SceneCode, req.RequestId, req.RequiredAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
+    private async Task ExecuteCelestialAssetSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<CelestialAssetSceneRenderResult> assetResults, CelestialObjectVisualPlan visualPlan, CancellationToken ct)
+    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, visualPlan.SelectedAssets, ct); assetResults.Add(new CelestialAssetSceneRenderResult(req.SceneCode, req.RequestId, req.RequiredAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
     private async Task ExecuteHybridSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<HybridSceneCompositeResult> hybridResults, CancellationToken ct)
-    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, ct); hybridResults.Add(new HybridSceneCompositeResult(req.SceneCode, req.RequestId, ["fallback_visual"], req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
-    private async Task ExecuteOverlaySceneAsync(SceneRenderRequest req, List<string> requestWarnings, List<string> requestErrors, CancellationToken ct) => await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, ct);
+    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, [] , ct); hybridResults.Add(new HybridSceneCompositeResult(req.SceneCode, req.RequestId, ["fallback_visual"], req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
+    private async Task ExecuteOverlaySceneAsync(SceneRenderRequest req, List<string> requestWarnings, List<string> requestErrors, CancellationToken ct) => await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, [], ct);
     private async Task ExecuteThumbnailSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, CancellationToken ct) => await RenderThumbnailAsync(prep.ThumbnailRenderPlan.PlannedOutputPath, req.SceneCode, ct);
-    private async Task RenderSceneVideoAsync(string outputPath, string label, double duration, CancellationToken ct)
+    private async Task RenderSceneVideoAsync(string outputPath, string label, double duration, IReadOnlyList<string> objectAssets, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var o = renderingOptions.Value;
@@ -182,7 +207,7 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         using (var imageCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
             imageCts.CancelAfter(ImageCompositionTimeout);
-            await RenderSceneFrameAsync(framePath, label, o.VideoWidth, o.VideoHeight, imageCts.Token);
+            await RenderSceneFrameAsync(framePath, label, o.VideoWidth, o.VideoHeight, objectAssets, imageCts.Token);
         }
         logger.LogInformation("C# image composition completed");
         var args = $"-y -loop 1 -i \"{framePath}\" -t {Math.Max(1, duration):0.##} -r {Math.Max(1, o.FrameRate)} -c:v libx264 -pix_fmt yuv420p \"{outputPath}\"";
@@ -209,7 +234,7 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         await RenderThumbnailImageAsync(outputPath, label, 1280, 720, ct);
     }
 
-    private static async Task RenderSceneFrameAsync(string path, string label, int width, int height, CancellationToken ct)
+    private static async Task RenderSceneFrameAsync(string path, string label, int width, int height, IReadOnlyList<string> objectAssets, CancellationToken ct)
     {
         var font = ResolveFont(Math.Max(32f, width * 0.03f));
         using var image = new Image<Rgba32>(width, height, new Rgba32(7, 10, 25));
@@ -221,10 +246,33 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             var options = new RichTextOptions(font) { Origin = new PointF(40, 60), WrappingLength = width - 80 };
             ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(44, 64) }, text, Color.Black.WithAlpha(0.85f));
             ctx.DrawText(options, text, Color.White);
+            var cardY = height * 0.52f;
+            for (var i = 0; i < Math.Min(3, objectAssets.Count); i++)
+            {
+                var x = 80 + (i * 320);
+                ctx.Fill(Color.ParseHex("#1B264A").WithAlpha(0.82f), new RectangleF(x, cardY, 280, 220));
+                ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(x + 20, cardY + 85), WrappingLength = 240 }, Path.GetFileNameWithoutExtension(objectAssets[i]), Color.White);
+            }
         });
         await image.SaveAsPngAsync(path, ct);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate generated scene frame '{path}'.");
         if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid generated scene frame '{path}'.");
+    }
+    private static CelestialObjectVisualPlan ResolveVisualPlan(SceneRenderRequest req, RenderPreparationPackage prep)
+    {
+        var root = Directory.GetCurrentDirectory();
+        var candidateRoots = new[] { Path.Combine(root, "Backend", "src", "Astronomy.MediaFactory.Api", "assets", "celestial"), Path.Combine(root, "assets", "celestial") };
+        var requiredObjects = req.RequiredAssets.Count > 0 ? req.RequiredAssets : req.SceneCode.Split('_', StringSplitOptions.RemoveEmptyEntries).Where(s => s.Length > 2).Take(3).ToList();
+        var selected = new List<string>();
+        var warnings = new List<string>();
+        foreach (var obj in requiredObjects)
+        {
+            var aliases = new[] { obj, obj.Replace("_", "-"), obj.Replace("planet_", "") };
+            var found = candidateRoots.SelectMany(r => aliases.Select(a => Path.Combine(r, a.ToLowerInvariant()))).FirstOrDefault(Directory.Exists);
+            var asset = found is null ? null : Directory.GetFiles(found).FirstOrDefault(f => ImageExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase));
+            if (asset is null) warnings.Add($"No asset resolved for object '{obj}'."); else selected.Add(asset);
+        }
+        return new CelestialObjectVisualPlan(req.SceneCode, req.SceneCode, req.NarrationSegmentCodes, requiredObjects, requiredObjects, [], selected, requiredObjects.Count > 1 ? "SkyGroupingCollage" : "HeroObject", selected.Count == 0, selected.Count == 0 ? "No assets resolved, diagnostics fallback required." : null, warnings);
     }
 
     private static async Task RenderOverlayImageAsync(string path, string label, int width, int height, CancellationToken ct)
