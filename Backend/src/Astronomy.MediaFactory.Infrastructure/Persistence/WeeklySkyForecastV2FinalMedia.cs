@@ -60,7 +60,17 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         logger.LogInformation("Narration voice: {VoiceCode}", resolvedVoiceCode);
         logger.LogInformation("Narration output path: {Path}", narrationWavPath);
 
-        var narrationGenerated = await ExecuteNarrationSynthesisAsync(narrationText, prep.WorkingDirectoryPlan.AudioPath, narrationWavPath, ffmpegPath, orchestrationContext.Request.Diagnostics, speechSynthesisService, blocking, warnings, cancellationToken);
+        var narrationGenerated = await ExecuteNarrationSynthesisAsync(
+            narrationText,
+            prep.WorkingDirectoryPlan.AudioPath,
+            narrationWavPath,
+            ffmpegPath,
+            orchestrationContext.Request.Diagnostics,
+            speechSynthesisService,
+            logger,
+            blocking,
+            warnings,
+            cancellationToken);
         logger.LogInformation("Narration synthesis completed");
         logger.LogInformation("Narration validation started");
         logger.LogInformation("Narration validation completed");
@@ -172,6 +182,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         string? ffmpegPath,
         bool diagnosticsEnabled,
         ISpeechSynthesisService speechSynthesisService,
+        ILogger logger,
         List<string> blocking,
         List<string> warnings,
         CancellationToken cancellationToken)
@@ -206,7 +217,8 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         }
         catch (Exception ex)
         {
-            if (!diagnosticsEnabled)
+            logger.LogError(ex, "Narration synthesis failed for output path {NarrationWavPath}", narrationWavPath);
+            if (!diagnosticsEnabled || !IsAzureSpeechUnavailable(ex))
             {
                 blocking.Add($"Narration synthesis failed: {ex.Message}");
                 return new NarrationSynthesisOutcome(false);
@@ -230,6 +242,18 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
 
         var narrationOk = ValidateWav(narrationWavPath, ffmpegPath, blocking, "narration wav");
         return new NarrationSynthesisOutcome(narrationOk);
+    }
+
+    private static bool IsAzureSpeechUnavailable(Exception ex)
+    {
+        var message = ex.ToString();
+        return message.Contains("azure", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("speech", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("cognitive", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("authentication", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("401", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("403", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("unavailable", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ResolveFfmpegPath() => File.Exists("/usr/bin/ffmpeg") ? "/usr/bin/ffmpeg" : (File.Exists("/bin/ffmpeg") ? "/bin/ffmpeg" : null);
