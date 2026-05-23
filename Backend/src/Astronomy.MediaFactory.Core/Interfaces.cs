@@ -1056,6 +1056,10 @@ public sealed record WeeklySkyForecastFinalVideoValidation(bool IsValid, IReadOn
 public sealed record WeeklySkyForecastPreparationResponse(Guid? ContentGenerationPlanId, string Category, DateOnly WeekStartDate, DateOnly WeekEndDate, WeeklySkyForecastContext ContextSummary, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> LongSegments, IReadOnlyList<WeeklySkyForecastSegmentPlanItem> ShortSegments, IReadOnlyList<WeeklySkyForecastSscScenePlanItem> SscScenes, CategoryOutputPaths OutputPaths, WeeklySkyForecastMetadataSkeleton MetadataSkeleton, WeeklySkyForecastPreparationValidation PreparationValidation, WeeklyForecastDebugSummary DebugSummary, IReadOnlyList<string> Warnings, IReadOnlyList<CategoryProductionStepResult> StepResults, bool PublishingEnabled, bool AnalyticsEnabled, string? NarrationManifestPath, IReadOnlyList<WeeklySkyForecastAudioSegmentResult> AudioSegments, IReadOnlyList<WeeklySkyForecastSscScriptResult> SscScripts, IReadOnlyList<WeeklySkyForecastVisualAssetResult> VisualAssets, IReadOnlyList<WeeklySkyForecastCaptureResult> CaptureResults, string? LongVideoPath, string? ShortVideoPath, string? FinalVideoManifestPath, WeeklySkyForecastFinalVideoResult? FinalVideoResults, WeeklySkyForecastFinalVideoValidation? FinalVideoValidation, string ExecutionMode, WeeklySkyForecastExecutionFlags FlagsUsed);
 
 public interface IWeeklySkyForecastContextBuilder { Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken); }
+public interface IWeeklySkyForecastContextBuilderV2 : IWeeklySkyForecastContextBuilder
+{
+    Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastV2OrchestrationContext context, CancellationToken cancellationToken);
+}
 public interface IRegionResolutionService
 {
     Task<RegionResolutionResult?> TryResolveAsync(string regionId, string? regionName, CancellationToken cancellationToken);
@@ -1146,6 +1150,20 @@ public sealed record WeeklySkyForecastV2RenderScenesRequest(
     bool Diagnostics = true,
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
+
+public sealed record WeeklySkyForecastV2OrchestrationContext(
+    Guid ContentGenerationPlanId,
+    Guid PipelineRunId,
+    string? WorkingDirectoryRoot,
+    WeeklySkyForecastV2IntelligenceRequest Request,
+    RegionResolutionResult? ResolvedRegion,
+    WeeklySkyForecastContext? WeeklyForecast,
+    WeeklySkyForecastV2SkyfieldSummary? SkyfieldSummary,
+    IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem>? EventIntelligence,
+    DateTime GeneratedAtUtc,
+    int SkyfieldWeeklyForecastCalls = 0,
+    int RegionResolveCalls = 0,
+    bool ContextReusedAcrossPhases = false);
 
 public sealed record WeeklySkyForecastV2EventIntelligenceItem(
     string EventId,
@@ -1304,21 +1322,25 @@ public interface IWeeklySkyForecastV2EventIntelligenceBuilder
 public interface IWeeklySkyForecastV2IntelligenceService
 {
     Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken);
+    Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken);
 }
 public interface IWeeklySkyForecastSceneRenderingOrchestrator
 {
     Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken);
+    Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken);
 }
 
 public interface IWeeklySkyForecastTimelineCompositionOrchestrator
 {
     Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken);
+    Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken);
 }
 
 
 public interface IWeeklySkyForecastFinalMediaOrchestrator
 {
     Task<FinalMediaPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken);
+    Task<FinalMediaPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken);
 }
 
 public sealed record FinalMediaPackage(

@@ -8,8 +8,20 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     ILogger<WeeklySkyForecastSceneRenderingOrchestrator> logger) : IWeeklySkyForecastSceneRenderingOrchestrator
 {
     public async Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
+        => await RunAsync(new WeeklySkyForecastV2OrchestrationContext(
+            ContentGenerationPlanId: contentGenerationPlanId ?? request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid(),
+            PipelineRunId: request.PipelineRunId ?? contentGenerationPlanId ?? request.ContentGenerationPlanId ?? Guid.NewGuid(),
+            WorkingDirectoryRoot: null,
+            Request: request,
+            ResolvedRegion: null,
+            WeeklyForecast: null,
+            SkyfieldSummary: null,
+            EventIntelligence: null,
+            GeneratedAtUtc: DateTime.UtcNow), cancellationToken);
+
+    public async Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
     {
-        var preview = await intelligenceService.PreviewAsync(request, cancellationToken);
+        var preview = await intelligenceService.PreviewAsync(orchestrationContext, cancellationToken);
         var prep = preview.RenderPreparationPackage ?? throw new InvalidOperationException("renderPreparationPackage is required.");
         var blocking = new List<string>();
         var warnings = new List<string>();

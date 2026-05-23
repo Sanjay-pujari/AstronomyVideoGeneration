@@ -77,7 +77,7 @@ public sealed class WeeklySkyForecastV2EventIntelligenceBuilder : IWeeklySkyFore
 }
 
 public sealed class WeeklySkyForecastV2IntelligenceService(
-    IWeeklySkyForecastContextBuilder contextBuilder,
+    IWeeklySkyForecastContextBuilderV2 contextBuilder,
     IWeeklySkyForecastV2EventIntelligenceBuilder eventBuilder,
     IWeeklySkyForecastV2EditorialIntelligenceBuilder editorialBuilder,
     IWeeklySkyForecastV2CinematicEditorialRefiner cinematicRefiner,
@@ -88,9 +88,22 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastV2EditorialNormalizer editorialNormalizer,
     IOptions<RenderingOptions> renderingOptions) : IWeeklySkyForecastV2IntelligenceService
 {
-    public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
+    public Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2IntelligenceRequest request, CancellationToken cancellationToken)
+        => PreviewAsync(new WeeklySkyForecastV2OrchestrationContext(
+            ContentGenerationPlanId: request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid(),
+            PipelineRunId: request.PipelineRunId ?? request.ContentGenerationPlanId ?? Guid.NewGuid(),
+            WorkingDirectoryRoot: null,
+            Request: request,
+            ResolvedRegion: null,
+            WeeklyForecast: null,
+            SkyfieldSummary: null,
+            EventIntelligence: null,
+            GeneratedAtUtc: DateTime.UtcNow), cancellationToken);
+
+    public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
     {
-        var ctx = await contextBuilder.BuildAsync(new WeeklySkyForecastProductionRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, Diagnostics: request.Diagnostics), cancellationToken);
+        var request = orchestrationContext.Request;
+        var ctx = await contextBuilder.BuildAsync(orchestrationContext, cancellationToken);
         if (ctx.DailyForecasts.Count != 7)
             throw new InvalidOperationException("Skyfield weekly response must include 7 days.");
         var events = eventBuilder.Build(ctx);

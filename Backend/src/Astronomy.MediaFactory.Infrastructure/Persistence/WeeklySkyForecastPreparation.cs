@@ -20,7 +20,7 @@ public sealed class WeeklySkyForecastContextBuilder(
     IOptions<SchedulerOptions> schedulerOptions,
     IRegionResolutionService regionResolutionService,
     ISkyfieldSidecarClient sidecarClient,
-    ILogger<WeeklySkyForecastContextBuilder> logger) : IWeeklySkyForecastContextBuilder
+    ILogger<WeeklySkyForecastContextBuilder> logger) : IWeeklySkyForecastContextBuilderV2
 {
     internal const string CategoryDebugNormalizedObjectCountKey = "WeeklySkyForecast.NormalizedObjectCount";
     internal const string CategoryDebugCorrectedHighlightCountKey = "WeeklySkyForecast.CorrectedHighlightCount";
@@ -121,6 +121,25 @@ public sealed class WeeklySkyForecastContextBuilder(
         WeeklySkyForecastPreparationDiagnostics.Set(CategoryDebugCorrectedHighlightCountKey, correctedHighlightCount);
         WeeklySkyForecastPreparationDiagnostics.Set(CategoryDebugExcludedObjectCountKey, excludedObjectCount);
         return new(resolution.CanonicalRegionId, response.LocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights.OrderBy(h => h.Order).Select((h, i) => h with { Order = i + 1 }).ToList(), recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
+    }
+
+    public Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastV2OrchestrationContext context, CancellationToken cancellationToken)
+    {
+        if (context.WeeklyForecast is not null)
+        {
+            logger.LogInformation("Reusing cached WeeklySkyForecast context for pipelineRunId {pipelineRunId}", context.PipelineRunId);
+            return Task.FromResult(context.WeeklyForecast);
+        }
+
+        return BuildAsync(
+            new WeeklySkyForecastProductionRequest(
+                context.Request.ContentCategoryCode,
+                context.Request.Language,
+                context.Request.RegionId,
+                context.Request.RegionName,
+                context.Request.ScheduledUtc,
+                Diagnostics: context.Request.Diagnostics),
+            cancellationToken);
     }
 }
 
