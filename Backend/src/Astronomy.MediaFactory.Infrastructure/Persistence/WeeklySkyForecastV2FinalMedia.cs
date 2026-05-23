@@ -55,37 +55,11 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         logger.LogInformation("Starting narration synthesis");
         string? narrationMp3Path = null;
         var narrationWavPath = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-narration.wav");
-        try
-        {
-            narrationMp3Path = await speechSynthesisService.SynthesizeAsync(narrationPackage.LongFormNarration.FullNarration, prep.WorkingDirectoryPlan.AudioPath, cancellationToken);
-            var canonicalMp3Path = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-narration.mp3");
-            if (!string.Equals(narrationMp3Path, canonicalMp3Path, StringComparison.OrdinalIgnoreCase) && File.Exists(narrationMp3Path))
-            {
-                File.Copy(narrationMp3Path, canonicalMp3Path, true);
-                narrationMp3Path = canonicalMp3Path;
-            }
+        var narrationText = narrationPackage.LongFormNarration.FullNarration?.Trim() ?? string.Empty;
 
-            if (ffmpegPath is not null && File.Exists(narrationMp3Path))
-            {
-                RunProcess(ffmpegPath, $"-y -i \"{narrationMp3Path}\" -ac 2 -ar 48000 \"{narrationWavPath}\"", blocking, "narration wav transcode");
-            }
-            logger.LogInformation("Narration synthesis completed");
-        }
-        catch (Exception ex)
-        {
-            warnings.Add($"Narration generation fallback activated: {ex.Message}");
-        }
-
-        if (!ValidateWav(narrationWavPath, ffmpegPath, [], "narration wav"))
-        {
-            var fallbackRendered = ffmpegPath is not null
-                &&
-                RunProcess(ffmpegPath, $"-y -f lavfi -i \"sine=frequency=440:duration=3\" -ac 2 -ar 48000 \"{narrationWavPath}\"", blocking, "narration fallback tone");
-            if (fallbackRendered)
-            {
-                warnings.Add("Narration synthesized using diagnostics fallback tone.");
-            }
-        }
+        var narrationGenerated = await ExecuteNarrationSynthesisAsync(narrationText, prep.WorkingDirectoryPlan.AudioPath, narrationWavPath, ffmpegPath, speechSynthesisService, blocking, warnings, cancellationToken);
+        narrationMp3Path = narrationGenerated.NarrationMp3Path;
+        logger.LogInformation("Narration synthesis completed");
 
         var thumbnailPath = scenes.ThumbnailRenderResult?.OutputPath ?? prep.ThumbnailRenderPlan.PlannedOutputPath;
         logger.LogInformation("Thumbnail render started");
@@ -181,6 +155,84 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         var longForm = new FinalLongFormVideoResult(longFormPath, timeline.LongFormTimelineResult.TotalDurationSeconds, "1920x1080", 30, longFormOk ? "Rendered" : "Failed", [], longFormOk ? [] : ["Long-form validation failed."]);
         var thumbnail = new ThumbnailFinalResult(thumbnailPath, thumbnailValidation ? "Rendered" : "Failed", true, [], thumbnailValidation ? [] : ["Thumbnail validation failed."]);
         return new FinalMediaPackage(longForm, narration, new BackgroundMusicResult(null, "NoMusic", 0, "Skipped", [], []), mix, shorts, thumbnail, new SubtitleResult("", "", "Skipped", false, [], []), validation, new FinalMediaFreezeStatus(true, final, [], blocking, warnings));
+    }
+
+
+
+    private sealed record NarrationSynthesisOutcome(string? NarrationMp3Path, bool WavReady);
+
+    private static async Task<NarrationSynthesisOutcome> ExecuteNarrationSynthesisAsync(
+        string narrationText,
+        string audioDirectory,
+        string narrationWavPath,
+        string? ffmpegPath,
+        ISpeechSynthesisService speechSynthesisService,
+        List<string> blocking,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(audioDirectory);
+        var narrationDisabled = string.IsNullOrWhiteSpace(narrationText);
+        string? narrationMp3Path = null;
+
+        if (!narrationDisabled)
+        {
+            try
+            {
+                narrationMp3Path = await speechSynthesisService.SynthesizeAsync(narrationText, audioDirectory, cancellationToken);
+                var canonicalMp3Path = Path.Combine(audioDirectory, "weekly-skyforecast-narration.mp3");
+                if (!string.Equals(narrationMp3Path, canonicalMp3Path, StringComparison.OrdinalIgnoreCase) && File.Exists(narrationMp3Path))
+                {
+                    File.Copy(narrationMp3Path, canonicalMp3Path, true);
+                    narrationMp3Path = canonicalMp3Path;
+                }
+
+                if (ffmpegPath is not null && !string.IsNullOrWhiteSpace(narrationMp3Path) && File.Exists(narrationMp3Path))
+                {
+                    RunProcess(ffmpegPath, $"-y -i \"{narrationMp3Path}\" -ac 2 -ar 48000 \"{narrationWavPath}\"", blocking, "narration wav transcode");
+                }
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"Narration generation fallback activated: {ex.Message}");
+            }
+        }
+        else
+        {
+            warnings.Add("Narration generation disabled (empty narration text); fallback wav will be generated.");
+        }
+
+        var narrationValidation = new List<string>();
+        var narrationOk = ValidateWav(narrationWavPath, ffmpegPath, narrationValidation, "narration wav");
+        if (narrationOk)
+        {
+            return new NarrationSynthesisOutcome(narrationMp3Path, true);
+        }
+
+        warnings.AddRange(narrationValidation);
+
+        if (ffmpegPath is not null)
+        {
+            var fallbackArgs = narrationDisabled
+                ? $"-y -f lavfi -i anullsrc=r=48000:cl=stereo -t 3 -c:a pcm_s16le \"{narrationWavPath}\""
+                : $"-y -f lavfi -i \"sine=frequency=440:duration=3\" -ac 2 -ar 48000 \"{narrationWavPath}\"";
+            var fallbackLabel = narrationDisabled ? "narration fallback silent wav" : "narration fallback diagnostics wav";
+            if (RunProcess(ffmpegPath, fallbackArgs, blocking, fallbackLabel))
+            {
+                warnings.Add(narrationDisabled
+                    ? "Narration fallback silent wav generated."
+                    : "Narration fallback diagnostics wav generated.");
+            }
+        }
+
+        var postFallbackValidation = new List<string>();
+        var fallbackOk = ValidateWav(narrationWavPath, ffmpegPath, postFallbackValidation, "narration wav");
+        if (!fallbackOk)
+        {
+            blocking.AddRange(postFallbackValidation);
+        }
+
+        return new NarrationSynthesisOutcome(narrationMp3Path, fallbackOk);
     }
 
     private static string? ResolveFfmpegPath() => File.Exists("/usr/bin/ffmpeg") ? "/usr/bin/ffmpeg" : (File.Exists("/bin/ffmpeg") ? "/bin/ffmpeg" : null);
