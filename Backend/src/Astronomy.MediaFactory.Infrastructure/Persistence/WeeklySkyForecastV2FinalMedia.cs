@@ -1,6 +1,5 @@
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 
@@ -9,6 +8,8 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 public sealed class WeeklySkyForecastFinalMediaOrchestrator(
     IWeeklySkyForecastSceneRenderingOrchestrator sceneOrchestrator,
     IWeeklySkyForecastTimelineCompositionOrchestrator timelineOrchestrator,
+    IFFmpegService ffmpegService,
+    IMediaValidationService mediaValidationService,
     ISpeechSynthesisService speechSynthesisService,
     ILogger<WeeklySkyForecastFinalMediaOrchestrator> logger) : IWeeklySkyForecastFinalMediaOrchestrator
 {
@@ -46,12 +47,6 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
 
         var blocking = new List<string>();
         var warnings = new List<string>();
-        var ffmpegPath = ResolveFfmpegPath();
-        if (ffmpegPath is null)
-        {
-            blocking.Add("FFmpeg executable not configured or not found.");
-        }
-
         logger.LogInformation("Starting narration synthesis");
         var narrationWavPath = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-narration.wav");
         var narrationText = narrationPackage.LongFormNarration.FullNarration?.Trim() ?? string.Empty;
@@ -64,8 +59,9 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             narrationText,
             prep.WorkingDirectoryPlan.AudioPath,
             narrationWavPath,
-            ffmpegPath,
             orchestrationContext.Request.Diagnostics,
+            ffmpegService,
+            mediaValidationService,
             speechSynthesisService,
             logger,
             blocking,
@@ -102,7 +98,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         var mixPath = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-final-mix.wav");
 
         logger.LogInformation("Starting final audio mix");
-        var mixOk = BuildFinalMix(narrationWavPath, mixPath, ffmpegPath, blocking);
+        var mixOk = await BuildFinalMixAsync(narrationWavPath, mixPath, ffmpegService, mediaValidationService, blocking, cancellationToken);
         logger.LogInformation("Final audio mix completed");
 
         logger.LogInformation("Starting shorts render");
@@ -113,16 +109,16 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             var match = scenes.SceneRenderResults.FirstOrDefault(x => x.SceneCode == sourceSceneCode);
             var source = match?.OutputPath ?? shortPlan.PlannedOutputPath;
             var output = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, $"short-{shortPlan.ShortCode}.mp4");
-            var encoded = mixOk && ffmpegPath is not null && RenderShort(output, source, mixPath, shortPlan.TargetDurationSeconds, ffmpegPath, blocking, shortPlan.ShortCode);
-            var ok = encoded && ValidateMp4(output, 1, ffmpegPath, blocking, $"short {shortPlan.ShortCode}");
+            var encoded = mixOk && await RenderShortAsync(output, source, mixPath, shortPlan.TargetDurationSeconds, ffmpegService, blocking, shortPlan.ShortCode, cancellationToken);
+            var ok = encoded && await ValidateMp4Async(output, 1, mediaValidationService, blocking, $"short {shortPlan.ShortCode}", cancellationToken);
             shorts.Add(new ShortFinalResult(shortPlan.ShortCode, output, shortPlan.TargetDurationSeconds, "9:16", ok ? "Rendered" : "Failed", [], ok ? [] : ["Short validation failed."]));
         }
         logger.LogInformation("Shorts render completed");
 
         logger.LogInformation("Starting long-form assembly");
         var longFormPath = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, "weekly-skyforecast-longform-draft.mp4");
-        var longFormRendered = ffmpegPath is not null && AssembleLongForm(timeline.SegmentCompositionResults.Select(x => x.SourceSceneOutputPath).ToList(), mixPath, longFormPath, ffmpegPath, blocking);
-        var longFormOk = longFormRendered && ValidateMp4(longFormPath, 1, ffmpegPath, blocking, "long-form");
+        var longFormRendered = await AssembleLongFormAsync(timeline.SegmentCompositionResults.Select(x => x.SourceSceneOutputPath).ToList(), mixPath, longFormPath, ffmpegService, blocking, cancellationToken);
+        var longFormOk = longFormRendered && await ValidateMp4Async(longFormPath, 1, mediaValidationService, blocking, "long-form", cancellationToken);
         logger.LogInformation("Long-form assembly completed");
 
         logger.LogInformation("Validation started");
@@ -152,14 +148,14 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             blocking,
             warnings,
             outputFilesExist,
-            ffmpegPath is not null,
+            true,
             stellariumExecuted,
             overlaysValid,
             thumbnailValidation,
             allShortsValid,
             longFormOk,
             RealMediaOutputsGenerated: outputFilesExist && allShortsValid,
-            FfprobeExecuted: ffmpegPath is not null,
+            FfprobeExecuted: true,
             ThumbnailContainsObjects: thumbnailContainsObjects,
             SceneVisualsContainObjects: sceneVisualsContainObjects,
             VisualAssetsResolved: visualAssetsResolved);
@@ -179,8 +175,9 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         string narrationText,
         string audioDirectory,
         string narrationWavPath,
-        string? ffmpegPath,
         bool diagnosticsEnabled,
+        IFFmpegService ffmpegService,
+        IMediaValidationService mediaValidationService,
         ISpeechSynthesisService speechSynthesisService,
         ILogger logger,
         List<string> blocking,
@@ -211,7 +208,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
                 return new NarrationSynthesisOutcome(false);
             }
 
-            if (ffmpegPath is null || !RunProcess(ffmpegPath, $"-y -f lavfi -i anullsrc=r=44100:cl=stereo -t 110 -c:a pcm_s16le \"{narrationWavPath}\"", blocking, "diagnostics silent narration"))
+            if (!await RunFfmpegAsync(ffmpegService, $"-y -f lavfi -i anullsrc=r=44100:cl=stereo -t 110 -c:a pcm_s16le \"{narrationWavPath}\"", narrationWavPath, blocking, "diagnostics silent narration", cancellationToken))
             {
                 blocking.Add($"Narration synthesis failed and diagnostics fallback could not be generated: {ex.Message}");
                 return new NarrationSynthesisOutcome(false);
@@ -227,7 +224,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             return new NarrationSynthesisOutcome(false);
         }
 
-        var narrationOk = ValidateWav(narrationWavPath, ffmpegPath, blocking, "narration wav");
+        var narrationOk = await ValidateWavAsync(narrationWavPath, mediaValidationService, blocking, "narration wav", cancellationToken);
         return new NarrationSynthesisOutcome(narrationOk);
     }
 
@@ -243,25 +240,17 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
                || message.Contains("unavailable", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string? ResolveFfmpegPath() => File.Exists("/usr/bin/ffmpeg") ? "/usr/bin/ffmpeg" : (File.Exists("/bin/ffmpeg") ? "/bin/ffmpeg" : null);
-    private static bool ValidateMp4(string path, long minBytes, string? ffmpegPath, List<string> blocking, string label)
+    private static async Task<bool> ValidateMp4Async(string path, long minBytes, IMediaValidationService mediaValidationService, List<string> blocking, string label, CancellationToken cancellationToken)
     {
-        if (!ValidateBasic(path, minBytes, blocking, label)) return false;
-        if (ffmpegPath is null) return false;
-        var media = ProbeMedia(path, ffmpegPath, blocking, label);
-        return media is { Duration: > 0, Width: > 0, Height: > 0 } && !string.IsNullOrWhiteSpace(media.VideoCodec);
+        var result = await mediaValidationService.ValidateMp4Async(path, minBytes, cancellationToken);
+        if (!result.IsValid) blocking.AddRange(result.BlockingIssues.Select(x => $"{label}: {x}"));
+        return result.IsValid;
     }
-    private static bool ValidateWav(string path, string? ffmpegPath, List<string> blocking, string label)
+    private static async Task<bool> ValidateWavAsync(string path, IMediaValidationService mediaValidationService, List<string> blocking, string label, CancellationToken cancellationToken)
     {
-        if (!ValidateBasic(path, 10 * 1024, blocking, label)) return false;
-        if (ffmpegPath is null) return false;
-        return ProbeDuration(path, ffmpegPath, blocking, label) > 0;
-    }
-    private static bool ValidateAudio(string path, string? ffmpegPath, List<string> blocking, string label)
-    {
-        if (!ValidateBasic(path, 10 * 1024, blocking, label)) return false;
-        if (ffmpegPath is null) return false;
-        return ProbeDuration(path, ffmpegPath, blocking, label) > 0;
+        var result = await mediaValidationService.ValidateWavAsync(path, cancellationToken);
+        if (!result.IsValid) blocking.AddRange(result.BlockingIssues.Select(x => $"{label}: {x}"));
+        return result.IsValid;
     }
     private static bool ValidateImage(string path, long minBytes, List<string> blocking, string label)
     {
@@ -276,47 +265,32 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         if (len <= minBytes) { blocking.Add($"{label}: file too small '{path}' ({len} bytes)."); return false; }
         return true;
     }
-    private static double ProbeDuration(string path, string ffmpegPath, List<string> blocking, string label)
-    {
-        var ffprobe = ffmpegPath.Replace("ffmpeg", "ffprobe", StringComparison.OrdinalIgnoreCase);
-        var args = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{path}\"";
-        var psi = new ProcessStartInfo(ffprobe, args) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        var p = Process.Start(psi)!;
-        p.WaitForExit();
-        var stdout = p.StandardOutput.ReadToEnd();
-        var stderr = p.StandardError.ReadToEnd();
-        if (p.ExitCode != 0 || !double.TryParse(stdout.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var duration))
-        { blocking.Add($"{label}: ffprobe failed for '{path}'. exit={p.ExitCode} stderr={stderr}"); return 0; }
-        return duration;
-    }
-
-    private static bool BuildFinalMix(string narrationWavPath, string mixPath, string? ffmpegPath, List<string> blocking)
+    private static async Task<bool> BuildFinalMixAsync(string narrationWavPath, string mixPath, IFFmpegService ffmpegService, IMediaValidationService mediaValidationService, List<string> blocking, CancellationToken cancellationToken)
     {
         if (!File.Exists(narrationWavPath)) { blocking.Add("final-mix: narration source missing."); return false; }
-        if (ffmpegPath is null) { blocking.Add("final-mix: ffmpeg unavailable."); return false; }
         if (File.Exists(mixPath)) File.Delete(mixPath);
         var copied = CopyFile(narrationWavPath, mixPath, blocking, "final-mix copy");
-        return copied || (RunProcess(ffmpegPath, $"-y -i \"{narrationWavPath}\" -af loudnorm=I=-16:LRA=11:TP=-1.5 \"{mixPath}\"", blocking, "final-mix")
-            && ValidateWav(mixPath, ffmpegPath, blocking, "final-mix"));
+        return copied || (await RunFfmpegAsync(ffmpegService, $"-y -i \"{narrationWavPath}\" -af loudnorm=I=-16:LRA=11:TP=-1.5 \"{mixPath}\"", mixPath, blocking, "final-mix", cancellationToken)
+            && await ValidateWavAsync(mixPath, mediaValidationService, blocking, "final-mix", cancellationToken));
     }
 
-    private static bool AssembleLongForm(IReadOnlyList<string> scenePaths, string mixPath, string outputPath, string ffmpegPath, List<string> blocking)
+    private static async Task<bool> AssembleLongFormAsync(IReadOnlyList<string> scenePaths, string mixPath, string outputPath, IFFmpegService ffmpegService, List<string> blocking, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var listPath = Path.Combine(Path.GetDirectoryName(outputPath)!, "longform-concat.txt");
         var sb = new StringBuilder();
         foreach (var s in scenePaths.Where(File.Exists)) sb.AppendLine($"file '{s.Replace("'", "'\\''")}'");
         File.WriteAllText(listPath, sb.ToString());
-        return RunProcess(ffmpegPath, $"-y -f concat -safe 0 -i \"{listPath}\" -i \"{mixPath}\" -map 0:v:0 -map 1:a:0 -c:v libx264 -pix_fmt yuv420p -r 30 -s 1920x1080 -c:a aac -shortest \"{outputPath}\"", blocking, "long-form-assembly");
+        return await RunFfmpegAsync(ffmpegService, $"-y -f concat -safe 0 -i \"{listPath}\" -i \"{mixPath}\" -map 0:v:0 -map 1:a:0 -c:v libx264 -pix_fmt yuv420p -r 30 -s 1920x1080 -c:a aac -shortest \"{outputPath}\"", outputPath, blocking, "long-form-assembly", cancellationToken);
     }
 
-    private static bool RenderShort(string output, string source, string? narrationWav, double durationSeconds, string ffmpegPath, List<string> blocking, string label)
+    private static async Task<bool> RenderShortAsync(string output, string source, string? narrationWav, double durationSeconds, IFFmpegService ffmpegService, List<string> blocking, string label, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         var trim = Math.Max(1, durationSeconds).ToString("0.###", CultureInfo.InvariantCulture);
         var audioInput = !string.IsNullOrWhiteSpace(narrationWav) && File.Exists(narrationWav) ? $"-i \"{narrationWav}\"" : string.Empty;
         var audioMap = !string.IsNullOrWhiteSpace(narrationWav) && File.Exists(narrationWav) ? "-map 1:a:0" : "-an";
-        return RunProcess(ffmpegPath, $"-y -i \"{source}\" {audioInput} -t {trim} -vf \"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2\" -map 0:v:0 {audioMap} -c:v libx264 -pix_fmt yuv420p -r 30 -c:a aac -shortest \"{output}\"", blocking, $"short-{label}");
+        return await RunFfmpegAsync(ffmpegService, $"-y -i \"{source}\" {audioInput} -t {trim} -vf \"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2\" -map 0:v:0 {audioMap} -c:v libx264 -pix_fmt yuv420p -r 30 -c:a aac -shortest \"{output}\"", output, blocking, $"short-{label}", cancellationToken);
     }
 
     private static bool CopyFile(string source, string destination, List<string> blocking, string label)
@@ -334,31 +308,19 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         }
     }
 
-    private static bool RunProcess(string executable, string args, List<string> blocking, string label)
+    private static async Task<bool> RunFfmpegAsync(IFFmpegService ffmpegService, string args, string outputPath, List<string> blocking, string label, CancellationToken cancellationToken)
     {
-        var psi = new ProcessStartInfo(executable, args) { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
-        using var p = Process.Start(psi)!;
-        p.WaitForExit();
-        if (p.ExitCode == 0) return true;
-        blocking.Add($"{label}: ffmpeg failed exit={p.ExitCode} stderr={p.StandardError.ReadToEnd()}");
-        return false;
-    }
-
-    private sealed record MediaProbe(double Duration, int Width, int Height, string? VideoCodec);
-    private static MediaProbe? ProbeMedia(string path, string ffmpegPath, List<string> blocking, string label)
-    {
-        var ffprobe = ffmpegPath.Replace("ffmpeg", "ffprobe", StringComparison.OrdinalIgnoreCase);
-        var args = $"-v error -select_streams v:0 -show_entries stream=codec_name,width,height:format=duration -of csv=p=0:s=, \"{path}\"";
-        var psi = new ProcessStartInfo(ffprobe, args) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        using var p = Process.Start(psi)!;
-        p.WaitForExit();
-        var output = p.StandardOutput.ReadToEnd().Trim();
-        if (p.ExitCode != 0 || string.IsNullOrWhiteSpace(output)) { blocking.Add($"{label}: ffprobe media probe failed for '{path}'."); return null; }
-        var parts = output.Split(',');
-        if (parts.Length < 4) { blocking.Add($"{label}: ffprobe media probe format invalid for '{path}'."); return null; }
-        if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var dur)) return null;
-        if (!int.TryParse(parts[2], out var w)) return null;
-        if (!int.TryParse(parts[3], out var h)) return null;
-        return new MediaProbe(dur, w, h, parts[1]);
+        try
+        {
+            var result = await ffmpegService.ExecuteAsync(args, Directory.GetCurrentDirectory(), outputPath, cancellationToken);
+            if (result.ExitCode == 0) return true;
+            blocking.Add($"{label}: ffmpeg failed exit={result.ExitCode} stderr={result.StdErr}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            blocking.Add($"{label}: ffmpeg execution failed. {ex.Message}");
+            return false;
+        }
     }
 }
