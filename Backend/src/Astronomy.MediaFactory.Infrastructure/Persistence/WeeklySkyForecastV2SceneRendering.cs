@@ -482,7 +482,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             assetImage.Mutate(x => x.Resize(new ResizeOptions { Size = new Size((int)bounds.Width, (int)bounds.Height), Mode = ResizeMode.Crop }));
             ctx.DrawImage(assetImage, new Point((int)bounds.X, (int)bounds.Y), 1f);
             ctx.Draw(Color.White.WithAlpha(0.38f), 1.4f, new EllipsePolygon(bounds.X + bounds.Width / 2f, bounds.Y + bounds.Height / 2f, bounds.Width / 2.02f));
-            ctx.DrawLines(Color.ParseHex("#F8BE73").WithAlpha(0.18f), 2f, [new PointF(bounds.X + bounds.Width * 0.22f, bounds.Y + bounds.Height * 0.27f), new PointF(bounds.X + bounds.Width * 0.68f, bounds.Y + bounds.Height * 0.10f)]);
+            ctx.DrawLine(Color.ParseHex("#F8BE73").WithAlpha(0.18f), 2f, new PointF(bounds.X + bounds.Width * 0.22f, bounds.Y + bounds.Height * 0.27f), new PointF(bounds.X + bounds.Width * 0.68f, bounds.Y + bounds.Height * 0.10f));
             return;
         }
 
@@ -539,7 +539,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         ctx.Fill(new LinearGradientBrush(new PointF(width * 0.02f, bandTop.Top), new PointF(width * 0.88f, bandTop.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#0E2348").WithAlpha(0.0f)), new ColorStop(0.48f, Color.ParseHex("#2B4C7A").WithAlpha(0.15f)), new ColorStop(1, Color.ParseHex("#6D3E8F").WithAlpha(0.09f))]), bandTop);
         ctx.Fill(new LinearGradientBrush(new PointF(width * 0.12f, bandMid.Top), new PointF(width * 0.94f, bandMid.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#17386A").WithAlpha(0.02f)), new ColorStop(0.55f, Color.ParseHex("#3A5B9E").WithAlpha(0.13f)), new ColorStop(1, Color.ParseHex("#7E479E").WithAlpha(0.10f))]), bandMid);
         ctx.Fill(new LinearGradientBrush(new PointF(width * 0.01f, bandBottom.Top), new PointF(width * 0.96f, bandBottom.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#0A1A36").WithAlpha(0.0f)), new ColorStop(0.56f, Color.ParseHex("#295E88").WithAlpha(0.11f)), new ColorStop(1, Color.ParseHex("#C6864E").WithAlpha(0.08f))]), bandBottom);
-        ctx.ApplyGaussianBlur(22f);
+        ctx.GaussianBlur(22f);
     }
     private static void DrawDepthLayerStack(IImageProcessingContext ctx, int width, int height)
     {
@@ -555,7 +555,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     {
         var hazeBand = new RectangleF(0, height * 0.50f, width, height * 0.45f);
         ctx.Fill(new LinearGradientBrush(new PointF(0, hazeBand.Top), new PointF(width, hazeBand.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#7CA6FF").WithAlpha(0.0f)), new ColorStop(0.6f, Color.ParseHex("#6CB9D8").WithAlpha(0.05f)), new ColorStop(1f, Color.ParseHex("#E1A35E").WithAlpha(0.08f))]), hazeBand);
-        ctx.ApplyGaussianBlur(12f);
+        ctx.GaussianBlur(12f);
     }
     private static void DrawVignette(IImageProcessingContext ctx, int width, int height)
     {
