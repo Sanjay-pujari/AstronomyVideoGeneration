@@ -9,6 +9,9 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
 using Microsoft.EntityFrameworkCore;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Microsoft.Extensions.Options;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration
@@ -54,6 +57,27 @@ builder.Services.AddMediaFactory(builder.Configuration);
 var app = builder.Build();
 
 app.Logger.LogInformation("Starting Astronomy.MediaFactory.Api in {Environment}", app.Environment.EnvironmentName);
+var renderingOptions = app.Services.GetRequiredService<IOptions<RenderingOptions>>().Value;
+var ffmpegConfigured = !string.IsNullOrWhiteSpace(renderingOptions.FfmpegPath);
+var ffprobeConfigured = !string.IsNullOrWhiteSpace(renderingOptions.FfprobePath);
+var ffmpegExists = ffmpegConfigured && File.Exists(renderingOptions.FfmpegPath);
+var ffprobeExists = ffprobeConfigured && File.Exists(renderingOptions.FfprobePath);
+if (ffmpegExists)
+{
+    app.Logger.LogInformation("FFmpeg executable resolved: {Path}", renderingOptions.FfmpegPath);
+}
+else
+{
+    app.Logger.LogWarning("FFmpeg executable is not available. configured={Configured}; path={Path}", ffmpegConfigured, renderingOptions.FfmpegPath);
+}
+if (ffprobeExists)
+{
+    app.Logger.LogInformation("FFprobe executable resolved: {Path}", renderingOptions.FfprobePath);
+}
+else
+{
+    app.Logger.LogWarning("FFprobe executable is not available. configured={Configured}; path={Path}", ffprobeConfigured, renderingOptions.FfprobePath);
+}
 
 if (app.Environment.IsDevelopment())
 {
@@ -90,12 +114,78 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
         await ctx.Response.WriteAsJsonAsync(payload);
     }
 });
+app.MapGet("/api/system/rendering/diagnostics", () =>
+{
+    var current = app.Services.GetRequiredService<IOptions<RenderingOptions>>().Value;
+    var isFfmpegConfigured = !string.IsNullOrWhiteSpace(current.FfmpegPath);
+    var isFfprobeConfigured = !string.IsNullOrWhiteSpace(current.FfprobePath);
+    var isFfmpegExists = isFfmpegConfigured && File.Exists(current.FfmpegPath);
+    var isFfprobeExists = isFfprobeConfigured && File.Exists(current.FfprobePath);
+    var ffmpegVersion = GetVersion(current.FfmpegPath, isFfmpegExists);
+    var ffprobeVersion = GetVersion(current.FfprobePath, isFfprobeExists);
+    var writable = IsWritable(current.WorkingDirectory);
+
+    return Results.Ok(new
+    {
+        ffmpegConfigured = isFfmpegConfigured,
+        ffmpegExists = isFfmpegExists,
+        ffprobeConfigured = isFfprobeConfigured,
+        ffprobeExists = isFfprobeExists,
+        ffmpegVersion = ffmpegVersion,
+        ffprobeVersion = ffprobeVersion,
+        currentUser = Environment.UserName,
+        processArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
+        workingDirectoryWritable = writable
+    });
+});
 
 app.MapPost("/api/assets/celestial/extract-pack", async (ICelestialAssetPackExtractor extractor, CancellationToken ct) =>
 {
     var report = await extractor.ExtractAsync(ct);
     return Results.Ok(report);
 });
+
+static object? GetVersion(string? executablePath, bool executableExists)
+{
+    if (!executableExists || string.IsNullOrWhiteSpace(executablePath))
+    {
+        return new { executed = false, exitCode = -1, stdout = "", stderr = "Executable not found." };
+    }
+
+    var psi = new ProcessStartInfo(executablePath, "-version")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false
+    };
+    using var process = Process.Start(psi);
+    if (process is null)
+    {
+        return new { executed = false, exitCode = -1, stdout = "", stderr = "Unable to start process." };
+    }
+
+    process.WaitForExit();
+    var stdout = process.StandardOutput.ReadToEnd();
+    var stderr = process.StandardError.ReadToEnd();
+    return new { executed = true, exitCode = process.ExitCode, stdout, stderr };
+}
+
+static bool IsWritable(string? path)
+{
+    if (string.IsNullOrWhiteSpace(path)) return false;
+    try
+    {
+        Directory.CreateDirectory(path);
+        var probe = Path.Combine(path, $".write-test-{Guid.NewGuid():N}.tmp");
+        File.WriteAllText(probe, "ok");
+        File.Delete(probe);
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
+}
 
 app.MapGet("/api/events/upcoming", async (int? days, string? regionId, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
 {

@@ -57,7 +57,10 @@ public sealed class FFmpegService(IOptions<RenderingOptions> options, IExternalP
     public Task<ExternalProcessExecutionResult> ExecuteAsync(string arguments, string workingDirectory, string? outputPath, CancellationToken cancellationToken)
     {
         var ffmpegPath = options.Value.FfmpegPath;
-        if (string.IsNullOrWhiteSpace(ffmpegPath) || !File.Exists(ffmpegPath)) throw new InvalidOperationException("FFmpeg executable not configured or not found.");
+        if (string.IsNullOrWhiteSpace(ffmpegPath) || !File.Exists(ffmpegPath))
+        {
+            throw new InvalidOperationException($"FFmpeg executable not found at '{ffmpegPath}'.");
+        }
         return runner.RunAsync(ffmpegPath, arguments, workingDirectory, outputPath, cancellationToken);
     }
 }
@@ -67,7 +70,10 @@ public sealed class FFprobeService(IOptions<RenderingOptions> options, IExternal
     public async Task<FfprobeMediaInfo?> ProbeAsync(string path, CancellationToken cancellationToken)
     {
         var ffprobePath = options.Value.FfprobePath;
-        if (string.IsNullOrWhiteSpace(ffprobePath) || !File.Exists(ffprobePath)) throw new InvalidOperationException("FFmpeg executable not configured or not found.");
+        if (string.IsNullOrWhiteSpace(ffprobePath) || !File.Exists(ffprobePath))
+        {
+            throw new InvalidOperationException($"FFprobe executable not found at '{ffprobePath}'.");
+        }
         var args = $"-v error -print_format json -show_streams -show_format \"{path}\"";
         var res = await runner.RunAsync(ffprobePath, args, Directory.GetCurrentDirectory(), path, cancellationToken);
         if (res.ExitCode != 0) return null;
