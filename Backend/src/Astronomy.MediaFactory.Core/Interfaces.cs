@@ -1338,7 +1338,7 @@ public sealed record FinalAudioMixResult(string FinalMixedAudioPath, double Dura
 public sealed record ShortFinalResult(string ShortCode, string OutputPath, double DurationSeconds, string AspectRatio, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
 public sealed record ThumbnailFinalResult(string OutputPath, string Status, bool ReusedFromPhase6B, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
 public sealed record SubtitleResult(string SrtPath, string VttPath, string Status, bool CaptionsRendered, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
-public sealed record FinalMediaValidation(bool IsValid, bool NarrationAudioRendered, bool FinalAudioMixed, bool LongFormVideoRendered, bool ShortsRendered, bool ThumbnailAvailable, bool SubtitlesReady, bool DurationValid, bool OutputFilesExist, bool ReadyForHumanReview, bool ReadyForPublishing, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
+public sealed record FinalMediaValidation(bool IsValid, bool NarrationAudioRendered, bool FinalAudioMixed, bool LongFormVideoRendered, bool ShortsRendered, bool ThumbnailAvailable, bool SubtitlesReady, bool DurationValid, bool OutputFilesExist, bool ReadyForHumanReview, bool ReadyForPublishing, bool SinglePipelineRunIdUsed, bool OutputRootConsistent, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 public sealed record FinalMediaFreezeStatus(bool IsFrozen, bool IsReadyForPhase7, IReadOnlyList<string> VerifiedChecks, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 
 public interface IWeeklySkyForecastV2EditorialIntelligenceBuilder
