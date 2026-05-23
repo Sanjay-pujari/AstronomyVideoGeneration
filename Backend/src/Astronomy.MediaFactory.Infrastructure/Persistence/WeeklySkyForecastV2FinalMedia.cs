@@ -342,10 +342,16 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
 
     private static string BuildShortNarrationText(ShortsCompositionPlan shortPlan, WeeklySkyForecastV2IntelligenceResponse preview, string regionName)
     {
-        var bestNight = preview.WeeklyForecast?.DailyForecasts?
-            .OrderByDescending(x => x.VisibleObjects?.Count ?? 0)
-            .FirstOrDefault()?.Date.ToString("dddd", CultureInfo.InvariantCulture) ?? "this week";
-        var objects = string.Join(", ", preview.WeeklyForecast?.VisibleObjects?.Take(3) ?? []);
+        var bestNight = preview.SkyfieldSummary.BestMoonNight?.ToString("dddd", CultureInfo.InvariantCulture)
+                        ?? preview.EventIntelligence.OrderByDescending(x => x.VisualScore).FirstOrDefault()?.PrimaryDate.ToString("dddd", CultureInfo.InvariantCulture)
+                        ?? "this week";
+        var objectNames = preview.EventIntelligence
+            .SelectMany(x => x.VisibleObjectNames ?? [])
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToList();
+        var objects = objectNames.Count > 0 ? string.Join(", ", objectNames) : "the Moon, bright planets, and star clusters";
         var hook = shortPlan.ShortCode.Contains("best_night", StringComparison.OrdinalIgnoreCase)
             ? "Stop scrolling—this is your best sky night."
             : shortPlan.ShortCode.Contains("moon", StringComparison.OrdinalIgnoreCase)
