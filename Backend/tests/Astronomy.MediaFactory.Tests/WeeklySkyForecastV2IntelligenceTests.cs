@@ -23,6 +23,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.NormalizedEditorialPackage);
         Assert.NotNull(response.SceneChoreographyPackage);
         Assert.NotNull(response.CinematicChoreographyPackage);
+        Assert.NotNull(response.RenderExecutionPackage);
         Assert.NotNull(response.PreviewStability);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
@@ -54,7 +55,12 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.All(response.VisualRequirementPackage.SegmentVisualMappings, map => Assert.Contains(response.HybridScenePlanPackage.ScenePlans, s => s.VisualCode == map.VisualCode));
         Assert.True(response.PreviewStability!.IsStable);
         Assert.True(response.PreviewStability.ReadyForAssetResolution);
+        Assert.True(response.PreviewStability.ReadyForRenderPreparation);
         Assert.False(response.PreviewStability.ReadyForRendering);
+        Assert.True(response.RenderExecutionPackage!.ExecutionScenes.Count is >= 4 and <= 6);
+        Assert.All(response.RenderExecutionPackage.ExecutionScenes, s => Assert.Contains(response.RenderExecutionPackage.RenderSourceDecisions, d => d.SceneCode == s.SceneCode));
+        Assert.NotNull(response.RenderExecutionPackage.ThumbnailExecutionContract);
+        Assert.Contains(response.RenderExecutionPackage.StellariumExecutionDirectives, d => d.SceneCode == "best_night_wide_scene" && d.Required);
         Assert.InRange(response.SceneChoreographyPackage!.ResolvedScenes.Count, 4, 6);
         Assert.InRange(response.CinematicChoreographyPackage!.Scenes.Count, 4, 6);
         Assert.All(response.CinematicChoreographyPackage.Scenes, s => Assert.Contains(response.CinematicChoreographyPackage.SceneTimeline, t => t.SceneCode == s.SceneCode));
@@ -71,6 +77,9 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         {
             Assert.Equal(new DateOnly(2026, 5, 25), DateOnly.FromDateTime(bestNightScene.TechnicalBestTimeUtc.Value));
         }
+        Assert.DoesNotContain(response.CinematicStoryBlueprint.OpeningHook, new[] { "Same viewing window grouping", "High-value weekly observation event", "visibility momentum", "backup opportunities", "observation event", "grouping event" }, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(response.NormalizedEditorialPackage!.HeroNormalizedEvent.PeakDate, new DateOnly(2026, 5, 25));
+        Assert.DoesNotContain("DailySkyGuide", response.Category, StringComparison.OrdinalIgnoreCase);
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.False(string.IsNullOrWhiteSpace(s.CameraPlan.PrimaryBehavior)));
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.False(string.IsNullOrWhiteSpace(s.MotionPlan)));
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.Contains(response.SceneChoreographyPackage.RenderContracts, c => c.SceneCode == s.SceneCode));
@@ -105,6 +114,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             events,
             new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             null!,
+            null,
             null,
             null,
             null,

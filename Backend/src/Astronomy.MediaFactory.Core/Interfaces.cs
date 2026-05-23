@@ -1194,6 +1194,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyNormalizedEditorialPackage? NormalizedEditorialPackage,
     WeeklySceneChoreographyPackage? SceneChoreographyPackage,
     WeeklyCinematicChoreographyPackage? CinematicChoreographyPackage,
+    WeeklyRenderExecutionPackage? RenderExecutionPackage,
     WeeklyPreviewStabilityReport? PreviewStability,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
@@ -1358,7 +1359,7 @@ public sealed record WeeklyGeneratedLongNarration(string FullNarration, int Esti
 public sealed record WeeklyGeneratedNarrationSegment(string SegmentCode, string SegmentTitle, string NarrationText, int EstimatedDurationSeconds, IReadOnlyList<string> TargetObjects, string RecommendedVisualStrategy, string VisualPurpose);
 public sealed record WeeklyGeneratedShortNarration(string ShortCode, string Title, string NarrationText, int EstimatedDurationSeconds, string RecommendedVisualStrategy);
 public sealed record WeeklyNarrationQualityReport(bool IsValid, IReadOnlyList<string> Warnings, IReadOnlyList<string> ForbiddenPhraseHits, IReadOnlyList<string> RepeatedPhraseWarnings, int WordCount, int EstimatedDurationSeconds, int TargetDurationSeconds, bool EmotionalProgressionDetected, bool ShortCtaUniquenessValid);
-public sealed record WeeklyPreviewStabilityReport(bool IsStable, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, bool ReadyForAssetResolution, bool ReadyForSceneChoreography, bool ReadyForRendering);
+public sealed record WeeklyPreviewStabilityReport(bool IsStable, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, bool ReadyForAssetResolution, bool ReadyForSceneChoreography, bool ReadyForRenderPreparation, bool ReadyForRendering);
 public sealed record WeeklyNormalizedEditorialEvent(string NormalizedEventId, string NormalizedEventType, string Title, string HumanDescription, IReadOnlyList<string> PrimaryObjects, DateOnly PeakDate, IReadOnlyList<DateOnly> SupportingDates, string HumanTimeWindow, IReadOnlyList<string> SourceEventIds, int EditorialImportance, string RecommendedVisualStrategy);
 public sealed record WeeklyNormalizedStoryArc(string Headline, string Hook, string StoryTheme, string HeroStory, IReadOnlyList<string> SupportingStoryPoints, string BestNightRecommendation, string EmotionalProgression, string ViewerPromise);
 public sealed record WeeklyNormalizedTimeWindow(DateOnly Date, string HumanLabel, DateTime? RawBestTimeUtc, double Confidence);
@@ -1383,6 +1384,26 @@ public sealed record ResolvedWeeklyAsset(string AssetId, string AssetCode, strin
 public sealed record WeeklySceneTimeline(string SceneCode, int StartSecond, int EndSecond, int NarrationStartSecond, int NarrationEndSecond, int TransitionLeadSeconds);
 public sealed record WeeklyOverlayTimeline(string SceneCode, string OverlayType, string OverlayText, int StartSecond, int EndSecond, string AnimationStyle, string SafeArea);
 public sealed record WeeklyRenderContract(string SceneCode, string RendererType, string RenderMode, IReadOnlyList<string> ExpectedInputs, IReadOnlyList<string> ExpectedOutputs, bool SupportsReuse, bool RequiresCompositing);
+public sealed record WeeklyRenderExecutionPackage(
+    string ExecutionId,
+    IReadOnlyList<WeeklyRenderExecutionScene> ExecutionScenes,
+    IReadOnlyList<WeeklySceneTimeline> ExecutionTimeline,
+    IReadOnlyList<RenderSourceDecision> RenderSourceDecisions,
+    IReadOnlyList<AssetResolutionDirective> AssetResolutionDirectives,
+    IReadOnlyList<StellariumExecutionDirective> StellariumExecutionDirectives,
+    IReadOnlyList<OverlayExecutionDirective> OverlayExecutionDirectives,
+    IReadOnlyList<MotionExecutionDirective> MotionExecutionDirectives,
+    IReadOnlyList<TransitionExecutionDirective> TransitionExecutionDirectives,
+    ThumbnailExecutionContract ThumbnailExecutionContract,
+    IReadOnlyList<string> ExecutionWarnings);
+public sealed record WeeklyRenderExecutionScene(string SceneCode, int SceneOrder, string RendererType, string VisualSourceType, string SceneType, int DurationSeconds, int StartSecond, int EndSecond, IReadOnlyList<string> NarrationSegmentCodes, DateOnly TargetDate, string HumanTimeWindow, DateTime? TechnicalBestTimeUtc, IReadOnlyList<string> InputContracts, IReadOnlyList<string> OutputContract, int ExecutionPriority, string ReusePolicy);
+public sealed record RenderSourceDecision(string SceneCode, string SelectedSourceType, string Reason, IReadOnlyList<string> FallbackSourceTypes, bool RequiresAssetResolution, bool RequiresStellarium, bool RequiresOverlayComposite, bool CanRenderWithoutStellarium);
+public sealed record AssetResolutionDirective(string SceneCode, IReadOnlyList<string> RequiredAssets, IReadOnlyList<string> OptionalAssets, string FallbackPolicy, bool AllowPublicImageFallback, bool AllowGeneratedImageFallback);
+public sealed record StellariumExecutionDirective(string SceneCode, string RegionId, DateOnly TargetDate, DateTime? TechnicalBestTimeUtc, string HumanTimeWindow, IReadOnlyList<string> ObjectCodes, int FieldOfViewDegrees, string CapturePurpose, string FutureSscScriptRole, bool Required);
+public sealed record OverlayExecutionDirective(string SceneCode, IReadOnlyList<string> Overlays, int StartSecond, int EndSecond, int ZIndex, string Animation);
+public sealed record MotionExecutionDirective(string SceneCode, string CameraBehavior, string MotionStyle, double ZoomStart, double ZoomEnd, string PanDirection, bool ParallaxEnabled);
+public sealed record TransitionExecutionDirective(string FromSceneCode, string ToSceneCode, string TransitionType, int DurationSeconds);
+public sealed record ThumbnailExecutionContract(string RendererType, string VisualSourceType, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, string CompositionDescription, string OverlayText, IReadOnlyList<string> RequiredAssets, string FallbackPolicy, string OutputRole);
 public sealed record WeeklyCinematicChoreographyPackage(
     IReadOnlyList<WeeklyCinematicScene> Scenes,
     IReadOnlyList<WeeklySceneTimeline> SceneTimeline,
