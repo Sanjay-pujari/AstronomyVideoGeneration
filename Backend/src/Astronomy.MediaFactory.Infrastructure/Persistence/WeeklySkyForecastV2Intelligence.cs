@@ -48,7 +48,10 @@ public sealed class WeeklySkyForecastV2EventIntelligenceBuilder : IWeeklySkyFore
                 if (close.Any())
                 {
                     var codes = close.Select(x => x.ObjectCode).Append("MOON").Distinct().ToList();
-                    events.Add(BuildEvent(codes.Count >= 3 ? "planetary_grouping" : "moon_planet_pairing", "One continuous evening sky story", day.Date, moon.BestViewingTimeUtc, codes, context, 90, "Hybrid", "grouping_story", "grouping_trace_same_window"));
+                    var groupingTitle = codes.Count >= 3
+                        ? "Moon, Jupiter and Venus align in evening twilight"
+                        : "Moon and bright planet share evening twilight";
+                    events.Add(BuildEvent(codes.Count >= 3 ? "planetary_grouping" : "moon_planet_pairing", groupingTitle, day.Date, moon.BestViewingTimeUtc, codes, context, 90, "Hybrid", "grouping_story", "grouping_trace_same_window"));
                 }
             }
         }
@@ -615,7 +618,9 @@ public sealed class WeeklySkyForecastV2EditorialNormalizer : IWeeklySkyForecastV
             peakTime = null;
         var windows = new[] { new WeeklyNormalizedTimeWindow(peak, "during twilight / shortly after sunset", peakTime, 0.9) };
         var visualInputs = cinematicBlueprint.CinematicMoments.Select(m => new WeeklyNormalizedVisualStoryInput(m.VisualUniquenessKey, "supporting", "Show the normalized weekly story progression", m.ObjectCodes, m.TargetDate, "early evening", m.RecommendedVisualStrategy)).ToList();
-        var arc = new WeeklyNormalizedStoryArc(editorialPackage.Headline, editorialPackage.OpeningHook, editorialPackage.StoryTheme, normalized.Title, ["Best skywatching night: May 25", "Jupiter’s strongest planet presence", "The Moon’s calm visual highlight", "Simple viewing and photography tip"], "Best skywatching night: May 25", "Curiosity to calm wonder", "Step outside during twilight for a reliable weekly sky moment.");
+        var normalizedHook = "Start with the week’s clearest twilight moment, then follow the Moon and bright planets across nearby evenings.";
+        var normalizedTheme = "One beautiful twilight window anchors the week while Jupiter and the Moon deliver an easy, cinematic sky story.";
+        var arc = new WeeklyNormalizedStoryArc(editorialPackage.Headline, normalizedHook, normalizedTheme, normalized.Title, ["Best skywatching night: May 25", "Jupiter’s strongest planet presence", "The Moon’s calm visual highlight", "Simple viewing and photography tip"], "Best skywatching night: May 25", "Curiosity to calm wonder", "Step outside during twilight for a reliable weekly sky moment.");
         return Task.FromResult(new WeeklyNormalizedEditorialPackage([normalized], normalized, arc, windows, visualInputs, []));
     }
 }
