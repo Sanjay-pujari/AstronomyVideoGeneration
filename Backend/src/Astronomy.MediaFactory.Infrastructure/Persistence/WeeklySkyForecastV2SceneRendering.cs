@@ -50,6 +50,10 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         var assetResults = new List<CelestialAssetSceneRenderResult>();
         var hybridResults = new List<HybridSceneCompositeResult>();
         var overlayResults = new List<OverlayRenderResult>();
+        var overlayDiagnostics = new List<SceneOverlayDiagnostics>();
+        var overlayJobsByScene = prep.OverlayRenderPlan.Jobs
+            .GroupBy(x => x.SceneCode, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
         var visualPlans = new List<CelestialObjectVisualPlan>();
         var assetResolver = new CelestialAssetResolver(renderingOptions.Value.CelestialAssetsRoot, logger);
@@ -108,17 +112,17 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
                 switch (req.RendererType)
                 {
                     case "StellariumSceneRenderer":
-                        await ExecuteStellariumSceneAsync(req, prep, requestWarnings, requestErrors, stellariumResults, visualPlan, cinematicPlan, sceneTimeoutCts.Token);
+                        await ExecuteStellariumSceneAsync(req, prep, requestWarnings, requestErrors, stellariumResults, visualPlan, cinematicPlan, overlayJobsByScene, overlayResults, overlayDiagnostics, orchestrationContext.Request.Diagnostics, sceneTimeoutCts.Token);
                         diagnosticsFallbackUsed = true;
                         break;
                     case "CelestialAssetCompositor":
-                        await ExecuteCelestialAssetSceneAsync(req, prep, requestWarnings, requestErrors, assetResults, visualPlan, cinematicPlan, sceneTimeoutCts.Token);
+                        await ExecuteCelestialAssetSceneAsync(req, prep, requestWarnings, requestErrors, assetResults, visualPlan, cinematicPlan, overlayJobsByScene, overlayResults, overlayDiagnostics, orchestrationContext.Request.Diagnostics, sceneTimeoutCts.Token);
                         break;
                     case "HybridCompositor":
-                        await ExecuteHybridSceneAsync(req, prep, requestWarnings, requestErrors, hybridResults, sceneTimeoutCts.Token);
+                        await ExecuteHybridSceneAsync(req, prep, requestWarnings, requestErrors, hybridResults, overlayJobsByScene, overlayResults, overlayDiagnostics, orchestrationContext.Request.Diagnostics, sceneTimeoutCts.Token);
                         break;
                     case "OverlayCompositor":
-                        await ExecuteOverlaySceneAsync(req, requestWarnings, requestErrors, sceneTimeoutCts.Token);
+                        await ExecuteOverlaySceneAsync(req, requestWarnings, requestErrors, overlayJobsByScene, overlayResults, overlayDiagnostics, orchestrationContext.Request.Diagnostics, sceneTimeoutCts.Token);
                         break;
                     case "ThumbnailCompositor":
                         await ExecuteThumbnailSceneAsync(req, prep, requestWarnings, requestErrors, sceneTimeoutCts.Token);
@@ -166,11 +170,13 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             logger.LogInformation("Completed scene render: {SceneCode}, status={Status}, elapsedMs={ElapsedMs}", req.SceneCode, status, (DateTime.UtcNow - sceneStartedAt).TotalMilliseconds);
         }
 
-        foreach (var overlay in prep.OverlayRenderPlan.Jobs)
+        var diagnosticsOverlayPath = Path.Combine(prep.WorkingDirectoryPlan.DebugPath, "scene-overlay-diagnostics.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsOverlayPath)!);
+        await File.WriteAllTextAsync(diagnosticsOverlayPath, JsonSerializer.Serialize(new
         {
-await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {overlay.OverlayType}", cancellationToken);
-            overlayResults.Add(new OverlayRenderResult(overlay.JobId, overlay.SceneCode, overlay.OverlayType, overlay.PlannedOverlayPath, "Rendered", [], []));
-        }
+            ownership = "OptionA_PreCompositeInSceneFrames",
+            items = overlayDiagnostics
+        }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 
         ThumbnailSceneRenderResult? thumbnail = null;
         var thumbnailObjectCount = 0;
@@ -254,20 +260,20 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
     private static bool IsReuseScene(SceneRenderRequest req)
         => req.IsReuseScene || req.SceneCode.EndsWith("_reuse", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(req.ReuseSourceSceneCode);
 
-    private async Task ExecuteStellariumSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<StellariumSceneRenderResult> stellariumResults, CelestialObjectVisualPlan visualPlan, CinematicVisualPlan cinematicPlan, CancellationToken ct)
+    private async Task ExecuteStellariumSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<StellariumSceneRenderResult> stellariumResults, CelestialObjectVisualPlan visualPlan, CinematicVisualPlan cinematicPlan, IReadOnlyDictionary<string, List<OverlayRenderJob>> overlayJobsByScene, List<OverlayRenderResult> overlayResults, List<SceneOverlayDiagnostics> overlayDiagnostics, bool diagnosticsEnabled, CancellationToken ct)
     {
         requestWarnings.Add("Stellarium capture not implemented; diagnostics fallback visual used.");
-        await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, visualPlan.SelectedAssets, cinematicPlan, ct);
+        await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, visualPlan.SelectedAssets, cinematicPlan, overlayJobsByScene, overlayResults, overlayDiagnostics, diagnosticsEnabled, requestWarnings, ct);
         var job = prep.StellariumRenderPlan.Jobs.FirstOrDefault(x => x.RequestId == req.RequestId || x.SceneCode == req.SceneCode);
         if (job is not null) stellariumResults.Add(new StellariumSceneRenderResult(job.JobId, req.SceneCode, req.RequestId, job.PlannedSscPath, req.OutputPath, "DiagnosticsFallbackVisual", req.DurationSeconds, requestWarnings, requestErrors));
     }
-    private async Task ExecuteCelestialAssetSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<CelestialAssetSceneRenderResult> assetResults, CelestialObjectVisualPlan visualPlan, CinematicVisualPlan cinematicPlan, CancellationToken ct)
-    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, visualPlan.SelectedAssets, cinematicPlan, ct); assetResults.Add(new CelestialAssetSceneRenderResult(req.SceneCode, req.RequestId, req.RequiredAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
-    private async Task ExecuteHybridSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<HybridSceneCompositeResult> hybridResults, CancellationToken ct)
-    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, req.RequiredAssets, BuildCinematicVisualPlan(req, new CelestialObjectVisualPlan(req.SceneCode, req.SceneCode, req.NarrationSegmentCodes, req.RequiredAssets, req.RequiredAssets, [], req.RequiredAssets, "Hybrid", false, null, [])), ct); hybridResults.Add(new HybridSceneCompositeResult(req.SceneCode, req.RequestId, req.RequiredAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
-    private async Task ExecuteOverlaySceneAsync(SceneRenderRequest req, List<string> requestWarnings, List<string> requestErrors, CancellationToken ct) => await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, req.RequiredAssets, BuildCinematicVisualPlan(req, new CelestialObjectVisualPlan(req.SceneCode, req.SceneCode, req.NarrationSegmentCodes, req.RequiredAssets, req.RequiredAssets, [], req.RequiredAssets, "Overlay", false, null, [])), ct);
+    private async Task ExecuteCelestialAssetSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<CelestialAssetSceneRenderResult> assetResults, CelestialObjectVisualPlan visualPlan, CinematicVisualPlan cinematicPlan, IReadOnlyDictionary<string, List<OverlayRenderJob>> overlayJobsByScene, List<OverlayRenderResult> overlayResults, List<SceneOverlayDiagnostics> overlayDiagnostics, bool diagnosticsEnabled, CancellationToken ct)
+    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, visualPlan.SelectedAssets, cinematicPlan, overlayJobsByScene, overlayResults, overlayDiagnostics, diagnosticsEnabled, requestWarnings, ct); assetResults.Add(new CelestialAssetSceneRenderResult(req.SceneCode, req.RequestId, req.RequiredAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
+    private async Task ExecuteHybridSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, List<HybridSceneCompositeResult> hybridResults, IReadOnlyDictionary<string, List<OverlayRenderJob>> overlayJobsByScene, List<OverlayRenderResult> overlayResults, List<SceneOverlayDiagnostics> overlayDiagnostics, bool diagnosticsEnabled, CancellationToken ct)
+    { await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, req.RequiredAssets, BuildCinematicVisualPlan(req, new CelestialObjectVisualPlan(req.SceneCode, req.SceneCode, req.NarrationSegmentCodes, req.RequiredAssets, req.RequiredAssets, [], req.RequiredAssets, "Hybrid", false, null, [])), overlayJobsByScene, overlayResults, overlayDiagnostics, diagnosticsEnabled, requestWarnings, ct); hybridResults.Add(new HybridSceneCompositeResult(req.SceneCode, req.RequestId, req.RequiredAssets, req.OutputPath, "Rendered", requestWarnings, requestErrors)); }
+    private async Task ExecuteOverlaySceneAsync(SceneRenderRequest req, List<string> requestWarnings, List<string> requestErrors, IReadOnlyDictionary<string, List<OverlayRenderJob>> overlayJobsByScene, List<OverlayRenderResult> overlayResults, List<SceneOverlayDiagnostics> overlayDiagnostics, bool diagnosticsEnabled, CancellationToken ct) => await RenderSceneVideoAsync(req.OutputPath, req.SceneCode, req.DurationSeconds, req.RequiredAssets, BuildCinematicVisualPlan(req, new CelestialObjectVisualPlan(req.SceneCode, req.SceneCode, req.NarrationSegmentCodes, req.RequiredAssets, req.RequiredAssets, [], req.RequiredAssets, "Overlay", false, null, [])), overlayJobsByScene, overlayResults, overlayDiagnostics, diagnosticsEnabled, requestWarnings, ct);
     private async Task ExecuteThumbnailSceneAsync(SceneRenderRequest req, RenderPreparationPackage prep, List<string> requestWarnings, List<string> requestErrors, CancellationToken ct) => await RenderThumbnailAsync(prep.ThumbnailRenderPlan.PlannedOutputPath, req.SceneCode, req.RequiredAssets, null, ct);
-    private async Task RenderSceneVideoAsync(string outputPath, string label, double duration, IReadOnlyList<string> objectAssets, CinematicVisualPlan plan, CancellationToken ct)
+    private async Task RenderSceneVideoAsync(string outputPath, string label, double duration, IReadOnlyList<string> objectAssets, CinematicVisualPlan plan, IReadOnlyDictionary<string, List<OverlayRenderJob>> overlayJobsByScene, List<OverlayRenderResult> overlayResults, List<SceneOverlayDiagnostics> overlayDiagnostics, bool diagnosticsEnabled, List<string> requestWarnings, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var o = renderingOptions.Value;
@@ -280,6 +286,16 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         {
             imageCts.CancelAfter(ImageCompositionTimeout);
             await RenderSceneFrameAsync(framePath, label, o.VideoWidth, o.VideoHeight, objectAssets, plan, imageCts.Token);
+            if (overlayJobsByScene.TryGetValue(label, out var sceneOverlays))
+            {
+                foreach (var overlay in sceneOverlays.OrderBy(x => x.ZIndex))
+                {
+                    var diag = await GenerateAndCompositeOverlayAsync(overlay, framePath, o.VideoWidth, o.VideoHeight, diagnosticsEnabled, imageCts.Token);
+                    overlayDiagnostics.Add(diag);
+                    overlayResults.Add(new OverlayRenderResult(overlay.JobId, overlay.SceneCode, overlay.OverlayType, overlay.PlannedOverlayPath, "Rendered", diag.Warnings, []));
+                    requestWarnings.AddRange(diag.Warnings);
+                }
+            }
         }
         logger.LogInformation("C# image composition completed");
         var frameRate = Math.Max(1, o.FrameRate);
@@ -301,10 +317,26 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         await mediaValidationService.ValidateMp4Async(outputPath, 1024, ct);
         logger.LogInformation("ffprobe validation completed");
     }
-    private async Task RenderOverlayAsync(string outputPath, string label, CancellationToken ct)
+    private async Task<SceneOverlayDiagnostics> GenerateAndCompositeOverlayAsync(OverlayRenderJob overlay, string sceneFramePath, int width, int height, bool diagnosticsEnabled, CancellationToken ct)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-        await RenderOverlayImageAsync(outputPath, label, 1920, 1080, ct);
+        Directory.CreateDirectory(Path.GetDirectoryName(overlay.PlannedOverlayPath)!);
+        await RenderOverlayImageAsync(overlay.PlannedOverlayPath, overlay, width, height, diagnosticsEnabled, ct);
+        var overlayVisiblePixelCount = CountVisiblePixels(overlay.PlannedOverlayPath);
+        var warnings = new List<string>();
+        var overlayGenerated = File.Exists(overlay.PlannedOverlayPath);
+        var overlayComposited = false;
+        if (overlayGenerated && overlayVisiblePixelCount == 0) warnings.Add("Blank overlay generated.");
+        if (overlayGenerated && overlayVisiblePixelCount > 0 && File.Exists(sceneFramePath))
+        {
+            using var baseFrame = Image.Load<Rgba32>(sceneFramePath);
+            using var overlayImage = Image.Load<Rgba32>(overlay.PlannedOverlayPath);
+            baseFrame.Mutate(ctx => ctx.DrawImage(overlayImage, 1f));
+            await baseFrame.SaveAsPngAsync(sceneFramePath, ct);
+            overlayComposited = true;
+        }
+        if (overlayGenerated && !overlayComposited) warnings.Add("Overlay generated but not used in final scene.");
+        if (!diagnosticsEnabled && (!overlayComposited || overlayVisiblePixelCount == 0) && File.Exists(overlay.PlannedOverlayPath)) File.Delete(overlay.PlannedOverlayPath);
+        return new SceneOverlayDiagnostics(overlay.SceneCode, overlay.OverlayType, overlay.PlannedOverlayPath, overlayGenerated, overlayComposited, overlayVisiblePixelCount, overlayComposited, sceneFramePath, warnings);
     }
     private async Task RenderThumbnailAsync(string outputPath, string label, IReadOnlyList<string> objectAssets, string? regionName, CancellationToken ct)
     {
@@ -369,24 +401,41 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         return new CelestialObjectVisualPlan(req.SceneCode, req.SceneCode, req.NarrationSegmentCodes, requiredObjects, requiredObjects, diagnostics.FilesScanned.SelectMany(kv => kv.Value).Distinct().ToList(), selected, layout, selected.Count == 0, selected.Count == 0 ? "No assets resolved, diagnostics fallback required." : null, warnings);
     }
 
-    private static async Task RenderOverlayImageAsync(string path, string label, int width, int height, CancellationToken ct)
+    private static async Task RenderOverlayImageAsync(string path, OverlayRenderJob overlay, int width, int height, bool diagnosticsEnabled, CancellationToken ct)
     {
         var font = ResolveFont(Math.Max(30f, width * 0.022f));
+        var body = ResolveFont(Math.Max(20f, width * 0.014f));
         using var image = new Image<Rgba32>(width, height, Color.Transparent);
         image.Mutate(ctx =>
         {
-            var text = string.IsNullOrWhiteSpace(label) ? "Overlay" : label;
-            var panel = new RectangleF(45, height - 220, width - 90, 150);
+            var panel = new RectangleF(45, height - 240, width - 90, 185);
             ctx.Fill(Color.ParseHex("#050911").WithAlpha(0.55f), panel);
             ctx.Draw(Color.White.WithAlpha(0.2f), 2, panel);
-            var options = new RichTextOptions(font) { Origin = new PointF(panel.X + 28, panel.Y + 32), WrappingLength = panel.Width - 56 };
-            ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(panel.X + 30, panel.Y + 34) }, text, Color.ParseHex("#4FA3FF").WithAlpha(0.45f));
-            ctx.DrawText(options, text, Color.White.WithAlpha(0.9f));
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(panel.X + 24, panel.Y + 16), WrappingLength = panel.Width - 48 }, $"Objects: {overlay.OverlayText}", Color.White);
+            ctx.DrawText(new RichTextOptions(body) { Origin = new PointF(panel.X + 24, panel.Y + 62), WrappingLength = panel.Width - 48 }, $"Viewing: {overlay.SafeArea} • {overlay.Animation}", Color.ParseHex("#8FD2FF"));
+            ctx.DrawText(new RichTextOptions(body) { Origin = new PointF(panel.X + 24, panel.Y + 92), WrappingLength = panel.Width - 48 }, $"Time: {overlay.StartSecond}s–{overlay.EndSecond}s • Best Night", Color.ParseHex("#F9B24E"));
+            ctx.DrawText(new RichTextOptions(body) { Origin = new PointF(panel.X + 24, panel.Y + 124), WrappingLength = panel.Width - 48 }, "CTA: Look up tonight and follow for tomorrow's targets.", Color.ParseHex("#D5F3FF"));
+            if (diagnosticsEnabled) ctx.Draw(Color.Lime.WithAlpha(0.55f), 2f, new RectangleF(width * 0.1f, height * 0.1f, width * 0.8f, height * 0.8f));
         });
         await image.SaveAsPngAsync(path, ct);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate overlay image '{path}'.");
         if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid overlay image '{path}'.");
     }
+    private static int CountVisiblePixels(string path)
+    {
+        using var image = Image.Load<Rgba32>(path);
+        var count = 0;
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < row.Length; x++) if (row[x].A > 0) count++;
+            }
+        });
+        return count;
+    }
+    private sealed record SceneOverlayDiagnostics(string SceneCode, string OverlayType, string OverlayPath, bool OverlayGenerated, bool OverlayComposited, int OverlayVisiblePixelCount, bool OverlayUsedInSceneFrame, string FinalSceneFramePath, IReadOnlyList<string> Warnings);
 
     private static async Task RenderThumbnailImageAsync(string path, string label, int width, int height, IReadOnlyList<string> objectAssets, string? regionName, CancellationToken ct)
     {
