@@ -26,6 +26,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
     private static readonly string[] PriorityObjects = ["moon", "jupiter", "venus", "saturn", "mars", "milky-way", "milky_way", "starfield", "background"];
     private const float BlackThresholdDefault = 18f;
+    private const string WeeklyThumbnailHeadline = "THIS WEEK'S SKY";
     public async Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
         => await RunAsync(new WeeklySkyForecastV2OrchestrationContext(
             ContentGenerationPlanId: contentGenerationPlanId ?? request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid(),
@@ -455,13 +456,14 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
 
             DrawVignette(ctx, width, height);
             DrawAtmosphericHaze(ctx, width, height);
-            var headline = "WEEKLY SKY FORECAST";
-            var subtitle = $"{(regionName ?? "UDAIPUR").ToUpperInvariant()} • MAY 23–30";
-            var titleOptions = new RichTextOptions(titleFont) { Origin = new PointF(70, 58), WrappingLength = width - 140 };
+            var headline = WeeklyThumbnailHeadline;
+            var subtitle = "Moon Meets Jupiter";
+            var metadataLine = $"{(regionName ?? "Udaipur")} • May 23–30";
+            var titleOptions = new RichTextOptions(titleFont) { Origin = new PointF(72, 62), WrappingLength = width * 0.58f };
             ctx.DrawText(new RichTextOptions(titleOptions) { Origin = new PointF(74, 62) }, headline, Color.Black.WithAlpha(0.88f));
             ctx.DrawText(titleOptions, headline, Color.White);
-            ctx.DrawText(new RichTextOptions(subtitleFont) { Origin = new PointF(76, 145), WrappingLength = width - 150 }, subtitle, Color.ParseHex("#F9B24E"));
-            DrawThumbnailStoryBadges(ctx, width, height, subtitleFont);
+            ctx.DrawText(new RichTextOptions(subtitleFont) { Origin = new PointF(76, 154), WrappingLength = width * 0.52f }, subtitle, Color.ParseHex("#F9B24E"));
+            ctx.DrawText(new RichTextOptions(subtitleFont) { Origin = new PointF(76, 192), WrappingLength = width * 0.52f }, metadataLine, Color.ParseHex("#CBE3FF").WithAlpha(0.92f));
         });
         await image.SaveAsJpegAsync(path, new JpegEncoder { Quality = 92 }, ct);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate thumbnail image '{path}'.");
@@ -477,8 +479,8 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         {
             using var assetImage = Image.Load<Rgba32>(assetPath);
             MakeBlackTransparent(assetImage, BlackThresholdDefault);
-            FeatherAlphaEdges(assetImage, 2);
-            ApplyOuterGlow(assetImage, Color.ParseHex("#85C9FF"), 12, 0.52f);
+            FeatherAlphaEdges(assetImage, 1);
+            ApplyOuterGlow(assetImage, Color.ParseHex("#85C9FF"), 11, 0.44f);
             assetImage.Mutate(x => x.Resize(new ResizeOptions { Size = new Size((int)bounds.Width, (int)bounds.Height), Mode = ResizeMode.Crop }));
             ctx.DrawImage(assetImage, new Point((int)bounds.X, (int)bounds.Y), 1f);
             ctx.Draw(Color.White.WithAlpha(0.38f), 1.4f, new EllipsePolygon(bounds.X + bounds.Width / 2f, bounds.Y + bounds.Height / 2f, bounds.Width / 2.02f));
@@ -504,7 +506,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             }
         });
     }
-    private static void FeatherAlphaEdges(Image<Rgba32> image, int radius) => image.Mutate(x => x.GaussianBlur(Math.Max(0.5f, radius * 0.45f)));
+    private static void FeatherAlphaEdges(Image<Rgba32> image, int radius) => image.Mutate(x => x.GaussianBlur(Math.Max(0.25f, radius * 0.2f)));
     private static void ApplyOuterGlow(Image<Rgba32> image, Color color, int radius, float opacity)
     {
         using var glow = image.Clone(i => i.GaussianBlur(Math.Max(1f, radius)).Opacity(opacity));
@@ -543,13 +545,13 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     }
     private static void DrawDepthLayerStack(IImageProcessingContext ctx, int width, int height)
     {
-        DrawStars(ctx, width, height, 420);
+        DrawStars(ctx, width, height, 520);
         DrawNebulaCloud(ctx, width, height);
-        DrawStars(ctx, width, height, 180);
-        ctx.Fill(Color.ParseHex("#7AB3FF").WithAlpha(0.035f), new RectangleF(0, 0, width, height * 0.42f));
-        ctx.Fill(Color.ParseHex("#B896FF").WithAlpha(0.03f), new RectangleF(width * 0.28f, height * 0.18f, width * 0.62f, height * 0.48f));
-        ctx.Fill(Color.ParseHex("#FFB26A").WithAlpha(0.024f), new RectangleF(0, height * 0.55f, width * 0.56f, height * 0.45f));
-        DrawStars(ctx, width, height, 75);
+        DrawStars(ctx, width, height, 240);
+        ctx.Fill(Color.ParseHex("#7AB3FF").WithAlpha(0.025f), new RectangleF(0, 0, width, height * 0.42f));
+        ctx.Fill(Color.ParseHex("#B896FF").WithAlpha(0.022f), new RectangleF(width * 0.28f, height * 0.18f, width * 0.62f, height * 0.48f));
+        ctx.Fill(Color.ParseHex("#FFB26A").WithAlpha(0.02f), new RectangleF(0, height * 0.55f, width * 0.56f, height * 0.45f));
+        DrawStars(ctx, width, height, 110);
     }
     private static void DrawAtmosphericHaze(IImageProcessingContext ctx, int width, int height)
     {
@@ -559,8 +561,10 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     }
     private static void DrawVignette(IImageProcessingContext ctx, int width, int height)
     {
-        ctx.Fill(Color.Black.WithAlpha(0.33f), new RectangleF(0, 0, width, 70));
-        ctx.Fill(Color.Black.WithAlpha(0.38f), new RectangleF(0, height - 80, width, 80));
+        ctx.Fill(Color.Black.WithAlpha(0.35f), new RectangleF(0, 0, width, 84));
+        ctx.Fill(Color.Black.WithAlpha(0.46f), new RectangleF(0, height - 102, width, 102));
+        ctx.Fill(Color.Black.WithAlpha(0.2f), new RectangleF(0, 0, 96, height));
+        ctx.Fill(Color.Black.WithAlpha(0.16f), new RectangleF(width - 88, 0, 88, height));
     }
     private static List<RectangleF> BuildDynamicPlacements(string scene, int width, int height, IReadOnlyList<string> assets)
     {
@@ -577,26 +581,6 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             4 => [new RectangleF(-90, 110, 460, 460), new RectangleF(width * 0.46f, 250, 280, 280), new RectangleF(width * 0.66f, 140, 210, 210), new RectangleF(width * 0.79f, 300, 150, 150)],
             _ => Enumerable.Range(0, Math.Min(6, count)).Select(i => new RectangleF(80 + (i * 150), 90 + ((i % 2 == 0) ? i * 28 : i * 44), Math.Max(120, 380 - (i * 35)), Math.Max(120, 380 - (i * 35)))).ToList()
         };
-    }
-    private static void DrawThumbnailStoryBadges(IImageProcessingContext ctx, int width, int height, Font font)
-    {
-        var badges = new[]
-        {
-            ("BEST NIGHT", "#F9B24E"),
-            ("Moon meets Jupiter", "#8FD2FF"),
-            ("Rare Evening Alignment", "#C5A3FF"),
-            ("Visible This Week", "#FFFFFF"),
-            ("Look West After Sunset", "#9AE7C8")
-        };
-        var y = height - 220f;
-        foreach (var (text, color) in badges)
-        {
-            var panel = new RectangleF(width - 470, y, 410, 34);
-            ctx.Fill(Color.ParseHex("#050911").WithAlpha(0.68f), panel);
-            ctx.Draw(Color.ParseHex(color).WithAlpha(0.7f), 1.2f, panel);
-            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(panel.X + 10, panel.Y + 7), WrappingLength = panel.Width - 16 }, text, Color.ParseHex(color));
-            y += 38;
-        }
     }
     private static CinematicVisualPlan BuildCinematicVisualPlan(SceneRenderRequest req, CelestialObjectVisualPlan visualPlan) => new(
         req.SceneCode, req.SceneCode, visualPlan.RequiredObjects, visualPlan.SelectedAssets, "EpicReveal", visualPlan.VisualLayoutType,
@@ -634,9 +618,8 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     private sealed record CinematicVisualPlan(string SceneCode, string ScenePurpose, IReadOnlyList<string> RequiredObjects, IReadOnlyList<string> SelectedAssets, string VisualMood, string LayoutType, string CameraMotion, string TransitionIn, string TransitionOut, IReadOnlyList<object> ObjectPlacements, IReadOnlyList<string> Effects, IReadOnlyList<object> OverlayMoments, double StartSecond, double EndSecond, double DurationSeconds);
     private static void DrawSceneOverlay(IImageProcessingContext ctx, string scene, int width, int height, Font titleFont, Font bodyFont)
     {
-        var panel = new RectangleF(62, height - 160, width * 0.58f, 112);
-        ctx.Fill(Color.ParseHex("#050910").WithAlpha(0.35f), panel);
-        ctx.Draw(Color.White.WithAlpha(0.14f), 1.1f, panel);
+        var panel = new RectangleF(62, height - 168, width * 0.56f, 102);
+        ctx.Fill(Color.ParseHex("#050910").WithAlpha(0.18f), panel);
         var title = scene switch
         {
             "hero_western_grouping_scene" => "Look west after sunset this week...",
@@ -645,8 +628,8 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             "viewing_tip_wide_scene" => "Bring binoculars and let your eyes adapt",
             _ => "Weekly Sky Forecast"
         };
-        ctx.DrawText(new RichTextOptions(titleFont) { Origin = new PointF(panel.X + 16, panel.Y + 14), WrappingLength = panel.Width - 28 }, title, Color.White.WithAlpha(0.95f));
-        ctx.DrawText(new RichTextOptions(bodyFont) { Origin = new PointF(panel.X + 16, panel.Y + 58), WrappingLength = panel.Width - 28 }, "BEST NIGHT • WESTERN SKY • LOOK UP TONIGHT", Color.ParseHex("#8FD2FF").WithAlpha(0.95f));
+        ctx.DrawText(new RichTextOptions(titleFont) { Origin = new PointF(panel.X + 14, panel.Y + 12), WrappingLength = panel.Width - 24 }, title, Color.White.WithAlpha(0.96f));
+        ctx.DrawText(new RichTextOptions(bodyFont) { Origin = new PointF(panel.X + 14, panel.Y + 54), WrappingLength = panel.Width - 24 }, "One sky story. One perfect viewing moment.", Color.ParseHex("#8FD2FF").WithAlpha(0.9f));
     }
 
 
