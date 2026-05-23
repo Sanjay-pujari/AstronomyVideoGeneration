@@ -111,15 +111,24 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.All(response.RenderPreparationPackage.SceneRenderRequests, r => Assert.False(string.IsNullOrWhiteSpace(r.MetadataOutputPath)));
         Assert.All(response.RenderPreparationPackage.SceneRenderRequests, r => Assert.False(string.IsNullOrWhiteSpace(r.DebugOutputPath)));
         var directories = response.RenderPreparationPackage.WorkingDirectoryPlan;
+        Assert.Equal("v2", directories.PathConventionVersion);
+        Assert.Equal("Rendering:WorkingDirectory", directories.WorkingDirectorySource);
         var pathList = new[] { directories.RootPath, directories.SceneRendersPath, directories.OverlaysPath, directories.AudioPath, directories.ThumbnailsPath, directories.TimelinePath, directories.FinalPath, directories.MetadataPath, directories.DebugPath, directories.StellariumPath, directories.AssetsPath };
-        Assert.All(pathList, p => Assert.True(Path.IsPathRooted(p)));
+        Assert.All(pathList, path =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(path));
+            Assert.True(Path.IsPathRooted(path));
+        });
         Assert.Equal(pathList.Length, pathList.Distinct(StringComparer.Ordinal).Count());
         Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.IsValid);
+        Assert.Empty(response.RenderPreparationPackage.RenderPreparationValidation.BlockingIssues);
         Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.ReadyForSceneRendering);
         Assert.False(response.RenderPreparationPackage.RenderPreparationValidation.ReadyForRendering);
         Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.WorkingDirectoryPlanValid);
         Assert.True(response.RenderPreparationPackage.RenderPreparationFreezeStatus.IsFrozen);
         Assert.True(response.RenderPreparationPackage.RenderPreparationFreezeStatus.IsReadyForPhase6B);
+        Assert.NotEmpty(response.RenderPreparationPackage.RenderPreparationFreezeStatus.VerifiedChecks);
+        Assert.Empty(response.RenderPreparationPackage.RenderPreparationFreezeStatus.BlockingIssues);
         Assert.True(response.ReadyForRenderPreparation);
         Assert.True(response.ReadyForSceneRendering);
         Assert.False(response.ReadyForRendering);
@@ -183,6 +192,8 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Empty(Directory.GetFiles(workingDirectory, "*.ssc", SearchOption.AllDirectories));
         Assert.Empty(Directory.GetFiles(workingDirectory, "*.mp4", SearchOption.AllDirectories));
         Assert.Empty(Directory.GetFiles(workingDirectory, "*.wav", SearchOption.AllDirectories));
+        Assert.Empty(Directory.GetFiles(workingDirectory, "*.jpg", SearchOption.AllDirectories));
+        Assert.Empty(Directory.GetFiles(workingDirectory, "*.png", SearchOption.AllDirectories));
     }
 
     [Fact]
