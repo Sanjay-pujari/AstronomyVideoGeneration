@@ -173,7 +173,15 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         if (!string.IsNullOrWhiteSpace(prep.ThumbnailRenderPlan.ThumbnailRequestId))
         {
             var thumbAssets = prep.ThumbnailRenderPlan.PrimaryObjects
-                .SelectMany(o => assetResolver.ResolveForObject(o).OrderByDescending(a => ScoreThumbnailAsset(a)).Take(1))
+                .SelectMany(o =>
+                {
+                    var resolution = assetResolver.ResolveForObject(o);
+                    return resolution.HeroAssets
+                        .Concat(resolution.TransparentAssets)
+                        .Concat(resolution.FilesScanned)
+                        .OrderByDescending(ScoreThumbnailAsset)
+                        .Take(1);
+                })
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             thumbnailObjectCount = thumbAssets.Count(File.Exists);
@@ -350,11 +358,14 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         }
         var layout = requiredObjects.Count > 1 || requiredObjects.Any(x => x.Contains("jupiter", StringComparison.OrdinalIgnoreCase) || x.Contains("venus", StringComparison.OrdinalIgnoreCase))
             ? "SkyGroupingCollage" : "HeroObject";
-        diagnostics.SelectedAssets = selected.ToList();
-        diagnostics.MissingObjects = requiredObjects.Where(o => !selected.Any(s => MatchesObjectName(o, s))).ToList();
-        diagnostics.FallbackUsed = selected.Count == 0;
-        diagnostics.ObjectCountDrawn = selected.Count;
-        diagnostics.SceneVisualsContainObjects = selected.Count > 0;
+        diagnostics = diagnostics with
+        {
+            SelectedAssets = selected.ToList(),
+            MissingObjects = requiredObjects.Where(o => !selected.Any(s => MatchesObjectName(o, s))).ToList(),
+            FallbackUsed = selected.Count == 0,
+            ObjectCountDrawn = selected.Count,
+            SceneVisualsContainObjects = selected.Count > 0
+        };
         return new CelestialObjectVisualPlan(req.SceneCode, req.SceneCode, req.NarrationSegmentCodes, requiredObjects, requiredObjects, diagnostics.FilesScanned.SelectMany(kv => kv.Value).Distinct().ToList(), selected, layout, selected.Count == 0, selected.Count == 0 ? "No assets resolved, diagnostics fallback required." : null, warnings);
     }
 
