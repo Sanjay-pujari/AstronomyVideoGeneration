@@ -1423,7 +1423,8 @@ public sealed record RenderPreparationPackage(
     OverlayRenderPlan OverlayRenderPlan,
     TimelineRenderPlan TimelineRenderPlan,
     ThumbnailRenderPlan ThumbnailRenderPlan,
-    RenderPreparationValidation RenderPreparationValidation);
+    RenderPreparationValidation RenderPreparationValidation,
+    RenderPreparationFreezeStatus RenderPreparationFreezeStatus);
 public sealed record RenderWorkingDirectoryPlan(string RootPath, string SceneRendersPath, string AudioPath, string OverlaysPath, string ThumbnailsPath, string TimelinePath, string FinalPath, string MetadataPath, string DebugPath, string StellariumPath, string AssetsPath, string PathConventionVersion, string WorkingDirectorySource);
 public sealed record SceneRenderRequest(string RequestId, string SceneCode, string RendererType, string SelectedSourceType, DateOnly TargetDate, DateTime? BestTimeUtc, int DurationSeconds, IReadOnlyList<string> NarrationSegmentCodes, IReadOnlyList<SceneRenderRequestInput> RequiredInputs, IReadOnlyList<SceneRenderExpectedOutput> ExpectedOutputs, IReadOnlyList<string> RequiredAssets, MotionExecutionDirective? MotionDirective, IReadOnlyList<OverlayExecutionDirective> OverlayDirectives, IReadOnlyList<TransitionExecutionDirective> TransitionDirectives, string FallbackPolicy, string OutputPath, string MetadataOutputPath, string DebugOutputPath, int RenderPriority, bool IsThumbnailOnly, bool RendererDecisionLocked);
 public sealed record SceneRenderRequestInput(string InputType, string InputCode, string Description, bool IsRequired);

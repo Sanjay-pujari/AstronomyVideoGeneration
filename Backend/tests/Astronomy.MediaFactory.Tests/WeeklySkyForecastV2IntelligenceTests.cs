@@ -11,7 +11,8 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
     [Fact]
     public async Task V2_Intelligence_Generates_Cinematic_Blueprint()
     {
-        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator(), new WeeklySkyForecastV2AssetResolver(), new WeeklySkyForecastV2EditorialNormalizer(), Options.Create(new RenderingOptions { WorkingDirectory = "./media-output" }));
+        var workingDirectory = Path.Combine(Path.GetTempPath(), $"weekly-preview-{Guid.NewGuid():N}");
+        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator(), new WeeklySkyForecastV2AssetResolver(), new WeeklySkyForecastV2EditorialNormalizer(), Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }));
         var response = await service.PreviewAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "IN-RJ-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), Diagnostics: true), CancellationToken.None);
 
         Assert.True(response.Success);
@@ -101,11 +102,26 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "twilight_starfield_bg");
         Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "tripod_phone_overlay");
         Assert.Contains(response.RenderPreparationPackage.AssetResolutionPlan.Items, a => a.AssetCode == "thumbnail_overlay_assets");
+        Assert.Equal(6, response.RenderPreparationPackage.SceneRenderRequests.Count);
+        var thumbnailRequest = Assert.Single(response.RenderPreparationPackage.SceneRenderRequests.Where(r => r.SceneCode == "thumbnail_story_scene"));
+        Assert.True(thumbnailRequest.IsThumbnailOnly);
+        var closingReuseRequest = Assert.Single(response.RenderPreparationPackage.SceneRenderRequests.Where(r => r.SceneCode == "best_night_wide_closing_reuse"));
+        Assert.NotEqual(closingReuseRequest.RequestId, response.RenderPreparationPackage.SceneRenderRequests.First(r => r.SceneCode == "best_night_wide_scene").RequestId);
+        Assert.All(response.RenderPreparationPackage.SceneRenderRequests, r => Assert.False(string.IsNullOrWhiteSpace(r.OutputPath)));
+        Assert.All(response.RenderPreparationPackage.SceneRenderRequests, r => Assert.False(string.IsNullOrWhiteSpace(r.MetadataOutputPath)));
+        Assert.All(response.RenderPreparationPackage.SceneRenderRequests, r => Assert.False(string.IsNullOrWhiteSpace(r.DebugOutputPath)));
+        var directories = response.RenderPreparationPackage.WorkingDirectoryPlan;
+        var pathList = new[] { directories.RootPath, directories.SceneRendersPath, directories.OverlaysPath, directories.AudioPath, directories.ThumbnailsPath, directories.TimelinePath, directories.FinalPath, directories.MetadataPath, directories.DebugPath, directories.StellariumPath, directories.AssetsPath };
+        Assert.All(pathList, p => Assert.True(Path.IsPathRooted(p)));
+        Assert.Equal(pathList.Length, pathList.Distinct(StringComparer.Ordinal).Count());
         Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.IsValid);
         Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.ReadyForSceneRendering);
         Assert.False(response.RenderPreparationPackage.RenderPreparationValidation.ReadyForRendering);
         Assert.True(response.RenderPreparationPackage.RenderPreparationValidation.WorkingDirectoryPlanValid);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationFreezeStatus.IsFrozen);
+        Assert.True(response.RenderPreparationPackage.RenderPreparationFreezeStatus.IsReadyForPhase6B);
         Assert.True(response.ReadyForRenderPreparation);
+        Assert.True(response.ReadyForSceneRendering);
         Assert.False(response.ReadyForRendering);
         Assert.InRange(response.SceneChoreographyPackage!.ResolvedScenes.Count, 4, 6);
         Assert.InRange(response.CinematicChoreographyPackage!.Scenes.Count, 4, 6);
@@ -163,6 +179,10 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.Contains(response.SceneChoreographyPackage.SceneTimeline, t => t.SceneCode == s.SceneCode));
         Assert.Contains(response.SceneChoreographyPackage.ResolvedAssets, a => a.FallbackPath.Contains("GeneratedImage", StringComparison.OrdinalIgnoreCase));
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes.Where(s => s.RequiresStellarium), s => Assert.Contains("best_night", s.SceneCode, StringComparison.OrdinalIgnoreCase));
+        Assert.False(Directory.Exists(response.RenderPreparationPackage.WorkingDirectoryPlan.RootPath));
+        Assert.Empty(Directory.GetFiles(workingDirectory, "*.ssc", SearchOption.AllDirectories));
+        Assert.Empty(Directory.GetFiles(workingDirectory, "*.mp4", SearchOption.AllDirectories));
+        Assert.Empty(Directory.GetFiles(workingDirectory, "*.wav", SearchOption.AllDirectories));
     }
 
     [Fact]

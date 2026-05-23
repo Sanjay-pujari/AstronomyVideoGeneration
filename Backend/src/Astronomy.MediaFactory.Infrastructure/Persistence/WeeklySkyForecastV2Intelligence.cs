@@ -860,8 +860,9 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
         if (!timelineValid) blocking.Add("Long-form timeline must cover 0-110 without gaps or overlaps.");
         var thumbnailPlanValid = !string.IsNullOrWhiteSpace(thumbnailPlan.ThumbnailRequestId) && !string.IsNullOrWhiteSpace(thumbnailPlan.PlannedOutputPath);
         var validation = new RenderPreparationValidation(blocking.Count == 0, sceneRequests.Count == requiredSceneCodes.Length, assetItems.Count > 0, stellariumJobs.Count > 0, overlayJobs.Count > 0, timelineValid, thumbnailPlanValid, workingDirValid, blocking.Count == 0, false, blocking, []);
+        var freezeStatus = new RenderPreparationFreezeStatus(true, true, ["working_directory_plan", "scene_render_requests", "asset_resolution_plan", "stellarium_render_plan", "overlay_render_plan", "timeline_render_plan", "thumbnail_render_plan", "render_preparation_validation"], [], []);
 
-        return new RenderPreparationPackage($"prep-{execution.ExecutionId}", dirs, sceneRequests, new AssetResolutionPlan(assetItems), new StellariumRenderPlan(stellariumJobs), new OverlayRenderPlan(overlayJobs), new TimelineRenderPlan(110, longForm.Count, longForm.Count - 1, longForm.Count(s => s.HasOverlap), 100, longForm), thumbnailPlan, validation);
+        return new RenderPreparationPackage($"prep-{execution.ExecutionId}", dirs, sceneRequests, new AssetResolutionPlan(assetItems), new StellariumRenderPlan(stellariumJobs), new OverlayRenderPlan(overlayJobs), new TimelineRenderPlan(110, longForm.Count, longForm.Count - 1, longForm.Count(s => s.HasOverlap), 100, longForm), thumbnailPlan, validation, freezeStatus);
     }
 
     private static Guid BuildDeterministicGuid(string value)
