@@ -229,6 +229,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             false,
             false,
             false,
+            false,
             ["Hybrid"],
             [],
             []);
