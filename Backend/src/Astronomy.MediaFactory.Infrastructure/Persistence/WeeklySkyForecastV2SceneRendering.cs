@@ -2,6 +2,12 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using SixLabors.Fonts;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -149,19 +155,92 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var o = renderingOptions.Value;
-        var args = $"-y -f lavfi -i testsrc2=size={o.VideoWidth}x{o.VideoHeight}:rate={o.FrameRate} -t {Math.Max(1,duration):0.##} -vf \"drawtext=text='{label}':x=40:y=40:fontsize=42:fontcolor=white\" -c:v libx264 -pix_fmt yuv420p \"{outputPath}\"";
+        var framePath = Path.Combine(Path.GetDirectoryName(outputPath)!, $"{Path.GetFileNameWithoutExtension(outputPath)}.scene-frame.png");
+        await RenderSceneFrameAsync(framePath, label, o.VideoWidth, o.VideoHeight, ct);
+        var args = $"-y -loop 1 -i \"{framePath}\" -t {Math.Max(1, duration):0.##} -r {Math.Max(1, o.FrameRate)} -c:v libx264 -pix_fmt yuv420p \"{outputPath}\"";
+        ValidateNoDrawText(args);
         await ffmpegService.ExecuteAsync(args, Directory.GetCurrentDirectory(), outputPath, ct);
     }
     private async Task RenderOverlayAsync(string outputPath, string label, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-        var args = $"-y -f lavfi -i color=c=black@0.0:s=1920x1080:d=1 -vf \"drawtext=text='{label}':x=60:y=60:fontsize=42:fontcolor=white@0.8\" -frames:v 1 \"{outputPath}\"";
-        await ffmpegService.ExecuteAsync(args, Directory.GetCurrentDirectory(), outputPath, ct);
+        await RenderOverlayImageAsync(outputPath, label, 1920, 1080, ct);
     }
     private async Task RenderThumbnailAsync(string outputPath, string label, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-        var args = $"-y -f lavfi -i testsrc=size=1280x720:rate=1 -vf \"drawtext=text='{label}':x=40:y=40:fontsize=52:fontcolor=white\" -frames:v 1 \"{outputPath}\"";
-        await ffmpegService.ExecuteAsync(args, Directory.GetCurrentDirectory(), outputPath, ct);
+        await RenderThumbnailImageAsync(outputPath, label, 1280, 720, ct);
+    }
+
+    private static async Task RenderSceneFrameAsync(string path, string label, int width, int height, CancellationToken ct)
+    {
+        var font = ResolveFont(Math.Max(32f, width * 0.03f));
+        using var image = new Image<Rgba32>(width, height, new Rgba32(7, 10, 25));
+        image.Mutate(ctx =>
+        {
+            ctx.Fill(Color.Black, new RectangleF(0, 0, width, height));
+            ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#0A1330")), new ColorStop(1, Color.ParseHex("#02040A"))]));
+            var text = string.IsNullOrWhiteSpace(label) ? "Weekly Sky Forecast" : label;
+            var options = new RichTextOptions(font) { Origin = new PointF(40, 60), WrappingLength = width - 80 };
+            ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(44, 64) }, text, Color.Black.WithAlpha(0.85f));
+            ctx.DrawText(options, text, Color.White);
+        });
+        await image.SaveAsPngAsync(path, ct);
+        var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate generated scene frame '{path}'.");
+        if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid generated scene frame '{path}'.");
+    }
+
+    private static async Task RenderOverlayImageAsync(string path, string label, int width, int height, CancellationToken ct)
+    {
+        var font = ResolveFont(Math.Max(30f, width * 0.022f));
+        using var image = new Image<Rgba32>(width, height, Color.Transparent);
+        image.Mutate(ctx =>
+        {
+            var text = string.IsNullOrWhiteSpace(label) ? "Overlay" : label;
+            var options = new RichTextOptions(font) { Origin = new PointF(60, 60), WrappingLength = width - 120 };
+            ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(63, 63) }, text, Color.Black.WithAlpha(0.7f));
+            ctx.DrawText(options, text, Color.White.WithAlpha(0.85f));
+        });
+        await image.SaveAsPngAsync(path, ct);
+        var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate overlay image '{path}'.");
+        if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid overlay image '{path}'.");
+    }
+
+    private static async Task RenderThumbnailImageAsync(string path, string label, int width, int height, CancellationToken ct)
+    {
+        var font = ResolveFont(Math.Max(40f, width * 0.045f));
+        using var image = new Image<Rgba32>(width, height, new Rgba32(6, 8, 16));
+        image.Mutate(ctx =>
+        {
+            ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, height), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#14264F")), new ColorStop(1, Color.ParseHex("#060810"))]));
+            var text = string.IsNullOrWhiteSpace(label) ? "Weekly story" : label;
+            var options = new RichTextOptions(font) { Origin = new PointF(42, 48), WrappingLength = width - 84 };
+            ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(46, 52) }, text, Color.Black.WithAlpha(0.82f));
+            ctx.DrawText(options, text, Color.White);
+        });
+        await image.SaveAsJpegAsync(path, new JpegEncoder { Quality = 92 }, ct);
+        var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate thumbnail image '{path}'.");
+        if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid thumbnail image '{path}'.");
+    }
+
+    private static Font ResolveFont(float size)
+    {
+        var preferred = new[] { "Inter", "Segoe UI", "Arial", "DejaVu Sans" };
+        foreach (var name in preferred)
+        {
+            if (SystemFonts.TryGet(name, out var family)) return family.CreateFont(size, FontStyle.Bold);
+        }
+
+        var fallbackFamily = SystemFonts.Collection.Families.FirstOrDefault()
+            ?? throw new InvalidOperationException("No system fonts available for C# overlay rendering.");
+        return fallbackFamily.CreateFont(size, FontStyle.Bold);
+    }
+
+    private static void ValidateNoDrawText(string ffmpegArgs)
+    {
+        if (ffmpegArgs.Contains("drawtext", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("FFmpeg drawtext is disabled for Windows-safe rendering.");
+        }
     }
 }
