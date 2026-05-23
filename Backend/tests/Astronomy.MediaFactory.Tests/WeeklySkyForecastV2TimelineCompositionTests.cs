@@ -85,7 +85,7 @@ internal sealed class FakeIntelligenceServiceFor6C : IWeeklySkyForecastV2Intelli
             new TimelineRenderSegment("seg-thumb","thumbnail_story_scene","req-thumb",0,3,3,[],"none","none",0,0,false,"",true)
         ]);
 
-        var prep = new RenderPreparationPackage("prep", new RenderWorkingDirectoryPlan(root, root, root, root, root, root, Path.Combine(root,"final"), root, root, root, root, "v1", "test"), sceneRequests, new AssetResolutionPlan([]), new StellariumRenderPlan([]), new OverlayRenderPlan([]), timeline, new ThumbnailRenderPlan("thumb","ThumbnailCompositor","Hybrid",[],[],"f","e","emo","s","m","c",[],Path.Combine(root,"thumb.png"),Path.Combine(root,"thumb.meta"),Path.Combine(root,"thumb.debug"),"planned"), new RenderPreparationValidation(true,true,true,true,true,true,true,true,true,[],[]), new RenderPreparationFreezeStatus(true,true,[],[],[]));
+        var prep = new RenderPreparationPackage("prep", new RenderWorkingDirectoryPlan(root, root, root, root, root, root, Path.Combine(root,"final"), root, root, root, root, "v1", "test"), sceneRequests, new AssetResolutionPlan([]), new StellariumRenderPlan([]), new OverlayRenderPlan([]), timeline, new ThumbnailRenderPlan("thumb","ThumbnailCompositor","Hybrid",[],[],"f","e","emo","s","m","c",[],Path.Combine(root,"thumb.png"),Path.Combine(root,"thumb.meta"),Path.Combine(root,"thumb.debug"),"planned"), new RenderPreparationValidation(true,true,true,true,true,true,true,true,true,true,[],[]), new RenderPreparationFreezeStatus(true,true,[],[],[]));
 
         var transitions = new List<TransitionExecutionDirective>
         {

@@ -78,7 +78,7 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
             {
                 new("req-stel","hero_scene","StellariumSceneRenderer","Stellarium",DateOnly.FromDateTime(DateTime.UtcNow),DateTime.UtcNow,8,[],[],[],[],null,[],[],"fallback",Path.Combine(root,"hero.mp4"),Path.Combine(root,"hero.meta.json"),Path.Combine(root,"hero.debug.json"),1,false,true),
                 new("req-asset","asset_scene","CelestialAssetCompositor","Asset",DateOnly.FromDateTime(DateTime.UtcNow),DateTime.UtcNow,8,[],[],[],["moon_hero_image"],null,[],[],"fallback",Path.Combine(root,"asset.mp4"),Path.Combine(root,"asset.meta.json"),Path.Combine(root,"asset.debug.json"),1,false,true),
-                new("req-hybrid","hybrid_scene","HybridCompositor","Hybrid",DateOnly.FromDateTime(DateTime.UtcNow),DateTime.UtcNow,8,[],[],[],["jupiter_hero_image"],new MotionExecutionDirective("drift","none","none",1,1,[]),[new OverlayExecutionDirective("title","Hero",0,2,1,"fade","safe","heading",true)],[],"fallback",Path.Combine(root,"hybrid.mp4"),Path.Combine(root,"hybrid.meta.json"),Path.Combine(root,"hybrid.debug.json"),1,false,true),
+                new("req-hybrid","hybrid_scene","HybridCompositor","Hybrid",DateOnly.FromDateTime(DateTime.UtcNow),DateTime.UtcNow,8,[],[],[],["jupiter_hero_image"],new MotionExecutionDirective("drift","none","none",1,1,"none",false,"intent"),[new OverlayExecutionDirective("hero_scene","title","Hero",0,2,1,"fade","safe","heading",1)],[],"fallback",Path.Combine(root,"hybrid.mp4"),Path.Combine(root,"hybrid.meta.json"),Path.Combine(root,"hybrid.debug.json"),1,false,true),
                 new("req-thumb","thumbnail_story_scene","ThumbnailCompositor","Thumbnail",DateOnly.FromDateTime(DateTime.UtcNow),DateTime.UtcNow,3,[],[],[],["thumb_asset"],null,[],[],"fallback",Path.Combine(root,"scene-thumb.mp4"),Path.Combine(root,"scene-thumb.meta.json"),Path.Combine(root,"scene-thumb.debug.json"),1,true,true)
             };
             if (includeUnsupportedRenderer)
@@ -99,7 +99,7 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
             new OverlayRenderPlan([new OverlayRenderJob("ov1","hero_scene","text labels","Hero",0,3,1,"none","safe","body",Path.Combine(root,"ov1.png"),"png",1,"planned")]),
             new TimelineRenderPlan(20,2,1,0,100,[]),
             new ThumbnailRenderPlan("thumb-1","ThumbnailCompositor","Hybrid",[],[],"focus","left","wow","safe","mobile","crop",[],Path.Combine(root,"thumbnails","thumb.png"),Path.Combine(root,"thumb.meta.json"),Path.Combine(root,"thumb.debug.json"),"planned"),
-            new RenderPreparationValidation(true,true,true,true,true,true,true,true,true,[] ,[]),
+            new RenderPreparationValidation(true,true,true,true,true,true,true,true,true,true,[] ,[]),
             new RenderPreparationFreezeStatus(true,true,[],[],[]));
 
             return Task.FromResult(new WeeklySkyForecastV2IntelligenceResponse(null,"WeeklySkyForecast",true,DateOnly.FromDateTime(DateTime.UtcNow),DateOnly.FromDateTime(DateTime.UtcNow),"US",new WeeklySkyForecastV2SkyfieldSummary(0,0,0,0,null,null,null),[],new WeeklyStoryArc("h","s","t","o",[],"c",[],[],[]),new WeeklyEditorialStoryPackage(new WeeklyHeroEvent("e","t","t","d",DateOnly.FromDateTime(DateTime.UtcNow),null,[],[],0,0,0,"v","w"),[],"h","s","o","t",[],[],new WeeklyThumbnailDirection([],[],[],"e","v","c","b","o"),[],"",[]),null,null,null,null,null,null,null,null,null,prep,null,null,null,null,true,true,false,true,[],[],[]));
