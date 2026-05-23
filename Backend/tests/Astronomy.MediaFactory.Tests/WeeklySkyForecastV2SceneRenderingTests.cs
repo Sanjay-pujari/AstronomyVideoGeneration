@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Builder;
@@ -165,7 +166,13 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
 
     private sealed class FakeMediaValidationService : IMediaValidationService
     {
-        public Task<MediaValidationResult> ValidateAsync(string path, string mediaType, CancellationToken cancellationToken)
-            => Task.FromResult(new MediaValidationResult(true, path, mediaType, []));
+        public Task<MediaValidationResult> ValidateMp4Async(string path, long minBytes, CancellationToken cancellationToken)
+            => Task.FromResult(new MediaValidationResult(true, path, "mp4", []));
+
+        public Task<MediaValidationResult> ValidateWavAsync(string path, CancellationToken cancellationToken)
+            => Task.FromResult(new MediaValidationResult(true, path, "wav", []));
+
+        public MediaValidationResult ValidateImage(string path, long minBytes, string mediaType)
+            => new(true, path, mediaType, []);
     }
 }
