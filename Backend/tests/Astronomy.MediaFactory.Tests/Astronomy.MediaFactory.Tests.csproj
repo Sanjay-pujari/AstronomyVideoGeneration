@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Infrastructure\Astronomy.MediaFactory.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Api\Astronomy.MediaFactory.Api.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
