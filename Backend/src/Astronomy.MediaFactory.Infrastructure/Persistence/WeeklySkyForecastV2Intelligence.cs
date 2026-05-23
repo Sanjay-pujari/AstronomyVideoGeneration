@@ -208,6 +208,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
 
 public sealed class WeeklySkyForecastV2NarrationPlanner : IWeeklySkyForecastV2NarrationPlanner
 {
+    private const int Phase5TargetDurationSeconds = 110;
     private static readonly string[] SegmentCodes = ["OpeningHook", "HeroSkyStory", "WhyThisWeekMatters", "BestObservationNight", "MoonPlanetHighlight", "ViewingPhotographyTip", "ClosingCTA"];
     private static readonly Dictionary<string, (int min, int max)> DurationGuidelines = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -228,7 +229,16 @@ public sealed class WeeklySkyForecastV2NarrationPlanner : IWeeklySkyForecastV2Na
         }
 
         var total = segments.Sum(x => x.EstimatedDurationSeconds);
-        if (total < 90 && segments.Count > 0) segments[1] = segments[1] with { EstimatedDurationSeconds = segments[1].EstimatedDurationSeconds + Math.Min(150 - total, 90 - total) };
+        if (segments.Count > 0 && total != Phase5TargetDurationSeconds)
+        {
+            var adjustment = Phase5TargetDurationSeconds - total;
+            var heroIndex = Math.Min(1, segments.Count - 1);
+            var hero = segments[heroIndex];
+            var minForHero = DurationGuidelines[hero.SegmentCode].min;
+            var maxForHero = DurationGuidelines[hero.SegmentCode].max + 35;
+            var adjustedHeroDuration = Math.Clamp(hero.EstimatedDurationSeconds + adjustment, minForHero, maxForHero);
+            segments[heroIndex] = hero with { EstimatedDurationSeconds = adjustedHeroDuration };
+        }
         total = segments.Sum(x => x.EstimatedDurationSeconds);
         var shorts = narrativePackage.ShortsNarrativePlan
             .Take(3)
@@ -244,7 +254,7 @@ public sealed class WeeklySkyForecastV2NarrationPlanner : IWeeklySkyForecastV2Na
         if (segments.Select(x => x.SegmentCode).Distinct(StringComparer.OrdinalIgnoreCase).Count() != segments.Count) warnings.Add("Duplicate long-form segment codes detected.");
         if (segments.Sum(x => x.EstimatedDurationSeconds) is < 90 or > 150) warnings.Add("Long-form total duration is outside 90-150 seconds.");
 
-        var longForm = new WeeklyLongFormNarrationPlan(segments.Sum(x => x.EstimatedDurationSeconds), segments.Count, segments);
+        var longForm = new WeeklyLongFormNarrationPlan(Phase5TargetDurationSeconds, segments.Count, segments);
         return Task.FromResult(new WeeklyNarrationPlan(language, cinematicBlueprint.NarrationTone, longForm, new WeeklyShortNarrationPlan(shorts), warnings));
     }
 
@@ -454,6 +464,10 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
             new("viewing_tip_wide_scene", "FramingGuide", "Tripod / phone frame guide", 70, 90, 25, "gentle_fade", "action-safe", "GuideText", 7, "ovl_viewing_tip", true),
             new("thumbnail_story_scene", "TitleText", "Venus, Jupiter and the Moon share the evening sky", 0, 6, 40, "static", "mobile-safe", "TitleBold", 10, "ovl_thumbnail_title", true)
         };
+        foreach (var scene in scenes.Where(s => overlays.All(o => !o.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase))))
+        {
+            overlays.Add(new OverlayExecutionDirective(scene.SceneCode, "SceneCaption", scene.SceneType.Replace('_', ' '), scene.StartSecond, scene.EndSecond, 12, "gentle_fade", "title-safe", "LabelSmall", 3, $"ovl_{scene.SceneCode}_caption", false));
+        }
         var motions = scenes.Select(s => s.SceneCode switch
         {
             "hero_western_grouping_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "ParallaxDepth", 1.0, 1.08, "right", true, "Awe through layered depth", "mot_hero"),
@@ -468,7 +482,7 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
         };
         transitions.AddRange(hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro" && t.ToSceneCode != "outro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, scenes.FirstOrDefault(x => x.SceneCode == t.ToSceneCode)?.StartSecond ?? 0, t.DurationSeconds, "Cinematic continuity", $"tr_{t.FromSceneCode}_to_{t.ToSceneCode}")));
         transitions.Add(new TransitionExecutionDirective(scenes.Last().SceneCode, "outro", "soft fade-out / closing return", scenes.Last().EndSecond - 2, 2, "Warm close", "tr_outro"));
-        var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon > Jupiter > Venus", "left-to-right", "Calm awe", "mobile-safe", "center weighted", "protect Moon and Jupiter in 9:16 crop", ["moon_hero_image", "jupiter_hero_image", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
+        var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon > Jupiter > Venus", "left-to-right", "Calm awe", "mobile-safe", "center weighted", "protect Moon and Jupiter in 9:16 crop", ["moon_hero_image", "jupiter_hero_image", "venus_support_image", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
         var rendererContracts = scenes.Select(s =>
         {
             var sceneOverlays = overlays.Where(o => o.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)).Select(o => o.DirectiveId).ToList();
@@ -536,7 +550,13 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         var rendererContractsValidated = pkg.RendererExecutionContracts.Count == pkg.ExecutionScenes.Count && pkg.RendererExecutionContracts.All(x => x.RendererDecisionLocked && !string.IsNullOrWhiteSpace(x.ContractId) && !string.IsNullOrWhiteSpace(x.SceneCode));
         var thumbnailContractsValidated = !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.RendererType) && !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.VisualSourceType) && pkg.ThumbnailExecutionContract.PrimaryObjects.Count > 0 && !string.IsNullOrWhiteSpace(pkg.ThumbnailExecutionContract.FocalHierarchy);
         var coverage = timelineValidated ? 100d : Math.Round((timeline.Sum(x => Math.Max(0, x.EndSecond - x.StartSecond)) / 110d) * 100d, 2);
-        return new WeeklyExecutionValidationReport(overlaysValidated, transitionsValidated, timelineValidated, rendererContractsValidated, thumbnailContractsValidated, coverage, [], []);
+        var missing = new List<string>();
+        if (!overlaysValidated) missing.Add("RenderExecutionPackage.OverlayExecutionDirectives");
+        if (!transitionsValidated) missing.Add("RenderExecutionPackage.TransitionExecutionDirectives");
+        if (!timelineValidated) missing.Add("RenderExecutionPackage.ExecutionTimeline");
+        if (!rendererContractsValidated) missing.Add("RenderExecutionPackage.RendererExecutionContracts");
+        if (!thumbnailContractsValidated) missing.Add("RenderExecutionPackage.ThumbnailExecutionContract");
+        return new WeeklyExecutionValidationReport(overlaysValidated, transitionsValidated, timelineValidated, rendererContractsValidated, thumbnailContractsValidated, coverage, [], missing);
     }
     public static WeeklyPreviewStabilityReport Validate(WeeklySkyForecastV2IntelligenceResponse response)
     {
