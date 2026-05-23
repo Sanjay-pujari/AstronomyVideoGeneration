@@ -87,6 +87,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.True(response.RenderExecutionPackage!.ExecutionScenes.Count is >= 4 and <= 6);
         Assert.All(response.RenderExecutionPackage.ExecutionScenes, s => Assert.Contains(response.RenderExecutionPackage.RenderSourceDecisions, d => d.SceneCode == s.SceneCode));
         Assert.NotNull(response.RenderExecutionPackage.ThumbnailExecutionContract);
+        Assert.Equal("WeeklySkyForecastThumbnail", response.RenderExecutionPackage.ThumbnailExecutionContract.OutputRole);
         Assert.Contains(response.RenderExecutionPackage.StellariumExecutionDirectives, d => d.SceneCode == "best_night_wide_scene" && d.Required);
         Assert.InRange(response.SceneChoreographyPackage!.ResolvedScenes.Count, 4, 6);
         Assert.InRange(response.CinematicChoreographyPackage!.Scenes.Count, 4, 6);
@@ -128,7 +129,8 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.Contains(response.RenderExecutionPackage.TransitionExecutionDirectives, t => t.ToSceneCode == "outro");
         Assert.Equal(response.RenderExecutionPackage.ExecutionScenes.Count, response.RenderExecutionPackage.RendererExecutionContracts.Count);
         Assert.All(response.RenderExecutionPackage.RendererExecutionContracts, c => Assert.True(c.RendererDecisionLocked));
-        Assert.DoesNotContain(response.RenderExecutionPackage.ExecutionTimeline, x => x.SceneCode == "thumbnail_story_scene");
+        Assert.Contains(response.RenderExecutionPackage.ExecutionTimeline, x => x.SceneCode == "thumbnail_story_scene" && x.IsThumbnailOnly);
+        Assert.Equal(110, response.RenderExecutionPackage.ExecutionTimeline.Where(x => !x.IsThumbnailOnly).OrderBy(x => x.StartSecond).Last().EndSecond);
         Assert.DoesNotContain(response.RenderExecutionPackage.ExecutionScenes, x => x.SceneCode == "thumbnail_story_scene");
         Assert.True(response.Phase5FoundationStatus!.IsFrozen);
         Assert.True(response.Phase5FoundationStatus.IsReadyForPhase6);
