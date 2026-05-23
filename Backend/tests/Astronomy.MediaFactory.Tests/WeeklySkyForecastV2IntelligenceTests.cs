@@ -22,6 +22,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.NotNull(response.HybridScenePlanPackage);
         Assert.NotNull(response.NormalizedEditorialPackage);
         Assert.NotNull(response.SceneChoreographyPackage);
+        Assert.NotNull(response.CinematicChoreographyPackage);
         Assert.NotNull(response.PreviewStability);
         Assert.NotNull(response.EditorialStoryPackage);
         Assert.DoesNotContain("Same viewing window grouping", response.CinematicStoryBlueprint!.Headline, StringComparison.OrdinalIgnoreCase);
@@ -55,6 +56,21 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.True(response.PreviewStability.ReadyForAssetResolution);
         Assert.False(response.PreviewStability.ReadyForRendering);
         Assert.InRange(response.SceneChoreographyPackage!.ResolvedScenes.Count, 4, 6);
+        Assert.InRange(response.CinematicChoreographyPackage!.Scenes.Count, 4, 6);
+        Assert.All(response.CinematicChoreographyPackage.Scenes, s => Assert.Contains(response.CinematicChoreographyPackage.SceneTimeline, t => t.SceneCode == s.SceneCode));
+        Assert.All(response.CinematicChoreographyPackage.Scenes, s => Assert.Contains(response.CinematicChoreographyPackage.CameraTimeline, t => t.SceneCode == s.SceneCode));
+        Assert.All(response.CinematicChoreographyPackage.Scenes, s => Assert.Contains(response.CinematicChoreographyPackage.RenderContracts, c => c.SceneCode == s.SceneCode));
+        Assert.Contains(response.CinematicChoreographyPackage.Scenes, s => s.SceneCode == "hero_western_grouping_scene");
+        Assert.Contains(response.CinematicChoreographyPackage.Scenes, s => s.SceneCode == "best_night_wide_scene");
+        Assert.Contains(response.CinematicChoreographyPackage.Scenes, s => s.SceneCode == "moon_jupiter_hero_scene");
+        Assert.Contains(response.CinematicChoreographyPackage.Scenes, s => s.SceneCode == "viewing_tip_wide_scene");
+        Assert.Contains(response.CinematicChoreographyPackage.Scenes, s => s.SceneCode == "thumbnail_story_scene");
+        Assert.All(response.NarrationPlan.LongFormPlan.Segments, seg => Assert.Contains(response.CinematicChoreographyPackage.Scenes, s => s.NarrationSegmentCodes.Contains(seg.SegmentCode)));
+        var bestNightScene = response.CinematicChoreographyPackage.Scenes.First(s => s.SceneCode == "best_night_wide_scene");
+        if (bestNightScene.TechnicalBestTimeUtc is not null)
+        {
+            Assert.Equal(new DateOnly(2026, 5, 25), DateOnly.FromDateTime(bestNightScene.TechnicalBestTimeUtc.Value));
+        }
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.False(string.IsNullOrWhiteSpace(s.CameraPlan.PrimaryBehavior)));
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.False(string.IsNullOrWhiteSpace(s.MotionPlan)));
         Assert.All(response.SceneChoreographyPackage.ResolvedScenes, s => Assert.Contains(response.SceneChoreographyPackage.RenderContracts, c => c.SceneCode == s.SceneCode));
@@ -89,6 +105,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             events,
             new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             null!,
+            null,
             null,
             null,
             null,

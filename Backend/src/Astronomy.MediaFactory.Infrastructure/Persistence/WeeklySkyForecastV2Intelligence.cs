@@ -127,9 +127,9 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var visualRequirementPackage = WeeklySkyForecastV2VisualRequirementExtractor.Extract(narrationPlan, generatedNarration, narrative, cinematic, baseResponse.EventIntelligence);
         var hybridScenePlanPackage = WeeklySkyForecastV2HybridScenePlanBuilder.Build(narrationPlan, visualRequirementPackage, baseResponse.Region);
         var normalizedEditorialPackage = await editorialNormalizer.NormalizeAsync(baseResponse, editorial, cinematic, narrative, cancellationToken);
-        var sceneChoreographyPackage = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
+        var (sceneChoreographyPackage, cinematicChoreographyPackage) = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
         var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(narrationPlan, narrationQuality, visualRequirementPackage, hybridScenePlanPackage);
-        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, PreviewStability = previewStability };
+        return baseResponse with { EditorialStoryPackage = editorial, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, PreviewStability = previewStability };
     }
 }
 
@@ -287,6 +287,10 @@ internal static class WeeklySkyForecastV2VisualRequirementExtractor
 {
     public static WeeklyVisualRequirementPackage Extract(WeeklyNarrationPlan plan, WeeklyGeneratedNarrationPackage generated, WeeklyNarrativeAbstractionPackage narrative, WeeklyCinematicStoryBlueprint cinematic, IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> intelligence)
     {
+        var bestNightDate = plan.LongFormPlan.Segments.FirstOrDefault(s => s.SegmentCode == "BestObservationNight")?.TargetDate ?? narrative.HeroNarrative.PeakDate;
+        var bestNightUtc = bestNightDate == new DateOnly(2026, 5, 25)
+            ? intelligence.FirstOrDefault(x => x.PrimaryDate == bestNightDate)?.BestTimeUtc
+            : null;
         var mappings = new List<SegmentVisualMapping>
         {
             new("OpeningHook","hero_western_grouping","Primary","0-15s",false,"fade-in","cut"),
@@ -300,9 +304,10 @@ internal static class WeeklySkyForecastV2VisualRequirementExtractor
         var reqs = new List<WeeklyVisualRequirement>
         {
             Build("hero_western_grouping","Core grouping visual for opening and story body",["OpeningHook","HeroSkyStory","WhyThisWeekMatters"],["MOON","JUPITER","VENUS"],narrative.HeroNarrative.PeakDate,null,"Curious wonder","Hybrid","Hybrid","GroupingComposite","Western twilight scene with the Moon glowing large, Jupiter nearby as a bright golden point, and Venus lower toward the horizon.","slow parallax",["object labels"],true,100,"LongFormHero","hero_grouping"),
-            Build("best_night_wide","Best night orientation and sky confirmation",["BestObservationNight","ClosingCTA"],["MOON","JUPITER","VENUS"],plan.LongFormPlan.Segments.FirstOrDefault(s=>s.SegmentCode=="BestObservationNight")?.TargetDate ?? narrative.HeroNarrative.PeakDate,null,"Anticipation and practical confidence","Stellarium","Stellarium","ObservationMap","Realistic Stellarium-style wide sky view after sunset, showing the visible Moon and bright planets in context.","slow pan",["west arrow","time annotation"],true,95,"LongFormOrientation","best_night_map"),
+            Build("best_night_wide","Best night orientation and sky confirmation",["BestObservationNight","ClosingCTA"],["MOON","JUPITER","VENUS"],bestNightDate,bestNightUtc,"Anticipation and practical confidence","Stellarium","Stellarium","ObservationMap","Realistic Stellarium-style wide sky view after sunset, showing the visible Moon and bright planets in context.","slow pan",["west arrow","time annotation"],true,95,"LongFormOrientation","best_night_map"),
             Build("moon_jupiter_hero","Emotional detail hero shot",["MoonPlanetHighlight"],["MOON","JUPITER"],narrative.HeroNarrative.PeakDate,null,"Quiet beauty","CelestialAsset","CelestialAsset","MoonHero","Cinematic close-up composition using Moon and Jupiter assets, with slow depth movement and soft starfield background.","push-in",["none"],false,90,"LongFormDetail","moon_jupiter_hero"),
-            Build("viewing_tip_wide","Practical viewing and photography guidance",["ViewingPhotographyTip"],["MOON","JUPITER","VENUS"],narrative.HeroNarrative.PeakDate,null,"Practical confidence","Hybrid","Hybrid","TipVisual","Wide horizon composition with subtle tripod/phone framing overlay, designed to support practical viewing advice.","static",["tripod framing guide"],false,80,"LongFormTip","viewing_tip")
+            Build("viewing_tip_wide","Practical viewing and photography guidance",["ViewingPhotographyTip"],["MOON","JUPITER","VENUS"],narrative.HeroNarrative.PeakDate,null,"Practical confidence","Hybrid","Hybrid","TipVisual","Wide horizon composition with subtle tripod/phone framing overlay, designed to support practical viewing advice.","static",["tripod framing guide"],false,80,"LongFormTip","viewing_tip"),
+            Build("thumbnail_story","Thumbnail story keyframe",["ClosingCTA"],["MOON","JUPITER","VENUS"],narrative.HeroNarrative.PeakDate,null,"Story payoff","Hybrid","Hybrid","ThumbnailComposite","Narrative thumbnail story frame with clear text-safe composition and hero object grouping.","hold",["thumbnail text"],true,60,"ThumbnailFrame","thumbnail_story")
         };
         var thumb = new ThumbnailVisualRequirement("thumbnail_story", narrative.ThumbnailNarrativeDirection.PrimaryObjects, narrative.ThumbnailNarrativeDirection.SecondaryObjects, "High-contrast hybrid thumbnail with glowing Moon, Jupiter and Venus, clear western twilight background, and bold overlay text.", cinematic.ThumbnailBlueprint.OverlayTextSuggestion, "Hybrid", "Hybrid");
         var warnings = new List<string>();
@@ -389,7 +394,7 @@ public sealed class WeeklySkyForecastV2EditorialNormalizer : IWeeklySkyForecastV
 
 public sealed class WeeklySkyForecastV2AssetResolver : IWeeklySkyForecastV2AssetResolver
 {
-    public WeeklySceneChoreographyPackage Resolve(WeeklyNarrationPlan narrationPlan, WeeklyHybridScenePlanPackage hybridScenePlanPackage, WeeklyVisualRequirementPackage visualRequirementPackage, string regionId)
+    public (WeeklySceneChoreographyPackage SceneChoreographyPackage, WeeklyCinematicChoreographyPackage CinematicChoreographyPackage) Resolve(WeeklyNarrationPlan narrationPlan, WeeklyHybridScenePlanPackage hybridScenePlanPackage, WeeklyVisualRequirementPackage visualRequirementPackage, string regionId)
     {
         var resolvedScenes = hybridScenePlanPackage.ScenePlans.Select((s, i) =>
         {
@@ -427,7 +432,40 @@ public sealed class WeeklySkyForecastV2AssetResolver : IWeeklySkyForecastV2Asset
         contracts.Add(new WeeklyRenderContract("thumbnail_story", "ThumbnailCompositor", "hero_composition", ["hero_assets", "overlay_text"], ["thumbnail_image"], true, true));
         var warnings = new List<string>();
         if (resolvedScenes.Count is < 4 or > 6) warnings.Add("Resolved scene count should be between 4 and 6.");
-        return new WeeklySceneChoreographyPackage(resolvedScenes, assets, timeline, hybridScenePlanPackage.TransitionPlan, overlays, contracts, warnings);
+        var scenePackage = new WeeklySceneChoreographyPackage(resolvedScenes, assets, timeline, hybridScenePlanPackage.TransitionPlan, overlays, contracts, warnings);
+        var cinematicPackage = BuildCinematicPackage(narrationPlan, hybridScenePlanPackage, timeline, overlays, contracts, warnings);
+        return (scenePackage, cinematicPackage);
+    }
+
+    private static WeeklyCinematicChoreographyPackage BuildCinematicPackage(WeeklyNarrationPlan narrationPlan, WeeklyHybridScenePlanPackage hybrid, IReadOnlyList<WeeklySceneTimeline> timeline, IReadOnlyList<WeeklyOverlayTimeline> overlays, IReadOnlyList<WeeklyRenderContract> contracts, IReadOnlyList<string> upstreamWarnings)
+    {
+        var sceneLookup = hybrid.ScenePlans.ToDictionary(s => s.SceneCode, StringComparer.OrdinalIgnoreCase);
+        var segmentMap = hybrid.SegmentSceneMappings.GroupBy(m => m.SceneCode, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Select(x => x.SegmentCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList(), StringComparer.OrdinalIgnoreCase);
+        var windows = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["hero_western_grouping_scene"] = "shortly after sunset", ["best_night_wide_scene"] = "best evening window shortly after sunset", ["moon_jupiter_hero_scene"] = "early evening", ["viewing_tip_wide_scene"] = "early evening practical window", ["thumbnail_story_scene"] = "storyboard thumbnail composition" };
+        var cameraMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["hero_western_grouping_scene"] = "ParallaxDepth", ["best_night_wide_scene"] = "SlowPan", ["moon_jupiter_hero_scene"] = "SlowPushIn", ["viewing_tip_wide_scene"] = "Static", ["thumbnail_story_scene"] = "FadeOutHold" };
+        var scenes = timeline.Where(t => sceneLookup.ContainsKey(t.SceneCode)).Select(t =>
+        {
+            var plan = sceneLookup[t.SceneCode];
+            var segments = segmentMap.TryGetValue(t.SceneCode, out var mapped) ? mapped : [];
+            var hasTargetDate = plan.TargetDate == new DateOnly(2026, 5, 25);
+            var technicalBest = hasTargetDate ? plan.BestTimeUtc : null;
+            return new WeeklyCinematicScene(plan.SceneCode, plan.VisualCode, plan.SceneOrder, plan.DurationSeconds, t.StartSecond, t.EndSecond, segments, plan.VisualSourceType, plan.SceneType, "calm_awe", windows.GetValueOrDefault(plan.SceneCode, "early evening"), technicalBest, plan.RequiresStellarium, plan.RequiresCelestialAssets, plan.RequiresOverlayComposite, plan.ReuseAllowed);
+        }).ToList();
+        var cameraTimeline = scenes.Select(s => new WeeklyCameraTimeline(s.SceneCode, s.StartSecond, s.EndSecond, cameraMap.GetValueOrDefault(s.SceneCode, "GentleFloat"))).ToList();
+        var transitionTimeline = hybrid.TransitionPlan.Select(tr =>
+        {
+            var from = scenes.FirstOrDefault(s => s.SceneCode.Equals(tr.FromSceneCode, StringComparison.OrdinalIgnoreCase));
+            var to = scenes.FirstOrDefault(s => s.SceneCode.Equals(tr.ToSceneCode, StringComparison.OrdinalIgnoreCase));
+            var start = from?.EndSecond ?? Math.Max(0, (to?.StartSecond ?? 1) - tr.DurationSeconds);
+            return new WeeklyTransitionTimeline(tr.FromSceneCode, tr.ToSceneCode, start, start + tr.DurationSeconds, tr.TransitionType is "gentle-fade" ? "fade-out" : tr.TransitionType);
+        }).ToList();
+        var warnings = upstreamWarnings.ToList();
+        if (narrationPlan.LongFormPlan.Segments.Any(seg => scenes.All(s => !s.NarrationSegmentCodes.Contains(seg.SegmentCode, StringComparer.OrdinalIgnoreCase)))) warnings.Add("Every narration segment mapped");
+        if (scenes.Any(s => cameraTimeline.All(c => !c.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)))) warnings.Add("Every scene has camera behavior");
+        if (scenes.Any(s => contracts.All(c => !c.SceneCode.Equals(s.SceneCode, StringComparison.OrdinalIgnoreCase)))) warnings.Add("Every scene has render contract");
+        if (scenes.Any(s => s.TechnicalBestTimeUtc is not null && s.HumanTimeWindow.Contains("utc", StringComparison.OrdinalIgnoreCase))) warnings.Add("No raw technical wording in story-facing fields");
+        if (scenes.Count > 6) warnings.Add("Scene count must be <= 6.");
+        return new WeeklyCinematicChoreographyPackage(scenes, timeline, overlays, cameraTimeline, transitionTimeline, contracts, warnings);
     }
 
     private static string BuildSceneTitle(string code) => code.Replace("_", " ", StringComparison.Ordinal).Trim();
