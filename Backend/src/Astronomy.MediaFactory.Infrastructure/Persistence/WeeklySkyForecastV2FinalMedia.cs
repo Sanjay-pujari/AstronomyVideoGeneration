@@ -91,6 +91,10 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
 
         var mixPath = Path.Combine(prep.WorkingDirectoryPlan.AudioPath, "weekly-skyforecast-final-mix.wav");
 
+        logger.LogInformation("Starting final audio mix");
+        var mixOk = BuildFinalMix(narrationWavPath, mixPath, ffmpegPath, blocking);
+        logger.LogInformation("Final audio mix completed");
+
         logger.LogInformation("Starting shorts render");
         var shorts = new List<ShortFinalResult>();
         foreach (var shortPlan in timeline.ShortsCompositionPlans)
@@ -99,15 +103,11 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             var match = scenes.SceneRenderResults.FirstOrDefault(x => x.SceneCode == sourceSceneCode);
             var source = match?.OutputPath ?? shortPlan.PlannedOutputPath;
             var output = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, $"short-{shortPlan.ShortCode}.mp4");
-            var encoded = ffmpegPath is not null && RenderShort(output, source, mixPath, shortPlan.TargetDurationSeconds, ffmpegPath, blocking, shortPlan.ShortCode);
+            var encoded = mixOk && ffmpegPath is not null && RenderShort(output, source, mixPath, shortPlan.TargetDurationSeconds, ffmpegPath, blocking, shortPlan.ShortCode);
             var ok = encoded && ValidateMp4(output, 1, ffmpegPath, blocking, $"short {shortPlan.ShortCode}");
             shorts.Add(new ShortFinalResult(shortPlan.ShortCode, output, shortPlan.TargetDurationSeconds, "9:16", ok ? "Rendered" : "Failed", [], ok ? [] : ["Short validation failed."]));
         }
         logger.LogInformation("Shorts render completed");
-
-        logger.LogInformation("Starting final audio mix");
-        var mixOk = BuildFinalMix(narrationWavPath, mixPath, ffmpegPath, blocking);
-        logger.LogInformation("Final audio mix completed");
 
         logger.LogInformation("Starting long-form assembly");
         var longFormPath = Path.Combine(prep.WorkingDirectoryPlan.FinalPath, "weekly-skyforecast-longform-draft.mp4");
@@ -126,7 +126,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         logger.LogInformation("Final validation completed");
 
         var validation = new FinalMediaValidation(
-            true,
+            final,
             narrationOk,
             mixOk,
             longFormOk,
@@ -148,6 +148,8 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             thumbnailValidation,
             allShortsValid,
             longFormOk,
+            RealMediaOutputsGenerated: outputFilesExist && allShortsValid,
+            FfprobeExecuted: ffmpegPath is not null,
             ThumbnailContainsObjects: thumbnailContainsObjects,
             SceneVisualsContainObjects: sceneVisualsContainObjects,
             VisualAssetsResolved: visualAssetsResolved);
