@@ -362,10 +362,11 @@ internal static class WeeklySkyForecastV2HybridScenePlanBuilder
         var overlays = scenePlans.Where(s => s.OverlayInstructions.Count > 0 && !s.OverlayInstructions.Contains("none", StringComparer.OrdinalIgnoreCase)).Select(s => new WeeklyOverlayPlan(s.SceneCode, s.OverlayInstructions, "minimal_cinematic", "segment-aligned", "title-safe-lower-third")).ToList();
         var transitions = new List<WeeklyTransitionPlan>
         {
-            new("intro","hero_western_grouping_scene","fade-in",2),
+            new("intro","hero_western_grouping_scene","intro-fade-in",2),
             new("hero_western_grouping_scene","best_night_wide_scene","soft-crossfade",2),
             new("best_night_wide_scene","moon_jupiter_hero_scene","cinematic-push",1),
-            new("viewing_tip_wide_scene","best_night_wide_scene","gentle-fade",2)
+            new("moon_jupiter_hero_scene","viewing_tip_wide_scene","soft-crossfade",1),
+            new("viewing_tip_wide_scene","outro","gentle-fade-out",2)
         };
         var warnings = new List<string>();
         if (narrationPlan.LongFormPlan.Segments.Any(s => segmentMappings.All(m => !m.SegmentCode.Equals(s.SegmentCode, StringComparison.OrdinalIgnoreCase)))) warnings.Add("Every narration segment must map to a scene.");
@@ -396,31 +397,43 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
         {
             var scene = sceneByCode[t.SceneCode];
             var technical = scene.BestTimeUtc is not null && DateOnly.FromDateTime(scene.BestTimeUtc.Value) == scene.TargetDate ? scene.BestTimeUtc : null;
-            return new WeeklyRenderExecutionScene(scene.SceneCode, scene.SceneOrder, scene.RequiresStellarium ? "StellariumRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, scene.DurationSeconds, t.StartSecond, t.EndSecond, hybridPlan.SegmentSceneMappings.Where(m => m.SceneCode == scene.SceneCode).Select(m => m.SegmentCode).ToList(), scene.TargetDate, "early evening", technical, ["scene", "assets", "overlays", "motion", "transition"], ["frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
+            return new WeeklyRenderExecutionScene(scene.SceneCode, scene.SceneOrder, scene.RequiresStellarium ? "StellariumRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, scene.DurationSeconds, t.StartSecond, t.EndSecond, hybridPlan.SegmentSceneMappings.Where(m => m.SceneCode == scene.SceneCode).Select(m => m.SegmentCode).ToList(), scene.TargetDate, "early evening", technical, ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"], ["composited_frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
         }).ToList();
         var decisions = scenes.Select(s => BuildDecision(s.SceneCode)).ToList();
         var assetDirectives = scenes.Select(s => new AssetResolutionDirective(s.SceneCode, hybridPlan.AssetNeeds.Where(a => a.RequiredForSceneCodes.Contains(s.SceneCode)).Select(a => a.AssetCode).ToList(), ["public_twilight_plate"], "CelestialAsset>GeneratedImage>PublicImage", true, true)).ToList();
         var stellarium = scenes.Where(s => s.SceneCode == "best_night_wide_scene").Select(s => new StellariumExecutionDirective(s.SceneCode, regionId, s.TargetDate, s.TechnicalBestTimeUtc, s.HumanTimeWindow, ["MOON", "JUPITER", "VENUS"], 90, "Best night wide confirmation", "weekly_best_night_reference", true)).ToList();
-        var overlays = scenes.Select(s => new OverlayExecutionDirective(s.SceneCode, hybridPlan.OverlayPlan.FirstOrDefault(o => o.SceneCode == s.SceneCode)?.Overlays ?? [], s.StartSecond, s.EndSecond, 20, "fade")).ToList();
-        var motions = scenes.Select(s => new MotionExecutionDirective(s.SceneCode, s.SceneCode.Contains("wide") ? "SlowPan" : "SlowPushIn", s.SceneCode.Contains("viewing") ? "practical" : "cinematic", 1.0, 1.1, "right", !s.SceneCode.Contains("viewing"))).ToList();
-        var transitions = hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, t.DurationSeconds)).ToList();
+        var overlays = scenes.Select(s => new OverlayExecutionDirective(s.SceneCode, hybridPlan.OverlayPlan.FirstOrDefault(o => o.SceneCode == s.SceneCode)?.Overlays ?? [], s.StartSecond, s.EndSecond, 20, "fade", "title-safe-lower-third")).ToList();
+        var motions = scenes.Select(s => s.SceneCode switch
+        {
+            "hero_western_grouping_scene" => new MotionExecutionDirective(s.SceneCode, "SlowParallax", "GentlePushIn", 1.0, 1.08, "right", true),
+            "best_night_wide_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPan", "CinematicWideDrift", 1.0, 1.03, "right", true),
+            "moon_jupiter_hero_scene" => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "CinematicHeroHold", 1.0, 1.1, "center", true),
+            "viewing_tip_wide_scene" => new MotionExecutionDirective(s.SceneCode, "Static", "VerySlowHold", 1.0, 1.01, "none", false),
+            _ => new MotionExecutionDirective(s.SceneCode, "SlowPushIn", "CinematicCalm", 1.0, 1.05, "right", true)
+        }).ToList();
+        var transitions = new List<TransitionExecutionDirective>
+        {
+            new("intro", scenes.First().SceneCode, "intro-fade-in", 2)
+        };
+        transitions.AddRange(hybridPlan.TransitionPlan.Where(t => t.FromSceneCode != "intro" && t.ToSceneCode != "outro").Select(t => new TransitionExecutionDirective(t.FromSceneCode, t.ToSceneCode, t.TransitionType, t.DurationSeconds)));
+        transitions.Add(new TransitionExecutionDirective(scenes.Last().SceneCode, "outro", "gentle-fade-out", 2));
         var thumbnail = new ThumbnailExecutionContract("ThumbnailCompositor", "Hybrid", ["MOON", "JUPITER"], ["VENUS"], "Moon and Jupiter hero with Venus accent in western dusk.", "Best skywatching night: May 25", ["moon_hero_image", "jupiter_hero_image", "thumbnail_overlay_assets"], "CelestialAsset>GeneratedImage>PublicImage", "weekly_thumbnail");
         return new WeeklyRenderExecutionPackage(Guid.NewGuid().ToString("N"), scenes, timeline, decisions, assetDirectives, stellarium, overlays, motions, transitions, thumbnail, []);
     }
 
     private static RenderSourceDecision BuildDecision(string sceneCode) => sceneCode switch
     {
-        "hero_western_grouping_scene" => new(sceneCode, "Hybrid", "Hero scene blends objects with cinematic dusk context.", ["CelestialAsset", "GeneratedImage", "PublicImage"], true, false, false, true),
-        "best_night_wide_scene" => new(sceneCode, "Stellarium", "Best-night orientation requires astronomical sky map accuracy.", ["StellariumFallbackMode"], false, true, false, false),
-        "moon_jupiter_hero_scene" => new(sceneCode, "CelestialAsset", "Moon-Jupiter detail should use curated object assets.", ["GeneratedImage", "PublicImage"], true, false, false, true),
-        "viewing_tip_wide_scene" => new(sceneCode, "Hybrid", "Viewing tip needs overlays and compositing.", ["GeneratedImage", "PublicImage"], false, false, true, true),
+        "hero_western_grouping_scene" => new(sceneCode, "Hybrid", "Hybrid is selected to combine Stellarium-accurate layout with cinematic western dusk context.", ["Stellarium", "CelestialAsset", "GeneratedImage"], true, false, false, true),
+        "best_night_wide_scene" => new(sceneCode, "Stellarium", "Stellarium is selected because this scene prioritizes true sky orientation and timing clarity.", ["Hybrid", "CelestialAsset"], false, true, false, false),
+        "moon_jupiter_hero_scene" => new(sceneCode, "CelestialAsset", "CelestialAsset is selected for clean Moon/Jupiter hero detail and visual fidelity.", ["Hybrid", "GeneratedImage"], true, false, false, true),
+        "viewing_tip_wide_scene" => new(sceneCode, "Hybrid", "Hybrid is selected to layer practical overlays on top of a calm wide-sky background.", ["Stellarium", "CelestialAsset", "GeneratedImage"], false, false, true, true),
         _ => new(sceneCode, "Hybrid", "Default weekly scene source.", ["GeneratedImage", "PublicImage"], true, false, true, true)
     };
 }
 
 internal static class WeeklySkyForecastV2PreviewStabilityValidator
 {
-    private static readonly string[] ForbiddenStoryPhrases = ["evening sky lineup", "same viewing window grouping", "high-value weekly observation event", "weekly visibility momentum", "backup opportunities", "observation event", "grouping event"];
+    private static readonly string[] ForbiddenStoryPhrases = ["evening sky lineup", "same viewing window grouping", "high-value weekly observation event", "weekly visibility momentum", "backup opportunities", "observation event", "grouping event", "practical planning value", "grouping story", "one continuous evening sky story"];
     public static WeeklyPreviewStabilityReport Validate(WeeklySkyForecastV2IntelligenceResponse response)
     {
         var narrationPlan = response.NarrationPlan!;
@@ -466,6 +479,13 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
             blocking.Add("Repeated grouping story leaked into supporting stories.");
             affectedPaths.Add("CinematicStoryBlueprint.SupportingStories");
         }
+        var hasTimelineCoverage = renderExecutionPackage.ExecutionTimeline.Count > 0
+            && renderExecutionPackage.ExecutionTimeline.Min(x => x.StartSecond) == 0
+            && renderExecutionPackage.ExecutionTimeline.OrderBy(x => x.StartSecond).Zip(renderExecutionPackage.ExecutionTimeline.OrderBy(x => x.StartSecond).Skip(1), (a, b) => b.StartSecond - a.EndSecond).All(g => g == 0);
+        if (!hasTimelineCoverage) { blocking.Add("Long-form timeline has gaps or overlaps."); affectedPaths.Add("RenderExecutionPackage.ExecutionTimeline"); }
+        if (renderExecutionPackage.OverlayExecutionDirectives.Any(o => string.IsNullOrWhiteSpace(o.SafeArea))) { blocking.Add("Overlay directives must include safe area."); affectedPaths.Add("RenderExecutionPackage.OverlayExecutionDirectives"); }
+        if (renderExecutionPackage.MotionExecutionDirectives.Any(m => string.IsNullOrWhiteSpace(m.CameraBehavior) || string.IsNullOrWhiteSpace(m.MotionStyle))) { blocking.Add("Motion directives must define cameraBehavior and motionStyle."); affectedPaths.Add("RenderExecutionPackage.MotionExecutionDirectives"); }
+        if (renderExecutionPackage.TransitionExecutionDirectives.Count < renderExecutionPackage.ExecutionScenes.Count + 1) { blocking.Add("Transition directives missing scene boundary coverage."); affectedPaths.Add("RenderExecutionPackage.TransitionExecutionDirectives"); }
         var readyForAssetResolution = blocking.Count == 0;
         var readyForSceneChoreography = readyForAssetResolution && hybridScenePlanPackage.ScenePlans.Count <= 6;
         var readyForRenderPreparation = readyForSceneChoreography
@@ -491,7 +511,7 @@ public sealed class WeeklySkyForecastV2EditorialNormalizer : IWeeklySkyForecastV
             peakTime = null;
         var windows = new[] { new WeeklyNormalizedTimeWindow(peak, "during twilight / shortly after sunset", peakTime, 0.9) };
         var visualInputs = cinematicBlueprint.CinematicMoments.Select(m => new WeeklyNormalizedVisualStoryInput(m.VisualUniquenessKey, "supporting", "Show the normalized weekly story progression", m.ObjectCodes, m.TargetDate, "early evening", m.RecommendedVisualStrategy)).ToList();
-        var arc = new WeeklyNormalizedStoryArc(editorialPackage.Headline, editorialPackage.OpeningHook, editorialPackage.StoryTheme, normalized.Title, ["Best skywatching night: May 25", "The Moon’s strongest visual night"], "Best skywatching night: May 25", "Curiosity to calm wonder", "Step outside during twilight for a reliable weekly sky moment.");
+        var arc = new WeeklyNormalizedStoryArc(editorialPackage.Headline, editorialPackage.OpeningHook, editorialPackage.StoryTheme, normalized.Title, ["Best skywatching night: May 25", "Jupiter’s strongest planet presence", "The Moon’s calm visual highlight", "Simple viewing and photography tip"], "Best skywatching night: May 25", "Curiosity to calm wonder", "Step outside during twilight for a reliable weekly sky moment.");
         return Task.FromResult(new WeeklyNormalizedEditorialPackage([normalized], normalized, arc, windows, visualInputs, []));
     }
 }
@@ -581,7 +601,7 @@ public sealed class WeeklySkyForecastV2AssetResolver : IWeeklySkyForecastV2Asset
         {
             var end = second + s.DurationSeconds;
             list.Add(new WeeklySceneTimeline(s.SceneCode, second, end, second, end, 1));
-            second = end - 1;
+            second = end;
         }
         return list;
     }
