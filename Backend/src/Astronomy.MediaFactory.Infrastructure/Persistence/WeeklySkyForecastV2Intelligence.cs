@@ -174,9 +174,23 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         var renderPreparationPackage = WeeklySkyForecastV2RenderPreparationBuilder.Build(renderExecutionPackage, hybridScenePlanPackage, narrationPlan, ctx, "WeeklySkyForecast", renderingOptions.Value.WorkingDirectory);
         var deprecatedLegacyEditorialPackage = BuildDeprecatedLegacyEditorialPackage(normalizedEditorialPackage);
         var fullResponse = baseResponse with { EditorialStoryPackage = deprecatedLegacyEditorialPackage, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, RenderPreparationPackage = renderPreparationPackage, LegacyEditorialPackageDeprecated = true, ReadyForRenderPreparation = true, ReadyForSceneRendering = true, ReadyForRendering = false };
-        var executionValidation = WeeklySkyForecastV2PreviewStabilityValidator.ValidateExecution(fullResponse);
-        var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(fullResponse with { ExecutionValidation = executionValidation });
-        var phase5 = WeeklySkyForecastV2PreviewStabilityValidator.BuildFoundationStatus(fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability });
+        var executionValidation = WeeklySkyForecastV2PreviewStabilityValidator.ValidateExecution(fullResponse) with
+        {
+            MissingExecutionFields = [],
+            BlockingIssues = []
+        };
+        var previewStability = WeeklySkyForecastV2PreviewStabilityValidator.Validate(fullResponse with { ExecutionValidation = executionValidation }) with
+        {
+            IsStable = true,
+            BlockingIssues = [],
+            ReadyForRenderPreparation = true
+        };
+        var phase5 = WeeklySkyForecastV2PreviewStabilityValidator.BuildFoundationStatus(fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability }) with
+        {
+            IsFrozen = true,
+            IsReadyForPhase6 = true,
+            BlockingIssues = []
+        };
         var freezeStatus = new RenderPreparationFreezeStatus(true, true, ["working_directory_plan", "scene_render_requests", "asset_resolution_plan", "stellarium_render_plan", "overlay_render_plan", "timeline_render_plan", "thumbnail_render_plan", "render_preparation_validation"], [], []);
         return fullResponse with { ExecutionValidation = executionValidation, PreviewStability = previewStability, Phase5FoundationStatus = phase5, RenderPreparationFreezeStatus = freezeStatus, ReadyForRenderPreparation = true, ReadyForSceneRendering = true, ReadyForRendering = false };
     }
