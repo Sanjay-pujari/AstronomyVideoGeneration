@@ -1201,6 +1201,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyPhase5FoundationStatus? Phase5FoundationStatus,
     RenderPreparationFreezeStatus? RenderPreparationFreezeStatus,
     bool ReadyForRenderPreparation,
+    bool ReadyForSceneRendering,
     bool ReadyForRendering,
     bool LegacyEditorialPackageDeprecated,
     IReadOnlyList<string> RecommendedVisualStrategies,
