@@ -1193,6 +1193,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklyHybridScenePlanPackage? HybridScenePlanPackage,
     WeeklyNormalizedEditorialPackage? NormalizedEditorialPackage,
     WeeklySceneChoreographyPackage? SceneChoreographyPackage,
+    WeeklyCinematicChoreographyPackage? CinematicChoreographyPackage,
     WeeklyPreviewStabilityReport? PreviewStability,
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
@@ -1382,9 +1383,36 @@ public sealed record ResolvedWeeklyAsset(string AssetId, string AssetCode, strin
 public sealed record WeeklySceneTimeline(string SceneCode, int StartSecond, int EndSecond, int NarrationStartSecond, int NarrationEndSecond, int TransitionLeadSeconds);
 public sealed record WeeklyOverlayTimeline(string SceneCode, string OverlayType, string OverlayText, int StartSecond, int EndSecond, string AnimationStyle, string SafeArea);
 public sealed record WeeklyRenderContract(string SceneCode, string RendererType, string RenderMode, IReadOnlyList<string> ExpectedInputs, IReadOnlyList<string> ExpectedOutputs, bool SupportsReuse, bool RequiresCompositing);
+public sealed record WeeklyCinematicChoreographyPackage(
+    IReadOnlyList<WeeklyCinematicScene> Scenes,
+    IReadOnlyList<WeeklySceneTimeline> SceneTimeline,
+    IReadOnlyList<WeeklyOverlayTimeline> OverlayTimeline,
+    IReadOnlyList<WeeklyCameraTimeline> CameraTimeline,
+    IReadOnlyList<WeeklyTransitionTimeline> TransitionTimeline,
+    IReadOnlyList<WeeklyRenderContract> RenderContracts,
+    IReadOnlyList<string> ChoreographyWarnings);
+public sealed record WeeklyCinematicScene(
+    string SceneCode,
+    string VisualCode,
+    int SceneOrder,
+    int DurationSeconds,
+    int StartSecond,
+    int EndSecond,
+    IReadOnlyList<string> NarrationSegmentCodes,
+    string VisualSourceType,
+    string SceneType,
+    string EmotionalTone,
+    string HumanTimeWindow,
+    DateTime? TechnicalBestTimeUtc,
+    bool RequiresStellarium,
+    bool RequiresAssets,
+    bool RequiresOverlayComposite,
+    bool ReuseAllowed);
+public sealed record WeeklyCameraTimeline(string SceneCode, int StartSecond, int EndSecond, string CameraBehavior);
+public sealed record WeeklyTransitionTimeline(string FromSceneCode, string ToSceneCode, int StartSecond, int EndSecond, string TransitionType);
 public interface IWeeklySkyForecastV2AssetResolver
 {
-    WeeklySceneChoreographyPackage Resolve(WeeklyNarrationPlan narrationPlan, WeeklyHybridScenePlanPackage hybridScenePlanPackage, WeeklyVisualRequirementPackage visualRequirementPackage, string regionId);
+    (WeeklySceneChoreographyPackage SceneChoreographyPackage, WeeklyCinematicChoreographyPackage CinematicChoreographyPackage) Resolve(WeeklyNarrationPlan narrationPlan, WeeklyHybridScenePlanPackage hybridScenePlanPackage, WeeklyVisualRequirementPackage visualRequirementPackage, string regionId);
 }
 
 public interface IWeeklySkyForecastV2NarrativeAbstractionBuilder
