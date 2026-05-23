@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Logging;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing.Processing;
@@ -50,6 +51,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
         var visualPlans = new List<CelestialObjectVisualPlan>();
         var assetResolver = new CelestialAssetResolver(renderingOptions.Value.CelestialAssetsRoot);
         var diagnosticsFallbackUsed = false;
+        var visualAssetDiagnostics = new List<object>();
         foreach (var req in prep.SceneRenderRequests)
         {
             var sceneStartedAt = DateTime.UtcNow;
@@ -62,6 +64,27 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             Directory.CreateDirectory(Path.GetDirectoryName(req.DebugOutputPath)!);
             var visualPlan = ResolveVisualPlan(req, prep, assetResolver);
             visualPlans.Add(visualPlan);
+            var missingAssets = visualPlan.RequiredObjects
+                .Where(required => !visualPlan.SelectedAssets.Any(selected => MatchesObjectName(required, selected)))
+                .ToList();
+            var fallbackBackgroundUsed = visualPlan.FallbackUsed;
+            logger.LogInformation("[AssetResolver]\nScene={SceneCode}\nRequired=[{Required}]\nResolved=[{Resolved}]\nMissing=[{Missing}]\nAssetSearchPaths=[{AssetSearchPaths}]\nFallbackBackgroundUsed={FallbackBackgroundUsed}\nRoot={ConfiguredRoot}",
+                req.SceneCode,
+                string.Join(',', visualPlan.RequiredObjects),
+                string.Join(',', visualPlan.SelectedAssets.Select(Path.GetFileName)),
+                string.Join(',', missingAssets),
+                string.Join(',', assetResolver.SearchDirectories),
+                fallbackBackgroundUsed,
+                assetResolver.ConfiguredRoot);
+            visualAssetDiagnostics.Add(new
+            {
+                sceneCode = req.SceneCode,
+                requestedObjects = visualPlan.RequiredObjects,
+                resolvedAssets = visualPlan.SelectedAssets.Select(Path.GetFileName).ToList(),
+                missingAssets,
+                fallbackUsed = fallbackBackgroundUsed,
+                assetSearchDirectories = assetResolver.SearchDirectories
+            });
 
             if (IsReuseScene(req))
             {
@@ -148,7 +171,12 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             thumbnail = new ThumbnailSceneRenderResult(prep.ThumbnailRenderPlan.ThumbnailRequestId, prep.ThumbnailRenderPlan.PlannedOutputPath, "Rendered", [], []);
         }
 
+        var diagnosticsPath = Path.Combine(prep.WorkingDirectoryPlan.DebugPath, "visual-asset-diagnostics.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath)!);
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(visualAssetDiagnostics, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+
         var hasVisuals = visualPlans.All(v => v.SelectedAssets.Count > 0);
+        var allAssetsMissing = visualPlans.All(v => v.SelectedAssets.Count == 0);
         var thumbnailContainsObjects = thumbnail is not null && prep.ThumbnailRenderPlan.PrimaryObjects.Count > 0;
         if (!thumbnailContainsObjects) blocking.Add("Thumbnail has no visual object assets.");
         var valid = blocking.Count == 0 && hasVisuals;
@@ -162,8 +190,8 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             thumbnail is not null || string.IsNullOrWhiteSpace(prep.ThumbnailRenderPlan.ThumbnailRequestId),
             valid,
             false,
-            visualPlans.Any(v => v.SelectedAssets.Count > 0),
-            hasVisuals,
+            !allAssetsMissing && visualPlans.Any(v => v.SelectedAssets.Count > 0),
+            !allAssetsMissing && hasVisuals,
             thumbnailContainsObjects,
             !hasVisuals || sceneResults.Any(s => File.Exists(Path.Combine(Path.GetDirectoryName(s.OutputPath)!, $"{Path.GetFileNameWithoutExtension(s.OutputPath)}.scene-frame.png")) == false),
             diagnosticsFallbackUsed,
@@ -209,6 +237,8 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         var o = renderingOptions.Value;
         var framePath = Path.Combine(Path.GetDirectoryName(outputPath)!, $"{Path.GetFileNameWithoutExtension(outputPath)}.scene-frame.png");
         logger.LogInformation("Preparing C# background frame");
+        var renderedObjectCount = objectAssets.Count(File.Exists);
+        logger.LogInformation("Object assets rendered onto canvas: {ObjectCount} for scene {SceneLabel}", renderedObjectCount, label);
         logger.LogInformation("C# image composition started");
         using (var imageCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
@@ -356,23 +386,88 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
         ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(bounds.X + 20, bounds.Y + (bounds.Height * 0.45f)), WrappingLength = bounds.Width - 40 }, fallbackLabel, Color.White);
     }
 
+
+    private static bool MatchesObjectName(string requiredObject, string selectedAssetPath)
+    {
+        var required = NormalizeObjectKey(requiredObject);
+        var assetName = NormalizeObjectKey(Path.GetFileNameWithoutExtension(selectedAssetPath));
+        return !string.IsNullOrWhiteSpace(required) && assetName.Contains(required, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeObjectKey(string value)
+        => string.Concat(value.Where(char.IsLetterOrDigit)).ToLowerInvariant();
+
     private sealed class CelestialAssetResolver(string configuredRoot)
     {
+        private static readonly Dictionary<string, string[]> EmergencyFallbacks = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["moon"] = ["moon_generic"],
+            ["jupiter"] = ["planet"],
+            ["venus"] = ["planet"]
+        };
+
         private readonly string[] _roots = BuildRoots(configuredRoot);
+        public string ConfiguredRoot => configuredRoot;
+        public IReadOnlyList<string> SearchDirectories => _roots;
+
         public IReadOnlyList<string> ResolveForObject(string objectCode)
         {
-            var aliases = BuildAliases(objectCode);
+            var aliases = BuildAliases(objectCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var assets = ResolveAgainstAliases(aliases);
+            if (assets.Count > 0)
+            {
+                return assets;
+            }
+
+            foreach (var fallbackAlias in ResolveEmergencyFallbackAliases(objectCode))
+            {
+                assets = ResolveAgainstAliases([fallbackAlias]);
+                if (assets.Count > 0)
+                {
+                    return assets;
+                }
+            }
+
+            return [];
+        }
+
+        private List<string> ResolveAgainstAliases(IReadOnlyList<string> aliases)
+        {
             var assets = new List<string>();
             foreach (var root in _roots.Where(Directory.Exists))
             {
-                foreach (var alias in aliases)
+                foreach (var file in Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories))
                 {
-                    var dir = Path.Combine(root, alias);
-                    if (!Directory.Exists(dir)) continue;
-                    assets.AddRange(Directory.GetFiles(dir).Where(f => ImageExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase)));
+                    var ext = Path.GetExtension(file);
+                    if (!ImageExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase)) continue;
+
+                    var normalizedDir = NormalizeObjectKey(Path.GetFileName(Path.GetDirectoryName(file) ?? string.Empty));
+                    var normalizedFile = NormalizeObjectKey(Path.GetFileNameWithoutExtension(file));
+                    if (aliases.Any(a => normalizedDir.Contains(NormalizeObjectKey(a), StringComparison.OrdinalIgnoreCase)
+                                         || normalizedFile.Contains(NormalizeObjectKey(a), StringComparison.OrdinalIgnoreCase)))
+                    {
+                        assets.Add(file);
+                    }
                 }
             }
+
             return assets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static IEnumerable<string> ResolveEmergencyFallbackAliases(string objectCode)
+        {
+            yield return "starfield_object";
+            var normalized = NormalizeObjectKey(objectCode);
+            foreach (var kvp in EmergencyFallbacks)
+            {
+                if (normalized.Contains(NormalizeObjectKey(kvp.Key), StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var alias in kvp.Value)
+                    {
+                        yield return alias;
+                    }
+                }
+            }
         }
 
         private static string[] BuildRoots(string configuredRoot)
@@ -390,6 +485,8 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             var baseName = value.Trim().ToLowerInvariant().Replace("planet_", string.Empty);
             yield return baseName;
             yield return baseName.Replace("_", "-");
+            yield return baseName.Replace("-", " ");
+            yield return baseName.Replace(" ", "_");
             if (baseName == "milky way") yield return "milky-way";
             if (baseName.Contains("background")) yield return "starfield";
         }

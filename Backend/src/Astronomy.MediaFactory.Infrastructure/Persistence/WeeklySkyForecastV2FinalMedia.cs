@@ -128,7 +128,12 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
         var thumbnailContainsObjects = scenes.SceneRenderingValidation.ThumbnailContainsObjects;
         var sceneVisualsContainObjects = scenes.SceneRenderingValidation.SceneVisualsContainObjects;
         var visualAssetsResolved = scenes.SceneRenderingValidation.VisualAssetsResolved;
-        var final = blocking.Count == 0 && outputFilesExist && allShortsValid && overlaysValid && thumbnailValidation;
+        var readyForHumanReview = sceneVisualsContainObjects;
+        if (!readyForHumanReview)
+        {
+            blocking.Add("Scene visuals do not contain resolved celestial objects.");
+        }
+        var final = blocking.Count == 0 && outputFilesExist && allShortsValid && overlaysValid && thumbnailValidation && readyForHumanReview;
         logger.LogInformation("Final validation completed");
 
         var validation = new FinalMediaValidation(
@@ -141,7 +146,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             false,
             longFormOk,
             outputFilesExist,
-            true,
+            readyForHumanReview,
             false,
             true,
             true,
