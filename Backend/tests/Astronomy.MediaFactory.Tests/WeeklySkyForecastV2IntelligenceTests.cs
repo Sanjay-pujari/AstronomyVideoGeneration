@@ -36,6 +36,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.True(response.ExecutionValidation.ThumbnailContractsValidated);
         Assert.Equal(100d, response.ExecutionValidation.NarrationTimelineCoveragePercent);
         Assert.Empty(response.ExecutionValidation.MissingExecutionFields);
+        Assert.Empty(response.ExecutionValidation.BlockingIssues);
         Assert.True(response.LegacyEditorialPackageDeprecated);
         Assert.NotNull(response.PreviewStability);
         Assert.Empty(response.PreviewStability!.BlockingIssues);
@@ -183,6 +184,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
         Assert.DoesNotContain(response.RenderExecutionPackage.ExecutionScenes, x => x.SceneCode == "thumbnail_story_scene");
         Assert.True(response.Phase5FoundationStatus!.IsFrozen);
         Assert.True(response.Phase5FoundationStatus.IsReadyForPhase6);
+        Assert.Empty(response.Phase5FoundationStatus.BlockingIssues);
         Assert.True(response.RenderPreparationFreezeStatus!.IsFrozen);
         Assert.True(response.RenderPreparationFreezeStatus.IsReadyForPhase6B);
         Assert.NotEmpty(response.RenderPreparationFreezeStatus.VerifiedChecks);
