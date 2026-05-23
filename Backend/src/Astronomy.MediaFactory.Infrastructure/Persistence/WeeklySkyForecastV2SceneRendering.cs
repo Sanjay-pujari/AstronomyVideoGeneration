@@ -100,11 +100,11 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
                 continue;
             }
 
+            var cinematicPlan = BuildCinematicVisualPlan(req, visualPlan);
             try
             {
                 using var sceneTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 sceneTimeoutCts.CancelAfter(SceneRenderTimeout);
-                var cinematicPlan = BuildCinematicVisualPlan(req, visualPlan);
                 switch (req.RendererType)
                 {
                     case "StellariumSceneRenderer":
@@ -207,7 +207,7 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             totalObjectsResolved,
             scenes = visualAssetDiagnostics
         }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
-        await WriteCinematicDiagnosticsAsync(prep.WorkingDirectoryPlan.WorkingDirectoryRoot, prep, visualPlans, sceneObjectsDrawn, thumbnailObjectCount, cancellationToken);
+        await WriteCinematicDiagnosticsAsync(prep.WorkingDirectoryPlan.RootPath, prep, visualPlans, sceneObjectsDrawn, thumbnailObjectCount, cancellationToken);
 
         var hasVisuals = visualPlans.Any(v => v.SelectedAssets.Count > 0);
         var sceneVisualsContainObjects = sceneObjectsDrawn.Values.Any(v => v > 0);
