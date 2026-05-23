@@ -48,7 +48,7 @@ public sealed class WeeklySkyForecastV2EventIntelligenceBuilder : IWeeklySkyFore
                 if (close.Any())
                 {
                     var codes = close.Select(x => x.ObjectCode).Append("MOON").Distinct().ToList();
-                    events.Add(BuildEvent(codes.Count >= 3 ? "planetary_grouping" : "moon_planet_pairing", "Evening sky lineup", day.Date, moon.BestViewingTimeUtc, codes, context, 90, "Hybrid", "grouping_story", "same_window_grouping_only_no_angular_separation"));
+                    events.Add(BuildEvent(codes.Count >= 3 ? "planetary_grouping" : "moon_planet_pairing", "One continuous evening sky story", day.Date, moon.BestViewingTimeUtc, codes, context, 90, "Hybrid", "grouping_story", "grouping_trace_same_window"));
                 }
             }
         }
@@ -229,7 +229,7 @@ public sealed class WeeklySkyForecastV2NarrationTextGenerator : IWeeklySkyForeca
         var phraseDiversifier = new PhraseDiversifier();
         var segments = narrationPlan.LongFormPlan.Segments.Select(s => BuildLongSegment(s, phraseDiversifier)).ToList();
         var full = string.Join("\n\n", segments.Select(x => x.NarrationText));
-        var shorts = narrationPlan.ShortsPlan.Shorts.Select((s, i) => BuildShort(s, i)).ToList();
+        var shorts = narrationPlan.ShortsPlan.Shorts.Select((s, i) => BuildShort(s, i, narrationPlan.ShortsPlan.Shorts)).ToList();
         var warnings = new List<string>(narrationPlan.NarrationWarnings);
         if (Forbidden.Any(f => full.Contains(f, StringComparison.OrdinalIgnoreCase))) warnings.Add("Forbidden conjunction-like wording detected.");
         var estimatedLongDuration = EstimateDurationSeconds(full);
@@ -252,11 +252,12 @@ public sealed class WeeklySkyForecastV2NarrationTextGenerator : IWeeklySkyForeca
         };
         return new WeeklyGeneratedNarrationSegment(s.SegmentCode, s.SegmentTitle, text, EstimateDurationSeconds(text), s.TargetObjects, s.RecommendedVisualStrategy, s.VisualPurpose);
     }
-    private static WeeklyGeneratedShortNarration BuildShort(WeeklyShortNarrationItem s, int index)
+    private static WeeklyGeneratedShortNarration BuildShort(WeeklyShortNarrationItem s, int index, IReadOnlyList<WeeklyShortNarrationItem> allShorts)
     {
         var objects = WeeklySkyForecastV2TextHelpers.FormatCelestialList(s.TargetObjects);
         var cta = CtaVariants[index % CtaVariants.Length];
-        var text = $"{s.Hook} Tonight, {objects} {PhraseDiversifier.ShortVariant(index)}. {cta}";
+        var intro = index switch { 0 => "As twilight deepens", 1 => "If you can only watch once", _ => "In the calm western dusk" };
+        var text = $"{intro}, {objects} {PhraseDiversifier.ShortVariant(index)}. {cta}";
         return new WeeklyGeneratedShortNarration(s.ShortCode, s.Title, text, EstimateDurationSeconds(text), s.RecommendedVisualStrategy);
     }
     private static int EstimateDurationSeconds(string text) => (int)Math.Ceiling(CountWords(text) / (double)SpokenWordsPerMinute * 60d);
@@ -419,7 +420,7 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
 
 internal static class WeeklySkyForecastV2PreviewStabilityValidator
 {
-    private static readonly string[] ForbiddenStoryPhrases = ["same viewing window grouping", "high-value weekly observation event", "weekly visibility momentum", "backup opportunities", "observation event", "grouping event"];
+    private static readonly string[] ForbiddenStoryPhrases = ["evening sky lineup", "same viewing window grouping", "high-value weekly observation event", "weekly visibility momentum", "backup opportunities", "observation event", "grouping event"];
     public static WeeklyPreviewStabilityReport Validate(WeeklySkyForecastV2IntelligenceResponse response)
     {
         var narrationPlan = response.NarrationPlan!;
@@ -429,21 +430,25 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         var renderExecutionPackage = response.RenderExecutionPackage!;
         var blocking = new List<string>();
         var warnings = new List<string>();
-        if (!narrationQuality.IsValid) blocking.Add("Narration quality failed required checks.");
+        var affectedPaths = new List<string>();
+        if (!narrationQuality.IsValid) { blocking.Add("Narration quality failed required checks."); affectedPaths.Add("NarrationQuality"); }
         if (visualRequirementPackage is null) blocking.Add("Visual requirement package is missing.");
         if (hybridScenePlanPackage is null) blocking.Add("Hybrid scene plan package is missing.");
         if (narrationPlan.LongFormPlan.Segments.Any(s => visualRequirementPackage.SegmentVisualMappings.All(m => !m.SegmentCode.Equals(s.SegmentCode, StringComparison.OrdinalIgnoreCase))))
-            blocking.Add("Every narration segment must map to a visual requirement.");
+            { blocking.Add("Every narration segment must map to a visual requirement."); affectedPaths.Add("VisualRequirementPackage.SegmentVisualMappings"); }
         if (visualRequirementPackage.SegmentVisualMappings.Any(m => hybridScenePlanPackage.ScenePlans.All(s => !s.VisualCode.Equals(m.VisualCode, StringComparison.OrdinalIgnoreCase))))
-            blocking.Add("Every visual requirement mapping must resolve to a scene.");
-        if (narrationQuality.ForbiddenPhraseHits.Count > 0) blocking.Add("Forbidden wording detected.");
+            { blocking.Add("Every visual requirement mapping must resolve to a scene."); affectedPaths.Add("HybridScenePlanPackage.ScenePlans"); }
+        if (narrationQuality.ForbiddenPhraseHits.Count > 0) { blocking.Add("Forbidden wording detected."); affectedPaths.Add("GeneratedNarrationPackage"); }
         if (!narrationQuality.ShortCtaUniquenessValid) warnings.Add("Short CTA endings need better differentiation.");
-        if (hybridScenePlanPackage.ScenePlans.Count is < 4 or > 6) blocking.Add("Hybrid scene plan must contain 4-6 timeline scenes.");
-        if (renderExecutionPackage.ExecutionScenes.Any(s => s.TechnicalBestTimeUtc is null && string.IsNullOrWhiteSpace(s.HumanTimeWindow))) blocking.Add("Render contract uses null technical time without human fallback.");
+        if (hybridScenePlanPackage.ScenePlans.Count is < 4 or > 6) { blocking.Add("Hybrid scene plan must contain 4-6 timeline scenes."); affectedPaths.Add("HybridScenePlanPackage.ScenePlans"); }
+        if (renderExecutionPackage.ExecutionScenes.Any(s => s.TechnicalBestTimeUtc is null && string.IsNullOrWhiteSpace(s.HumanTimeWindow))) { blocking.Add("Render contract uses null technical time without human fallback."); affectedPaths.Add("RenderExecutionPackage.ExecutionScenes"); }
         foreach (var scene in renderExecutionPackage.ExecutionScenes)
         {
             if (scene.TechnicalBestTimeUtc is not null && DateOnly.FromDateTime(scene.TechnicalBestTimeUtc.Value) != scene.TargetDate)
+            {
                 blocking.Add($"RenderExecutionPackage.ExecutionScenes[{scene.SceneCode}].TechnicalBestTimeUtc date mismatch.");
+                affectedPaths.Add($"RenderExecutionPackage.ExecutionScenes[{scene.SceneCode}].TechnicalBestTimeUtc");
+            }
         }
         var storyFacingChecks = new Dictionary<string, string?>
         {
@@ -455,7 +460,12 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
         };
         foreach (var kv in storyFacingChecks)
             foreach (var phrase in ForbiddenStoryPhrases.Where(p => (kv.Value ?? "").Contains(p, StringComparison.OrdinalIgnoreCase)))
-                blocking.Add($"{kv.Key} contains forbidden phrase: {phrase}");
+            { blocking.Add($"{kv.Key} contains forbidden phrase: {phrase}"); affectedPaths.Add(kv.Key); }
+        if (response.CinematicStoryBlueprint?.SupportingStories.Count(s => s.Title.Contains("continuous evening sky story", StringComparison.OrdinalIgnoreCase)) > 1)
+        {
+            blocking.Add("Repeated grouping story leaked into supporting stories.");
+            affectedPaths.Add("CinematicStoryBlueprint.SupportingStories");
+        }
         var readyForAssetResolution = blocking.Count == 0;
         var readyForSceneChoreography = readyForAssetResolution && hybridScenePlanPackage.ScenePlans.Count <= 6;
         var readyForRenderPreparation = readyForSceneChoreography
@@ -464,7 +474,7 @@ internal static class WeeklySkyForecastV2PreviewStabilityValidator
             && renderExecutionPackage.AssetResolutionDirectives.Count == renderExecutionPackage.ExecutionScenes.Count
             && renderExecutionPackage.ThumbnailExecutionContract is not null
             && renderExecutionPackage.StellariumExecutionDirectives.Any(x => x.SceneCode == "best_night_wide_scene" && x.Required);
-        return new WeeklyPreviewStabilityReport(readyForAssetResolution, blocking, warnings, readyForAssetResolution, readyForSceneChoreography, readyForRenderPreparation, false);
+        return new WeeklyPreviewStabilityReport(readyForAssetResolution, blocking, warnings, affectedPaths.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), readyForAssetResolution, readyForSceneChoreography, readyForRenderPreparation, false);
     }
 }
 
@@ -476,7 +486,10 @@ public sealed class WeeklySkyForecastV2EditorialNormalizer : IWeeklySkyForecastV
         var grouping = intelligence.EventIntelligence.Where(e => e.EventType.Contains("group", StringComparison.OrdinalIgnoreCase) || e.EventType.Contains("pair", StringComparison.OrdinalIgnoreCase)).ToList();
         var peak = new DateOnly(2026, 5, 25);
         var normalized = new WeeklyNormalizedEditorialEvent(Guid.NewGuid().ToString("N"), "evening_grouping", "Venus, Jupiter and the Moon share the evening sky", "Bright planets and the Moon define the western dusk during the week’s strongest evening window.", ["VENUS", "JUPITER", "MOON"], peak, [new DateOnly(2026, 5, 22), new DateOnly(2026, 5, 23), new DateOnly(2026, 5, 24), new DateOnly(2026, 5, 25), new DateOnly(2026, 5, 26)], "shortly after sunset in western dusk", grouping.Select(x => x.EventId).ToList(), 95, "Hybrid");
-        var windows = new[] { new WeeklyNormalizedTimeWindow(peak, "shortly after sunset", grouping.FirstOrDefault(x => x.PrimaryDate == peak)?.BestTimeUtc, 0.9) };
+        var peakTime = grouping.FirstOrDefault(x => x.PrimaryDate == peak)?.BestTimeUtc;
+        if (peakTime is not null && DateOnly.FromDateTime(peakTime.Value) != peak)
+            peakTime = null;
+        var windows = new[] { new WeeklyNormalizedTimeWindow(peak, "during twilight / shortly after sunset", peakTime, 0.9) };
         var visualInputs = cinematicBlueprint.CinematicMoments.Select(m => new WeeklyNormalizedVisualStoryInput(m.VisualUniquenessKey, "supporting", "Show the normalized weekly story progression", m.ObjectCodes, m.TargetDate, "early evening", m.RecommendedVisualStrategy)).ToList();
         var arc = new WeeklyNormalizedStoryArc(editorialPackage.Headline, editorialPackage.OpeningHook, editorialPackage.StoryTheme, normalized.Title, ["Best skywatching night: May 25", "The Moon’s strongest visual night"], "Best skywatching night: May 25", "Curiosity to calm wonder", "Step outside during twilight for a reliable weekly sky moment.");
         return Task.FromResult(new WeeklyNormalizedEditorialPackage([normalized], normalized, arc, windows, visualInputs, []));
