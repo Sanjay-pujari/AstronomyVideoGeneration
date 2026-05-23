@@ -463,11 +463,14 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
             new("thumbnail_story_scene", 0, 6, 0, 0, 0, ["ThumbnailTitle"], 0, 0, true, false, false)
         };
         var sceneByCode = hybridPlan.ScenePlans.ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
-        var scenes = timeline.Where(t => !t.IsThumbnailOnly).Select((t, index) =>
+        var scenes = timeline.Select((t, index) =>
         {
             var scene = sceneByCode[t.SceneCode];
             var technical = scene.TargetDate == new DateOnly(2026, 5, 25) ? DateTime.Parse("2026-05-25T18:00:00Z") : (scene.BestTimeUtc is not null && DateOnly.FromDateTime(scene.BestTimeUtc.Value) == scene.TargetDate ? scene.BestTimeUtc : null);
-            return new WeeklyRenderExecutionScene(scene.SceneCode, index + 1, scene.VisualSourceType == "Hybrid" ? "HybridCompositor" : scene.RequiresStellarium ? "StellariumSceneRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor", scene.VisualSourceType, scene.SceneType, t.EndSecond - t.StartSecond, t.StartSecond, t.EndSecond, t.NarrationSegmentCodes ?? [], scene.TargetDate, "early evening", technical, ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"], ["composited_frames", "scene_manifest"], scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
+            var rendererType = t.IsThumbnailOnly
+                ? "ThumbnailCompositor"
+                : scene.VisualSourceType == "Hybrid" ? "HybridCompositor" : scene.RequiresStellarium ? "StellariumSceneRenderer" : scene.VisualSourceType == "CelestialAsset" ? "CelestialAssetCompositor" : "HybridCompositor";
+            return new WeeklyRenderExecutionScene(scene.SceneCode, index + 1, rendererType, scene.VisualSourceType, scene.SceneType, t.EndSecond - t.StartSecond, t.StartSecond, t.EndSecond, t.NarrationSegmentCodes ?? [], scene.TargetDate, t.IsThumbnailOnly ? "storyboard thumbnail composition" : "early evening", technical, ["scene_media_inputs", "resolved_assets", "overlay_directives", "camera_motion_directives", "transition_directive"], ["composited_frames", "scene_manifest"], t.IsThumbnailOnly ? 60 : scene.ReuseAllowed ? 100 : 80, scene.ReuseAllowed ? "prefer_reuse" : "primary");
         }).ToList();
         var decisions = scenes.Select(s => BuildDecision(s.SceneCode)).ToList();
         var assetDirectives = scenes.Select(s => new AssetResolutionDirective(s.SceneCode, hybridPlan.AssetNeeds.Where(a => a.RequiredForSceneCodes.Contains(s.SceneCode)).Select(a => a.AssetCode).ToList(), ["public_twilight_plate"], "CelestialAsset>GeneratedImage>PublicImage", true, true)).ToList();
@@ -537,6 +540,7 @@ internal static class WeeklySkyForecastV2RenderExecutionBuilder
         "best_night_wide_scene" => new(sceneCode, "Stellarium", "Stellarium is selected because this scene prioritizes true sky orientation and timing clarity.", ["Hybrid", "CelestialAsset"], false, true, false, false),
         "moon_jupiter_hero_scene" => new(sceneCode, "CelestialAsset", "CelestialAsset is selected for clean Moon/Jupiter hero detail and visual fidelity.", ["Hybrid", "GeneratedImage"], true, false, false, true),
         "viewing_tip_wide_scene" => new(sceneCode, "Hybrid", "Hybrid is selected to layer practical overlays on top of a calm wide-sky background.", ["Stellarium", "CelestialAsset", "GeneratedImage"], false, false, true, true),
+        "thumbnail_story_scene" => new(sceneCode, "Hybrid", "Hybrid is selected for thumbnail-only compositing with locked framing and overlay-safe layout.", ["CelestialAsset", "GeneratedImage", "PublicImage"], true, false, true, true),
         _ => new(sceneCode, "Hybrid", "Default weekly scene source.", ["GeneratedImage", "PublicImage"], true, false, true, true)
     };
 }
