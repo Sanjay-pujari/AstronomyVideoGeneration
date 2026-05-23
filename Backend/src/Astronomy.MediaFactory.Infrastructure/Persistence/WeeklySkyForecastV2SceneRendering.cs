@@ -231,8 +231,12 @@ await RenderOverlayAsync(overlay.PlannedOverlayPath, $"{overlay.SceneCode} {over
             if (SystemFonts.TryGet(name, out var family)) return family.CreateFont(size, FontStyle.Bold);
         }
 
-        var fallbackFamily = SystemFonts.Collection.Families.FirstOrDefault()
-            ?? throw new InvalidOperationException("No system fonts available for C# overlay rendering.");
+        var fallbackFamily = SystemFonts.Collection.Families.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(fallbackFamily.Name))
+        {
+            throw new InvalidOperationException("No system fonts available for C# overlay rendering.");
+        }
+
         return fallbackFamily.CreateFont(size, FontStyle.Bold);
     }
 
