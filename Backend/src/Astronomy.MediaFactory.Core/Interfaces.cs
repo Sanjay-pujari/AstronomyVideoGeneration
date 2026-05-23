@@ -1133,7 +1133,9 @@ public sealed record WeeklySkyForecastV2IntelligenceRequest(
     string RegionName,
     DateTimeOffset ScheduledUtc,
     DateOnly? WeekStartDate = null,
-    bool Diagnostics = true);
+    bool Diagnostics = true,
+    Guid? PipelineRunId = null,
+    Guid? ContentGenerationPlanId = null);
 public sealed record WeeklySkyForecastV2RenderScenesRequest(
     string ContentCategoryCode,
     string Language,
@@ -1142,7 +1144,8 @@ public sealed record WeeklySkyForecastV2RenderScenesRequest(
     DateTimeOffset ScheduledUtc,
     DateOnly? WeekStartDate = null,
     bool Diagnostics = true,
-    Guid? ContentGenerationPlanId = null);
+    Guid? ContentGenerationPlanId = null,
+    Guid? PipelineRunId = null);
 
 public sealed record WeeklySkyForecastV2EventIntelligenceItem(
     string EventId,
@@ -1492,7 +1495,7 @@ public sealed record NarrationSyncResult(bool NarrationTrackPlanned, string Narr
 public sealed record NarrationSegmentSync(string SegmentCode, int StartSecond, int EndSecond, int TargetDurationSeconds, int NarrationEstimatedDurationSeconds, string Status);
 public sealed record AudioCompositionPlan(string NarrationAudioPath, string BackgroundMusicPath, string FinalMixedAudioPath, bool AudioRendered, bool MusicRendered, bool MixRendered, string Status);
 public sealed record ShortsCompositionPlan(string ShortCode, string Title, IReadOnlyList<string> SourceSceneCodes, IReadOnlyList<string> SourceNarrationCodes, int TargetDurationSeconds, string AspectRatio, string CropStrategy, string PlannedOutputPath, string Status);
-public sealed record TimelineCompositionValidation(bool IsValid, bool LongFormTimelineComposed, int TotalDurationSeconds, int ExpectedDurationSeconds, bool TimelineHasNoGaps, bool TransitionsValid, bool ThumbnailExcluded, bool ReuseSceneResolved, bool NarrationSyncValid, bool ReadyForFinalVideoReview, bool ReadyForPublishing, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
+public sealed record TimelineCompositionValidation(bool IsValid, bool LongFormTimelineComposed, int TotalDurationSeconds, int ExpectedDurationSeconds, bool TimelineHasNoGaps, bool TransitionsValid, bool ThumbnailExcluded, bool ReuseSceneResolved, bool NarrationSyncValid, bool SinglePipelineRunIdUsed, bool ReadyForFinalVideoReview, bool ReadyForPublishing, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 public sealed record TimelineCompositionFreezeStatus(bool IsFrozen, bool IsReadyForPhase6D, IReadOnlyList<string> VerifiedChecks, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 public sealed record WeeklyExecutionValidationReport(
     bool OverlaysValidated,

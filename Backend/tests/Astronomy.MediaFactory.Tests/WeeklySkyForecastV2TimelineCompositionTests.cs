@@ -38,6 +38,7 @@ public sealed class WeeklySkyForecastV2TimelineCompositionTests
         Assert.True(result.TimelineCompositionValidation.TimelineHasNoGaps);
         Assert.True(result.TimelineCompositionValidation.ThumbnailExcluded);
         Assert.True(result.TimelineCompositionValidation.ReuseSceneResolved);
+        Assert.True(result.TimelineCompositionValidation.SinglePipelineRunIdUsed);
         Assert.True(result.TimelineCompositionValidation.ReadyForFinalVideoReview);
         Assert.False(result.TimelineCompositionValidation.ReadyForPublishing);
         Assert.Equal("Planned", result.AudioCompositionPlan.Status);
@@ -52,7 +53,7 @@ public sealed class WeeklySkyForecastV2TimelineCompositionTests
     private sealed class FakeTimelineOrchestrator : IWeeklySkyForecastTimelineCompositionOrchestrator
     {
         public Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
-            => Task.FromResult(new TimelineCompositionPackage(new LongFormTimelineResult("/tmp/out.mp4", 110, "Composed", true, true, [], []), [], [], new NarrationSyncResult(true, "generated", 100, 110, false, "Planned", [], [], []), new AudioCompositionPlan("a", "b", "c", false, false, false, "Planned"), [], new TimelineCompositionValidation(true, true, 110, 110, true, true, true, true, true, true, false, [], []), new TimelineCompositionFreezeStatus(true, true, [], [], [])));
+            => Task.FromResult(new TimelineCompositionPackage(new LongFormTimelineResult("/tmp/out.mp4", 110, "Composed", true, true, [], []), [], [], new NarrationSyncResult(true, "generated", 100, 110, false, "Planned", [], [], []), new AudioCompositionPlan("a", "b", "c", false, false, false, "Planned"), [], new TimelineCompositionValidation(true, true, 110, 110, true, true, true, true, true, true, true, false, [], []), new TimelineCompositionFreezeStatus(true, true, [], [], [])));
     }
 }
 

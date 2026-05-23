@@ -112,8 +112,9 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             new("event_intelligence", "completed", DateTime.UtcNow, DateTime.UtcNow, 0, "Event intelligence generated", null, [])
         };
 
+        var orchestrationId = request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid();
         var baseResponse = new WeeklySkyForecastV2IntelligenceResponse(
-            ContentGenerationPlanId: null,
+            ContentGenerationPlanId: orchestrationId,
             Category: "WeeklySkyForecast",
             Success: true,
             WeekStartDate: ctx.WeekStartDate,
@@ -171,7 +172,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         baseResponse = baseResponse with { WeeklyStoryArc = arc };
         var (sceneChoreographyPackage, cinematicChoreographyPackage) = assetResolver.Resolve(narrationPlan, hybridScenePlanPackage, visualRequirementPackage, baseResponse.Region);
         var renderExecutionPackage = WeeklySkyForecastV2RenderExecutionBuilder.Build(narrationPlan, hybridScenePlanPackage, cinematicChoreographyPackage, baseResponse.Region);
-        var renderPreparationPackage = WeeklySkyForecastV2RenderPreparationBuilder.Build(renderExecutionPackage, hybridScenePlanPackage, narrationPlan, ctx, "WeeklySkyForecast", renderingOptions.Value.WorkingDirectory);
+        var renderPreparationPackage = WeeklySkyForecastV2RenderPreparationBuilder.Build(renderExecutionPackage, hybridScenePlanPackage, narrationPlan, ctx, "WeeklySkyForecast", renderingOptions.Value.WorkingDirectory, orchestrationId);
         var deprecatedLegacyEditorialPackage = BuildDeprecatedLegacyEditorialPackage(normalizedEditorialPackage);
         var fullResponse = baseResponse with { EditorialStoryPackage = deprecatedLegacyEditorialPackage, CinematicStoryBlueprint = cinematic, NarrativeAbstractionPackage = narrative, NarrationPlan = narrationPlan, GeneratedNarrationPackage = generatedNarration, NarrationQuality = narrationQuality, VisualRequirementPackage = visualRequirementPackage, HybridScenePlanPackage = hybridScenePlanPackage, NormalizedEditorialPackage = normalizedEditorialPackage, SceneChoreographyPackage = sceneChoreographyPackage, CinematicChoreographyPackage = cinematicChoreographyPackage, RenderExecutionPackage = renderExecutionPackage, RenderPreparationPackage = renderPreparationPackage, LegacyEditorialPackageDeprecated = true, ReadyForRenderPreparation = true, ReadyForSceneRendering = true, ReadyForRendering = false };
         var executionValidation = WeeklySkyForecastV2PreviewStabilityValidator.ValidateExecution(fullResponse) with
@@ -799,9 +800,8 @@ public sealed class WeeklySkyForecastV2AssetResolver : IWeeklySkyForecastV2Asset
 
 internal static class WeeklySkyForecastV2RenderPreparationBuilder
 {
-    public static RenderPreparationPackage Build(WeeklyRenderExecutionPackage execution, WeeklyHybridScenePlanPackage hybrid, WeeklyNarrationPlan narration, WeeklySkyForecastContext context, string categoryName, string workingDirectory)
+    public static RenderPreparationPackage Build(WeeklyRenderExecutionPackage execution, WeeklyHybridScenePlanPackage hybrid, WeeklyNarrationPlan narration, WeeklySkyForecastContext context, string categoryName, string workingDirectory, Guid pipelineRunId)
     {
-        var pipelineRunId = BuildDeterministicGuid($"{execution.ExecutionId}|{context.RegionId}|{context.WeekStartDate:yyyy-MM-dd}");
         var workingRoot = string.IsNullOrWhiteSpace(workingDirectory) ? "./media-output" : workingDirectory;
         var root = Path.GetFullPath(Path.Combine(workingRoot, categoryName, context.WeekStartDate.ToString("yyyy-MM-dd"), context.RegionId.ToLowerInvariant(), pipelineRunId.ToString("N")));
         var dirs = new RenderWorkingDirectoryPlan(root, Path.Combine(root, "scene-renders"), Path.Combine(root, "audio"), Path.Combine(root, "overlays"), Path.Combine(root, "thumbnails"), Path.Combine(root, "timeline"), Path.Combine(root, "final"), Path.Combine(root, "metadata"), Path.Combine(root, "debug"), Path.Combine(root, "stellarium"), Path.Combine(root, "assets"), "v2", "Rendering:WorkingDirectory");
