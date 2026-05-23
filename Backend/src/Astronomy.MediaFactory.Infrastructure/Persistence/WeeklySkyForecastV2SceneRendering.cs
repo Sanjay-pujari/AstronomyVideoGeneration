@@ -12,7 +12,6 @@ using SixLabors.ImageSharp.Processing;
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
-    IWeeklySkyForecastV2IntelligenceService intelligenceService,
     IFFmpegService ffmpegService,
     IMediaValidationService mediaValidationService,
     IOptions<RenderingOptions> renderingOptions,
@@ -32,8 +31,9 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
 
     public async Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
     {
-        var preview = await intelligenceService.PreviewAsync(orchestrationContext, cancellationToken);
-        var prep = preview.RenderPreparationPackage ?? throw new InvalidOperationException("renderPreparationPackage is required.");
+        var prep = orchestrationContext.RenderPreparationPackage
+            ?? orchestrationContext.IntelligencePreviewResult?.RenderPreparationPackage
+            ?? throw new InvalidOperationException("renderPreparationPackage is required on orchestration context.");
         var blocking = new List<string>();
         var warnings = new List<string>();
         var sceneResults = new List<SceneRenderResult>();
