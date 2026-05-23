@@ -1343,6 +1343,32 @@ public interface IWeeklySkyForecastFinalMediaOrchestrator
     Task<FinalMediaPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken);
 }
 
+public sealed record ExternalProcessExecutionResult(string ExecutablePath, string Arguments, string WorkingDirectory, DateTime StartedUtc, DateTime CompletedUtc, long ElapsedMs, int ExitCode, string StdOut, string StdErr, string? OutputPath, long OutputFileSizeBytes);
+public sealed record FfprobeMediaInfo(double DurationSeconds, int Width, int Height, string? VideoCodec, bool HasAudioStream, bool HasVideoStream);
+public sealed record MediaValidationResult(bool IsValid, string Path, string MediaType, IReadOnlyList<string> BlockingIssues, FfprobeMediaInfo? ProbeInfo = null);
+
+public interface IExternalProcessRunner
+{
+    Task<ExternalProcessExecutionResult> RunAsync(string executablePath, string arguments, string workingDirectory, string? outputPath, CancellationToken cancellationToken);
+}
+
+public interface IFFmpegService
+{
+    Task<ExternalProcessExecutionResult> ExecuteAsync(string arguments, string workingDirectory, string? outputPath, CancellationToken cancellationToken);
+}
+
+public interface IFFprobeService
+{
+    Task<FfprobeMediaInfo?> ProbeAsync(string path, CancellationToken cancellationToken);
+}
+
+public interface IMediaValidationService
+{
+    Task<MediaValidationResult> ValidateMp4Async(string path, long minBytes, CancellationToken cancellationToken);
+    Task<MediaValidationResult> ValidateWavAsync(string path, CancellationToken cancellationToken);
+    MediaValidationResult ValidateImage(string path, long minBytes, string mediaType);
+}
+
 public sealed record FinalMediaPackage(
     FinalLongFormVideoResult LongFormFinalVideo,
     NarrationAudioResult NarrationAudioResult,
@@ -1360,7 +1386,7 @@ public sealed record FinalAudioMixResult(string FinalMixedAudioPath, double Dura
 public sealed record ShortFinalResult(string ShortCode, string OutputPath, double DurationSeconds, string AspectRatio, string Status, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
 public sealed record ThumbnailFinalResult(string OutputPath, string Status, bool ReusedFromPhase6B, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
 public sealed record SubtitleResult(string SrtPath, string VttPath, string Status, bool CaptionsRendered, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
-public sealed record FinalMediaValidation(bool IsValid, bool NarrationAudioRendered, bool FinalAudioMixed, bool LongFormVideoRendered, bool ShortsRendered, bool ThumbnailAvailable, bool SubtitlesReady, bool DurationValid, bool OutputFilesExist, bool ReadyForHumanReview, bool ReadyForPublishing, bool SinglePipelineRunIdUsed, bool OutputRootConsistent, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, bool OutputFilesAreValidMedia, bool FfmpegExecuted, bool StellariumCaptureExecuted, bool OverlaysAreValidImages, bool ThumbnailIsValidImage, bool ShortsAreValidMedia, bool LongFormIsValidMedia);
+public sealed record FinalMediaValidation(bool IsValid, bool NarrationAudioRendered, bool FinalAudioMixed, bool LongFormVideoRendered, bool ShortsRendered, bool ThumbnailAvailable, bool SubtitlesReady, bool DurationValid, bool OutputFilesExist, bool ReadyForHumanReview, bool ReadyForPublishing, bool SinglePipelineRunIdUsed, bool OutputRootConsistent, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings, bool OutputFilesAreValidMedia, bool FfmpegExecuted, bool StellariumCaptureExecuted, bool OverlaysAreValidImages, bool ThumbnailIsValidImage, bool ShortsAreValidMedia, bool LongFormIsValidMedia, bool RealMediaOutputsGenerated = false, bool FfprobeExecuted = false);
 public sealed record FinalMediaFreezeStatus(bool IsFrozen, bool IsReadyForPhase7, IReadOnlyList<string> VerifiedChecks, IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> Warnings);
 
 public interface IWeeklySkyForecastV2EditorialIntelligenceBuilder
