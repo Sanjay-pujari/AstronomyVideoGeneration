@@ -7,13 +7,25 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
     IWeeklySkyForecastSceneRenderingOrchestrator sceneRenderingOrchestrator) : IWeeklySkyForecastTimelineCompositionOrchestrator
 {
     public async Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
+        => await RunAsync(new WeeklySkyForecastV2OrchestrationContext(
+            ContentGenerationPlanId: contentGenerationPlanId ?? request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid(),
+            PipelineRunId: request.PipelineRunId ?? contentGenerationPlanId ?? request.ContentGenerationPlanId ?? Guid.NewGuid(),
+            WorkingDirectoryRoot: null,
+            Request: request,
+            ResolvedRegion: null,
+            WeeklyForecast: null,
+            SkyfieldSummary: null,
+            EventIntelligence: null,
+            GeneratedAtUtc: DateTime.UtcNow), cancellationToken);
+
+    public async Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
     {
-        var preview = await intelligenceService.PreviewAsync(request, cancellationToken);
+        var preview = await intelligenceService.PreviewAsync(orchestrationContext, cancellationToken);
         var prep = preview.RenderPreparationPackage ?? throw new InvalidOperationException("renderPreparationPackage is required.");
         var generatedNarration = preview.GeneratedNarrationPackage ?? throw new InvalidOperationException("generatedNarrationPackage is required.");
         var execution = preview.RenderExecutionPackage ?? throw new InvalidOperationException("executionTimeline/transitionExecutionDirectives are required.");
 
-        var sceneRendering = await sceneRenderingOrchestrator.RunAsync(request, contentGenerationPlanId, cancellationToken);
+        var sceneRendering = await sceneRenderingOrchestrator.RunAsync(orchestrationContext, cancellationToken);
         var renderedByCode = sceneRendering.SceneRenderResults.ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
         var blocking = new List<string>();
 

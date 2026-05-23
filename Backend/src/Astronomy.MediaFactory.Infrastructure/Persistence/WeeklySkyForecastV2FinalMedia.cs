@@ -13,19 +13,31 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
     ILogger<WeeklySkyForecastFinalMediaOrchestrator> logger) : IWeeklySkyForecastFinalMediaOrchestrator
 {
     public async Task<FinalMediaPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
+        => await RunAsync(new WeeklySkyForecastV2OrchestrationContext(
+            ContentGenerationPlanId: contentGenerationPlanId ?? request.ContentGenerationPlanId ?? request.PipelineRunId ?? Guid.NewGuid(),
+            PipelineRunId: request.PipelineRunId ?? contentGenerationPlanId ?? request.ContentGenerationPlanId ?? Guid.NewGuid(),
+            WorkingDirectoryRoot: null,
+            Request: request,
+            ResolvedRegion: null,
+            WeeklyForecast: null,
+            SkyfieldSummary: null,
+            EventIntelligence: null,
+            GeneratedAtUtc: DateTime.UtcNow), cancellationToken);
+
+    public async Task<FinalMediaPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
     {
         logger.LogInformation("Content plan created");
         logger.LogInformation("Pipeline run created");
 
-        var preview = await intelligenceService.PreviewAsync(request, cancellationToken);
+        var preview = await intelligenceService.PreviewAsync(orchestrationContext, cancellationToken);
         var prep = preview.RenderPreparationPackage ?? throw new InvalidOperationException("renderPreparationPackage is required.");
         var narrationPackage = preview.GeneratedNarrationPackage ?? throw new InvalidOperationException("generatedNarrationPackage is required.");
         logger.LogInformation("Working root selected: {Root}", prep.WorkingDirectoryPlan.RootPath);
         logger.LogInformation("Skyfield request started");
         logger.LogInformation("Skyfield request completed");
 
-        var scenes = await sceneOrchestrator.RunAsync(request, contentGenerationPlanId, cancellationToken);
-        var timeline = await timelineOrchestrator.RunAsync(request, contentGenerationPlanId, cancellationToken);
+        var scenes = await sceneOrchestrator.RunAsync(orchestrationContext, cancellationToken);
+        var timeline = await timelineOrchestrator.RunAsync(orchestrationContext, cancellationToken);
         logger.LogInformation("Scene render request count: {Count}", scenes.SceneRenderResults.Count);
         logger.LogInformation("Stellarium SSC generated");
 
