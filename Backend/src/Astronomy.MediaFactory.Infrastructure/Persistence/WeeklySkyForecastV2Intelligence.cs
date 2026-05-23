@@ -802,10 +802,14 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
                 ? execution.ExecutionTimeline
                     .LastOrDefault(t => t.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) && (t.NarrationSegmentCodes ?? []).Contains("ClosingCTA", StringComparer.OrdinalIgnoreCase))
                     ?? execution.ExecutionTimeline.Last(t => t.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase))
-                : execution.ExecutionTimeline.First(t => t.SceneCode.Equals(sceneCode, StringComparison.OrdinalIgnoreCase));
+                : execution.ExecutionTimeline.FirstOrDefault(t => t.SceneCode.Equals(sceneCode, StringComparison.OrdinalIgnoreCase))
+                    ?? execution.ExecutionTimeline.FirstOrDefault(t => t.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) && sceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase))
+                    ?? throw CreateMissingSceneException(sceneCode, execution.ExecutionTimeline.Select(t => t.SceneCode), "ExecutionTimeline");
             var canonicalSceneCode = timelineItem.SceneCode;
-            var scene = execution.ExecutionScenes.First(s => s.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase));
-            var contract = execution.RendererExecutionContracts.First(c => c.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase));
+            var scene = execution.ExecutionScenes.FirstOrDefault(s => s.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase))
+                ?? throw CreateMissingSceneException(canonicalSceneCode, execution.ExecutionScenes.Select(s => s.SceneCode), "ExecutionScenes");
+            var contract = execution.RendererExecutionContracts.FirstOrDefault(c => c.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase))
+                ?? throw CreateMissingSceneException(canonicalSceneCode, execution.RendererExecutionContracts.Select(c => c.SceneCode), "RendererExecutionContracts");
             return new SceneRenderRequest(
                 $"rr-{i + 1:00}-{sceneCode}", sceneCode, contract.RendererType, contract.SelectedSourceType, scene.TargetDate, scene.TechnicalBestTimeUtc, timelineItem.EndSecond - timelineItem.StartSecond,
                 timelineItem.NarrationSegmentCodes ?? [],
@@ -860,5 +864,11 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
     {
         var bytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(value));
         return new Guid(bytes);
+    }
+
+    private static InvalidOperationException CreateMissingSceneException(string expectedSceneCode, IEnumerable<string> availableSceneCodes, string source)
+    {
+        var available = string.Join(", ", availableSceneCodes.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
+        return new InvalidOperationException($"Could not resolve scene code '{expectedSceneCode}' from {source}. Available scene codes: [{available}]");
     }
 }
