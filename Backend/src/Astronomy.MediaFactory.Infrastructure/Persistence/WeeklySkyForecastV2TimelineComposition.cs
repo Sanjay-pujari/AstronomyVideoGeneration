@@ -88,7 +88,19 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
         }
         var noGaps = segmentResults.Count > 0 && segmentResults.Zip(segmentResults.Skip(1), (a, b) => a.EndSecond == b.StartSecond).All(x => x) && segmentResults[0].StartSecond == 0;
         var thumbnailExcluded = segmentResults.All(x => !x.SceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase));
-        var reuseResolved = segmentResults.Any(x => x.SceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.SourceSceneOutputPath));
+
+        var closingSegment = segmentResults
+            .LastOrDefault(x => (x.NarrationSegmentCodes ?? []).Contains("ClosingCTA", StringComparer.OrdinalIgnoreCase));
+        var hasExpectedClosingSegment = closingSegment is not null
+            && closingSegment.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase)
+            && closingSegment.RequestId.Equals("rr-02-best_night_wide_scene", StringComparison.OrdinalIgnoreCase);
+        var hasLegacyClosingReuseSegment = segmentResults.Any(x => x.SceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.SourceSceneOutputPath));
+        var closingSourceExistsInPipeline = closingSegment is not null && File.Exists(closingSegment.SourceSceneOutputPath)
+            && Path.GetFullPath(closingSegment.SourceSceneOutputPath).StartsWith(expectedRoot, StringComparison.OrdinalIgnoreCase);
+        var duplicateClosingReuseRenderCreated = prep.SceneRenderRequests.Any(x =>
+            x.SceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase)
+            || (x.IsReuseScene && x.ReuseSourceSceneCode?.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) == true && !x.RequestId.Equals("rr-02-best_night_wide_scene", StringComparison.OrdinalIgnoreCase)));
+        var reuseResolved = (hasExpectedClosingSegment && closingSourceExistsInPipeline && !duplicateClosingReuseRenderCreated) || hasLegacyClosingReuseSegment;
 
         var validation = new TimelineCompositionValidation(
             blocking.Count == 0 && totalDuration == 110 && targetDuration == 110 && noGaps && singlePipelineRunIdUsed,
