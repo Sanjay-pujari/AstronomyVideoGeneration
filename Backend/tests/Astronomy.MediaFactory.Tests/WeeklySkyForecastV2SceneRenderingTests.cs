@@ -39,7 +39,6 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
     public async Task Orchestrator_DispatchesPhase6BRenderers_WithoutPlaceholderFallback()
     {
         var orchestrator = new WeeklySkyForecastSceneRenderingOrchestrator(
-            new FakeIntelligenceService(),
             new FakeFfmpegService(),
             new FakeMediaValidationService(),
             Options.Create(new RenderingOptions()),
@@ -65,7 +64,6 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
     public async Task Orchestrator_UnknownRendererType_ReturnsValidationError()
     {
         var orchestrator = new WeeklySkyForecastSceneRenderingOrchestrator(
-            new FakeIntelligenceService(includeUnsupportedRenderer: true),
             new FakeFfmpegService(),
             new FakeMediaValidationService(),
             Options.Create(new RenderingOptions()),
@@ -79,7 +77,7 @@ public sealed class WeeklySkyForecastV2SceneRenderingTests
     private sealed class FakeOrchestrator : IWeeklySkyForecastSceneRenderingOrchestrator
     {
         public Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2IntelligenceRequest request, Guid? contentGenerationPlanId, CancellationToken cancellationToken)
-            => Task.FromResult(new SceneRenderingPackage([], [], [], [], [], null, new SceneRenderingValidation(true, true, true, true, true, true, true, true, false, [], []), new SceneRenderingFreezeStatus(true, [], [], [])));
+            => Task.FromResult(new SceneRenderingPackage([], [], [], [], [], null, new SceneRenderingValidation(true, true, true, true, true, true, true, true, true, false, [], []), new SceneRenderingFreezeStatus(true, [], [], [])));
 
         public Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
             => RunAsync(orchestrationContext.Request, orchestrationContext.ContentGenerationPlanId, cancellationToken);

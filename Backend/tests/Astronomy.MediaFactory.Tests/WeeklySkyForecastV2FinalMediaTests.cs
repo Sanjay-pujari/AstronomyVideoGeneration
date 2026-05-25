@@ -45,15 +45,12 @@ public sealed class WeeklySkyForecastV2FinalMediaTests
         var orchestrator = new WeeklySkyForecastFinalMediaOrchestrator(
             new FakeIntelligenceServiceFor6C(),
             new WeeklySkyForecastSceneRenderingOrchestrator(
-                new FakeIntelligenceServiceFor6C(),
                 new FakeFfmpegService(),
                 new FakeMediaValidationService(),
                 Options.Create(new RenderingOptions()),
                 new Microsoft.Extensions.Logging.Abstractions.NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>()),
             new WeeklySkyForecastTimelineCompositionOrchestrator(
-                new FakeIntelligenceServiceFor6C(),
                 new WeeklySkyForecastSceneRenderingOrchestrator(
-                    new FakeIntelligenceServiceFor6C(),
                     new FakeFfmpegService(),
                     new FakeMediaValidationService(),
                     Options.Create(new RenderingOptions()),
