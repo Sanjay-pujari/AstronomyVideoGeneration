@@ -1460,7 +1460,13 @@ public sealed record WeeklyCinematicShot(
     string ExpectedOutputVideoPath,
     string ExpectedSscScriptPath,
     IReadOnlyList<string> PlannedSscCommands,
-    WeeklyShotNarrationSync NarrationSync);
+    WeeklyShotNarrationSync NarrationSync,
+    string TitleText = "",
+    string SubtitleText = "",
+    IReadOnlyList<string>? LabelObjects = null,
+    double? ShowLabelsFromSecond = null,
+    double? HideLabelsAtSecond = null,
+    string OverlayStyle = "cinematic_minimal");
 
 public sealed record WeeklyCinematicSceneSequence(
     string SegmentCode,
