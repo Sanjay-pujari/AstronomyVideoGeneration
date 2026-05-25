@@ -391,6 +391,21 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             ["shortsPlan"] = root is null ? null : Path.Combine(root, "debug", "weekly-shorts-plan.json")
         };
 
+        async Task<object?> ExecuteStellariumSmokeTestAsync()
+        {
+            var shots = await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root!, pipelineRunId.ToString("N")), root!, ct);
+            var selected = string.IsNullOrWhiteSpace(request.ExecuteShotCode)
+                ? shots.Scripts.FirstOrDefault()
+                : shots.Scripts.FirstOrDefault(x => string.Equals(x.ShotCode, request.ExecuteShotCode, StringComparison.OrdinalIgnoreCase));
+            selected ??= shots.Scripts.FirstOrDefault(x => string.Equals(x.ShotCode, "s1_wide_sky_reveal_01", StringComparison.OrdinalIgnoreCase));
+            if (selected is null)
+            {
+                return null;
+            }
+
+            return await stellariumScriptExecutor.ExecuteAsync(root!, selected.ScriptPath, selected.ExpectedScreenshotPath, request.StellariumTimeoutSeconds ?? 45, ct);
+        }
+
         object result = phase switch
         {
             WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents => new
@@ -472,16 +487,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
                     ? await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")), root, ct)
                     : null,
                 execution = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
-                    ? await (async () =>
-                    {
-                        var shots = await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")), root, ct);
-                        var selected = string.IsNullOrWhiteSpace(request.ExecuteShotCode)
-                            ? shots.Scripts.FirstOrDefault()
-                            : shots.Scripts.FirstOrDefault(x => string.Equals(x.ShotCode, request.ExecuteShotCode, StringComparison.OrdinalIgnoreCase));
-                        selected ??= shots.Scripts.FirstOrDefault(x => string.Equals(x.ShotCode, "s1_wide_sky_reveal_01", StringComparison.OrdinalIgnoreCase));
-                        if (selected is null) return null;
-                        return await stellariumScriptExecutor.ExecuteAsync(root, selected.ScriptPath, selected.ExpectedScreenshotPath, request.StellariumTimeoutSeconds ?? 45, ct);
-                    })()
+                    ? await ExecuteStellariumSmokeTestAsync()
                     : null,
                 debugFiles
             },
