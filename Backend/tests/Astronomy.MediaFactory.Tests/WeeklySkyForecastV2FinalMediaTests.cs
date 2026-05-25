@@ -43,7 +43,6 @@ public sealed class WeeklySkyForecastV2FinalMediaTests
     public async Task FinalMediaOrchestrator_Renders_FinalAssets_WithoutPublishing()
     {
         var orchestrator = new WeeklySkyForecastFinalMediaOrchestrator(
-            new FakeIntelligenceServiceFor6C(),
             new WeeklySkyForecastSceneRenderingOrchestrator(
                 new FakeFfmpegService(),
                 new FakeMediaValidationService(),
