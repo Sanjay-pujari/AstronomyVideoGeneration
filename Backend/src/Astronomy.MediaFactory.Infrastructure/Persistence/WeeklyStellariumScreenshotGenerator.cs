@@ -27,16 +27,17 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         if (scriptPackage is null)
         {
             errors.Add("No script package provided.");
-            return await WriteResultAsync(false, workingDirectoryRoot, warnings, errors, results, sw.ElapsedMilliseconds);
+            return await WriteResultAsync(false, workingDirectoryRoot, ExtractPipelineRunId(Path.GetFullPath(workingDirectoryRoot)), warnings, errors, results, sw.ElapsedMilliseconds);
         }
 
         if (string.IsNullOrWhiteSpace(_options.ExecutablePath) || !File.Exists(_options.ExecutablePath))
         {
             errors.Add("Stellarium executable path is not configured.");
-            return await WriteResultAsync(false, workingDirectoryRoot, warnings, errors, results, sw.ElapsedMilliseconds);
+            return await WriteResultAsync(false, workingDirectoryRoot, ExtractPipelineRunId(Path.GetFullPath(workingDirectoryRoot)), warnings, errors, results, sw.ElapsedMilliseconds);
         }
 
         var rootFull = Path.GetFullPath(workingDirectoryRoot);
+        var pipelineRunId = ExtractPipelineRunId(rootFull);
         var scenesDir = Path.Combine(rootFull, "stellarium", "scenes");
         Directory.CreateDirectory(scenesDir);
 
@@ -45,7 +46,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         {
             errors.Add("Basic Stellarium smoke test failed. Cinematic scripts were not executed.");
             await WriteBasicSmokeDiagnosticsAsync(rootFull, smokeResult, cancellationToken);
-            return await WriteResultAsync(false, workingDirectoryRoot, warnings, errors, results, sw.ElapsedMilliseconds);
+            return await WriteResultAsync(false, workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds);
         }
         await WriteBasicSmokeDiagnosticsAsync(rootFull, smokeResult, cancellationToken);
 
@@ -54,7 +55,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         if (selected.Count == 0)
         {
             errors.Add("No scripts selected for execution.");
-            return await WriteResultAsync(false, workingDirectoryRoot, warnings, errors, results, sw.ElapsedMilliseconds);
+            return await WriteResultAsync(false, workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds);
         }
 
         foreach (var script in selected)
@@ -65,13 +66,32 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             int? exitCode = null;
             var screenshotSize = 0L;
             var screenshotFull = Path.GetFullPath(script.ExpectedScreenshotPath);
+            var scriptFull = Path.GetFullPath(script.ScriptPath);
+            var scriptExists = File.Exists(scriptFull);
+            var scriptPreview = scriptExists ? await File.ReadAllTextAsync(scriptFull, cancellationToken) : string.Empty;
+            scriptPreview = scriptPreview.Length > 1200 ? scriptPreview[..1200] : scriptPreview;
+            var scriptLastWriteUtc = scriptExists ? File.GetLastWriteTimeUtc(scriptFull).ToString("O") : null;
+            string? launchedExecutable = null;
+            string? launchedArguments = null;
+            string? launchedWorkingDirectory = null;
 
             logger.LogInformation("Starting Stellarium script execution");
-            logger.LogInformation("Script path: {ScriptPath}", script.ScriptPath);
-            logger.LogInformation("Expected screenshot path: {ExpectedScreenshotPath}", script.ExpectedScreenshotPath);
+            logger.LogInformation("selectedShotCode={ShotCode}", script.ShotCode);
+            logger.LogInformation("selectedScriptPath={ScriptPath}", script.ScriptPath);
+            logger.LogInformation("selectedExpectedScreenshotPath={ExpectedScreenshotPath}", script.ExpectedScreenshotPath);
+            logger.LogInformation("selectedScriptExists={ScriptExists}", scriptExists);
+            logger.LogInformation("selectedScriptLastWriteUtc={ScriptLastWriteUtc}", scriptLastWriteUtc);
+            logger.LogInformation("workingDirectoryRoot={WorkingDirectoryRoot}", rootFull);
+            logger.LogInformation("pipelineRunId={PipelineRunId}", pipelineRunId);
 
-            if (!File.Exists(script.ScriptPath)) error = $"Selected script missing: {script.ScriptPath}";
+            if (!scriptExists) error = $"Selected script missing: {script.ScriptPath}";
+            else if (!scriptFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) error = "Selected script path outside workingDirectoryRoot.";
             else if (!screenshotFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) error = "Expected screenshot path outside workingDirectoryRoot.";
+            else if (!scriptFull.Contains(pipelineRunId, StringComparison.OrdinalIgnoreCase) || !screenshotFull.Contains(pipelineRunId, StringComparison.OrdinalIgnoreCase)) error = "Selected script/screenshot path must include current pipelineRunId without dashes.";
+            else if (scriptFull.Contains(@"D:\AstronomyWorkspace\Astronomy\media-output\stellarium\", StringComparison.OrdinalIgnoreCase)
+                || screenshotFull.Contains(@"D:\AstronomyWorkspace\Astronomy\media-output\stellarium\", StringComparison.OrdinalIgnoreCase)) error = "Generic Stellarium path detected.";
+            else if (!scriptPreview.Contains("core.screenshot(", StringComparison.OrdinalIgnoreCase)
+                || (!scriptPreview.Contains("core.quitStellarium()", StringComparison.OrdinalIgnoreCase) && !scriptPreview.Contains("core.quit()", StringComparison.OrdinalIgnoreCase))) error = "Selected SSC script does not contain screenshot/quit command.";
             else
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(screenshotFull)!);
@@ -83,10 +103,14 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                     {
                         FileName = _options.ExecutablePath,
                         Arguments = $"--startup-script \"{script.ScriptPath}\"",
+                        WorkingDirectory = rootFull,
                         UseShellExecute = false,
                         CreateNoWindow = false
                     }
                 };
+                launchedExecutable = process.StartInfo.FileName;
+                launchedArguments = process.StartInfo.Arguments;
+                launchedWorkingDirectory = process.StartInfo.WorkingDirectory;
 
                 process.Start();
                 logger.LogInformation("Stellarium process id: {ProcessId}", process.Id);
@@ -132,12 +156,12 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 
             scriptSw.Stop();
             logger.LogInformation("Script execution completed");
-            results.Add(new WeeklyStellariumScreenshotScriptResult(script.ShotCode, script.ScriptPath, script.ExpectedScreenshotPath, exists, screenshotSize, scriptSw.ElapsedMilliseconds, timedOut, exitCode, error));
+            results.Add(new WeeklyStellariumScreenshotScriptResult(script.ShotCode, script.ScriptPath, script.ExpectedScreenshotPath, exists, screenshotSize, scriptSw.ElapsedMilliseconds, timedOut, exitCode, error, scriptPreview, scriptLastWriteUtc, launchedExecutable, launchedArguments, launchedWorkingDirectory));
         }
 
         sw.Stop();
         logger.LogInformation("Screenshot generation completed");
-        return await WriteResultAsync(!results.Any(r => !string.IsNullOrWhiteSpace(r.Error)), workingDirectoryRoot, warnings, errors, results, sw.ElapsedMilliseconds);
+        return await WriteResultAsync(!results.Any(r => !string.IsNullOrWhiteSpace(r.Error)), workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds);
     }
 
     private static List<WeeklyStellariumScriptInfo> SelectScripts(WeeklyStellariumScriptPackage package, string? executeShotCode, int maxScriptCount, List<string> warnings, List<string> errors)
@@ -165,13 +189,19 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         return package.Scripts.Take(capped).ToList();
     }
 
-    private static async Task<WeeklyStellariumScreenshotGenerationResult> WriteResultAsync(bool success, string workingDirectoryRoot, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<WeeklyStellariumScreenshotScriptResult> scripts, long elapsedMs)
+    private static async Task<WeeklyStellariumScreenshotGenerationResult> WriteResultAsync(bool success, string workingDirectoryRoot, string? pipelineRunId, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<WeeklyStellariumScreenshotScriptResult> scripts, long elapsedMs)
     {
         var timeoutCount = scripts.Count(s => s.TimedOut);
-        var result = new WeeklyStellariumScreenshotGenerationResult(success, scripts.Count, scripts.Count(s => s.Error is null), scripts.Count(s => s.Error is not null), elapsedMs, timeoutCount, warnings, errors, scripts, Path.Combine(Path.GetFullPath(workingDirectoryRoot), "debug", "weekly-stellarium-screenshot-generation.json"));
+        var result = new WeeklyStellariumScreenshotGenerationResult(success, scripts.Count, scripts.Count(s => s.Error is null), scripts.Count(s => s.Error is not null), elapsedMs, timeoutCount, warnings, errors, scripts, Path.Combine(Path.GetFullPath(workingDirectoryRoot), "debug", "weekly-stellarium-screenshot-generation.json"), Path.GetFullPath(workingDirectoryRoot), pipelineRunId);
         Directory.CreateDirectory(Path.GetDirectoryName(result.DiagnosticsPath)!);
         await File.WriteAllTextAsync(result.DiagnosticsPath, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         return result;
+    }
+
+    private static string ExtractPipelineRunId(string rootFull)
+    {
+        var normalized = rootFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return Path.GetFileName(normalized);
     }
 
     private async Task<BasicSmokeResult> RunBasicSmokeTestAsync(string rootFull, int timeoutSeconds, CancellationToken cancellationToken)

@@ -392,9 +392,17 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
         };
 
 
-        async Task<object?> ExecuteStellariumScreenshotsAsync()
+        WeeklyStellariumScriptPackage? cachedStellariumScripts = null;
+        async Task<WeeklyStellariumScriptPackage?> GetStellariumScriptsAsync()
         {
-            var shots = await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root!, pipelineRunId.ToString("N")), root!, ct);
+            if (cachedStellariumScripts is not null) return cachedStellariumScripts;
+            if (response.Storyboard is null || response.StellariumBlueprintPackage is null || response.EventExtractionResult is null || root is null) return null;
+            cachedStellariumScripts = await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")), root, ct);
+            return cachedStellariumScripts;
+        }
+
+        async Task<object?> ExecuteStellariumScreenshotsAsync(WeeklyStellariumScriptPackage shots)
+        {
             return await stellariumScreenshotGenerator.GenerateAsync(root!, shots, request.ExecuteShotCode, request.MaxScriptCount ?? 1, request.StellariumTimeoutSeconds ?? 60, ct);
         }
         async Task<object?> ExecuteStellariumSmokeTestAsync()
@@ -484,16 +492,16 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             },
             WeeklySkyForecastV2DiagnosticsPhase.StellariumScreenshots => new
             {
+                pipelineRunId = pipelineRunId.ToString("N"),
+                workingDirectoryRoot = root,
                 storyboard = response.Storyboard,
                 stellariumBlueprintPackage = response.StellariumBlueprintPackage,
                 cinematicShotPackage = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
                     ? cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N"))
                     : null,
-                stellariumScripts = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
-                    ? await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")), root, ct)
-                    : null,
+                stellariumScripts = await GetStellariumScriptsAsync(),
                 screenshotGeneration = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
-                    ? await ExecuteStellariumScreenshotsAsync()
+                    ? await ExecuteStellariumScreenshotsAsync((await GetStellariumScriptsAsync())!)
                     : null,
                 debugFiles
             },

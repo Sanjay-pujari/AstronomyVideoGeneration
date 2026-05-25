@@ -1199,7 +1199,12 @@ public sealed record WeeklyStellariumScreenshotScriptResult(
     long ElapsedMs,
     bool TimedOut,
     int? ExitCode,
-    string? Error);
+    string? Error,
+    string? SelectedScriptContentPreview = null,
+    string? SelectedScriptLastWriteUtc = null,
+    string? LaunchedExecutable = null,
+    string? LaunchedArguments = null,
+    string? LaunchedWorkingDirectory = null);
 
 public sealed record WeeklyStellariumScreenshotGenerationResult(
     bool Success,
@@ -1211,7 +1216,9 @@ public sealed record WeeklyStellariumScreenshotGenerationResult(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<WeeklyStellariumScreenshotScriptResult> Scripts,
-    string DiagnosticsPath);
+    string DiagnosticsPath,
+    string? WorkingDirectoryRoot = null,
+    string? PipelineRunId = null);
 
 public sealed record WeeklyStellariumScriptExecutionResult(
     string ScriptPath,

@@ -58,6 +58,7 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
                 };
 
                 lines.AddRange(shot.PlannedSscCommands);
+                lines.Add("core.wait(1.0);");
                 lines.Add($"core.screenshot(\"{EscapeForSscDoubleQuotedString(shot.ShotCode)}\", false, \"{EscapeForSscDoubleQuotedString(sceneFolderSscPath)}\", true, \"png\");");
                 lines.Add("core.wait(2.0);");
                 lines.Add("core.quitStellarium();");
@@ -65,6 +66,11 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
             }
 
             validationIssues.AddRange(shotIssues);
+            if (scriptFullPath.Contains(@"D:\AstronomyWorkspace\Astronomy\media-output\stellarium\", StringComparison.OrdinalIgnoreCase)
+                || screenshotFullPath.Contains(@"D:\AstronomyWorkspace\Astronomy\media-output\stellarium\", StringComparison.OrdinalIgnoreCase))
+            {
+                validationIssues.Add("Generic Stellarium path detected.");
+            }
             scripts.Add(new WeeklyStellariumScriptInfo(shot.ShotCode, scriptFullPath, ToSscPath(screenshotFullPath), shot.PlannedSscCommands?.Count ?? 0, isValid));
         }
 
