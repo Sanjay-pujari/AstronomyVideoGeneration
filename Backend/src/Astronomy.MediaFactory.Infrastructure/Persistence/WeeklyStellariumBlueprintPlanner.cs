@@ -84,7 +84,9 @@ internal static class WeeklyStellariumBlueprintPlanner
         $"core.moveToAltAzi('{direction}', 35)",
         "core.setFov(58)",
         "landscapeMgr.setFlagAtmosphere(true); landscapeMgr.setFlagLandscape(true)",
-        $"labelMgr.setFlagLabels(true); core.selectObjectByName('{string.Join(",", objectCodes)}')",
+        "core.setTracking(false)",
+        "labelMgr.setFlagLabels(false)",
+        $"core.output('Blueprint labels will be choreographed per shot for: {string.Join(",", objectCodes)}')",
         $"core.screenshot('{screenshot}', false, 'png')"
     ];
 
