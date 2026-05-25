@@ -1163,6 +1163,7 @@ public enum WeeklySkyForecastV2DiagnosticsPhase
     StellariumBlueprints,
     CinematicShots,
     StellariumScripts,
+    StellariumScreenshots,
     StellariumExecutionSmokeTest,
     MotionRenderPlan,
     NarrationSceneSync,
@@ -1185,8 +1186,32 @@ public sealed record WeeklySkyForecastV2PhaseDiagnosticsRequest(
     int PreviewClipCount = 0,
     string? ExecuteShotCode = null,
     int? StellariumTimeoutSeconds = null,
+    int? MaxScriptCount = null,
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
+
+public sealed record WeeklyStellariumScreenshotScriptResult(
+    string ShotCode,
+    string ScriptPath,
+    string ExpectedScreenshotPath,
+    bool ScreenshotExists,
+    long ScreenshotSizeBytes,
+    long ElapsedMs,
+    bool TimedOut,
+    int? ExitCode,
+    string? Error);
+
+public sealed record WeeklyStellariumScreenshotGenerationResult(
+    bool Success,
+    int AttemptedScripts,
+    int SuccessfulScreenshots,
+    int FailedScreenshots,
+    long ElapsedMs,
+    int TimeoutCount,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<WeeklyStellariumScreenshotScriptResult> Scripts,
+    string DiagnosticsPath);
 
 public sealed record WeeklyStellariumScriptExecutionResult(
     string ScriptPath,
@@ -1655,6 +1680,11 @@ public interface IWeeklyStellariumScriptWriter
 public interface IWeeklyStellariumScriptExecutor
 {
     Task<WeeklyStellariumScriptExecutionResult> ExecuteAsync(string workingDirectoryRoot, string scriptPath, string expectedScreenshotPath, int timeoutSeconds = 45, CancellationToken cancellationToken = default);
+}
+
+public interface IWeeklyStellariumScreenshotGenerator
+{
+    Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, int maxScriptCount = 1, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
 }
 
 public sealed record WeeklyMotionRenderManifest(

@@ -342,7 +342,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/intelligence-preview", 
         return Results.BadRequest(new { error = ex.Message });
     }
 });
-app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", async (WeeklySkyForecastV2PhaseDiagnosticsRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklyCinematicShotExpansionEngine cinematicEngine, IWeeklyStellariumScriptWriter stellariumScriptWriter, IWeeklyStellariumScriptExecutor stellariumScriptExecutor, IWeeklyMotionRenderManifestBuilder motionManifestBuilder, IContentPlanningService planning, CancellationToken ct) =>
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", async (WeeklySkyForecastV2PhaseDiagnosticsRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklyCinematicShotExpansionEngine cinematicEngine, IWeeklyStellariumScriptWriter stellariumScriptWriter, IWeeklyStellariumScriptExecutor stellariumScriptExecutor, IWeeklyStellariumScreenshotGenerator stellariumScreenshotGenerator, IWeeklyMotionRenderManifestBuilder motionManifestBuilder, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
     {
@@ -391,6 +391,12 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             ["shortsPlan"] = root is null ? null : Path.Combine(root, "debug", "weekly-shorts-plan.json")
         };
 
+
+        async Task<object?> ExecuteStellariumScreenshotsAsync()
+        {
+            var shots = await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root!, pipelineRunId.ToString("N")), root!, ct);
+            return await stellariumScreenshotGenerator.GenerateAsync(root!, shots, request.ExecuteShotCode, request.MaxScriptCount ?? 1, request.StellariumTimeoutSeconds ?? 60, ct);
+        }
         async Task<object?> ExecuteStellariumSmokeTestAsync()
         {
             var shots = await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root!, pipelineRunId.ToString("N")), root!, ct);
@@ -473,6 +479,21 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
                         cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")),
                         root,
                         ct)
+                    : null,
+                debugFiles
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.StellariumScreenshots => new
+            {
+                storyboard = response.Storyboard,
+                stellariumBlueprintPackage = response.StellariumBlueprintPackage,
+                cinematicShotPackage = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
+                    ? cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N"))
+                    : null,
+                stellariumScripts = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
+                    ? await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")), root, ct)
+                    : null,
+                screenshotGeneration = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
+                    ? await ExecuteStellariumScreenshotsAsync()
                     : null,
                 debugFiles
             },
