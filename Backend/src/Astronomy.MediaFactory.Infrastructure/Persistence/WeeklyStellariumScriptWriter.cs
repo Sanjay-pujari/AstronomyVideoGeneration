@@ -38,6 +38,7 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
             if (shot.PlannedSscCommands is null || shot.PlannedSscCommands.Count == 0) shotIssues.Add($"Shot '{shot.ShotCode}' has empty command list.");
             if (shot.PlannedSscCommands.Any(IsForbiddenMultiObjectSelect)) shotIssues.Add($"Shot '{shot.ShotCode}' contains invalid multi-object selectObjectByName command.");
             if (shot.PlannedSscCommands.Any(ContainsForbiddenSetFov)) shotIssues.Add($"Shot '{shot.ShotCode}' contains unsupported core.setFov command.");
+            if (shot.PlannedSscCommands.Any(ContainsForbiddenManagerReference)) shotIssues.Add($"Shot '{shot.ShotCode}' contains unsupported manager reference not used by DailySkyGuide scripts.");
             if (shot.PlannedSscCommands.Any(c => c.Contains("core.screenshot(", StringComparison.OrdinalIgnoreCase) && c.Contains('/')))
                 warnings.Add($"Shot '{shot.ShotCode}' screenshot command uses forward slashes; Windows backslash path is recommended.");
 
@@ -105,4 +106,11 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
 
     private static bool ContainsForbiddenSetFov(string command)
         => !string.IsNullOrWhiteSpace(command) && command.Contains("core.setFov(", StringComparison.Ordinal);
+
+    private static bool ContainsForbiddenManagerReference(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return false;
+        return command.Contains("landscapeMgr.", StringComparison.OrdinalIgnoreCase)
+            || command.Contains("labelMgr.", StringComparison.OrdinalIgnoreCase);
+    }
 }
