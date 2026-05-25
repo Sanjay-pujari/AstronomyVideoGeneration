@@ -342,6 +342,122 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/intelligence-preview", 
         return Results.BadRequest(new { error = ex.Message });
     }
 });
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", async (WeeklySkyForecastV2PhaseDiagnosticsRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        var contentPlanId = request.ContentGenerationPlanId;
+        if (!contentPlanId.HasValue)
+        {
+            var plan = await planning.GeneratePlanAsync(new GenerateContentPlanRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc.UtcDateTime, GeneratedByAi: true), ct);
+            contentPlanId = plan.ContentGenerationPlanId;
+        }
+
+        var pipelineRunId = request.PipelineRunId ?? contentPlanId.Value;
+        var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(
+            request.ContentCategoryCode,
+            request.Language,
+            request.RegionId,
+            request.RegionName,
+            request.ScheduledUtc,
+            request.WeekStartDate,
+            request.Diagnostics,
+            pipelineRunId,
+            contentPlanId);
+        var response = await service.PreviewAsync(intelligenceRequest, ct);
+        var root = response.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
+        var debugFiles = new Dictionary<string, string?>
+        {
+            ["astronomyEvents"] = root is null ? null : Path.Combine(root, "debug", "weekly-astronomy-events.json"),
+            ["storyBeats"] = root is null ? null : Path.Combine(root, "debug", "weekly-story-beats.json"),
+            ["visualSources"] = root is null ? null : Path.Combine(root, "debug", "weekly-visual-sources.json"),
+            ["stellariumBlueprints"] = root is null ? null : Path.Combine(root, "debug", "weekly-stellarium-blueprints.json"),
+            ["narrationSceneSync"] = root is null ? null : Path.Combine(root, "debug", "weekly-narration-scene-sync.json"),
+            ["cinematicTimeline"] = root is null ? null : Path.Combine(root, "debug", "weekly-cinematic-timeline.json"),
+            ["thumbnailStoryboard"] = root is null ? null : Path.Combine(root, "debug", "weekly-thumbnail-storyboard.json"),
+            ["shortsPlan"] = root is null ? null : Path.Combine(root, "debug", "weekly-shorts-plan.json")
+        };
+
+        object result = request.Phase switch
+        {
+            WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents => new
+            {
+                response.EventExtractionResult,
+                response.EventIntelligence
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.StoryBeats => new
+            {
+                response.EventExtractionResult,
+                response.EventIntelligence,
+                response.WeeklyStoryArc
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.VisualSources => new
+            {
+                response.EventExtractionResult,
+                response.EventIntelligence,
+                response.WeeklyStoryArc,
+                response.EditorialStoryPackage
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.StellariumBlueprints => new
+            {
+                response.CinematicStoryBlueprint,
+                response.NarrativeAbstractionPackage
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.NarrationSceneSync => new
+            {
+                response.NarrationPlan,
+                response.GeneratedNarrationPackage,
+                response.NarrationQuality,
+                response.VisualRequirementPackage,
+                response.HybridScenePlanPackage
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.CinematicTimeline => new
+            {
+                response.SceneChoreographyPackage,
+                response.CinematicChoreographyPackage,
+                response.RenderExecutionPackage
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.ThumbnailStoryboard => new
+            {
+                response.EditorialStoryPackage.ThumbnailDirection,
+                response.CinematicStoryBlueprint
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.ShortsPlan => new
+            {
+                response.EditorialStoryPackage.ShortsCandidates,
+                response.WeeklyStoryArc.SuggestedShorts
+            },
+            _ => response
+        };
+
+        return Results.Ok(new
+        {
+            contentGenerationPlanId = contentPlanId,
+            pipelineRunId,
+            workingDirectoryRoot = root,
+            phase = request.Phase.ToString(),
+            skyfieldCallCount = 1,
+            region = response.Region,
+            result,
+            debugFiles,
+            validation = new
+            {
+                response.ReadyForRenderPreparation,
+                response.ReadyForSceneRendering,
+                response.ReadyForRendering,
+                response.ExecutionValidation,
+                response.PreviewStability,
+                response.Phase5FoundationStatus
+            },
+            warnings = response.Warnings,
+            errors = response.StepResults.Where(x => !x.Success).Select(x => x.Message).ToArray()
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
 app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastSceneRenderingOrchestrator orchestrator, IContentPlanningService planning, CancellationToken ct) =>
 {
     var contentPlanId = request.ContentGenerationPlanId;

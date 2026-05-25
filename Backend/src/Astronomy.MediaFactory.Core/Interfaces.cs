@@ -1155,6 +1155,31 @@ public sealed record WeeklySkyForecastV2RenderScenesRequest(
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
 
+public enum WeeklySkyForecastV2DiagnosticsPhase
+{
+    AstronomyEvents,
+    StoryBeats,
+    VisualSources,
+    StellariumBlueprints,
+    NarrationSceneSync,
+    CinematicTimeline,
+    ThumbnailStoryboard,
+    ShortsPlan,
+    AllPlanning
+}
+
+public sealed record WeeklySkyForecastV2PhaseDiagnosticsRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    string RegionName,
+    DateTimeOffset ScheduledUtc,
+    DateOnly? WeekStartDate = null,
+    bool Diagnostics = true,
+    WeeklySkyForecastV2DiagnosticsPhase Phase = WeeklySkyForecastV2DiagnosticsPhase.AllPlanning,
+    Guid? ContentGenerationPlanId = null,
+    Guid? PipelineRunId = null);
+
 public sealed record WeeklySkyForecastV2OrchestrationContext(
     Guid ContentGenerationPlanId,
     Guid PipelineRunId,
