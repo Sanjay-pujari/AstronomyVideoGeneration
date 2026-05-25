@@ -120,5 +120,8 @@ public sealed class WeeklySkyForecastV2FinalMediaTests
             File.WriteAllText(path, script);
             return Task.FromResult(path);
         }
+
+        public Task SynthesizeToFileAsync(string script, string outputPath, CancellationToken cancellationToken)
+            => File.WriteAllTextAsync(outputPath, script, cancellationToken);
     }
 }
