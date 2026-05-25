@@ -37,6 +37,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             WeeklyForecast: null,
             SkyfieldSummary: null,
             EventIntelligence: null,
+            EventExtractionResult: null,
             GeneratedAtUtc: DateTime.UtcNow), cancellationToken);
 
     public async Task<SceneRenderingPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
