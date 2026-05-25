@@ -37,8 +37,11 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
             if (!IsPathUnderRoot(screenshotFullPath, rootFullPath)) shotIssues.Add($"Screenshot path is outside working root for shot '{shot.ShotCode}'.");
             if (shot.PlannedSscCommands is null || shot.PlannedSscCommands.Count == 0) shotIssues.Add($"Shot '{shot.ShotCode}' has empty command list.");
             if (shot.PlannedSscCommands.Any(IsForbiddenMultiObjectSelect)) shotIssues.Add($"Shot '{shot.ShotCode}' contains invalid multi-object selectObjectByName command.");
+            if (shot.PlannedSscCommands.Any(ContainsForbiddenSetFov)) shotIssues.Add($"Shot '{shot.ShotCode}' contains unsupported core.setFov command.");
+            if (shot.PlannedSscCommands.Any(c => c.Contains("core.screenshot(", StringComparison.OrdinalIgnoreCase) && c.Contains('/')))
+                warnings.Add($"Shot '{shot.ShotCode}' screenshot command uses forward slashes; Windows backslash path is recommended.");
 
-            var expectedScreenshotPath = ToForwardSlashes(screenshotFullPath);
+            var expectedScreenshotPath = ToWindowsPath(screenshotFullPath);
             var isValid = shotIssues.Count == 0;
             if (isValid)
             {
@@ -54,7 +57,7 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
                 };
 
                 lines.AddRange(shot.PlannedSscCommands);
-                lines.Add($"core.screenshot('{expectedScreenshotPath}', false, 'png')");
+                lines.Add($"core.screenshot(\"{EscapeForSscDoubleQuotedString(expectedScreenshotPath)}\", false, \"png\")");
                 lines.Add("core.quit()");
                 await File.WriteAllTextAsync(scriptFullPath, string.Join("\n", lines), Encoding.UTF8, cancellationToken);
             }
@@ -83,7 +86,9 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
         return candidatePath.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase) || string.Equals(candidatePath, rootPath, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ToForwardSlashes(string path) => path.Replace('\\', '/');
+    private static string ToWindowsPath(string path) => path.Replace('/', '\\');
+
+    private static string EscapeForSscDoubleQuotedString(string value) => value.Replace("\\", "\\\\");
 
     private static bool IsForbiddenMultiObjectSelect(string command)
     {
@@ -97,4 +102,7 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
         var selected = command[start..end];
         return selected.Contains(',', StringComparison.Ordinal);
     }
+
+    private static bool ContainsForbiddenSetFov(string command)
+        => !string.IsNullOrWhiteSpace(command) && command.Contains("core.setFov(", StringComparison.Ordinal);
 }

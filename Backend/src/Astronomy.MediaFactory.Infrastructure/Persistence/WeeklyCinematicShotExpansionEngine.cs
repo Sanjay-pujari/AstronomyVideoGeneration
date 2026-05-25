@@ -169,7 +169,7 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
             $"core.setDate('{bp.DateLocal:yyyy-MM-dd}T{bp.TimeLocal:HH\\:mm\\:ss}', 'local')",
             $"core.setObserverLocation({bp.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {bp.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 0, '{bp.RecommendedVisualSource}', '{bp.Timezone}')",
             $"core.moveToAltAzi('{direction}', 35)",
-            $"core.setFov({startFov.ToString(System.Globalization.CultureInfo.InvariantCulture)})",
+            $"StelMovementMgr.zoomTo({startFov.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 0)",
             "landscapeMgr.setFlagAtmosphere(true); landscapeMgr.setFlagLandscape(true); core.setGuiVisible(false);",
             "labelMgr.setFlagLabels(false)"
         };
@@ -186,7 +186,6 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         list.Add($"StelMovementMgr.zoomTo({endFov.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {Math.Max(3, duration - 2)})");
         list.Add($"core.wait({Math.Max(2, duration - 2)})");
         if (!string.IsNullOrWhiteSpace(primary)) list.Add("core.setTracking(false)");
-        list.Add($"core.screenshot('{img.Replace("\\", "/")}', false, 'png')");
         return list;
     }
 

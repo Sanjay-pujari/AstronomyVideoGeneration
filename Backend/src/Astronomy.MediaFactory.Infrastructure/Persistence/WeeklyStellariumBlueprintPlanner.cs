@@ -82,7 +82,7 @@ internal static class WeeklyStellariumBlueprintPlanner
         $"core.setDate('{date:yyyy-MM-dd}T{time:HH:mm:ss}', 'local')",
         $"core.setObserverLocation({ctx.Latitude:F6}, {ctx.Longitude:F6}, 0, '{ctx.LocationName}', '{ctx.Timezone}')",
         $"core.moveToAltAzi('{direction}', 35)",
-        "core.setFov(58)",
+        "StelMovementMgr.zoomTo(58, 0)",
         "landscapeMgr.setFlagAtmosphere(true); landscapeMgr.setFlagLandscape(true)",
         "core.setTracking(false)",
         "labelMgr.setFlagLabels(false)",
