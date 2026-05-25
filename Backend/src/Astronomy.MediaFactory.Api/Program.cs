@@ -450,7 +450,10 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
                 response.Phase5FoundationStatus
             },
             warnings = response.Warnings,
-            errors = response.StepResults.Where(x => !x.Success).Select(x => x.Message).ToArray()
+            errors = response.StepResults
+                .Where(x => !string.Equals(x.Status, "Completed", StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.ErrorMessage ?? x.Message ?? $"{x.StepName} did not complete successfully.")
+                .ToArray()
         });
     }
     catch (Exception ex)
