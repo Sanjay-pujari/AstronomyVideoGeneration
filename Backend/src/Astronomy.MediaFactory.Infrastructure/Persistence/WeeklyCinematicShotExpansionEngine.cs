@@ -10,12 +10,13 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         var warnings = new List<string> { "narration sync placeholder only" };
         var fov = new List<WeeklyDynamicFovCalculation>();
         var sequences = new List<WeeklyCinematicSceneSequence>();
+        var diagnostics = new WeeklyAstronomyCinematicRefinementDiagnostics();
 
         foreach (var segment in storyboard.OrderedSegments)
         {
             var bp = stellariumBlueprintPackage.SceneBlueprints.FirstOrDefault(s => s.SegmentCode == segment.SegmentCode);
             if (bp is null) continue;
-            var seqShots = BuildShots(segment, bp, eventExtractionResult, workingDirectoryRoot, fov, warnings);
+            var seqShots = BuildShots(segment, bp, eventExtractionResult, workingDirectoryRoot, fov, warnings, diagnostics);
             var seqDuration = seqShots.Sum(s => s.DurationSeconds);
             sequences.Add(new WeeklyCinematicSceneSequence(segment.SegmentCode, bp.SceneCode, bp.SceneType, bp.SceneCode, seqDuration, seqShots, segment.Purpose,
                 new WeeklyShotTransitionPlan("cut", "cut", "sequence-start"),
@@ -27,10 +28,13 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         var pkg = new WeeklyCinematicShotPackage(validation.Count == 0, storyboard.EmotionalArc, pipelineRunId, sequences.Count, sequences.Sum(s => s.Shots.Count), sequences.Sum(s => s.DurationSeconds), sequences, fov, validation, warnings);
         Directory.CreateDirectory(Path.Combine(workingDirectoryRoot, "debug"));
         File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-cinematic-shot-timeline.json"), JsonSerializer.Serialize(pkg, new JsonSerializerOptions { WriteIndented = true }));
+        diagnostics.FovCalculations = fov;
+        diagnostics.Warnings = warnings;
+        File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-astronomy-cinematic-refinement.json"), JsonSerializer.Serialize(new { astronomyCinematicRefinement = diagnostics }, new JsonSerializerOptions { WriteIndented = true }));
         return pkg;
     }
 
-    private static List<WeeklyCinematicShot> BuildShots(WeeklyStoryboardSegment segment, WeeklyStellariumSceneBlueprint bp, WeeklyAstronomyEventExtractionResult events, string root, List<WeeklyDynamicFovCalculation> fov, List<string> warnings)
+    private static List<WeeklyCinematicShot> BuildShots(WeeklyStoryboardSegment segment, WeeklyStellariumSceneBlueprint bp, WeeklyAstronomyEventExtractionResult events, string root, List<WeeklyDynamicFovCalculation> fov, List<string> warnings, WeeklyAstronomyCinematicRefinementDiagnostics diagnostics)
     {
         var shots = new List<WeeklyCinematicShot>();
         if (segment.SegmentType == WeeklyStoryboardSegmentType.OpeningHook)
@@ -41,27 +45,26 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
             ]);
         else if (segment.SegmentType == WeeklyStoryboardSegmentType.WeeklyOverview)
         {
-            var dates = events.ExtractedEvents.Select(e => e.BestDateLocal ?? bp.DateLocal).Distinct().Take(5).ToList();
-            if (dates.Count < 3) dates = [bp.DateLocal, bp.DateLocal.AddDays(1), bp.DateLocal.AddDays(3), bp.DateLocal.AddDays(5), bp.DateLocal.AddDays(6)];
-            foreach (var (d, i) in dates.Take(5).Select((d, i) => (d, i)))
-                shots.Add(BuildShot(bp with { DateLocal = d }, segment, root, $"{i+1:00}", "timeline_date_focus", $"show important date {d:MMM dd}", 5, "cross_dissolve", bp.HighlightObjects.Select(x=>x.ObjectCode).ToList(), null, 58, 60, 55, bp.CameraDirection));
+            var milestones = WeeklyTimelineMilestoneSelector.Select(events, bp.DateLocal);
+            diagnostics.TimelineMilestones = milestones;
+            foreach (var (m, i) in milestones.Take(5).Select((m, i) => (m, i)))
+                shots.Add(BuildShot(bp with { DateLocal = m.DateLocal }, segment, root, $"{i+1:00}", "timeline_date_focus", m.ReasonForSelection, 5, "cross_dissolve", m.TargetObjects, null, 58, 60, 55, bp.CameraDirection));
         }
         else if (segment.SegmentType is WeeklyStoryboardSegmentType.MainAstronomyEvent or WeeklyStoryboardSegmentType.GroupingFocus)
         {
-            var bestVisible = events.ExtractedEvents.SelectMany(e => e.Objects)
-                .GroupBy(o => o.ObjectCode, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.OrderByDescending(x => x.VisibilityScore).First())
-                .OrderByDescending(o => o.VisibilityScore)
-                .ToList();
-            var heroTargets = bestVisible.Where(o => !string.Equals(o.ObjectCode, "NEPTUNE", StringComparison.OrdinalIgnoreCase)).Take(3).Select(o => o.ObjectCode).ToList();
-            if (!heroTargets.Any()) heroTargets = ["MOON", "JUPITER", "VENUS"];
-            if (bestVisible.Any(o => string.Equals(o.ObjectCode, "NEPTUNE", StringComparison.OrdinalIgnoreCase))) warnings.Add("Neptune omitted because not naked-eye friendly.");
+            var selection = WeeklyVisibleObjectSelector.SelectForScene(events, "MainGrouping", warnings);
+            var heroTargets = selection.SelectedObjects;
+            diagnostics.SelectedObjectsByScene["MainGrouping"] = heroTargets;
+            diagnostics.OmittedObjectsWithReasons.AddRange(selection.OmittedObjectsWithReasons);
             var sourceSep = events.SelectedPrimaryEvent?.AngularSeparationDegrees;
             var gfov = CalcGroupingFov(bp.SceneCode, heroTargets, sourceSep, events.SelectedPrimaryEvent?.Objects, fov, warnings);
-            shots.Add(BuildShot(bp, segment, root, "01", "wide_grouping_reveal", "show all hero objects in one frame", 10, "slow_zoom_in", heroTargets, null, gfov, gfov + 8, gfov, bp.CameraDirection));
-            foreach (var (obj, idx) in heroTargets.Select((o, i) => (o, i)))
-                shots.Add(BuildShot(bp, segment, root, $"{idx + 2:00}", $"{obj.ToLowerInvariant()}_focus", $"select/track {obj}", 9, "object_tracking", [obj], obj, 30 - idx * 2, 36 - idx * 2, 30 - idx * 2, bp.CameraDirection));
-            shots.Add(BuildShot(bp, segment, root, "05", "final_grouping_composition", "return to all objects in one frame", 10, "slow_zoom_out", heroTargets, null, gfov, gfov - 4, gfov, bp.CameraDirection));
+            shots.Add(BuildShot(bp, segment, root, "01", "wide_grouping_reveal", "show all hero objects in one frame", 8, "slow_zoom_in", heroTargets, null, gfov, gfov + 8, gfov, bp.CameraDirection));
+            shots.Add(BuildShot(bp, segment, root, "02", "slow_grouping_zoom", "slow cinematic zoom across grouping", 10, "slow_zoom_in", heroTargets, null, gfov, gfov + 6, gfov - 6, bp.CameraDirection));
+            shots.Add(BuildShot(bp, segment, root, "03", "moon_focus", "moon detail focus", 8, "object_tracking", ["MOON"], "MOON", 30, 36, 30, bp.CameraDirection));
+            shots.Add(BuildShot(bp, segment, root, "04", "venus_jupiter_focus", "venus and jupiter focus", 8, "object_tracking", heroTargets.Where(o => o is "VENUS" or "JUPITER").ToList(), heroTargets.Contains("JUPITER") ? "JUPITER" : "VENUS", 30, 35, 30, bp.CameraDirection));
+            var hasSaturn = heroTargets.Contains("SATURN", StringComparer.OrdinalIgnoreCase);
+            if (hasSaturn) shots.Add(BuildShot(bp, segment, root, "05", "saturn_reveal", "saturn reveal", 6, "object_tracking", ["SATURN"], "SATURN", 28, 33, 28, bp.CameraDirection));
+            shots.Add(BuildShot(bp, segment, root, hasSaturn ? "06" : "05", "final_grouping_hold", "return to all objects in one frame", hasSaturn ? 10 : 16, "slow_zoom_out", heroTargets, null, gfov, gfov - 4, gfov, bp.CameraDirection));
         }
         else if (segment.SegmentType == WeeklyStoryboardSegmentType.BestViewingNight)
         {
@@ -73,7 +76,12 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
                 BuildShot(bp, segment, root, "04", "final_best_window_summary", "practical viewing overlay", 6, "cross_dissolve", allVisible, null, 60, 60, 60, "W")]);
         }
         else if (segment.SegmentType == WeeklyStoryboardSegmentType.ViewingDirectionGuide)
-            shots.AddRange([BuildShot(bp, segment, root, "01", "direction_establishing", "show W/E/S direction", 8, "direction_overlay", [], null, 78, 80, 75, "W"), BuildShot(bp, segment, root, "02", "altitude_path_trace", "show altitude hints and labels", 9, "path_trace", bp.HighlightObjects.Select(x=>x.ObjectCode).ToList(), null, 55, 58, 52, "W"), BuildShot(bp, segment, root, "03", "practical_observer_view", "look west after sunset guidance", 8, "instructional_hold", [], null, 70, 70, 70, "W")]);
+        {
+            var selection = WeeklyVisibleObjectSelector.SelectForScene(events, "ViewingGuide", warnings);
+            var overlay = WeeklyObservationOverlayBuilder.Build(events, selection.SelectedObjects, bp.CameraDirection, bp.TimeLocal);
+            diagnostics.ObservationOverlays[segment.SegmentCode] = overlay;
+            shots.AddRange([BuildShot(bp, segment, root, "01", "direction_establishing", "show W/E/S direction", 8, "direction_overlay", selection.SelectedObjects, null, 78, 80, 75, "W"), BuildShot(bp, segment, root, "02", "altitude_path_trace", "show altitude hints and labels", 9, "path_trace", selection.SelectedObjects, null, 55, 58, 52, "W"), BuildShot(bp, segment, root, "03", "practical_observer_view", $"look west after sunset guidance | {overlay.ViewingTip}", 8, "instructional_hold", selection.SelectedObjects, null, 70, 70, 70, "W")]);
+        }
         else if (segment.SegmentType == WeeklyStoryboardSegmentType.ClosingSequence)
             shots.AddRange([BuildShot(bp, segment, root, "01", "calm_horizon", "slow zoom out", 6, "slow_zoom_out", [], null, 70, 65, 75, "W"), BuildShot(bp, segment, root, "02", "stars_fade", "reduce labels", 5, "label_fade", [], null, 75, 75, 75, "W"), BuildShot(bp, segment, root, "03", "final_cta", "fade to black", 5, "fade_to_black", [], null, 82, 80, 82, "W")]);
 
@@ -200,6 +208,66 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         var totalDuration = shots.Sum(s => s.DurationSeconds);
         if (totalDuration < 120) issues.Add("total duration < 120s");
         if (shots.Any(s => !s.PlannedSscCommands.Any(c => c.Contains($"StelMovementMgr.zoomTo({s.EndFovDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}", StringComparison.Ordinal)))) issues.Add("zoomTo target does not match endFov");
+        if (shots.Any(s => s.PlannedSscCommands.Any(c => c.Contains("selectObjectByName('") && c.Contains(",")))) issues.Add("grouping uses comma-separated object selection");
         return issues;
     }
+}
+
+internal sealed class WeeklyAstronomyCinematicRefinementDiagnostics
+{
+    public Dictionary<string, IReadOnlyList<string>> SelectedObjectsByScene { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<object> OmittedObjectsWithReasons { get; } = [];
+    public IReadOnlyList<WeeklyDynamicFovCalculation> FovCalculations { get; set; } = [];
+    public IReadOnlyList<object> TimelineMilestones { get; set; } = [];
+    public Dictionary<string, object> ObservationOverlays { get; } = new();
+    public IReadOnlyList<string> Warnings { get; set; } = [];
+}
+
+internal sealed record WeeklySceneSelectionResult(IReadOnlyList<string> SelectedObjects, IReadOnlyList<object> OmittedObjectsWithReasons);
+internal static class WeeklyVisibleObjectSelector
+{
+    public static WeeklySceneSelectionResult SelectForScene(WeeklyAstronomyEventExtractionResult events, string scene, List<string> warnings)
+    {
+        var bestVisible = events.ExtractedEvents.SelectMany(e => e.Objects)
+            .GroupBy(o => o.ObjectCode, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(x => x.VisibilityScore).First())
+            .ToDictionary(x => x.ObjectCode, StringComparer.OrdinalIgnoreCase);
+        var selected = new List<string>();
+        void Add(string code){ if(bestVisible.TryGetValue(code, out var o) && (code=="MOON" ? o.VisibilityScore>0 : o.VisibilityScore>=0.5)) selected.Add(code); }
+        Add("MOON"); Add("VENUS"); Add("JUPITER"); Add("SATURN");
+        if (scene.Equals("OpeningHook", StringComparison.OrdinalIgnoreCase)) selected = selected.Take(3).ToList();
+        if (scene.Equals("ViewingGuide", StringComparison.OrdinalIgnoreCase)) selected = selected.Where(x => !x.Equals("NEPTUNE", StringComparison.OrdinalIgnoreCase)).ToList();
+        var omitted = new List<object>();
+        if (bestVisible.ContainsKey("NEPTUNE"))
+        {
+            warnings.Add("Neptune omitted from naked-eye cinematic grouping because it requires optical aid.");
+            omitted.Add(new { objectCode = "NEPTUNE", reason = "telescope-only object omitted from naked-eye grouping" });
+        }
+        return new WeeklySceneSelectionResult(selected.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), omitted);
+    }
+}
+
+internal sealed record WeeklyTimelineMilestone(DateOnly DateLocal, string ReasonForSelection, IReadOnlyList<string> TargetObjects, string NarrationPurpose, string VisualDifferenceFromPreviousShot);
+internal static class WeeklyTimelineMilestoneSelector
+{
+    public static IReadOnlyList<WeeklyTimelineMilestone> Select(WeeklyAstronomyEventExtractionResult events, DateOnly fallbackDate)
+    {
+        var list = new List<WeeklyTimelineMilestone>();
+        var ordered = events.ExtractedEvents.OrderByDescending(e => e.EventScore).ToList();
+        var best = ordered.FirstOrDefault();
+        if (best is not null) list.Add(new(best.BestDateLocal ?? fallbackDate, "Best overall viewing night based on highest event score.", best.Objects.Select(o=>o.ObjectCode).Distinct().ToList(), "Recommend one must-watch night.", "Strongest combined visibility and composition."));
+        var grouping = ordered.FirstOrDefault(e => e.EventType == WeeklyAstronomyEventType.Grouping);
+        if (grouping is not null) list.Add(new(grouping.BestDateLocal ?? fallbackDate, "Closest grouping/conjunction-like spacing night.", grouping.Objects.Select(o=>o.ObjectCode).Distinct().ToList(), "Highlight the tightest visual grouping.", "Objects appear closest together."));
+        var moonShift = ordered.FirstOrDefault(e => e.Objects.Any(o => o.ObjectCode.Equals("MOON", StringComparison.OrdinalIgnoreCase)));
+        if (moonShift is not null) list.Add(new(moonShift.BestDateLocal ?? fallbackDate, "Moon position change night for visible motion context.", ["MOON"], "Show how the Moon shifts night-to-night.", "Moon location differs noticeably from prior shot."));
+        while (list.Count < 5) list.Add(new(fallbackDate.AddDays(list.Count), "Weekend-friendly or high-visibility backup milestone.", ["MOON","VENUS"], "Keep weekly progression practical.", "Incremental date progression."));
+        return list.DistinctBy(x => x.DateLocal).Take(5).ToList();
+    }
+}
+
+internal sealed record WeeklyObservationOverlay(string BestViewingTimeLocal, string LookDirection, string AltitudeHint, IReadOnlyList<string> NakedEyeObjects, IReadOnlyList<string> BinocularObjects, IReadOnlyList<string> TelescopeObjects, string ViewingTip, string LightPollutionTip, string HorizonTip);
+internal static class WeeklyObservationOverlayBuilder
+{
+    public static WeeklyObservationOverlay Build(WeeklyAstronomyEventExtractionResult events, IReadOnlyList<string> nakedEyeObjects, string lookDirection, TimeOnly t)
+        => new(t.ToString("HH:mm"), lookDirection, "Moon high, Jupiter mid-sky, Venus lower toward western horizon", nakedEyeObjects, ["NEPTUNE"], ["NEPTUNE"], "Start looking after twilight from a clear western horizon.", "Move 20-30 minutes away from city center lights if possible.", "Use a clear low western horizon without tall buildings.");
 }
