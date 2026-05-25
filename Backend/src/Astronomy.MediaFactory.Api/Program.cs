@@ -379,6 +379,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
         {
             ["astronomyEvents"] = root is null ? null : Path.Combine(root, "debug", "weekly-astronomy-events.json"),
             ["storyBeats"] = root is null ? null : Path.Combine(root, "debug", "weekly-story-beats.json"),
+            ["storyboard"] = root is null ? null : Path.Combine(root, "debug", "weekly-storyboard.json"),
             ["visualSources"] = root is null ? null : Path.Combine(root, "debug", "weekly-visual-sources.json"),
             ["stellariumBlueprints"] = root is null ? null : Path.Combine(root, "debug", "weekly-stellarium-blueprints.json"),
             ["narrationSceneSync"] = root is null ? null : Path.Combine(root, "debug", "weekly-narration-scene-sync.json"),
@@ -396,6 +397,12 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             },
             WeeklySkyForecastV2DiagnosticsPhase.StoryBeats => new
             {
+                storyboard = response.Storyboard,
+                segments = response.Storyboard?.OrderedSegments,
+                transitions = response.Storyboard?.Transitions,
+                pacingAnalysis = response.Storyboard?.PacingAnalysis,
+                heroEvent = response.Storyboard?.SelectedPrimaryEvent,
+                emotionalArc = response.Storyboard?.EmotionalArc,
                 response.EventExtractionResult,
                 response.EventIntelligence,
                 response.WeeklyStoryArc

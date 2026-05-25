@@ -89,6 +89,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastV2NarrationTextGenerator narrationTextGenerator,
     IWeeklySkyForecastV2AssetResolver assetResolver,
     IWeeklySkyForecastV2EditorialNormalizer editorialNormalizer,
+    IWeeklyStoryboardComposer storyboardComposer,
     IOptions<RenderingOptions> renderingOptions,
     ILogger<WeeklySkyForecastV2IntelligenceService> logger) : IWeeklySkyForecastV2IntelligenceService
 {
@@ -170,6 +171,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
                 ctx.BestPhotographyNight),
             EventIntelligence: events,
             EventExtractionResult: eventExtractionResult,
+            Storyboard: storyboardComposer.Compose(eventExtractionResult, ctx.RegionId, request.Language, eventExtractionResult.SourceForecastSummary, "cinematic", orchestrationContext.WorkingDirectoryRoot ?? renderingOptions.Value.WorkingDirectory),
             WeeklyStoryArc: arc,
             EditorialStoryPackage: null!,
             CinematicStoryBlueprint: null,

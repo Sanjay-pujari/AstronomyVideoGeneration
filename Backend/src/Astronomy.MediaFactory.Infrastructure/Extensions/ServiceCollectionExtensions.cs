@@ -498,6 +498,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastV2NarrationTextGenerator, WeeklySkyForecastV2NarrationTextGenerator>();
         services.AddScoped<IWeeklySkyForecastV2AssetResolver, WeeklySkyForecastV2AssetResolver>();
         services.AddScoped<IWeeklySkyForecastV2EditorialNormalizer, WeeklySkyForecastV2EditorialNormalizer>();
+        services.AddScoped<IWeeklyStoryboardComposer, WeeklyStoryboardComposer>();
         services.AddScoped<IWeeklySkyForecastV2IntelligenceService, WeeklySkyForecastV2IntelligenceService>();
         services.AddScoped<IExternalProcessRunner, ExternalProcessRunner>();
         services.AddScoped<IFFmpegService, FFmpegService>();
