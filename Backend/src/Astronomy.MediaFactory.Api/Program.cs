@@ -541,7 +541,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", as
     var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, request.WeekStartDate, request.Diagnostics, pipelineRunId, contentPlanId);
     using var skyfieldTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
     skyfieldTimeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
-    var weeklyForecast = await contextBuilder.BuildAsync(new WeeklySkyForecastV2OrchestrationContext(contentPlanId.Value, pipelineRunId, null, intelligenceRequest, null, null, null, null, null, DateTime.UtcNow), skyfieldTimeoutCts.Token);
+    var weeklyForecast = await contextBuilder.BuildAsync(new WeeklySkyForecastV2OrchestrationContext(contentPlanId.Value, pipelineRunId, null, intelligenceRequest, null, null, null, null, null, null, DateTime.UtcNow), skyfieldTimeoutCts.Token);
     var orchestrationContext = new WeeklySkyForecastV2OrchestrationContext(
         contentPlanId.Value,
         pipelineRunId,
@@ -549,6 +549,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", as
         intelligenceRequest,
         null,
         weeklyForecast,
+        null,
         null,
         null,
         null,
