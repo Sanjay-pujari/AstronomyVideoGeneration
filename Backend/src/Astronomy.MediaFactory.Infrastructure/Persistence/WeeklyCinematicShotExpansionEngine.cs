@@ -24,7 +24,7 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         }
 
         sequences = ApplyGlobalNarrationTiming(sequences);
-        var validation = Validate(sequences, fov);
+        var validation = Validate(sequences, fov, workingDirectoryRoot);
         var pkg = new WeeklyCinematicShotPackage(validation.Count == 0, storyboard.EmotionalArc, pipelineRunId, sequences.Count, sequences.Sum(s => s.Shots.Count), sequences.Sum(s => s.DurationSeconds), sequences, fov, validation, warnings);
         Directory.CreateDirectory(Path.Combine(workingDirectoryRoot, "debug"));
         File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-cinematic-shot-timeline.json"), JsonSerializer.Serialize(pkg, new JsonSerializerOptions { WriteIndented = true }));
@@ -209,9 +209,10 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         return updated;
     }
 
-    private static List<string> Validate(IReadOnlyList<WeeklyCinematicSceneSequence> seq, IReadOnlyList<WeeklyDynamicFovCalculation> fov)
+    private static List<string> Validate(IReadOnlyList<WeeklyCinematicSceneSequence> seq, IReadOnlyList<WeeklyDynamicFovCalculation> fov, string workingDirectoryRoot)
     {
         var issues = new List<string>();
+        var rootFull = Path.GetFullPath(workingDirectoryRoot);
         if (!seq.Any()) issues.Add("no scene sequences");
         var shots = seq.SelectMany(x => x.Shots).ToList();
         if (!shots.Any()) issues.Add("totalShots == 0");
@@ -220,6 +221,7 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         if (seq.Where(s => s.SceneType.Contains("group", StringComparison.OrdinalIgnoreCase)).Any(s => s.Shots.Count < 5)) issues.Add("grouping scene has fewer than 5 shots");
         if (shots.Any(s => s.DurationSeconds <= 0)) issues.Add("any shot missing duration");
         if (shots.Any(s => string.IsNullOrWhiteSpace(s.ExpectedOutputImagePath) || string.IsNullOrWhiteSpace(s.ExpectedOutputVideoPath) || string.IsNullOrWhiteSpace(s.ExpectedSscScriptPath))) issues.Add("any shot missing output path");
+        if (shots.Any(s => !IsPathUnderRoot(s.ExpectedOutputImagePath, rootFull) || !IsPathUnderRoot(s.ExpectedOutputVideoPath, rootFull) || !IsPathUnderRoot(s.ExpectedSscScriptPath, rootFull))) issues.Add("every shot path must be under workingDirectoryRoot");
         if (shots.Any(s => string.IsNullOrWhiteSpace(s.TransitionIn.TransitionIn) || string.IsNullOrWhiteSpace(s.TransitionOut.TransitionOut))) issues.Add("any shot missing transition");
         if (shots.Where(s=>s.ShotType.Contains("group", StringComparison.OrdinalIgnoreCase) || s.ShotType.Contains("focus", StringComparison.OrdinalIgnoreCase)).Any(s => !s.TargetObjects.Any())) issues.Add("any grouping shot missing target objects");
         if (seq.Any(s => s.SceneType.Contains("group", StringComparison.OrdinalIgnoreCase)) && !fov.Any()) issues.Add("dynamic FOV missing for grouping scene");
@@ -234,6 +236,13 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         var climaxDuration = shots.Where(s => s.ShotType is "wide_group_reveal" or "object_label_reveal" or "moon_hero_focus" or "venus_jupiter_focus" or "saturn_support_focus" or "full_group_return" or "cinematic_hold").Sum(s => s.DurationSeconds);
         if (climaxDuration > 0 && climaxDuration < 50) issues.Add("climax duration < 50 sec");
         return issues;
+    }
+
+    private static bool IsPathUnderRoot(string candidatePath, string rootPath)
+    {
+        var candidateFull = Path.GetFullPath(candidatePath);
+        var rootWithSep = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return candidateFull.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase) || string.Equals(candidateFull, rootPath, StringComparison.OrdinalIgnoreCase);
     }
 }
 
