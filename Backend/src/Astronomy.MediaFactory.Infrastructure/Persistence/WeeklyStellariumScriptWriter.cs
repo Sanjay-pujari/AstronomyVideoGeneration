@@ -39,10 +39,10 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
             if (shot.PlannedSscCommands.Any(IsForbiddenMultiObjectSelect)) shotIssues.Add($"Shot '{shot.ShotCode}' contains invalid multi-object selectObjectByName command.");
             if (shot.PlannedSscCommands.Any(ContainsForbiddenSetFov)) shotIssues.Add($"Shot '{shot.ShotCode}' contains unsupported core.setFov command.");
             if (shot.PlannedSscCommands.Any(ContainsForbiddenManagerReference)) shotIssues.Add($"Shot '{shot.ShotCode}' contains unsupported manager reference not used by DailySkyGuide scripts.");
-            if (shot.PlannedSscCommands.Any(c => c.Contains("core.screenshot(", StringComparison.OrdinalIgnoreCase) && c.Contains('/')))
-                warnings.Add($"Shot '{shot.ShotCode}' screenshot command uses forward slashes; Windows backslash path is recommended.");
+            if (shot.PlannedSscCommands.Any(c => c.Contains("core.screenshot(", StringComparison.OrdinalIgnoreCase) && c.Contains("\\", StringComparison.Ordinal)))
+                warnings.Add($"Shot '{shot.ShotCode}' screenshot command uses backslashes; forward slash path is required for SSC parity.");
 
-            var expectedScreenshotPath = ToWindowsPath(screenshotFullPath);
+            var sceneFolderSscPath = ToSscPath(scenesDir);
             var isValid = shotIssues.Count == 0;
             if (isValid)
             {
@@ -53,18 +53,19 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
                     $"// Type: {shot.ShotType}",
                     $"// Duration: {shot.DurationSeconds}s",
                     $"// GeneratedUtc: {DateTime.UtcNow:O}",
-                    $"// ExpectedScreenshotPath: {expectedScreenshotPath}",
+                    $"// ExpectedScreenshotPath: {ToSscPath(screenshotFullPath)}",
                     string.Empty
                 };
 
                 lines.AddRange(shot.PlannedSscCommands);
-                lines.Add($"core.screenshot(\"{EscapeForSscDoubleQuotedString(expectedScreenshotPath)}\", false, \"png\")");
-                lines.Add("core.quit()");
+                lines.Add($"core.screenshot(\"{EscapeForSscDoubleQuotedString(shot.ShotCode)}\", false, \"{EscapeForSscDoubleQuotedString(sceneFolderSscPath)}\", true, \"png\");");
+                lines.Add("core.wait(2.0);");
+                lines.Add("core.quitStellarium();");
                 await File.WriteAllTextAsync(scriptFullPath, string.Join("\n", lines), Encoding.UTF8, cancellationToken);
             }
 
             validationIssues.AddRange(shotIssues);
-            scripts.Add(new WeeklyStellariumScriptInfo(shot.ShotCode, scriptFullPath, expectedScreenshotPath, shot.PlannedSscCommands?.Count ?? 0, isValid));
+            scripts.Add(new WeeklyStellariumScriptInfo(shot.ShotCode, scriptFullPath, ToSscPath(screenshotFullPath), shot.PlannedSscCommands?.Count ?? 0, isValid));
         }
 
         var diagnosticsPath = Path.Combine(debugDir, "weekly-stellarium-script-package.json");
@@ -87,7 +88,7 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
         return candidatePath.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase) || string.Equals(candidatePath, rootPath, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ToWindowsPath(string path) => path.Replace('/', '\\');
+    private static string ToSscPath(string path) => path.Replace('\\', '/');
 
     private static string EscapeForSscDoubleQuotedString(string value) => value.Replace("\\", "\\\\");
 
@@ -110,7 +111,7 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
     private static bool ContainsForbiddenManagerReference(string command)
     {
         if (string.IsNullOrWhiteSpace(command)) return false;
-        return command.Contains("landscapeMgr.", StringComparison.OrdinalIgnoreCase)
-            || command.Contains("labelMgr.", StringComparison.OrdinalIgnoreCase);
+        return command.Contains("landscapeMgr.", StringComparison.Ordinal)
+            || command.Contains("labelMgr.", StringComparison.Ordinal);
     }
 }
