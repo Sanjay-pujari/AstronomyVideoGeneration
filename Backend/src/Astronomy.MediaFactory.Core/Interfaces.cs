@@ -1163,6 +1163,7 @@ public enum WeeklySkyForecastV2DiagnosticsPhase
     StellariumBlueprints,
     CinematicShots,
     StellariumScripts,
+    StellariumExecutionSmokeTest,
     MotionRenderPlan,
     NarrationSceneSync,
     CinematicTimeline,
@@ -1182,8 +1183,23 @@ public sealed record WeeklySkyForecastV2PhaseDiagnosticsRequest(
     string Phase = nameof(WeeklySkyForecastV2DiagnosticsPhase.AllPlanning),
     bool RenderPreviewClips = false,
     int PreviewClipCount = 0,
+    string? ExecuteShotCode = null,
+    int? StellariumTimeoutSeconds = null,
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
+
+public sealed record WeeklyStellariumScriptExecutionResult(
+    string ScriptPath,
+    string ExpectedScreenshotPath,
+    bool ScreenshotExists,
+    long ScreenshotSizeBytes,
+    long ElapsedMs,
+    bool TimedOut,
+    int? ExitCode,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<string> Warnings,
+    string DiagnosticsPath,
+    bool Success);
 
 public sealed record WeeklySkyForecastV2OrchestrationContext(
     Guid ContentGenerationPlanId,
@@ -1634,6 +1650,11 @@ public sealed record WeeklyStellariumScriptPackage(
 public interface IWeeklyStellariumScriptWriter
 {
     Task<WeeklyStellariumScriptPackage> WriteAsync(WeeklyCinematicShotPackage cinematicShotPackage, string workingDirectoryRoot, CancellationToken cancellationToken);
+}
+
+public interface IWeeklyStellariumScriptExecutor
+{
+    Task<WeeklyStellariumScriptExecutionResult> ExecuteAsync(string workingDirectoryRoot, string scriptPath, string expectedScreenshotPath, int timeoutSeconds = 45, CancellationToken cancellationToken = default);
 }
 
 public sealed record WeeklyMotionRenderManifest(

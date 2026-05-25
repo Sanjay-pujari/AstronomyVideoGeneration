@@ -506,6 +506,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklyMotionRenderManifestBuilder, WeeklyMotionRenderManifestBuilder>();
         services.AddScoped<IWeeklySkyForecastV2IntelligenceService, WeeklySkyForecastV2IntelligenceService>();
         services.AddScoped<IWeeklyStellariumScriptWriter, WeeklyStellariumScriptWriter>();
+        services.AddScoped<IWeeklyStellariumScriptExecutor, WeeklyStellariumScriptExecutor>();
         services.AddScoped<IExternalProcessRunner, ExternalProcessRunner>();
         services.AddScoped<IFFmpegService, FFmpegService>();
         services.AddScoped<IFFprobeService, FFprobeService>();

@@ -342,7 +342,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/intelligence-preview", 
         return Results.BadRequest(new { error = ex.Message });
     }
 });
-app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", async (WeeklySkyForecastV2PhaseDiagnosticsRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklyCinematicShotExpansionEngine cinematicEngine, IWeeklyStellariumScriptWriter stellariumScriptWriter, IWeeklyMotionRenderManifestBuilder motionManifestBuilder, IContentPlanningService planning, CancellationToken ct) =>
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", async (WeeklySkyForecastV2PhaseDiagnosticsRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklyCinematicShotExpansionEngine cinematicEngine, IWeeklyStellariumScriptWriter stellariumScriptWriter, IWeeklyStellariumScriptExecutor stellariumScriptExecutor, IWeeklyMotionRenderManifestBuilder motionManifestBuilder, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
     {
@@ -458,6 +458,30 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
                         cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")),
                         root,
                         ct)
+                    : null,
+                debugFiles
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.StellariumExecutionSmokeTest => new
+            {
+                storyboard = response.Storyboard,
+                stellariumBlueprintPackage = response.StellariumBlueprintPackage,
+                cinematicShotPackage = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
+                    ? cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N"))
+                    : null,
+                stellariumScripts = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
+                    ? await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")), root, ct)
+                    : null,
+                execution = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
+                    ? await (async () =>
+                    {
+                        var shots = await stellariumScriptWriter.WriteAsync(cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")), root, ct);
+                        var selected = string.IsNullOrWhiteSpace(request.ExecuteShotCode)
+                            ? shots.Scripts.FirstOrDefault()
+                            : shots.Scripts.FirstOrDefault(x => string.Equals(x.ShotCode, request.ExecuteShotCode, StringComparison.OrdinalIgnoreCase));
+                        selected ??= shots.Scripts.FirstOrDefault(x => string.Equals(x.ShotCode, "s1_wide_sky_reveal_01", StringComparison.OrdinalIgnoreCase));
+                        if (selected is null) return null;
+                        return await stellariumScriptExecutor.ExecuteAsync(root, selected.ScriptPath, selected.ExpectedScreenshotPath, request.StellariumTimeoutSeconds ?? 45, ct);
+                    })()
                     : null,
                 debugFiles
             },
