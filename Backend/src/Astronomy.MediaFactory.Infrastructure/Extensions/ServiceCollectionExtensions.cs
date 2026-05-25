@@ -500,6 +500,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastV2EditorialNormalizer, WeeklySkyForecastV2EditorialNormalizer>();
         services.AddScoped<IWeeklyStoryboardComposer, WeeklyStoryboardComposer>();
         services.AddScoped<IWeeklyCinematicShotExpansionEngine, WeeklyCinematicShotExpansionEngine>();
+        services.AddScoped<IWeeklyCameraPathEngine, WeeklyCameraPathEngine>();
+        services.AddScoped<IWeeklyCinematicCompositionEngine, WeeklyCinematicCompositionEngine>();
+        services.AddScoped<IWeeklyMotionClipRenderer, WeeklyMotionClipRenderer>();
+        services.AddScoped<IWeeklyMotionRenderManifestBuilder, WeeklyMotionRenderManifestBuilder>();
         services.AddScoped<IWeeklySkyForecastV2IntelligenceService, WeeklySkyForecastV2IntelligenceService>();
         services.AddScoped<IExternalProcessRunner, ExternalProcessRunner>();
         services.AddScoped<IFFmpegService, FFmpegService>();
