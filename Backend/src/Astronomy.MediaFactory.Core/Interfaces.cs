@@ -1364,6 +1364,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> EventIntelligence,
     WeeklyAstronomyEventExtractionResult? EventExtractionResult,
     WeeklyStoryboard? Storyboard,
+    WeeklyStellariumBlueprintPackage? StellariumBlueprintPackage,
     WeeklyStoryArc WeeklyStoryArc,
     WeeklyEditorialStoryPackage EditorialStoryPackage,
     WeeklyCinematicStoryBlueprint? CinematicStoryBlueprint,
@@ -1389,6 +1390,49 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     IReadOnlyList<string> RecommendedVisualStrategies,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<CategoryProductionStepResult> StepResults);
+
+public sealed record WeeklyStellariumBlueprintPackage(
+    bool IsValid,
+    string Region,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    IReadOnlyList<WeeklyStellariumSceneBlueprint> SceneBlueprints,
+    IReadOnlyList<string> ValidationIssues,
+    IReadOnlyList<string> Warnings);
+
+public sealed record WeeklyStellariumSceneBlueprint(
+    string SegmentCode,
+    string SceneCode,
+    string SceneType,
+    string RecommendedVisualSource,
+    DateOnly DateLocal,
+    TimeOnly TimeLocal,
+    string Timezone,
+    double Latitude,
+    double Longitude,
+    string CameraDirection,
+    double ZoomLevel,
+    double FieldOfViewDegrees,
+    bool ShowHorizon,
+    bool ShowAtmosphere,
+    bool ShowLabels,
+    IReadOnlyList<WeeklyStellariumHighlightObject> HighlightObjects,
+    IReadOnlyList<string> OverlayText,
+    string MotionStyle,
+    string TransitionIn,
+    string TransitionOut,
+    string ExpectedOutputImagePath,
+    string ExpectedSscScriptPath,
+    WeeklyStellariumCameraPlan CameraPlan,
+    WeeklyStellariumOverlayPlan OverlayPlan,
+    IReadOnlyList<WeeklyStellariumShot> Shots,
+    IReadOnlyList<string> PlannedSscCommands);
+
+public sealed record WeeklyStellariumShot(string ShotCode, string ShotType, DateOnly DateLocal, TimeOnly TimeLocal, int DurationSeconds, string ExpectedOutputImagePath);
+public sealed record WeeklyStellariumHighlightObject(string ObjectCode, string ObjectName, string LabelText, string HighlightStyle, string MarkerColor, int Priority, string ExpectedVisibility);
+public sealed record WeeklyStellariumCameraPlan(string CameraStyle, string CameraDirection, string MotionStyle, double ZoomLevel, double FieldOfViewDegrees, bool ShowHorizon, bool ShowAtmosphere, bool ShowLabels);
+public sealed record WeeklyStellariumOverlayPlan(IReadOnlyList<string> OverlayText, bool ShowDateLabel, bool ShowDirectionArrow, bool ShowAltitudeOverlay, bool ShowPracticalGuidanceLabels);
 
 public sealed record WeeklyEditorialStoryPackage(
     WeeklyHeroEvent HeroEvent,

@@ -122,6 +122,8 @@ internal sealed class FakeIntelligenceServiceFor6C : IWeeklySkyForecastV2Intelli
             SkyfieldSummary: new WeeklySkyForecastV2SkyfieldSummary(0,0,0,0,null,null,null),
             EventIntelligence: [],
             EventExtractionResult: null,
+            Storyboard: null,
+            StellariumBlueprintPackage: null,
             WeeklyStoryArc: new WeeklyStoryArc("h","s","t","o",[],"c",[],[],[]),
             EditorialStoryPackage: new WeeklyEditorialStoryPackage(new WeeklyHeroEvent("e","t","t","d",now,null,[],[],0,0,0,"v","w"),[],"h","s","o","t",[],[],new WeeklyThumbnailDirection([],[],[],"e","v","c","b","o"),[],"",[]),
             CinematicStoryBlueprint: new WeeklyCinematicStoryBlueprint("id","h","s","o","p",new WeeklyHeroStory("t","d",now,[],null,[],[],"a","b","c","v","s"),[],[],[],[new WeeklyShortBlueprint("short_hero","Hero Short","Hook","Angle",[],now,"v",30,1)],new WeeklyThumbnailBlueprint([],[],[],"e","c","b","o","v"),"n","v",[]),

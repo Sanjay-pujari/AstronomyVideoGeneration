@@ -237,6 +237,8 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             SkyfieldSummary: new WeeklySkyForecastV2SkyfieldSummary(7, 21, 0, 1, "JUPITER", new DateOnly(2026, 5, 24), new DateOnly(2026, 5, 25)),
             EventIntelligence: events,
             EventExtractionResult: null,
+            Storyboard: null,
+            StellariumBlueprintPackage: null,
             WeeklyStoryArc: new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             EditorialStoryPackage: null!,
             CinematicStoryBlueprint: null,

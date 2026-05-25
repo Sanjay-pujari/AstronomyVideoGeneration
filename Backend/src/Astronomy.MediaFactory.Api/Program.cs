@@ -416,8 +416,11 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             },
             WeeklySkyForecastV2DiagnosticsPhase.StellariumBlueprints => new
             {
-                response.CinematicStoryBlueprint,
-                response.NarrativeAbstractionPackage
+                storyboard = response.Storyboard,
+                stellariumBlueprintPackage = response.StellariumBlueprintPackage,
+                sceneBlueprints = response.StellariumBlueprintPackage?.SceneBlueprints,
+                validation = response.StellariumBlueprintPackage?.ValidationIssues,
+                debugFiles
             },
             WeeklySkyForecastV2DiagnosticsPhase.NarrationSceneSync => new
             {
