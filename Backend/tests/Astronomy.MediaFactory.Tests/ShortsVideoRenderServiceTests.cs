@@ -251,6 +251,9 @@ public sealed class ShortsVideoRenderServiceTests
             File.WriteAllBytes(path, [1, 2, 3]);
             return Task.FromResult(path);
         }
+
+        public Task SynthesizeToFileAsync(string script, string outputPath, CancellationToken cancellationToken)
+            => File.WriteAllBytesAsync(outputPath, [1, 2, 3], cancellationToken);
     }
 
     private sealed class FixedVisualProvider : IVisualAssetProvider

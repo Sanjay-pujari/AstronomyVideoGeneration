@@ -247,6 +247,9 @@ public sealed class PipelineStageInstrumentationTests
             await File.WriteAllTextAsync(audioPath, "audio", cancellationToken);
             return audioPath;
         }
+
+        public Task SynthesizeToFileAsync(string script, string outputPath, CancellationToken cancellationToken)
+            => File.WriteAllTextAsync(outputPath, "audio", cancellationToken);
     }
 
     private sealed class FakeRenderService : IVideoRenderService

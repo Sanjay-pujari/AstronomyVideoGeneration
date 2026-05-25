@@ -383,6 +383,9 @@ public sealed class PipelineOrchestratorSceneNarrationTests
             await File.WriteAllBytesAsync(audioPath, [1,2,3,4], cancellationToken);
             return audioPath;
         }
+
+        public Task SynthesizeToFileAsync(string script, string outputPath, CancellationToken cancellationToken)
+            => File.WriteAllBytesAsync(outputPath, [1, 2, 3, 4], cancellationToken);
     }
 
     private sealed class DictionarySceneScriptService(IReadOnlyDictionary<string, string> scriptSections) : IScriptGenerationService

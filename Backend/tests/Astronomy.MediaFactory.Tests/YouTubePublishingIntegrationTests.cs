@@ -882,6 +882,9 @@ public sealed class YouTubePublishingIntegrationTests
             await File.WriteAllTextAsync(path, "audio", cancellationToken);
             return path;
         }
+
+        public Task SynthesizeToFileAsync(string script, string outputPath, CancellationToken cancellationToken)
+            => File.WriteAllTextAsync(outputPath, "audio", cancellationToken);
     }
 
     private sealed class AutoFakeRenderService : IVideoRenderService
