@@ -61,16 +61,16 @@ public sealed class WeeklySkyForecastV2PhaseDiagnosticsEndpointTests
                 Warnings: [],
                 StepResults: []);
 
-            var result = request.Phase == WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents
+            var result = string.Equals(request.Phase, nameof(WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents), StringComparison.OrdinalIgnoreCase)
                 ? new { response.EventExtractionResult, response.EventIntelligence }
                 : response;
 
-            return Results.Ok(new { phase = request.Phase.ToString(), result });
+            return Results.Ok(new { phase = request.Phase, result });
         });
 
         app.RunAsync();
         var client = app.GetTestClient();
-        var http = await client.PostAsJsonAsync("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", new WeeklySkyForecastV2PhaseDiagnosticsRequest("WeeklySkyForecast", "en", "us", "US", DateTimeOffset.UtcNow, Phase: WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents));
+        var http = await client.PostAsJsonAsync("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", new WeeklySkyForecastV2PhaseDiagnosticsRequest("WeeklySkyForecast", "en", "us", "US", DateTimeOffset.UtcNow, Phase: nameof(WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents)));
         http.EnsureSuccessStatusCode();
         var payload = await http.Content.ReadAsStringAsync();
         Assert.Contains("AstronomyEvents", payload);
