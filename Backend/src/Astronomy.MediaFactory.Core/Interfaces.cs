@@ -1161,6 +1161,7 @@ public enum WeeklySkyForecastV2DiagnosticsPhase
     StoryBeats,
     VisualSources,
     StellariumBlueprints,
+    CinematicShots,
     NarrationSceneSync,
     CinematicTimeline,
     ThumbnailStoryboard,
@@ -1434,6 +1435,56 @@ public sealed record WeeklyStellariumHighlightObject(string ObjectCode, string O
 public sealed record WeeklyStellariumCameraPlan(string CameraStyle, string CameraDirection, string MotionStyle, double ZoomLevel, double FieldOfViewDegrees, bool ShowHorizon, bool ShowAtmosphere, bool ShowLabels);
 public sealed record WeeklyStellariumOverlayPlan(IReadOnlyList<string> OverlayText, bool ShowDateLabel, bool ShowDirectionArrow, bool ShowAltitudeOverlay, bool ShowPracticalGuidanceLabels);
 
+public sealed record WeeklyCameraMovementPlan(string MovementType, string MotionStyle, string Direction, double? StartFovDegrees, double? EndFovDegrees, bool TrackPrimaryObject);
+public sealed record WeeklyShotTransitionPlan(string TransitionIn, string TransitionOut, string TransitionPurpose);
+public sealed record WeeklyShotNarrationSync(string NarrationBeat, double EstimatedStartSecond, double EstimatedEndSecond, string SyncedNarrationPurpose, string? EmphasisObject, IReadOnlyList<string> EmphasisWords);
+public sealed record WeeklyDynamicFovCalculation(string SceneCode, IReadOnlyList<string> TargetObjects, double? SourceSeparationDegrees, double CalculatedFovDegrees, string Reason);
+public sealed record WeeklyCinematicShot(
+    string ShotCode,
+    string ShotType,
+    string ShotPurpose,
+    IReadOnlyList<string> TargetObjects,
+    string? PrimaryObject,
+    DateOnly DateLocal,
+    TimeOnly TimeLocal,
+    int DurationSeconds,
+    string CameraDirection,
+    double FieldOfViewDegrees,
+    double StartFovDegrees,
+    double EndFovDegrees,
+    WeeklyCameraMovementPlan CameraMovement,
+    WeeklyShotTransitionPlan TransitionIn,
+    WeeklyShotTransitionPlan TransitionOut,
+    string MotionStyle,
+    string ExpectedOutputImagePath,
+    string ExpectedOutputVideoPath,
+    string ExpectedSscScriptPath,
+    IReadOnlyList<string> PlannedSscCommands,
+    WeeklyShotNarrationSync NarrationSync);
+
+public sealed record WeeklyCinematicSceneSequence(
+    string SegmentCode,
+    string SceneCode,
+    string SceneType,
+    string SourceBlueprintSceneCode,
+    int DurationSeconds,
+    IReadOnlyList<WeeklyCinematicShot> Shots,
+    string SequencePurpose,
+    WeeklyShotTransitionPlan TransitionIn,
+    WeeklyShotTransitionPlan TransitionOut);
+
+public sealed record WeeklyCinematicShotPackage(
+    bool IsValid,
+    string StoryboardId,
+    string PipelineRunId,
+    int TotalScenes,
+    int TotalShots,
+    int EstimatedDurationSeconds,
+    IReadOnlyList<WeeklyCinematicSceneSequence> SceneSequences,
+    IReadOnlyList<WeeklyDynamicFovCalculation> DynamicFovCalculations,
+    IReadOnlyList<string> ValidationIssues,
+    IReadOnlyList<string> Warnings);
+
 public sealed record WeeklyEditorialStoryPackage(
     WeeklyHeroEvent HeroEvent,
     IReadOnlyList<WeeklyHeroEvent> SecondaryEvents,
@@ -1523,6 +1574,11 @@ public interface IWeeklySkyForecastV2EventIntelligenceBuilder
 public interface IWeeklyStoryboardComposer
 {
     WeeklyStoryboard Compose(WeeklyAstronomyEventExtractionResult extractionResult, string region, string language, string forecastSummary, string narrationStyle, string? workingDirectoryRoot);
+}
+
+public interface IWeeklyCinematicShotExpansionEngine
+{
+    WeeklyCinematicShotPackage Expand(WeeklyStoryboard storyboard, WeeklyStellariumBlueprintPackage stellariumBlueprintPackage, WeeklyAstronomyEventExtractionResult eventExtractionResult, string region, string workingDirectoryRoot, string pipelineRunId);
 }
 
 public interface IWeeklySkyForecastV2IntelligenceService
