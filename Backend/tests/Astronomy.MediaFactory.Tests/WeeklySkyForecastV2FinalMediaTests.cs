@@ -54,6 +54,8 @@ public sealed class WeeklySkyForecastV2FinalMediaTests
                     new FakeMediaValidationService(),
                     Options.Create(new RenderingOptions()),
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<WeeklySkyForecastSceneRenderingOrchestrator>())),
+            new FakeFfmpegService(),
+            new FakeMediaValidationService(),
             new FakeSpeechSynthesisService(),
             new Microsoft.Extensions.Logging.Abstractions.NullLogger<WeeklySkyForecastFinalMediaOrchestrator>());
         var request = new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "us", "US", DateTimeOffset.UtcNow, Diagnostics: true);
