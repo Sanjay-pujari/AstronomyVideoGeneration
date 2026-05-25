@@ -183,12 +183,13 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 
         var smokeScriptPath = Path.Combine(scriptsDir, "_smoke_basic.ssc");
         var smokeScreenshotPath = Path.Combine(scenesDir, "_smoke_basic.png");
-        var smokeScreenshotSscPath = smokeScreenshotPath.Replace('\\', '/');
+        var smokeScreenshotSscPath = smokeScreenshotPath;
+        var smokeScreenshotEscaped = smokeScreenshotSscPath.Replace("\\", "\\\\");
         var forms = new[]
         {
-            $"core.screenshot('{smokeScreenshotSscPath}', false, 'png')",
-            $"core.screenshot('{smokeScreenshotSscPath}')",
-            $"StelMainView.screenshot('{smokeScreenshotSscPath}')"
+            $"core.screenshot(\"{smokeScreenshotEscaped}\", false, \"png\")",
+            $"core.screenshot(\"{smokeScreenshotEscaped}\")",
+            $"StelMainView.screenshot(\"{smokeScreenshotEscaped}\")"
         };
 
         var launchedCommand = string.Empty;
