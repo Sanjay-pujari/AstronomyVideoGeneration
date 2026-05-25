@@ -41,7 +41,17 @@ public sealed class WeeklyCinematicCompositionEngine : IWeeklyCinematicCompositi
         img.Mutate(ctx =>
         {
             ctx.Fill(new LinearGradientBrush(new PointF(0, 800), new PointF(0, 1080), GradientRepetitionMode.None, [new ColorStop(0, new Rgba32(0, 0, 0, 0)), new ColorStop(1, new Rgba32(0, 0, 0, 190))]));
-            ctx.Fill(new Polygon(new PointF(0, 900), new PointF(350, 840), new PointF(740, 910), new PointF(1200, 860), new PointF(1500, 900), new PointF(1920, 840), new PointF(1920, 1080), new PointF(0, 1080)), Color.FromRgba(0, 0, 0, 160));
+            ctx.Fill(Color.FromRgba(0, 0, 0, 160), new Polygon(new LinearLineSegment(new[]
+            {
+                new PointF(0, 900),
+                new PointF(350, 840),
+                new PointF(740, 910),
+                new PointF(1200, 860),
+                new PointF(1500, 900),
+                new PointF(1920, 840),
+                new PointF(1920, 1080),
+                new PointF(0, 1080)
+            })));
             var font = SystemFonts.CreateFont("Arial", 44, FontStyle.Bold);
             var subtitle = SystemFonts.CreateFont("Arial", 28, FontStyle.Regular);
             ctx.DrawText(shot.TitleText, font, Color.White, new PointF(70, 70));
