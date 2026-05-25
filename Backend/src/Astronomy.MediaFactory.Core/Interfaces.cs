@@ -1218,7 +1218,11 @@ public sealed record WeeklyStellariumScreenshotGenerationResult(
     IReadOnlyList<WeeklyStellariumScreenshotScriptResult> Scripts,
     string DiagnosticsPath,
     string? WorkingDirectoryRoot = null,
-    string? PipelineRunId = null);
+    string? PipelineRunId = null,
+    string? SelectedShotCode = null,
+    string? SelectedScriptPath = null,
+    string? SelectedScriptSource = null,
+    IReadOnlyList<string>? IgnoredDiagnosticScripts = null);
 
 public sealed record WeeklyStellariumScriptExecutionResult(
     string ScriptPath,
@@ -1669,7 +1673,9 @@ public sealed record WeeklyStellariumScriptInfo(
     string ScriptPath,
     string ExpectedScreenshotPath,
     int CommandCount,
-    bool IsValid);
+    bool IsValid,
+    int ShotOrder = int.MaxValue,
+    bool IsDiagnostic = false);
 
 public sealed record WeeklyStellariumScriptPackage(
     bool IsValid,

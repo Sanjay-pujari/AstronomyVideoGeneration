@@ -23,8 +23,10 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
         var warnings = new List<string>();
         var scripts = new List<WeeklyStellariumScriptInfo>();
 
+        var shotOrder = 0;
         foreach (var shot in cinematicShotPackage.SceneSequences.SelectMany(x => x.Shots))
         {
+            shotOrder++;
             cancellationToken.ThrowIfCancellationRequested();
 
             var scriptPath = Path.Combine(scriptsDir, $"{shot.ShotCode}.ssc");
@@ -71,7 +73,8 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
             {
                 validationIssues.Add("Generic Stellarium path detected.");
             }
-            scripts.Add(new WeeklyStellariumScriptInfo(shot.ShotCode, scriptFullPath, ToSscPath(screenshotFullPath), shot.PlannedSscCommands?.Count ?? 0, isValid));
+            var isDiagnostic = shot.ShotCode.StartsWith("_", StringComparison.Ordinal);
+            scripts.Add(new WeeklyStellariumScriptInfo(shot.ShotCode, scriptFullPath, ToSscPath(screenshotFullPath), shot.PlannedSscCommands?.Count ?? 0, isValid, shotOrder, isDiagnostic));
         }
 
         var diagnosticsPath = Path.Combine(debugDir, "weekly-stellarium-script-package.json");
