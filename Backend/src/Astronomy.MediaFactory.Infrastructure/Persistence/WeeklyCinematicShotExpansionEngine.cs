@@ -253,7 +253,11 @@ internal static class WeeklyTimelineMilestoneSelector
     public static IReadOnlyList<WeeklyTimelineMilestone> Select(WeeklyAstronomyEventExtractionResult events, DateOnly fallbackDate)
     {
         var list = new List<WeeklyTimelineMilestone>();
-        var ordered = events.ExtractedEvents.OrderByDescending(e => e.EventScore).ToList();
+        var ordered = events.ExtractedEvents
+            .OrderByDescending(e => e.ImportanceScore + e.VisibilityScore)
+            .ThenByDescending(e => e.ImportanceScore)
+            .ThenByDescending(e => e.VisibilityScore)
+            .ToList();
         var best = ordered.FirstOrDefault();
         if (best is not null) list.Add(new(best.BestDateLocal ?? fallbackDate, "Best overall viewing night based on highest event score.", best.Objects.Select(o=>o.ObjectCode).Distinct().ToList(), "Recommend one must-watch night.", "Strongest combined visibility and composition."));
         var grouping = ordered.FirstOrDefault(e => e.EventType == WeeklyAstronomyEventType.Grouping);
