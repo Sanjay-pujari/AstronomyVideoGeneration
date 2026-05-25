@@ -68,13 +68,28 @@ public sealed class WeeklyMotionClipRenderer(IFFmpegService ffmpeg, IFFprobeServ
     public async Task<(string Command, WeeklyMotionRenderValidation Validation)> RenderAsync(WeeklyCinematicShot shot, WeeklyCameraPathPlan cameraPath, string composedFramePath, string clipOutputPath, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(clipOutputPath)!);
-        var fps = 30;
-        var frames = Math.Max(shot.DurationSeconds * fps, fps);
-        var zoomStart = cameraPath.StartFov >= cameraPath.EndFov ? 1.0 : 1.08;
-        var zoomExpr = cameraPath.MovementType == "slow_zoom_out" ? "zoom-0.0008" : "zoom+0.0008";
-        var vf = $"zoompan=z='if(eq(on,1),{zoomStart.ToString(System.Globalization.CultureInfo.InvariantCulture)},{zoomExpr})':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)',scale=1920:1080:flags=lanczos,format=yuv420p";
-        var args = $"-y -loop 1 -t {shot.DurationSeconds} -i \"{composedFramePath}\" -vf \"{vf}\" -r {fps} -c:v libx264 -pix_fmt yuv420p \"{clipOutputPath}\"";
-        await ffmpeg.ExecuteAsync(args, Directory.GetCurrentDirectory(), clipOutputPath, cancellationToken);
+        var expectedDurationSeconds = Math.Max(1, shot.DurationSeconds);
+        var args = $"-y -loop 1 -i \"{composedFramePath}\" -t {expectedDurationSeconds} -r 30 -vf \"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p\" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \"{clipOutputPath}\"";
+        var timeoutSeconds = Math.Clamp(expectedDurationSeconds + 20, 30, 60);
+        var startUtc = DateTime.UtcNow;
+        var ffmpegExitCode = -1;
+        Console.WriteLine($"Starting FFmpeg preview clip. Shot={shot.ShotCode}, ExpectedDuration={expectedDurationSeconds}s");
+        try
+        {
+            using var ffmpegTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            ffmpegTimeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            var ffmpegResult = await ffmpeg.ExecuteAsync(args, Directory.GetCurrentDirectory(), clipOutputPath, ffmpegTimeoutCts.Token);
+            ffmpegExitCode = ffmpegResult.ExitCode;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            var elapsedTimeout = (long)(DateTime.UtcNow - startUtc).TotalMilliseconds;
+            Console.WriteLine($"Completed FFmpeg preview clip. Shot={shot.ShotCode}, ElapsedMs={elapsedTimeout}, ExitCode={ffmpegExitCode}");
+            var timeoutValidation = new WeeklyMotionRenderValidation(shot.ShotCode, false, ["ffmpeg timeout"], [], clipOutputPath, null, null, null);
+            return (args, timeoutValidation);
+        }
+        var elapsedMs = (long)(DateTime.UtcNow - startUtc).TotalMilliseconds;
+        Console.WriteLine($"Completed FFmpeg preview clip. Shot={shot.ShotCode}, ElapsedMs={elapsedMs}, ExitCode={ffmpegExitCode}");
         var errors = new List<string>(); var warnings = new List<string>();
         if (!File.Exists(clipOutputPath)) errors.Add("clip missing");
         else if (new FileInfo(clipOutputPath).Length <= 50 * 1024) errors.Add("clip too small");
@@ -82,8 +97,10 @@ public sealed class WeeklyMotionClipRenderer(IFFmpegService ffmpeg, IFFprobeServ
         if (info is null) errors.Add("ffprobe unavailable");
         else
         {
-            if (Math.Abs(info.DurationSeconds - shot.DurationSeconds) > 1) errors.Add("duration mismatch");
+            if (Math.Abs(info.DurationSeconds - expectedDurationSeconds) > 1) errors.Add("duration mismatch");
+            if (info.DurationSeconds > expectedDurationSeconds + 1) errors.Add("duration exceeds expected tolerance");
             if (!((info.Width == 1920 && info.Height == 1080) || (info.Width == 1280 && info.Height == 720))) errors.Add("resolution mismatch");
+            Console.WriteLine($"Validated preview clip. Shot={shot.ShotCode}, ActualDuration={info.DurationSeconds}s");
         }
         return (args, new WeeklyMotionRenderValidation(shot.ShotCode, errors.Count == 0, errors, warnings, clipOutputPath, info?.DurationSeconds, info?.Width, info?.Height));
     }
@@ -101,7 +118,7 @@ public sealed class WeeklyMotionRenderManifestBuilder(
         if (string.IsNullOrWhiteSpace(rootPath)) throw new InvalidOperationException("missing working root");
         var compositionRoot = Path.Combine(rootPath, "composition", "frames");
         var clipsRoot = Path.Combine(rootPath, "stellarium", "clips");
-        var toRender = renderPreviewClips ? Math.Max(0, previewClipCount) : 0;
+        var toRender = renderPreviewClips ? Math.Min(1, Math.Max(0, previewClipCount)) : 0;
         for (int i = 0; i < allShots.Count; i++)
         {
             var (shot, purpose) = allShots[i];
@@ -118,7 +135,7 @@ public sealed class WeeklyMotionRenderManifestBuilder(
                 ffmpeg.Add(render.Command); validations.Add(render.Validation);
             }
         }
-        warnings.Add("Stellarium live capture unavailable; fallback Ken Burns used.");
+        warnings.Add("Stellarium live capture unavailable; static preview render used.");
         warnings.Add("music sync placeholder only");
         var manifestPath = Path.Combine(rootPath, "debug", "weekly-motion-render-manifest.json");
         Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);

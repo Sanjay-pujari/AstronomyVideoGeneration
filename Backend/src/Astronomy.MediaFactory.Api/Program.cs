@@ -458,7 +458,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
                         root,
                         pipelineRunId.ToString("N"),
                         request.RenderPreviewClips,
-                        request.PreviewClipCount <= 0 ? 3 : request.PreviewClipCount,
+                        request.PreviewClipCount <= 0 ? 1 : Math.Min(1, request.PreviewClipCount),
                         ct)
                     : null,
                 debugFiles
