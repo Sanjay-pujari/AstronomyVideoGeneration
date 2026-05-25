@@ -252,7 +252,8 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 
         var exists = File.Exists(smokeScreenshotPath);
         var size = exists ? new FileInfo(smokeScreenshotPath).Length : 0;
-        return new BasicSmokeResult(launchedCommand, smokeScriptPath, smokeScreenshotPath, exists, size, Math.Max(5, timeoutSeconds), exitCode, timedOut, stdout, stderr);
+        var scriptContent = File.Exists(smokeScriptPath) ? await File.ReadAllTextAsync(smokeScriptPath, cancellationToken) : string.Empty;
+        return new BasicSmokeResult(launchedCommand, smokeScriptPath, scriptContent, smokeScreenshotPath, exists, size, Math.Max(5, timeoutSeconds), exitCode, timedOut, stdout, stderr);
     }
 
     private static async Task WriteBasicSmokeDiagnosticsAsync(string rootFull, BasicSmokeResult result, CancellationToken cancellationToken)
@@ -266,6 +267,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
     private sealed record BasicSmokeResult(
         string LaunchedCommand,
         string SmokeScriptPath,
+        string SmokeScriptContent,
         string ExpectedSmokeScreenshotPath,
         bool ScreenshotExists,
         long ScreenshotSizeBytes,

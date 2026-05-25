@@ -79,15 +79,15 @@ internal static class WeeklyStellariumBlueprintPlanner
     private static List<string> BuildSscCommands(DateOnly date, TimeOnly time, WeeklySkyForecastContext ctx, string direction, IReadOnlyList<string> objectCodes, string screenshot)
     =>
     [
-        $"core.setDate('{date:yyyy-MM-dd}T{time:HH:mm:ss}', 'local')",
-        $"core.setObserverLocation({ctx.Latitude:F6}, {ctx.Longitude:F6}, 0, '{ctx.LocationName}', '{ctx.Timezone}')",
-        $"core.moveToAltAzi('{direction}', 35)",
-        "StelMovementMgr.zoomTo(58, 0)",
-        "landscapeMgr.setFlagAtmosphere(true); landscapeMgr.setFlagLandscape(true)",
-        "core.setTracking(false)",
-        "labelMgr.setFlagLabels(false)",
-        $"core.output('Blueprint labels will be choreographed per shot for: {string.Join(",", objectCodes)}')",
-        $"core.screenshot('{screenshot}', false, 'png')"
+        "core.clear(\"natural\");",
+        $"core.setDate(\"{date:yyyy-MM-dd}T{time:HH:mm:ss}\", \"local\");",
+        $"core.setObserverLocation({ctx.Longitude:F6}, {ctx.Latitude:F6}, 0, 0, \"{ctx.LocationName}\", \"Earth\");",
+        "core.wait(2.0);",
+        $"core.moveToAltAzi(\"{direction}\", 35, 1.0);",
+        "StelMovementMgr.zoomTo(58, 0);",
+        "core.setTracking(false);",
+        $"core.output(\"Blueprint labels will be choreographed per shot for: {string.Join(",", objectCodes)}\");",
+        $"core.screenshot(\"{screenshot.Replace(\"\\\\\", \"\\\\\\\\\")}\", false, \"png\");"
     ];
 
     private static List<WeeklyStellariumHighlightObject> ResolveHighlights(WeeklyStoryboardSegment segment, WeeklyAstronomyEvent? grouped, IReadOnlyList<string> moonJupVen)

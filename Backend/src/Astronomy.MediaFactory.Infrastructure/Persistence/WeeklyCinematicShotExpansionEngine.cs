@@ -164,28 +164,29 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
 
     private static List<string> BuildSsc(WeeklyStellariumSceneBlueprint bp, string img, int duration, string direction, double startFov, string? primary, double endFov, string shotType)
     {
+        var locationName = string.IsNullOrWhiteSpace(bp.RecommendedVisualSource) ? "Earth" : bp.RecommendedVisualSource;
         var list = new List<string>
         {
-            $"core.setDate('{bp.DateLocal:yyyy-MM-dd}T{bp.TimeLocal:HH\\:mm\\:ss}', 'local')",
-            $"core.setObserverLocation({bp.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {bp.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 0, '{bp.RecommendedVisualSource}', '{bp.Timezone}')",
-            $"core.moveToAltAzi('{direction}', 35)",
-            $"StelMovementMgr.zoomTo({startFov.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 0)",
-            "landscapeMgr.setFlagAtmosphere(true); landscapeMgr.setFlagLandscape(true); core.setGuiVisible(false);",
-            "labelMgr.setFlagLabels(false)"
+            "core.clear(\"natural\");",
+            $"core.setDate(\"{bp.DateLocal:yyyy-MM-dd}T{bp.TimeLocal:HH\\:mm\\:ss}\", \"local\");",
+            $"core.setObserverLocation({bp.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {bp.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 0, 0, \"{locationName}\", \"Earth\");",
+            "core.wait(2.0);",
+            $"core.moveToAltAzi(\"{direction}\", 35, 1.0);",
+            $"StelMovementMgr.zoomTo({startFov.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 0);"
         };
-        if (primary is null) list.Add("core.setTracking(false)");
+        if (primary is null) list.Add("core.setTracking(false);");
         if (!string.IsNullOrWhiteSpace(primary))
         {
-            list.Add($"core.selectObjectByName('{primary}')");
-            list.Add("core.setTracking(true)");
+            list.Add($"core.selectObjectByName(\"{primary}\", true);");
+            list.Add("core.wait(1.5);");
+            list.Add("core.moveToSelectedObject(2.0);");
+            list.Add("core.setTracking(true);");
         }
         if (shotType.Contains("grouping", StringComparison.OrdinalIgnoreCase))
-            list.Add("core.output('Plan: apply separate highlight labels for each object; no multi-select string usage.')");
-        list.Add("core.wait(2)");
-        list.Add("labelMgr.setFlagLabels(true)");
-        list.Add($"StelMovementMgr.zoomTo({endFov.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {Math.Max(3, duration - 2)})");
-        list.Add($"core.wait({Math.Max(2, duration - 2)})");
-        if (!string.IsNullOrWhiteSpace(primary)) list.Add("core.setTracking(false)");
+            list.Add("core.output(\"Plan: apply separate highlight labels for each object; no multi-select string usage.\");");
+        list.Add($"StelMovementMgr.zoomTo({endFov.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {Math.Max(3, duration - 2)});");
+        list.Add($"core.wait({Math.Max(2, duration - 2)});");
+        if (!string.IsNullOrWhiteSpace(primary)) list.Add("core.setTracking(false);");
         return list;
     }
 
