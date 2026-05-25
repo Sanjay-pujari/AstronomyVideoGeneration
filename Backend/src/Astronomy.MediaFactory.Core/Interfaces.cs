@@ -1164,6 +1164,7 @@ public sealed record WeeklySkyForecastV2OrchestrationContext(
     WeeklySkyForecastContext? WeeklyForecast,
     WeeklySkyForecastV2SkyfieldSummary? SkyfieldSummary,
     IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem>? EventIntelligence,
+    WeeklyAstronomyEventExtractionResult? EventExtractionResult,
     DateTime GeneratedAtUtc,
     int SkyfieldWeeklyForecastCalls = 0,
     int RegionResolveCalls = 0,
@@ -1173,6 +1174,60 @@ public sealed record WeeklySkyForecastV2OrchestrationContext(
     RenderPreparationPackage? RenderPreparationPackage = null,
     SceneRenderingPackage? SceneRenderingPackage = null,
     TimelineCompositionPackage? TimelineCompositionPackage = null);
+
+
+public enum WeeklyAstronomyEventType
+{
+    HeroObject,
+    Conjunction,
+    Grouping,
+    RareEvent,
+    BestViewingWindow,
+    DirectionalObservation,
+    TelescopeOpportunity,
+    DeepSkyHighlight
+}
+
+public sealed record WeeklyAstronomyEventObject(
+    string ObjectCode,
+    string ObjectName,
+    double? AltitudeDegrees,
+    double? AzimuthDegrees,
+    double? Magnitude,
+    double VisibilityScore);
+
+public sealed record WeeklyAstronomyEvent(
+    string EventId,
+    WeeklyAstronomyEventType EventType,
+    string Title,
+    string Summary,
+    IReadOnlyList<WeeklyAstronomyEventObject> Objects,
+    string? PrimaryObject,
+    int ObjectCount,
+    DateOnly? BestDateLocal,
+    TimeOnly? BestTimeLocal,
+    string? Direction,
+    double? AltitudeDegrees,
+    double? AzimuthDegrees,
+    double? AngularSeparationDegrees,
+    double? Magnitude,
+    double VisibilityScore,
+    double ImportanceScore,
+    double RarityScore,
+    string RecommendedVisualSource,
+    string? RecommendedSceneType,
+    string? RecommendedNarrationAngle,
+    IReadOnlyList<string> Warnings);
+
+public sealed record WeeklyAstronomyEventExtractionResult(
+    bool IsValid,
+    string? Message,
+    IReadOnlyList<WeeklyAstronomyEvent> ExtractedEvents,
+    string SourceForecastSummary,
+    IReadOnlyDictionary<string, int> EventCountsByType,
+    WeeklyAstronomyEvent? SelectedPrimaryEvent,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> MissingData);
 
 public sealed record WeeklySkyForecastV2EventIntelligenceItem(
     string EventId,
@@ -1221,6 +1276,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     string Region,
     WeeklySkyForecastV2SkyfieldSummary SkyfieldSummary,
     IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> EventIntelligence,
+    WeeklyAstronomyEventExtractionResult? EventExtractionResult,
     WeeklyStoryArc WeeklyStoryArc,
     WeeklyEditorialStoryPackage EditorialStoryPackage,
     WeeklyCinematicStoryBlueprint? CinematicStoryBlueprint,
@@ -1322,6 +1378,11 @@ public sealed record WeeklyShortCandidate(
     int RecommendedDurationSeconds,
     string RecommendedVisualStrategy,
     double PriorityScore);
+
+public interface IWeeklyAstronomyEventExtractor
+{
+    WeeklyAstronomyEventExtractionResult Extract(WeeklySkyForecastContext context, string region, DateOnly weekStartDate, DateOnly weekEndDate, string language, string? workingDirectoryRoot);
+}
 
 public interface IWeeklySkyForecastV2EventIntelligenceBuilder
 {

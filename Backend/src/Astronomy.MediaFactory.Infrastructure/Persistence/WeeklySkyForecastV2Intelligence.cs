@@ -81,6 +81,7 @@ public sealed class WeeklySkyForecastV2EventIntelligenceBuilder : IWeeklySkyFore
 public sealed class WeeklySkyForecastV2IntelligenceService(
     IWeeklySkyForecastContextBuilderV2 contextBuilder,
     IWeeklySkyForecastV2EventIntelligenceBuilder eventBuilder,
+    IWeeklyAstronomyEventExtractor astronomyEventExtractor,
     IWeeklySkyForecastV2EditorialIntelligenceBuilder editorialBuilder,
     IWeeklySkyForecastV2CinematicEditorialRefiner cinematicRefiner,
     IWeeklySkyForecastV2NarrativeAbstractionBuilder narrativeAbstractionBuilder,
@@ -104,6 +105,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             WeeklyForecast: null,
             SkyfieldSummary: null,
             EventIntelligence: null,
+            EventExtractionResult: null,
             GeneratedAtUtc: DateTime.UtcNow), cancellationToken);
 
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
@@ -131,6 +133,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         if (ctx.DailyForecasts.Count != 7)
             throw new InvalidOperationException("Skyfield weekly response must include 7 days.");
         var events = eventBuilder.Build(ctx);
+        var eventExtractionResult = astronomyEventExtractor.Extract(ctx, ctx.RegionId, ctx.WeekStartDate, ctx.WeekEndDate, request.Language, orchestrationContext.WorkingDirectoryRoot ?? renderingOptions.Value.WorkingDirectory);
         if (!events.Any()) throw new InvalidOperationException("At least one event must be extracted.");
         var primaryObjects = events.SelectMany(e => e.ObjectCodes).Distinct().Take(6).ToList();
         var arc = new WeeklyStoryArc(
@@ -166,6 +169,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
                 ctx.BestMoonNight,
                 ctx.BestPhotographyNight),
             EventIntelligence: events,
+            EventExtractionResult: eventExtractionResult,
             WeeklyStoryArc: arc,
             EditorialStoryPackage: null!,
             CinematicStoryBlueprint: null,
