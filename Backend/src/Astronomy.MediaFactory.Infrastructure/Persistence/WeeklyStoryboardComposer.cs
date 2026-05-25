@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Astronomy.MediaFactory.Core.Models;
+using Astronomy.MediaFactory.Core;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
