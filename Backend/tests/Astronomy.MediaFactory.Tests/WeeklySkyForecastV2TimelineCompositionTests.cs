@@ -35,9 +35,7 @@ public sealed class WeeklySkyForecastV2TimelineCompositionTests
     public async Task Orchestrator_ComposesDeterministic110SecondTimeline()
     {
         var orchestrator = new WeeklySkyForecastTimelineCompositionOrchestrator(
-            new FakeIntelligenceServiceFor6C(),
             new WeeklySkyForecastSceneRenderingOrchestrator(
-                new FakeIntelligenceServiceFor6C(),
                 new FakeFfmpegService(),
                 new FakeMediaValidationService(),
                 Options.Create(new RenderingOptions()),
@@ -123,6 +121,7 @@ internal sealed class FakeIntelligenceServiceFor6C : IWeeklySkyForecastV2Intelli
             Region: "US",
             SkyfieldSummary: new WeeklySkyForecastV2SkyfieldSummary(0,0,0,0,null,null,null),
             EventIntelligence: [],
+            EventExtractionResult: null,
             WeeklyStoryArc: new WeeklyStoryArc("h","s","t","o",[],"c",[],[],[]),
             EditorialStoryPackage: new WeeklyEditorialStoryPackage(new WeeklyHeroEvent("e","t","t","d",now,null,[],[],0,0,0,"v","w"),[],"h","s","o","t",[],[],new WeeklyThumbnailDirection([],[],[],"e","v","c","b","o"),[],"",[]),
             CinematicStoryBlueprint: new WeeklyCinematicStoryBlueprint("id","h","s","o","p",new WeeklyHeroStory("t","d",now,[],null,[],[],"a","b","c","v","s"),[],[],[],[new WeeklyShortBlueprint("short_hero","Hero Short","Hook","Angle",[],now,"v",30,1)],new WeeklyThumbnailBlueprint([],[],[],"e","c","b","o","v"),"n","v",[]),
