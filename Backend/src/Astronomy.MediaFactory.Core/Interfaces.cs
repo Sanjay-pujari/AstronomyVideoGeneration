@@ -1164,6 +1164,7 @@ public enum WeeklySkyForecastV2DiagnosticsPhase
     CinematicShots,
     StellariumScripts,
     StellariumScreenshots,
+    StellariumBasicSmoke,
     StellariumExecutionSmokeTest,
     MotionRenderPlan,
     NarrationSceneSync,
