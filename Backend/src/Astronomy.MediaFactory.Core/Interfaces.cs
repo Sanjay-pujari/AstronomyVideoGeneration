@@ -1162,6 +1162,7 @@ public enum WeeklySkyForecastV2DiagnosticsPhase
     VisualSources,
     StellariumBlueprints,
     CinematicShots,
+    StellariumScripts,
     MotionRenderPlan,
     NarrationSceneSync,
     CinematicTimeline,
@@ -1615,6 +1616,26 @@ public sealed record WeeklyMotionRenderShotPlan(
     WeeklyShotEmotionPlan EmotionPlan,
     IReadOnlyList<string> Warnings);
 public sealed record WeeklyMotionRenderValidation(string ShotCode, bool IsValid, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings, string? ClipPath = null, double? ActualDurationSeconds = null, int? Width = null, int? Height = null);
+public sealed record WeeklyStellariumScriptInfo(
+    string ShotCode,
+    string ScriptPath,
+    string ExpectedScreenshotPath,
+    int CommandCount,
+    bool IsValid);
+
+public sealed record WeeklyStellariumScriptPackage(
+    bool IsValid,
+    int ScriptCount,
+    IReadOnlyList<WeeklyStellariumScriptInfo> Scripts,
+    IReadOnlyList<string> ValidationIssues,
+    IReadOnlyList<string> Warnings,
+    string DiagnosticsPath);
+
+public interface IWeeklyStellariumScriptWriter
+{
+    Task<WeeklyStellariumScriptPackage> WriteAsync(WeeklyCinematicShotPackage cinematicShotPackage, string workingDirectoryRoot, CancellationToken cancellationToken);
+}
+
 public sealed record WeeklyMotionRenderManifest(
     IReadOnlyList<WeeklyMotionRenderShotPlan> Shots,
     IReadOnlyList<WeeklyCameraPathPlan> CameraPaths,

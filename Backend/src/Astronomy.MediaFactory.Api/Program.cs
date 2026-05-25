@@ -342,7 +342,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/intelligence-preview", 
         return Results.BadRequest(new { error = ex.Message });
     }
 });
-app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", async (WeeklySkyForecastV2PhaseDiagnosticsRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklyCinematicShotExpansionEngine cinematicEngine, IWeeklyMotionRenderManifestBuilder motionManifestBuilder, IContentPlanningService planning, CancellationToken ct) =>
+app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", async (WeeklySkyForecastV2PhaseDiagnosticsRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklyCinematicShotExpansionEngine cinematicEngine, IWeeklyStellariumScriptWriter stellariumScriptWriter, IWeeklyMotionRenderManifestBuilder motionManifestBuilder, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
     {
@@ -383,6 +383,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             ["visualSources"] = root is null ? null : Path.Combine(root, "debug", "weekly-visual-sources.json"),
             ["stellariumBlueprints"] = root is null ? null : Path.Combine(root, "debug", "weekly-stellarium-blueprints.json"),
             ["cinematicShots"] = root is null ? null : Path.Combine(root, "debug", "weekly-cinematic-shot-timeline.json"),
+            ["stellariumScripts"] = root is null ? null : Path.Combine(root, "debug", "weekly-stellarium-script-package.json"),
             ["motionRenderManifest"] = root is null ? null : Path.Combine(root, "debug", "weekly-motion-render-manifest.json"),
             ["narrationSceneSync"] = root is null ? null : Path.Combine(root, "debug", "weekly-narration-scene-sync.json"),
             ["cinematicTimeline"] = root is null ? null : Path.Combine(root, "debug", "weekly-cinematic-timeline.json"),
@@ -443,6 +444,21 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
                 validation = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
                     ? cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")).ValidationIssues
                     : ["missing prerequisites"],
+                debugFiles
+            },
+            WeeklySkyForecastV2DiagnosticsPhase.StellariumScripts => new
+            {
+                storyboard = response.Storyboard,
+                stellariumBlueprintPackage = response.StellariumBlueprintPackage,
+                cinematicShotPackage = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
+                    ? cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N"))
+                    : null,
+                stellariumScripts = (response.Storyboard is not null && response.StellariumBlueprintPackage is not null && response.EventExtractionResult is not null && root is not null)
+                    ? await stellariumScriptWriter.WriteAsync(
+                        cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N")),
+                        root,
+                        ct)
+                    : null,
                 debugFiles
             },
             WeeklySkyForecastV2DiagnosticsPhase.MotionRenderPlan => new
