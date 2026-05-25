@@ -31,6 +31,16 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         diagnostics.FovCalculations = fov;
         diagnostics.Warnings = warnings;
         File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-astronomy-cinematic-refinement.json"), JsonSerializer.Serialize(new { astronomyCinematicRefinement = diagnostics }, new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-camera-direction.json"), JsonSerializer.Serialize(new
+        {
+            shotChoreography = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, s.ShotType, s.Purpose, s.DurationSeconds }),
+            easingPlans = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, easingType = ResolveEasing(s.MotionStyle), cameraVelocity = ResolveVelocity(s.MotionStyle), holdDurationSeconds = ResolveHold(s.ShotType) }),
+            labelChoreography = sequences.SelectMany(s => s.Shots).SelectMany(BuildLabelRevealPlan),
+            trackingStates = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, trackingEnabled = s.PrimaryObjectCode is not null }),
+            holdTimings = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, holdStartSecond = Math.Max(0, s.DurationSeconds - ResolveHold(s.ShotType)), holdDurationSeconds = ResolveHold(s.ShotType) }),
+            atmosphereStates = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, state = ResolveAtmosphereState(s.ShotType) }),
+            emotionalPurposePerShot = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, emotionalPurpose = s.Purpose })
+        }, new JsonSerializerOptions { WriteIndented = true }));
         return pkg;
     }
 
@@ -58,13 +68,7 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
             diagnostics.OmittedObjectsWithReasons.AddRange(selection.OmittedObjectsWithReasons);
             var sourceSep = events.SelectedPrimaryEvent?.AngularSeparationDegrees;
             var gfov = CalcGroupingFov(bp.SceneCode, heroTargets, sourceSep, events.SelectedPrimaryEvent?.Objects, fov, warnings);
-            shots.Add(BuildShot(bp, segment, root, "01", "wide_grouping_reveal", "show all hero objects in one frame", 8, "slow_zoom_in", heroTargets, null, gfov, gfov + 8, gfov, bp.CameraDirection));
-            shots.Add(BuildShot(bp, segment, root, "02", "slow_grouping_zoom", "slow cinematic zoom across grouping", 10, "slow_zoom_in", heroTargets, null, gfov, gfov + 6, gfov - 6, bp.CameraDirection));
-            shots.Add(BuildShot(bp, segment, root, "03", "moon_focus", "moon detail focus", 8, "object_tracking", ["MOON"], "MOON", 30, 36, 30, bp.CameraDirection));
-            shots.Add(BuildShot(bp, segment, root, "04", "venus_jupiter_focus", "venus and jupiter focus", 8, "object_tracking", heroTargets.Where(o => o is "VENUS" or "JUPITER").ToList(), heroTargets.Contains("JUPITER") ? "JUPITER" : "VENUS", 30, 35, 30, bp.CameraDirection));
-            var hasSaturn = heroTargets.Contains("SATURN", StringComparer.OrdinalIgnoreCase);
-            if (hasSaturn) shots.Add(BuildShot(bp, segment, root, "05", "saturn_reveal", "saturn reveal", 6, "object_tracking", ["SATURN"], "SATURN", 28, 33, 28, bp.CameraDirection));
-            shots.Add(BuildShot(bp, segment, root, hasSaturn ? "06" : "05", "final_grouping_hold", "return to all objects in one frame", hasSaturn ? 10 : 16, "slow_zoom_out", heroTargets, null, gfov, gfov - 4, gfov, bp.CameraDirection));
+            shots.AddRange(WeeklyStellariumCameraDirector.BuildMainGroupingSequence(bp, segment, root, heroTargets, gfov, warnings));
         }
         else if (segment.SegmentType == WeeklyStoryboardSegmentType.BestViewingNight)
         {
@@ -126,8 +130,18 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         spread = max;
         return spread > 0;
     }
+    private static string ResolveEasing(string motion) => motion.Contains("fade", StringComparison.OrdinalIgnoreCase) ? "atmosphericFloat" : motion.Contains("zoom", StringComparison.OrdinalIgnoreCase) || motion.Contains("cinematicEaseInOut", StringComparison.OrdinalIgnoreCase) ? "cinematicEaseInOut" : motion.Contains("Drift", StringComparison.OrdinalIgnoreCase) ? "slowDrift" : "linear";
+    private static string ResolveVelocity(string motion) => motion.Contains("zoom", StringComparison.OrdinalIgnoreCase) ? "slow" : "very_slow";
+    private static int ResolveHold(string shotType) => shotType.Contains("hold", StringComparison.OrdinalIgnoreCase) ? 4 : 2;
+    private static string ResolveAtmosphereState(string shotType) => shotType.Contains("outro", StringComparison.OrdinalIgnoreCase) || shotType.Contains("final", StringComparison.OrdinalIgnoreCase) ? "atmosphere_dim_labels_off_stars_emphasized" : "atmosphere_on_landscape_on_twinkle_on";
+    private static IEnumerable<object> BuildLabelRevealPlan(WeeklyCinematicShot shot)
+    {
+        var labels = shot.LabelObjects.Take(2).ToList();
+        for (var i = 0; i < labels.Count; i++)
+            yield return new { shotCode = shot.ShotCode, @object = labels[i], revealSecond = i == 0 ? 2 : 5, hideSecond = Math.Max(6, shot.DurationSeconds - 2), animationStyle = i switch { 0 => "soft_fade", 1 => "glow_pulse", _ => "atmospheric_appear" } };
+    }
 
-    private static WeeklyCinematicShot BuildShot(WeeklyStellariumSceneBlueprint bp, WeeklyStoryboardSegment segment, string root, string suffix, string shotType, string purpose, int duration, string motion, IReadOnlyList<string> targets, string? primary, double fov, double startFov, double endFov, string direction)
+    internal static WeeklyCinematicShot BuildShot(WeeklyStellariumSceneBlueprint bp, WeeklyStoryboardSegment segment, string root, string suffix, string shotType, string purpose, int duration, string motion, IReadOnlyList<string> targets, string? primary, double fov, double startFov, double endFov, string direction)
     {
         var shotCode = $"{bp.SceneCode}_{suffix}";
         var img = Path.Combine(root, "stellarium", "scenes", $"{shotCode}.png");
@@ -155,8 +169,11 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
             $"core.setDate('{bp.DateLocal:yyyy-MM-dd}T{bp.TimeLocal:HH\\:mm\\:ss}', 'local')",
             $"core.setObserverLocation({bp.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {bp.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 0, '{bp.RecommendedVisualSource}', '{bp.Timezone}')",
             $"core.moveToAltAzi('{direction}', 35)",
-            $"core.setFov({startFov.ToString(System.Globalization.CultureInfo.InvariantCulture)})"
+            $"core.setFov({startFov.ToString(System.Globalization.CultureInfo.InvariantCulture)})",
+            "landscapeMgr.setFlagAtmosphere(true); landscapeMgr.setFlagLandscape(true); core.setGuiVisible(false);",
+            "labelMgr.setFlagLabels(false)"
         };
+        if (primary is null) list.Add("core.setTracking(false)");
         if (!string.IsNullOrWhiteSpace(primary))
         {
             list.Add($"core.selectObjectByName('{primary}')");
@@ -164,8 +181,11 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         }
         if (shotType.Contains("grouping", StringComparison.OrdinalIgnoreCase))
             list.Add("core.output('Plan: apply separate highlight labels for each object; no multi-select string usage.')");
-        list.Add($"StelMovementMgr.zoomTo({endFov.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 3)");
-        list.Add($"core.wait({Math.Max(1, duration - 1)})");
+        list.Add("core.wait(2)");
+        list.Add("labelMgr.setFlagLabels(true)");
+        list.Add($"StelMovementMgr.zoomTo({endFov.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {Math.Max(3, duration - 2)})");
+        list.Add($"core.wait({Math.Max(2, duration - 2)})");
+        if (!string.IsNullOrWhiteSpace(primary)) list.Add("core.setTracking(false)");
         list.Add($"core.screenshot('{img.Replace("\\", "/")}', false, 'png')");
         return list;
     }
@@ -209,7 +229,31 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         if (totalDuration < 120) issues.Add("total duration < 120s");
         if (shots.Any(s => !s.PlannedSscCommands.Any(c => c.Contains($"StelMovementMgr.zoomTo({s.EndFovDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}", StringComparison.Ordinal)))) issues.Add("zoomTo target does not match endFov");
         if (shots.Any(s => s.PlannedSscCommands.Any(c => c.Contains("selectObjectByName('") && c.Contains(",")))) issues.Add("grouping uses comma-separated object selection");
+        if (!shots.Any(s => s.ShotType.Contains("hold", StringComparison.OrdinalIgnoreCase))) issues.Add("no hold timing");
+        if (shots.Any(s => s.ShotType.Contains("group", StringComparison.OrdinalIgnoreCase) && s.PlannedSscCommands.Any(c => c.Contains("setTracking(true)", StringComparison.OrdinalIgnoreCase)))) issues.Add("grouping shot has tracking=true");
+        var climaxDuration = shots.Where(s => s.ShotType is "wide_group_reveal" or "object_label_reveal" or "moon_hero_focus" or "venus_jupiter_focus" or "saturn_support_focus" or "full_group_return" or "cinematic_hold").Sum(s => s.DurationSeconds);
+        if (climaxDuration > 0 && climaxDuration < 50) issues.Add("climax duration < 50 sec");
         return issues;
+    }
+}
+
+internal static class WeeklyStellariumCameraDirector
+{
+    public static IReadOnlyList<WeeklyCinematicShot> BuildMainGroupingSequence(WeeklyStellariumSceneBlueprint bp, WeeklyStoryboardSegment segment, string root, IReadOnlyList<string> heroTargets, double groupingFov, List<string> warnings)
+    {
+        var hasSaturn = heroTargets.Contains("SATURN", StringComparer.OrdinalIgnoreCase);
+        var shots = new List<WeeklyCinematicShot>
+        {
+            WeeklyCinematicShotExpansionEngine.BuildShot(bp, segment, root, "01", "wide_group_reveal", "cinematic emotional opening", 10, "slowDrift", heroTargets, null, groupingFov + 18, 90, 70, bp.CameraDirection),
+            WeeklyCinematicShotExpansionEngine.BuildShot(bp, segment, root, "02", "object_label_reveal", "grand celestial alignment reveal", 12, "cinematicEaseInOut", heroTargets, null, groupingFov + 10, 70, 42, bp.CameraDirection),
+            WeeklyCinematicShotExpansionEngine.BuildShot(bp, segment, root, "03", "moon_hero_focus", "epic lunar reveal", 8, "cinematicEaseInOut", ["MOON"], "MOON", 18, 42, 18, bp.CameraDirection),
+            WeeklyCinematicShotExpansionEngine.BuildShot(bp, segment, root, "04", "venus_jupiter_focus", "planetary choreography", 8, "slowDrift", heroTargets.Where(o => o is "VENUS" or "JUPITER").ToList(), null, 24, 40, 24, bp.CameraDirection)
+        };
+        if (hasSaturn) shots.Add(WeeklyCinematicShotExpansionEngine.BuildShot(bp, segment, root, "05", "saturn_support_focus", "supporting planetary emphasis", 6, "atmosphericFloat", ["SATURN"], null, 26, 36, 26, bp.CameraDirection));
+        else warnings.Add("telescope-only object omitted");
+        shots.Add(WeeklyCinematicShotExpansionEngine.BuildShot(bp, segment, root, hasSaturn ? "06" : "05", "full_group_return", "return to full grouping frame", hasSaturn ? 8 : 10, "cinematicEaseInOut", heroTargets, null, groupingFov, 50, groupingFov, bp.CameraDirection));
+        shots.Add(WeeklyCinematicShotExpansionEngine.BuildShot(bp, segment, root, hasSaturn ? "07" : "06", "cinematic_hold", "visual breathing hold", 6, "atmosphericFloat", heroTargets, null, groupingFov, groupingFov, groupingFov, bp.CameraDirection));
+        return shots;
     }
 }
 
