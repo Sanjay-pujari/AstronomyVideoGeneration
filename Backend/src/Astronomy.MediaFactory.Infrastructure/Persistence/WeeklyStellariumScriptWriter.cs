@@ -55,6 +55,7 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
 
                 lines.AddRange(shot.PlannedSscCommands);
                 lines.Add($"core.screenshot('{expectedScreenshotPath}', false, 'png')");
+                lines.Add("core.quit()");
                 await File.WriteAllTextAsync(scriptFullPath, string.Join("\n", lines), Encoding.UTF8, cancellationToken);
             }
 

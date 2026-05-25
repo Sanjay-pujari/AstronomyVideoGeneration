@@ -12,6 +12,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
     ILogger<WeeklyStellariumScreenshotGenerator> logger) : IWeeklyStellariumScreenshotGenerator
 {
     private const long MinScreenshotBytes = 10 * 1024;
+    private const int PollDelayMs = 500;
     private readonly StellariumOptions _options = options.Value;
 
     public async Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, int maxScriptCount = 1, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
@@ -35,6 +36,19 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             return await WriteResultAsync(false, workingDirectoryRoot, warnings, errors, results, sw.ElapsedMilliseconds);
         }
 
+        var rootFull = Path.GetFullPath(workingDirectoryRoot);
+        var scenesDir = Path.Combine(rootFull, "stellarium", "scenes");
+        Directory.CreateDirectory(scenesDir);
+
+        var smokeResult = await RunBasicSmokeTestAsync(rootFull, timeoutSeconds, cancellationToken);
+        if (!smokeResult.ScreenshotExists || smokeResult.TimedOut)
+        {
+            errors.Add("Basic Stellarium smoke test failed. Cinematic scripts were not executed.");
+            await WriteBasicSmokeDiagnosticsAsync(rootFull, smokeResult, cancellationToken);
+            return await WriteResultAsync(false, workingDirectoryRoot, warnings, errors, results, sw.ElapsedMilliseconds);
+        }
+        await WriteBasicSmokeDiagnosticsAsync(rootFull, smokeResult, cancellationToken);
+
         var selected = SelectScripts(scriptPackage, executeShotCode, maxScriptCount, warnings, errors);
         logger.LogInformation("Script count: {ScriptCount}", selected.Count);
         if (selected.Count == 0)
@@ -50,7 +64,6 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             bool timedOut = false;
             int? exitCode = null;
             var screenshotSize = 0L;
-            var rootFull = Path.GetFullPath(workingDirectoryRoot);
             var screenshotFull = Path.GetFullPath(script.ExpectedScreenshotPath);
 
             logger.LogInformation("Starting Stellarium script execution");
@@ -92,7 +105,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                             break;
                         }
                     }
-                    await Task.Delay(500, cancellationToken);
+                    await Task.Delay(PollDelayMs, cancellationToken);
                 }
 
                 timedOut = !(File.Exists(screenshotFull) && new FileInfo(screenshotFull).Length > MinScreenshotBytes);
@@ -160,4 +173,104 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         await File.WriteAllTextAsync(result.DiagnosticsPath, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         return result;
     }
+
+    private async Task<BasicSmokeResult> RunBasicSmokeTestAsync(string rootFull, int timeoutSeconds, CancellationToken cancellationToken)
+    {
+        var scriptsDir = Path.Combine(rootFull, "stellarium", "scripts");
+        var scenesDir = Path.Combine(rootFull, "stellarium", "scenes");
+        Directory.CreateDirectory(scriptsDir);
+        Directory.CreateDirectory(scenesDir);
+
+        var smokeScriptPath = Path.Combine(scriptsDir, "_smoke_basic.ssc");
+        var smokeScreenshotPath = Path.Combine(scenesDir, "_smoke_basic.png");
+        var smokeScreenshotSscPath = smokeScreenshotPath.Replace('\\', '/');
+        var forms = new[]
+        {
+            $"core.screenshot('{smokeScreenshotSscPath}', false, 'png')",
+            $"core.screenshot('{smokeScreenshotSscPath}')",
+            $"StelMainView.screenshot('{smokeScreenshotSscPath}')"
+        };
+
+        var launchedCommand = string.Empty;
+        var stdout = string.Empty;
+        var stderr = string.Empty;
+        int? exitCode = null;
+        var timedOut = false;
+
+        foreach (var screenshotCommand in forms)
+        {
+            var smokeScript = string.Join("\n", ["core.wait(3)", screenshotCommand, "core.quit()"]);
+            await File.WriteAllTextAsync(smokeScriptPath, smokeScript, cancellationToken);
+            if (File.Exists(smokeScreenshotPath)) File.Delete(smokeScreenshotPath);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = _options.ExecutablePath,
+                Arguments = $"--startup-script \"{smokeScriptPath}\"",
+                WorkingDirectory = rootFull,
+                UseShellExecute = false,
+                CreateNoWindow = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            launchedCommand = $"{psi.FileName} {psi.Arguments}";
+            logger.LogInformation("Launching Stellarium smoke test");
+            logger.LogInformation("Executable: {Executable}", psi.FileName);
+            logger.LogInformation("Arguments: {Arguments}", psi.Arguments);
+            logger.LogInformation("WorkingDirectory: {WorkingDirectory}", psi.WorkingDirectory);
+
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
+            var deadline = DateTime.UtcNow.AddSeconds(Math.Max(5, timeoutSeconds));
+            while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+            {
+                if (File.Exists(smokeScreenshotPath) && new FileInfo(smokeScreenshotPath).Length > 0) break;
+                if (process.HasExited) break;
+                await Task.Delay(PollDelayMs, cancellationToken);
+            }
+
+            if (!process.HasExited)
+            {
+                timedOut = !(File.Exists(smokeScreenshotPath) && new FileInfo(smokeScreenshotPath).Length > 0);
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None);
+            }
+
+            exitCode = process.HasExited ? process.ExitCode : null;
+            stdout = await stdoutTask;
+            stderr = await stderrTask;
+
+            if (File.Exists(smokeScreenshotPath) && new FileInfo(smokeScreenshotPath).Length > 0)
+            {
+                break;
+            }
+        }
+
+        var exists = File.Exists(smokeScreenshotPath);
+        var size = exists ? new FileInfo(smokeScreenshotPath).Length : 0;
+        return new BasicSmokeResult(launchedCommand, smokeScriptPath, smokeScreenshotPath, exists, size, Math.Max(5, timeoutSeconds), exitCode, timedOut, stdout, stderr);
+    }
+
+    private static async Task WriteBasicSmokeDiagnosticsAsync(string rootFull, BasicSmokeResult result, CancellationToken cancellationToken)
+    {
+        var debugDir = Path.Combine(rootFull, "debug");
+        Directory.CreateDirectory(debugDir);
+        var path = Path.Combine(debugDir, "weekly-stellarium-basic-smoke.json");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
+    private sealed record BasicSmokeResult(
+        string LaunchedCommand,
+        string SmokeScriptPath,
+        string ExpectedSmokeScreenshotPath,
+        bool ScreenshotExists,
+        long ScreenshotSizeBytes,
+        int Timeout,
+        int? StellariumExitCode,
+        bool TimedOut,
+        string Stdout,
+        string Stderr);
 }
