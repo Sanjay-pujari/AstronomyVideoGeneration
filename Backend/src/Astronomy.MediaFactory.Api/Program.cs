@@ -346,6 +346,15 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
 {
     try
     {
+        if (!Enum.TryParse<WeeklySkyForecastV2DiagnosticsPhase>(request.Phase, ignoreCase: true, out var phase))
+        {
+            return Results.BadRequest(new
+            {
+                error = "Invalid phase.",
+                allowedPhases = Enum.GetNames<WeeklySkyForecastV2DiagnosticsPhase>()
+            });
+        }
+
         var contentPlanId = request.ContentGenerationPlanId;
         if (!contentPlanId.HasValue)
         {
@@ -378,7 +387,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             ["shortsPlan"] = root is null ? null : Path.Combine(root, "debug", "weekly-shorts-plan.json")
         };
 
-        object result = request.Phase switch
+        object result = phase switch
         {
             WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents => new
             {
@@ -435,7 +444,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             contentGenerationPlanId = contentPlanId,
             pipelineRunId,
             workingDirectoryRoot = root,
-            phase = request.Phase.ToString(),
+            phase = phase.ToString(),
             skyfieldCallCount = 1,
             region = response.Region,
             result,

@@ -1176,7 +1176,7 @@ public sealed record WeeklySkyForecastV2PhaseDiagnosticsRequest(
     DateTimeOffset ScheduledUtc,
     DateOnly? WeekStartDate = null,
     bool Diagnostics = true,
-    WeeklySkyForecastV2DiagnosticsPhase Phase = WeeklySkyForecastV2DiagnosticsPhase.AllPlanning,
+    string Phase = nameof(WeeklySkyForecastV2DiagnosticsPhase.AllPlanning),
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
 
