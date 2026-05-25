@@ -12,7 +12,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
     public async Task V2_Intelligence_Generates_Cinematic_Blueprint()
     {
         var workingDirectory = Path.Combine(Path.GetTempPath(), $"weekly-preview-{Guid.NewGuid():N}");
-        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator(), new WeeklySkyForecastV2AssetResolver(), new WeeklySkyForecastV2EditorialNormalizer(), Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }));
+        var service = new WeeklySkyForecastV2IntelligenceService(new StubContextBuilder(), new WeeklySkyForecastV2EventIntelligenceBuilder(), new WeeklyAstronomyEventExtractor(), new WeeklySkyForecastV2EditorialIntelligenceBuilder(), new WeeklySkyForecastV2CinematicEditorialRefiner(), new WeeklySkyForecastV2NarrativeAbstractionBuilder(), new WeeklySkyForecastV2NarrationPlanner(), new WeeklySkyForecastV2NarrationTextGenerator(), new WeeklySkyForecastV2AssetResolver(), new WeeklySkyForecastV2EditorialNormalizer(), Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), new Microsoft.Extensions.Logging.Abstractions.NullLogger<WeeklySkyForecastV2IntelligenceService>());
         var response = await service.PreviewAsync(new WeeklySkyForecastV2IntelligenceRequest("WeeklySkyForecast", "en", "IN-RJ-UDAIPUR", "Udaipur", DateTimeOffset.Parse("2026-05-22T18:00:00Z"), Diagnostics: true), CancellationToken.None);
 
         Assert.True(response.Success);
@@ -236,6 +236,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             Region: "IN-RJ-UDAIPUR",
             SkyfieldSummary: new WeeklySkyForecastV2SkyfieldSummary(7, 21, 0, 1, "JUPITER", new DateOnly(2026, 5, 24), new DateOnly(2026, 5, 25)),
             EventIntelligence: events,
+            EventExtractionResult: null,
             WeeklyStoryArc: new WeeklyStoryArc("h", "s", "t", "o", ["a"], "c", ["MOON"], ["2026-05-24"], ["x"]),
             EditorialStoryPackage: null!,
             CinematicStoryBlueprint: null,
