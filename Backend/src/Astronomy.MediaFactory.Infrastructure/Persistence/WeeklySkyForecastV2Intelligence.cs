@@ -173,6 +173,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             EventIntelligence: events,
             EventExtractionResult: eventExtractionResult,
             Storyboard: storyboardComposer.Compose(eventExtractionResult, ctx.RegionId, request.Language, eventExtractionResult.SourceForecastSummary, "cinematic", orchestrationContext.WorkingDirectoryRoot ?? renderingOptions.Value.WorkingDirectory),
+            StellariumBlueprintPackage: null,
             WeeklyStoryArc: arc,
             EditorialStoryPackage: null!,
             CinematicStoryBlueprint: null,
@@ -198,6 +199,11 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             RecommendedVisualStrategies: events.Select(e => e.RecommendedVisualStrategy).Distinct().ToList(),
             Warnings: ctx.Warnings,
             StepResults: stepResults);
+        var stellariumBlueprintPackage = baseResponse.Storyboard is null
+            ? null
+            : WeeklyStellariumBlueprintPlanner.Build(baseResponse.Storyboard, eventExtractionResult, ctx, orchestrationContext.WorkingDirectoryRoot ?? renderingOptions.Value.WorkingDirectory);
+        baseResponse = baseResponse with { StellariumBlueprintPackage = stellariumBlueprintPackage };
+
         logger.LogInformation("Starting editorial story generation");
         var editorial = await editorialBuilder.BuildAsync(baseResponse, cancellationToken);
         logger.LogInformation("Completed editorial story generation");
