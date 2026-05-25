@@ -32,10 +32,10 @@ internal static class WeeklyStellariumBlueprintPlanner
             var shotCount = segment.SegmentType == WeeklyStoryboardSegmentType.WeeklyOverview ? 3 : 1;
             var highlights = ResolveHighlights(segment, grouped, moonJupVen);
             var sceneCode = $"{segment.SegmentCode.ToLowerInvariant()}_{sceneType}";
-            var imagePath = Path.Combine(root, "weekly_sky_forecast", "stellarium", "scenes", $"{sceneCode}.png");
-            var sscPath = Path.Combine(root, "weekly_sky_forecast", "stellarium", "scripts", $"{sceneCode}.ssc");
+            var imagePath = Path.Combine(root, "stellarium", "scenes", $"{sceneCode}.png");
+            var sscPath = Path.Combine(root, "stellarium", "scripts", $"{sceneCode}.ssc");
             var shots = Enumerable.Range(1, shotCount)
-                .Select(i => new WeeklyStellariumShot($"{sceneCode}_shot{i}", sceneType, date.AddDays(i - 1), time, Math.Max(4, segment.EstimatedDurationSeconds / shotCount), Path.Combine(root, "weekly_sky_forecast", "stellarium", "scenes", $"{sceneCode}_shot{i}.png")))
+                .Select(i => new WeeklyStellariumShot($"{sceneCode}_shot{i}", sceneType, date.AddDays(i - 1), time, Math.Max(4, segment.EstimatedDurationSeconds / shotCount), Path.Combine(root, "stellarium", "scenes", $"{sceneCode}_shot{i}.png")))
                 .ToList();
 
             sceneBlueprints.Add(new WeeklyStellariumSceneBlueprint(
@@ -67,7 +67,7 @@ internal static class WeeklyStellariumBlueprintPlanner
                 BuildSscCommands(date, time, ctx, direction, sceneType == "multi_object_grouping" ? moonJupVen : highlights.Select(h => h.ObjectCode).ToList(), imagePath)));
         }
 
-        var validation = Validate(sceneBlueprints, grouped is not null, moonJupVen);
+        var validation = Validate(sceneBlueprints, grouped is not null, moonJupVen, root);
         var package = new WeeklyStellariumBlueprintPackage(validation.Count == 0, ctx.RegionId, ctx.Latitude, ctx.Longitude, ctx.Timezone, sceneBlueprints, validation, []);
 
         var debugPath = Path.Combine(root, "debug");
@@ -105,9 +105,10 @@ internal static class WeeklyStellariumBlueprintPlanner
     private static List<string> BuildOverlayText(WeeklyStoryboardSegment segment, DateOnly date, TimeOnly time, string direction)
         => [$"{segment.Title}", $"Date: {date:dd MMM yyyy}", $"Time: {time:HH:mm}", $"Direction: {direction}"];
 
-    private static List<string> Validate(IReadOnlyList<WeeklyStellariumSceneBlueprint> scenes, bool hasGrouping, IReadOnlyList<string> moonJupVen)
+    private static List<string> Validate(IReadOnlyList<WeeklyStellariumSceneBlueprint> scenes, bool hasGrouping, IReadOnlyList<string> moonJupVen, string root)
     {
         var issues = new List<string>();
+        var rootFull = Path.GetFullPath(root);
         if (hasGrouping && !scenes.Any(s => s.SceneType == "multi_object_grouping")) issues.Add("At least one blueprint must use MultiObjectSkyGrouping when grouping event exists.");
         if (hasGrouping && moonJupVen.Count >= 2)
         {
@@ -117,9 +118,18 @@ internal static class WeeklyStellariumBlueprintPlanner
         }
         if (scenes.Any(s => string.IsNullOrWhiteSpace(s.CameraDirection))) issues.Add("Every Stellarium blueprint must have cameraDirection.");
         if (scenes.Any(s => s.Shots.Any(shot => string.IsNullOrWhiteSpace(shot.ExpectedOutputImagePath)))) issues.Add("Every shot must have expected output path.");
+        if (scenes.Any(s => !IsPathUnderRoot(s.ExpectedSscScriptPath, rootFull) || !IsPathUnderRoot(s.ExpectedOutputImagePath, rootFull))) issues.Add("Every scene path must be under workingDirectoryRoot.");
+        if (scenes.Any(s => s.Shots.Any(shot => !IsPathUnderRoot(shot.ExpectedOutputImagePath, rootFull)))) issues.Add("Every shot image path must be under workingDirectoryRoot.");
         if (scenes.Any(s => s.DateLocal == default || s.TimeLocal == default)) issues.Add("Every blueprint must have date/time/location.");
         if (scenes.Any(s => string.IsNullOrWhiteSpace(s.TransitionIn) || string.IsNullOrWhiteSpace(s.TransitionOut))) issues.Add("Every scene must include transitionIn/transitionOut.");
         if (scenes.Where(s => s.SceneType == "multi_object_grouping").Any(s => s.HighlightObjects.Count == 0)) issues.Add("Grouping/conjunction scenes cannot have empty highlight objects.");
         return issues;
+    }
+
+    private static bool IsPathUnderRoot(string candidatePath, string rootPath)
+    {
+        var candidateFull = Path.GetFullPath(candidatePath);
+        var rootWithSep = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return candidateFull.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase) || string.Equals(candidateFull, rootPath, StringComparison.OrdinalIgnoreCase);
     }
 }
