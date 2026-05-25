@@ -492,6 +492,14 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             },
             WeeklySkyForecastV2DiagnosticsPhase.StellariumScreenshots => new
             {
+                requestedPhase = phase.ToString(),
+                executeShotCode = request.ExecuteShotCode,
+                selectedShotCode = request.ExecuteShotCode,
+                selectedScriptPath = (root is not null && !string.IsNullOrWhiteSpace(request.ExecuteShotCode))
+                    ? Path.Combine(root, "stellarium", "scripts", $"{request.ExecuteShotCode}.ssc")
+                    : null,
+                selectedScriptSource = "WeeklyStellariumScriptPackage",
+                executedBasicSmoke = false,
                 pipelineRunId = pipelineRunId.ToString("N"),
                 workingDirectoryRoot = root,
                 storyboard = response.Storyboard,
@@ -505,7 +513,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
                     : null,
                 debugFiles
             },
-            WeeklySkyForecastV2DiagnosticsPhase.StellariumExecutionSmokeTest => new
+            WeeklySkyForecastV2DiagnosticsPhase.StellariumBasicSmoke or WeeklySkyForecastV2DiagnosticsPhase.StellariumExecutionSmokeTest => new
             {
                 storyboard = response.Storyboard,
                 stellariumBlueprintPackage = response.StellariumBlueprintPackage,

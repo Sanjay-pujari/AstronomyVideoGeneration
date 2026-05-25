@@ -41,15 +41,6 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         var scenesDir = Path.Combine(rootFull, "stellarium", "scenes");
         Directory.CreateDirectory(scenesDir);
 
-        var smokeResult = await RunBasicSmokeTestAsync(rootFull, timeoutSeconds, cancellationToken);
-        if (!smokeResult.ScreenshotExists || smokeResult.TimedOut)
-        {
-            errors.Add("Basic Stellarium smoke test failed. Cinematic scripts were not executed.");
-            await WriteBasicSmokeDiagnosticsAsync(rootFull, smokeResult, cancellationToken);
-            return await WriteResultAsync(false, workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds, null, null, []);
-        }
-        await WriteBasicSmokeDiagnosticsAsync(rootFull, smokeResult, cancellationToken);
-
         var ignoredDiagnosticScripts = new List<string>();
         var selected = SelectScripts(scriptPackage, executeShotCode, maxScriptCount, warnings, errors, ignoredDiagnosticScripts);
         logger.LogInformation("Script count: {ScriptCount}", selected.Count);
@@ -62,8 +53,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         var selectedScript = selected[0];
         if (selectedScript.ScriptPath.Contains("_smoke_basic", StringComparison.OrdinalIgnoreCase))
         {
-            errors.Add("Diagnostic smoke script cannot be executed as a cinematic shot.");
-            return await WriteResultAsync(false, workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds, selectedScript.ShotCode, selectedScript.ScriptPath, ignoredDiagnosticScripts);
+            throw new InvalidOperationException("StellariumScreenshots cannot execute diagnostic smoke script.");
         }
 
         foreach (var script in selected)
@@ -83,7 +73,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             string? launchedArguments = null;
             string? launchedWorkingDirectory = null;
 
-            logger.LogInformation("Starting Stellarium script execution");
+            logger.LogInformation("Launching Stellarium cinematic shot script");
             logger.LogInformation("selectedShotCode={ShotCode}", script.ShotCode);
             logger.LogInformation("selectedScriptPath={ScriptPath}", script.ScriptPath);
             logger.LogInformation("selectedExpectedScreenshotPath={ExpectedScreenshotPath}", script.ExpectedScreenshotPath);
