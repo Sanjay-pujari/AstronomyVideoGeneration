@@ -25,6 +25,7 @@ public sealed class WeeklySkyForecastFinalMediaOrchestrator(
             WeeklyForecast: null,
             SkyfieldSummary: null,
             EventIntelligence: null,
+            EventExtractionResult: null,
             GeneratedAtUtc: DateTime.UtcNow), cancellationToken);
 
     public async Task<FinalMediaPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)

@@ -15,6 +15,7 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
             WeeklyForecast: null,
             SkyfieldSummary: null,
             EventIntelligence: null,
+            EventExtractionResult: null,
             GeneratedAtUtc: DateTime.UtcNow), cancellationToken);
 
     public async Task<TimelineCompositionPackage> RunAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
