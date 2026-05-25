@@ -1190,6 +1190,7 @@ public sealed record WeeklySkyForecastV2OrchestrationContext(
     WeeklySkyForecastV2SkyfieldSummary? SkyfieldSummary,
     IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem>? EventIntelligence,
     WeeklyAstronomyEventExtractionResult? EventExtractionResult,
+    WeeklyStoryboard? Storyboard,
     DateTime GeneratedAtUtc,
     int SkyfieldWeeklyForecastCalls = 0,
     int RegionResolveCalls = 0,
@@ -1254,6 +1255,66 @@ public sealed record WeeklyAstronomyEventExtractionResult(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> MissingData);
 
+
+public enum WeeklyStoryboardSegmentType
+{
+    OpeningHook,
+    WeeklyOverview,
+    MainAstronomyEvent,
+    GroupingFocus,
+    HeroObjectFocus,
+    BestViewingNight,
+    ViewingDirectionGuide,
+    TelescopeRecommendation,
+    AstrophotographyMoment,
+    EducationalInsight,
+    EmotionalHighlight,
+    ClosingSequence,
+    CTAOutro
+}
+
+public sealed record WeeklyStoryboardNarrationSection(
+    string NarrationPurpose,
+    string NarrationTone,
+    string NarrationSummary,
+    int EstimatedDurationSeconds,
+    int NarrationPriority);
+
+public sealed record WeeklyStoryboardVisualPlan(
+    string RecommendedVisualSource,
+    string RecommendedSceneType,
+    string RecommendedCameraStyle,
+    string RecommendedMotionStyle,
+    string RecommendedTransition);
+
+public sealed record WeeklyStoryboardTransition(
+    string FromSegmentCode,
+    string ToSegmentCode,
+    string TransitionType,
+    string Purpose);
+
+public sealed record WeeklyStoryboardSegment(
+    string SegmentCode,
+    WeeklyStoryboardSegmentType SegmentType,
+    string Title,
+    string Purpose,
+    IReadOnlyList<string> TargetObjects,
+    int EstimatedDurationSeconds,
+    WeeklyStoryboardNarrationSection Narration,
+    WeeklyStoryboardVisualPlan VisualPlan);
+
+public sealed record WeeklyStoryboard(
+    bool IsValid,
+    string EmotionalArc,
+    WeeklyAstronomyEvent? SelectedPrimaryEvent,
+    IReadOnlyList<WeeklyStoryboardSegment> OrderedSegments,
+    IReadOnlyList<WeeklyStoryboardTransition> Transitions,
+    string PacingAnalysis,
+    string NarrationFlowAnalysis,
+    string VisualEscalationAnalysis,
+    int EstimatedVideoDurationSeconds,
+    IReadOnlyList<string> Warnings);
+
 public sealed record WeeklySkyForecastV2EventIntelligenceItem(
     string EventId,
     string EventType,
@@ -1302,6 +1363,7 @@ public sealed record WeeklySkyForecastV2IntelligenceResponse(
     WeeklySkyForecastV2SkyfieldSummary SkyfieldSummary,
     IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> EventIntelligence,
     WeeklyAstronomyEventExtractionResult? EventExtractionResult,
+    WeeklyStoryboard? Storyboard,
     WeeklyStoryArc WeeklyStoryArc,
     WeeklyEditorialStoryPackage EditorialStoryPackage,
     WeeklyCinematicStoryBlueprint? CinematicStoryBlueprint,
@@ -1412,6 +1474,11 @@ public interface IWeeklyAstronomyEventExtractor
 public interface IWeeklySkyForecastV2EventIntelligenceBuilder
 {
     IReadOnlyList<WeeklySkyForecastV2EventIntelligenceItem> Build(WeeklySkyForecastContext context);
+}
+
+public interface IWeeklyStoryboardComposer
+{
+    WeeklyStoryboard Compose(WeeklyAstronomyEventExtractionResult extractionResult, string region, string language, string forecastSummary, string narrationStyle, string? workingDirectoryRoot);
 }
 
 public interface IWeeklySkyForecastV2IntelligenceService
