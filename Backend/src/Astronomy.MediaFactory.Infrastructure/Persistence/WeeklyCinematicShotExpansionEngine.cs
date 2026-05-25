@@ -33,13 +33,13 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-astronomy-cinematic-refinement.json"), JsonSerializer.Serialize(new { astronomyCinematicRefinement = diagnostics }, new JsonSerializerOptions { WriteIndented = true }));
         File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-camera-direction.json"), JsonSerializer.Serialize(new
         {
-            shotChoreography = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, s.ShotType, s.Purpose, s.DurationSeconds }),
+            shotChoreography = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, s.ShotType, s.ShotPurpose, s.DurationSeconds }),
             easingPlans = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, easingType = ResolveEasing(s.MotionStyle), cameraVelocity = ResolveVelocity(s.MotionStyle), holdDurationSeconds = ResolveHold(s.ShotType) }),
             labelChoreography = sequences.SelectMany(s => s.Shots).SelectMany(BuildLabelRevealPlan),
-            trackingStates = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, trackingEnabled = s.PrimaryObjectCode is not null }),
+            trackingStates = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, trackingEnabled = s.PrimaryObject is not null }),
             holdTimings = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, holdStartSecond = Math.Max(0, s.DurationSeconds - ResolveHold(s.ShotType)), holdDurationSeconds = ResolveHold(s.ShotType) }),
             atmosphereStates = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, state = ResolveAtmosphereState(s.ShotType) }),
-            emotionalPurposePerShot = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, emotionalPurpose = s.Purpose })
+            emotionalPurposePerShot = sequences.SelectMany(s => s.Shots).Select(s => new { s.ShotCode, emotionalPurpose = s.ShotPurpose })
         }, new JsonSerializerOptions { WriteIndented = true }));
         return pkg;
     }
