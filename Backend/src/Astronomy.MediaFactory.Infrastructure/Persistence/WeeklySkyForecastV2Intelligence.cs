@@ -107,6 +107,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             SkyfieldSummary: null,
             EventIntelligence: null,
             EventExtractionResult: null,
+            Storyboard: null,
             GeneratedAtUtc: DateTime.UtcNow), cancellationToken);
 
     public async Task<WeeklySkyForecastV2IntelligenceResponse> PreviewAsync(WeeklySkyForecastV2OrchestrationContext orchestrationContext, CancellationToken cancellationToken)
