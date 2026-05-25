@@ -164,7 +164,7 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
 
     private static List<string> BuildSsc(WeeklyStellariumSceneBlueprint bp, string img, int duration, string direction, double startFov, string? primary, double endFov, string shotType)
     {
-        var locationName = string.IsNullOrWhiteSpace(bp.RecommendedVisualSource) ? bp.RegionTimezone : bp.RecommendedVisualSource;
+        var locationName = string.IsNullOrWhiteSpace(bp.RecommendedVisualSource) ? bp.Timezone : bp.RecommendedVisualSource;
         var utcObservationTime = DateTime.SpecifyKind(bp.DateLocal.ToDateTime(bp.TimeLocal), DateTimeKind.Local).ToUniversalTime();
         var zoomDuration = Math.Max(3, duration - 2);
         var waitBeforeScreenshot = Math.Max(2, duration - 2);
