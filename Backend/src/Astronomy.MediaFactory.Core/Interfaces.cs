@@ -1162,6 +1162,7 @@ public enum WeeklySkyForecastV2DiagnosticsPhase
     VisualSources,
     StellariumBlueprints,
     CinematicShots,
+    MotionRenderPlan,
     NarrationSceneSync,
     CinematicTimeline,
     ThumbnailStoryboard,
@@ -1178,6 +1179,8 @@ public sealed record WeeklySkyForecastV2PhaseDiagnosticsRequest(
     DateOnly? WeekStartDate = null,
     bool Diagnostics = true,
     string Phase = nameof(WeeklySkyForecastV2DiagnosticsPhase.AllPlanning),
+    bool RenderPreviewClips = false,
+    int PreviewClipCount = 0,
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
 
@@ -1585,6 +1588,58 @@ public interface IWeeklyStoryboardComposer
 public interface IWeeklyCinematicShotExpansionEngine
 {
     WeeklyCinematicShotPackage Expand(WeeklyStoryboard storyboard, WeeklyStellariumBlueprintPackage stellariumBlueprintPackage, WeeklyAstronomyEventExtractionResult eventExtractionResult, string region, string workingDirectoryRoot, string pipelineRunId);
+}
+public sealed record WeeklyCameraPathPlan(
+    string ShotCode,
+    double StartSecond,
+    double EndSecond,
+    double StartFov,
+    double EndFov,
+    double StartAzimuth,
+    double EndAzimuth,
+    double StartAltitude,
+    double EndAltitude,
+    string EasingType,
+    double DriftAmount,
+    double HoldStartSecond,
+    double HoldDurationSeconds,
+    double CameraIntensity,
+    string MovementType);
+public sealed record WeeklyShotEmotionPlan(string VisualEmotion, string MusicBeat, double CameraIntensity, double NarrationIntensity, double TransitionEnergy);
+public sealed record WeeklyMotionRenderShotPlan(
+    string ShotCode,
+    int DurationSeconds,
+    string CompositionFramePath,
+    string ClipOutputPath,
+    WeeklyCameraPathPlan CameraPath,
+    WeeklyShotEmotionPlan EmotionPlan,
+    IReadOnlyList<string> Warnings);
+public sealed record WeeklyMotionRenderValidation(string ShotCode, bool IsValid, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings, string? ClipPath = null, double? ActualDurationSeconds = null, int? Width = null, int? Height = null);
+public sealed record WeeklyMotionRenderManifest(
+    IReadOnlyList<WeeklyMotionRenderShotPlan> Shots,
+    IReadOnlyList<WeeklyCameraPathPlan> CameraPaths,
+    IReadOnlyList<string> ClipPaths,
+    IReadOnlyList<string> CompositionFrames,
+    IReadOnlyList<string> FfmpegCommands,
+    IReadOnlyList<WeeklyMotionRenderValidation> Validation,
+    IReadOnlyList<string> FailedShots,
+    IReadOnlyList<string> Warnings,
+    string ManifestPath);
+public interface IWeeklyCameraPathEngine { WeeklyCameraPathPlan Build(WeeklyCinematicShot shot, string sequencePurpose); }
+public interface IWeeklyCinematicCompositionEngine { Task<string> ComposeAsync(WeeklyCinematicShot shot, string outputPath, CancellationToken cancellationToken); }
+public interface IWeeklyMotionClipRenderer
+{
+    Task<(string Command, WeeklyMotionRenderValidation Validation)> RenderAsync(WeeklyCinematicShot shot, WeeklyCameraPathPlan cameraPath, string composedFramePath, string clipOutputPath, CancellationToken cancellationToken);
+}
+public interface IWeeklyMotionRenderManifestBuilder
+{
+    Task<WeeklyMotionRenderManifest> BuildAsync(
+        WeeklyCinematicShotPackage cinematicShotPackage,
+        string rootPath,
+        string pipelineRunId,
+        bool renderPreviewClips,
+        int previewClipCount,
+        CancellationToken cancellationToken);
 }
 
 public interface IWeeklySkyForecastV2IntelligenceService
