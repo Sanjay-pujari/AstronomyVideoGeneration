@@ -1188,6 +1188,9 @@ public sealed record WeeklySkyForecastV2PhaseDiagnosticsRequest(
     string? ExecuteShotCode = null,
     int? StellariumTimeoutSeconds = null,
     int? MaxScriptCount = null,
+    bool ExecuteAllScripts = false,
+    bool ConfirmFullBatch = false,
+    bool ContinueOnFailure = true,
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
 
@@ -1704,7 +1707,7 @@ public interface IWeeklyStellariumScriptExecutor
 
 public interface IWeeklyStellariumScreenshotGenerator
 {
-    Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, int maxScriptCount = 1, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
+    Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, int? maxScriptCount = null, bool executeAllScripts = false, bool confirmFullBatch = false, bool continueOnFailure = true, int timeoutSeconds = 90, CancellationToken cancellationToken = default);
 }
 
 public sealed record WeeklyMotionRenderManifest(
