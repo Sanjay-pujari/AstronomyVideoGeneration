@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExpansionEngine
+public sealed class WeeklyCinematicShotExpansionEngine(IWeeklySkySceneComposer sceneComposer, IWeeklySscSceneBuilder sscSceneBuilder) : IWeeklyCinematicShotExpansionEngine
 {
     public WeeklyCinematicShotPackage Expand(WeeklyStoryboard storyboard, WeeklyStellariumBlueprintPackage stellariumBlueprintPackage, WeeklyAstronomyEventExtractionResult eventExtractionResult, string region, string workingDirectoryRoot, string pipelineRunId)
     {
@@ -24,6 +24,27 @@ public sealed class WeeklyCinematicShotExpansionEngine : IWeeklyCinematicShotExp
         }
 
         sequences = ApplyGlobalNarrationTiming(sequences);
+
+        var sceneComposition = sceneComposer.Compose(new WeeklyCinematicShotPackage(true, storyboard.EmotionalArc, pipelineRunId, sequences.Count, sequences.Sum(s => s.Shots.Count), sequences.Sum(s => s.DurationSeconds), sequences, fov, [], warnings), eventExtractionResult, workingDirectoryRoot);
+        var compositionByShot = sceneComposition.Entries.ToDictionary(x => x.ShotCode, StringComparer.OrdinalIgnoreCase);
+        sequences = sequences.Select(seq => seq with
+        {
+            Shots = seq.Shots.Select(shot =>
+            {
+                if (!compositionByShot.TryGetValue(shot.ShotCode, out var comp)) return shot;
+                var planned = sscSceneBuilder.Build(shot, comp);
+                return shot with
+                {
+                    CameraDirection = comp.CenterAzimuth.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    FieldOfViewDegrees = comp.ComputedFov,
+                    StartFovDegrees = comp.ComputedFov,
+                    EndFovDegrees = comp.ComputedFov,
+                    PlannedSscCommands = planned
+                };
+            }).ToList()
+        }).ToList();
+
+        warnings.AddRange(sceneComposition.Errors);
         var validation = Validate(sequences, fov, workingDirectoryRoot);
         var pkg = new WeeklyCinematicShotPackage(validation.Count == 0, storyboard.EmotionalArc, pipelineRunId, sequences.Count, sequences.Sum(s => s.Shots.Count), sequences.Sum(s => s.DurationSeconds), sequences, fov, validation, warnings);
         Directory.CreateDirectory(Path.Combine(workingDirectoryRoot, "debug"));

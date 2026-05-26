@@ -499,6 +499,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastV2AssetResolver, WeeklySkyForecastV2AssetResolver>();
         services.AddScoped<IWeeklySkyForecastV2EditorialNormalizer, WeeklySkyForecastV2EditorialNormalizer>();
         services.AddScoped<IWeeklyStoryboardComposer, WeeklyStoryboardComposer>();
+        services.AddScoped<IWeeklyConjunctionFramingEngine, WeeklyConjunctionFramingEngine>();
+        services.AddScoped<IWeeklyDynamicFovCalculator, WeeklyDynamicFovCalculator>();
+        services.AddScoped<IWeeklySscSceneBuilder, WeeklySscSceneBuilder>();
+        services.AddScoped<IWeeklySkySceneComposer, WeeklySkySceneComposer>();
+        services.AddScoped<IWeeklyScreenshotQualityValidator, WeeklyScreenshotQualityValidator>();
         services.AddScoped<IWeeklyCinematicShotExpansionEngine, WeeklyCinematicShotExpansionEngine>();
         services.AddScoped<IWeeklyCameraPathEngine, WeeklyCameraPathEngine>();
         services.AddScoped<IWeeklyCinematicCompositionEngine, WeeklyCinematicCompositionEngine>();

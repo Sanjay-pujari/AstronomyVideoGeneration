@@ -1162,6 +1162,7 @@ public enum WeeklySkyForecastV2DiagnosticsPhase
     VisualSources,
     StellariumBlueprints,
     CinematicShots,
+    SceneComposition,
     StellariumScripts,
     StellariumScreenshots,
     StellariumBasicSmoke,
