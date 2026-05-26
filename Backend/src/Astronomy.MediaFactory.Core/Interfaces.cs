@@ -1205,7 +1205,13 @@ public sealed record WeeklyStellariumScreenshotScriptResult(
     string? SelectedScriptLastWriteUtc = null,
     string? LaunchedExecutable = null,
     string? LaunchedArguments = null,
-    string? LaunchedWorkingDirectory = null);
+    string? LaunchedWorkingDirectory = null,
+    double? WarmupSeconds = null,
+    double? CameraSettleSeconds = null,
+    double? PreScreenshotWaitSeconds = null,
+    long? ScreenshotDetectedAtMs = null,
+    long? ScreenshotStableAtMs = null,
+    string? ActualScriptContentPath = null);
 
 public sealed record WeeklyStellariumScreenshotGenerationResult(
     bool Success,

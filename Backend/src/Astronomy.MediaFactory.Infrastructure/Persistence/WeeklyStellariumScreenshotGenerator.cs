@@ -13,6 +13,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 {
     private const long MinScreenshotBytes = 10 * 1024;
     private const int PollDelayMs = 500;
+    private const int MinimumApiScreenshotTimeoutSeconds = 90;
     private readonly StellariumOptions _options = options.Value;
 
     public async Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, int maxScriptCount = 1, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
@@ -68,6 +69,9 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             var scriptExists = File.Exists(scriptFull);
             var scriptPreview = scriptExists ? await File.ReadAllTextAsync(scriptFull, cancellationToken) : string.Empty;
             scriptPreview = scriptPreview.Length > 1200 ? scriptPreview[..1200] : scriptPreview;
+            var warmupSeconds = ReadHeaderDouble(scriptPreview, "WarmupSeconds", _options.WeeklyApiLaunchWarmupSeconds > 0 ? _options.WeeklyApiLaunchWarmupSeconds : 8);
+            var cameraSettleSeconds = ReadHeaderDouble(scriptPreview, "CameraSettleSeconds", _options.WeeklyCameraSettleSeconds > 0 ? _options.WeeklyCameraSettleSeconds : 3);
+            var preScreenshotWaitSeconds = ReadHeaderDouble(scriptPreview, "PreScreenshotWaitSeconds", _options.WeeklyPreScreenshotWaitSeconds > 0 ? _options.WeeklyPreScreenshotWaitSeconds : 2);
             var scriptLastWriteUtc = scriptExists ? File.GetLastWriteTimeUtc(scriptFull).ToString("O") : null;
             string? launchedExecutable = null;
             string? launchedArguments = null;
@@ -114,7 +118,10 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 logger.LogInformation("Stellarium process id: {ProcessId}", process.Id);
                 logger.LogInformation("Waiting for screenshot");
 
-                var deadline = DateTime.UtcNow.AddSeconds(Math.Max(5, timeoutSeconds));
+                var effectiveTimeoutSeconds = Math.Max(MinimumApiScreenshotTimeoutSeconds, timeoutSeconds);
+                var deadline = DateTime.UtcNow.AddSeconds(effectiveTimeoutSeconds);
+                long? screenshotDetectedAtMs = null;
+                long? screenshotStableAtMs = null;
                 while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
                 {
                     if (File.Exists(screenshotFull))
@@ -124,7 +131,16 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                         {
                             logger.LogInformation("Screenshot detected");
                             logger.LogInformation("Screenshot size: {ScreenshotSize}", screenshotSize);
-                            break;
+                            screenshotDetectedAtMs = scriptSw.ElapsedMilliseconds;
+                            await Task.Delay(1000, cancellationToken);
+                            var sizeAfterDelay = File.Exists(screenshotFull) ? new FileInfo(screenshotFull).Length : 0;
+                            await Task.Delay(1000, cancellationToken);
+                            var sizeSecondCheck = File.Exists(screenshotFull) ? new FileInfo(screenshotFull).Length : 0;
+                            if (sizeAfterDelay > MinScreenshotBytes && sizeAfterDelay == sizeSecondCheck)
+                            {
+                                screenshotStableAtMs = scriptSw.ElapsedMilliseconds;
+                                break;
+                            }
                         }
                     }
                     await Task.Delay(PollDelayMs, cancellationToken);
@@ -144,7 +160,9 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 }
 
                 exitCode = process.HasExited ? process.ExitCode : null;
-                if (timedOut) error = $"Screenshot not created within timeout ({Math.Max(5, timeoutSeconds)}s).";
+                if (timedOut) error = $"Screenshot not created within timeout ({effectiveTimeoutSeconds}s).";
+                results.Add(new WeeklyStellariumScreenshotScriptResult(script.ShotCode, script.ScriptPath, script.ExpectedScreenshotPath, File.Exists(script.ExpectedScreenshotPath), screenshotSize, scriptSw.ElapsedMilliseconds, timedOut, exitCode, error, scriptPreview, scriptLastWriteUtc, launchedExecutable, launchedArguments, launchedWorkingDirectory, warmupSeconds, cameraSettleSeconds, preScreenshotWaitSeconds, screenshotDetectedAtMs, screenshotStableAtMs, scriptFull));
+                continue;
             }
 
             var exists = File.Exists(script.ExpectedScreenshotPath);
@@ -154,7 +172,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 
             scriptSw.Stop();
             logger.LogInformation("Script execution completed");
-            results.Add(new WeeklyStellariumScreenshotScriptResult(script.ShotCode, script.ScriptPath, script.ExpectedScreenshotPath, exists, screenshotSize, scriptSw.ElapsedMilliseconds, timedOut, exitCode, error, scriptPreview, scriptLastWriteUtc, launchedExecutable, launchedArguments, launchedWorkingDirectory));
+            results.Add(new WeeklyStellariumScreenshotScriptResult(script.ShotCode, script.ScriptPath, script.ExpectedScreenshotPath, exists, screenshotSize, scriptSw.ElapsedMilliseconds, timedOut, exitCode, error, scriptPreview, scriptLastWriteUtc, launchedExecutable, launchedArguments, launchedWorkingDirectory, warmupSeconds, cameraSettleSeconds, preScreenshotWaitSeconds, null, null, scriptFull));
         }
 
         sw.Stop();
@@ -209,6 +227,15 @@ public sealed class WeeklyStellariumScreenshotGenerator(
     {
         var normalized = rootFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         return Path.GetFileName(normalized);
+    }
+
+    private static double ReadHeaderDouble(string text, string key, double fallback)
+    {
+        var marker = $"// {key}:";
+        var line = text.Split('\n').FirstOrDefault(x => x.TrimStart().StartsWith(marker, StringComparison.OrdinalIgnoreCase));
+        if (line is null) return fallback;
+        var raw = line[(line.IndexOf(':') + 1)..].Trim();
+        return double.TryParse(raw, out var value) ? value : fallback;
     }
 
     private async Task<BasicSmokeResult> RunBasicSmokeTestAsync(string rootFull, int timeoutSeconds, CancellationToken cancellationToken)
