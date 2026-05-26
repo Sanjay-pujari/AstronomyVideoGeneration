@@ -28,7 +28,7 @@ public sealed class WeeklySkyForecastV2FinalMediaTests
         {
             var planId = request.ContentGenerationPlanId ?? (await planning.GeneratePlanAsync(new GenerateContentPlanRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc.UtcDateTime), ct)).ContentGenerationPlanId;
             var runId = request.PipelineRunId ?? planId;
-            var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, request.WeekStartDate, request.Diagnostics, runId, planId);
+            var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, request.WeekStartDate, Diagnostics: request.Diagnostics, PipelineRunId: runId, ContentGenerationPlanId: planId);
             var timeline = await timelineOrchestrator.RunAsync(intelligenceRequest, planId, ct);
             var media = await finalMediaOrchestrator.RunAsync(intelligenceRequest, planId, ct);
             return Results.Ok(new { timelineCompositionPackage = timeline, finalMediaPackage = media });
