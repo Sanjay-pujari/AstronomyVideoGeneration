@@ -50,4 +50,13 @@ public sealed class StellariumOptions
 
     [Range(0, 120)]
     public double CinematicWaitBeforeScreenshotSeconds { get; set; } = 8;
+
+    [Range(0, 120)]
+    public double WeeklyApiLaunchWarmupSeconds { get; set; } = 8;
+
+    [Range(0, 120)]
+    public double WeeklyCameraSettleSeconds { get; set; } = 3;
+
+    [Range(0, 120)]
+    public double WeeklyPreScreenshotWaitSeconds { get; set; } = 2;
 }

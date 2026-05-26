@@ -1,11 +1,18 @@
 using System.Text;
 using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
+public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> options) : IWeeklyStellariumScriptWriter
 {
+    private const double DefaultWarmupSeconds = 8;
+    private const double DefaultCameraSettleSeconds = 3;
+    private const double DefaultPreScreenshotWaitSeconds = 2;
+    private readonly StellariumOptions _options = options.Value;
+
     public async Task<WeeklyStellariumScriptPackage> WriteAsync(WeeklyCinematicShotPackage cinematicShotPackage, string workingDirectoryRoot, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(cinematicShotPackage);
@@ -48,9 +55,16 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
             var isValid = shotIssues.Count == 0;
             if (isValid)
             {
+                var warmupSeconds = _options.WeeklyApiLaunchWarmupSeconds <= 0 ? DefaultWarmupSeconds : _options.WeeklyApiLaunchWarmupSeconds;
+                var cameraSettleSeconds = _options.WeeklyCameraSettleSeconds <= 0 ? DefaultCameraSettleSeconds : _options.WeeklyCameraSettleSeconds;
+                var preScreenshotWaitSeconds = _options.WeeklyPreScreenshotWaitSeconds <= 0 ? DefaultPreScreenshotWaitSeconds : _options.WeeklyPreScreenshotWaitSeconds;
                 var lines = new List<string>
                 {
                     "// WeeklySkyForecast v2 SSC",
+                    "// ExecutionMode: ApiLaunched",
+                    $"// WarmupSeconds: {warmupSeconds:0.###}",
+                    $"// CameraSettleSeconds: {cameraSettleSeconds:0.###}",
+                    $"// PreScreenshotWaitSeconds: {preScreenshotWaitSeconds:0.###}",
                     $"// Shot: {shot.ShotCode}",
                     $"// Type: {shot.ShotType}",
                     $"// Duration: {shot.DurationSeconds}s",
@@ -59,8 +73,8 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
                     string.Empty
                 };
 
-                lines.AddRange(shot.PlannedSscCommands);
-                lines.Add("core.wait(1.0);");
+                lines.AddRange(ApplyApiStartupStabilization(shot.PlannedSscCommands, warmupSeconds, cameraSettleSeconds));
+                lines.Add($"core.wait({preScreenshotWaitSeconds:0.###});");
                 lines.Add($"core.screenshot(\"{EscapeForSscDoubleQuotedString(shot.ShotCode)}\", false, \"{EscapeForSscDoubleQuotedString(sceneFolderSscPath)}\", true, \"png\");");
                 lines.Add("core.wait(2.0);");
                 lines.Add("core.quitStellarium();");
@@ -122,5 +136,44 @@ public sealed class WeeklyStellariumScriptWriter : IWeeklyStellariumScriptWriter
         if (string.IsNullOrWhiteSpace(command)) return false;
         return command.Contains("landscapeMgr.", StringComparison.Ordinal)
             || command.Contains("labelMgr.", StringComparison.Ordinal);
+    }
+
+    private static List<string> ApplyApiStartupStabilization(IReadOnlyList<string> plannedCommands, double warmupSeconds, double cameraSettleSeconds)
+    {
+        var adjusted = new List<string>(plannedCommands.Count + 8);
+        var warmupInserted = false;
+        var dateLocationSettleInserted = false;
+        var cameraSettleInserted = false;
+        var zoomSettleInserted = false;
+
+        foreach (var command in plannedCommands)
+        {
+            adjusted.Add(command);
+            if (!warmupInserted && command.Contains("core.clear(\"natural\")", StringComparison.OrdinalIgnoreCase))
+            {
+                adjusted.Add($"core.wait({warmupSeconds:0.###});");
+                warmupInserted = true;
+            }
+
+            if (!dateLocationSettleInserted && command.Contains("core.setObserverLocation(", StringComparison.OrdinalIgnoreCase))
+            {
+                adjusted.Add("core.wait(2.0);");
+                dateLocationSettleInserted = true;
+            }
+
+            if (!cameraSettleInserted && (command.Contains("moveToAltAzi(", StringComparison.OrdinalIgnoreCase) || command.Contains("moveToSelectedObject(", StringComparison.OrdinalIgnoreCase)))
+            {
+                adjusted.Add($"core.wait({cameraSettleSeconds:0.###});");
+                cameraSettleInserted = true;
+            }
+
+            if (!zoomSettleInserted && command.Contains("zoomTo(", StringComparison.OrdinalIgnoreCase))
+            {
+                adjusted.Add("core.wait(4.0);");
+                zoomSettleInserted = true;
+            }
+        }
+
+        return adjusted;
     }
 }
