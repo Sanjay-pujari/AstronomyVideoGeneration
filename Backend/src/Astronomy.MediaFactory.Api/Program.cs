@@ -718,7 +718,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklySkyForecastVisualAssetGenerationService visualAssetService, IContentPlanningService planning, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, IWeeklySscSceneBuilder sscSceneBuilder, CancellationToken ct) =>
 {
     try
     {
@@ -794,62 +794,92 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 contentPlanId
             });
 
-        var visualRequest = new WeeklySkyForecastProductionRequest(
-            request.ContentCategoryCode,
-            request.Language,
-            request.RegionId,
-            request.RegionName,
-            request.ScheduledUtc,
-            weekStartDate,
-            weekEndDate,
-            GenerateNarration: true,
-            GenerateSscScripts: true,
-            CaptureStellariumScenes: true,
-            DryRun: false,
-            Diagnostics: false,
-            OverwriteExisting: true);
-        if (visualRequest.WeekStartDate == DateOnly.MinValue ||
-            visualRequest.WeekEndDate == DateOnly.MinValue)
+        var scenePlansDirectory = Path.Combine(root, "scene-plans");
+        var compositionDirectory = Path.Combine(root, "composition");
+        var scriptsDirectory = Path.Combine(root, "stellarium", "scripts");
+        var scenesDirectory = Path.Combine(root, "stellarium", "scenes");
+        Directory.CreateDirectory(scenePlansDirectory);
+        Directory.CreateDirectory(compositionDirectory);
+        Directory.CreateDirectory(scriptsDirectory);
+        Directory.CreateDirectory(scenesDirectory);
+
+        var weeklyScenePlan = weeklySkyfieldContext.HybridScenePlanPackage;
+        if (weeklyScenePlan is null)
+            throw new InvalidOperationException("Weekly scene plan package was not generated.");
+
+        var scenePlanPath = Path.Combine(scenePlansDirectory, "weekly-scene-plan.json");
+        await File.WriteAllTextAsync(scenePlanPath, JsonSerializer.Serialize(weeklyScenePlan, new JsonSerializerOptions { WriteIndented = true }), ct);
+
+        var shots = weeklyScenePlan.ScenePlans
+            .OrderBy(x => x.SceneOrder)
+            .Select((scene, idx) => new WeeklyCinematicShot(
+                scene.SceneCode,
+                scene.SceneType,
+                scene.RenderIntent,
+                scene.ObjectCodes,
+                scene.ObjectCodes.FirstOrDefault(),
+                scene.TargetDate,
+                TimeOnly.FromDateTime((scene.BestTimeUtc ?? request.ScheduledUtc.UtcDateTime).ToUniversalTime()),
+                scene.DurationSeconds,
+                "W",
+                scene.SceneType.Contains("wide", StringComparison.OrdinalIgnoreCase) ? 82d : 45d,
+                scene.SceneType.Contains("wide", StringComparison.OrdinalIgnoreCase) ? 82d : 45d,
+                scene.SceneType.Contains("wide", StringComparison.OrdinalIgnoreCase) ? 82d : 45d,
+                new WeeklyCameraMovementPlan("static", scene.CinematicMotion, "none", null, null, false),
+                new WeeklyShotTransitionPlan(scene.TransitionIn, scene.TransitionIn, "in"),
+                new WeeklyShotTransitionPlan(scene.TransitionOut, scene.TransitionOut, "out"),
+                scene.CinematicMotion,
+                Path.Combine(scenesDirectory, $"{scene.SceneCode}.png"),
+                string.Empty,
+                Path.Combine(scriptsDirectory, $"{scene.SceneCode}.ssc"),
+                [],
+                new WeeklyShotNarrationSync(scene.SceneCode, idx * 6, (idx + 1) * 6, scene.VisualStrategy, scene.ObjectCodes.FirstOrDefault(), [])))
+            .ToList();
+
+        var shotTimeline = new WeeklyCinematicShotPackage(true, "weekly-v2", pipelineRunId.ToString(), weeklyScenePlan.ScenePlans.Count, shots.Count, shots.Sum(x => x.DurationSeconds),
+            shots.Select(s => new WeeklyCinematicSceneSequence(s.ShotCode, s.ShotCode, s.ShotType, s.ShotCode, s.DurationSeconds, [s], s.ShotPurpose, s.TransitionIn, s.TransitionOut)).ToList(), [], [], []);
+        var shotTimelinePath = Path.Combine(scenePlansDirectory, "weekly-cinematic-shot-timeline.json");
+        await File.WriteAllTextAsync(shotTimelinePath, JsonSerializer.Serialize(shotTimeline, new JsonSerializerOptions { WriteIndented = true }), ct);
+
+        var compositionPackage = sceneComposer.Compose(shotTimeline, weeklySkyfieldContext.EventExtractionResult ?? throw new InvalidOperationException("Missing event extraction result."), root);
+        var compositionPaths = new List<string>();
+        var scriptPaths = new List<string>();
+        foreach (var shot in shots)
         {
-            throw new InvalidOperationException("Internal bug: weekly date range lost before visual generation.");
+            var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
+            var compositionPath = Path.Combine(compositionDirectory, $"{shot.ShotCode}.composition.json");
+            await File.WriteAllTextAsync(compositionPath, JsonSerializer.Serialize(composition, new JsonSerializerOptions { WriteIndented = true }), ct);
+            compositionPaths.Add(compositionPath);
+
+            var commands = sscSceneBuilder.Build(shot with { ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png") }, composition);
+            var scriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc");
+            var header = string.Join(Environment.NewLine, new[] {
+                "// Source: WeeklyScenePlan",
+                $"// CompositionPath: {compositionPath.Replace("\\", "/")}",
+                $"// ScreenshotDirectory: {scenesDirectory.Replace("\\", "/")}",
+                string.Empty
+            });
+            await File.WriteAllTextAsync(scriptPath, header + string.Join(Environment.NewLine, commands), ct);
+            scriptPaths.Add(scriptPath);
         }
 
-        app.Logger.LogInformation("Using existing weekly Skyfield context for visual scene generation");
-        var visualAssets = await visualAssetService.GenerateAsync(
-            contentPlanId.Value,
-            new WeeklySkyForecastVisualAssetsGenerateRequest(
-                DryRun: false,
-                OverwriteExisting: true,
-                CaptureStellariumScenes: true,
-                Diagnostics: request.Diagnostics,
-                AllowExtraScenes: true),
-            visualRequest,
-            ct);
-
         var waitTimeout = TimeSpan.FromSeconds(Math.Clamp(request.StellariumTimeoutSeconds ?? 90, 30, 600));
-        foreach (var script in visualAssets.Scripts)
+        var screenshots = new List<string>();
+        foreach (var shot in shots)
         {
+            var expectedImagePath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png");
             var started = DateTime.UtcNow;
             while (DateTime.UtcNow - started < waitTimeout)
             {
-                if (File.Exists(script.ExpectedImagePath))
-                {
-                    var len = new FileInfo(script.ExpectedImagePath).Length;
-                    if (len > 10 * 1024)
-                        break;
-                }
-
+                if (File.Exists(expectedImagePath) && new FileInfo(expectedImagePath).Length > 10 * 1024)
+                    break;
                 await Task.Delay(500, ct);
             }
+            if (File.Exists(expectedImagePath) && new FileInfo(expectedImagePath).Length > 10 * 1024)
+                screenshots.Add(expectedImagePath);
         }
 
-        var screenshots = visualAssets.Scripts
-            .Select(x => x.ExpectedImagePath)
-            .Where(path => File.Exists(path) && new FileInfo(path).Length > 10 * 1024)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var warnings = weeklySkyfieldContext.Warnings.Concat(visualAssets.Warnings).Concat(visualAssets.Errors).Distinct().ToList();
+        var warnings = weeklySkyfieldContext.Warnings.Concat(compositionPackage.Errors).Distinct().ToList();
 
         var narrationManifestPath = Path.Combine(root, "debug", "weekly-scenes-manifest.json");
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
@@ -860,7 +890,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 narrationPlanPath,
                 narrationTextPath,
                 visualRequirementsPath
-            }
+            },
+            scenePlanPath,
+            shotTimelinePath,
+            compositionPaths,
+            sscScriptPaths = scriptPaths,
+            screenshotPaths = screenshots
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
 
         var output = new WeeklySkyForecastV2GenerateWeeklyScenesResponse(
@@ -868,9 +903,9 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             root,
             skyfieldResponsePath,
             storyBeatsPath,
-            visualAssets.VisualAssetManifestPath,
-            visualAssets.ScriptCount,
-            visualAssets.ScriptCount,
+            narrationManifestPath,
+            scriptPaths.Count,
+            scriptPaths.Count,
             screenshots,
             warnings);
 
