@@ -21,6 +21,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
     private readonly ObservationOptions _observationOptions;
     private readonly ILogger<StellariumVisualGenerationService> _logger;
     private readonly IObservationTimeService _observationTimeService;
+    private readonly WeeklyAstronomicalCompositionEngine _compositionEngine = new();
 
     public StellariumVisualGenerationService(
         IOptions<StellariumOptions> options,
@@ -85,9 +86,11 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 scene.ObservationContext.AzimuthDegrees,
                 scene.ObservationContext.DirectionLabel);
 
-            var script = _scriptBuilder.BuildSceneScript(scene);
+            var composition = _compositionEngine.Compose(scene.ObservationContext, context.SceneObservationContexts);
+            var script = _scriptBuilder.BuildSceneScript(scene, composition);
             await File.WriteAllTextAsync(scene.ScriptPath, script, cancellationToken);
-            await WriteSscContextAsync(scene, cancellationToken);
+            await WriteSscContextAsync(scene, composition, cancellationToken);
+            await WriteCompositionDiagnosticsAsync(scene, composition, cancellationToken);
 
             var sceneMetadata = JsonSerializer.Serialize(scene, new JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(scene.MetadataPath, sceneMetadata, cancellationToken);
@@ -140,15 +143,10 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         return scenes.Select(s => s.OutputImagePath).ToList();
     }
 
-    private static async Task WriteSscContextAsync(StellariumScene scene, CancellationToken cancellationToken)
+    private static async Task WriteSscContextAsync(StellariumScene scene, WeeklyAstronomicalCompositionResult composition, CancellationToken cancellationToken)
     {
         var contextPath = Path.ChangeExtension(scene.ScriptPath, ".generated-ssc-context.json");
-        var isGroupingScene = string.Equals(scene.ObservationContext.SceneId, "s3_multi_object_grouping_01", StringComparison.OrdinalIgnoreCase)
-            || scene.ObservationContext.SceneType.Contains("Grouping", StringComparison.OrdinalIgnoreCase)
-            || scene.ObservationContext.SceneType.Contains("Conjunction", StringComparison.OrdinalIgnoreCase);
-        var targetObjects = isGroupingScene
-            ? new[] { "Moon", "Venus", "Jupiter", "Saturn" }
-            : Array.Empty<string>();
+        var targetObjects = composition.TargetObjects.Select(t => t.ObjectName).ToArray();
 
         var payload = new
         {
@@ -161,7 +159,10 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             scene.ObservationContext.DirectionLabel,
             scene.ObservationContext.IsVisible,
             targetObjects,
-            renderMode = isGroupingScene ? "Grouping" : "Unknown",
+            renderMode = composition.RenderMode,
+            centerAzimuth = composition.CenterAzimuth,
+            centerAltitude = composition.CenterAltitude,
+            computedFov = composition.RecommendedFov,
             SscFilePath = scene.ScriptPath
         };
         await File.WriteAllTextAsync(contextPath, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
@@ -582,6 +583,26 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         var chars = value.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
         var slug = string.Join('-', new string(chars).Split('-', StringSplitOptions.RemoveEmptyEntries));
         return string.IsNullOrWhiteSpace(slug) ? "target" : slug;
+    }
+
+
+    private static async Task WriteCompositionDiagnosticsAsync(StellariumScene scene, WeeklyAstronomicalCompositionResult composition, CancellationToken cancellationToken)
+    {
+        var compositionPath = Path.ChangeExtension(scene.ScriptPath, ".composition.json");
+        var payload = new
+        {
+            shotCode = Path.GetFileNameWithoutExtension(scene.ScriptPath),
+            renderMode = composition.RenderMode,
+            targetObjects = composition.TargetObjects,
+            includedObjects = composition.IncludedObjects,
+            excludedObjects = composition.ExcludedObjects,
+            centerAzimuth = composition.CenterAzimuth,
+            centerAltitude = composition.CenterAltitude,
+            computedFov = composition.RecommendedFov,
+            angularSpread = composition.AngularSpread,
+            primaryObject = composition.PrimaryObject
+        };
+        await File.WriteAllTextAsync(compositionPath, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     private sealed record SceneDefinition(string Slug, string Title, string Caption, string TargetObject, string Type);

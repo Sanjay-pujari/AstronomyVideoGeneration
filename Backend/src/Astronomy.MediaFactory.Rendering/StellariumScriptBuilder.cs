@@ -6,19 +6,11 @@ namespace Astronomy.MediaFactory.Rendering;
 public sealed class StellariumScriptBuilder
 {
 
-    private static readonly (string Name, string Title, double Fov)[] GroupingTargets =
-    [
-        ("Moon", "Moon — Brightest Target", 8d),
-        ("Venus", "Venus — Evening Planet", 10d),
-        ("Jupiter", "Jupiter — Giant Planet", 10d),
-        ("Saturn", "Saturn — Ringed Planet", 12d)
-    ];
-
     private readonly StellariumOptions _options;
 
     public StellariumScriptBuilder(StellariumOptions options) => _options = options;
 
-    public string BuildSceneScript(StellariumScene scene)
+    public string BuildSceneScript(StellariumScene scene, WeeklyAstronomicalCompositionResult? composition = null)
     {
         var utcDate = scene.ObservationContext.UtcObservationTime.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
         var screenshotPrefix = Path.GetFileNameWithoutExtension(scene.OutputImagePath);
@@ -35,7 +27,7 @@ public sealed class StellariumScriptBuilder
 
         if (IsGroupingScene(scene))
         {
-            return BuildGroupingScript(scene, utcDate, screenshotPrefix, screenshotDir, escapedLocationName);
+            return BuildGroupingScript(scene, utcDate, screenshotPrefix, screenshotDir, escapedLocationName, composition);
         }
 
         return isOverviewScene
@@ -207,10 +199,16 @@ core.quitStellarium();
            || scene.ObservationContext.SceneType.Contains("Grouping", StringComparison.OrdinalIgnoreCase)
            || scene.ObservationContext.SceneType.Contains("Conjunction", StringComparison.OrdinalIgnoreCase);
 
-    private static string BuildGroupingScript(StellariumScene scene, string utcDate, string screenshotPrefix, string screenshotDir, string escapedLocationName)
+    private static string BuildGroupingScript(StellariumScene scene, string utcDate, string screenshotPrefix, string screenshotDir, string escapedLocationName, WeeklyAstronomicalCompositionResult? composition)
     {
-        var labels = string.Join("\n", GroupingTargets.Select(target => $"LabelMgr.labelObject(\"{target.Name}\", \"{target.Title}\", true, 24);"));
-        var highlights = string.Join("\n", GroupingTargets.Select(target => $"HighlightMgr.setHighlighted(\"{target.Name}\", true);"));
+        var targets = composition?.IncludedObjects?.Count > 0 ? composition.IncludedObjects : ["Moon", "Venus", "Jupiter", "Saturn"];
+        var labels = string.Join("\n", targets.Select(target => $"LabelMgr.labelObject(\"{target}\", \"{target}\", true, 24);"));
+        var highlights = string.Join("\n", targets.Select(target => $"HighlightMgr.setHighlighted(\"{target}\", true);"));
+        var targetArray = string.Join(", ", targets.Select(t => $"\"{t}\""));
+        var centerAz = composition?.CenterAzimuth ?? scene.ObservationContext.AzimuthDegrees ?? 270d;
+        var centerAlt = composition?.CenterAltitude ?? scene.ObservationContext.AltitudeDegrees ?? 35d;
+        var fov = composition?.RecommendedFov ?? 70d;
+        var primary = composition?.PrimaryObject ?? targets.First();
 
         return $$"""
 core.clear("natural");
@@ -233,9 +231,16 @@ HighlightMgr.setMarkersSize(8);
 {{labels}}
 {{highlights}}
 
-core.selectObjectByName("Moon", true);
-core.moveToSelectedObject(3.0);
-StelMovementMgr.zoomTo(70, 3);
+var targets = [{{targetArray}}];
+for (var i = 0; i < targets.length; i++) {
+    try { HighlightMgr.addPointRaDec(targets[i], true); } catch (e) { }
+}
+
+core.moveToAltAzi({{centerAz.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{centerAlt.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 3.0);
+core.wait(1.0);
+core.selectObjectByName("{{primary}}", true);
+core.moveToSelectedObject(2.0);
+StelMovementMgr.zoomTo({{fov.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 3);
 core.wait(3);
 
 core.screenshot("{{screenshotPrefix}}", false, "{{screenshotDir}}", true, "png");
