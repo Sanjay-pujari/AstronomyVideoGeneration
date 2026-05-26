@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
-using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -14,7 +13,6 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
     ICategoryOutputPathResolver pathResolver,
     IStellariumScriptGenerator scriptGenerator,
     IStellariumImageCaptureExecutor captureExecutor,
-    IOptions<StellariumOptions> stellariumOptions,
     ILogger<WeeklySkyForecastVisualAssetGenerationService> logger) : IWeeklySkyForecastVisualAssetGenerationService
 {
     public async Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, WeeklySkyForecastProductionRequest? productionRequest, CancellationToken cancellationToken)
@@ -51,8 +49,8 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
         if (!request.AllowExtraScenes && weeklyScenePlan.Scenes.Count > 5)
             throw new InvalidOperationException($"WeeklySkyForecast visual planning generated {weeklyScenePlan.Scenes.Count} scenes. Maximum allowed is 5 unless allowExtraScenes=true.");
         var outputPaths = pathResolver.Resolve("WeeklySkyForecast", context.WeekStartDate, context.RegionId, contentGenerationPlanId);
-        var canonicalSscScriptsDirectory = Path.Combine(stellariumOptions.Value.ScriptsDirectory, "content-plans", contentGenerationPlanId.ToString());
-        var canonicalStellariumCapturesDirectory = Path.Combine(stellariumOptions.Value.CaptureDirectory, "content-plans", contentGenerationPlanId.ToString(), "stellarium-scenes");
+        var canonicalSscScriptsDirectory = outputPaths.StellariumScriptsDirectory;
+        var canonicalStellariumCapturesDirectory = outputPaths.StellariumScenesDirectory;
         Directory.CreateDirectory(canonicalSscScriptsDirectory);
         Directory.CreateDirectory(canonicalStellariumCapturesDirectory);
         Directory.CreateDirectory(outputPaths.ManifestsDirectory);
