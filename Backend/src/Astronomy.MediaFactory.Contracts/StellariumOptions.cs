@@ -1,7 +1,12 @@
 using System.ComponentModel.DataAnnotations;
-using Astronomy.MediaFactory.Core;
-
 namespace Astronomy.MediaFactory.Contracts;
+
+public enum SceneGenerationMode
+{
+    Hybrid = 0,
+    ObjectFocused = 1,
+    CompositionFocused = 2
+}
 
 public sealed class StellariumOptions
 {

@@ -67,14 +67,14 @@ public sealed class DailySkyGuideStellariumScenePlanner(IOptions<StellariumOptio
     private List<StellariumSceneCaptureItem> BuildCompositionScenes(ContentGenerationPlan plan, AstronomyVisibilityResult visibilityResult, List<string> warnings)
     {
         var visible = visibilityResult.VisibleObjects.Where(x => x.Visible).ToList();
-        var groups = visible.GroupBy(x => NormalizeDirection(x.ViewingDirection)).Take(_options.MaxCompositionScenes).ToList();
+        var groups = visible.GroupBy(x => NormalizeDirection(GetDirectionLabel(x))).Take(_options.MaxCompositionScenes).ToList();
         var list = new List<StellariumSceneCaptureItem>();
         var order = 1;
         foreach (var g in groups)
         {
             var objects = g.Select(x => x.ObjectName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var fov = Math.Clamp(35 + (objects.Length * 8), 40, 110);
-            var sample = g.OrderByDescending(x => x.AltitudeDegrees ?? 0).First();
+            var sample = g.OrderByDescending(x => x.AltitudeScore).First();
             var code = $"{plan.ContentCategoryCode}_Composition_{NormalizeDirection(g.Key)}_{order:00}";
             list.Add(new(code, "Composition", $"{g.Key} sky composition", sample.ObjectCode, sample.ObjectName, visibilityResult.BestViewingStartUtc.AddMinutes(order * 10), "WideComposition", fov,
                 true, true, true, false, false, order == 1 ? "ThumbnailCandidate" : "SupportingSkyMap", order, new()
@@ -105,6 +105,21 @@ public sealed class DailySkyGuideStellariumScenePlanner(IOptions<StellariumOptio
         File.WriteAllText(reportPath, System.Text.Json.JsonSerializer.Serialize(report));
         foreach (var item in list) item.Metadata?["MetadataPath"] = reportPath;
         return list;
+    }
+
+    private static string GetDirectionLabel(VisibleCelestialObjectResult item)
+    {
+        if (string.IsNullOrWhiteSpace(item.Reason))
+        {
+            return "west";
+        }
+
+        var reason = item.Reason;
+        if (reason.Contains("east", StringComparison.OrdinalIgnoreCase)) return "east";
+        if (reason.Contains("west", StringComparison.OrdinalIgnoreCase)) return "west";
+        if (reason.Contains("north", StringComparison.OrdinalIgnoreCase)) return "north";
+        if (reason.Contains("south", StringComparison.OrdinalIgnoreCase)) return "south";
+        return "west";
     }
 
     private static string NormalizeDirection(string? direction)
