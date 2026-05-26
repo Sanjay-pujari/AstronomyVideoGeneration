@@ -250,9 +250,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 _logger.LogInformation("Stellarium timeline [{SceneId}] validation start", scene.SceneId);
                 var scriptContent = await File.ReadAllTextAsync(scene.ScriptPath, cancellationToken);
                 var hasScreenshot = IsExecutableScreenshotScript(scriptContent);
-                var hasQuit = scriptContent.Contains("core.quitStellarium(", StringComparison.OrdinalIgnoreCase);
-                _logger.LogInformation("SSC validation diagnostics for {SceneId}: ScriptLength={ScriptLength}, ScreenshotCommandFound={ScreenshotCommandFound}, QuitCommandFound={QuitCommandFound}, NormalizedValidationResult={NormalizedValidationResult}", scene.SceneId, scriptContent.Length, hasScreenshot, hasQuit, hasScreenshot);
-                _logger.LogInformation("SSC validation preview for {SceneId}: First300={First300}; Last300={Last300}", scene.SceneId, scriptContent[..Math.Min(300, scriptContent.Length)], scriptContent[Math.Max(0, scriptContent.Length-300)..]);
+                _logger.LogInformation("SSC validation diagnostics for {SceneId}: ScriptLength={ScriptLength}, ScreenshotCommandFound={ScreenshotCommandFound}", scene.SceneId, scriptContent.Length, hasScreenshot);
 
                 if (!hasScreenshot)
                 {
@@ -261,7 +259,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
                 }
 
                 _logger.LogInformation("Stellarium timeline [{SceneId}] validation passed", scene.SceneId);
-                _logger.LogInformation("Launching Stellarium screenshot capture");
+                _logger.LogInformation("Launching Stellarium screenshot capture for script {ScriptPath}", scene.ScriptPath);
                 process = Process.Start(new ProcessStartInfo
                 {
                     FileName = _options.ExecutablePath,
@@ -381,9 +379,6 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         return false;
     }
 
-    private static string NormalizeForValidation(string content)
-        => content.Replace("\r", string.Empty).Replace("\n", string.Empty).Replace(" ", string.Empty).ToLowerInvariant();
-
     private static bool IsExecutableScreenshotScript(string content)
     {
         if (string.IsNullOrWhiteSpace(content))
@@ -391,8 +386,7 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             return false;
         }
 
-        var normalized = NormalizeForValidation(content);
-        return normalized.Contains("core.screenshot(");
+        return System.Text.RegularExpressions.Regex.IsMatch(content, @"core\s*\.\s*screenshot\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
     private static List<StellariumScene> ComposeScenes(AstronomyContext context, string scriptsDirectory, string capturesDirectory, ObservationOptions observationOptions, IObservationTimeService observationTimeService)
