@@ -144,14 +144,14 @@ public sealed partial class ContentPlanningGeneratePlanTests
     {
         var packager = new DailySkyGuideVisualAssetPackager(Options.Create(new StellariumOptions { CaptureDirectory = Path.GetTempPath() }));
         var schedulerOptions = Options.Create(new Astronomy.MediaFactory.Contracts.SchedulerOptions());
-        var contextBuilder = new DailySkyGuideContextBuilder(db, new RegionResolutionService(schedulerOptions), new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())), new StellariumScenePlannerResolver([new DailySkyGuideStellariumScenePlanner()]));
+        var contextBuilder = new DailySkyGuideContextBuilder(db, new RegionResolutionService(schedulerOptions), new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())), new StellariumScenePlannerResolver([new DailySkyGuideStellariumScenePlanner(Options.Create(new StellariumOptions()))]));
         return new(
             db,
             new NoopVarietyGuard(),
             new ContentCategoryPipelineStrategyResolver([new DailySkyGuidePipelineStrategy(packager, contextBuilder)]),
             contextBuilder,
             new AstronomyVisibilityService(db, new FakeSkyfieldVisibilityClient(), Options.Create(new SkyfieldSidecarOptions())),
-            new StellariumScenePlannerResolver([new DailySkyGuideStellariumScenePlanner()]));
+            new StellariumScenePlannerResolver([new DailySkyGuideStellariumScenePlanner(Options.Create(new StellariumOptions()))]));
     }
 
     private static void SeedRequired(MediaFactoryDbContext db)
