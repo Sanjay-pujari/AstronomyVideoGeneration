@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
