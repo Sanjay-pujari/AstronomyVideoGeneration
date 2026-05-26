@@ -1190,11 +1190,20 @@ public sealed record WeeklySkyForecastV2PhaseDiagnosticsRequest(
     string? TestMode = null,
     int? StellariumTimeoutSeconds = null,
     int? MaxScriptCount = null,
-    bool ExecuteAllScripts = false,
-    bool ConfirmFullBatch = false,
-    bool ContinueOnFailure = true,
+    bool? ExecuteAllScripts = null,
+    bool? ConfirmFullBatch = null,
+    bool? ContinueOnFailure = null,
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
+
+public enum ScreenshotTestMode
+{
+    All,
+    Single,
+    Grouping,
+    Conjunction,
+    Panorama
+}
 
 public sealed record WeeklyStellariumScreenshotScriptResult(
     string ShotCode,

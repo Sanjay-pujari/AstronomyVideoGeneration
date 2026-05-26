@@ -60,8 +60,8 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         logger.LogInformation("selected shot codes: {ShotCodes}", string.Join(", ", selected.Select(s => s.ShotCode)));
         if (selected.Count == 0)
         {
-            errors.Add("No scripts selected for execution.");
-            return await WriteResultAsync(false, workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds, null, null, ignoredDiagnosticScripts);
+            warnings.Add("No shots matched testMode filter.");
+            return await WriteResultAsync(true, workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds, null, null, ignoredDiagnosticScripts);
         }
 
         var selectedScript = selected[0];
@@ -235,7 +235,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             return [selected];
         }
 
-        var ordered = FilterByTestMode(executableScripts.OrderBy(s => s.ShotOrder).ToList(), testMode);
+        var ordered = FilterByTestMode(executableScripts.OrderBy(s => s.ShotOrder).ToList(), testMode, warnings);
         if (executeAllScripts)
         {
             if (!confirmFullBatch)
@@ -254,18 +254,26 @@ public sealed class WeeklyStellariumScreenshotGenerator(
     }
 
     
-    private static List<WeeklyStellariumScriptInfo> FilterByTestMode(List<WeeklyStellariumScriptInfo> ordered, string? testMode)
+    private static List<WeeklyStellariumScriptInfo> FilterByTestMode(List<WeeklyStellariumScriptInfo>? ordered, string? testMode, List<string> warnings)
     {
-        if (string.IsNullOrWhiteSpace(testMode) || testMode.Equals("All", StringComparison.OrdinalIgnoreCase)) return ordered;
+        if (ordered is null || ordered.Count == 0) return [];
+        if (string.IsNullOrWhiteSpace(testMode) || testMode.Equals(nameof(ScreenshotTestMode.All), StringComparison.OrdinalIgnoreCase)) return ordered;
+        if (!Enum.TryParse<ScreenshotTestMode>(testMode, ignoreCase: true, out var parsedTestMode))
+        {
+            warnings.Add($"Invalid testMode '{testMode}' supplied. Falling back to '{ScreenshotTestMode.All}'.");
+            parsedTestMode = ScreenshotTestMode.All;
+        }
+        if (parsedTestMode == ScreenshotTestMode.All) return ordered;
         return ordered.Where(s =>
         {
             var content = File.Exists(s.ScriptPath) ? File.ReadAllText(s.ScriptPath) : string.Empty;
             var renderMode = ReadHeaderString(content, "RenderMode") ?? ReadHeaderString(content, "Type") ?? s.ShotCode;
-            var targetCount = ReadHeaderString(content, "TargetObjects")?.Split(',', StringSplitOptions.RemoveEmptyEntries).Length ?? (s.ShotCode.Contains("group", StringComparison.OrdinalIgnoreCase) || s.ShotCode.Contains("conjunction", StringComparison.OrdinalIgnoreCase) ? 2 : 1);
-            if (testMode.Equals("Single", StringComparison.OrdinalIgnoreCase)) return targetCount == 1;
-            if (testMode.Equals("Grouping", StringComparison.OrdinalIgnoreCase)) return renderMode.Contains("group", StringComparison.OrdinalIgnoreCase);
-            if (testMode.Equals("Conjunction", StringComparison.OrdinalIgnoreCase)) return renderMode.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
-            if (testMode.Equals("Panorama", StringComparison.OrdinalIgnoreCase)) return renderMode.Contains("panorama", StringComparison.OrdinalIgnoreCase) || renderMode.Contains("wide", StringComparison.OrdinalIgnoreCase);
+            var shotCode = s.ShotCode ?? string.Empty;
+            var targetCount = ReadHeaderString(content, "TargetObjects")?.Split(',', StringSplitOptions.RemoveEmptyEntries).Length ?? (shotCode.Contains("group", StringComparison.OrdinalIgnoreCase) || shotCode.Contains("conjunction", StringComparison.OrdinalIgnoreCase) ? 2 : 1);
+            if (parsedTestMode == ScreenshotTestMode.Single) return targetCount == 1;
+            if (parsedTestMode == ScreenshotTestMode.Grouping) return renderMode.Contains("group", StringComparison.OrdinalIgnoreCase);
+            if (parsedTestMode == ScreenshotTestMode.Conjunction) return renderMode.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
+            if (parsedTestMode == ScreenshotTestMode.Panorama) return renderMode.Contains("panorama", StringComparison.OrdinalIgnoreCase) || renderMode.Contains("wide", StringComparison.OrdinalIgnoreCase);
             return true;
         }).ToList();
     }

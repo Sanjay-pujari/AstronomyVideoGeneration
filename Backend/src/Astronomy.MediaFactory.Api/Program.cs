@@ -401,9 +401,35 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             return cachedStellariumScripts;
         }
 
+        var selectedTestModeRaw = string.IsNullOrWhiteSpace(request.TestMode) ? nameof(ScreenshotTestMode.All) : request.TestMode;
+        var executeAllScripts = request.ExecuteAllScripts ?? false;
+        var confirmFullBatch = request.ConfirmFullBatch ?? false;
+        var continueOnFailure = request.ContinueOnFailure ?? true;
+        var maxScriptCount = request.MaxScriptCount ?? 3;
+        var warnings = new List<string>();
+        if (!Enum.TryParse<ScreenshotTestMode>(selectedTestModeRaw, true, out var parsedTestMode))
+        {
+            parsedTestMode = ScreenshotTestMode.All;
+            warnings.Add($"Invalid testMode '{selectedTestModeRaw}' supplied. Falling back to '{ScreenshotTestMode.All}'.");
+        }
+
+        if (root is not null)
+        {
+            var diagSnapshotPath = Path.Combine(root, "debug", "diagnostics-request.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(diagSnapshotPath)!);
+            await File.WriteAllTextAsync(diagSnapshotPath, JsonSerializer.Serialize(new
+            {
+                request,
+                parsedDefaults = new { selectedTestMode = parsedTestMode.ToString(), executeAllScripts, confirmFullBatch, continueOnFailure, maxScriptCount },
+                selectedPhase = phase.ToString()
+            }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        }
+
         async Task<object?> ExecuteStellariumScreenshotsAsync(WeeklyStellariumScriptPackage shots)
         {
-            return await stellariumScreenshotGenerator.GenerateAsync(root!, shots, request.ExecuteShotCode, request.TestMode, request.MaxScriptCount, request.ExecuteAllScripts, request.ConfirmFullBatch, request.ContinueOnFailure, request.StellariumTimeoutSeconds ?? 90, ct);
+            var totalShotsAvailable = shots?.Scripts?.Count ?? 0;
+            Console.WriteLine($"entering diagnostics phase; request.phase={request.Phase}; request.testMode={parsedTestMode}; totalShotsAvailable={totalShotsAvailable}");
+            return await stellariumScreenshotGenerator.GenerateAsync(root!, shots, request.ExecuteShotCode, parsedTestMode.ToString(), maxScriptCount, executeAllScripts, confirmFullBatch, continueOnFailure, request.StellariumTimeoutSeconds ?? 90, ct);
         }
         async Task<object?> ExecuteStellariumSmokeTestAsync()
         {
@@ -420,8 +446,15 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             return await stellariumScriptExecutor.ExecuteAsync(root!, selected.ScriptPath, selected.ExpectedScreenshotPath, request.StellariumTimeoutSeconds ?? 45, ct);
         }
 
-        object result = phase switch
+        Console.WriteLine("entering diagnostics phase");
+        Console.WriteLine($"phase selected={phase}");
+        Console.WriteLine($"request values: executeShotCode={request.ExecuteShotCode}, testMode={parsedTestMode}, executeAllScripts={executeAllScripts}, confirmFullBatch={confirmFullBatch}, continueOnFailure={continueOnFailure}, maxScriptCount={maxScriptCount}");
+        Console.WriteLine("service execution start");
+        object result;
+        try
         {
+            result = phase switch
+            {
             WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents => new
             {
                 response.EventExtractionResult,
@@ -494,11 +527,11 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             {
                 requestedPhase = phase.ToString(),
                 executeShotCode = request.ExecuteShotCode,
-                testMode = request.TestMode,
-                maxScriptCount = request.MaxScriptCount,
-                executeAllScripts = request.ExecuteAllScripts,
-                confirmFullBatch = request.ConfirmFullBatch,
-                continueOnFailure = request.ContinueOnFailure,
+                testMode = parsedTestMode.ToString(),
+                maxScriptCount,
+                executeAllScripts,
+                confirmFullBatch,
+                continueOnFailure,
                 selectedShotCode = request.ExecuteShotCode,
                 selectedScriptPath = (root is not null && !string.IsNullOrWhiteSpace(request.ExecuteShotCode))
                     ? Path.Combine(root, "stellarium", "scripts", $"{request.ExecuteShotCode}.ssc")
@@ -575,8 +608,14 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
                 response.EditorialStoryPackage.ShortsCandidates,
                 response.WeeklyStoryArc.SuggestedShorts
             },
-            _ => response
-        };
+                _ => response
+            };
+        }
+        catch (Exception ex)
+        {
+            return Results.Ok(new { phase = phase.ToString(), errorStage = "DiagnosticsPhaseRouting", error = ex.Message, stackTrace = ex.StackTrace, warnings });
+        }
+        Console.WriteLine("service execution completed");
 
         return Results.Ok(new
         {
