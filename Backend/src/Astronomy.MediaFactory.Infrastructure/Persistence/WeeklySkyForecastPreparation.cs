@@ -105,36 +105,40 @@ public sealed class WeeklySkyForecastContextBuilder(
                         continue;
                     }
 
+                    var targetDate = DateOnly.TryParse(dailyForecast.Date, out var parsedDate) ? parsedDate : day;
+                    var startUtc = DateTime.UtcNow;
+                    var endUtc = startUtc.AddHours(8);
+                    var fallbackVisibleObjects = dailyForecast.Events
+                        .Where(e => !string.IsNullOrWhiteSpace(e.ObjectName))
+                        .GroupBy(e => e.ObjectName.Trim(), StringComparer.OrdinalIgnoreCase)
+                        .Select(g => new VisibleObjectForecastItem
+                        {
+                            ObjectCode = WeeklySkyForecastObjectCodeResolver.NormalizeObjectCode(g.Key),
+                            ObjectName = g.Key,
+                            ObjectType = g.First().Category,
+                            Visible = true,
+                            ViewingDirection = g.First().Direction,
+                            Reason = g.First().Details,
+                            VisibilityScore = 0.5,
+                            PhotographyScore = 0.5
+                        })
+                        .ToList();
+
                     successfulDays.Add(new DailySkyForecastItem
                     {
-                        Date = dailyForecast.TargetDate,
-                        SunsetUtc = DateTime.TryParse(dailyForecast.NightWindowStartUtc, out var nwStart) ? nwStart : DateTime.UtcNow,
-                        SunriseUtc = DateTime.TryParse(dailyForecast.NightWindowEndUtc, out var nwEnd) ? nwEnd : DateTime.UtcNow,
+                        Date = targetDate.ToString("yyyy-MM-dd"),
+                        SunsetUtc = startUtc,
+                        SunriseUtc = endUtc,
                         MoonPhase = "",
                         MoonIlluminationPercent = 0,
                         MoonRiseUtc = null,
                         MoonSetUtc = null,
-                        VisibleObjects = dailyForecast.VisibleObjects.Select(v => new VisibleObjectForecastItem
-                        {
-                            ObjectCode = v.ObjectCode,
-                            ObjectName = v.ObjectName,
-                            ObjectType = v.ObjectType,
-                            Visible = true,
-                            RiseUtc = v.RiseUtc,
-                            SetUtc = v.SetUtc,
-                            TransitUtc = v.TransitUtc,
-                            MaxAltitudeDegrees = v.MaxAltitudeDegrees,
-                            BestViewingTimeUtc = v.BestTimeUtc,
-                            VisibilityScore = v.VisibilityScore,
-                            PhotographyScore = v.PhotographyScore,
-                            ViewingDirection = v.Direction,
-                            Reason = v.Reason
-                        }).ToList(),
+                        VisibleObjects = fallbackVisibleObjects,
                         Events = [],
-                        BestViewingStartUtc = DateTime.TryParse(dailyForecast.NightWindowStartUtc, out var bvs) ? bvs : DateTime.UtcNow,
-                        BestViewingEndUtc = DateTime.TryParse(dailyForecast.NightWindowEndUtc, out var bve) ? bve : DateTime.UtcNow,
-                        OverallViewingScore = dailyForecast.VisibleObjects.Any() ? dailyForecast.VisibleObjects.Average(x => x.VisibilityScore) : 0,
-                        ViewingSummary = dailyForecast.Summary
+                        BestViewingStartUtc = startUtc,
+                        BestViewingEndUtc = endUtc,
+                        OverallViewingScore = fallbackVisibleObjects.Count == 0 ? 0 : fallbackVisibleObjects.Average(x => x.VisibilityScore),
+                        ViewingSummary = string.Join(" ", dailyForecast.VisualIdeas.Select(v => v.Description).Where(v => !string.IsNullOrWhiteSpace(v))).Trim()
                     });
                 }
                 catch (Exception ex)
