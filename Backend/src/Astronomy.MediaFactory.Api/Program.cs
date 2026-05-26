@@ -423,14 +423,14 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
                 ValidationIssues = package.ValidationIssues.Concat([$"No shot matched executeShotCode '{executeShotCode}'."]).ToList()
             };
 
-            var filteredShotCodes = filteredSequences.SelectMany(sequence => sequence.Shots).Select(shot => shot.ShotCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var filteredSceneCodes = filteredSequences.Select(sequence => sequence.SceneCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
             return package with
             {
                 SceneSequences = filteredSequences,
                 TotalScenes = filteredSequences.Count,
                 TotalShots = filteredSequences.Sum(sequence => sequence.Shots.Count),
                 EstimatedDurationSeconds = filteredSequences.Sum(sequence => Math.Max(1, sequence.DurationSeconds)),
-                DynamicFovCalculations = package.DynamicFovCalculations.Where(calc => filteredShotCodes.Contains(calc.ShotCode)).ToList()
+                DynamicFovCalculations = package.DynamicFovCalculations.Where(calc => filteredSceneCodes.Contains(calc.SceneCode)).ToList()
             };
         }
         WeeklyCinematicShotPackage? GetCinematicShotPackage()
