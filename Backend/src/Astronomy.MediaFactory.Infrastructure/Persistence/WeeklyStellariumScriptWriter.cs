@@ -67,6 +67,11 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
                     $"// PreScreenshotWaitSeconds: {preScreenshotWaitSeconds:0.###}",
                     $"// Shot: {shot.ShotCode}",
                     $"// Type: {shot.ShotType}",
+                    $"// RenderMode: {ResolveRenderMode(shot)}",
+                    $"// TargetObjects: {string.Join(",", shot.TargetObjects)}",
+                    $"// PrimaryObject: {shot.PrimaryObject ?? string.Empty}",
+                    $"// MotionStyle: {shot.MotionStyle}",
+                    $"// ComputedFov: {shot.FieldOfViewDegrees:0.###}",
                     $"// Duration: {shot.DurationSeconds}s",
                     $"// GeneratedUtc: {DateTime.UtcNow:O}",
                     $"// ExpectedScreenshotPath: {ToSscPath(screenshotFullPath)}",
@@ -136,6 +141,16 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
         if (string.IsNullOrWhiteSpace(command)) return false;
         return command.Contains("landscapeMgr.", StringComparison.Ordinal)
             || command.Contains("labelMgr.", StringComparison.Ordinal);
+    }
+
+
+    private static string ResolveRenderMode(WeeklyCinematicShot shot)
+    {
+        if (shot.TargetObjects.Count >= 3 || shot.ShotType.Contains("group", StringComparison.OrdinalIgnoreCase)) return "Grouping";
+        if (shot.TargetObjects.Count == 2 || shot.ShotType.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return "Conjunction";
+        if (shot.ShotType.Contains("wide", StringComparison.OrdinalIgnoreCase)) return "Panorama";
+        if (shot.ShotType.Contains("guide", StringComparison.OrdinalIgnoreCase)) return "ObservationGuide";
+        return "SingleFocus";
     }
 
     private static List<string> ApplyApiStartupStabilization(IReadOnlyList<string> plannedCommands, double warmupSeconds, double cameraSettleSeconds)

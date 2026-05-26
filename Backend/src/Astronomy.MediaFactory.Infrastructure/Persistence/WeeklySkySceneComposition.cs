@@ -144,16 +144,38 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
 {
     public IReadOnlyList<string> Build(WeeklyCinematicShot shot, WeeklySceneCompositionEntry composition)
     {
-        var list=shot.PlannedSscCommands.Where(c=>!c.Contains("core.selectObjectByName(")&&!c.Contains("core.moveToSelectedObject(")).ToList();
-        if (composition.RenderMode=="SingleFocus" && !string.IsNullOrWhiteSpace(shot.PrimaryObject))
+        var list = shot.PlannedSscCommands
+            .Where(c => !c.Contains("core.selectObjectByName(", StringComparison.OrdinalIgnoreCase)
+                     && !c.Contains("core.moveToSelectedObject(", StringComparison.OrdinalIgnoreCase)
+                     && !c.Contains("core.moveToAltAzi(", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        list.Add($"core.moveToAltAzi({composition.CenterAzimuth.ToString(CultureInfo.InvariantCulture)}, {composition.CenterAltitude.ToString(CultureInfo.InvariantCulture)}, 2.0);");
+
+        if (composition.RenderMode == "SingleFocus" && !string.IsNullOrWhiteSpace(shot.PrimaryObject))
         {
-            list.Add($"core.selectObjectByName(\"{shot.PrimaryObject}\", true);"); list.Add("core.moveToSelectedObject(2.0);"); list.Add("StelMovementMgr.setFlagTracking(true);");
+            list.Add($"core.selectObjectByName(\"{shot.PrimaryObject}\", true);");
+            list.Add("core.moveToSelectedObject(2.0);");
+            list.Add("StelMovementMgr.setFlagTracking(true);");
         }
         else
         {
-            list.Add($"core.moveToAltAzi({composition.CenterAzimuth.ToString(CultureInfo.InvariantCulture)}, {composition.CenterAltitude.ToString(CultureInfo.InvariantCulture)}, 2.0);");
             list.Add("StelMovementMgr.setFlagTracking(false);");
+
+            if (composition.TargetObjects.Count > 0)
+            {
+                var targetsArray = string.Join(", ", composition.TargetObjects.Select(o => $"\"{o}\""));
+                list.Add($"var targets = [{targetsArray}];");
+                list.Add("for (var i = 0; i < targets.length; i++) {");
+                list.Add("  var objectName = targets[i];");
+                list.Add("  core.selectObjectByName(objectName, true);");
+                list.Add("  if (typeof LabelMgr !== \"undefined\" && typeof LabelMgr.labelObject === \"function\") { LabelMgr.labelObject(objectName, objectName, true, 20); }");
+                list.Add("  if (typeof HighlightMgr !== \"undefined\" && typeof HighlightMgr.highlightObject === \"function\") { HighlightMgr.highlightObject(objectName, true); }");
+                list.Add("  core.wait(0.6);");
+                list.Add("}");
+            }
         }
+
         return list;
     }
 }

@@ -317,7 +317,13 @@ private static async Task<WeeklyStellariumScreenshotGenerationResult> WriteResul
             }
             payloadResults.Add(new { shotCode = r.ShotCode, scriptExecuted = true, screenshotExists = r.ScreenshotExists, fileSizeBytes = r.ScreenshotSizeBytes, dimensions = new { width, height }, imageHash = sha, warnings = itemWarnings, error = r.Error });
             var compPath = Path.Combine(Path.GetDirectoryName(r.ExpectedScreenshotPath)!, $"{r.ShotCode}.composition.json");
-            await File.WriteAllTextAsync(compPath, JsonSerializer.Serialize(new { shotCode = r.ShotCode, renderMode = "Unknown", centerAzimuth = (double?)null, centerAltitude = (double?)null, computedFov = (double?)null, targetObjects = Array.Empty<string>(), includedObjects = Array.Empty<string>(), excludedObjects = Array.Empty<string>(), fallbackUsed = false, fallbackReason = "" }, new JsonSerializerOptions { WriteIndented = true }));
+            var scriptText = File.Exists(r.ScriptPath) ? await File.ReadAllTextAsync(r.ScriptPath) : string.Empty;
+            var renderMode = ReadHeaderString(scriptText, "RenderMode") ?? "Unknown";
+            var targetObjects = (ReadHeaderString(scriptText, "TargetObjects") ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var computedFov = ReadHeaderDouble(scriptText, "ComputedFov", 0);
+            var (centerAzimuth, centerAltitude) = ReadMoveToAltAzi(scriptText);
+            await File.WriteAllTextAsync(compPath, JsonSerializer.Serialize(new { shotCode = r.ShotCode, renderMode, centerAzimuth, centerAltitude, computedFov = computedFov <= 0 ? (double?)null : computedFov, targetObjects, includedObjects = targetObjects, excludedObjects = Array.Empty<string>(), fallbackUsed = false, fallbackReason = "" }, new JsonSerializerOptions { WriteIndented = true }));
         }
         foreach (var dup in hashes.Where(x => x.Value.Count > 1)) warnings.Add($"Duplicate screenshot hash detected for shots: {string.Join(",", dup.Value)}");
         var report = new { totalShots = results.Count, successfulScreenshots = results.Count(x => string.IsNullOrWhiteSpace(x.Error)), failedScreenshots = results.Count(x => !string.IsNullOrWhiteSpace(x.Error)), duplicateGroups = hashes.Where(x=>x.Value.Count>1).Select(x=>x.Value).ToList(), results = payloadResults, totalElapsedMs = elapsedMs };
@@ -339,6 +345,16 @@ private static async Task<WeeklyStellariumScreenshotGenerationResult> WriteResul
         if (line is null) return fallback;
         var raw = line[(line.IndexOf(':') + 1)..].Trim();
         return double.TryParse(raw, out var value) ? value : fallback;
+    }
+
+
+    private static (double? Azimuth, double? Altitude) ReadMoveToAltAzi(string text)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(text, @"core\.moveToAltAzi\((?<az>-?\d+(\.\d+)?),\s*(?<alt>-?\d+(\.\d+)?),");
+        if (!match.Success) return (null, null);
+        if (!double.TryParse(match.Groups["az"].Value, out var az)) return (null, null);
+        if (!double.TryParse(match.Groups["alt"].Value, out var alt)) return (null, null);
+        return (az, alt);
     }
 
     private async Task<BasicSmokeResult> RunBasicSmokeTestAsync(string rootFull, int timeoutSeconds, CancellationToken cancellationToken)
