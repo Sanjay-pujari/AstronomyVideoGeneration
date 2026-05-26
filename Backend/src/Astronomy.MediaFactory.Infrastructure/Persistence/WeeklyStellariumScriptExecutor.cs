@@ -31,7 +31,26 @@ public sealed class WeeklyStellariumScriptExecutor(
 
         if (!File.Exists(scriptPath)) errors.Add($"Script file does not exist: {scriptPath}");
         var rootFull = Path.GetFullPath(workingDirectoryRoot);
+        var scriptFull = Path.GetFullPath(scriptPath);
         var screenshotFull = Path.GetFullPath(expectedScreenshotPath);
+        var screenshotDirectory = Path.GetDirectoryName(screenshotFull) ?? string.Empty;
+        var pipelineRunFolderName = Path.GetFileName(rootFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var pipelineRunIdRaw = Guid.TryParseExact(pipelineRunFolderName, "N", out var parsedPipelineRunId)
+            ? parsedPipelineRunId.ToString()
+            : pipelineRunFolderName;
+
+        logger.LogInformation("workingDirectoryRoot: {WorkingDirectoryRoot}", rootFull);
+        logger.LogInformation("scriptPath: {ScriptPath}", scriptFull);
+        logger.LogInformation("expectedScreenshotPath: {ExpectedScreenshotPath}", screenshotFull);
+        logger.LogInformation("screenshotDirectory: {ScreenshotDirectory}", screenshotDirectory);
+        logger.LogInformation("pipelineRunId raw: {PipelineRunIdRaw}", pipelineRunIdRaw);
+        logger.LogInformation("pipelineRunFolderName: {PipelineRunFolderName}", pipelineRunFolderName);
+
+        if (!scriptFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase) || !screenshotFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Script/screenshot path mismatch: both paths must share the same workingDirectoryRoot. root='{rootFull}', script='{scriptFull}', screenshot='{screenshotFull}'.");
+        }
+
         if (!screenshotFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
         {
             errors.Add($"Expected screenshot path must be under working directory root. Root='{rootFull}', screenshot='{screenshotFull}'");
@@ -50,7 +69,7 @@ public sealed class WeeklyStellariumScriptExecutor(
             var psi = new ProcessStartInfo
             {
                 FileName = _options.ExecutablePath,
-                Arguments = $"--startup-script \"{scriptPath}\"",
+                Arguments = $"--startup-script \"{scriptFull}\"",
                 UseShellExecute = false,
                 CreateNoWindow = false
             };

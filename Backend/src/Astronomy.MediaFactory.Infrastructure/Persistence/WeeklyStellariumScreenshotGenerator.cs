@@ -42,6 +42,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 
         var rootFull = Path.GetFullPath(workingDirectoryRoot);
         var pipelineRunId = ExtractPipelineRunId(rootFull);
+        var pipelineRunFolderName = Path.GetFileName(rootFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         var scenesDir = Path.Combine(rootFull, "stellarium", "scenes");
         Directory.CreateDirectory(scenesDir);
 
@@ -88,20 +89,22 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             string? launchedExecutable = null;
             string? launchedArguments = null;
             string? launchedWorkingDirectory = null;
+            var screenshotDirectory = Path.GetDirectoryName(screenshotFull) ?? string.Empty;
 
             logger.LogInformation("Launching Stellarium cinematic shot script");
             logger.LogInformation("selectedShotCode={ShotCode}", script.ShotCode);
-            logger.LogInformation("selectedScriptPath={ScriptPath}", script.ScriptPath);
-            logger.LogInformation("selectedExpectedScreenshotPath={ExpectedScreenshotPath}", script.ExpectedScreenshotPath);
+            logger.LogInformation("workingDirectoryRoot={WorkingDirectoryRoot}", rootFull);
+            logger.LogInformation("scriptPath={ScriptPath}", scriptFull);
+            logger.LogInformation("expectedScreenshotPath={ExpectedScreenshotPath}", screenshotFull);
+            logger.LogInformation("screenshotDirectory={ScreenshotDirectory}", screenshotDirectory);
+            logger.LogInformation("pipelineRunId raw={PipelineRunIdRaw}", Guid.TryParseExact(pipelineRunId ?? string.Empty, "N", out var parsedPipelineRunId) ? parsedPipelineRunId.ToString() : pipelineRunId);
+            logger.LogInformation("pipelineRunFolderName={PipelineRunFolderName}", pipelineRunFolderName);
             logger.LogInformation("selectedScriptExists={ScriptExists}", scriptExists);
             logger.LogInformation("selectedScriptLastWriteUtc={ScriptLastWriteUtc}", scriptLastWriteUtc);
-            logger.LogInformation("workingDirectoryRoot={WorkingDirectoryRoot}", rootFull);
-            logger.LogInformation("pipelineRunId={PipelineRunId}", pipelineRunId);
             logger.LogInformation("Stellarium executable path: {ExecutablePath}", _options.ExecutablePath);
-            logger.LogInformation("SSC script path: {ScriptPath}", scriptFull);
-            logger.LogInformation("Screenshot target path: {ScreenshotTargetPath}", screenshotFull);
 
             if (!scriptExists) error = $"Selected script missing: {script.ScriptPath}";
+            else if (!scriptFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase) || !screenshotFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Script/screenshot path mismatch: both paths must share the same workingDirectoryRoot. root='{rootFull}', script='{scriptFull}', screenshot='{screenshotFull}'.");
             else if (!scriptFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) error = "Selected script path outside workingDirectoryRoot.";
             else if (!screenshotFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) error = "Expected screenshot path outside workingDirectoryRoot.";
             else if (!scriptFull.Contains(pipelineRunId, StringComparison.OrdinalIgnoreCase) || !screenshotFull.Contains(pipelineRunId, StringComparison.OrdinalIgnoreCase)) error = "Selected script/screenshot path must include current pipelineRunId without dashes.";
@@ -111,7 +114,6 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 || (!scriptPreview.Contains("core.quitStellarium()", StringComparison.OrdinalIgnoreCase) && !scriptPreview.Contains("core.quit()", StringComparison.OrdinalIgnoreCase))) error = "Selected SSC script does not contain screenshot/quit command.";
             else
             {
-                var screenshotDirectory = Path.GetDirectoryName(screenshotFull)!;
                 Directory.CreateDirectory(screenshotDirectory);
                 logger.LogInformation("Screenshot directory exists.");
                 if (File.Exists(screenshotFull)) File.Delete(screenshotFull);

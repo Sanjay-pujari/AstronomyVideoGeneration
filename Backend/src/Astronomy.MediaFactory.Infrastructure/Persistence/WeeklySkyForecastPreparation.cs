@@ -400,7 +400,8 @@ public sealed class CategoryOutputPathResolver(IOptions<RenderingOptions> render
     public CategoryOutputPaths Resolve(string categoryName, DateOnly date, string regionId, Guid pipelineRunId)
     {
         var normalizedRegionId = RegionIdNormalizer.NormalizeRegionId(regionId);
-        var root = Path.Combine(renderingOptions.Value.WorkingDirectory, categoryName, date.ToString("yyyy-MM-dd"), normalizedRegionId.ToLowerInvariant(), pipelineRunId.ToString());
+        var pipelineRunFolderName = pipelineRunId.ToString("N");
+        var root = Path.Combine(renderingOptions.Value.WorkingDirectory, categoryName, date.ToString("yyyy-MM-dd"), normalizedRegionId.ToLowerInvariant(), pipelineRunFolderName);
         return new(root, Path.Combine(root, "narration"), Path.Combine(root, "shorts"), Path.Combine(root, "thumbnails"), Path.Combine(root, "stellarium-scenes"), Path.Combine(root, "stellarium-scripts"), Path.Combine(root, "manifests"), Path.Combine(root, "metadata"));
     }
 }
