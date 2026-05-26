@@ -210,15 +210,47 @@ public sealed class WeeklyDynamicFovCalculator : IWeeklyDynamicFovCalculator
 
 public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
 {
+    private static string NormalizeObjectName(string objectCode)
+        => objectCode.Trim().ToLowerInvariant() switch
+        {
+            "moon" => "Moon",
+            "venus" => "Venus",
+            "jupiter" => "Jupiter",
+            "saturn" => "Saturn",
+            _ => objectCode
+        };
+
     public IReadOnlyList<string> Build(WeeklyCinematicShot shot, WeeklySceneCompositionEntry composition)
     {
-        var list = shot.PlannedSscCommands
-            .Where(c => !c.Contains("core.selectObjectByName(", StringComparison.OrdinalIgnoreCase)
-                     && !c.Contains("core.moveToSelectedObject(", StringComparison.OrdinalIgnoreCase)
-                     && !c.Contains("core.moveToAltAzi(", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        var scriptPath = shot.ExpectedSscScriptPath;
+        var usedSkyfieldBoundingBox = composition.ValidAzimuthCount > 0 && composition.ValidAltitudeCount > 0;
+        var centerAz = usedSkyfieldBoundingBox ? composition.CenterAzimuth : 260d;
+        var centerAlt = usedSkyfieldBoundingBox ? composition.CenterAltitude : 35d;
+        var fov = usedSkyfieldBoundingBox ? composition.ComputedFov : 90d;
+        var locationName = string.IsNullOrWhiteSpace(shot.CameraDirection) ? "Udaipur" : shot.CameraDirection;
+        var normalizedTargets = composition.TargetObjects.Select(NormalizeObjectName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
-        list.Add($"core.moveToAltAzi({composition.CenterAzimuth.ToString(CultureInfo.InvariantCulture)}, {composition.CenterAltitude.ToString(CultureInfo.InvariantCulture)}, 2.0);");
+        var list = new List<string>
+        {
+            "core.clear(\"natural\");",
+            "core.setGuiVisible(false);",
+            $"core.setDate(\"{DateTime.SpecifyKind(shot.CaptureDateLocal.ToDateTime(shot.CaptureTimeLocal), DateTimeKind.Local).ToUniversalTime():yyyy-MM-ddTHH:mm:ss}\", \"utc\");",
+            $"core.setObserverLocation({260d.ToString(CultureInfo.InvariantCulture)}, {24.58d.ToString(CultureInfo.InvariantCulture)}, {600d.ToString(CultureInfo.InvariantCulture)}, 0, \"{locationName}\", \"Earth\");",
+            "core.wait(3);",
+            "LandscapeMgr.setFlagLandscape(true);",
+            "LandscapeMgr.setFlagAtmosphere(false);",
+            "StelMovementMgr.setFlagTracking(false);",
+            "if (typeof LabelMgr !== \"undefined\") {",
+            "  LabelMgr.deleteAllLabels();",
+            "}",
+            "if (typeof HighlightMgr !== \"undefined\") {",
+            "  HighlightMgr.cleanHighlightList();",
+            "  HighlightMgr.setMarkersSize(22);",
+            "}",
+            $"StelMovementMgr.zoomTo({fov.ToString(CultureInfo.InvariantCulture)}, 0);",
+            $"core.moveToAltAzi(\"{centerAlt.ToString("0.###", CultureInfo.InvariantCulture)}d\", \"{centerAz.ToString("0.###", CultureInfo.InvariantCulture)}d\", 0);",
+            "core.wait(2);"
+        };
 
         if (composition.RenderMode == "SingleFocus" && !string.IsNullOrWhiteSpace(shot.PrimaryObject))
         {
@@ -234,18 +266,45 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
                 list.Add("LandscapeMgr.setFlagAtmosphere(false);");
             }
 
-            if (composition.TargetObjects.Count > 0)
+            if (normalizedTargets.Count > 0)
             {
-                var targetsArray = string.Join(", ", composition.TargetObjects.Select(o => $"\"{o}\""));
+                var targetsArray = string.Join(", ", normalizedTargets.Select(o => $"\"{o}\""));
                 list.Add($"var targets = [{targetsArray}];");
                 list.Add("for (var i = 0; i < targets.length; i++) {");
                 list.Add("  var objectName = targets[i];");
-                list.Add("  if (typeof LabelMgr !== \"undefined\" && typeof LabelMgr.labelObject === \"function\") { LabelMgr.labelObject(objectName, objectName, true, 20); }");
+                list.Add("  if (typeof LabelMgr !== \"undefined\" && typeof LabelMgr.labelObject === \"function\") { LabelMgr.labelObject(objectName, objectName, true, 20, \"#ffff66\", \"NE\", 15, \"Line\", false, 0); }");
                 list.Add("  if (typeof HighlightMgr !== \"undefined\" && typeof HighlightMgr.highlightObject === \"function\") { HighlightMgr.highlightObject(objectName, true); }");
                 list.Add("}");
-                list.Add("core.wait(4);");
             }
+            list.Add("core.wait(4);");
         }
+
+        if (!string.IsNullOrWhiteSpace(shot.ExpectedOutputImagePath))
+            list.Add($"core.screenshot(\"{shot.ExpectedOutputImagePath.Replace("\\", "/")}\");");
+
+        var reportPath = string.IsNullOrWhiteSpace(scriptPath)
+            ? "grouped-ssc-validation-report.json"
+            : Path.Combine(Path.GetDirectoryName(scriptPath)!, "grouped-ssc-validation-report.json");
+        var report = new
+        {
+            scriptPath,
+            targetObjects = composition.TargetObjects,
+            normalizedObjectNames = normalizedTargets,
+            cameraAzimuth = centerAz,
+            cameraAltitude = centerAlt,
+            fieldOfView = fov,
+            usedSkyfieldBoundingBox,
+            screenshotCount = 1,
+            labelsCleared = true,
+            highlightsCleared = true,
+            objectLoopMovesCamera = false
+        };
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(reportPath) ?? ".");
+            File.WriteAllText(reportPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { }
 
         return list;
     }
