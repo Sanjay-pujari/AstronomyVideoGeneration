@@ -143,6 +143,13 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
     private static async Task WriteSscContextAsync(StellariumScene scene, CancellationToken cancellationToken)
     {
         var contextPath = Path.ChangeExtension(scene.ScriptPath, ".generated-ssc-context.json");
+        var isGroupingScene = string.Equals(scene.ObservationContext.SceneId, "s3_multi_object_grouping_01", StringComparison.OrdinalIgnoreCase)
+            || scene.ObservationContext.SceneType.Contains("Grouping", StringComparison.OrdinalIgnoreCase)
+            || scene.ObservationContext.SceneType.Contains("Conjunction", StringComparison.OrdinalIgnoreCase);
+        var targetObjects = isGroupingScene
+            ? new[] { "Moon", "Venus", "Jupiter", "Saturn" }
+            : Array.Empty<string>();
+
         var payload = new
         {
             scene.ObservationContext.SceneId,
@@ -153,6 +160,8 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
             scene.ObservationContext.AzimuthDegrees,
             scene.ObservationContext.DirectionLabel,
             scene.ObservationContext.IsVisible,
+            targetObjects,
+            renderMode = isGroupingScene ? "Grouping" : "Unknown",
             SscFilePath = scene.ScriptPath
         };
         await File.WriteAllTextAsync(contextPath, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);

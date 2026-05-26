@@ -5,6 +5,15 @@ namespace Astronomy.MediaFactory.Rendering;
 
 public sealed class StellariumScriptBuilder
 {
+
+    private static readonly (string Name, string Title, double Fov)[] GroupingTargets =
+    [
+        ("Moon", "Moon — Brightest Target", 8d),
+        ("Venus", "Venus — Evening Planet", 10d),
+        ("Jupiter", "Jupiter — Giant Planet", 10d),
+        ("Saturn", "Saturn — Ringed Planet", 12d)
+    ];
+
     private readonly StellariumOptions _options;
 
     public StellariumScriptBuilder(StellariumOptions options) => _options = options;
@@ -22,6 +31,11 @@ public sealed class StellariumScriptBuilder
         if (!isOverviewScene && !scene.ObservationContext.IsVisible)
         {
             return BuildSafeSkyFallbackScript(scene, utcDate, screenshotPrefix, screenshotDir, escapedLocationName);
+        }
+
+        if (IsGroupingScene(scene))
+        {
+            return BuildGroupingScript(scene, utcDate, screenshotPrefix, screenshotDir, escapedLocationName);
         }
 
         return isOverviewScene
@@ -183,6 +197,48 @@ core.wait(6.0);
 
 core.screenshot("{{screenshotPrefix}}", false, "{{screenshotDir}}", true, "png");
 
+core.wait(2.0);
+core.quitStellarium();
+""";
+    }
+
+    private static bool IsGroupingScene(StellariumScene scene)
+        => string.Equals(scene.ObservationContext.SceneId, "s3_multi_object_grouping_01", StringComparison.OrdinalIgnoreCase)
+           || scene.ObservationContext.SceneType.Contains("Grouping", StringComparison.OrdinalIgnoreCase)
+           || scene.ObservationContext.SceneType.Contains("Conjunction", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildGroupingScript(StellariumScene scene, string utcDate, string screenshotPrefix, string screenshotDir, string escapedLocationName)
+    {
+        var labels = string.Join("\n", GroupingTargets.Select(target => $"LabelMgr.labelObject(\"{target.Name}\", \"{target.Title}\", true, 24);"));
+        var highlights = string.Join("\n", GroupingTargets.Select(target => $"HighlightMgr.setHighlighted(\"{target.Name}\", true);"));
+
+        return $$"""
+core.clear("natural");
+
+LandscapeMgr.setFlagLandscape(false);
+LandscapeMgr.setFlagAtmosphere(false);
+
+core.setDate("{{utcDate}}", "utc");
+core.setObserverLocation({{scene.ObservationContext.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, {{scene.ObservationContext.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}}, 0, 0, "{{escapedLocationName}}", "Earth");
+core.wait(2.0);
+
+ConstellationMgr.setFlagLines(true);
+ConstellationMgr.setFlagLabels(true);
+
+LabelMgr.deleteAllLabels();
+HighlightMgr.cleanHighlightList();
+HighlightMgr.setColor("#FFD166");
+HighlightMgr.setMarkersSize(8);
+
+{{labels}}
+{{highlights}}
+
+core.selectObjectByName("Moon", true);
+core.moveToSelectedObject(3.0);
+StelMovementMgr.zoomTo(70, 3);
+core.wait(3);
+
+core.screenshot("{{screenshotPrefix}}", false, "{{screenshotDir}}", true, "png");
 core.wait(2.0);
 core.quitStellarium();
 """;

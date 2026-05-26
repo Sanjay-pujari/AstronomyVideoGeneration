@@ -113,6 +113,41 @@ public sealed class StellariumVisualGenerationServiceTests
         Assert.DoesNotContain("moveToAltAzi", script);
     }
 
+
+    [Fact]
+    public void BuildSceneScript_GroupingScene_UsesMultiObjectWorkflow()
+    {
+        var builder = new StellariumScriptBuilder(new StellariumOptions());
+        var scene = new StellariumScene
+        {
+            SceneId = "003-grouping",
+            TargetObject = "Sky",
+            OutputImagePath = Path.Combine("/tmp", "003-grouping.png"),
+            ObservationContext = new SceneObservationContext
+            {
+                SceneId = "s3_multi_object_grouping_01",
+                SceneType = "Grouping",
+                ObjectName = "Sky",
+                IsVisible = true,
+                LocalObservationTime = DateTimeOffset.UtcNow,
+                UtcObservationTime = DateTimeOffset.UtcNow
+            }
+        };
+
+        var script = builder.BuildSceneScript(scene);
+
+        Assert.Contains("Moon", script);
+        Assert.Contains("Venus", script);
+        Assert.Contains("Jupiter", script);
+        Assert.Contains("Saturn", script);
+        Assert.Contains("LabelMgr.deleteAllLabels()", script);
+        Assert.Contains("HighlightMgr.cleanHighlightList()", script);
+        Assert.Contains("core.moveToSelectedObject(3.0)", script);
+        Assert.Contains("StelMovementMgr.zoomTo(70, 3)", script);
+        Assert.Contains("core.screenshot", script);
+        Assert.DoesNotContain("moveToAltAzi", script);
+    }
+
     [Fact]
     public async Task PrepareVisualsAsync_GeneratesDailySkyGuideScenesAndManifest()
     {
