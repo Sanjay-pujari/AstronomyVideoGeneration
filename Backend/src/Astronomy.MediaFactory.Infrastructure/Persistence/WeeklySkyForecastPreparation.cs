@@ -37,6 +37,15 @@ public sealed class WeeklySkyForecastContextBuilder(
         if (request.WeekEndDate < request.WeekStartDate)
             throw new ArgumentException("WeekEndDate must be greater than or equal to WeekStartDate.");
 
+        var weekStart = request.WeekStartDate;
+        var weekEnd = request.WeekEndDate;
+        var cacheKey = $"{RegionIdNormalizer.NormalizeRegionId(request.RegionId)}|{request.Language}|{weekStart:yyyy-MM-dd}|{weekEnd:yyyy-MM-dd}";
+        if (ContextCache.TryGetValue(cacheKey, out var cachedContext))
+        {
+            logger.LogInformation("Reusing cached WeeklySkyForecast context for key {CacheKey}", cacheKey);
+            return cachedContext;
+        }
+
         logger.LogInformation("Resolving WeeklySkyForecast region using production region resolver.");
         logger.LogInformation("Requested regionId: {RequestedRegionId}", request.RegionId);
 
@@ -62,15 +71,6 @@ public sealed class WeeklySkyForecastContextBuilder(
             resolution.Latitude,
             resolution.Longitude,
             resolution.Timezone);
-
-        var weekStart = request.WeekStartDate;
-        var weekEnd = request.WeekEndDate;
-        var cacheKey = $"{RegionIdNormalizer.NormalizeRegionId(request.RegionId)}|{request.Language}|{weekStart:yyyy-MM-dd}|{weekEnd:yyyy-MM-dd}";
-        if (ContextCache.TryGetValue(cacheKey, out var cachedContext))
-        {
-            logger.LogInformation("Reusing cached WeeklySkyForecast context for key {CacheKey}", cacheKey);
-            return cachedContext;
-        }
         var resolvedLocationName = string.IsNullOrWhiteSpace(resolution.LocationName) ? request.RegionName : resolution.LocationName;
         logger.LogInformation("Skyfield weekly request payload: regionId={RegionId}, location={LocationName}, latitude={Latitude}, longitude={Longitude}, timezone={Timezone}, startDate={StartDate}, endDate={EndDate}", resolution.CanonicalRegionId, resolvedLocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, weekStart, weekEnd);
         logger.LogInformation("Resolved region for WeeklySkyForecast: {RegionId}", resolution.CanonicalRegionId);

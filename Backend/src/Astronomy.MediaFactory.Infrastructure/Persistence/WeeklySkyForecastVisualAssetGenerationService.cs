@@ -158,8 +158,15 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
             warnings.Add($"Duplicate scene signature: target={group.Key.TargetObjectCode ?? "NONE"}, captureTimeUtc={group.Key.CaptureTimeUtc:O}, fov={group.Key.FieldOfViewDegrees}.");
         }
 
+        var narrationArtifacts = new
+        {
+            storyBeatsPath = Path.Combine(outputPaths.NarrationDirectory, "weekly-story-beats.json"),
+            narrationPlanPath = Path.Combine(outputPaths.NarrationDirectory, "weekly-narration-plan.json"),
+            narrationTextPath = Path.Combine(outputPaths.NarrationDirectory, "weekly-narration-text.txt"),
+            visualRequirementsPath = Path.Combine(outputPaths.NarrationDirectory, "weekly-visual-requirements.json")
+        };
         var manifestPath = Path.Combine(outputPaths.ManifestsDirectory, "weekly-visual-assets-manifest.json");
-        var manifest = new { contentGenerationPlanId, canonicalSscScriptsDirectory, canonicalStellariumCapturesDirectory, visualAssetManifestPath = manifestPath, contextSummary = context, sscScenes = weeklyScenePlan.Scenes, scripts = scriptResults, images, visualAssetManifest, capture = captureResponse, warnings, errors };
+        var manifest = new { contentGenerationPlanId, canonicalSscScriptsDirectory, canonicalStellariumCapturesDirectory, visualAssetManifestPath = manifestPath, narrationArtifacts, contextSummary = context, sscScenes = weeklyScenePlan.Scenes, scripts = scriptResults, images, visualAssetManifest, capture = captureResponse, warnings, errors };
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 
         var success = errors.Count == 0 && scriptResults.Count == weeklyScenePlan.Scenes.Count;
