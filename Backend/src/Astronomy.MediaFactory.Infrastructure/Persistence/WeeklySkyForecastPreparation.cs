@@ -23,6 +23,7 @@ public sealed class WeeklySkyForecastContextBuilder(
     ISkyfieldSidecarClient sidecarClient,
     ILogger<WeeklySkyForecastContextBuilder> logger) : IWeeklySkyForecastContextBuilderV2
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, WeeklySkyForecastContext> ContextCache = new(StringComparer.OrdinalIgnoreCase);
     internal const string CategoryDebugNormalizedObjectCountKey = "WeeklySkyForecast.NormalizedObjectCount";
     internal const string CategoryDebugCorrectedHighlightCountKey = "WeeklySkyForecast.CorrectedHighlightCount";
     internal const string CategoryDebugExcludedObjectCountKey = "WeeklySkyForecast.ExcludedObjectCount";
@@ -64,6 +65,12 @@ public sealed class WeeklySkyForecastContextBuilder(
 
         var weekStart = request.WeekStartDate;
         var weekEnd = request.WeekEndDate;
+        var cacheKey = $"{RegionIdNormalizer.NormalizeRegionId(request.RegionId)}|{request.Language}|{weekStart:yyyy-MM-dd}|{weekEnd:yyyy-MM-dd}";
+        if (ContextCache.TryGetValue(cacheKey, out var cachedContext))
+        {
+            logger.LogInformation("Reusing cached WeeklySkyForecast context for key {CacheKey}", cacheKey);
+            return cachedContext;
+        }
         var resolvedLocationName = string.IsNullOrWhiteSpace(resolution.LocationName) ? request.RegionName : resolution.LocationName;
         logger.LogInformation("Skyfield weekly request payload: regionId={RegionId}, location={LocationName}, latitude={Latitude}, longitude={Longitude}, timezone={Timezone}, startDate={StartDate}, endDate={EndDate}", resolution.CanonicalRegionId, resolvedLocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, weekStart, weekEnd);
         logger.LogInformation("Resolved region for WeeklySkyForecast: {RegionId}", resolution.CanonicalRegionId);
@@ -242,7 +249,9 @@ public sealed class WeeklySkyForecastContextBuilder(
         WeeklySkyForecastPreparationDiagnostics.Set(CategoryDebugNormalizedObjectCountKey, normalizedObjectCount);
         WeeklySkyForecastPreparationDiagnostics.Set(CategoryDebugCorrectedHighlightCountKey, correctedHighlightCount);
         WeeklySkyForecastPreparationDiagnostics.Set(CategoryDebugExcludedObjectCountKey, excludedObjectCount);
-        return new(resolution.CanonicalRegionId, response.LocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights.OrderBy(h => h.Order).Select((h, i) => h with { Order = i + 1 }).ToList(), recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
+        var builtContext = new WeeklySkyForecastContext(resolution.CanonicalRegionId, response.LocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, DateOnly.Parse(response.WeekStartDate), DateOnly.Parse(response.WeekEndDate), request.Language, daily, highlights.OrderBy(h => h.Order).Select((h, i) => h with { Order = i + 1 }).ToList(), recommended, bestPlanet, bestMoonNight, bestPhotoNight, response.Warnings);
+        ContextCache[cacheKey] = builtContext;
+        return builtContext;
     }
 
     public Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastV2OrchestrationContext context, CancellationToken cancellationToken)
@@ -402,7 +411,7 @@ public sealed class CategoryOutputPathResolver(IOptions<RenderingOptions> render
         var normalizedRegionId = RegionIdNormalizer.NormalizeRegionId(regionId);
         var pipelineRunFolderName = pipelineRunId.ToString("N");
         var root = Path.Combine(renderingOptions.Value.WorkingDirectory, categoryName, date.ToString("yyyy-MM-dd"), normalizedRegionId.ToLowerInvariant(), pipelineRunFolderName);
-        return new(root, Path.Combine(root, "narration"), Path.Combine(root, "shorts"), Path.Combine(root, "thumbnails"), Path.Combine(root, "stellarium-scenes"), Path.Combine(root, "stellarium-scripts"), Path.Combine(root, "manifests"), Path.Combine(root, "metadata"));
+        return new(root, Path.Combine(root, "narration"), Path.Combine(root, "shorts"), Path.Combine(root, "thumbnails"), Path.Combine(root, "stellarium", "scenes"), Path.Combine(root, "stellarium", "scripts"), Path.Combine(root, "manifests"), Path.Combine(root, "metadata"));
     }
 }
 
