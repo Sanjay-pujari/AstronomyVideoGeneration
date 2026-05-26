@@ -83,6 +83,20 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
                 lines.Add($"core.screenshot(\"{EscapeForSscDoubleQuotedString(shot.ShotCode)}\", false, \"{EscapeForSscDoubleQuotedString(sceneFolderSscPath)}\", true, \"png\");");
                 lines.Add("core.wait(2.0);");
                 lines.Add("core.quitStellarium();");
+
+                var sscValidation = ValidateGeneratedSsc(lines);
+                if (!sscValidation.IsValid)
+                {
+                    isValid = false;
+                    shotIssues.Add($"SSC validation failed with line number {sscValidation.FirstFailedLine}: {sscValidation.ErrorMessage}");
+                    var validationReportPath = Path.Combine(Path.GetDirectoryName(scriptFullPath)!, $"{shot.ShotCode}.validation.json");
+                    await File.WriteAllTextAsync(validationReportPath, JsonSerializer.Serialize(sscValidation, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+                    warnings.Add($"Shot '{shot.ShotCode}': SSC validation failed with line number {sscValidation.FirstFailedLine}.");
+                }
+                else
+                {
+                    warnings.Add($"Shot '{shot.ShotCode}': SSC validation passed.");
+                }
                 await File.WriteAllTextAsync(scriptFullPath, string.Join("\n", lines), Encoding.UTF8, cancellationToken);
             }
 
@@ -139,9 +153,54 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
     private static bool ContainsForbiddenManagerReference(string command)
     {
         if (string.IsNullOrWhiteSpace(command)) return false;
-        return command.Contains("landscapeMgr.", StringComparison.Ordinal)
-            || command.Contains("labelMgr.", StringComparison.Ordinal);
+        return command.Contains("LabelMgr.", StringComparison.Ordinal)
+            || command.Contains("HighlightMgr.", StringComparison.Ordinal)
+            || command.Contains("SolarSystem.", StringComparison.Ordinal)
+            || command.Contains("GridLinesMgr.", StringComparison.Ordinal)
+            || command.Contains("StelSkyDrawer.", StringComparison.Ordinal);
     }
+
+    private static SscValidationResult ValidateGeneratedSsc(IReadOnlyList<string> lines)
+    {
+        var allowedPrefixes = new[]
+        {
+            "core.clear(",
+            "core.setGuiVisible(",
+            "core.setDate(",
+            "core.wait(",
+            "core.setObserverLocation(",
+            "LandscapeMgr.setFlagAtmosphere(",
+            "LandscapeMgr.setFlagLandscape(",
+            "StelMovementMgr.setFlagTracking(",
+            "StelMovementMgr.zoomTo(",
+            "core.moveToAltAzi(",
+            "core.selectObjectByName(",
+            "core.moveToSelectedObject(",
+            "core.screenshot(",
+            "core.quitStellarium(",
+            "var targets =",
+            "for (var i = 0;",
+            "var objectName =",
+            "}"
+        };
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var raw = lines[i];
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith("//", StringComparison.Ordinal)) continue;
+            if (line.Contains("\\", StringComparison.Ordinal) && line.Contains("core.screenshot(", StringComparison.Ordinal))
+                return new(false, i + 1, "Screenshot path must use forward slashes only.");
+            if (line.Contains("undefined", StringComparison.OrdinalIgnoreCase))
+                return new(false, i + 1, "Undefined reference marker found.");
+            if (!allowedPrefixes.Any(prefix => line.StartsWith(prefix, StringComparison.Ordinal)))
+                return new(false, i + 1, $"Unsupported or unstable API call: {line}");
+        }
+
+        return new(true, null, null);
+    }
+
+    private sealed record SscValidationResult(bool IsValid, int? FirstFailedLine, string? ErrorMessage);
 
 
     private static string ResolveRenderMode(WeeklyCinematicShot shot)
