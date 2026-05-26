@@ -29,12 +29,15 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
             throw new InvalidOperationException("This endpoint only supports WeeklySkyForecast plans.");
         }
 
+        var weekStartDate = DateOnly.FromDateTime((plan.ScheduledUtc ?? DateTimeOffset.UtcNow).UtcDateTime);
         var weeklyRequest = new WeeklySkyForecastProductionRequest(
             plan.ContentCategoryCode,
             plan.Language,
             plan.RegionId,
             plan.RegionId,
             plan.ScheduledUtc ?? DateTimeOffset.UtcNow,
+            weekStartDate,
+            weekStartDate.AddDays(6),
             false,
             false,
             false,

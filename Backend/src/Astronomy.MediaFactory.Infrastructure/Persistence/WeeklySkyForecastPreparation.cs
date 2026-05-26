@@ -29,6 +29,13 @@ public sealed class WeeklySkyForecastContextBuilder(
 
     public async Task<WeeklySkyForecastContext> BuildAsync(WeeklySkyForecastProductionRequest request, CancellationToken cancellationToken)
     {
+        logger.LogInformation("WeeklySkyForecast raw request payload: {RequestPayload}", JsonSerializer.Serialize(request));
+        logger.LogInformation("WeeklySkyForecast parsed WeekStartDate={WeekStartDate}, WeekEndDate={WeekEndDate}", request.WeekStartDate, request.WeekEndDate);
+        if (request.WeekStartDate == DateOnly.MinValue || request.WeekEndDate == DateOnly.MinValue)
+            throw new ArgumentException("WeekStartDate and WeekEndDate are required and cannot be DateOnly.MinValue.");
+        if (request.WeekEndDate < request.WeekStartDate)
+            throw new ArgumentException("WeekEndDate must be greater than or equal to WeekStartDate.");
+
         logger.LogInformation("Resolving WeeklySkyForecast region using production region resolver.");
         logger.LogInformation("Requested regionId: {RequestedRegionId}", request.RegionId);
 
@@ -55,8 +62,8 @@ public sealed class WeeklySkyForecastContextBuilder(
             resolution.Longitude,
             resolution.Timezone);
 
-        var weekStart = DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
-        var weekEnd = weekStart.AddDays(6);
+        var weekStart = request.WeekStartDate;
+        var weekEnd = request.WeekEndDate;
         var resolvedLocationName = string.IsNullOrWhiteSpace(resolution.LocationName) ? request.RegionName : resolution.LocationName;
         logger.LogInformation("Skyfield weekly request payload: regionId={RegionId}, location={LocationName}, latitude={Latitude}, longitude={Longitude}, timezone={Timezone}, startDate={StartDate}, endDate={EndDate}", resolution.CanonicalRegionId, resolvedLocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, weekStart, weekEnd);
         logger.LogInformation("Resolved region for WeeklySkyForecast: {RegionId}", resolution.CanonicalRegionId);
@@ -253,6 +260,8 @@ public sealed class WeeklySkyForecastContextBuilder(
                 context.Request.RegionId,
                 context.Request.RegionName,
                 context.Request.ScheduledUtc,
+                context.Request.WeekStartDate ?? DateOnly.FromDateTime(context.Request.ScheduledUtc.UtcDateTime),
+                (context.Request.WeekStartDate ?? DateOnly.FromDateTime(context.Request.ScheduledUtc.UtcDateTime)).AddDays(6),
                 Diagnostics: context.Request.Diagnostics),
             cancellationToken);
     }

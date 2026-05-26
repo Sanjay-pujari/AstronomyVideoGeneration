@@ -951,10 +951,14 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/run-through-timeline", 
         timelineCompositionPackage = timeline
     });
 });
-app.MapPost("/api/content-planning/run-weekly-skyforecast-preparation", async (WeeklySkyForecastProductionRequest request, IWeeklySkyForecastPreparationOrchestrator orchestrator, CancellationToken ct) =>
+app.MapPost("/api/content-planning/run-weekly-skyforecast-preparation", async (WeeklySkyForecastProductionRequest request, IWeeklySkyForecastPreparationOrchestrator orchestrator, ILogger<Program> logger, CancellationToken ct) =>
 {
     try
     {
+        logger.LogInformation("WeeklySkyForecast preparation raw request payload: {@Request}", request);
+        logger.LogInformation("WeeklySkyForecast preparation parsed WeekStartDate={WeekStartDate}, WeekEndDate={WeekEndDate}", request.WeekStartDate, request.WeekEndDate);
+        if (request.WeekStartDate == DateOnly.MinValue || request.WeekEndDate == DateOnly.MinValue)
+            return Results.BadRequest(new { message = "weekStartDate and weekEndDate are required and cannot be DateOnly.MinValue." });
         var safeRequest = request with { PublishToYouTube = false, PublishToFacebook = false, PublishToInstagram = false };
         var response = await orchestrator.RunAsync(safeRequest, ct);
         return Results.Ok(response);
