@@ -252,18 +252,30 @@ public sealed class WeeklySkyForecastContextBuilder(
             logger.LogInformation("Reusing cached WeeklySkyForecast context for pipelineRunId {pipelineRunId}", context.PipelineRunId);
             return Task.FromResult(context.WeeklyForecast);
         }
+        var weekStartDate = context.Request.WeekStartDate ?? DateOnly.FromDateTime(context.Request.ScheduledUtc.UtcDateTime);
+        var preservedRequest = new WeeklySkyForecastProductionRequest(
+            context.Request.ContentCategoryCode,
+            context.Request.Language,
+            context.Request.RegionId,
+            context.Request.RegionName,
+            context.Request.ScheduledUtc,
+            weekStartDate,
+            weekStartDate.AddDays(6),
+            GenerateNarration: context.Request.GenerateNarration,
+            GenerateAudio: context.Request.GenerateAudio,
+            GenerateSscScripts: context.Request.GenerateSscScripts,
+            CaptureStellariumScenes: context.Request.CaptureStellariumScenes,
+            GenerateSegmentVideos: context.Request.GenerateSegmentVideos,
+            GenerateFinalVideos: context.Request.GenerateFinalVideos,
+            DryRun: context.Request.DryRun,
+            OverwriteExisting: context.Request.OverwriteExisting,
+            PublishToYouTube: context.Request.PublishToYouTube,
+            PublishToFacebook: context.Request.PublishToFacebook,
+            PublishToInstagram: context.Request.PublishToInstagram,
+            Diagnostics: context.Request.Diagnostics);
+        logger.LogInformation("WeeklySkyForecast request snapshot before orchestration context build: {RequestPayload}", JsonSerializer.Serialize(preservedRequest));
 
-        return BuildAsync(
-            new WeeklySkyForecastProductionRequest(
-                context.Request.ContentCategoryCode,
-                context.Request.Language,
-                context.Request.RegionId,
-                context.Request.RegionName,
-                context.Request.ScheduledUtc,
-                context.Request.WeekStartDate ?? DateOnly.FromDateTime(context.Request.ScheduledUtc.UtcDateTime),
-                (context.Request.WeekStartDate ?? DateOnly.FromDateTime(context.Request.ScheduledUtc.UtcDateTime)).AddDays(6),
-                Diagnostics: context.Request.Diagnostics),
-            cancellationToken);
+        return BuildAsync(preservedRequest, cancellationToken);
     }
 }
 

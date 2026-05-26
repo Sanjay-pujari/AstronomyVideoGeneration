@@ -720,6 +720,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
 {
     try
     {
+        app.Logger.LogInformation("WeeklySkyForecast generate-weekly-scenes request after HTTP binding: {@Request}", request);
         var contentPlanId = request.ContentGenerationPlanId;
         if (!contentPlanId.HasValue)
         {
@@ -750,6 +751,28 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var skyfieldErrorsPath = Path.Combine(debugRoot, "skyfield-weekly-errors.json");
         await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.SkyfieldSummary, new JsonSerializerOptions { WriteIndented = true }), ct);
         await File.WriteAllTextAsync(skyfieldErrorsPath, "[]", ct);
+
+        app.Logger.LogInformation(
+            "WeeklySkyForecast generate-weekly-scenes before orchestration visual generation: weekStartDate={WeekStartDate}, weekEndDate={WeekEndDate}, scheduledUtc={ScheduledUtc}, dryRun={DryRun}, generateSscScripts={GenerateSscScripts}, captureStellariumScenes={CaptureStellariumScenes}, diagnostics={Diagnostics}, flags={Flags}",
+            request.WeekStartDate,
+            request.WeekStartDate?.AddDays(6),
+            request.ScheduledUtc,
+            false,
+            true,
+            true,
+            request.Diagnostics,
+            new
+            {
+                request.ContentCategoryCode,
+                request.Language,
+                request.RegionId,
+                request.RegionName,
+                request.StellariumTimeoutSeconds,
+                request.MaxScriptCount,
+                request.ContinueOnFailure,
+                pipelineRunId,
+                contentPlanId
+            });
 
         var visualAssets = await visualAssetService.GenerateAsync(
             contentPlanId.Value,
