@@ -1176,6 +1176,30 @@ public sealed record WeeklySkyForecastV2RenderScenesRequest(
     bool Diagnostics = true,
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
+public sealed record WeeklySkyForecastV2GenerateWeeklyScenesRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    string RegionName,
+    DateTimeOffset ScheduledUtc,
+    DateOnly? WeekStartDate = null,
+    bool Diagnostics = false,
+    int? StellariumTimeoutSeconds = null,
+    int? MaxScriptCount = null,
+    bool ContinueOnFailure = true,
+    Guid? ContentGenerationPlanId = null,
+    Guid? PipelineRunId = null);
+
+public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
+    Guid PipelineRunId,
+    string WorkingDirectoryRoot,
+    string SkyfieldResponsePath,
+    string StoryBeatPath,
+    string ScenePlanPath,
+    int GeneratedScenes,
+    int GeneratedSscScripts,
+    IReadOnlyList<string> Screenshots,
+    IReadOnlyList<string> Warnings);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
