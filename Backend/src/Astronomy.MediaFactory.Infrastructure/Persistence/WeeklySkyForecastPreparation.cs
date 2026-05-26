@@ -55,7 +55,7 @@ public sealed class WeeklySkyForecastContextBuilder(
             resolution.Longitude,
             resolution.Timezone);
 
-        var weekStart = request.WeekStartDate ?? DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
+        var weekStart = DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
         var weekEnd = weekStart.AddDays(6);
         var resolvedLocationName = string.IsNullOrWhiteSpace(resolution.LocationName) ? request.RegionName : resolution.LocationName;
         logger.LogInformation("Skyfield weekly request payload: regionId={RegionId}, location={LocationName}, latitude={Latitude}, longitude={Longitude}, timezone={Timezone}, startDate={StartDate}, endDate={EndDate}", resolution.CanonicalRegionId, resolvedLocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, weekStart, weekEnd);
@@ -90,7 +90,7 @@ public sealed class WeeklySkyForecastContextBuilder(
                 var day = weekStart.AddDays(offset);
                 try
                 {
-                    var daily = await sidecarClient.GetDailySkyAsync(new SkyfieldDailySkyRequest
+                    var dailyForecast = await sidecarClient.GetDailySkyAsync(new SkyfieldDailySkyRequest
                     {
                         Date = day.ToString("yyyy-MM-dd"),
                         LocationName = resolvedLocationName,
@@ -98,7 +98,7 @@ public sealed class WeeklySkyForecastContextBuilder(
                         Longitude = resolution.Longitude,
                         Timezone = resolution.Timezone
                     }, cancellationToken);
-                    if (daily is null)
+                    if (dailyForecast is null)
                     {
                         failedDays.Add(new { date = day.ToString("yyyy-MM-dd"), error = "Daily Skyfield response was null." });
                         logger.LogWarning("Skyfield daily fallback failed for {Date}: null response.", day);
@@ -107,14 +107,14 @@ public sealed class WeeklySkyForecastContextBuilder(
 
                     successfulDays.Add(new DailySkyForecastItem
                     {
-                        Date = daily.TargetDate,
-                        SunsetUtc = DateTime.TryParse(daily.NightWindowStartUtc, out var nwStart) ? nwStart : DateTime.UtcNow,
-                        SunriseUtc = DateTime.TryParse(daily.NightWindowEndUtc, out var nwEnd) ? nwEnd : DateTime.UtcNow,
+                        Date = dailyForecast.TargetDate,
+                        SunsetUtc = DateTime.TryParse(dailyForecast.NightWindowStartUtc, out var nwStart) ? nwStart : DateTime.UtcNow,
+                        SunriseUtc = DateTime.TryParse(dailyForecast.NightWindowEndUtc, out var nwEnd) ? nwEnd : DateTime.UtcNow,
                         MoonPhase = "",
                         MoonIlluminationPercent = 0,
                         MoonRiseUtc = null,
                         MoonSetUtc = null,
-                        VisibleObjects = daily.VisibleObjects.Select(v => new VisibleObjectForecastItem
+                        VisibleObjects = dailyForecast.VisibleObjects.Select(v => new VisibleObjectForecastItem
                         {
                             ObjectCode = v.ObjectCode,
                             ObjectName = v.ObjectName,
@@ -131,10 +131,10 @@ public sealed class WeeklySkyForecastContextBuilder(
                             Reason = v.Reason
                         }).ToList(),
                         Events = [],
-                        BestViewingStartUtc = DateTime.TryParse(daily.NightWindowStartUtc, out var bvs) ? bvs : DateTime.UtcNow,
-                        BestViewingEndUtc = DateTime.TryParse(daily.NightWindowEndUtc, out var bve) ? bve : DateTime.UtcNow,
-                        OverallViewingScore = daily.VisibleObjects.Any() ? daily.VisibleObjects.Average(x => x.VisibilityScore) : 0,
-                        ViewingSummary = daily.Summary
+                        BestViewingStartUtc = DateTime.TryParse(dailyForecast.NightWindowStartUtc, out var bvs) ? bvs : DateTime.UtcNow,
+                        BestViewingEndUtc = DateTime.TryParse(dailyForecast.NightWindowEndUtc, out var bve) ? bve : DateTime.UtcNow,
+                        OverallViewingScore = dailyForecast.VisibleObjects.Any() ? dailyForecast.VisibleObjects.Average(x => x.VisibilityScore) : 0,
+                        ViewingSummary = dailyForecast.Summary
                     });
                 }
                 catch (Exception ex)
