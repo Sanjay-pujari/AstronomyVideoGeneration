@@ -370,9 +370,9 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             request.RegionName,
             request.ScheduledUtc,
             request.WeekStartDate,
-            request.Diagnostics,
-            pipelineRunId,
-            contentPlanId);
+            Diagnostics: request.Diagnostics,
+            PipelineRunId: pipelineRunId,
+            ContentGenerationPlanId: contentPlanId);
         var response = await service.PreviewAsync(intelligenceRequest, ct);
         var root = response.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
         var debugFiles = new Dictionary<string, string?>
@@ -709,9 +709,9 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
         request.RegionName,
         request.ScheduledUtc,
         request.WeekStartDate,
-        request.Diagnostics,
-        pipelineRunId,
-        contentPlanId);
+        Diagnostics: request.Diagnostics,
+        PipelineRunId: pipelineRunId,
+        ContentGenerationPlanId: contentPlanId);
     var result = await orchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
     return Results.Ok(result);
 });
@@ -736,9 +736,9 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             request.RegionName,
             request.ScheduledUtc,
             request.WeekStartDate,
-            request.Diagnostics,
-            pipelineRunId,
-            contentPlanId);
+            Diagnostics: request.Diagnostics,
+            PipelineRunId: pipelineRunId,
+            ContentGenerationPlanId: contentPlanId);
 
         var response = await service.PreviewAsync(intelligenceRequest, ct);
         var root = response.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
@@ -846,9 +846,9 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/compose-timeline", asyn
         request.RegionName,
         request.ScheduledUtc,
         request.WeekStartDate,
-        request.Diagnostics,
-        pipelineRunId,
-        contentPlanId);
+        Diagnostics: request.Diagnostics,
+        PipelineRunId: pipelineRunId,
+        ContentGenerationPlanId: contentPlanId);
     var result = await orchestrator.RunAsync(intelligenceRequest, contentPlanId, ct);
     return Results.Ok(result);
 });
@@ -865,7 +865,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-final-media", as
     }
 
     var pipelineRunId = request.PipelineRunId ?? contentPlanId.Value;
-    var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, request.WeekStartDate, request.Diagnostics, pipelineRunId, contentPlanId);
+    var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, request.WeekStartDate, Diagnostics: request.Diagnostics, PipelineRunId: pipelineRunId, ContentGenerationPlanId: contentPlanId);
     using var skyfieldTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
     skyfieldTimeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
     var weeklyForecast = await contextBuilder.BuildAsync(new WeeklySkyForecastV2OrchestrationContext(contentPlanId.Value, pipelineRunId, null, intelligenceRequest, null, null, null, null, null, null, DateTime.UtcNow), skyfieldTimeoutCts.Token);
@@ -962,7 +962,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/run-through-timeline", 
     }
 
     var pipelineRunId = request.PipelineRunId ?? contentPlanId.Value;
-    var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, request.WeekStartDate, request.Diagnostics, pipelineRunId, contentPlanId);
+    var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc, request.WeekStartDate, Diagnostics: request.Diagnostics, PipelineRunId: pipelineRunId, ContentGenerationPlanId: contentPlanId);
 
     var intelligence = await intelligenceService.PreviewAsync(intelligenceRequest, ct);
     var renderPreparation = intelligence.RenderPreparationPackage ?? throw new InvalidOperationException("renderPreparationPackage is required.");
