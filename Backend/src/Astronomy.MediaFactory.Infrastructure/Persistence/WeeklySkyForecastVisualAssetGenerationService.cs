@@ -13,7 +13,8 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
     ICategoryOutputPathResolver pathResolver,
     IStellariumScriptGenerator scriptGenerator,
     IStellariumImageCaptureExecutor captureExecutor,
-    IOptions<StellariumOptions> stellariumOptions) : IWeeklySkyForecastVisualAssetGenerationService
+    IOptions<StellariumOptions> stellariumOptions,
+    ILogger<WeeklySkyForecastVisualAssetGenerationService> logger) : IWeeklySkyForecastVisualAssetGenerationService
 {
     public async Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, CancellationToken cancellationToken)
     {
@@ -86,6 +87,17 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
         StellariumCaptureExecutionResponse? captureResponse = null;
         if (!request.DryRun && request.CaptureStellariumScenes)
         {
+            logger.LogInformation(
+                "WeeklySkyForecast before screenshot generation: contentGenerationPlanId={ContentGenerationPlanId}, weekStartDate={WeekStartDate}, weekEndDate={WeekEndDate}, scheduledUtc={ScheduledUtc}, dryRun={DryRun}, generateSscScripts={GenerateSscScripts}, captureStellariumScenes={CaptureStellariumScenes}, diagnostics={Diagnostics}, overwriteExisting={OverwriteExisting}",
+                contentGenerationPlanId,
+                weeklyRequest.WeekStartDate,
+                weeklyRequest.WeekEndDate,
+                weeklyRequest.ScheduledUtc,
+                request.DryRun,
+                true,
+                request.CaptureStellariumScenes,
+                request.Diagnostics,
+                request.OverwriteExisting);
             captureResponse = await captureExecutor.CaptureAsync(capturePlan, new StellariumCaptureExecutionRequest(contentGenerationPlanId, false, request.OverwriteExisting, request.Diagnostics), cancellationToken);
             warnings.AddRange(captureResponse.Warnings);
         }
