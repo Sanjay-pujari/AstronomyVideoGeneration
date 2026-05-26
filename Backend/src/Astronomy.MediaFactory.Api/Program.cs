@@ -403,7 +403,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
 
         async Task<object?> ExecuteStellariumScreenshotsAsync(WeeklyStellariumScriptPackage shots)
         {
-            return await stellariumScreenshotGenerator.GenerateAsync(root!, shots, request.ExecuteShotCode, request.MaxScriptCount, request.ExecuteAllScripts, request.ConfirmFullBatch, request.ContinueOnFailure, request.StellariumTimeoutSeconds ?? 90, ct);
+            return await stellariumScreenshotGenerator.GenerateAsync(root!, shots, request.ExecuteShotCode, request.TestMode, request.MaxScriptCount, request.ExecuteAllScripts, request.ConfirmFullBatch, request.ContinueOnFailure, request.StellariumTimeoutSeconds ?? 90, ct);
         }
         async Task<object?> ExecuteStellariumSmokeTestAsync()
         {
@@ -494,6 +494,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             {
                 requestedPhase = phase.ToString(),
                 executeShotCode = request.ExecuteShotCode,
+                testMode = request.TestMode,
                 maxScriptCount = request.MaxScriptCount,
                 executeAllScripts = request.ExecuteAllScripts,
                 confirmFullBatch = request.ConfirmFullBatch,
