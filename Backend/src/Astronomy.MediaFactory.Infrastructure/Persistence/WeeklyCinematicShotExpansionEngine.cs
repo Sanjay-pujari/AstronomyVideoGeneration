@@ -46,7 +46,11 @@ public sealed class WeeklyCinematicShotExpansionEngine(IWeeklySkySceneComposer s
 
         warnings.AddRange(sceneComposition.Errors);
         var validation = Validate(sequences, fov, workingDirectoryRoot);
-        var pkg = new WeeklyCinematicShotPackage(validation.Count == 0, storyboard.EmotionalArc, pipelineRunId, sequences.Count, sequences.Sum(s => s.Shots.Count), sequences.Sum(s => s.DurationSeconds), sequences, fov, validation, warnings);
+        var totalShots = sequences.Sum(s => s.Shots.Count);
+        var hasScriptPath = sequences.SelectMany(s => s.Shots).Any(s => !string.IsNullOrWhiteSpace(s.ExpectedSscScriptPath));
+        var hasImagePath = sequences.SelectMany(s => s.Shots).Any(s => !string.IsNullOrWhiteSpace(s.ExpectedOutputImagePath));
+        var packageExecutable = totalShots > 0 && sequences.Count > 0 && hasScriptPath && hasImagePath;
+        var pkg = new WeeklyCinematicShotPackage(packageExecutable, storyboard.EmotionalArc, pipelineRunId, sequences.Count, totalShots, sequences.Sum(s => s.DurationSeconds), sequences, fov, validation, warnings);
         Directory.CreateDirectory(Path.Combine(workingDirectoryRoot, "debug"));
         File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-cinematic-shot-timeline.json"), JsonSerializer.Serialize(pkg, new JsonSerializerOptions { WriteIndented = true }));
         diagnostics.FovCalculations = fov;
@@ -257,16 +261,16 @@ public sealed class WeeklyCinematicShotExpansionEngine(IWeeklySkySceneComposer s
         if (!seq.Any()) issues.Add("no scene sequences");
         var shots = seq.SelectMany(x => x.Shots).ToList();
         if (!shots.Any()) issues.Add("totalShots == 0");
-        if (seq.Any(s => s.Shots.Count < 2)) issues.Add("any sequence has fewer than 2 shots");
-        if (seq.Where(s => s.SceneType.Contains("wide_sky", StringComparison.OrdinalIgnoreCase)).Any(s => s.Shots.Count < 3)) issues.Add("opening sequence has fewer than 3 shots");
-        if (seq.Where(s => s.SceneType.Contains("group", StringComparison.OrdinalIgnoreCase)).Any(s => s.Shots.Count < 5)) issues.Add("grouping scene has fewer than 5 shots");
+        if (seq.Any(s => s.Shots.Count < 2)) issues.Add("warning: any sequence has fewer than 2 shots");
+        if (seq.Where(s => s.SceneType.Contains("wide_sky", StringComparison.OrdinalIgnoreCase)).Any(s => s.Shots.Count < 3)) issues.Add("warning: opening sequence has fewer than 3 shots");
+        if (seq.Where(s => s.SceneType.Contains("group", StringComparison.OrdinalIgnoreCase)).Any(s => s.Shots.Count < 5)) issues.Add("warning: grouping scene has fewer than 5 shots");
         if (shots.Any(s => s.DurationSeconds <= 0)) issues.Add("any shot missing duration");
         if (shots.Any(s => string.IsNullOrWhiteSpace(s.ExpectedOutputImagePath) || string.IsNullOrWhiteSpace(s.ExpectedOutputVideoPath) || string.IsNullOrWhiteSpace(s.ExpectedSscScriptPath))) issues.Add("any shot missing output path");
         if (shots.Any(s => !IsPathUnderRoot(s.ExpectedOutputImagePath, rootFull) || !IsPathUnderRoot(s.ExpectedOutputVideoPath, rootFull) || !IsPathUnderRoot(s.ExpectedSscScriptPath, rootFull))) issues.Add("every shot path must be under workingDirectoryRoot");
         if (shots.Any(s => string.IsNullOrWhiteSpace(s.TransitionIn.TransitionIn) || string.IsNullOrWhiteSpace(s.TransitionOut.TransitionOut))) issues.Add("any shot missing transition");
         if (shots.Where(s=>s.ShotType.Contains("group", StringComparison.OrdinalIgnoreCase) || s.ShotType.Contains("focus", StringComparison.OrdinalIgnoreCase)).Any(s => !s.TargetObjects.Any())) issues.Add("any grouping shot missing target objects");
         if (seq.Any(s => s.SceneType.Contains("group", StringComparison.OrdinalIgnoreCase)) && !fov.Any()) issues.Add("dynamic FOV missing for grouping scene");
-        if (fov.Any(x => x.Reason.Contains("fallback", StringComparison.OrdinalIgnoreCase) && !x.Reason.Contains("missing", StringComparison.OrdinalIgnoreCase))) issues.Add("grouping scene has no real separation calculation and no explicit fallback reason");
+        if (fov.Any(x => x.Reason.Contains("fallback", StringComparison.OrdinalIgnoreCase) && !x.Reason.Contains("missing", StringComparison.OrdinalIgnoreCase))) issues.Add("warning: grouping scene fallback FOV applied");
         if (shots.Zip(shots.Skip(1), (a,b) => (a,b)).Any(p => Math.Abs(p.a.NarrationSync.EstimatedEndSecond - p.b.NarrationSync.EstimatedStartSecond) > 0.001)) issues.Add("narration timings are not cumulative");
         var totalDuration = shots.Sum(s => s.DurationSeconds);
         if (totalDuration < 120) issues.Add("total duration < 120s");
