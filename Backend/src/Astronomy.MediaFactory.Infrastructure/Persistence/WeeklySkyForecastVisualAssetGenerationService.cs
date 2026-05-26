@@ -17,7 +17,7 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
     IOptions<StellariumOptions> stellariumOptions,
     ILogger<WeeklySkyForecastVisualAssetGenerationService> logger) : IWeeklySkyForecastVisualAssetGenerationService
 {
-    public async Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, CancellationToken cancellationToken)
+    public async Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, WeeklySkyForecastProductionRequest? productionRequest, CancellationToken cancellationToken)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -32,7 +32,7 @@ public sealed class WeeklySkyForecastVisualAssetGenerationService(
         }
 
         var weekStartDate = DateOnly.FromDateTime((plan.ScheduledUtc ?? DateTimeOffset.UtcNow).UtcDateTime);
-        var weeklyRequest = new WeeklySkyForecastProductionRequest(
+        var weeklyRequest = productionRequest ?? new WeeklySkyForecastProductionRequest(
             plan.ContentCategoryCode,
             plan.Language,
             plan.RegionId,
