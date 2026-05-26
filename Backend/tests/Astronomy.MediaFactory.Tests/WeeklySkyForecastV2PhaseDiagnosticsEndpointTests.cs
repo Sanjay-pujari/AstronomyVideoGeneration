@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using Astronomy.MediaFactory.Core;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Xunit;
 
