@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Json;
+using SixLabors.ImageSharp;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -18,7 +20,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
     private const int MaximumTimeoutSeconds = 180;
     private readonly StellariumOptions _options = options.Value;
 
-    public async Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, int? maxScriptCount = null, bool executeAllScripts = false, bool confirmFullBatch = false, bool continueOnFailure = true, int timeoutSeconds = 90, CancellationToken cancellationToken = default)
+    public async Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, string? testMode = null, int? maxScriptCount = null, bool executeAllScripts = false, bool confirmFullBatch = false, bool continueOnFailure = true, int timeoutSeconds = 90, CancellationToken cancellationToken = default)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -46,7 +48,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 
         var ignoredDiagnosticScripts = new List<string>();
         var skippedScripts = new List<(string ShotCode, string Reason)>();
-        var selected = SelectScripts(scriptPackage, executeShotCode, maxScriptCount, executeAllScripts, confirmFullBatch, warnings, errors, ignoredDiagnosticScripts, skippedScripts);
+        var selected = SelectScripts(scriptPackage, executeShotCode, testMode, maxScriptCount, executeAllScripts, confirmFullBatch, warnings, errors, ignoredDiagnosticScripts, skippedScripts);
         logger.LogInformation("Starting Stellarium screenshot execution batch");
         var totalScenes = scriptPackage.Scripts.Select(s => s.ShotCode.Split("_", StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? s.ShotCode).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         logger.LogInformation("Screenshot execution diagnostics: packageIsValid={IsValid}, totalScenes={TotalScenes}, totalShots={TotalShots}, executableShotCount={ExecutableShotCount}, skippedShotCount={SkippedShotCount}", scriptPackage.IsValid, totalScenes, scriptPackage.ScriptCount, selected.Count, skippedScripts.Count);
@@ -197,10 +199,11 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         var skippedShots = skippedScripts.Count;
         logger.LogInformation("Screenshot generation completed");
         logger.LogInformation("Screenshot batch summary: attemptedShots={AttemptedShots}, successfulShots={SuccessfulShots}, failedShots={FailedShots}, skippedShots={SkippedShots}", attemptedShots, successfulShots, failedShots, skippedShots);
+        await WriteValidationReportAsync(workingDirectoryRoot, results, warnings, sw.ElapsedMilliseconds);
         return await WriteResultAsync(failedShots == 0, workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds, selectedScript.ShotCode, selectedScript.ScriptPath, ignoredDiagnosticScripts);
     }
 
-    private static List<WeeklyStellariumScriptInfo> SelectScripts(WeeklyStellariumScriptPackage package, string? executeShotCode, int? maxScriptCount, bool executeAllScripts, bool confirmFullBatch, List<string> warnings, List<string> errors, List<string> ignoredDiagnosticScripts, List<(string ShotCode, string Reason)> skippedScripts)
+    private static List<WeeklyStellariumScriptInfo> SelectScripts(WeeklyStellariumScriptPackage package, string? executeShotCode, string? testMode, int? maxScriptCount, bool executeAllScripts, bool confirmFullBatch, List<string> warnings, List<string> errors, List<string> ignoredDiagnosticScripts, List<(string ShotCode, string Reason)> skippedScripts)
     {
         if (package.Scripts.Count == 0)
         {
@@ -232,7 +235,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             return [selected];
         }
 
-        var ordered = executableScripts.OrderBy(s => s.ShotOrder).ToList();
+        var ordered = FilterByTestMode(executableScripts.OrderBy(s => s.ShotOrder).ToList(), testMode);
         if (executeAllScripts)
         {
             if (!confirmFullBatch)
@@ -250,13 +253,69 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         return ordered.Take(capped).ToList();
     }
 
-    private static async Task<WeeklyStellariumScreenshotGenerationResult> WriteResultAsync(bool success, string workingDirectoryRoot, string? pipelineRunId, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<WeeklyStellariumScreenshotScriptResult> scripts, long elapsedMs, string? selectedShotCode, string? selectedScriptPath, IReadOnlyList<string> ignoredDiagnosticScripts)
+    
+    private static List<WeeklyStellariumScriptInfo> FilterByTestMode(List<WeeklyStellariumScriptInfo> ordered, string? testMode)
+    {
+        if (string.IsNullOrWhiteSpace(testMode) || testMode.Equals("All", StringComparison.OrdinalIgnoreCase)) return ordered;
+        return ordered.Where(s =>
+        {
+            var content = File.Exists(s.ScriptPath) ? File.ReadAllText(s.ScriptPath) : string.Empty;
+            var renderMode = ReadHeaderString(content, "RenderMode") ?? ReadHeaderString(content, "Type") ?? s.ShotCode;
+            var targetCount = ReadHeaderString(content, "TargetObjects")?.Split(',', StringSplitOptions.RemoveEmptyEntries).Length ?? (s.ShotCode.Contains("group", StringComparison.OrdinalIgnoreCase) || s.ShotCode.Contains("conjunction", StringComparison.OrdinalIgnoreCase) ? 2 : 1);
+            if (testMode.Equals("Single", StringComparison.OrdinalIgnoreCase)) return targetCount == 1;
+            if (testMode.Equals("Grouping", StringComparison.OrdinalIgnoreCase)) return renderMode.Contains("group", StringComparison.OrdinalIgnoreCase);
+            if (testMode.Equals("Conjunction", StringComparison.OrdinalIgnoreCase)) return renderMode.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
+            if (testMode.Equals("Panorama", StringComparison.OrdinalIgnoreCase)) return renderMode.Contains("panorama", StringComparison.OrdinalIgnoreCase) || renderMode.Contains("wide", StringComparison.OrdinalIgnoreCase);
+            return true;
+        }).ToList();
+    }
+
+    private static string? ReadHeaderString(string text, string key)
+    {
+        var marker = $"// {key}:";
+        var line = text.Split('\n').FirstOrDefault(x => x.TrimStart().StartsWith(marker, StringComparison.OrdinalIgnoreCase));
+        if (line is null) return null;
+        return line[(line.IndexOf(':') + 1)..].Trim();
+    }
+private static async Task<WeeklyStellariumScreenshotGenerationResult> WriteResultAsync(bool success, string workingDirectoryRoot, string? pipelineRunId, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<WeeklyStellariumScreenshotScriptResult> scripts, long elapsedMs, string? selectedShotCode, string? selectedScriptPath, IReadOnlyList<string> ignoredDiagnosticScripts)
     {
         var timeoutCount = scripts.Count(s => s.TimedOut);
         var result = new WeeklyStellariumScreenshotGenerationResult(success, scripts.Count, scripts.Count(s => s.Error is null), scripts.Count(s => s.Error is not null), elapsedMs, timeoutCount, warnings, errors, scripts, Path.Combine(Path.GetFullPath(workingDirectoryRoot), "debug", "weekly-stellarium-multishot-capture.json"), Path.GetFullPath(workingDirectoryRoot), pipelineRunId, selectedShotCode, selectedScriptPath, "WeeklyStellariumScriptPackage", ignoredDiagnosticScripts);
         Directory.CreateDirectory(Path.GetDirectoryName(result.DiagnosticsPath)!);
         await File.WriteAllTextAsync(result.DiagnosticsPath, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         return result;
+    }
+
+
+    private static async Task WriteValidationReportAsync(string workingDirectoryRoot, IReadOnlyList<WeeklyStellariumScreenshotScriptResult> results, List<string> warnings, long elapsedMs)
+    {
+        var hashes = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var payloadResults = new List<object>();
+        foreach (var r in results)
+        {
+            string? sha = null;
+            int width = 0; int height = 0;
+            var itemWarnings = new List<string>();
+            if (File.Exists(r.ExpectedScreenshotPath))
+            {
+                using var fs = File.OpenRead(r.ExpectedScreenshotPath);
+                sha = Convert.ToHexString(SHA256.HashData(fs));
+                fs.Position = 0;
+                var info = Image.Identify(fs);
+                width = info?.Width ?? 0; height = info?.Height ?? 0;
+                if (width <= 0 || height <= 0) itemWarnings.Add("Invalid image dimensions.");
+                if (r.ScreenshotSizeBytes <= MinScreenshotBytes) itemWarnings.Add("Screenshot size <=10KB.");
+                hashes.TryAdd(sha, []); hashes[sha].Add(r.ShotCode);
+            }
+            payloadResults.Add(new { shotCode = r.ShotCode, scriptExecuted = true, screenshotExists = r.ScreenshotExists, fileSizeBytes = r.ScreenshotSizeBytes, dimensions = new { width, height }, imageHash = sha, warnings = itemWarnings, error = r.Error });
+            var compPath = Path.Combine(Path.GetDirectoryName(r.ExpectedScreenshotPath)!, $"{r.ShotCode}.composition.json");
+            await File.WriteAllTextAsync(compPath, JsonSerializer.Serialize(new { shotCode = r.ShotCode, renderMode = "Unknown", centerAzimuth = (double?)null, centerAltitude = (double?)null, computedFov = (double?)null, targetObjects = Array.Empty<string>(), includedObjects = Array.Empty<string>(), excludedObjects = Array.Empty<string>(), fallbackUsed = false, fallbackReason = "" }, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        foreach (var dup in hashes.Where(x => x.Value.Count > 1)) warnings.Add($"Duplicate screenshot hash detected for shots: {string.Join(",", dup.Value)}");
+        var report = new { totalShots = results.Count, successfulScreenshots = results.Count(x => string.IsNullOrWhiteSpace(x.Error)), failedScreenshots = results.Count(x => !string.IsNullOrWhiteSpace(x.Error)), duplicateGroups = hashes.Where(x=>x.Value.Count>1).Select(x=>x.Value).ToList(), results = payloadResults, totalElapsedMs = elapsedMs };
+        var path = Path.Combine(Path.GetFullPath(workingDirectoryRoot), "debug", "weekly-screenshot-validation.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static string ExtractPipelineRunId(string rootFull)
