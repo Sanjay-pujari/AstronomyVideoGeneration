@@ -765,7 +765,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var visualRequirementsPath = Path.Combine(narrationDirectory, "weekly-visual-requirements.json");
         await File.WriteAllTextAsync(storyBeatsPath, JsonSerializer.Serialize(weeklySkyfieldContext.NarrativeAbstractionPackage, new JsonSerializerOptions { WriteIndented = true }), ct);
         await File.WriteAllTextAsync(narrationPlanPath, JsonSerializer.Serialize(weeklySkyfieldContext.NarrationPlan, new JsonSerializerOptions { WriteIndented = true }), ct);
-        await File.WriteAllTextAsync(narrationTextPath, weeklySkyfieldContext.GeneratedNarrationPackage?.FullNarrationText ?? string.Empty, ct);
+        await File.WriteAllTextAsync(narrationTextPath, weeklySkyfieldContext.GeneratedNarrationPackage?.LongFormNarration.FullNarration ?? string.Empty, ct);
         await File.WriteAllTextAsync(visualRequirementsPath, JsonSerializer.Serialize(weeklySkyfieldContext.VisualRequirementPackage, new JsonSerializerOptions { WriteIndented = true }), ct);
         app.Logger.LogInformation("Narration artifacts persisted");
 
