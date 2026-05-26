@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Options;
 using Xunit;
