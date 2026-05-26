@@ -320,7 +320,7 @@ public sealed class WeeklySkyForecastSegmentPlanner : IWeeklySkyForecastSegmentP
     }
 }
 
-public sealed class WeeklySkyForecastSscScenePlanner(ILogger<WeeklySkyForecastSscScenePlanner> logger) : IWeeklySkyForecastSscScenePlanner
+public sealed class LegacyWeeklyVisualAssetGenerator(ILogger<LegacyWeeklyVisualAssetGenerator> logger) : IWeeklySkyForecastSscScenePlanner
 {
     private const int MaxInitialWeeklyScenes = 5;
 
