@@ -98,6 +98,9 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             logger.LogInformation("selectedScriptLastWriteUtc={ScriptLastWriteUtc}", scriptLastWriteUtc);
             logger.LogInformation("workingDirectoryRoot={WorkingDirectoryRoot}", rootFull);
             logger.LogInformation("pipelineRunId={PipelineRunId}", pipelineRunId);
+            logger.LogInformation("Stellarium executable path: {ExecutablePath}", _options.ExecutablePath);
+            logger.LogInformation("SSC script path: {ScriptPath}", scriptFull);
+            logger.LogInformation("Screenshot target path: {ScreenshotTargetPath}", screenshotFull);
 
             if (!scriptExists) error = $"Selected script missing: {script.ScriptPath}";
             else if (!scriptFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) error = "Selected script path outside workingDirectoryRoot.";
@@ -109,8 +112,16 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 || (!scriptPreview.Contains("core.quitStellarium()", StringComparison.OrdinalIgnoreCase) && !scriptPreview.Contains("core.quit()", StringComparison.OrdinalIgnoreCase))) error = "Selected SSC script does not contain screenshot/quit command.";
             else
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(screenshotFull)!);
+                var screenshotDirectory = Path.GetDirectoryName(screenshotFull)!;
+                Directory.CreateDirectory(screenshotDirectory);
+                logger.LogInformation("Screenshot directory exists.");
                 if (File.Exists(screenshotFull)) File.Delete(screenshotFull);
+                logger.LogInformation("Expected screenshot path: {ExpectedScreenshotPath}", screenshotFull);
+                var screenshotCommand = ExtractScreenshotCommand(scriptPreview);
+                if (!string.IsNullOrWhiteSpace(screenshotCommand))
+                {
+                    logger.LogInformation("SSC screenshot command: {SscScreenshotCommand}", screenshotCommand);
+                }
 
                 using var process = new Process
                 {
@@ -126,6 +137,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 launchedExecutable = process.StartInfo.FileName;
                 launchedArguments = process.StartInfo.Arguments;
                 launchedWorkingDirectory = process.StartInfo.WorkingDirectory;
+                logger.LogInformation("Working directory: {WorkingDirectory}", launchedWorkingDirectory);
 
                 process.Start();
                 logger.LogInformation("Stellarium process id: {ProcessId}", process.Id);
@@ -163,6 +175,18 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 
                 var screenshotExists = File.Exists(screenshotFull);
                 screenshotSize = screenshotExists ? new FileInfo(screenshotFull).Length : 0;
+                if (!screenshotExists || screenshotSize <= MinScreenshotBytes)
+                {
+                    var fallback = TryResolveFallbackScreenshot(rootFull, script.ShotCode, screenshotFull, scriptLastWriteUtc);
+                    if (fallback is not null)
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(screenshotFull)!);
+                        File.Copy(fallback.FullPath, screenshotFull, overwrite: true);
+                        screenshotExists = File.Exists(screenshotFull);
+                        screenshotSize = screenshotExists ? new FileInfo(screenshotFull).Length : 0;
+                        logger.LogInformation("Actual screenshot detected:\n{Path}\n{FileSize}", fallback.FullPath, fallback.FileSizeBytes);
+                    }
+                }
                 logger.LogInformation("Screenshot exists: {ScreenshotExists}", screenshotExists);
                 logger.LogInformation("Screenshot file size: {ScreenshotSize}", screenshotSize);
                 timedOut = !(screenshotExists && screenshotSize > MinScreenshotBytes);
@@ -293,6 +317,45 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         var line = text.Split('\n').FirstOrDefault(x => x.TrimStart().StartsWith(marker, StringComparison.OrdinalIgnoreCase));
         if (line is null) return null;
         return line[(line.IndexOf(':') + 1)..].Trim();
+    }
+
+    private static string? ExtractScreenshotCommand(string scriptPreview)
+        => scriptPreview
+            .Split('\n')
+            .Select(x => x.Trim())
+            .FirstOrDefault(x => x.StartsWith("core.screenshot(", StringComparison.OrdinalIgnoreCase));
+
+    private ResolvedFallbackScreenshot? TryResolveFallbackScreenshot(string rootFull, string shotCode, string expectedScreenshotPath, string? scriptLastWriteUtc)
+    {
+        var expectedDir = Path.GetDirectoryName(expectedScreenshotPath) ?? Path.Combine(rootFull, "stellarium", "scenes");
+        var candidates = new List<string>();
+        candidates.Add(expectedDir);
+        if (!string.IsNullOrWhiteSpace(_options.CaptureDirectory)) candidates.Add(_options.CaptureDirectory);
+        var defaultPictures = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+        if (!string.IsNullOrWhiteSpace(defaultPictures)) candidates.Add(Path.Combine(defaultPictures, "Stellarium"));
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        if (!string.IsNullOrWhiteSpace(appData)) candidates.Add(Path.Combine(appData, "Stellarium", "screenshots"));
+
+        var allFiles = candidates
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(Directory.Exists)
+            .SelectMany(d => Directory.EnumerateFiles(d, "*.png", SearchOption.AllDirectories))
+            .Select(path => new FileInfo(path))
+            .Where(f => f.Exists && f.Length > 0)
+            .ToList();
+        if (allFiles.Count == 0) return null;
+
+        var scriptTimeUtc = DateTime.TryParse(scriptLastWriteUtc, out var parsedUtc) ? parsedUtc : DateTime.UtcNow;
+        var byShotCode = allFiles
+            .Where(f => f.Name.Contains(shotCode, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => Math.Abs((f.LastWriteTimeUtc - scriptTimeUtc).TotalSeconds))
+            .ThenByDescending(f => f.LastWriteTimeUtc)
+            .FirstOrDefault();
+        var selected = byShotCode ?? allFiles
+            .OrderBy(f => Math.Abs((f.LastWriteTimeUtc - scriptTimeUtc).TotalSeconds))
+            .ThenByDescending(f => f.LastWriteTimeUtc)
+            .FirstOrDefault();
+        return selected is null ? null : new ResolvedFallbackScreenshot(selected.FullName, selected.Length);
     }
 private static async Task<WeeklyStellariumScreenshotGenerationResult> WriteResultAsync(bool success, string workingDirectoryRoot, string? pipelineRunId, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<WeeklyStellariumScreenshotScriptResult> scripts, long elapsedMs, string? selectedShotCode, string? selectedScriptPath, IReadOnlyList<string> ignoredDiagnosticScripts)
     {
@@ -468,4 +531,6 @@ private static async Task<WeeklyStellariumScreenshotGenerationResult> WriteResul
         bool TimedOut,
         string Stdout,
         string Stderr);
+
+    private sealed record ResolvedFallbackScreenshot(string FullPath, long FileSizeBytes);
 }
