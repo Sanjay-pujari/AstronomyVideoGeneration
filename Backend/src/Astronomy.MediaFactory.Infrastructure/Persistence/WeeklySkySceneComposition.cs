@@ -234,7 +234,7 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
         {
             "core.clear(\"natural\");",
             "core.setGuiVisible(false);",
-            $"core.setDate(\"{DateTime.SpecifyKind(shot.CaptureDateLocal.ToDateTime(shot.CaptureTimeLocal), DateTimeKind.Local).ToUniversalTime():yyyy-MM-ddTHH:mm:ss}\", \"utc\");",
+            $"core.setDate(\"{DateTime.SpecifyKind(shot.DateLocal.ToDateTime(shot.TimeLocal), DateTimeKind.Local).ToUniversalTime():yyyy-MM-ddTHH:mm:ss}\", \"utc\");",
             $"core.setObserverLocation({260d.ToString(CultureInfo.InvariantCulture)}, {24.58d.ToString(CultureInfo.InvariantCulture)}, {600d.ToString(CultureInfo.InvariantCulture)}, 0, \"{locationName}\", \"Earth\");",
             "core.wait(3);",
             "LandscapeMgr.setFlagLandscape(true);",
