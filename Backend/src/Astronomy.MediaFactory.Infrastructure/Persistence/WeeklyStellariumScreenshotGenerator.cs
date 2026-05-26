@@ -45,7 +45,15 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         Directory.CreateDirectory(scenesDir);
 
         var ignoredDiagnosticScripts = new List<string>();
-        var selected = SelectScripts(scriptPackage, executeShotCode, maxScriptCount, executeAllScripts, confirmFullBatch, warnings, errors, ignoredDiagnosticScripts);
+        var skippedScripts = new List<(string ShotCode, string Reason)>();
+        var selected = SelectScripts(scriptPackage, executeShotCode, maxScriptCount, executeAllScripts, confirmFullBatch, warnings, errors, ignoredDiagnosticScripts, skippedScripts);
+        logger.LogInformation("Starting Stellarium screenshot execution batch");
+        var totalScenes = scriptPackage.Scripts.Select(s => s.ShotCode.Split("_", StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? s.ShotCode).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        logger.LogInformation("Screenshot execution diagnostics: packageIsValid={IsValid}, totalScenes={TotalScenes}, totalShots={TotalShots}, executableShotCount={ExecutableShotCount}, skippedShotCount={SkippedShotCount}", scriptPackage.IsValid, totalScenes, scriptPackage.TotalScripts, selected.Count, skippedScripts.Count);
+        foreach (var skipped in skippedScripts)
+        {
+            logger.LogWarning("Skipping shot {ShotCode}: {Reason}", skipped.ShotCode, skipped.Reason);
+        }
         logger.LogInformation("selected script count: {ScriptCount}", selected.Count);
         logger.LogInformation("selected shot codes: {ShotCodes}", string.Join(", ", selected.Select(s => s.ShotCode)));
         if (selected.Count == 0)
@@ -183,11 +191,16 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         }
 
         sw.Stop();
+        var attemptedShots = results.Count;
+        var successfulShots = results.Count(r => string.IsNullOrWhiteSpace(r.Error));
+        var failedShots = results.Count(r => !string.IsNullOrWhiteSpace(r.Error));
+        var skippedShots = skippedScripts.Count;
         logger.LogInformation("Screenshot generation completed");
-        return await WriteResultAsync(!results.Any(r => !string.IsNullOrWhiteSpace(r.Error)), workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds, selectedScript.ShotCode, selectedScript.ScriptPath, ignoredDiagnosticScripts);
+        logger.LogInformation("Screenshot batch summary: attemptedShots={AttemptedShots}, successfulShots={SuccessfulShots}, failedShots={FailedShots}, skippedShots={SkippedShots}", attemptedShots, successfulShots, failedShots, skippedShots);
+        return await WriteResultAsync(failedShots == 0, workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds, selectedScript.ShotCode, selectedScript.ScriptPath, ignoredDiagnosticScripts);
     }
 
-    private static List<WeeklyStellariumScriptInfo> SelectScripts(WeeklyStellariumScriptPackage package, string? executeShotCode, int? maxScriptCount, bool executeAllScripts, bool confirmFullBatch, List<string> warnings, List<string> errors, List<string> ignoredDiagnosticScripts)
+    private static List<WeeklyStellariumScriptInfo> SelectScripts(WeeklyStellariumScriptPackage package, string? executeShotCode, int? maxScriptCount, bool executeAllScripts, bool confirmFullBatch, List<string> warnings, List<string> errors, List<string> ignoredDiagnosticScripts, List<(string ShotCode, string Reason)> skippedScripts)
     {
         if (package.Scripts.Count == 0)
         {
@@ -195,20 +208,22 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             return [];
         }
 
-        var cinematicScripts = package.Scripts
-            .Where(s => !s.IsDiagnostic
-                && !s.ShotCode.StartsWith("_", StringComparison.Ordinal)
-                && s.IsValid
-                && !Path.GetFileName(s.ScriptPath).StartsWith("_", StringComparison.Ordinal)
-                && !Path.GetFileName(s.ScriptPath).Contains("_smoke_basic", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        ignoredDiagnosticScripts.AddRange(package.Scripts
-            .Except(cinematicScripts)
-            .Select(s => s.ShotCode));
+        var executableScripts = new List<WeeklyStellariumScriptInfo>();
+        foreach (var s in package.Scripts.Where(s => !s.IsDiagnostic && !s.ShotCode.StartsWith("_", StringComparison.Ordinal) && !Path.GetFileName(s.ScriptPath).StartsWith("_", StringComparison.Ordinal) && !Path.GetFileName(s.ScriptPath).Contains("_smoke_basic", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (string.IsNullOrWhiteSpace(s.ShotCode)) { skippedScripts.Add((s.ShotCode, "missing shotCode")); continue; }
+            if (string.IsNullOrWhiteSpace(s.ScriptPath) || !File.Exists(s.ScriptPath)) { skippedScripts.Add((s.ShotCode, "SSC missing")); continue; }
+            if (string.IsNullOrWhiteSpace(s.ExpectedScreenshotPath)) { skippedScripts.Add((s.ShotCode, "expected image path missing")); continue; }
+            var content = File.ReadAllText(s.ScriptPath);
+            if (!content.Contains("core.screenshot", StringComparison.OrdinalIgnoreCase)) { skippedScripts.Add((s.ShotCode, "script missing core.screenshot")); continue; }
+            executableScripts.Add(s);
+        }
+
+        ignoredDiagnosticScripts.AddRange(package.Scripts.Except(executableScripts).Select(s => s.ShotCode));
 
         if (!string.IsNullOrWhiteSpace(executeShotCode))
         {
-            var selected = cinematicScripts.FirstOrDefault(s => string.Equals(s.ShotCode, executeShotCode, StringComparison.Ordinal));
+            var selected = executableScripts.FirstOrDefault(s => string.Equals(s.ShotCode, executeShotCode, StringComparison.Ordinal));
             if (selected is null)
             {
                 errors.Add($"Selected script missing for executeShotCode='{executeShotCode}'.");
@@ -217,7 +232,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             return [selected];
         }
 
-        var ordered = cinematicScripts.OrderBy(s => s.ShotOrder).ToList();
+        var ordered = executableScripts.OrderBy(s => s.ShotOrder).ToList();
         if (executeAllScripts)
         {
             if (!confirmFullBatch)
