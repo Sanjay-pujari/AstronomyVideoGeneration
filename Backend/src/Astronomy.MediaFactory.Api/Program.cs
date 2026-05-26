@@ -895,7 +895,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             {
                 sceneCode = shot.ShotCode,
                 sceneType = shot.ShotType,
-                objects = shot.ObjectCodes,
+                objects = shot.TargetObjects,
                 sscPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc"),
                 screenshotPath,
                 screenshotExists = File.Exists(screenshotPath) && new FileInfo(screenshotPath).Length > 10 * 1024
