@@ -52,7 +52,46 @@ public sealed class WeeklyCinematicShotExpansionEngine(IWeeklySkySceneComposer s
         var packageExecutable = totalShots > 0 && sequences.Count > 0 && hasScriptPath && hasImagePath;
         var pkg = new WeeklyCinematicShotPackage(packageExecutable, storyboard.EmotionalArc, pipelineRunId, sequences.Count, totalShots, sequences.Sum(s => s.DurationSeconds), sequences, fov, validation, warnings);
         Directory.CreateDirectory(Path.Combine(workingDirectoryRoot, "debug"));
+        var scenePlansDirectory = Path.Combine(workingDirectoryRoot, "scene-plans");
+        Directory.CreateDirectory(scenePlansDirectory);
+        File.WriteAllText(Path.Combine(scenePlansDirectory, "weekly-cinematic-shot-timeline.json"), JsonSerializer.Serialize(pkg, new JsonSerializerOptions { WriteIndented = true }));
         File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-cinematic-shot-timeline.json"), JsonSerializer.Serialize(pkg, new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(Path.Combine(scenePlansDirectory, "weekly-scene-plan.json"), JsonSerializer.Serialize(new
+        {
+            sceneCount = sequences.Count,
+            shotCount = totalShots,
+            scenes = sequences.Select(s => new
+            {
+                s.SceneCode,
+                s.SceneType,
+                s.SegmentCode,
+                s.DurationSeconds,
+                shots = s.Shots.Select(x => new { x.ShotCode, x.ShotType, x.TargetObjects, x.ExpectedSscScriptPath, x.ExpectedOutputImagePath })
+            })
+        }, new JsonSerializerOptions { WriteIndented = true }));
+
+        var compositionDirectory = Path.Combine(workingDirectoryRoot, "composition");
+        Directory.CreateDirectory(compositionDirectory);
+        foreach (var sequence in sequences)
+        foreach (var shot in sequence.Shots)
+        {
+            if (!compositionByShot.TryGetValue(shot.ShotCode, out var comp)) continue;
+            var compositionPath = Path.Combine(compositionDirectory, $"{shot.ShotCode}.composition.json");
+            File.WriteAllText(compositionPath, JsonSerializer.Serialize(new
+            {
+                shotCode = shot.ShotCode,
+                sceneType = shot.ShotType,
+                objects = comp.TargetObjects,
+                altitudes = new { center = comp.CenterAltitude, spread = comp.AltitudeSpread },
+                azimuths = new { center = comp.CenterAzimuth, spread = comp.AzimuthSpread },
+                computedFov = comp.ComputedFov,
+                cameraCenter = new { azimuth = comp.CenterAzimuth, altitude = comp.CenterAltitude },
+                groupingFeasibility = new { isGroupingMode = string.Equals(comp.RenderMode, "Grouping", StringComparison.OrdinalIgnoreCase), includedCount = comp.IncludedObjects.Count, requiredMinimum = 2, feasible = !string.Equals(comp.RenderMode, "Grouping", StringComparison.OrdinalIgnoreCase) || comp.IncludedObjects.Count >= 2 },
+                visibilityAnalysis = new { includedObjects = comp.IncludedObjects, excludedObjects = comp.ExcludedObjects, warnings = comp.Warnings, fallbackUsed = comp.FallbackUsed },
+                screenshotTargetPath = shot.ExpectedOutputImagePath,
+                sscPath = shot.ExpectedSscScriptPath
+            }, new JsonSerializerOptions { WriteIndented = true }));
+        }
         diagnostics.FovCalculations = fov;
         diagnostics.Warnings = warnings;
         File.WriteAllText(Path.Combine(workingDirectoryRoot, "debug", "weekly-astronomy-cinematic-refinement.json"), JsonSerializer.Serialize(new { astronomyCinematicRefinement = diagnostics }, new JsonSerializerOptions { WriteIndented = true }));

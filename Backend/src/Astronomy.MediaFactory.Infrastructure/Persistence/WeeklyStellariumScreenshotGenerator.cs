@@ -90,6 +90,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             string? launchedArguments = null;
             string? launchedWorkingDirectory = null;
             var screenshotDirectory = Path.GetDirectoryName(screenshotFull) ?? string.Empty;
+            Directory.CreateDirectory(screenshotDirectory);
 
             logger.LogInformation("Launching Stellarium cinematic shot script");
             logger.LogInformation("selectedShotCode={ShotCode}", script.ShotCode);
@@ -193,7 +194,8 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                         File.Copy(fallback.FullPath, screenshotFull, overwrite: true);
                         screenshotExists = File.Exists(screenshotFull);
                         screenshotSize = screenshotExists ? new FileInfo(screenshotFull).Length : 0;
-                        logger.LogInformation("Actual screenshot detected:\n{Path}\n{FileSize}", fallback.FullPath, fallback.FileSizeBytes);
+                        logger.LogInformation("Actual discovered screenshot path: {Path}", fallback.FullPath);
+                        logger.LogInformation("Actual discovered screenshot file size: {FileSize}", fallback.FileSizeBytes);
                     }
                 }
                 logger.LogInformation("Screenshot exists: {ScreenshotExists}", screenshotExists);
@@ -205,6 +207,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                     logger.LogInformation("Killing/closing Stellarium");
                     process.Kill(entireProcessTree: true);
                     await process.WaitForExitAsync(CancellationToken.None);
+                    logger.LogInformation("Process terminated: true");
                     logger.LogInformation("Process killed/closed");
                     if (!timedOut) warnings.Add($"Stellarium had to be killed after screenshot capture for shot {script.ShotCode}.");
                 }
@@ -217,6 +220,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 if (exitCode.HasValue) logger.LogInformation("Stellarium process exit code: {ExitCode}", exitCode.Value);
                 if (timedOut)
                 {
+                    logger.LogWarning("Timeout reached.");
                     logger.LogWarning("Screenshot timeout after {TimeoutSeconds}s", effectiveTimeoutSeconds);
                     error = $"Screenshot not created within timeout ({effectiveTimeoutSeconds}s).";
                 }
@@ -349,6 +353,8 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         if (!string.IsNullOrWhiteSpace(_options.CaptureDirectory)) candidates.Add(_options.CaptureDirectory);
         var defaultPictures = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
         if (!string.IsNullOrWhiteSpace(defaultPictures)) candidates.Add(Path.Combine(defaultPictures, "Stellarium"));
+        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        if (!string.IsNullOrWhiteSpace(documents)) candidates.Add(Path.Combine(documents, "Stellarium", "screenshots"));
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         if (!string.IsNullOrWhiteSpace(appData)) candidates.Add(Path.Combine(appData, "Stellarium", "screenshots"));
 
