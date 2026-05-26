@@ -977,6 +977,8 @@ public sealed record WeeklySkyForecastProductionRequest(
     string RegionId,
     string RegionName,
     DateTimeOffset ScheduledUtc,
+    DateOnly WeekStartDate,
+    DateOnly WeekEndDate,
     bool GenerateNarration = false,
     bool GenerateAudio = false,
     bool GenerateSscScripts = false,

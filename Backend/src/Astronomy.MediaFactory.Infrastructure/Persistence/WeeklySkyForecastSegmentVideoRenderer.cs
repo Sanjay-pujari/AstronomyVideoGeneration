@@ -29,7 +29,8 @@ public sealed class WeeklySkyForecastSegmentVideoRenderer(
         if (!string.Equals(plan.ContentCategoryCode, "WeeklySkyForecast", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("This endpoint only supports WeeklySkyForecast plans.");
 
-        var weeklyRequest = new WeeklySkyForecastProductionRequest(plan.ContentCategoryCode, plan.Language, plan.RegionId, plan.RegionId, plan.ScheduledUtc ?? DateTimeOffset.UtcNow, false, false, false, true, false, false);
+        var weekStartDate = DateOnly.FromDateTime((plan.ScheduledUtc ?? DateTimeOffset.UtcNow).UtcDateTime);
+        var weeklyRequest = new WeeklySkyForecastProductionRequest(plan.ContentCategoryCode, plan.Language, plan.RegionId, plan.RegionId, plan.ScheduledUtc ?? DateTimeOffset.UtcNow, weekStartDate, weekStartDate.AddDays(6), false, false, false, true, false, false);
         var context = await contextBuilder.BuildAsync(weeklyRequest, cancellationToken);
         var segmentPlan = await segmentPlanner.BuildAsync(context, cancellationToken);
         var scenePlan = await scenePlanner.BuildAsync(context, segmentPlan, cancellationToken);
