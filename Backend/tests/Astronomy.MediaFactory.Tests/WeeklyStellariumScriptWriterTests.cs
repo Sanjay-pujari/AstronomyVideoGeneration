@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -10,7 +11,7 @@ public sealed class WeeklyStellariumScriptWriterTests
     public async Task WriteAsync_Writes_Scripts_And_Diagnostics()
     {
         var root = Path.Combine(Path.GetTempPath(), "weekly-ssc-" + Guid.NewGuid().ToString("N"));
-        var writer = new WeeklyStellariumScriptWriter();
+        var writer = new WeeklyStellariumScriptWriter(Options.Create(new StellariumOptions()));
         var shot = new WeeklyCinematicShot(
             "s3_multi_object_grouping_01",
             "wide_group_reveal",
