@@ -25,6 +25,8 @@ public sealed class WeeklySkyForecastV2PhaseDiagnosticsEndpointTests
                 SkyfieldSummary: new WeeklySkyForecastV2SkyfieldSummary(7, 10, 5, 3, "JUPITER", null, null),
                 EventIntelligence: [],
                 EventExtractionResult: new WeeklyAstronomyEventExtractionResult(true, null, [], "summary", new Dictionary<string, int>(), null, [], []),
+                Storyboard: null,
+                StellariumBlueprintPackage: null,
                 WeeklyStoryArc: new WeeklyStoryArc("h", "s", "t", "o", [], "c", [], [], []),
                 EditorialStoryPackage: new WeeklyEditorialStoryPackage(
                     new WeeklyHeroEvent("1", "HeroObject", "Moon", "Moon lead", new DateOnly(2026, 5, 26), null, ["MOON"], ["Moon"], 1, 1, 1, "Cinematic", "Why"),
@@ -35,7 +37,7 @@ public sealed class WeeklySkyForecastV2PhaseDiagnosticsEndpointTests
                     "theme",
                     [],
                     [],
-                    new WeeklyThumbnailDirection([], [], [], "Wonder", "Moon", "Wide", []),
+                    new WeeklyThumbnailDirection([], [], [], "Wonder", "Moon", "Wide", "Night sky background", "Moon over desert ridge"),
                     [],
                     "summary",
                     []),
@@ -63,7 +65,7 @@ public sealed class WeeklySkyForecastV2PhaseDiagnosticsEndpointTests
                 Warnings: [],
                 StepResults: []);
 
-            var result = string.Equals(request.Phase, nameof(WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents), StringComparison.OrdinalIgnoreCase)
+            object result = string.Equals(request.Phase, nameof(WeeklySkyForecastV2DiagnosticsPhase.AstronomyEvents), StringComparison.OrdinalIgnoreCase)
                 ? new { response.EventExtractionResult, response.EventIntelligence }
                 : response;
 

@@ -59,7 +59,19 @@ public sealed class StellariumScenePlanningCompositionTests
     {
         var now = DateTime.UtcNow;
         return new AstronomyVisibilityResult(
-            "us", "Phoenix", 33.4, -112.0, "America/Phoenix", DateOnly.FromDateTime(now), now, now.AddHours(3), new List<AstronomyVisibilityObject>
+            "us",
+            "Phoenix",
+            33.4,
+            -112.0,
+            "America/Phoenix",
+            DateOnly.FromDateTime(now),
+            now,
+            now.AddHours(8),
+            now,
+            now.AddHours(3),
+            "Waxing Gibbous",
+            72,
+            new List<VisibleCelestialObjectResult>
             {
                 BuildObj("Moon","Moon","west",40),
                 BuildObj("Venus","Venus","west",30),
@@ -68,6 +80,21 @@ public sealed class StellariumScenePlanningCompositionTests
             }, []);
     }
 
-    private static AstronomyVisibilityObject BuildObj(string code, string name, string dir, double alt)
-        => new(code, name, "Planet", true, DateTime.UtcNow, DateTime.UtcNow.AddHours(2), DateTime.UtcNow, alt, dir, new AstronomyVisibilityScore(0.9, 0.8, 0.8, 0.9), []);
+    private static VisibleCelestialObjectResult BuildObj(string code, string name, string dir, double alt)
+        => new(
+            code,
+            name,
+            "Planet",
+            true,
+            DateTime.UtcNow,
+            DateTime.UtcNow.AddHours(2),
+            DateTime.UtcNow.AddHours(1),
+            DateTime.UtcNow,
+            DateTime.UtcNow.AddHours(2),
+            alt / 90d,
+            0.9,
+            0.8,
+            0.8,
+            0.9,
+            $"Visible toward {dir}");
 }
