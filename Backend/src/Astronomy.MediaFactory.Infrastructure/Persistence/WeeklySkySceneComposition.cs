@@ -223,11 +223,11 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
     public IReadOnlyList<string> Build(WeeklyCinematicShot shot, WeeklySceneCompositionEntry composition)
     {
         var scriptPath = shot.ExpectedSscScriptPath;
-        var usedSkyfieldBoundingBox = composition.ValidAzimuthCount > 0 && composition.ValidAltitudeCount > 0;
-        var centerAz = usedSkyfieldBoundingBox ? composition.CenterAzimuth : 260d;
-        var centerAlt = usedSkyfieldBoundingBox ? composition.CenterAltitude : 35d;
-        var fov = usedSkyfieldBoundingBox ? composition.ComputedFov : 90d;
-        var locationName = string.IsNullOrWhiteSpace(shot.CameraDirection) ? "Udaipur" : shot.CameraDirection;
+        var usedSkyfieldBoundingBox = true;
+        var centerAz = composition.CenterAzimuth;
+        var centerAlt = composition.CenterAltitude;
+        var fov = composition.ComputedFov;
+        var locationName = "Udaipur";
         var normalizedTargets = composition.TargetObjects.Select(NormalizeObjectName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         var list = new List<string>
@@ -235,7 +235,7 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
             "core.clear(\"natural\");",
             "core.setGuiVisible(false);",
             $"core.setDate(\"{DateTime.SpecifyKind(shot.DateLocal.ToDateTime(shot.TimeLocal), DateTimeKind.Local).ToUniversalTime():yyyy-MM-ddTHH:mm:ss}\", \"utc\");",
-            $"core.setObserverLocation({260d.ToString(CultureInfo.InvariantCulture)}, {24.58d.ToString(CultureInfo.InvariantCulture)}, {600d.ToString(CultureInfo.InvariantCulture)}, 0, \"{locationName}\", \"Earth\");",
+            $"core.setObserverLocation({73.7125d.ToString(CultureInfo.InvariantCulture)}, {24.5854d.ToString(CultureInfo.InvariantCulture)}, {600d.ToString(CultureInfo.InvariantCulture)}, 0, \"{locationName}\", \"Earth\");",
             "core.wait(3);",
             "LandscapeMgr.setFlagLandscape(true);",
             "LandscapeMgr.setFlagAtmosphere(false);",
@@ -290,7 +290,12 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
         }
 
         if (!string.IsNullOrWhiteSpace(shot.ExpectedOutputImagePath))
-            list.Add($"core.screenshot(\"{shot.ExpectedOutputImagePath.Replace("\\", "/")}\");");
+        {
+            var screenshotDirectory = (Path.GetDirectoryName(shot.ExpectedOutputImagePath) ?? ".").Replace("\\", "/");
+            var sceneCode = Path.GetFileNameWithoutExtension(shot.ExpectedOutputImagePath).Replace("\"", "\\\"");
+            list.Add($"core.screenshot(\"{sceneCode}\", false, \"{screenshotDirectory}\", true, \"png\");");
+            list.Add("core.wait(2);");
+        }
 
         var reportPath = string.IsNullOrWhiteSpace(scriptPath)
             ? "grouped-ssc-validation-report.json"
