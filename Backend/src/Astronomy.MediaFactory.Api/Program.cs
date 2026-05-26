@@ -749,7 +749,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var debugRoot = Path.Combine(root, "debug");
         Directory.CreateDirectory(debugRoot);
         var skyfieldResponsePath = Path.Combine(debugRoot, "skyfield-weekly-response.json");
-        await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.WeeklyForecast, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.SkyfieldSummary, new JsonSerializerOptions { WriteIndented = true }), ct);
 
         if (response.Storyboard is null || response.StellariumBlueprintPackage is null || response.EventExtractionResult is null)
         {
