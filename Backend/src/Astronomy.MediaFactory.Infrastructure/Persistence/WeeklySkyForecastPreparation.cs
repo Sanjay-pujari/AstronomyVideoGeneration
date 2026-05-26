@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -54,14 +55,124 @@ public sealed class WeeklySkyForecastContextBuilder(
             resolution.Longitude,
             resolution.Timezone);
 
-        var weekStart = DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
+        var weekStart = request.WeekStartDate ?? DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
+        var weekEnd = weekStart.AddDays(6);
         var resolvedLocationName = string.IsNullOrWhiteSpace(resolution.LocationName) ? request.RegionName : resolution.LocationName;
+        logger.LogInformation("Skyfield weekly request payload: regionId={RegionId}, location={LocationName}, latitude={Latitude}, longitude={Longitude}, timezone={Timezone}, startDate={StartDate}, endDate={EndDate}", resolution.CanonicalRegionId, resolvedLocationName, resolution.Latitude, resolution.Longitude, resolution.Timezone, weekStart, weekEnd);
+        logger.LogInformation("Resolved region for WeeklySkyForecast: {RegionId}", resolution.CanonicalRegionId);
+        logger.LogInformation("WeeklySkyForecast start date: {StartDate}", weekStart);
+        logger.LogInformation("WeeklySkyForecast end date: {EndDate}", weekEnd);
+
         var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = resolution.CanonicalRegionId, LocationName = resolvedLocationName, Latitude = resolution.Latitude, Longitude = resolution.Longitude, Timezone = resolution.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
-        var response = await sidecarClient.GetWeeklySkyForecastAsync(skyfieldRequest, cancellationToken) ?? throw new InvalidOperationException("Skyfield weekly forecast sidecar returned no response.");
-        if (!response.Success)
+        var successfulDays = new List<DailySkyForecastItem>();
+        var failedDays = new List<object>();
+        var debugWarnings = new List<string>();
+        WeeklySkyForecastSkyfieldResponse? response = null;
+        try
         {
-            throw new InvalidOperationException($"Skyfield weekly forecast failed: {response.ErrorMessage ?? "unknown error"}");
+            response = await sidecarClient.GetWeeklySkyForecastAsync(skyfieldRequest, cancellationToken);
         }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Skyfield weekly API call threw; falling back to day-by-day requests.");
+            debugWarnings.Add("Skyfield weekly API threw exception; used day-by-day fallback.");
+        }
+
+        if (response is not null && response.Success)
+        {
+            successfulDays.AddRange(response.Days);
+        }
+        else
+        {
+            debugWarnings.Add("Weekly Skyfield API failed; retrying day-by-day.");
+            for (var offset = 0; offset < 7; offset++)
+            {
+                var day = weekStart.AddDays(offset);
+                try
+                {
+                    var daily = await sidecarClient.GetDailySkyAsync(new SkyfieldDailySkyRequest
+                    {
+                        Date = day.ToString("yyyy-MM-dd"),
+                        LocationName = resolvedLocationName,
+                        Latitude = resolution.Latitude,
+                        Longitude = resolution.Longitude,
+                        Timezone = resolution.Timezone
+                    }, cancellationToken);
+                    if (daily is null)
+                    {
+                        failedDays.Add(new { date = day.ToString("yyyy-MM-dd"), error = "Daily Skyfield response was null." });
+                        logger.LogWarning("Skyfield daily fallback failed for {Date}: null response.", day);
+                        continue;
+                    }
+
+                    successfulDays.Add(new DailySkyForecastItem
+                    {
+                        Date = daily.TargetDate,
+                        SunsetUtc = DateTime.TryParse(daily.NightWindowStartUtc, out var nwStart) ? nwStart : DateTime.UtcNow,
+                        SunriseUtc = DateTime.TryParse(daily.NightWindowEndUtc, out var nwEnd) ? nwEnd : DateTime.UtcNow,
+                        MoonPhase = "",
+                        MoonIlluminationPercent = 0,
+                        MoonRiseUtc = null,
+                        MoonSetUtc = null,
+                        VisibleObjects = daily.VisibleObjects.Select(v => new VisibleObjectForecastItem
+                        {
+                            ObjectCode = v.ObjectCode,
+                            ObjectName = v.ObjectName,
+                            ObjectType = v.ObjectType,
+                            Visible = true,
+                            RiseUtc = v.RiseUtc,
+                            SetUtc = v.SetUtc,
+                            TransitUtc = v.TransitUtc,
+                            MaxAltitudeDegrees = v.MaxAltitudeDegrees,
+                            BestViewingTimeUtc = v.BestTimeUtc,
+                            VisibilityScore = v.VisibilityScore,
+                            PhotographyScore = v.PhotographyScore,
+                            ViewingDirection = v.Direction,
+                            Reason = v.Reason
+                        }).ToList(),
+                        Events = [],
+                        BestViewingStartUtc = DateTime.TryParse(daily.NightWindowStartUtc, out var bvs) ? bvs : DateTime.UtcNow,
+                        BestViewingEndUtc = DateTime.TryParse(daily.NightWindowEndUtc, out var bve) ? bve : DateTime.UtcNow,
+                        OverallViewingScore = daily.VisibleObjects.Any() ? daily.VisibleObjects.Average(x => x.VisibilityScore) : 0,
+                        ViewingSummary = daily.Summary
+                    });
+                }
+                catch (Exception ex)
+                {
+                    failedDays.Add(new { date = day.ToString("yyyy-MM-dd"), error = ex.Message });
+                    logger.LogWarning(ex, "Skyfield daily fallback failed for {Date}.", day);
+                }
+            }
+
+            response = new WeeklySkyForecastSkyfieldResponse
+            {
+                Success = successfulDays.Count > 0,
+                RegionId = resolution.CanonicalRegionId,
+                LocationName = resolvedLocationName,
+                Timezone = resolution.Timezone,
+                WeekStartDate = weekStart.ToString("yyyy-MM-dd"),
+                WeekEndDate = weekEnd.ToString("yyyy-MM-dd"),
+                Days = successfulDays.OrderBy(x => x.Date).ToList(),
+                WeeklyHighlights = [],
+                RecommendedNights = [],
+                Warnings = [..debugWarnings],
+                ErrorMessage = successfulDays.Count == 0 ? "Unable to compute weekly forecast for all requested days." : null
+            };
+        }
+
+        logger.LogInformation("Skyfield daily fallback summary: successfulDays={SuccessfulDays}, failedDays={FailedDays}", successfulDays.Count, failedDays.Count);
+        if (successfulDays.Count == 0)
+        {
+            throw new InvalidOperationException("Skyfield weekly forecast failed: Unable to compute weekly forecast for all requested days.");
+        }
+
+        if (failedDays.Count > 0)
+        {
+            response.Warnings.Add("Partial Skyfield weekly forecast used.");
+        }
+        response.Warnings = response.Warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        WeeklySkyForecastPreparationDiagnostics.SetJson("WeeklySkyForecast.SkyfieldWeeklyResponse", JsonSerializer.Serialize(response));
+        WeeklySkyForecastPreparationDiagnostics.SetJson("WeeklySkyForecast.SkyfieldWeeklyErrors", JsonSerializer.Serialize(failedDays));
 
         var normalizedObjectCount = 0;
         var correctedHighlightCount = 0;
@@ -665,7 +776,7 @@ internal static class WeeklySkyForecastObjectCodeResolver
     }
 }
 
-internal static class WeeklySkyForecastPreparationDiagnostics
+public static class WeeklySkyForecastPreparationDiagnostics
 {
     private static readonly AsyncLocal<Dictionary<string, int>> Store = new();
     public static void Set(string key, int value)
@@ -674,4 +785,11 @@ internal static class WeeklySkyForecastPreparationDiagnostics
         Store.Value[key] = value;
     }
     public static int Get(string key) => Store.Value is not null && Store.Value.TryGetValue(key, out var value) ? value : 0;
+    public static void SetJson(string key, string value)
+    {
+        StoreJson.Value ??= [];
+        StoreJson.Value[key] = value;
+    }
+    public static string? GetJson(string key) => StoreJson.Value is not null && StoreJson.Value.TryGetValue(key, out var value) ? value : null;
+    private static readonly AsyncLocal<Dictionary<string, string>> StoreJson = new();
 }
