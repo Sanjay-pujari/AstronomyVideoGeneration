@@ -798,10 +798,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var compositionDirectory = Path.Combine(root, "composition");
         var scriptsDirectory = Path.Combine(root, "stellarium", "scripts");
         var scenesDirectory = Path.Combine(root, "stellarium", "scenes");
+        var manifestsDirectory = Path.Combine(root, "manifests");
         Directory.CreateDirectory(scenePlansDirectory);
         Directory.CreateDirectory(compositionDirectory);
         Directory.CreateDirectory(scriptsDirectory);
         Directory.CreateDirectory(scenesDirectory);
+        Directory.CreateDirectory(manifestsDirectory);
 
         var weeklyScenePlan = weeklySkyfieldContext.HybridScenePlanPackage;
         if (weeklyScenePlan is null)
@@ -880,10 +882,40 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         }
 
         var warnings = weeklySkyfieldContext.Warnings.Concat(compositionPackage.Errors).Distinct().ToList();
+        if (screenshots.Count < shots.Count)
+        {
+            warnings.Add($"Only {screenshots.Count} screenshots were detected out of {shots.Count} planned shots.");
+        }
 
-        var narrationManifestPath = Path.Combine(root, "debug", "weekly-scenes-manifest.json");
+        var narrationManifestPath = Path.Combine(manifestsDirectory, "weekly-scenes-manifest.json");
+        var sscManifestEntries = shots.Select(shot =>
+        {
+            var screenshotPath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png");
+            return new
+            {
+                sceneCode = shot.ShotCode,
+                sceneType = shot.ShotType,
+                objects = shot.ObjectCodes,
+                sscPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc"),
+                screenshotPath,
+                screenshotExists = File.Exists(screenshotPath) && new FileInfo(screenshotPath).Length > 10 * 1024
+            };
+        }).ToList();
+
+        var executionSummary = new
+        {
+            plannedSceneCount = shots.Count,
+            compositionFileCount = compositionPaths.Count,
+            sscScriptCount = scriptPaths.Count,
+            screenshotCount = screenshots.Count,
+            screenshotMissingCount = Math.Max(0, shots.Count - screenshots.Count)
+        };
+
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
+            pipelineRunId,
+            workingDirectoryRoot = root,
+            skyfieldResponsePath,
             narrationArtifacts = new
             {
                 storyBeatsPath,
@@ -893,9 +925,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             },
             scenePlanPath,
             shotTimelinePath,
-            compositionPaths,
-            sscScriptPaths = scriptPaths,
-            screenshotPaths = screenshots
+            compositionFiles = compositionPaths,
+            sscScripts = sscManifestEntries,
+            screenshotOutputs = screenshots,
+            warnings,
+            executionSummary
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
 
         var output = new WeeklySkyForecastV2GenerateWeeklyScenesResponse(
