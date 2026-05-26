@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Astronomy.MediaFactory.Core;
 
 namespace Astronomy.MediaFactory.Contracts;
 
@@ -59,4 +60,12 @@ public sealed class StellariumOptions
 
     [Range(0, 120)]
     public double WeeklyPreScreenshotWaitSeconds { get; set; } = 2;
+
+    public SceneGenerationMode DailySkyGuideSceneGenerationMode { get; set; } = SceneGenerationMode.Hybrid;
+
+    [Range(1, 12)]
+    public int MaxCompositionScenes { get; set; } = 5;
+
+    [Range(1, 12)]
+    public int MaxFocusedScenes { get; set; } = 3;
 }

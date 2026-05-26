@@ -444,6 +444,28 @@ public sealed record StellariumSceneCaptureItem(
     int SortOrder,
     Dictionary<string, string>? Metadata);
 
+public enum SceneGenerationMode
+{
+    ObjectFocused = 0,
+    CompositionFocused = 1,
+    Hybrid = 2
+}
+
+public sealed record CompositionScene(
+    string SceneId,
+    string SceneTitle,
+    string CompositionType,
+    IReadOnlyList<string> IncludedObjects,
+    double CameraAzimuth,
+    double CameraAltitude,
+    double FieldOfView,
+    double ZoomLevel,
+    bool LabelsEnabled,
+    string HighlightStrategy,
+    string CapturePath,
+    string ScriptPath,
+    string MetadataPath);
+
 public interface IStellariumScenePlanner
 {
     Task<StellariumSceneCapturePlan> BuildScenePlanAsync(

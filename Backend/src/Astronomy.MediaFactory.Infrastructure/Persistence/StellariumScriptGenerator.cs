@@ -36,11 +36,23 @@ public sealed class StellariumScriptGenerator(IOptions<StellariumOptions> option
         script.AppendLine($"GridLinesMgr.setFlagAzimuthalGrid({scene.ShowAzimuthGrid.ToString().ToLowerInvariant()});");
         script.AppendLine($"GridLinesMgr.setFlagEquatorGrid({scene.ShowEquatorialGrid.ToString().ToLowerInvariant()});");
         script.AppendLine($"StelMovementMgr.zoomTo({fov}, 1.5);");
-        if (!string.IsNullOrWhiteSpace(targetObject))
+        var isCompositionScene = string.Equals(scene.SceneType, "Composition", StringComparison.OrdinalIgnoreCase)
+            || (scene.Metadata?.TryGetValue("IncludedObjects", out var included) == true && !string.IsNullOrWhiteSpace(included));
+
+        if (!isCompositionScene && !string.IsNullOrWhiteSpace(targetObject))
         {
             script.AppendLine($"core.selectObjectByName(\"{targetObject}\", true);");
             script.AppendLine("core.wait(1.5);");
             script.AppendLine("core.moveToSelectedObject(2.0);");
+        }
+
+        if (isCompositionScene && scene.Metadata?.TryGetValue("IncludedObjects", out var groupedObjects) == true)
+        {
+            foreach (var obj in groupedObjects.Split(",", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var escaped = obj.Replace("\"", "\\\"");
+                script.AppendLine($"core.selectObjectByName(\"{escaped}\", false);");
+            }
         }
 
         script.AppendLine("core.wait(3.0);");
