@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using ContractsSceneGenerationMode = Astronomy.MediaFactory.Contracts.SceneGenerationMode;
 using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -22,8 +23,8 @@ public sealed class DailySkyGuideStellariumScenePlanner(IOptions<StellariumOptio
 
         var scenes = mode switch
         {
-            SceneGenerationMode.ObjectFocused => objectFocused,
-            SceneGenerationMode.CompositionFocused => compositionScenes,
+            ContractsSceneGenerationMode.ObjectFocused => objectFocused,
+            ContractsSceneGenerationMode.CompositionFocused => compositionScenes,
             _ => compositionScenes.Take(Math.Min(2, _options.MaxCompositionScenes))
                 .Concat(objectFocused.Where(x => string.Equals(x.SceneType, "ObjectFocus", StringComparison.OrdinalIgnoreCase) || string.Equals(x.SceneType, "MoonFocus", StringComparison.OrdinalIgnoreCase)).Take(_options.MaxFocusedScenes))
                 .Concat(compositionScenes.Skip(2).Take(1))
@@ -79,7 +80,7 @@ public sealed class DailySkyGuideStellariumScenePlanner(IOptions<StellariumOptio
             list.Add(new(code, "Composition", $"{g.Key} sky composition", sample.ObjectCode, sample.ObjectName, visibilityResult.BestViewingStartUtc.AddMinutes(order * 10), "WideComposition", fov,
                 true, true, true, false, false, order == 1 ? "ThumbnailCandidate" : "SupportingSkyMap", order, new()
                 {
-                    ["SceneGenerationMode"] = SceneGenerationMode.CompositionFocused.ToString(),
+                    ["SceneGenerationMode"] = ContractsSceneGenerationMode.CompositionFocused.ToString(),
                     ["CompositionType"] = order == 1 ? "EveningSkyComposition" : "WesternSkyOverview",
                     ["IncludedObjects"] = string.Join(",", objects),
                     ["HighlightStrategy"] = "GroupLabelsStable"
