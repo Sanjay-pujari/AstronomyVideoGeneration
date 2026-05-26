@@ -2,6 +2,7 @@ using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
