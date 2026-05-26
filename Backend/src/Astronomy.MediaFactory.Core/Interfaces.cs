@@ -2147,7 +2147,7 @@ public interface IWeeklySkyForecastV2EditorialNormalizer
 
 public interface IWeeklySkyForecastVisualAssetGenerationService
 {
-    Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, CancellationToken cancellationToken);
+    Task<WeeklySkyForecastVisualAssetsResponse> GenerateAsync(Guid contentGenerationPlanId, WeeklySkyForecastVisualAssetsGenerateRequest request, WeeklySkyForecastProductionRequest? productionRequest, CancellationToken cancellationToken);
 }
 
 public sealed record WeeklySkyForecastSegmentVideoRenderRequest(

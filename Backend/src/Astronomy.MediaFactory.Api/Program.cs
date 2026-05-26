@@ -774,6 +774,26 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 contentPlanId
             });
 
+        var visualRequest = new WeeklySkyForecastProductionRequest(
+            request.ContentCategoryCode,
+            request.Language,
+            request.RegionId,
+            request.RegionName,
+            request.ScheduledUtc,
+            request.WeekStartDate,
+            request.WeekStartDate.AddDays(6),
+            GenerateNarration: true,
+            GenerateSscScripts: true,
+            CaptureStellariumScenes: true,
+            DryRun: false,
+            Diagnostics: false,
+            OverwriteExisting: true);
+        if (visualRequest.WeekStartDate == DateOnly.MinValue ||
+            visualRequest.WeekEndDate == DateOnly.MinValue)
+        {
+            throw new InvalidOperationException("Internal bug: weekly date range lost before visual generation.");
+        }
+
         var visualAssets = await visualAssetService.GenerateAsync(
             contentPlanId.Value,
             new WeeklySkyForecastVisualAssetsGenerateRequest(
@@ -782,6 +802,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 CaptureStellariumScenes: true,
                 Diagnostics: request.Diagnostics,
                 AllowExtraScenes: true),
+            visualRequest,
             ct);
 
         var waitTimeout = TimeSpan.FromSeconds(Math.Clamp(request.StellariumTimeoutSeconds ?? 90, 30, 600));
@@ -1184,7 +1205,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast/{contentGenerationPlanId:g
 {
     try
     {
-        return Results.Ok(await service.GenerateAsync(contentGenerationPlanId, request, ct));
+        return Results.Ok(await service.GenerateAsync(contentGenerationPlanId, request, productionRequest: null, ct));
     }
     catch (KeyNotFoundException ex)
     {
