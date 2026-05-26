@@ -716,6 +716,86 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklyCinematicShotExpansionEngine cinematicEngine, IWeeklyStellariumScriptWriter stellariumScriptWriter, IWeeklyStellariumScreenshotGenerator stellariumScreenshotGenerator, IContentPlanningService planning, CancellationToken ct) =>
+{
+    try
+    {
+        var contentPlanId = request.ContentGenerationPlanId;
+        if (!contentPlanId.HasValue)
+        {
+            var plan = await planning.GeneratePlanAsync(new GenerateContentPlanRequest(request.ContentCategoryCode, request.Language, request.RegionId, request.RegionName, request.ScheduledUtc.UtcDateTime, GeneratedByAi: true), ct);
+            contentPlanId = plan.ContentGenerationPlanId;
+        }
+
+        var pipelineRunId = request.PipelineRunId ?? contentPlanId!.Value;
+        var intelligenceRequest = new WeeklySkyForecastV2IntelligenceRequest(
+            request.ContentCategoryCode,
+            request.Language,
+            request.RegionId,
+            request.RegionName,
+            request.ScheduledUtc,
+            request.WeekStartDate,
+            request.Diagnostics,
+            pipelineRunId,
+            contentPlanId);
+
+        var response = await service.PreviewAsync(intelligenceRequest, ct);
+        var root = response.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return Results.BadRequest(new { error = "Unable to resolve working directory root for WeeklySkyForecast scene generation." });
+        }
+
+        var debugRoot = Path.Combine(root, "debug");
+        Directory.CreateDirectory(debugRoot);
+        var skyfieldResponsePath = Path.Combine(debugRoot, "skyfield-weekly-response.json");
+        await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.WeeklyForecast, new JsonSerializerOptions { WriteIndented = true }), ct);
+
+        if (response.Storyboard is null || response.StellariumBlueprintPackage is null || response.EventExtractionResult is null)
+        {
+            return Results.BadRequest(new { error = "Scene planning prerequisites were not produced by the intelligence pipeline." });
+        }
+
+        var cinematic = cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N"));
+        var scripts = await stellariumScriptWriter.WriteAsync(cinematic, root, ct);
+        var screenshotsResult = await stellariumScreenshotGenerator.GenerateAsync(
+            root,
+            scripts,
+            executeShotCode: null,
+            testMode: ScreenshotTestMode.All.ToString(),
+            maxScriptCount: request.MaxScriptCount ?? Math.Max(1, scripts.Scripts.Count),
+            executeAllScripts: true,
+            confirmFullBatch: true,
+            continueOnFailure: request.ContinueOnFailure,
+            timeoutSeconds: request.StellariumTimeoutSeconds ?? 90,
+            ct);
+
+        var screenshots = screenshotsResult.Scripts
+            .Where(x => x.ScreenshotExists)
+            .Select(x => x.ExpectedScreenshotPath)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList()!;
+
+        var output = new WeeklySkyForecastV2GenerateWeeklyScenesResponse(
+            pipelineRunId,
+            root,
+            skyfieldResponsePath,
+            Path.Combine(root, "debug", "weekly-story-beats.json"),
+            Path.Combine(root, "debug", "weekly-cinematic-shot-timeline.json"),
+            cinematic.TotalShots,
+            scripts.Scripts.Count,
+            screenshots,
+            response.Warnings);
+
+        return Results.Ok(output);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
 
 app.MapPost("/api/content-planning/weekly-skyforecast-v2/compose-timeline", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastTimelineCompositionOrchestrator orchestrator, IContentPlanningService planning, CancellationToken ct) =>
 {
