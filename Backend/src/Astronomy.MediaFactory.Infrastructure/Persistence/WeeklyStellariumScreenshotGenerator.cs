@@ -49,7 +49,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         var selected = SelectScripts(scriptPackage, executeShotCode, maxScriptCount, executeAllScripts, confirmFullBatch, warnings, errors, ignoredDiagnosticScripts, skippedScripts);
         logger.LogInformation("Starting Stellarium screenshot execution batch");
         var totalScenes = scriptPackage.Scripts.Select(s => s.ShotCode.Split("_", StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? s.ShotCode).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        logger.LogInformation("Screenshot execution diagnostics: packageIsValid={IsValid}, totalScenes={TotalScenes}, totalShots={TotalShots}, executableShotCount={ExecutableShotCount}, skippedShotCount={SkippedShotCount}", scriptPackage.IsValid, totalScenes, scriptPackage.TotalScripts, selected.Count, skippedScripts.Count);
+        logger.LogInformation("Screenshot execution diagnostics: packageIsValid={IsValid}, totalScenes={TotalScenes}, totalShots={TotalShots}, executableShotCount={ExecutableShotCount}, skippedShotCount={SkippedShotCount}", scriptPackage.IsValid, totalScenes, scriptPackage.ScriptCount, selected.Count, skippedScripts.Count);
         foreach (var skipped in skippedScripts)
         {
             logger.LogWarning("Skipping shot {ShotCode}: {Reason}", skipped.ShotCode, skipped.Reason);
