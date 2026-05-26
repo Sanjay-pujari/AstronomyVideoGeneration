@@ -239,6 +239,12 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
             "core.wait(3);",
             "LandscapeMgr.setFlagLandscape(true);",
             "LandscapeMgr.setFlagAtmosphere(false);",
+            "ConstellationMgr.setFlagLines(true);",
+            "ConstellationMgr.setFlagLabels(true);",
+            "ConstellationMgr.setFlagBoundaries(false);",
+            "ConstellationMgr.setFlagArt(false);",
+            "StelSkyDrawer.setFlagStarName(false);",
+            "if (typeof SolarSystem !== \"undefined\" && typeof SolarSystem.setFlagLabels === \"function\") { SolarSystem.setFlagLabels(true); }",
             "StelMovementMgr.setFlagTracking(false);",
             "if (typeof LabelMgr !== \"undefined\") {",
             "  LabelMgr.deleteAllLabels();",
@@ -272,8 +278,12 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
                 list.Add($"var targets = [{targetsArray}];");
                 list.Add("for (var i = 0; i < targets.length; i++) {");
                 list.Add("  var objectName = targets[i];");
-                list.Add("  if (typeof LabelMgr !== \"undefined\" && typeof LabelMgr.labelObject === \"function\") { LabelMgr.labelObject(objectName, objectName, true, 20, \"#ffff66\", \"NE\", 15, \"Line\", false, 0); }");
-                list.Add("  if (typeof HighlightMgr !== \"undefined\" && typeof HighlightMgr.highlightObject === \"function\") { HighlightMgr.highlightObject(objectName, true); }");
+                list.Add("  core.selectObjectByName(objectName, false);");
+                list.Add("  var obj = core.getObjectInfo(objectName);");
+                list.Add("  if (obj) {");
+                list.Add("    if (typeof LabelMgr !== \"undefined\" && typeof LabelMgr.labelObject === \"function\") { LabelMgr.labelObject(objectName, objectName, true, 20, \"#ffff66\", \"NE\", 15, \"Line\", false, 0); }");
+                list.Add("    if (typeof HighlightMgr !== \"undefined\" && typeof HighlightMgr.highlightObject === \"function\") { HighlightMgr.highlightObject(objectName, true); }");
+                list.Add("  }");
                 list.Add("}");
             }
             list.Add("core.wait(4);");
