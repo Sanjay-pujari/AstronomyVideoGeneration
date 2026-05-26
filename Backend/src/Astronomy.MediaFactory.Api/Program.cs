@@ -403,7 +403,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
 
         async Task<object?> ExecuteStellariumScreenshotsAsync(WeeklyStellariumScriptPackage shots)
         {
-            return await stellariumScreenshotGenerator.GenerateAsync(root!, shots, request.ExecuteShotCode, request.MaxScriptCount ?? 1, request.StellariumTimeoutSeconds ?? 60, ct);
+            return await stellariumScreenshotGenerator.GenerateAsync(root!, shots, request.ExecuteShotCode, request.MaxScriptCount, request.ExecuteAllScripts, request.ConfirmFullBatch, request.ContinueOnFailure, request.StellariumTimeoutSeconds ?? 90, ct);
         }
         async Task<object?> ExecuteStellariumSmokeTestAsync()
         {
@@ -494,6 +494,10 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             {
                 requestedPhase = phase.ToString(),
                 executeShotCode = request.ExecuteShotCode,
+                maxScriptCount = request.MaxScriptCount,
+                executeAllScripts = request.ExecuteAllScripts,
+                confirmFullBatch = request.ConfirmFullBatch,
+                continueOnFailure = request.ContinueOnFailure,
                 selectedShotCode = request.ExecuteShotCode,
                 selectedScriptPath = (root is not null && !string.IsNullOrWhiteSpace(request.ExecuteShotCode))
                     ? Path.Combine(root, "stellarium", "scripts", $"{request.ExecuteShotCode}.ssc")

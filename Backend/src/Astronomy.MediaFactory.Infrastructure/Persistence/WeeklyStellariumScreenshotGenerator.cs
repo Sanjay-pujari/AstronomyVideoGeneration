@@ -13,17 +13,19 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 {
     private const long MinScreenshotBytes = 10 * 1024;
     private const int PollDelayMs = 500;
-    private const int MinimumApiScreenshotTimeoutSeconds = 90;
+    private const int DefaultTimeoutSeconds = 90;
+    private const int MinimumTimeoutSeconds = 60;
+    private const int MaximumTimeoutSeconds = 180;
     private readonly StellariumOptions _options = options.Value;
 
-    public async Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, int maxScriptCount = 1, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+    public async Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, int? maxScriptCount = null, bool executeAllScripts = false, bool confirmFullBatch = false, bool continueOnFailure = true, int timeoutSeconds = 90, CancellationToken cancellationToken = default)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
         var results = new List<WeeklyStellariumScreenshotScriptResult>();
         var sw = Stopwatch.StartNew();
 
-        logger.LogInformation("Screenshot generation started");
+        logger.LogInformation("Multi-shot Stellarium capture started");
 
         if (scriptPackage is null)
         {
@@ -43,8 +45,9 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         Directory.CreateDirectory(scenesDir);
 
         var ignoredDiagnosticScripts = new List<string>();
-        var selected = SelectScripts(scriptPackage, executeShotCode, maxScriptCount, warnings, errors, ignoredDiagnosticScripts);
-        logger.LogInformation("Script count: {ScriptCount}", selected.Count);
+        var selected = SelectScripts(scriptPackage, executeShotCode, maxScriptCount, executeAllScripts, confirmFullBatch, warnings, errors, ignoredDiagnosticScripts);
+        logger.LogInformation("selected script count: {ScriptCount}", selected.Count);
+        logger.LogInformation("selected shot codes: {ShotCodes}", string.Join(", ", selected.Select(s => s.ShotCode)));
         if (selected.Count == 0)
         {
             errors.Add("No scripts selected for execution.");
@@ -118,7 +121,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 logger.LogInformation("Stellarium process id: {ProcessId}", process.Id);
                 logger.LogInformation("Waiting for screenshot");
 
-                var effectiveTimeoutSeconds = Math.Max(MinimumApiScreenshotTimeoutSeconds, timeoutSeconds);
+                var effectiveTimeoutSeconds = Math.Clamp(timeoutSeconds <= 0 ? DefaultTimeoutSeconds : timeoutSeconds, MinimumTimeoutSeconds, MaximumTimeoutSeconds);
                 var deadline = DateTime.UtcNow.AddSeconds(effectiveTimeoutSeconds);
                 long? screenshotDetectedAtMs = null;
                 long? screenshotStableAtMs = null;
@@ -162,6 +165,8 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 exitCode = process.HasExited ? process.ExitCode : null;
                 if (timedOut) error = $"Screenshot not created within timeout ({effectiveTimeoutSeconds}s).";
                 results.Add(new WeeklyStellariumScreenshotScriptResult(script.ShotCode, script.ScriptPath, script.ExpectedScreenshotPath, File.Exists(script.ExpectedScreenshotPath), screenshotSize, scriptSw.ElapsedMilliseconds, timedOut, exitCode, error, scriptPreview, scriptLastWriteUtc, launchedExecutable, launchedArguments, launchedWorkingDirectory, warmupSeconds, cameraSettleSeconds, preScreenshotWaitSeconds, screenshotDetectedAtMs, screenshotStableAtMs, scriptFull));
+                await Task.Delay(2000, cancellationToken);
+                if (!continueOnFailure && !string.IsNullOrWhiteSpace(error)) break;
                 continue;
             }
 
@@ -173,6 +178,8 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             scriptSw.Stop();
             logger.LogInformation("Script execution completed");
             results.Add(new WeeklyStellariumScreenshotScriptResult(script.ShotCode, script.ScriptPath, script.ExpectedScreenshotPath, exists, screenshotSize, scriptSw.ElapsedMilliseconds, timedOut, exitCode, error, scriptPreview, scriptLastWriteUtc, launchedExecutable, launchedArguments, launchedWorkingDirectory, warmupSeconds, cameraSettleSeconds, preScreenshotWaitSeconds, null, null, scriptFull));
+            await Task.Delay(2000, cancellationToken);
+            if (!continueOnFailure && !string.IsNullOrWhiteSpace(error)) break;
         }
 
         sw.Stop();
@@ -180,7 +187,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         return await WriteResultAsync(!results.Any(r => !string.IsNullOrWhiteSpace(r.Error)), workingDirectoryRoot, pipelineRunId, warnings, errors, results, sw.ElapsedMilliseconds, selectedScript.ShotCode, selectedScript.ScriptPath, ignoredDiagnosticScripts);
     }
 
-    private static List<WeeklyStellariumScriptInfo> SelectScripts(WeeklyStellariumScriptPackage package, string? executeShotCode, int maxScriptCount, List<string> warnings, List<string> errors, List<string> ignoredDiagnosticScripts)
+    private static List<WeeklyStellariumScriptInfo> SelectScripts(WeeklyStellariumScriptPackage package, string? executeShotCode, int? maxScriptCount, bool executeAllScripts, bool confirmFullBatch, List<string> warnings, List<string> errors, List<string> ignoredDiagnosticScripts)
     {
         if (package.Scripts.Count == 0)
         {
@@ -191,7 +198,9 @@ public sealed class WeeklyStellariumScreenshotGenerator(
         var cinematicScripts = package.Scripts
             .Where(s => !s.IsDiagnostic
                 && !s.ShotCode.StartsWith("_", StringComparison.Ordinal)
-                && !Path.GetFileName(s.ScriptPath).StartsWith("_", StringComparison.Ordinal))
+                && s.IsValid
+                && !Path.GetFileName(s.ScriptPath).StartsWith("_", StringComparison.Ordinal)
+                && !Path.GetFileName(s.ScriptPath).Contains("_smoke_basic", StringComparison.OrdinalIgnoreCase))
             .ToList();
         ignoredDiagnosticScripts.AddRange(package.Scripts
             .Except(cinematicScripts)
@@ -208,16 +217,28 @@ public sealed class WeeklyStellariumScreenshotGenerator(
             return [selected];
         }
 
-        var requested = maxScriptCount <= 0 ? 1 : maxScriptCount;
-        var capped = Math.Min(3, requested);
-        if (capped != requested) warnings.Add("batch mode capped to 3 scripts");
-        return cinematicScripts.OrderBy(s => s.ShotOrder).Take(capped).ToList();
+        var ordered = cinematicScripts.OrderBy(s => s.ShotOrder).ToList();
+        if (executeAllScripts)
+        {
+            if (!confirmFullBatch)
+            {
+                errors.Add("Full batch requires confirmFullBatch=true.");
+                return [];
+            }
+            return ordered;
+        }
+
+        var requested = maxScriptCount.GetValueOrDefault(3);
+        var normalized = requested <= 0 ? 3 : requested;
+        var capped = Math.Min(5, normalized);
+        if (capped != normalized) warnings.Add("batch mode capped to 5 scripts");
+        return ordered.Take(capped).ToList();
     }
 
     private static async Task<WeeklyStellariumScreenshotGenerationResult> WriteResultAsync(bool success, string workingDirectoryRoot, string? pipelineRunId, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, IReadOnlyList<WeeklyStellariumScreenshotScriptResult> scripts, long elapsedMs, string? selectedShotCode, string? selectedScriptPath, IReadOnlyList<string> ignoredDiagnosticScripts)
     {
         var timeoutCount = scripts.Count(s => s.TimedOut);
-        var result = new WeeklyStellariumScreenshotGenerationResult(success, scripts.Count, scripts.Count(s => s.Error is null), scripts.Count(s => s.Error is not null), elapsedMs, timeoutCount, warnings, errors, scripts, Path.Combine(Path.GetFullPath(workingDirectoryRoot), "debug", "weekly-stellarium-screenshot-generation.json"), Path.GetFullPath(workingDirectoryRoot), pipelineRunId, selectedShotCode, selectedScriptPath, "WeeklyStellariumScriptPackage", ignoredDiagnosticScripts);
+        var result = new WeeklyStellariumScreenshotGenerationResult(success, scripts.Count, scripts.Count(s => s.Error is null), scripts.Count(s => s.Error is not null), elapsedMs, timeoutCount, warnings, errors, scripts, Path.Combine(Path.GetFullPath(workingDirectoryRoot), "debug", "weekly-stellarium-multishot-capture.json"), Path.GetFullPath(workingDirectoryRoot), pipelineRunId, selectedShotCode, selectedScriptPath, "WeeklyStellariumScriptPackage", ignoredDiagnosticScripts);
         Directory.CreateDirectory(Path.GetDirectoryName(result.DiagnosticsPath)!);
         await File.WriteAllTextAsync(result.DiagnosticsPath, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         return result;
