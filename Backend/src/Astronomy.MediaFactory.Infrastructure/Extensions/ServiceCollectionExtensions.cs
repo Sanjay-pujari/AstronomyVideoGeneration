@@ -500,6 +500,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastV2EditorialNormalizer, WeeklySkyForecastV2EditorialNormalizer>();
         services.AddScoped<IWeeklyStoryboardComposer, WeeklyStoryboardComposer>();
         services.AddScoped<IWeeklyConjunctionFramingEngine, WeeklyConjunctionFramingEngine>();
+        services.AddScoped<IAstronomicalGroupingComposer, AstronomicalGroupingComposer>();
         services.AddScoped<IWeeklyDynamicFovCalculator, WeeklyDynamicFovCalculator>();
         services.AddScoped<IWeeklySscSceneBuilder, WeeklySscSceneBuilder>();
         services.AddScoped<IWeeklySkySceneComposer, WeeklySkySceneComposer>();

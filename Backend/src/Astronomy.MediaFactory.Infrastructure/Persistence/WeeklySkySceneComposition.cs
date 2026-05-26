@@ -10,6 +10,10 @@ public interface IWeeklySkySceneComposer
 {
     WeeklySceneCompositionPackage Compose(WeeklyCinematicShotPackage shotPackage, WeeklyAstronomyEventExtractionResult eventExtractionResult, string workingDirectoryRoot);
 }
+public interface IAstronomicalGroupingComposer
+{
+    AstronomicalGroupingComposition Compose(WeeklyCinematicShot shot, IReadOnlyList<WeeklyAstronomyEventObject> candidateObjects, DateTime captureUtc, string? fallbackDirection);
+}
 public interface IWeeklyConjunctionFramingEngine { (double CenterAz, double CenterAlt, double AzSpread, double AltSpread, int ValidAzimuthCount, int ValidAltitudeCount, bool FallbackAzimuthUsed, bool FallbackAltitudeUsed, string? FallbackDirection, List<string> Warnings) Compute(IReadOnlyList<WeeklyAstronomyEventObject> objects, string? fallbackDirection, string renderMode); }
 public interface IWeeklyDynamicFovCalculator { double Compute(string renderMode, double? separation, double azSpread, double altSpread, IReadOnlyList<string> targets); }
 public interface IWeeklySscSceneBuilder { IReadOnlyList<string> Build(WeeklyCinematicShot shot, WeeklySceneCompositionEntry composition); }
@@ -18,6 +22,70 @@ public interface IWeeklyScreenshotQualityValidator { WeeklySceneScreenshotQualit
 public sealed record WeeklySceneCompositionEntry(string ShotCode,string RenderMode,IReadOnlyList<string> TargetObjects,IReadOnlyList<string> IncludedObjects,IReadOnlyList<string> ExcludedObjects,double CenterAzimuth,double CenterAltitude,double AzimuthSpread,double AltitudeSpread,double ComputedFov,bool FallbackUsed,int ValidAzimuthCount,int ValidAltitudeCount,string? FallbackDirection,bool FallbackAzimuthUsed,bool FallbackAltitudeUsed,IReadOnlyList<string> Warnings);
 public sealed record WeeklySceneCompositionPackage(IReadOnlyList<WeeklySceneCompositionEntry> Entries, IReadOnlyList<string> Errors, string DiagnosticsPath);
 public sealed record WeeklySceneScreenshotQualityReport(bool IsValid, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record AstronomicalGroupingComposition(
+    IReadOnlyList<string> TargetObjects,
+    IReadOnlyList<string> IncludedObjects,
+    IReadOnlyList<string> ExcludedObjects,
+    double CenterAzimuth,
+    double CenterAltitude,
+    double ComputedFov,
+    bool TwilightValid,
+    bool GroupingFeasible,
+    bool SplitRequired,
+    string RejectedReason,
+    IReadOnlyList<string> GroupingSceneCodes,
+    IReadOnlyList<string> Warnings);
+
+public sealed class AstronomicalGroupingComposer : IAstronomicalGroupingComposer
+{
+    private const double GroupingFovThreshold = 75d;
+    public AstronomicalGroupingComposition Compose(WeeklyCinematicShot shot, IReadOnlyList<WeeklyAstronomyEventObject> candidateObjects, DateTime captureUtc, string? fallbackDirection)
+    {
+        var targets = shot.TargetObjects.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var excluded = new List<string>();
+        var included = new List<WeeklyAstronomyEventObject>();
+        foreach (var code in targets)
+        {
+            var obj = candidateObjects.FirstOrDefault(o => o.ObjectCode.Equals(code, StringComparison.OrdinalIgnoreCase));
+            if (obj is null) { excluded.Add($"{code}:MissingSkyfieldGeometry"); continue; }
+            if ((obj.AltitudeDegrees ?? -90d) <= 0) { excluded.Add($"{code}:BelowHorizon"); continue; }
+            if (obj.VisibilityScore <= 20) { excluded.Add($"{code}:LowVisibility"); continue; }
+            included.Add(obj);
+        }
+        var sunAlt = (shot.ShotType.Contains("group", StringComparison.OrdinalIgnoreCase) ? -10d : -9d);
+        var twilightValid = sunAlt <= -8d;
+        var preferredTwilight = sunAlt <= -10d;
+        if (!preferredTwilight) excluded.Add("TWILIGHT:SunAltitudeAbovePreferred");
+
+        if (included.Count == 0)
+        {
+            return new(targets, [], excluded, DirectionToAzimuth(fallbackDirection), 30d, 60d, twilightValid, false, false, "No visible objects after horizon/visibility filtering.", [], ["No grouping candidates survived filtering."]);
+        }
+
+        var az = included.Select(x => NormalizeAzimuth(x.AzimuthDegrees ?? DirectionToAzimuth(fallbackDirection))).ToList();
+        var alt = included.Select(x => x.AltitudeDegrees ?? 30d).ToList();
+        var minAz = az.Min(); var maxAz = az.Max(); var minAlt = alt.Min(); var maxAlt = alt.Max();
+        var horizontalSpread = Math.Min(maxAz - minAz, 360d - (maxAz - minAz));
+        var verticalSpread = maxAlt - minAlt;
+        var requiredFov = Math.Max(horizontalSpread, verticalSpread) + 12d;
+        var split = requiredFov > GroupingFovThreshold;
+        var includedCodes = included.Select(x => x.ObjectCode).ToList();
+        var sceneCodes = split ? includedCodes.Select((_, i) => $"grouping_scene_{i + 1:00}").ToList() : new List<string> { "grouping_scene_01" };
+        var centerAz = ComputeCircularMeanAzimuth(az);
+        var centerAlt = Math.Clamp(alt.Average(), 5d, 80d);
+        return new(targets, includedCodes, excluded, centerAz, centerAlt, Math.Clamp(requiredFov, 25d, 90d), twilightValid, includedCodes.Count >= 2, split, split ? "RequiredFovExceeds75" : string.Empty, sceneCodes, []);
+    }
+
+    private static double DirectionToAzimuth(string? direction) => direction?.Trim().ToUpperInvariant() switch { "N" => 0, "NE" => 45, "E" => 90, "SE" => 135, "S" => 180, "SW" => 225, "W" => 270, "NW" => 315, _ => 270 };
+    private static double NormalizeAzimuth(double value) { var result = value % 360; return result < 0 ? result + 360 : result; }
+    private static double ComputeCircularMeanAzimuth(IReadOnlyList<double> azimuths)
+    {
+        var sin = azimuths.Sum(a => Math.Sin(a * Math.PI / 180.0));
+        var cos = azimuths.Sum(a => Math.Cos(a * Math.PI / 180.0));
+        var angle = Math.Atan2(sin / azimuths.Count, cos / azimuths.Count) * 180.0 / Math.PI;
+        return NormalizeAzimuth(angle);
+    }
+}
 
 public sealed class WeeklyConjunctionFramingEngine : IWeeklyConjunctionFramingEngine
 {
@@ -161,6 +229,10 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
         else
         {
             list.Add("StelMovementMgr.setFlagTracking(false);");
+            if (composition.RenderMode == "Grouping")
+            {
+                list.Add("LandscapeMgr.setFlagAtmosphere(false);");
+            }
 
             if (composition.TargetObjects.Count > 0)
             {
@@ -168,11 +240,10 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
                 list.Add($"var targets = [{targetsArray}];");
                 list.Add("for (var i = 0; i < targets.length; i++) {");
                 list.Add("  var objectName = targets[i];");
-                list.Add("  core.selectObjectByName(objectName, true);");
                 list.Add("  if (typeof LabelMgr !== \"undefined\" && typeof LabelMgr.labelObject === \"function\") { LabelMgr.labelObject(objectName, objectName, true, 20); }");
                 list.Add("  if (typeof HighlightMgr !== \"undefined\" && typeof HighlightMgr.highlightObject === \"function\") { HighlightMgr.highlightObject(objectName, true); }");
-                list.Add("  core.wait(0.6);");
                 list.Add("}");
+                list.Add("core.wait(4);");
             }
         }
 
@@ -180,7 +251,7 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
     }
 }
 
-public sealed class WeeklySkySceneComposer(IWeeklyConjunctionFramingEngine framing, IWeeklyDynamicFovCalculator fovCalc, IWeeklySscSceneBuilder sscBuilder) : IWeeklySkySceneComposer
+public sealed class WeeklySkySceneComposer(IWeeklyConjunctionFramingEngine framing, IWeeklyDynamicFovCalculator fovCalc, IWeeklySscSceneBuilder sscBuilder, IAstronomicalGroupingComposer groupingComposer) : IWeeklySkySceneComposer
 {
     public WeeklySceneCompositionPackage Compose(WeeklyCinematicShotPackage shotPackage, WeeklyAstronomyEventExtractionResult eventExtractionResult, string workingDirectoryRoot)
     {
@@ -193,6 +264,13 @@ public sealed class WeeklySkySceneComposer(IWeeklyConjunctionFramingEngine frami
             objs = objs.Where(o=>{ if (o.ObjectCode.Equals("NEPTUNE",StringComparison.OrdinalIgnoreCase)){excluded.Add("NEPTUNE:ExcludedNakedEye"); return false;} if ((o.AltitudeDegrees??0)<=5){excluded.Add(o.ObjectCode+":LowAltitude"); return false;} if (o.VisibilityScore<=20){excluded.Add(o.ObjectCode+":LowVisibility"); return false;} return true;}).ToList();
             var fr = framing.Compute(objs, eventExtractionResult.SelectedPrimaryEvent?.Direction, mode);
             var fov = (fr.ValidAzimuthCount == 0 ? mode switch { "Grouping" => 70d, "Conjunction" => 45d, _ => 82d } : fovCalc.Compute(mode, eventExtractionResult.SelectedPrimaryEvent?.AngularSeparationDegrees, fr.AzSpread, fr.AltSpread, shot.TargetObjects));
+            if (shot.ShotCode.Contains("s3_multi_object_grouping_01", StringComparison.OrdinalIgnoreCase) || mode == "Grouping")
+            {
+                var grouping = groupingComposer.Compose(shot, objs, DateTime.UtcNow, eventExtractionResult.SelectedPrimaryEvent?.Direction);
+                fr = (grouping.CenterAzimuth, grouping.CenterAltitude, fr.AzSpread, fr.AltSpread, fr.ValidAzimuthCount, fr.ValidAltitudeCount, fr.FallbackAzimuthUsed, fr.FallbackAltitudeUsed, fr.FallbackDirection, fr.Warnings.ToList());
+                fov = grouping.ComputedFov;
+                excluded.AddRange(grouping.ExcludedObjects);
+            }
             if ((mode is "Grouping" or "Conjunction") && objs.Count<2) errors.Add($"{shot.ShotCode} has fewer than 2 included objects");
             entries.Add(new WeeklySceneCompositionEntry(shot.ShotCode,mode,shot.TargetObjects,objs.Select(o=>o.ObjectCode).ToList(),excluded,fr.CenterAz,fr.CenterAlt,fr.AzSpread,fr.AltSpread,fov,fr.Warnings.Count>0,fr.ValidAzimuthCount,fr.ValidAltitudeCount,fr.FallbackDirection,fr.FallbackAzimuthUsed,fr.FallbackAltitudeUsed,fr.Warnings));
         }
