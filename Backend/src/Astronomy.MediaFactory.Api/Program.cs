@@ -374,7 +374,9 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
             PipelineRunId: pipelineRunId,
             ContentGenerationPlanId: contentPlanId);
         var response = await service.PreviewAsync(intelligenceRequest, ct);
-        var root = response.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
+        var weeklySkyfieldContext = response;
+        app.Logger.LogInformation("Skyfield weekly context loaded once");
+        var root = weeklySkyfieldContext.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
         var debugFiles = new Dictionary<string, string?>
         {
             ["astronomyEvents"] = root is null ? null : Path.Combine(root, "debug", "weekly-astronomy-events.json"),
@@ -741,7 +743,9 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             ContentGenerationPlanId: contentPlanId);
 
         var response = await service.PreviewAsync(intelligenceRequest, ct);
-        var root = response.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
+        var weeklySkyfieldContext = response;
+        app.Logger.LogInformation("Skyfield weekly context loaded once");
+        var root = weeklySkyfieldContext.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
         if (string.IsNullOrWhiteSpace(root))
             return Results.BadRequest(new { error = "Unable to resolve working directory root for WeeklySkyForecast scene generation." });
 
@@ -751,6 +755,19 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var skyfieldErrorsPath = Path.Combine(debugRoot, "skyfield-weekly-errors.json");
         await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.SkyfieldSummary, new JsonSerializerOptions { WriteIndented = true }), ct);
         await File.WriteAllTextAsync(skyfieldErrorsPath, "[]", ct);
+
+        var narrationDirectory = Path.Combine(root, "narration");
+        Directory.CreateDirectory(narrationDirectory);
+        app.Logger.LogInformation("Persisting narration artifacts");
+        var storyBeatsPath = Path.Combine(narrationDirectory, "weekly-story-beats.json");
+        var narrationPlanPath = Path.Combine(narrationDirectory, "weekly-narration-plan.json");
+        var narrationTextPath = Path.Combine(narrationDirectory, "weekly-narration-text.txt");
+        var visualRequirementsPath = Path.Combine(narrationDirectory, "weekly-visual-requirements.json");
+        await File.WriteAllTextAsync(storyBeatsPath, JsonSerializer.Serialize(weeklySkyfieldContext.NarrativeAbstractionPackage, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await File.WriteAllTextAsync(narrationPlanPath, JsonSerializer.Serialize(weeklySkyfieldContext.NarrationPlan, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await File.WriteAllTextAsync(narrationTextPath, weeklySkyfieldContext.GeneratedNarrationPackage?.FullNarrationText ?? string.Empty, ct);
+        await File.WriteAllTextAsync(visualRequirementsPath, JsonSerializer.Serialize(weeklySkyfieldContext.VisualRequirementPackage, new JsonSerializerOptions { WriteIndented = true }), ct);
+        app.Logger.LogInformation("Narration artifacts persisted");
 
         var weekStartDate = request.WeekStartDate ?? DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
         var weekEndDate = weekStartDate.AddDays(6);
@@ -797,6 +814,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             throw new InvalidOperationException("Internal bug: weekly date range lost before visual generation.");
         }
 
+        app.Logger.LogInformation("Using existing weekly Skyfield context for visual scene generation");
         var visualAssets = await visualAssetService.GenerateAsync(
             contentPlanId.Value,
             new WeeklySkyForecastVisualAssetsGenerateRequest(
@@ -831,13 +849,25 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var warnings = response.Warnings.Concat(visualAssets.Warnings).Concat(visualAssets.Errors).Distinct().ToList();
+        var warnings = weeklySkyfieldContext.Warnings.Concat(visualAssets.Warnings).Concat(visualAssets.Errors).Distinct().ToList();
+
+        var narrationManifestPath = Path.Combine(root, "debug", "weekly-scenes-manifest.json");
+        await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
+        {
+            narrationArtifacts = new
+            {
+                storyBeatsPath,
+                narrationPlanPath,
+                narrationTextPath,
+                visualRequirementsPath
+            }
+        }, new JsonSerializerOptions { WriteIndented = true }), ct);
 
         var output = new WeeklySkyForecastV2GenerateWeeklyScenesResponse(
             pipelineRunId,
             root,
             skyfieldResponsePath,
-            Path.Combine(root, "debug", "weekly-story-beats.json"),
+            storyBeatsPath,
             visualAssets.VisualAssetManifestPath,
             visualAssets.ScriptCount,
             visualAssets.ScriptCount,
