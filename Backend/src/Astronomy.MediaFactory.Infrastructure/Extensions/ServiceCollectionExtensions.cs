@@ -480,7 +480,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastContextBuilder, WeeklySkyForecastContextBuilder>();
         services.AddScoped<IWeeklySkyForecastContextBuilderV2, WeeklySkyForecastContextBuilder>();
         services.AddScoped<IWeeklySkyForecastSegmentPlanner, WeeklySkyForecastSegmentPlanner>();
-        services.AddScoped<IWeeklySkyForecastSscScenePlanner, WeeklySkyForecastSscScenePlanner>();
+        services.AddScoped<IWeeklySkyForecastSscScenePlanner, LegacyWeeklyVisualAssetGenerator>();
         services.AddScoped<ICategoryOutputPathResolver, CategoryOutputPathResolver>();
         services.AddScoped<IWeeklySkyForecastMetadataBuilder, WeeklySkyForecastMetadataBuilder>();
         services.AddScoped<IWeeklySkyForecastPreparationOrchestrator, WeeklySkyForecastPreparationOrchestrator>();
