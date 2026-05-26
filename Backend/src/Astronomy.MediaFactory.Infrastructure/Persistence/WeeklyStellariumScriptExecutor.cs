@@ -9,7 +9,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class WeeklyStellariumScriptExecutor(
     IOptions<StellariumOptions> options,
-    ILogger<WeeklyStellariumScriptExecutor> logger) : IWeeklyStellariumScriptExecutor
+    ILogger<WeeklyStellariumScriptExecutor> logger) : IWeeklyStellariumScriptExecutor, IStellariumScriptExecutionService
 {
     private readonly StellariumOptions _options = options.Value;
 
@@ -20,6 +20,8 @@ public sealed class WeeklyStellariumScriptExecutor(
         var stopwatch = Stopwatch.StartNew();
         var timedOut = false;
         int? exitCode = null;
+        var processStarted = false;
+        int? processId = null;
 
         logger.LogInformation("Starting Stellarium execution");
         logger.LogInformation("Script path: {ScriptPath}", scriptPath);
@@ -53,6 +55,8 @@ public sealed class WeeklyStellariumScriptExecutor(
 
             using var process = new Process { StartInfo = psi };
             process.Start();
+            processStarted = true;
+            processId = process.Id;
             logger.LogInformation("Stellarium process started");
             logger.LogInformation("Waiting for screenshot");
 
@@ -95,8 +99,26 @@ public sealed class WeeklyStellariumScriptExecutor(
         var debugDir = Path.Combine(rootFull, "debug");
         Directory.CreateDirectory(debugDir);
         var diagnosticsPath = Path.Combine(debugDir, "weekly-stellarium-execution-smoke-test.json");
+        var groupedDiagnosticsPath = Path.Combine(debugDir, "grouped-stellarium-execution-report.json");
         var result = new WeeklyStellariumScriptExecutionResult(scriptPath, expectedScreenshotPath, screenshotExists, screenshotSize, stopwatch.ElapsedMilliseconds, timedOut, exitCode, errors, warnings, diagnosticsPath, errors.Count == 0);
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        var groupedReport = new
+        {
+            scriptPath,
+            stellariumExecutablePath = _options.ExecutablePath,
+            processStarted,
+            processId,
+            expectedScreenshotPath,
+            screenshotExists,
+            screenshotFileSize = screenshotSize,
+            timeoutSeconds = Math.Max(5, timeoutSeconds),
+            constellationLinesEnabled = true,
+            constellationLabelsEnabled = true,
+            objectLabelsEnabled = true,
+            targetObjects = Array.Empty<string>(),
+            errors
+        };
+        await File.WriteAllTextAsync(groupedDiagnosticsPath, JsonSerializer.Serialize(groupedReport, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 
         logger.LogInformation("Execution completed");
         return result;

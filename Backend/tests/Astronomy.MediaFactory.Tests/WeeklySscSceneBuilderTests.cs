@@ -61,14 +61,23 @@ public class WeeklySscSceneBuilderTests
         Assert.Contains("\"Moon\"", text);
         Assert.Contains("\"Venus\"", text);
         Assert.DoesNotContain("\"MOON\"", text);
+        Assert.Contains("ConstellationMgr.setFlagLines(true);", text);
+        Assert.Contains("ConstellationMgr.setFlagLabels(true);", text);
+        Assert.Contains("ConstellationMgr.setFlagBoundaries(false);", text);
+        Assert.Contains("ConstellationMgr.setFlagArt(false);", text);
+        Assert.Contains("StelSkyDrawer.setFlagStarName(false);", text);
+        Assert.Contains("SolarSystem.setFlagLabels(true);", text);
         Assert.Contains("LabelMgr.deleteAllLabels();", text);
         Assert.Contains("HighlightMgr.cleanHighlightList();", text);
+        Assert.Contains("var obj = core.getObjectInfo(objectName);", text);
+        Assert.Contains("if (obj) {", text);
         Assert.Contains("LabelMgr.labelObject(objectName, objectName, true, 20, \"#ffff66\", \"NE\", 15, \"Line\", false, 0);", text);
         Assert.Equal(1, commands.Count(c => c.Contains("core.screenshot(", StringComparison.Ordinal)));
         Assert.DoesNotContain("core.moveToAltAzi(270", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("core.moveToAltAzi(\"35d\", \"260d\", 0);", text);
         Assert.Equal(1, commands.Count(c => c.Contains("core.moveToAltAzi(", StringComparison.Ordinal)));
         Assert.Equal(1, commands.Count(c => c.Contains("StelMovementMgr.zoomTo(", StringComparison.Ordinal)));
+        Assert.True(text.IndexOf("LabelMgr.deleteAllLabels();", StringComparison.Ordinal) < text.IndexOf("LabelMgr.labelObject(objectName", StringComparison.Ordinal));
         var reportPath = Path.Combine(tmp, "grouped-ssc-validation-report.json");
         Assert.True(File.Exists(reportPath));
     }

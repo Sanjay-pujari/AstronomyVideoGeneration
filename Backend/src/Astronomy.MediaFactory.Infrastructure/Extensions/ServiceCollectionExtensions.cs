@@ -513,6 +513,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastV2IntelligenceService, WeeklySkyForecastV2IntelligenceService>();
         services.AddScoped<IWeeklyStellariumScriptWriter, WeeklyStellariumScriptWriter>();
         services.AddScoped<IWeeklyStellariumScriptExecutor, WeeklyStellariumScriptExecutor>();
+        services.AddScoped<IStellariumScriptExecutionService>(sp => (IStellariumScriptExecutionService)sp.GetRequiredService<IWeeklyStellariumScriptExecutor>());
         services.AddScoped<IWeeklyStellariumScreenshotGenerator, WeeklyStellariumScreenshotGenerator>();
         services.AddScoped<IExternalProcessRunner, ExternalProcessRunner>();
         services.AddScoped<IFFmpegService, FFmpegService>();
