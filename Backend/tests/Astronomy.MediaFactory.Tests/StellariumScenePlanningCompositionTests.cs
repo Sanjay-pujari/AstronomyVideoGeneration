@@ -1,8 +1,8 @@
 using Astronomy.MediaFactory.Contracts;
-using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Options;
 using Xunit;
+using ContractsSceneGenerationMode = Astronomy.MediaFactory.Contracts.SceneGenerationMode;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -11,7 +11,7 @@ public sealed class StellariumScenePlanningCompositionTests
     [Fact]
     public async Task CompositionFocused_GroupsVisibleObjects_AndReducesSceneCount()
     {
-        var options = Options.Create(new StellariumOptions { DailySkyGuideSceneGenerationMode = SceneGenerationMode.CompositionFocused, MaxCompositionScenes = 5 });
+        var options = Options.Create(new StellariumOptions { DailySkyGuideSceneGenerationMode = ContractsSceneGenerationMode.CompositionFocused, MaxCompositionScenes = 5 });
         var sut = new DailySkyGuideStellariumScenePlanner(options);
         var plan = BuildPlan();
         var visibility = BuildVisibility();
@@ -26,7 +26,7 @@ public sealed class StellariumScenePlanningCompositionTests
     [Fact]
     public async Task ObjectFocused_PreservesLegacyFocusedScenes()
     {
-        var options = Options.Create(new StellariumOptions { DailySkyGuideSceneGenerationMode = SceneGenerationMode.ObjectFocused });
+        var options = Options.Create(new StellariumOptions { DailySkyGuideSceneGenerationMode = ContractsSceneGenerationMode.ObjectFocused });
         var sut = new DailySkyGuideStellariumScenePlanner(options);
 
         var result = await sut.BuildScenePlanAsync(BuildPlan(), BuildVisibility(), CancellationToken.None);
@@ -38,7 +38,7 @@ public sealed class StellariumScenePlanningCompositionTests
     [Fact]
     public async Task Hybrid_IncludesCompositionAndFocusedScenes_WithLimits()
     {
-        var options = Options.Create(new StellariumOptions { DailySkyGuideSceneGenerationMode = SceneGenerationMode.Hybrid, MaxCompositionScenes = 5, MaxFocusedScenes = 3 });
+        var options = Options.Create(new StellariumOptions { DailySkyGuideSceneGenerationMode = ContractsSceneGenerationMode.Hybrid, MaxCompositionScenes = 5, MaxFocusedScenes = 3 });
         var sut = new DailySkyGuideStellariumScenePlanner(options);
 
         var result = await sut.BuildScenePlanAsync(BuildPlan(), BuildVisibility(), CancellationToken.None);
@@ -50,7 +50,6 @@ public sealed class StellariumScenePlanningCompositionTests
 
     private static ContentGenerationPlan BuildPlan() => new()
     {
-        Id = Guid.NewGuid(),
         ContentCategoryCode = "DailySkyGuide",
         PrimaryCelestialObjectCode = "Mars"
     };
