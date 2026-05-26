@@ -716,7 +716,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklyCinematicShotExpansionEngine cinematicEngine, IWeeklyStellariumScriptWriter stellariumScriptWriter, IWeeklyStellariumScreenshotGenerator stellariumScreenshotGenerator, IContentPlanningService planning, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IWeeklySkyForecastVisualAssetGenerationService visualAssetService, IContentPlanningService planning, CancellationToken ct) =>
 {
     try
     {
@@ -742,9 +742,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var response = await service.PreviewAsync(intelligenceRequest, ct);
         var root = response.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
         if (string.IsNullOrWhiteSpace(root))
-        {
             return Results.BadRequest(new { error = "Unable to resolve working directory root for WeeklySkyForecast scene generation." });
-        }
 
         var debugRoot = Path.Combine(root, "debug");
         Directory.CreateDirectory(debugRoot);
@@ -753,42 +751,51 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.SkyfieldSummary, new JsonSerializerOptions { WriteIndented = true }), ct);
         await File.WriteAllTextAsync(skyfieldErrorsPath, "[]", ct);
 
-        if (response.Storyboard is null || response.StellariumBlueprintPackage is null || response.EventExtractionResult is null)
-        {
-            return Results.BadRequest(new { error = "Scene planning prerequisites were not produced by the intelligence pipeline." });
-        }
-
-        var cinematic = cinematicEngine.Expand(response.Storyboard, response.StellariumBlueprintPackage, response.EventExtractionResult, response.Region, root, pipelineRunId.ToString("N"));
-        var scripts = await stellariumScriptWriter.WriteAsync(cinematic, root, ct);
-        var screenshotsResult = await stellariumScreenshotGenerator.GenerateAsync(
-            root,
-            scripts,
-            executeShotCode: null,
-            testMode: ScreenshotTestMode.All.ToString(),
-            maxScriptCount: request.MaxScriptCount ?? Math.Max(1, scripts.Scripts.Count),
-            executeAllScripts: true,
-            confirmFullBatch: true,
-            continueOnFailure: request.ContinueOnFailure,
-            timeoutSeconds: request.StellariumTimeoutSeconds ?? 90,
+        var visualAssets = await visualAssetService.GenerateAsync(
+            contentPlanId.Value,
+            new WeeklySkyForecastVisualAssetsGenerateRequest(
+                DryRun: false,
+                OverwriteExisting: true,
+                CaptureStellariumScenes: true,
+                Diagnostics: request.Diagnostics,
+                AllowExtraScenes: true),
             ct);
 
-        var screenshots = screenshotsResult.Scripts
-            .Where(x => x.ScreenshotExists)
-            .Select(x => x.ExpectedScreenshotPath)
-            .Where(x => !string.IsNullOrWhiteSpace(x))
+        var waitTimeout = TimeSpan.FromSeconds(Math.Clamp(request.StellariumTimeoutSeconds ?? 90, 30, 600));
+        foreach (var script in visualAssets.Scripts)
+        {
+            var started = DateTime.UtcNow;
+            while (DateTime.UtcNow - started < waitTimeout)
+            {
+                if (File.Exists(script.ExpectedImagePath))
+                {
+                    var len = new FileInfo(script.ExpectedImagePath).Length;
+                    if (len > 10 * 1024)
+                        break;
+                }
+
+                await Task.Delay(500, ct);
+            }
+        }
+
+        var screenshots = visualAssets.Scripts
+            .Select(x => x.ExpectedImagePath)
+            .Where(path => File.Exists(path) && new FileInfo(path).Length > 10 * 1024)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList()!;
+            .ToList();
+
+        var warnings = response.Warnings.Concat(visualAssets.Warnings).Concat(visualAssets.Errors).Distinct().ToList();
 
         var output = new WeeklySkyForecastV2GenerateWeeklyScenesResponse(
             pipelineRunId,
             root,
             skyfieldResponsePath,
             Path.Combine(root, "debug", "weekly-story-beats.json"),
-            Path.Combine(root, "debug", "weekly-cinematic-shot-timeline.json"),
-            cinematic.TotalShots,
-            scripts.Scripts.Count,
+            visualAssets.VisualAssetManifestPath,
+            visualAssets.ScriptCount,
+            visualAssets.ScriptCount,
             screenshots,
-            response.Warnings);
+            warnings);
 
         return Results.Ok(output);
     }
