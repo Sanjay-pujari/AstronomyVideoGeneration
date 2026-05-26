@@ -752,10 +752,13 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.SkyfieldSummary, new JsonSerializerOptions { WriteIndented = true }), ct);
         await File.WriteAllTextAsync(skyfieldErrorsPath, "[]", ct);
 
+        var weekStartDate = request.WeekStartDate ?? DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
+        var weekEndDate = weekStartDate.AddDays(6);
+
         app.Logger.LogInformation(
             "WeeklySkyForecast generate-weekly-scenes before orchestration visual generation: weekStartDate={WeekStartDate}, weekEndDate={WeekEndDate}, scheduledUtc={ScheduledUtc}, dryRun={DryRun}, generateSscScripts={GenerateSscScripts}, captureStellariumScenes={CaptureStellariumScenes}, diagnostics={Diagnostics}, flags={Flags}",
-            request.WeekStartDate,
-            request.WeekStartDate?.AddDays(6),
+            weekStartDate,
+            weekEndDate,
             request.ScheduledUtc,
             false,
             true,
@@ -780,8 +783,8 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             request.RegionId,
             request.RegionName,
             request.ScheduledUtc,
-            request.WeekStartDate,
-            request.WeekStartDate.AddDays(6),
+            weekStartDate,
+            weekEndDate,
             GenerateNarration: true,
             GenerateSscScripts: true,
             CaptureStellariumScenes: true,
