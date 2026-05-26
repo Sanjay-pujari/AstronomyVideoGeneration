@@ -11,6 +11,8 @@ public sealed class WeeklyStellariumScriptExecutor(
     IOptions<StellariumOptions> options,
     ILogger<WeeklyStellariumScriptExecutor> logger) : IWeeklyStellariumScriptExecutor, IStellariumScriptExecutionService
 {
+    private const int MaxWaitSeconds = 60;
+    private const int PollDelayMilliseconds = 500;
     private readonly StellariumOptions _options = options.Value;
 
     public async Task<WeeklyStellariumScriptExecutionResult> ExecuteAsync(string workingDirectoryRoot, string scriptPath, string expectedScreenshotPath, int timeoutSeconds = 45, CancellationToken cancellationToken = default)
@@ -60,40 +62,45 @@ public sealed class WeeklyStellariumScriptExecutor(
             logger.LogInformation("Stellarium process started");
             logger.LogInformation("Waiting for screenshot");
 
-            var deadline = DateTime.UtcNow.AddSeconds(Math.Max(5, timeoutSeconds));
+            var deadline = DateTime.UtcNow.AddSeconds(MaxWaitSeconds);
             while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
             {
-                if (File.Exists(screenshotFull) && new FileInfo(screenshotFull).Length > 10 * 1024)
+                if (File.Exists(screenshotFull))
                 {
+                    var detectedSize = new FileInfo(screenshotFull).Length;
                     logger.LogInformation("Screenshot detected");
-                    break;
+                    logger.LogInformation("Screenshot file size: {ScreenshotFileSize}", detectedSize);
+                    if (detectedSize > 0)
+                    {
+                        logger.LogInformation("Screenshot validated");
+                        break;
+                    }
                 }
 
-                if (process.HasExited)
-                {
-                    exitCode = process.ExitCode;
-                    break;
-                }
+                await Task.Delay(PollDelayMilliseconds, cancellationToken);
+            }
 
-                await Task.Delay(500, cancellationToken);
+            timedOut = !(File.Exists(screenshotFull) && new FileInfo(screenshotFull).Length > 0);
+            if (timedOut)
+            {
+                logger.LogWarning("Timeout reached while waiting for screenshot");
             }
 
             if (!process.HasExited)
             {
-                timedOut = !(File.Exists(screenshotFull) && new FileInfo(screenshotFull).Length > 10 * 1024);
                 process.Kill(entireProcessTree: true);
                 await process.WaitForExitAsync(CancellationToken.None);
                 logger.LogInformation("Process killed/closed");
             }
 
-            if (exitCode is null && process.HasExited) exitCode = process.ExitCode;
+            if (process.HasExited) exitCode = process.ExitCode;
         }
 
         var screenshotExists = File.Exists(screenshotFull);
         var screenshotSize = screenshotExists ? new FileInfo(screenshotFull).Length : 0;
         if (!screenshotExists) errors.Add("Expected screenshot was not created.");
-        else if (screenshotSize <= 10 * 1024) errors.Add($"Screenshot exists but file size is too small: {screenshotSize} bytes.");
-        if (timedOut) errors.Add($"Stellarium execution timed out after {Math.Max(5, timeoutSeconds)} seconds.");
+        else if (screenshotSize <= 0) errors.Add($"Screenshot exists but file size is zero bytes: {screenshotSize} bytes.");
+        if (timedOut) errors.Add($"Stellarium execution timed out after {MaxWaitSeconds} seconds.");
 
         stopwatch.Stop();
         var debugDir = Path.Combine(rootFull, "debug");
@@ -111,7 +118,7 @@ public sealed class WeeklyStellariumScriptExecutor(
             expectedScreenshotPath,
             screenshotExists,
             screenshotFileSize = screenshotSize,
-            timeoutSeconds = Math.Max(5, timeoutSeconds),
+            timeoutSeconds = MaxWaitSeconds,
             constellationLinesEnabled = true,
             constellationLabelsEnabled = true,
             objectLabelsEnabled = true,
