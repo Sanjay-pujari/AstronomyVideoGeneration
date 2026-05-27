@@ -30,7 +30,21 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
         var warnings = new List<string>();
         var scripts = new List<WeeklyStellariumScriptInfo>();
 
-        var stellariumSceneCodes = ResolveStellariumSceneCodes(cinematicShotPackage);
+        var finalRenderSceneGraph = BuildFinalRenderSceneGraph(cinematicShotPackage);
+        var stellariumSceneCodes = finalRenderSceneGraph
+            .SelectMany(kvp => kvp.Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Console.WriteLine("FINAL_RENDER_SCENE_GRAPH");
+        foreach (var edge in finalRenderSceneGraph)
+        {
+            Console.WriteLine(edge.Key);
+            foreach (var node in edge.Value) Console.WriteLine($"  -> {node}");
+        }
+        Console.WriteLine($"FINAL_RENDER_SCENE_COUNT={stellariumSceneCodes.Count}");
+        Console.WriteLine($"FINAL_RENDER_SCENE_CODES={string.Join(',', stellariumSceneCodes)}");
+        Console.WriteLine("FINAL_STELLARIUM_SCENE_LIST");
+        foreach (var code in stellariumSceneCodes) Console.WriteLine(code);
         var shotOrder = 0;
         foreach (var sequence in cinematicShotPackage.SceneSequences)
         {
@@ -127,6 +141,7 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
         };
 
         await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        Console.WriteLine($"FINAL_SSC_SCRIPT_PATHS={string.Join(',', scripts.Select(s => s.ScriptPath).Distinct(StringComparer.OrdinalIgnoreCase))}");
 
         return new WeeklyStellariumScriptPackage(validationIssues.Count == 0, scripts.Count, scripts, validationIssues, warnings, diagnosticsPath);
     }
@@ -258,15 +273,15 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
         return adjusted;
     }
 
-    private static HashSet<string> ResolveStellariumSceneCodes(WeeklyCinematicShotPackage package)
+    private static Dictionary<string, IReadOnlyList<string>> BuildFinalRenderSceneGraph(WeeklyCinematicShotPackage package)
     {
-        var sceneCodes = package.SceneSequences
-            .Select(s => s.SceneCode)
-            .Where(sceneCode =>
-                sceneCode.Equals("hero_western_grouping_scene", StringComparison.OrdinalIgnoreCase)
-                || sceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var graph = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sceneCode in package.SceneSequences.Select(s => s.SceneCode).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (sceneCode.Equals("hero_western_grouping_scene", StringComparison.OrdinalIgnoreCase)) graph[sceneCode] = ["western_planet_grouping_scene", "moon_hero_scene"];
+            else graph[sceneCode] = [sceneCode];
+        }
 
-        return sceneCodes;
+        return graph;
     }
 }
