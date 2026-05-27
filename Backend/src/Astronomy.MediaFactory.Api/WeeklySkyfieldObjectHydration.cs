@@ -23,30 +23,97 @@ public static class WeeklySkyfieldObjectHydration
         var objects = events.SelectMany(e => e.Objects ?? []).ToList();
         LogStage(logger, sceneCode, requestedObject, "Objects", objects.Count, objects.Select(o => o.ObjectCode ?? o.ObjectName), events.Select(resolveEventUtc), nameof(WeeklyAstronomyEventObject));
 
-        var hydrated = events
-            .SelectMany(ev => (ev.Objects ?? []).Select(o => new { Event = ev, Object = o }))
-            .Where(x => matchesAliases(x.Object.ObjectCode, x.Object.ObjectName, targetAliases))
-            .Select(x =>
+        var hydrated = new List<HydratedTemporalObject>();
+        foreach (var item in events.SelectMany(ev => (ev.Objects ?? []).Select(o => new { Event = ev, Object = o })))
+        {
+            var sourceName = item.Object.ObjectCode ?? item.Object.ObjectName;
+            var normalizedName = normalizeName(sourceName);
+            var timestamp = resolveEventUtc(item.Event);
+            var altitude = item.Object.AltitudeDegrees;
+            var azimuth = item.Object.AzimuthDegrees;
+            var magnitude = item.Object.Magnitude;
+
+            if (!matchesAliases(item.Object.ObjectCode, item.Object.ObjectName, targetAliases))
             {
-                var ts = resolveEventUtc(x.Event);
-                if (!ts.HasValue || !x.Object.AltitudeDegrees.HasValue || !x.Object.AzimuthDegrees.HasValue) return null;
-                return new HydratedTemporalObject(
-                    normalizeName(x.Object.ObjectCode ?? x.Object.ObjectName),
-                    ts.Value,
-                    x.Object.AltitudeDegrees.Value,
-                    x.Object.AzimuthDegrees.Value,
-                    x.Object.Magnitude,
-                    x.Object.GetType().Name);
-            })
-            .Where(x => x is not null)
-            .Select(x => x!)
-            .ToList();
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "normalization mismatch");
+                continue;
+            }
+
+            if (!timestamp.HasValue)
+            {
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "timestamp parse failure");
+                continue;
+            }
+
+            if (!altitude.HasValue)
+            {
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "null altitude");
+                continue;
+            }
+
+            if (double.IsNaN(altitude.Value))
+            {
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "NaN value (altitude)");
+                continue;
+            }
+
+            if (!azimuth.HasValue)
+            {
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "invalid azimuth");
+                continue;
+            }
+
+            if (double.IsNaN(azimuth.Value))
+            {
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "NaN value (azimuth)");
+                continue;
+            }
+
+            if (magnitude.HasValue && double.IsNaN(magnitude.Value))
+            {
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "NaN value (magnitude)");
+                continue;
+            }
+
+            if (item.Object.GetType().Name != nameof(WeeklyAstronomyEventObject))
+            {
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "unsupported DTO");
+                continue;
+            }
+
+            LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, null);
+            hydrated.Add(new HydratedTemporalObject(normalizedName, timestamp.Value, altitude.Value, azimuth.Value, magnitude, item.Object.GetType().Name));
+        }
 
         LogStage(logger, sceneCode, requestedObject, "OBJECT_HYDRATION_STAGE", hydrated.Count, hydrated.Select(h => h.NormalizedName), hydrated.Select(h => (DateTime?)h.SnapshotUtc), nameof(HydratedTemporalObject));
+        if (objects.Count > 0 && hydrated.Count == 0)
+        {
+            logger.LogCritical(
+                "OBJECT_HYDRATION_STAGE_CRITICAL sceneCode={SceneCode} object={Object} sourceObjectCount={SourceObjectCount} hydratedCount={HydratedCount}",
+                sceneCode,
+                requestedObject,
+                objects.Count,
+                hydrated.Count);
+        }
 
         return hydrated
             .Select(h => new SkyfieldTemporalCandidate(h.NormalizedName.ToUpperInvariant(), h.SnapshotUtc, h.AltitudeDegrees, h.AzimuthDegrees, h.Magnitude))
             .ToList();
+    }
+
+    private static void LogHydratedMappingAttempt(Microsoft.Extensions.Logging.ILogger logger, string sceneCode, string requestedObject, string? sourceName, string normalizedName, DateTime? timestamp, double? altitude, double? azimuth, double? magnitude, string? rejectionReason)
+    {
+        logger.LogInformation(
+            "HYDRATED_OBJECT_MAPPING sceneCode={SceneCode} object={Object} sourceName={SourceName} normalizedName={NormalizedName} timestamp={Timestamp} altitudeField=AltitudeDegrees altitudeValue={AltitudeValue} azimuthField=AzimuthDegrees azimuthValue={AzimuthValue} magnitudeField=Magnitude magnitudeValue={MagnitudeValue} rejectionReason={RejectionReason}",
+            sceneCode,
+            requestedObject,
+            sourceName ?? string.Empty,
+            normalizedName,
+            timestamp?.ToString("O") ?? string.Empty,
+            altitude,
+            azimuth,
+            magnitude,
+            rejectionReason ?? "accepted");
     }
 
     private static void LogStage(Microsoft.Extensions.Logging.ILogger logger, string sceneCode, string requestedObject, string stage, int count, IEnumerable<string?> names, IEnumerable<DateTime?> timestamps, string dtoType)
