@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Astronomy.SscIntelligence;
 using Astronomy.SscIntelligence.Contracts;
+using Astronomy.SscIntelligence.Narrative;
+using Astronomy.SscIntelligence.Spatial;
 using Astronomy.SscIntelligence.Resolution;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.AIOptimization;
@@ -723,7 +725,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
 {
     try
     {
@@ -1015,6 +1017,10 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             source);
                     })
                     .ToList();
+                var compositionObjectsForSplit = skyPositions.Select(x => x.Position).ToList();
+                var spatialComposition = spatialCompositionEngine.Analyze(compositionObjectsForSplit);
+                var splitResult = narrativeSceneSplitter.Split(shot.ShotCode, shot.ShotPurpose, request.Language, weeklySkyfieldContext.Region, observationUtc, selectedObservationLocal, null, compositionObjectsForSplit, spatialComposition, new Astronomy.SscIntelligence.NightWindow.NightWindowResult(observationUtc, selectedObservationLocal, true, -18d, "narrative"));
+                app.Logger.LogInformation("NARRATIVE_SCENE_SPLIT originalSceneCode={OriginalSceneCode} splitApplied={SplitApplied} reason={Reason} originalObjects={OriginalObjects} generatedScenes={GeneratedScenes} totalSceneCount={TotalSceneCount}", shot.ShotCode, splitResult.SplitApplied, splitResult.Reason, string.Join(',', compositionObjectsForSplit.Select(x=>x.Name)), string.Join('|', splitResult.Scenes.Select(scn=>$"{scn.SceneCode}:{scn.SceneRole}:{scn.SceneIntent}:[{string.Join(',', scn.TargetObjects.Select(o=>o.Name))}]")), splitResult.Scenes.Count);
                 var screenshotPrefix = shot.ShotCode;
                 var expectedScreenshotPath = Path.Combine(scenesDirectory, $"{screenshotPrefix}.png");
                 var sceneIntent = sceneIntentResolver.Resolve(shot.ShotCode, shot.ShotPurpose);
@@ -1058,6 +1064,21 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             selected.Source);
                     }
                 }
+if (splitResult.SplitApplied)
+                {
+                    foreach (var splitScene in splitResult.Scenes.Take(3))
+                    {
+                        var splitPrefix = splitScene.SceneCode;
+                        var splitResultSsc = sscIntelligenceService.Generate(new SscIntelligenceRequest(
+                            observationUtc,longitude,latitude,elevationMeters,locationName,splitScene.TargetObjects.ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitScene.TargetObjects.Select(x=>x.Name).ToList()),
+                            scenesDirectory,splitPrefix);
+                        var splitScriptPath = Path.Combine(scriptsDirectory, $"{splitScene.SceneCode}.ssc");
+                        var splitHeader = string.Join(Environment.NewLine, new[] {"// Source: NarrativeSceneSplitter",$"// SourceSceneCode: {shot.ShotCode}",$"// ScreenshotDirectory: {scenesDirectory.Replace('\\', '/')}",string.Empty});
+                        generatedScripts.Add((splitScriptPath, splitHeader + splitResultSsc.SscScript));
+                    }
+                    continue;
+                }
+
 var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                     observationUtc,
                     longitude,
