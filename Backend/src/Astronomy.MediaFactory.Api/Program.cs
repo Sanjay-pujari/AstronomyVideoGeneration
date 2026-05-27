@@ -804,82 +804,158 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         Directory.CreateDirectory(scriptsDirectory);
         Directory.CreateDirectory(scenesDirectory);
         Directory.CreateDirectory(manifestsDirectory);
+        var orchestrationStageTimeout = TimeSpan.FromSeconds(60);
 
-        var weeklyScenePlan = weeklySkyfieldContext.HybridScenePlanPackage;
-        if (weeklyScenePlan is null)
-            throw new InvalidOperationException("Weekly scene plan package was not generated.");
+        async Task<T> ExecuteOrchestrationStageAsync<T>(string stageName, Func<CancellationToken, Task<T>> action)
+        {
+            app.Logger.LogInformation("[INF] Starting {StageName}", stageName);
+            var stageStopwatch = Stopwatch.StartNew();
+            using var stageTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            stageTimeoutCts.CancelAfter(orchestrationStageTimeout);
+            try
+            {
+                var result = await action(stageTimeoutCts.Token);
+                stageStopwatch.Stop();
+                app.Logger.LogInformation("[INF] Completed {StageName} in {ElapsedMs}ms", stageName, stageStopwatch.ElapsedMilliseconds);
+                return result;
+            }
+            catch (OperationCanceledException oce) when (!ct.IsCancellationRequested && stageTimeoutCts.IsCancellationRequested)
+            {
+                stageStopwatch.Stop();
+                app.Logger.LogWarning(oce, "[WRN] Timeout after {ElapsedMs}ms for stage {StageName}. TimeoutMs={TimeoutMs}", stageStopwatch.ElapsedMilliseconds, stageName, orchestrationStageTimeout.TotalMilliseconds);
+                throw new TimeoutException($"WeeklySkyForecast orchestration stage timed out after {orchestrationStageTimeout.TotalSeconds:0}s: {stageName}", oce);
+            }
+        }
+
+        var weeklyScenePlan = await ExecuteOrchestrationStageAsync("Building weekly scene plan", _ =>
+        {
+            var scenePlan = weeklySkyfieldContext.HybridScenePlanPackage;
+            if (scenePlan is null)
+                throw new InvalidOperationException("Weekly scene plan package was not generated.");
+            return Task.FromResult(scenePlan);
+        });
 
         var scenePlanPath = Path.Combine(scenePlansDirectory, "weekly-scene-plan.json");
-        await File.WriteAllTextAsync(scenePlanPath, JsonSerializer.Serialize(weeklyScenePlan, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await ExecuteOrchestrationStageAsync("Persisting weekly scene plan", stageCt =>
+            File.WriteAllTextAsync(scenePlanPath, JsonSerializer.Serialize(weeklyScenePlan, new JsonSerializerOptions { WriteIndented = true }), stageCt));
 
-        var shots = weeklyScenePlan.ScenePlans
-            .OrderBy(x => x.SceneOrder)
-            .Select((scene, idx) => new WeeklyCinematicShot(
-                scene.SceneCode,
-                scene.SceneType,
-                scene.RenderIntent,
-                scene.ObjectCodes,
-                scene.ObjectCodes.FirstOrDefault(),
-                scene.TargetDate,
-                TimeOnly.FromDateTime((scene.BestTimeUtc ?? request.ScheduledUtc.UtcDateTime).ToUniversalTime()),
-                scene.DurationSeconds,
-                "W",
-                scene.SceneType.Contains("wide", StringComparison.OrdinalIgnoreCase) ? 82d : 45d,
-                scene.SceneType.Contains("wide", StringComparison.OrdinalIgnoreCase) ? 82d : 45d,
-                scene.SceneType.Contains("wide", StringComparison.OrdinalIgnoreCase) ? 82d : 45d,
-                new WeeklyCameraMovementPlan("static", scene.CinematicMotion, "none", null, null, false),
-                new WeeklyShotTransitionPlan(scene.TransitionIn, scene.TransitionIn, "in"),
-                new WeeklyShotTransitionPlan(scene.TransitionOut, scene.TransitionOut, "out"),
-                scene.CinematicMotion,
-                Path.Combine(scenesDirectory, $"{scene.SceneCode}.png"),
-                string.Empty,
-                Path.Combine(scriptsDirectory, $"{scene.SceneCode}.ssc"),
-                [],
-                new WeeklyShotNarrationSync(scene.SceneCode, idx * 6, (idx + 1) * 6, scene.VisualStrategy, scene.ObjectCodes.FirstOrDefault(), [])))
-            .ToList();
-
-        var shotTimeline = new WeeklyCinematicShotPackage(true, "weekly-v2", pipelineRunId.ToString(), weeklyScenePlan.ScenePlans.Count, shots.Count, shots.Sum(x => x.DurationSeconds),
-            shots.Select(s => new WeeklyCinematicSceneSequence(s.ShotCode, s.ShotCode, s.ShotType, s.ShotCode, s.DurationSeconds, [s], s.ShotPurpose, s.TransitionIn, s.TransitionOut)).ToList(), [], [], []);
+        var shotTimeline = await ExecuteOrchestrationStageAsync("Building cinematic shot timeline", _ =>
+        {
+            var shots = weeklyScenePlan.ScenePlans
+                .OrderBy(x => x.SceneOrder)
+                .Select((scene, idx) => new WeeklyCinematicShot(
+                    scene.SceneCode,
+                    scene.SceneType,
+                    scene.RenderIntent,
+                    scene.ObjectCodes,
+                    scene.ObjectCodes.FirstOrDefault(),
+                    scene.TargetDate,
+                    TimeOnly.FromDateTime((scene.BestTimeUtc ?? request.ScheduledUtc.UtcDateTime).ToUniversalTime()),
+                    scene.DurationSeconds,
+                    "W",
+                    scene.SceneType.Contains("wide", StringComparison.OrdinalIgnoreCase) ? 82d : 45d,
+                    scene.SceneType.Contains("wide", StringComparison.OrdinalIgnoreCase) ? 82d : 45d,
+                    scene.SceneType.Contains("wide", StringComparison.OrdinalIgnoreCase) ? 82d : 45d,
+                    new WeeklyCameraMovementPlan("static", scene.CinematicMotion, "none", null, null, false),
+                    new WeeklyShotTransitionPlan(scene.TransitionIn, scene.TransitionIn, "in"),
+                    new WeeklyShotTransitionPlan(scene.TransitionOut, scene.TransitionOut, "out"),
+                    scene.CinematicMotion,
+                    Path.Combine(scenesDirectory, $"{scene.SceneCode}.png"),
+                    string.Empty,
+                    Path.Combine(scriptsDirectory, $"{scene.SceneCode}.ssc"),
+                    [],
+                    new WeeklyShotNarrationSync(scene.SceneCode, idx * 6, (idx + 1) * 6, scene.VisualStrategy, scene.ObjectCodes.FirstOrDefault(), [])))
+                .ToList();
+            var timeline = new WeeklyCinematicShotPackage(true, "weekly-v2", pipelineRunId.ToString(), weeklyScenePlan.ScenePlans.Count, shots.Count, shots.Sum(x => x.DurationSeconds),
+                shots.Select(s => new WeeklyCinematicSceneSequence(s.ShotCode, s.ShotCode, s.ShotType, s.ShotCode, s.DurationSeconds, [s], s.ShotPurpose, s.TransitionIn, s.TransitionOut)).ToList(), [], [], []);
+            return Task.FromResult(timeline);
+        });
+        var shots = shotTimeline.Shots;
         var shotTimelinePath = Path.Combine(scenePlansDirectory, "weekly-cinematic-shot-timeline.json");
-        await File.WriteAllTextAsync(shotTimelinePath, JsonSerializer.Serialize(shotTimeline, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await ExecuteOrchestrationStageAsync("Persisting cinematic shot timeline", stageCt =>
+            File.WriteAllTextAsync(shotTimelinePath, JsonSerializer.Serialize(shotTimeline, new JsonSerializerOptions { WriteIndented = true }), stageCt));
 
-        var compositionPackage = sceneComposer.Compose(shotTimeline, weeklySkyfieldContext.EventExtractionResult ?? throw new InvalidOperationException("Missing event extraction result."), root);
+        var compositionPackage = await ExecuteOrchestrationStageAsync("Generating compositions", _ =>
+        {
+            var package = sceneComposer.Compose(shotTimeline, weeklySkyfieldContext.EventExtractionResult ?? throw new InvalidOperationException("Missing event extraction result."), root);
+            return Task.FromResult(package);
+        });
         var compositionPaths = new List<string>();
         var scriptPaths = new List<string>();
-        foreach (var shot in shots)
+        var generatedScripts = new List<(string ScriptPath, string ScriptContent)>();
+        await ExecuteOrchestrationStageAsync("Persisting composition files", async stageCt =>
         {
-            var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
-            var compositionPath = Path.Combine(compositionDirectory, $"{shot.ShotCode}.composition.json");
-            await File.WriteAllTextAsync(compositionPath, JsonSerializer.Serialize(composition, new JsonSerializerOptions { WriteIndented = true }), ct);
-            compositionPaths.Add(compositionPath);
+            foreach (var shot in shots)
+            {
+                var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
+                var compositionPath = Path.Combine(compositionDirectory, $"{shot.ShotCode}.composition.json");
+                await File.WriteAllTextAsync(compositionPath, JsonSerializer.Serialize(composition, new JsonSerializerOptions { WriteIndented = true }), stageCt);
+                compositionPaths.Add(compositionPath);
+            }
+            return true;
+        });
 
-            var commands = sscSceneBuilder.Build(shot with { ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png") }, composition);
-            var scriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc");
-            var header = string.Join(Environment.NewLine, new[] {
-                "// Source: WeeklyScenePlan",
-                $"// CompositionPath: {compositionPath.Replace("\\", "/")}",
-                $"// ScreenshotDirectory: {scenesDirectory.Replace("\\", "/")}",
-                string.Empty
-            });
-            await File.WriteAllTextAsync(scriptPath, header + string.Join(Environment.NewLine, commands), ct);
-            scriptPaths.Add(scriptPath);
-        }
+        await ExecuteOrchestrationStageAsync("Generating SSC scripts", _ =>
+        {
+            foreach (var shot in shots)
+            {
+                var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
+                var commands = sscSceneBuilder.Build(shot with { ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png") }, composition);
+                var scriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc");
+                var header = string.Join(Environment.NewLine, new[] {
+                    "// Source: WeeklyScenePlan",
+                    $"// CompositionPath: {Path.Combine(compositionDirectory, $"{shot.ShotCode}.composition.json").Replace("\\", "/")}",
+                    $"// ScreenshotDirectory: {scenesDirectory.Replace("\\", "/")}",
+                    string.Empty
+                });
+                generatedScripts.Add((scriptPath, header + string.Join(Environment.NewLine, commands)));
+            }
+            return Task.FromResult(true);
+        });
+        await ExecuteOrchestrationStageAsync("Persisting SSC scripts", async stageCt =>
+        {
+            foreach (var generatedScript in generatedScripts)
+            {
+                await File.WriteAllTextAsync(generatedScript.ScriptPath, generatedScript.ScriptContent, stageCt);
+                scriptPaths.Add(generatedScript.ScriptPath);
+            }
+            return true;
+        });
+        await ExecuteOrchestrationStageAsync("Validating SSC scripts", _ =>
+        {
+            foreach (var scriptPath in scriptPaths)
+            {
+                var info = new FileInfo(scriptPath);
+                if (!info.Exists || info.Length == 0)
+                    throw new InvalidOperationException($"SSC script validation failed for '{scriptPath}'.");
+            }
+            return Task.FromResult(true);
+        });
 
         var waitTimeout = TimeSpan.FromSeconds(Math.Clamp(request.StellariumTimeoutSeconds ?? 90, 30, 600));
         var screenshots = new List<string>();
-        foreach (var shot in shots)
+        await ExecuteOrchestrationStageAsync("Building screenshot execution queue", _ =>
         {
-            var expectedImagePath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png");
-            var started = DateTime.UtcNow;
-            while (DateTime.UtcNow - started < waitTimeout)
+            _ = shots.Select(shot => Path.Combine(scenesDirectory, $"{shot.ShotCode}.png")).ToList();
+            return Task.FromResult(true);
+        });
+        await ExecuteOrchestrationStageAsync("Launching Stellarium execution", async stageCt =>
+        {
+            foreach (var shot in shots)
             {
+                var expectedImagePath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png");
+                var started = DateTime.UtcNow;
+                while (DateTime.UtcNow - started < waitTimeout)
+                {
+                    if (File.Exists(expectedImagePath) && new FileInfo(expectedImagePath).Length > 10 * 1024)
+                        break;
+                    await Task.Delay(500, stageCt);
+                }
                 if (File.Exists(expectedImagePath) && new FileInfo(expectedImagePath).Length > 10 * 1024)
-                    break;
-                await Task.Delay(500, ct);
+                    screenshots.Add(expectedImagePath);
             }
-            if (File.Exists(expectedImagePath) && new FileInfo(expectedImagePath).Length > 10 * 1024)
-                screenshots.Add(expectedImagePath);
-        }
+            return true;
+        });
 
         var warnings = weeklySkyfieldContext.Warnings.Concat(compositionPackage.Errors).Distinct().ToList();
         if (screenshots.Count < shots.Count)
