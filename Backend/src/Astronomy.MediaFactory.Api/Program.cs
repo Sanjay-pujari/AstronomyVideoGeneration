@@ -2494,20 +2494,6 @@ static string ResolveObjectSource(string code, dynamic composition, WeeklySceneP
     return "skyfield.scene-date-match";
 }
 
-public sealed record GenerateDailyPlanRequest(
-    string ContentCategoryCode,
-    string Language,
-    string RegionId,
-    DateTimeOffset ScheduledUtc,
-    string? PrimaryCelestialObjectCode);
-
-public sealed record GenerateDailyPlanResponse(
-    Guid ContentGenerationPlanId,
-    string Status);
-
-sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
-sealed record WeeklyObjectPositionResolution(double AltitudeDeg, double AzimuthDeg, double Magnitude, string Source);
-
 static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     string objectCode,
     DateTime sceneObservationUtc,
@@ -2564,3 +2550,18 @@ static DateTime? ResolveEventUtc(WeeklyAstronomyEvent weeklyEvent)
     var local = weeklyEvent.BestDateLocal.Value.ToDateTime(weeklyEvent.BestTimeLocal.Value, DateTimeKind.Utc);
     return DateTime.SpecifyKind(local, DateTimeKind.Utc);
 }
+
+public sealed record GenerateDailyPlanRequest(
+    string ContentCategoryCode,
+    string Language,
+    string RegionId,
+    DateTimeOffset ScheduledUtc,
+    string? PrimaryCelestialObjectCode);
+
+public sealed record GenerateDailyPlanResponse(
+    Guid ContentGenerationPlanId,
+    string Status);
+
+sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
+sealed record WeeklyObjectPositionResolution(double AltitudeDeg, double AzimuthDeg, double Magnitude, string Source);
+
