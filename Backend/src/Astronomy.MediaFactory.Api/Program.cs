@@ -2631,12 +2631,12 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     var selectedDateCollections = "ExtractedEvents.Objects";
     var selectedDateObjectNames = string.Join(",", selectedDateEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
     var selectedDateTimestamps = string.Join(",", selectedDateEvents.Select(e => ResolveEventUtc(e)).Where(x => x.HasValue).Select(x => x!.Value.ToString("O")).Distinct().OrderBy(x => x));
-    var candidates = WeeklySkyfieldObjectHydration.BuildTemporalCandidates(
+    var candidates = Astronomy.MediaFactory.Api.WeeklySkyfieldObjectHydration.BuildTemporalCandidates(
         extractedEvents,
         targetAliases,
-        ResolveEventUtc,
-        NormalizeWeeklyObjectName,
-        MatchesWeeklyObjectAliases,
+        e => ResolveEventUtc(e),
+        name => NormalizeWeeklyObjectName(name),
+        (code, name, aliases) => MatchesWeeklyObjectAliases(code, name, aliases),
         logger,
         sceneCode,
         directObject?.ObjectName ?? objectCodeOrName).ToList();
