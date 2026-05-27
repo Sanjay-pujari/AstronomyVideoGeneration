@@ -2617,7 +2617,7 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     WeeklySkyForecastV2IntelligenceResponse weeklyContext,
     IReadOnlyCollection<string> requestedTargetObjects,
     ISkyfieldTemporalResolver temporalResolver,
-    ILogger logger,
+    Microsoft.Extensions.Logging.ILogger logger,
     string sceneCode)
 {
     var targetAliases = ResolveWeeklyObjectAliases(objectCodeOrName, directObject?.ObjectName);
@@ -2719,7 +2719,7 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
         temporal.MatchedTimeUtc,
         temporal.DeltaMinutes,
         temporal.DeltaMinutes.HasValue && temporal.DeltaMinutes.Value <= toleranceMinutes,
-        temporal.Reason ?? "no-match");
+        temporal.RejectionReason ?? "no-match");
     logger.LogInformation("TEMPORAL_RESOLVER_EXIT sceneCode={SceneCode} object={Object} result=fallback source={Source}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, temporal.Source);
 
     var candidateNames = string.Join(",", extractedEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
