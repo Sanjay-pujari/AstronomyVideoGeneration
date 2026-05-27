@@ -3,6 +3,7 @@ using Astronomy.SscIntelligence.Contracts;
 using Astronomy.SscIntelligence.Rendering;
 using Astronomy.SscIntelligence.Visibility;
 using FluentAssertions;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
