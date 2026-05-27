@@ -16,6 +16,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 {
     private const long MinScreenshotBytes = 10 * 1024;
     private const int DefaultTimeoutSeconds = 180;
+    private const int PollDelayMs = 250;
     private readonly StellariumOptions _options = options.Value;
 
     public async Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, string? testMode = null, int? maxScriptCount = null, bool executeAllScripts = false, bool confirmFullBatch = false, bool continueOnFailure = true, int timeoutSeconds = 90, CancellationToken cancellationToken = default)
@@ -129,8 +130,8 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 launchedExecutable = _options.ExecutablePath;
                 launchedArguments = $"--startup-script \"{scriptFull}\"";
                 launchedWorkingDirectory = rootFull;
-                long? screenshotDetectedAtMs = execution.ScreenshotExists ? execution.ExecutionTimeMs : null;
-                long? screenshotStableAtMs = execution.ScreenshotExists ? execution.ExecutionTimeMs : null;
+                long? screenshotDetectedAtMs = execution.ScreenshotExists ? execution.ElapsedMs : null;
+                long? screenshotStableAtMs = execution.ScreenshotExists ? execution.ElapsedMs : null;
 
                 var screenshotExists = File.Exists(screenshotFull);
                 screenshotSize = screenshotExists ? new FileInfo(screenshotFull).Length : 0;
