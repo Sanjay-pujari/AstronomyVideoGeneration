@@ -8,4 +8,6 @@ public sealed record SscRenderRequest(
     string LocationName,
     double CameraAltitudeDeg,
     double CameraAzimuthDeg,
-    double FovDeg);
+    double FovDeg,
+    string ScreenshotDirectory,
+    string ScreenshotFileNameWithoutExtension);

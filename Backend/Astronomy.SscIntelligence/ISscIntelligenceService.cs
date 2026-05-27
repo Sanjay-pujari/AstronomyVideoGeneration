@@ -4,7 +4,7 @@ namespace Astronomy.SscIntelligence;
 
 public interface ISscIntelligenceService
 {
-    SscIntelligenceResult Generate(SscIntelligenceRequest request);
+    SscIntelligenceResult Generate(SscIntelligenceRequest request, string? screenshotDirectory = null, string? screenshotFileNameWithoutExtension = null);
 }
 
 public sealed record SscIntelligenceRequest(

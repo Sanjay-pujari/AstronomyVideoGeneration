@@ -12,7 +12,7 @@ public sealed class StellariumSscRenderer : IStellariumSscRenderer
         sb.AppendLine("core.clear(\"natural\");");
         sb.AppendLine("core.setGuiVisible(false);");
         sb.AppendLine();
-        sb.AppendLine($"core.setDate(\"{request.ObservationUtc:yyyy-MM-ddTHH:mm:ss}Z\", \"utc\");");
+        sb.AppendLine($"core.setDate(\"{request.ObservationUtc:yyyy-MM-ddTHH:mm:ss}\", \"utc\");");
         sb.AppendLine("core.wait(2);");
         sb.AppendLine();
         sb.AppendLine($"core.setObserverLocation({Fmt(request.Longitude)}, {Fmt(request.Latitude)}, {Fmt(request.ElevationMeters)}, 0, \"{Escape(request.LocationName)}\", \"Earth\");");
@@ -25,6 +25,9 @@ public sealed class StellariumSscRenderer : IStellariumSscRenderer
         sb.AppendLine($"StelMovementMgr.zoomTo({Fmt(request.FovDeg)}, 2);");
         sb.AppendLine();
         sb.AppendLine("core.wait(3);");
+        sb.AppendLine();
+        sb.AppendLine($"core.screenshot(\"{Escape(request.ScreenshotFileNameWithoutExtension)}\", false, \"{Escape(request.ScreenshotDirectory)}\", true);");
+        sb.AppendLine("core.wait(5);");
         sb.AppendLine();
         sb.AppendLine("core.wait(2);");
         sb.Append("core.quitStellarium();");
