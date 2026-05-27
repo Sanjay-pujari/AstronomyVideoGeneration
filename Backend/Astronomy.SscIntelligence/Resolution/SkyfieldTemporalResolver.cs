@@ -2,7 +2,7 @@ namespace Astronomy.SscIntelligence.Resolution;
 
 public sealed class SkyfieldTemporalResolver : ISkyfieldTemporalResolver
 {
-    public const double DefaultMaximumDeltaMinutes = 180;
+    public const double DefaultMaximumDeltaMinutes = 360;
 
     public TemporalResolutionResult Resolve(string requestedObjectName, DateTime selectedObservationUtc, IEnumerable<SkyfieldTemporalCandidate> candidates, double? maximumDeltaMinutes = null)
     {

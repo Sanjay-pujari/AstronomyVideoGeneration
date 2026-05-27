@@ -21,11 +21,22 @@ public class SkyfieldTemporalResolverTests
     {
         var requested = new DateTime(2026, 5, 25, 21, 0, 0, DateTimeKind.Utc);
         var candidate = new DateTime(2026, 5, 25, 20, 21, 34, DateTimeKind.Utc);
-        var result = _sut.Resolve("Moon", requested, [new("moon", candidate, 11, 101, -12)]);
+        var result = _sut.Resolve("Moon", requested, [new("moon", candidate, 11, 101, -12)], maximumDeltaMinutes: 180);
         Assert.True(result.MatchFound);
         Assert.False(result.ExactMatch);
         Assert.Equal("skyfield.nearest-time", result.Source);
         Assert.Equal(candidate, result.MatchedTimeUtc);
+    }
+
+    [Fact]
+    public void Requested2100_Candidate2021_Tolerance180_Resolves()
+    {
+        var requested = new DateTime(2026, 5, 25, 21, 0, 0, DateTimeKind.Utc);
+        var candidate = new DateTime(2026, 5, 25, 20, 21, 0, DateTimeKind.Utc);
+        var result = _sut.Resolve("Moon", requested, [new("moon", candidate, 11, 101, -12)], maximumDeltaMinutes: 180);
+        Assert.True(result.MatchFound);
+        Assert.Equal(candidate, result.MatchedTimeUtc);
+        Assert.Equal("skyfield.nearest-time", result.Source);
     }
 
     [Fact]
@@ -46,6 +57,17 @@ public class SkyfieldTemporalResolverTests
         var result = _sut.Resolve("Jupiter", requested, [new("jupiter", candidate, 30, 150, -2)], maximumDeltaMinutes: 180);
         Assert.False(result.MatchFound);
         Assert.Equal("fallback", result.Source);
+    }
+
+    [Fact]
+    public void Requested145134_Candidate202134_Tolerance180_Rejects()
+    {
+        var requested = new DateTime(2026, 5, 25, 14, 51, 34, DateTimeKind.Utc);
+        var candidate = new DateTime(2026, 5, 25, 20, 21, 34, DateTimeKind.Utc);
+        var result = _sut.Resolve("Jupiter", requested, [new("jupiter", candidate, 30, 150, -2)], maximumDeltaMinutes: 180);
+        Assert.False(result.MatchFound);
+        Assert.Equal("fallback", result.Source);
+        Assert.True(result.DeltaMinutes > 300);
     }
 
     [Fact]

@@ -57,6 +57,7 @@ builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen();
 builder.Services.AddMediaFactory(builder.Configuration);
 builder.Services.AddSscIntelligence();
+builder.Services.AddSingleton<ISkyfieldTemporalResolver, SkyfieldTemporalResolver>();
 
 var app = builder.Build();
 
@@ -722,7 +723,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, CancellationToken ct) =>
 {
     try
     {
@@ -981,7 +982,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     .Select(code =>
                     {
                         skyObjectsByCode.TryGetValue(code, out var obj);
-                        var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, shot.DateLocal, composition, obj, weeklySkyfieldContext, sceneSpecificCodes);
+                        var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, shot.DateLocal, composition, obj, weeklySkyfieldContext, sceneSpecificCodes, temporalResolver, app.Logger, shot.ShotCode);
                         var objectName = obj?.ObjectName ?? code;
                         var objectType = ResolveObjectType(obj?.ObjectName ?? code);
                         var isPrimaryTarget = sceneSpecificCodes.Contains(code, StringComparer.OrdinalIgnoreCase)
@@ -2614,9 +2615,11 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     dynamic composition,
     WeeklyAstronomyEventObject? directObject,
     WeeklySkyForecastV2IntelligenceResponse weeklyContext,
-    IReadOnlyCollection<string> requestedTargetObjects)
+    IReadOnlyCollection<string> requestedTargetObjects,
+    ISkyfieldTemporalResolver temporalResolver,
+    ILogger logger,
+    string sceneCode)
 {
-    var temporalResolver = new SkyfieldTemporalResolver();
     var targetAliases = ResolveWeeklyObjectAliases(objectCodeOrName, directObject?.ObjectName);
     var normalizedRequestedName = NormalizeWeeklyObjectName(directObject?.ObjectName ?? objectCodeOrName);
     var selectedDateKey = sceneDateLocal.ToString("yyyy-MM-dd");
@@ -2647,17 +2650,48 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
         .Where(x => x is not null)
         .Select(x => x!)
         .ToList();
+    logger.LogInformation(
+        "TEMPORAL_RESOLVER_ENTER sceneCode={SceneCode} object={Object} requestedUtc={RequestedUtc} candidateCount={CandidateCount} toleranceMinutes={ToleranceMinutes}",
+        sceneCode,
+        directObject?.ObjectName ?? objectCodeOrName,
+        sceneObservationUtc,
+        candidates.Count,
+        SkyfieldTemporalResolver.DefaultMaximumDeltaMinutes);
+
+    var toleranceMinutes = SkyfieldTemporalResolver.DefaultMaximumDeltaMinutes;
+    foreach (var candidate in candidates.OrderBy(c => c.SnapshotUtc))
+    {
+        var deltaMinutes = Math.Abs((candidate.SnapshotUtc - sceneObservationUtc).TotalMinutes);
+        var withinTolerance = deltaMinutes <= toleranceMinutes;
+        logger.LogInformation(
+            "TEMPORAL_RESOLVER_CANDIDATE sceneCode={SceneCode} object={Object} requestedUtc={RequestedUtc} candidateUtc={CandidateUtc} deltaMinutes={DeltaMinutes} withinTolerance={WithinTolerance} selected=False",
+            sceneCode,
+            directObject?.ObjectName ?? objectCodeOrName,
+            sceneObservationUtc,
+            candidate.SnapshotUtc,
+            deltaMinutes,
+            withinTolerance);
+    }
 
     var temporal = temporalResolver.Resolve(
         directObject?.ObjectName ?? objectCodeOrName,
         sceneObservationUtc,
         candidates,
-        SkyfieldTemporalResolver.DefaultMaximumDeltaMinutes);
+        toleranceMinutes);
 
     if (temporal.MatchFound && temporal.AltitudeDegrees.HasValue && temporal.AzimuthDegrees.HasValue)
     {
+        logger.LogInformation(
+            "TEMPORAL_RESOLVER_MATCH sceneCode={SceneCode} object={Object} requestedUtc={RequestedUtc} candidateUtc={CandidateUtc} deltaMinutes={DeltaMinutes} withinTolerance=True selected=True source={Source}",
+            sceneCode,
+            directObject?.ObjectName ?? objectCodeOrName,
+            temporal.RequestedTimeUtc,
+            temporal.MatchedTimeUtc,
+            temporal.DeltaMinutes,
+            temporal.Source);
         var source = temporal.ExactMatch ? "source=skyfield.exact" : "source=skyfield.nearest-time";
         var temporalTrace = $"{source};requestedTimeUtc={temporal.RequestedTimeUtc:O};matchedTimeUtc={temporal.MatchedTimeUtc:O};deltaMinutes={temporal.DeltaMinutes?.ToString("0.###") ?? "0"}";
+        logger.LogInformation("TEMPORAL_RESOLVER_EXIT sceneCode={SceneCode} object={Object} result=resolved source={Source}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, temporal.Source);
         return new WeeklyObjectPositionResolution(
             temporal.AltitudeDegrees.Value,
             temporal.AzimuthDegrees.Value,
@@ -2677,9 +2711,20 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
             selectedDateObjectNames);
     }
 
+    logger.LogWarning(
+        "TEMPORAL_RESOLVER_REJECT sceneCode={SceneCode} object={Object} requestedUtc={RequestedUtc} candidateUtc={CandidateUtc} deltaMinutes={DeltaMinutes} withinTolerance={WithinTolerance} selected=False reason={Reason}",
+        sceneCode,
+        directObject?.ObjectName ?? objectCodeOrName,
+        temporal.RequestedTimeUtc,
+        temporal.MatchedTimeUtc,
+        temporal.DeltaMinutes,
+        temporal.DeltaMinutes.HasValue && temporal.DeltaMinutes.Value <= toleranceMinutes,
+        temporal.Reason ?? "no-match");
+    logger.LogInformation("TEMPORAL_RESOLVER_EXIT sceneCode={SceneCode} object={Object} result=fallback source={Source}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, temporal.Source);
+
     var candidateNames = string.Join(",", extractedEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
     var candidateTimes = string.Join(",", extractedEvents.Select(e => ResolveEventUtc(e)).Where(x => x.HasValue).Select(x => x!.Value.ToString("O")).Distinct().OrderBy(x => x));
-    return new WeeklyObjectPositionResolution(
+    var fallbackResolution = new WeeklyObjectPositionResolution(
         (double)composition.CenterAltitude,
         (double)composition.CenterAzimuth,
         4d,
@@ -2696,6 +2741,18 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
         availableDates,
         selectedDateCollections,
         selectedDateObjectNames);
+    if (temporal.MatchedTimeUtc.HasValue && temporal.DeltaMinutes.HasValue && temporal.DeltaMinutes.Value <= toleranceMinutes)
+    {
+        logger.LogCritical(
+            "TEMPORAL_RESOLVER_CRITICAL_WITHIN_TOLERANCE_FALLBACK sceneCode={SceneCode} object={Object} requestedUtc={RequestedUtc} candidateUtc={CandidateUtc} deltaMinutes={DeltaMinutes}",
+            sceneCode,
+            directObject?.ObjectName ?? objectCodeOrName,
+            temporal.RequestedTimeUtc,
+            temporal.MatchedTimeUtc,
+            temporal.DeltaMinutes);
+    }
+
+    return fallbackResolution;
 }
 
 static HashSet<string> ResolveWeeklyObjectAliases(string objectCodeOrName, string? directName)
