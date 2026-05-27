@@ -72,4 +72,52 @@ public class WeeklySkyfieldObjectHydrationTests
         result.AltitudeDegrees.Should().Be(40);
         result.AzimuthDegrees.Should().Be(100);
     }
+
+    [Fact]
+    public void BuildTemporalCandidates_NormalizesObjectNameCase_AndPreservesCoordinates()
+    {
+        var eventUtc = new DateTime(2026, 5, 27, 20, 00, 0, DateTimeKind.Utc);
+        var ev = new WeeklyAstronomyEvent(
+            "e2",
+            WeeklyAstronomyEventType.HeroObject,
+            "Moon test",
+            "test",
+            [
+                new WeeklyAstronomyEventObject("moon", "Moon", 24.5, 210.3, -11.8, 0.9),
+                new WeeklyAstronomyEventObject("VeNuS", "Venus", 19.1, 199.4, -4.1, 0.8),
+                new WeeklyAstronomyEventObject("JUPITER", "Jupiter", 12.2, 188.0, -2.0, 0.7)
+            ],
+            "moon",
+            3,
+            DateOnly.FromDateTime(eventUtc),
+            TimeOnly.FromDateTime(eventUtc),
+            "SW",
+            24.5,
+            210.3,
+            20,
+            -11.8,
+            0.8,
+            60,
+            55,
+            "StellariumScene",
+            "Hero",
+            "narration",
+            []);
+
+        var candidates = WeeklySkyfieldObjectHydration.BuildTemporalCandidates(
+            [ev],
+            new HashSet<string>(["moon", "venus", "jupiter"], StringComparer.OrdinalIgnoreCase),
+            e => e.BestDateLocal.HasValue && e.BestTimeLocal.HasValue ? DateTime.SpecifyKind(e.BestDateLocal.Value.ToDateTime(e.BestTimeLocal.Value), DateTimeKind.Utc) : null,
+            s => (s ?? string.Empty).Trim().ToLowerInvariant(),
+            (code, name, aliases) => aliases.Contains((code ?? name ?? string.Empty).Trim().ToLowerInvariant()),
+            NullLogger.Instance,
+            "Scene-2",
+            "moon");
+
+        candidates.Should().HaveCount(3);
+        candidates.Select(c => c.Name).Should().BeEquivalentTo(["MOON", "VENUS", "JUPITER"]);
+        candidates.Should().ContainSingle(c => c.Name == "MOON" && c.AltitudeDegrees == 24.5 && c.AzimuthDegrees == 210.3);
+        candidates.Should().ContainSingle(c => c.Name == "VENUS" && c.AltitudeDegrees == 19.1 && c.AzimuthDegrees == 199.4);
+        candidates.Should().ContainSingle(c => c.Name == "JUPITER" && c.AltitudeDegrees == 12.2 && c.AzimuthDegrees == 188.0);
+    }
 }
