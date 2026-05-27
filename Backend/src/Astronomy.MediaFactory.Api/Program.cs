@@ -1019,7 +1019,26 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     .ToList();
                 var compositionObjectsForSplit = skyPositions.Select(x => x.Position).ToList();
                 var spatialComposition = spatialCompositionEngine.Analyze(compositionObjectsForSplit);
-                var splitResult = narrativeSceneSplitter.Split(shot.ShotCode, shot.ShotPurpose, request.Language, weeklySkyfieldContext.Region, observationUtc, selectedObservationLocal, null, compositionObjectsForSplit, spatialComposition, new NightWindowResult(observationUtc, selectedObservationLocal, true, -18d, "narrative"));
+                var splitProbeSceneIntent = sceneIntentResolver.Resolve(shot.ShotCode, shot.ShotPurpose);
+                var splitProbeSsc = sscIntelligenceService.Generate(new SscIntelligenceRequest(
+                    observationUtc,
+                    longitude,
+                    latitude,
+                    elevationMeters,
+                    locationName,
+                    skyPositions.Select(x => x.Position).ToList(),
+                    defaultRules,
+                    null,
+                    "Asia/Kolkata",
+                    null,
+                    null,
+                    splitProbeSceneIntent,
+                    shot.ShotCode,
+                    shot.ShotPurpose,
+                    sceneSpecificCodes.ToList()),
+                    scenesDirectory,
+                    shot.ShotCode);
+                var splitResult = narrativeSceneSplitter.Split(shot.ShotCode, shot.ShotPurpose, request.Language, weeklySkyfieldContext.Region, observationUtc, selectedObservationLocal, null, compositionObjectsForSplit, spatialComposition, splitProbeSsc.NightWindow, splitProbeSsc.RequiresSplit);
                 app.Logger.LogInformation("NARRATIVE_SCENE_SPLIT originalSceneCode={OriginalSceneCode} splitApplied={SplitApplied} reason={Reason} originalObjects={OriginalObjects} generatedScenes={GeneratedScenes} totalSceneCount={TotalSceneCount}", shot.ShotCode, splitResult.SplitApplied, splitResult.Reason, string.Join(',', compositionObjectsForSplit.Select(x=>x.Name)), string.Join('|', splitResult.Scenes.Select(scn=>$"{scn.SceneCode}:{scn.SceneRole}:{scn.SceneIntent}:[{string.Join(',', scn.TargetObjects.Select(o=>o.Name))}]")), splitResult.Scenes.Count);
                 var screenshotPrefix = shot.ShotCode;
                 var expectedScreenshotPath = Path.Combine(scenesDirectory, $"{screenshotPrefix}.png");
@@ -1079,24 +1098,7 @@ if (splitResult.SplitApplied)
                     continue;
                 }
 
-var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
-                    observationUtc,
-                    longitude,
-                    latitude,
-                    elevationMeters,
-                    locationName,
-                    skyPositions.Select(x => x.Position).ToList(),
-                    defaultRules,
-                    null,
-                    "Asia/Kolkata",
-                    null,
-                    null,
-                    sceneIntent,
-                    shot.ShotCode,
-                    shot.ShotPurpose,
-                    sceneSpecificCodes.ToList()),
-                    scenesDirectory,
-                    screenshotPrefix);
+var sscResult = splitProbeSsc;
                 if (sscResult.RequiresSplit)
                 {
                     app.Logger.LogWarning("WeeklySkyForecast V2 scene {SceneId} requires split, fallback to single SSC with computed center/FOV. reason=requiresSplit", shot.ShotCode);
@@ -1180,6 +1182,9 @@ var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
         });
         await ExecuteOrchestrationStageAsync("Persisting SSC scripts", async stageCt =>
         {
+            app.Logger.LogInformation(
+                "FINAL_STELLARIUM_SCENE_LIST sceneCodes={SceneCodes}",
+                string.Join(",", generatedScripts.Select(x => Path.GetFileNameWithoutExtension(x.ScriptPath))));
             foreach (var generatedScript in generatedScripts)
             {
                 await File.WriteAllTextAsync(generatedScript.ScriptPath, generatedScript.ScriptContent, stageCt);
