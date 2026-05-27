@@ -2,7 +2,7 @@ using Astronomy.SscIntelligence.Camera;
 using Astronomy.SscIntelligence.Contracts;
 using Astronomy.SscIntelligence.NightWindow;
 using Astronomy.SscIntelligence.Rendering;
-using Astronomy.SscIntelligence.SceneIntent;
+using SceneIntentType = Astronomy.SscIntelligence.SceneIntent.SceneIntent;
 using Astronomy.SscIntelligence.Visibility;
 
 namespace Astronomy.SscIntelligence;
@@ -54,12 +54,12 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
         return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, script.Script, nightWindow);
     }
 
-    private static double GetAltitudeBias(SceneIntent intent) => intent switch
+    private static double GetAltitudeBias(SceneIntentType intent) => intent switch
     {
-        SceneIntent.HeroShot => 6d,
-        SceneIntent.WideNight => 8d,
-        SceneIntent.Educational => 5d,
-        SceneIntent.CloseUp => 2d,
+        SceneIntentType.HeroShot => 6d,
+        SceneIntentType.WideNight => 8d,
+        SceneIntentType.Educational => 5d,
+        SceneIntentType.CloseUp => 2d,
         _ => 4d
     };
 }
