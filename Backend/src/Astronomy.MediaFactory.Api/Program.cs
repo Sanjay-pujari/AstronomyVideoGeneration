@@ -1019,7 +1019,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     .ToList();
                 var compositionObjectsForSplit = skyPositions.Select(x => x.Position).ToList();
                 var spatialComposition = spatialCompositionEngine.Analyze(compositionObjectsForSplit);
-                var splitResult = narrativeSceneSplitter.Split(shot.ShotCode, shot.ShotPurpose, request.Language, weeklySkyfieldContext.Region, observationUtc, selectedObservationLocal, null, compositionObjectsForSplit, spatialComposition, new Astronomy.SscIntelligence.NightWindow.NightWindowResult(observationUtc, selectedObservationLocal, true, -18d, "narrative"));
+                var splitResult = narrativeSceneSplitter.Split(shot.ShotCode, shot.ShotPurpose, request.Language, weeklySkyfieldContext.Region, observationUtc, selectedObservationLocal, null, compositionObjectsForSplit, spatialComposition, new NightWindowResult(observationUtc, selectedObservationLocal, true, -18d, "narrative"));
                 app.Logger.LogInformation("NARRATIVE_SCENE_SPLIT originalSceneCode={OriginalSceneCode} splitApplied={SplitApplied} reason={Reason} originalObjects={OriginalObjects} generatedScenes={GeneratedScenes} totalSceneCount={TotalSceneCount}", shot.ShotCode, splitResult.SplitApplied, splitResult.Reason, string.Join(',', compositionObjectsForSplit.Select(x=>x.Name)), string.Join('|', splitResult.Scenes.Select(scn=>$"{scn.SceneCode}:{scn.SceneRole}:{scn.SceneIntent}:[{string.Join(',', scn.TargetObjects.Select(o=>o.Name))}]")), splitResult.Scenes.Count);
                 var screenshotPrefix = shot.ShotCode;
                 var expectedScreenshotPath = Path.Combine(scenesDirectory, $"{screenshotPrefix}.png");
