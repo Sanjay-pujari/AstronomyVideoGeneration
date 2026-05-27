@@ -721,7 +721,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, IStellariumScriptExecutionService sharedStellariumExecutor, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, CancellationToken ct) =>
 {
     try
     {
@@ -1029,6 +1029,25 @@ var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                 {
                     app.Logger.LogWarning("WeeklySkyForecast V2 scene {SceneId} requires split, fallback to single SSC with computed center/FOV. reason=requiresSplit", shot.ShotCode);
                 }
+
+                var sceneScore = astronomicalSceneScorer.Score(
+                    shot.ShotCode,
+                    shot.ShotPurpose,
+                    sceneIntent.ToString(),
+                    sscResult.VisibleObjects,
+                    sscResult.NightWindow);
+
+                app.Logger.LogInformation(
+                    "WeeklySkyForecast V2 storytelling diagnostics sceneCode={SceneCode} eventType={EventType} significanceScore={SignificanceScore} closestPair={ClosestPair} closestPairSeparation={ClosestPairSeparation} maxSpread={MaxSpread} brightestObject={BrightestObject} recommendedPrimaryTargets={RecommendedPrimaryTargets} reason={Reason}",
+                    shot.ShotCode,
+                    sceneScore.EventType,
+                    sceneScore.Score,
+                    sceneScore.AngularRelationships.ClosestPair is null ? "" : $"{sceneScore.AngularRelationships.ClosestPair.ObjectA}-{sceneScore.AngularRelationships.ClosestPair.ObjectB}",
+                    sceneScore.AngularRelationships.ClosestPair?.SeparationDeg,
+                    sceneScore.AngularRelationships.MaxSpreadDeg,
+                    sceneScore.AngularRelationships.BrightestObject?.Name,
+                    string.Join(",", sceneScore.RecommendedPrimaryTargets),
+                    sceneScore.Reason);
                 app.Logger.LogInformation(
                     "WeeklySkyForecast V2 SSC intelligence sceneCode={SceneCode} sceneIntent={SceneIntent} primaryTargets={PrimaryTargets} secondaryTargets={SecondaryTargets} contextTargets={ContextTargets} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} isNight={IsNight} sunAltitudeDeg={SunAltitudeDeg} screenshotDirectory={ScreenshotDirectory} screenshotPrefix={ScreenshotPrefix} expectedScreenshotPath={ExpectedScreenshotPath} visibleObjectCount={VisibleObjectCount} removedObjectCount={RemovedObjectCount} rawCameraAltitude={RawCameraAltitude} adjustedCameraAltitude={CameraAltitude} cameraAzimuth={CameraAzimuth} fov={Fov} compositionBiasReason={CompositionBiasReason} requiresSplit={RequiresSplit}",
                     shot.ShotCode,
