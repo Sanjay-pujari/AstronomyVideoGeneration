@@ -1007,7 +1007,7 @@ public sealed record DailySkyForecastContextItem(
     double OverallViewingScore,
     string ViewingSummary);
 
-public sealed record WeeklySkyForecastVisibleObjectItem(string ObjectCode, string ObjectName, string ObjectType, bool Visible, DateTime? RiseUtc, DateTime? SetUtc, DateTime? TransitUtc, double? MaxAltitudeDegrees, DateTime? BestViewingTimeUtc, double VisibilityScore, double PhotographyScore, string ViewingDirection, string Reason);
+public sealed record WeeklySkyForecastVisibleObjectItem(string ObjectCode, string ObjectName, string ObjectType, bool Visible, DateTime? RiseUtc, DateTime? SetUtc, DateTime? TransitUtc, double? MaxAltitudeDegrees, double? BestViewingAzimuthDegrees, DateTime? BestViewingTimeUtc, double VisibilityScore, double PhotographyScore, string ViewingDirection, string Reason);
 public sealed record WeeklySkyForecastEventItem(string EventType, string Title, string Description, DateTime EventTimeUtc, double ImportanceScore, double ViralityScore, string? PrimaryObjectCode, string ViewingDirection, string ViewingTip);
 public sealed record WeeklySkyForecastHighlightItem(int Order, string HighlightType, string Title, string Description, DateOnly Date, DateTime? BestTimeUtc, string? ObjectCode, double Score, string SuggestedSceneType);
 

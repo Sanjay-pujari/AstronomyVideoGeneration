@@ -295,7 +295,7 @@ public sealed class WeeklySkyForecastV2IntelligenceTests
             var d = start.AddDays(i);
             var t = DateTime.Parse($"{d:yyyy-MM-dd}T18:00:00Z");
             return new DailySkyForecastContextItem(d, t, t, "Waxing", 33, null, null,
-                [new WeeklySkyForecastVisibleObjectItem("MOON", "Moon", "Moon", true, null, null, null, 55, t, 90, 80, "W", "Good"), new WeeklySkyForecastVisibleObjectItem("JUPITER", "Jupiter", "Planet", true, null, null, null, 60, t.AddMinutes(20), 92, 88, "W", "Great"), new WeeklySkyForecastVisibleObjectItem("VENUS", "Venus", "Planet", true, null, null, null, 40, t.AddMinutes(30), 85, 82, "W", "Great")],
+                [new WeeklySkyForecastVisibleObjectItem("MOON", "Moon", "Moon", true, null, null, null, 55, 250, t, 90, 80, "W", "Good"), new WeeklySkyForecastVisibleObjectItem("JUPITER", "Jupiter", "Planet", true, null, null, null, 60, 240, t.AddMinutes(20), 92, 88, "W", "Great"), new WeeklySkyForecastVisibleObjectItem("VENUS", "Venus", "Planet", true, null, null, null, 40, 260, t.AddMinutes(30), 85, 82, "W", "Great")],
                 [], t, t.AddHours(2), 95 - i, "Excellent");
         }).ToList();
 

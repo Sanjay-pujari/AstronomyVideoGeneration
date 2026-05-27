@@ -146,11 +146,11 @@ public sealed class WeeklySkyForecastFoundationTests
         var recommendedStart = DateTime.Parse("2026-05-26T17:30:00Z");
 
         var dayMoon = new CoreModel.DailySkyForecastContextItem(new DateOnly(2026, 5, 24), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 30, null, null,
-            [new CoreModel.WeeklySkyForecastVisibleObjectItem("Moon", "Moon", "Moon", true, null, null, null, null, moonTime, 80, 75, "E", "Great")], [], recommendedStart, recommendedStart, 80, "Good");
+            [new CoreModel.WeeklySkyForecastVisibleObjectItem("Moon", "Moon", "Moon", true, null, null, null, null, 110, moonTime, 80, 75, "E", "Great")], [], recommendedStart, recommendedStart, 80, "Good");
         var dayJupiter = new CoreModel.DailySkyForecastContextItem(new DateOnly(2026, 5, 25), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 40, null, null,
-            [new CoreModel.WeeklySkyForecastVisibleObjectItem("Jupiter", "Jupiter", "Planet", true, null, null, null, null, jupiterTime, 90, 88, "SE", "Great")], [], recommendedStart, recommendedStart, 90, "Great");
+            [new CoreModel.WeeklySkyForecastVisibleObjectItem("Jupiter", "Jupiter", "Planet", true, null, null, null, null, 150, jupiterTime, 90, 88, "SE", "Great")], [], recommendedStart, recommendedStart, 90, "Great");
         var daySummary = new CoreModel.DailySkyForecastContextItem(new DateOnly(2026, 5, 26), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 50, null, null,
-            [new CoreModel.WeeklySkyForecastVisibleObjectItem("Saturn", "Saturn", "Planet", true, null, null, null, null, DateTime.Parse("2026-05-26T20:00:00Z"), 70, 70, "S", "Good")], [], recommendedStart, recommendedStart.AddHours(2), 86, "Great");
+            [new CoreModel.WeeklySkyForecastVisibleObjectItem("Saturn", "Saturn", "Planet", true, null, null, null, null, 175, DateTime.Parse("2026-05-26T20:00:00Z"), 70, 70, "S", "Good")], [], recommendedStart, recommendedStart.AddHours(2), 86, "Great");
 
         var context = new CoreModel.WeeklySkyForecastContext("IN-RJ-UDAIPUR", "Udaipur", 24, 73, tz, new DateOnly(2026, 5, 22), new DateOnly(2026, 5, 28), "en",
             [dayMoon, dayJupiter, daySummary],
@@ -190,7 +190,7 @@ public sealed class WeeklySkyForecastFoundationTests
 private static CoreModel.WeeklySkyForecastContext BuildContext()
     {
         var day = new CoreModel.DailySkyForecastContextItem(new DateOnly(2026, 5, 22), DateTime.UtcNow, DateTime.UtcNow, "Waxing", 20, null, null,
-            [new CoreModel.WeeklySkyForecastVisibleObjectItem("JUP", "Jupiter", "Planet", true, null, null, null, null, DateTime.UtcNow, 90, 85, "SE", "Great")],
+            [new CoreModel.WeeklySkyForecastVisibleObjectItem("JUP", "Jupiter", "Planet", true, null, null, null, null, 200, DateTime.UtcNow, 90, 85, "SE", "Great")],
             [], DateTime.UtcNow, DateTime.UtcNow, 80, "Good");
         return new CoreModel.WeeklySkyForecastContext("IN-RJ-UDAIPUR", "Udaipur", 24, 73, "Asia/Kolkata", new DateOnly(2026, 5, 22), new DateOnly(2026, 5, 28), "en", [day, day, day, day, day, day, day], [new CoreModel.WeeklySkyForecastHighlightItem(1, "BestNight", "Title", "Desc", new DateOnly(2026, 5, 23), DateTime.UtcNow, "JUP", 90, "WeeklyHighlight")], [new CoreModel.RecommendedObservationNight(new DateOnly(2026, 5, 23), 90, "Reason", ["JUP"], DateTime.UtcNow, DateTime.UtcNow)], "JUP", new DateOnly(2026, 5, 23), new DateOnly(2026, 5, 24), []);
     }

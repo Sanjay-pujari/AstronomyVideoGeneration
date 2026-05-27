@@ -17,7 +17,7 @@ public sealed class WeeklyAstronomyEventExtractor : IWeeklyAstronomyEventExtract
         foreach (var obj in visible.Where(v => heroCodes.Contains(v.ObjectCode)).GroupBy(v => v.ObjectCode, StringComparer.OrdinalIgnoreCase))
         {
             var best = obj.OrderByDescending(o => o.VisibilityScore).ThenByDescending(o => o.MaxAltitudeDegrees ?? 0).First();
-            events.Add(BuildEvent(WeeklyAstronomyEventType.HeroObject, $"{best.ObjectName} this week", $"{best.ObjectName} is a strong standalone viewing target this week.", [best], best.ObjectCode, best.BestViewingTimeUtc, best.ViewingDirection, null, "StellariumScene", "HeroObjectCloseup", "Object-focused narration angle"));
+            events.Add(BuildEvent(logger: null, WeeklyAstronomyEventType.HeroObject, $"{best.ObjectName} this week", $"{best.ObjectName} is a strong standalone viewing target this week.", [best], best.ObjectCode, best.BestViewingTimeUtc, best.ViewingDirection, null, "StellariumScene", "HeroObjectCloseup", "Object-focused narration angle"));
         }
 
         foreach (var day in context.DailyForecasts)
@@ -26,7 +26,7 @@ public sealed class WeeklyAstronomyEventExtractor : IWeeklyAstronomyEventExtract
             var grouping = dayVisible.Where(v => v.ObjectCode is "MOON" or "JUPITER" or "VENUS" or "SATURN" or "MARS").OrderByDescending(v => v.VisibilityScore).Take(3).ToList();
             if (grouping.Count >= 2)
             {
-                events.Add(BuildEvent(grouping.Count >= 3 ? WeeklyAstronomyEventType.Grouping : WeeklyAstronomyEventType.Conjunction,
+                events.Add(BuildEvent(null, grouping.Count >= 3 ? WeeklyAstronomyEventType.Grouping : WeeklyAstronomyEventType.Conjunction,
                     string.Join(" + ", grouping.Select(g => g.ObjectName)),
                     "Multiple bright objects are visible in the same evening window.",
                     grouping, grouping.First().ObjectCode, grouping.First().BestViewingTimeUtc, grouping.First().ViewingDirection, 12, "StellariumScene", grouping.Count >=3 ? "MultiObjectSkyGrouping" : "ConjunctionScene", "Comparative visual narration"));
@@ -38,8 +38,8 @@ public sealed class WeeklyAstronomyEventExtractor : IWeeklyAstronomyEventExtract
         {
             var bestDate = bestNight.Date;
             var dayObjects = context.DailyForecasts.FirstOrDefault(d => d.Date == bestDate)?.VisibleObjects.Where(v => v.Visible).Take(5).ToList() ?? [];
-            events.Add(BuildEvent(WeeklyAstronomyEventType.BestViewingWindow, "Best viewing window", "Best local viewing window for the week with practical observing convenience.", dayObjects, dayObjects.FirstOrDefault()?.ObjectCode, bestNight.BestStartUtc, dayObjects.FirstOrDefault()?.ViewingDirection, null, "StellariumScene", "BestWindowScene", "Actionable viewing recommendation"));
-            events.Add(BuildEvent(WeeklyAstronomyEventType.DirectionalObservation, $"Look {dayObjects.FirstOrDefault()?.ViewingDirection ?? "west"} after sunset", "Use horizon direction guidance and altitude to find the best objects.", dayObjects, dayObjects.FirstOrDefault()?.ObjectCode, bestNight.BestStartUtc, dayObjects.FirstOrDefault()?.ViewingDirection, null, "StellariumScene", "DirectionalGuideScene", "Step-by-step finder guidance"));
+            events.Add(BuildEvent(null, WeeklyAstronomyEventType.BestViewingWindow, "Best viewing window", "Best local viewing window for the week with practical observing convenience.", dayObjects, dayObjects.FirstOrDefault()?.ObjectCode, bestNight.BestStartUtc, dayObjects.FirstOrDefault()?.ViewingDirection, null, "StellariumScene", "BestWindowScene", "Actionable viewing recommendation"));
+            events.Add(BuildEvent(null, WeeklyAstronomyEventType.DirectionalObservation, $"Look {dayObjects.FirstOrDefault()?.ViewingDirection ?? "west"} after sunset", "Use horizon direction guidance and altitude to find the best objects.", dayObjects, dayObjects.FirstOrDefault()?.ObjectCode, bestNight.BestStartUtc, dayObjects.FirstOrDefault()?.ViewingDirection, null, "StellariumScene", "DirectionalGuideScene", "Step-by-step finder guidance"));
         }
 
         var deduped = events.GroupBy(e => $"{e.EventType}|{e.BestDateLocal}|{string.Join(',', e.Objects.Select(o=>o.ObjectCode).OrderBy(x=>x))}")
@@ -60,10 +60,19 @@ public sealed class WeeklyAstronomyEventExtractor : IWeeklyAstronomyEventExtract
         return result;
     }
 
-    private static WeeklyAstronomyEvent BuildEvent(WeeklyAstronomyEventType type, string title, string summary, IReadOnlyList<WeeklySkyForecastVisibleObjectItem> objs, string? primary, DateTime? bestTimeUtc, string? direction, double? separation, string visualSource, string sceneType, string narrationAngle)
+    private static WeeklyAstronomyEvent BuildEvent(Microsoft.Extensions.Logging.ILogger? logger, WeeklyAstronomyEventType type, string title, string summary, IReadOnlyList<WeeklySkyForecastVisibleObjectItem> objs, string? primary, DateTime? bestTimeUtc, string? direction, double? separation, string visualSource, string sceneType, string narrationAngle)
     {
         var first = objs.FirstOrDefault();
-        var objects = objs.Select(o => new WeeklyAstronomyEventObject(o.ObjectCode, o.ObjectName, o.MaxAltitudeDegrees, null, null, o.VisibilityScore)).ToList();
+        var objects = objs.Select(o =>
+        {
+            logger?.LogInformation("SKYFIELD_COORDINATE_EXTRACTION object={ObjectName} timestamp={Timestamp} altitude={Altitude} azimuth={Azimuth} rawAlt={RawAltitude} rawAz={RawAzimuth} method={Method}",
+                o.ObjectName, o.BestViewingTimeUtc, o.MaxAltitudeDegrees, o.BestViewingAzimuthDegrees, o.MaxAltitudeDegrees, o.BestViewingAzimuthDegrees, "weekly-forecast-max-sample");
+            if (o.MaxAltitudeDegrees.HasValue && !o.BestViewingAzimuthDegrees.HasValue)
+            {
+                logger?.LogCritical("SKYFIELD_COORDINATE_EXTRACTION altitude exists but azimuth missing for object={ObjectName} timestamp={Timestamp}", o.ObjectName, o.BestViewingTimeUtc);
+            }
+            return new WeeklyAstronomyEventObject(o.ObjectCode, o.ObjectName, o.MaxAltitudeDegrees, o.BestViewingAzimuthDegrees, null, o.VisibilityScore);
+        }).ToList();
         return new WeeklyAstronomyEvent(Guid.NewGuid().ToString("N"), type, title, summary, objects, primary, objects.Count, bestTimeUtc.HasValue ? DateOnly.FromDateTime(bestTimeUtc.Value) : null, bestTimeUtc.HasValue ? TimeOnly.FromDateTime(bestTimeUtc.Value.ToLocalTime()) : null, direction, first?.MaxAltitudeDegrees, null, separation, null, objs.DefaultIfEmpty().Average(o => o?.VisibilityScore ?? 0), Math.Min(100, 60 + objects.Count * 10), type is WeeklyAstronomyEventType.Grouping or WeeklyAstronomyEventType.Conjunction ? 70 : 45, visualSource, sceneType, narrationAngle, []);
     }
 }
