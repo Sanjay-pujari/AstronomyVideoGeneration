@@ -915,12 +915,41 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
         var scenePlansByCode = weeklyScenePlan.ScenePlans
             .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
-        var stellariumShots = shots
-            .Where(shot =>
-                stellariumNeedsByScene.ContainsKey(shot.ShotCode)
-                || (scenePlansByCode.TryGetValue(shot.ShotCode, out var plan)
-                    && (plan.RequiresStellarium
-                        || string.Equals(plan.VisualSourceType, "Stellarium", StringComparison.OrdinalIgnoreCase))))
+        var stellariumShots = weeklyScenePlan.StellariumNeeds
+            .Select(need =>
+            {
+                var matchingShot = shots.FirstOrDefault(shot => shot.ShotCode.Equals(need.SceneCode, StringComparison.OrdinalIgnoreCase));
+                if (matchingShot is not null)
+                {
+                    return matchingShot;
+                }
+
+                var fallbackScenePlan = scenePlansByCode.TryGetValue(need.SceneCode, out var resolvedScenePlan)
+                    ? resolvedScenePlan
+                    : throw new InvalidOperationException($"Stellarium need '{need.SceneCode}' has no matching scene plan.");
+                return new WeeklyCinematicShot(
+                    fallbackScenePlan.SceneCode,
+                    fallbackScenePlan.SceneType,
+                    fallbackScenePlan.RenderIntent,
+                    need.ObjectCodes,
+                    need.ObjectCodes.FirstOrDefault(),
+                    need.TargetDate,
+                    TimeOnly.FromDateTime((need.BestTimeUtc ?? request.ScheduledUtc.UtcDateTime).ToUniversalTime()),
+                    fallbackScenePlan.DurationSeconds,
+                    "W",
+                    need.FieldOfViewDegrees,
+                    need.FieldOfViewDegrees,
+                    need.FieldOfViewDegrees,
+                    new WeeklyCameraMovementPlan("static", fallbackScenePlan.CinematicMotion, "none", null, null, false),
+                    new WeeklyShotTransitionPlan(fallbackScenePlan.TransitionIn, fallbackScenePlan.TransitionIn, "in"),
+                    new WeeklyShotTransitionPlan(fallbackScenePlan.TransitionOut, fallbackScenePlan.TransitionOut, "out"),
+                    fallbackScenePlan.CinematicMotion,
+                    Path.Combine(scenesDirectory, $"{fallbackScenePlan.SceneCode}.png"),
+                    string.Empty,
+                    Path.Combine(scriptsDirectory, $"{fallbackScenePlan.SceneCode}.ssc"),
+                    [],
+                    new WeeklyShotNarrationSync(fallbackScenePlan.SceneCode, 0, fallbackScenePlan.DurationSeconds, fallbackScenePlan.VisualStrategy, need.ObjectCodes.FirstOrDefault(), []));
+            })
             .ToList();
 
         app.Logger.LogInformation("Generating SSC scripts for {SceneCount} Stellarium scenes", stellariumShots.Count);
@@ -945,9 +974,16 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             };
             foreach (var shot in stellariumShots)
             {
+                var stellariumNeed = stellariumNeedsByScene.TryGetValue(shot.ShotCode, out var resolvedNeed)
+                    ? resolvedNeed
+                    : throw new InvalidOperationException($"Missing Stellarium need for scene '{shot.ShotCode}'.");
                 var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
                 var scenePlan = scenePlansByCode.TryGetValue(shot.ShotCode, out var resolvedScenePlan) ? resolvedScenePlan : null;
                 var sceneSpecificCodes = ResolveSceneSpecificObjectCodes(shot, composition, scenePlan, weeklySkyfieldContext);
+                if (stellariumNeed.ObjectCodes.Count > 0)
+                {
+                    sceneSpecificCodes = stellariumNeed.ObjectCodes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                }
                 var usedFallback = sceneSpecificCodes.Count == 0;
                 if (usedFallback)
                 {
@@ -1092,7 +1128,7 @@ if (splitResult.SplitApplied)
                             observationUtc,longitude,latitude,elevationMeters,locationName,splitScene.TargetObjects.ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitScene.TargetObjects.Select(x=>x.Name).ToList()),
                             scenesDirectory,splitPrefix);
                         var splitScriptPath = Path.Combine(scriptsDirectory, $"{splitScene.SceneCode}.ssc");
-                        var splitHeader = string.Join(Environment.NewLine, new[] {"// Source: NarrativeSceneSplitter",$"// SourceSceneCode: {shot.ShotCode}",$"// ScreenshotDirectory: {scenesDirectory.Replace('\\', '/')}",string.Empty});
+                        var splitHeader = string.Join(Environment.NewLine, new[] {"// Source: NarrativeSceneSplitter",$"// SourceSceneCode: {shot.ShotCode}",$"// Region: {weeklySkyfieldContext.Region}",$"// TargetDate: {stellariumNeed.TargetDate:yyyy-MM-dd}",$"// SelectedObservationUtc: {observationUtc:O}",$"// ScreenshotDirectory: {scenesDirectory.Replace('\\', '/')}",string.Empty});
                         generatedScripts.Add((splitScriptPath, splitHeader + splitResultSsc.SscScript));
                     }
                     continue;
