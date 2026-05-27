@@ -827,6 +827,15 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             }
         }
 
+        async Task ExecuteOrchestrationStageAsync(string stageName, Func<CancellationToken, Task> action)
+        {
+            await ExecuteOrchestrationStageAsync<object?>(stageName, async stageCt =>
+            {
+                await action(stageCt);
+                return null;
+            });
+        }
+
         var weeklyScenePlan = await ExecuteOrchestrationStageAsync("Building weekly scene plan", _ =>
         {
             var scenePlan = weeklySkyfieldContext.HybridScenePlanPackage;
@@ -870,7 +879,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 shots.Select(s => new WeeklyCinematicSceneSequence(s.ShotCode, s.ShotCode, s.ShotType, s.ShotCode, s.DurationSeconds, [s], s.ShotPurpose, s.TransitionIn, s.TransitionOut)).ToList(), [], [], []);
             return Task.FromResult(timeline);
         });
-        var shots = shotTimeline.Shots;
+        var shots = shotTimeline.SceneSequences.SelectMany(sequence => sequence.Shots).ToList();
         var shotTimelinePath = Path.Combine(scenePlansDirectory, "weekly-cinematic-shot-timeline.json");
         await ExecuteOrchestrationStageAsync("Persisting cinematic shot timeline", stageCt =>
             File.WriteAllTextAsync(shotTimelinePath, JsonSerializer.Serialize(shotTimeline, new JsonSerializerOptions { WriteIndented = true }), stageCt));
