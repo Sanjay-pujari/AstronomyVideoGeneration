@@ -74,4 +74,33 @@ public sealed class SscIntelligenceEngineTests
         script.Should().Contain("core.quitStellarium();");
         script.TrimEnd().Should().EndWith("core.wait(10);\ncore.quitStellarium();");
     }
+
+    [Fact]
+    public void NightWindowResolver_FallbackForUdaipur_Is2045Local_1515Utc()
+    {
+        var resolver = new Astronomy.SscIntelligence.NightWindow.NightWindowResolver();
+        var result = resolver.Resolve(new DateTime(2026, 5, 25, 0, 0, 0, DateTimeKind.Utc), "Asia/Kolkata", 24.5854, 73.7125, new VisibilityRules());
+        result.BestObservationUtc.Hour.Should().Be(15);
+        result.BestObservationUtc.Minute.Should().Be(15);
+        result.BestObservationLocalTime.Hour.Should().Be(20);
+        result.BestObservationLocalTime.Minute.Should().Be(45);
+    }
+
+    [Fact]
+    public void SceneIntentResolver_ResolvesHeroAndWide()
+    {
+        var r = new Astronomy.SscIntelligence.SceneIntent.SceneIntentResolver();
+        r.Resolve("moon_jupiter_hero_scene").Should().Be(Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot);
+        r.Resolve("best_night_wide_scene").Should().Be(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight);
+    }
+
+    [Fact]
+    public void DynamicFovCalculator_DiffersBySceneIntent()
+    {
+        var calculator = new DynamicFovCalculator();
+        var one = new[] { new SkyObjectPosition("Moon", 20, 30, 1) };
+        calculator.Calculate(one, 20, 30, new VisibilityRules(), Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot).FovDeg.Should().Be(25);
+        calculator.Calculate(one, 20, 30, new VisibilityRules(), Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight).FovDeg.Should().Be(55);
+    }
+
 }

@@ -721,7 +721,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, IStellariumScriptExecutionService sharedStellariumExecutor, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, IStellariumScriptExecutionService sharedStellariumExecutor, CancellationToken ct) =>
 {
     try
     {
@@ -972,6 +972,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     : shotObservationUtc;
                 var screenshotPrefix = shot.ShotCode;
                 var expectedScreenshotPath = Path.Combine(scenesDirectory, $"{screenshotPrefix}.png");
+                var sceneIntent = sceneIntentResolver.Resolve(shot.ShotCode, composition.VisualNarrative);
                 var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                     observationUtc,
                     longitude,
@@ -979,7 +980,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     elevationMeters,
                     locationName,
                     skyPositions,
-                    defaultRules),
+                    defaultRules,
+                    null,
+                    "Asia/Kolkata",
+                    null,
+                    null,
+                    sceneIntent),
                     scenesDirectory,
                     screenshotPrefix);
                 if (sscResult.RequiresSplit)
@@ -987,14 +993,19 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     app.Logger.LogWarning("WeeklySkyForecast V2 scene {SceneId} requires split, fallback to single SSC with computed center/FOV. reason=requiresSplit", shot.ShotCode);
                 }
                 app.Logger.LogInformation(
-                    "WeeklySkyForecast V2 SSC intelligence sceneCode={SceneCode} observationUtc={ObservationUtc} screenshotDirectory={ScreenshotDirectory} screenshotPrefix={ScreenshotPrefix} expectedScreenshotPath={ExpectedScreenshotPath} visibleObjectCount={VisibleObjectCount} removedObjectCount={RemovedObjectCount} cameraAltitude={CameraAltitude} cameraAzimuth={CameraAzimuth} fov={Fov} requiresSplit={RequiresSplit}",
+                    "WeeklySkyForecast V2 SSC intelligence sceneCode={SceneCode} sceneIntent={SceneIntent} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} isNight={IsNight} sunAltitudeDeg={SunAltitudeDeg} screenshotDirectory={ScreenshotDirectory} screenshotPrefix={ScreenshotPrefix} expectedScreenshotPath={ExpectedScreenshotPath} visibleObjectCount={VisibleObjectCount} removedObjectCount={RemovedObjectCount} cameraAltitudeBeforeBias={CameraAltitudeBeforeBias} cameraAltitudeAfterBias={CameraAltitude} cameraAzimuth={CameraAzimuth} fov={Fov} requiresSplit={RequiresSplit}",
                     shot.ShotCode,
-                    observationUtc,
+                    sceneIntent,
+                    sscResult.NightWindow.BestObservationUtc,
+                    sscResult.NightWindow.BestObservationLocalTime,
+                    sscResult.NightWindow.IsNight,
+                    sscResult.NightWindow.SunAltitudeDeg,
                     scenesDirectory,
                     screenshotPrefix,
                     expectedScreenshotPath,
                     sscResult.VisibleObjects.Count,
                     sscResult.RemovedObjects.Count,
+                    skyPositions.Average(x => x.AltitudeDeg),
                     sscResult.CameraAltitudeDeg,
                     sscResult.CameraAzimuthDeg,
                     sscResult.FovDeg,
@@ -2358,8 +2369,12 @@ static string ResolveObjectType(string objectName)
 static double ResolveObjectWeight(string objectName, string objectType)
 {
     var key = objectName.Trim().ToLowerInvariant();
-    if (key == "moon") return 2.0d;
-    if (key is "venus" or "jupiter" or "saturn" or "mars") return 1.5d;
+    if (key == "moon") return 3.0d;
+    if (key == "venus") return 2.5d;
+    if (key == "jupiter") return 2.2d;
+    if (key is "saturn" or "mars" or "mercury") return 2.0d;
+    if (objectType.Equals("starordeepsky", StringComparison.OrdinalIgnoreCase) && key is "sirius" or "canopus" or "arcturus" or "vega" or "capella" or "rigel" or "procyon" or "betelgeuse" or "achernar" or "aldebaran" or "antares" or "spica" or "pollux") return 1.2d;
+    if (key.Contains("constellation", StringComparison.OrdinalIgnoreCase) || key.Contains("nebula", StringComparison.OrdinalIgnoreCase)) return 0.5d;
     return 1.0d;
 }
 

@@ -1,6 +1,7 @@
 using Astronomy.SscIntelligence.Camera;
 using Astronomy.SscIntelligence.NightWindow;
 using Astronomy.SscIntelligence.Rendering;
+using Astronomy.SscIntelligence.SceneIntent;
 using Astronomy.SscIntelligence.Visibility;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -15,6 +16,7 @@ public static class DependencyInjection
         services.AddSingleton<ICameraCenterCalculator, CameraCenterCalculator>();
         services.AddSingleton<IDynamicFovCalculator, DynamicFovCalculator>();
         services.AddSingleton<IStellariumSscRenderer, StellariumSscRenderer>();
+        services.AddSingleton<ISceneIntentResolver, SceneIntentResolver>();
         services.AddSingleton<ISscIntelligenceService, SscIntelligenceService>();
         return services;
     }
