@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Astronomy.SscIntelligence;
+using Astronomy.SscIntelligence.Contracts;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.Core;
@@ -53,6 +55,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen();
 builder.Services.AddMediaFactory(builder.Configuration);
+builder.Services.AddSscIntelligence();
 
 var app = builder.Build();
 
@@ -718,7 +721,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, IWeeklySscSceneBuilder sscSceneBuilder, IStellariumScriptExecutionService sharedStellariumExecutor, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, IStellariumScriptExecutionService sharedStellariumExecutor, CancellationToken ct) =>
 {
     try
     {
@@ -920,10 +923,64 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
 
         await ExecuteOrchestrationStageAsync("Generating SSC scripts", _ =>
         {
+            var skyObjectsByCode = (weeklySkyfieldContext.EventExtractionResult?.ExtractedEvents ?? [])
+                .SelectMany(e => e.Objects)
+                .GroupBy(o => o.ObjectCode, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            var latitude = weeklySkyfieldContext.StellariumBlueprintPackage?.Latitude ?? 24.5854d;
+            var longitude = weeklySkyfieldContext.StellariumBlueprintPackage?.Longitude ?? 73.7125d;
+            var locationName = weeklySkyfieldContext.Region;
+            const double elevationMeters = 600d;
+            var defaultRules = new VisibilityRules
+            {
+                MinimumObjectAltitudeDeg = 10d,
+                TwilightSunAltitudeThresholdDeg = -12d,
+                MaximumMagnitude = 6d,
+                MaximumGroupSpreadDeg = 70d
+            };
             foreach (var shot in stellariumShots)
             {
                 var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
-                var commands = sscSceneBuilder.Build(shot with { ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png") }, composition);
+                var skyPositions = composition.IncludedObjects
+                    .Concat(composition.TargetObjects)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(code =>
+                    {
+                        skyObjectsByCode.TryGetValue(code, out var obj);
+                        var objectName = obj?.ObjectName ?? code;
+                        var objectType = ResolveObjectType(obj?.ObjectName ?? code);
+                        var weight = ResolveObjectWeight(objectName, objectType);
+                        return new SkyObjectPosition(
+                            Name: objectName,
+                            AltitudeDeg: obj?.AltitudeDegrees ?? composition.CenterAltitude,
+                            AzimuthDeg: obj?.AzimuthDegrees ?? composition.CenterAzimuth,
+                            Magnitude: obj?.Magnitude ?? 4d,
+                            ObjectType: objectType,
+                            Weight: weight);
+                    })
+                    .ToList();
+                var observationUtc = DateTime.SpecifyKind(shot.DateLocal.ToDateTime(shot.TimeLocal), DateTimeKind.Utc);
+                var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
+                    locationName,
+                    latitude,
+                    longitude,
+                    observationUtc,
+                    elevationMeters,
+                    skyPositions,
+                    defaultRules));
+                if (sscResult.RequiresSplit)
+                {
+                    app.Logger.LogWarning("WeeklySkyForecast V2 scene {SceneId} requires split, fallback to single SSC with computed center/FOV. reason=requiresSplit", shot.ShotCode);
+                }
+                app.Logger.LogInformation(
+                    "WeeklySkyForecast V2 SSC intelligence scene={SceneId} visibleObjectCount={VisibleObjectCount} removedObjectCount={RemovedObjectCount} cameraAltitude={CameraAltitude} cameraAzimuth={CameraAzimuth} fov={Fov} requiresSplit={RequiresSplit}",
+                    shot.ShotCode,
+                    sscResult.VisibleObjects.Count,
+                    sscResult.RemovedObjectReasons.Count,
+                    sscResult.CameraAltitudeDeg,
+                    sscResult.CameraAzimuthDeg,
+                    sscResult.FovDeg,
+                    sscResult.RequiresSplit);
                 var scriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc");
                 var header = string.Join(Environment.NewLine, new[] {
                     "// Source: WeeklyScenePlan",
@@ -931,7 +988,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     $"// ScreenshotDirectory: {scenesDirectory.Replace("\\", "/")}",
                     string.Empty
                 });
-                generatedScripts.Add((scriptPath, header + string.Join(Environment.NewLine, commands)));
+                generatedScripts.Add((scriptPath, header + sscResult.SscScript));
             }
             return Task.FromResult(true);
         });
@@ -2252,6 +2309,25 @@ static IReadOnlyCollection<string> GetChangedFields(RunPipelineRequest original,
     if (original.TargetDate != result.TargetDate) changed.Add(nameof(RunPipelineRequest.TargetDate));
     if (original.RegionId != result.RegionId) changed.Add(nameof(RunPipelineRequest.RegionId));
     return changed;
+}
+
+static string ResolveObjectType(string objectName)
+{
+    var key = objectName.Trim().ToLowerInvariant();
+    return key switch
+    {
+        "moon" => "Moon",
+        "venus" or "jupiter" or "saturn" or "mars" or "mercury" => "Planet",
+        _ => "StarOrDeepSky"
+    };
+}
+
+static double ResolveObjectWeight(string objectName, string objectType)
+{
+    var key = objectName.Trim().ToLowerInvariant();
+    if (key == "moon") return 2.0d;
+    if (key is "venus" or "jupiter" or "saturn" or "mars") return 1.5d;
+    return 1.0d;
 }
 
 public sealed record GenerateDailyPlanRequest(
