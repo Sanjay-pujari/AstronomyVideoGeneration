@@ -21,6 +21,7 @@ public static class DependencyInjection
         services.AddSingleton<IDynamicBiasLimiter, DynamicBiasLimiter>();
         services.AddSingleton<IScreenSpaceFramingSolver, ScreenSpaceFramingSolver>();
         services.AddSingleton<ICinematicAnchorSolver, CinematicAnchorSolver>();
+        services.AddSingleton<IUnifiedCameraComposer, UnifiedCameraComposer>();
         services.AddSingleton<IStellariumSscRenderer, StellariumSscRenderer>();
         services.AddSingleton<ISceneIntentResolver, SceneIntentResolver>();
         services.AddSingleton<ISscIntelligenceService, SscIntelligenceService>();
