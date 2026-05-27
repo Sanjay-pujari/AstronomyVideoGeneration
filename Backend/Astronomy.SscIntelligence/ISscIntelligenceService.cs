@@ -1,4 +1,5 @@
 using Astronomy.SscIntelligence.Contracts;
+using Astronomy.SscIntelligence.SceneIntent;
 
 namespace Astronomy.SscIntelligence;
 
@@ -15,7 +16,11 @@ public sealed record SscIntelligenceRequest(
     string LocationName,
     IReadOnlyList<SkyObjectPosition> SkyObjectPositions,
     VisibilityRules? VisibilityRules = null,
-    double? SunAltitudeDeg = null);
+    double? SunAltitudeDeg = null,
+    string Timezone = "Asia/Kolkata",
+    DateTime? AstronomicalNightStartUtc = null,
+    DateTime? AstronomicalNightEndUtc = null,
+    SceneIntent SceneIntent = SceneIntent.Grouping);
 
 public sealed record SscIntelligenceResult(
     IReadOnlyList<SkyObjectPosition> VisibleObjects,
