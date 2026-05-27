@@ -2412,8 +2412,6 @@ static double ResolveObjectWeight(string objectName, string objectType, bool isP
     return isPrimaryTarget ? 1.1d : 0.8d;
 }
 
-sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
-
 static List<string> ResolveSceneSpecificObjectCodes(dynamic shot, dynamic composition, WeeklyScenePlan? scenePlan, WeeklySkyForecastV2IntelligenceResponse weeklyContext)
 {
     var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2431,7 +2429,7 @@ static List<string> ResolveSceneSpecificObjectCodes(dynamic shot, dynamic compos
 
     foreach (var ev in weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
     {
-        var sameDate = ev.EventDate == default || ev.EventDate == shot.DateLocal;
+        var sameDate = ev.BestDateLocal is null || ev.BestDateLocal == shot.DateLocal;
         if (!sameDate) continue;
         foreach (var o in ev.Objects ?? [])
         {
@@ -2463,3 +2461,5 @@ public sealed record GenerateDailyPlanRequest(
 public sealed record GenerateDailyPlanResponse(
     Guid ContentGenerationPlanId,
     string Status);
+
+sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
