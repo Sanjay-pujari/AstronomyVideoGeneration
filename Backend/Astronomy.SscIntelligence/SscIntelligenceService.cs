@@ -54,11 +54,15 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
         var weighted = targets.AllTargets;
         var (rawAltitude, azimuth) = _cameraCenterCalculator.CalculateCenter(weighted);
         var preliminaryCamera = _dynamicFovCalculator.Calculate(visible, targets.PrimaryTargets, targets.SecondaryTargets, targets.ContextTargets, rawAltitude, azimuth, rules, sceneIntent);
+        var compositionObjects = targets.PrimaryTargets.Concat(targets.SecondaryTargets).ToList();
+        if (compositionObjects.Count == 0) compositionObjects = visible.ToList();
+        var spatialAnalysis = new SpatialCompositionAnalyzer().Analyze(compositionObjects);
         var composition = _unifiedCameraComposer.Compose(sceneIntent, rawAltitude, azimuth, preliminaryCamera.FovDeg, visible, targets.PrimaryTargets, targets.SecondaryTargets, targets.ContextTargets);
         var camera = preliminaryCamera with { AltitudeDeg = composition.FinalCameraAltitudeDeg, AzimuthDeg = composition.FinalCameraAzimuthDeg };
 
         var sceneSemantics = ResolveSceneSemantics(request.SceneCode, request.SceneTitle);
         _logger.LogInformation("SSC unified composition: sceneCode={SceneCode}, sceneIntent={SceneIntent}, anchorTargetNames={AnchorTargetNames}, desiredY={DesiredY:0.##}, targetAltitude={TargetAltitude:0.##}, rawCameraAltitude={RawCameraAltitude:0.##}, finalCameraAltitude={FinalCameraAltitude:0.##}, rawCameraAzimuth={RawCameraAzimuth:0.##}, finalCameraAzimuth={FinalCameraAzimuth:0.##}, fov={Fov:0.##}, reason={Reason}, sceneSemantics={SceneSemantics}", request.SceneCode, sceneIntent, string.Join(",", composition.AnchorTargetNames), composition.DesiredY, composition.TargetAltitudeDeg, composition.RawCameraAltitudeDeg, composition.FinalCameraAltitudeDeg, composition.RawCameraAzimuthDeg, composition.FinalCameraAzimuthDeg, composition.FovDeg, composition.Reason, sceneSemantics);
+        _logger.LogInformation("SPATIAL_COMPOSITION_ANALYSIS: classification={Classification}, azimuthSpread={AzimuthSpread:0.##}, altitudeSpread={AltitudeSpread:0.##}, maxAngularDistance={MaxAngularDistance:0.##}, recommendedFov={RecommendedFov:0.##}, splitScene={SplitScene}, pairDistances={PairDistances}", spatialAnalysis.Classification, spatialAnalysis.AzimuthSpreadDeg, spatialAnalysis.AltitudeSpreadDeg, spatialAnalysis.MaxAngularDistanceDeg, spatialAnalysis.RecommendedFovDeg, spatialAnalysis.SplitScene, string.Join(";", spatialAnalysis.PairDistances.Select(p => $"{p.ObjectA}-{p.ObjectB}:{p.AngularDistanceDeg:0.##}(az:{p.AzimuthDeltaDeg:0.##},alt:{p.AltitudeDeltaDeg:0.##})")));
 
         var script = _renderer.Render(new SscRenderRequest(
             nightWindow.BestObservationUtc,
