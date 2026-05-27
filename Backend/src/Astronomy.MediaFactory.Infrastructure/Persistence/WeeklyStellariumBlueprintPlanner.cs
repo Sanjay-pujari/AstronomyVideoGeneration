@@ -9,7 +9,7 @@ internal static class WeeklyStellariumBlueprintPlanner
     {
         var primary = extraction.SelectedPrimaryEvent ?? extraction.ExtractedEvents.FirstOrDefault();
         var date = primary?.BestDateLocal ?? ctx.WeekStartDate;
-        var time = primary?.BestTimeLocal ?? new TimeOnly(20, 0);
+        var time = ResolveSkyfieldDerivedTime(primary, ctx, date);
         var direction = primary?.Direction ?? "South-West";
         var grouped = extraction.ExtractedEvents.FirstOrDefault(e => e.EventType == WeeklyAstronomyEventType.Grouping);
         var groupedCodes = grouped?.Objects.Select(o => o.ObjectCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList() ?? [];
@@ -91,6 +91,28 @@ internal static class WeeklyStellariumBlueprintPlanner
             "StelMovementMgr.zoomTo(58, 0.0);",
             $"core.output(\"Blueprint labels will be choreographed per shot for: {string.Join(",", objectCodes)}\");"
         ];
+    }
+
+    private static TimeOnly ResolveSkyfieldDerivedTime(WeeklyAstronomyEvent? primary, WeeklySkyForecastContext ctx, DateOnly date)
+    {
+        if (primary?.BestTimeLocal is { } bestTimeLocal) return bestTimeLocal;
+
+        var day = ctx.DailyForecasts.FirstOrDefault(d => d.Date == date)
+            ?? ctx.DailyForecasts.FirstOrDefault();
+        if (day is null)
+            throw new InvalidOperationException("Unable to resolve Skyfield-derived capture time because no daily forecasts are available.");
+
+        var fallbackUtc = day.BestViewingStartUtc != default
+            ? day.BestViewingStartUtc
+            : day.SunsetUtc.AddMinutes(45);
+        return TimeOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(fallbackUtc, ResolveTimeZoneOrUtc(ctx.Timezone)));
+    }
+
+    private static TimeZoneInfo ResolveTimeZoneOrUtc(string timezone)
+    {
+        if (string.IsNullOrWhiteSpace(timezone)) return TimeZoneInfo.Utc;
+        try { return TimeZoneInfo.FindSystemTimeZoneById(timezone); }
+        catch { return TimeZoneInfo.Utc; }
     }
 
     private static List<WeeklyStellariumHighlightObject> ResolveHighlights(WeeklyStoryboardSegment segment, WeeklyAstronomyEvent? grouped, IReadOnlyList<string> moonJupVen)
