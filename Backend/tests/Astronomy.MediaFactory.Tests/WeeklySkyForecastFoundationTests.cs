@@ -123,7 +123,7 @@ public sealed class WeeklySkyForecastFoundationTests
         Assert.True(segments.LongSegments.Count >= 6);
         Assert.True(segments.ShortSegments.Count >= 3);
 
-        var scenePlanner = new WeeklySkyForecastSscScenePlanner(NullLogger<WeeklySkyForecastSscScenePlanner>.Instance);
+        var scenePlanner = new LegacyWeeklyVisualAssetGenerator(NullLogger<LegacyWeeklyVisualAssetGenerator>.Instance);
         var scenes = await scenePlanner.BuildAsync(context, segments, CancellationToken.None);
         Assert.All(scenes.Scenes.Where(x => !string.IsNullOrWhiteSpace(x.TargetObjectCode)), x => Assert.Contains(x.TargetObjectCode!, context.DailyForecasts.SelectMany(d => d.VisibleObjects).Where(v => v.Visible).Select(v => v.ObjectCode).Append("Moon")));
 
@@ -158,7 +158,7 @@ public sealed class WeeklySkyForecastFoundationTests
             [new CoreModel.RecommendedObservationNight(new DateOnly(2026, 5, 25), 90, "Best Jupiter", ["Jupiter"], jupiterTime, jupiterTime.AddHours(1)), new CoreModel.RecommendedObservationNight(new DateOnly(2026, 5, 26), 88, "Best summary", ["Saturn"], recommendedStart, recommendedStart.AddHours(1))],
             "Jupiter", new DateOnly(2026, 5, 24), new DateOnly(2026, 5, 26), []);
 
-        var planner = new WeeklySkyForecastSscScenePlanner(NullLogger<WeeklySkyForecastSscScenePlanner>.Instance);
+        var planner = new LegacyWeeklyVisualAssetGenerator(NullLogger<LegacyWeeklyVisualAssetGenerator>.Instance);
         var segments = await new WeeklySkyForecastSegmentPlanner().BuildAsync(context, CancellationToken.None);
         var scenes = await planner.BuildAsync(context, segments, CancellationToken.None);
 
