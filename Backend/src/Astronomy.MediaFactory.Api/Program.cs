@@ -927,14 +927,42 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     return matchingShot;
                 }
 
-                var fallbackScenePlan = DynamicSplitScenePlanResolver.Resolve(need.SceneCode, scenePlansByCode, generatedSplitMetadataBySceneCode, out var sourceSceneCode, out var metadataSource)
-                    ?? throw new InvalidOperationException($"Stellarium need '{need.SceneCode}' has no matching scene plan.");
-                if (!string.IsNullOrWhiteSpace(sourceSceneCode))
+                WeeklyScenePlan? fallbackScenePlan = null;
+                var matchedBy = "Failed";
+
+                if (scenePlansByCode.TryGetValue(need.SceneCode, out var directScenePlan))
                 {
-                    app.Logger.LogInformation("DYNAMIC_SPLIT_SCENE_RESOLVED sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} metadataSource={MetadataSource}", need.SceneCode, sourceSceneCode, metadataSource);
+                    fallbackScenePlan = directScenePlan;
+                    matchedBy = "SceneCode";
                 }
+                else if (!string.IsNullOrWhiteSpace(need.SourceSceneCode) && scenePlansByCode.TryGetValue(need.SourceSceneCode, out var sourceScenePlan))
+                {
+                    fallbackScenePlan = sourceScenePlan with { SceneCode = need.SceneCode };
+                    matchedBy = "SourceSceneCode";
+                }
+                else
+                {
+                    fallbackScenePlan = DynamicSplitScenePlanResolver.Resolve(need.SceneCode, scenePlansByCode, generatedSplitMetadataBySceneCode, out var sourceSceneCode, out var metadataSource);
+                    if (fallbackScenePlan is not null)
+                    {
+                        matchedBy = "DerivedDynamicSplit";
+                        if (!string.IsNullOrWhiteSpace(sourceSceneCode))
+                        {
+                            app.Logger.LogInformation("DYNAMIC_SPLIT_SCENE_RESOLVED sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} metadataSource={MetadataSource}", need.SceneCode, sourceSceneCode, metadataSource);
+                        }
+                    }
+                }
+
+                app.Logger.LogInformation("STELLARIUM_NEED_SCENEPLAN_RESOLUTION needSceneCode={NeedSceneCode} sourceSceneCode={SourceSceneCode} matchedBy={MatchedBy}", need.SceneCode, need.SourceSceneCode, matchedBy);
+
+                if (fallbackScenePlan is null)
+                {
+                    var availableSceneCodes = string.Join(", ", scenePlansByCode.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
+                    throw new InvalidOperationException($"Stellarium need '{need.SceneCode}' has no matching scene plan. Available original scene codes: [{availableSceneCodes}]");
+                }
+
                 return new WeeklyCinematicShot(
-                    fallbackScenePlan.SceneCode,
+                    need.SceneCode,
                     fallbackScenePlan.SceneType,
                     fallbackScenePlan.RenderIntent,
                     need.ObjectCodes,
@@ -950,11 +978,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     new WeeklyShotTransitionPlan(fallbackScenePlan.TransitionIn, fallbackScenePlan.TransitionIn, "in"),
                     new WeeklyShotTransitionPlan(fallbackScenePlan.TransitionOut, fallbackScenePlan.TransitionOut, "out"),
                     fallbackScenePlan.CinematicMotion,
-                    Path.Combine(scenesDirectory, $"{fallbackScenePlan.SceneCode}.png"),
+                    Path.Combine(scenesDirectory, $"{need.SceneCode}.png"),
                     string.Empty,
-                    Path.Combine(scriptsDirectory, $"{fallbackScenePlan.SceneCode}.ssc"),
+                    Path.Combine(scriptsDirectory, $"{need.SceneCode}.ssc"),
                     [],
-                    new WeeklyShotNarrationSync(fallbackScenePlan.SceneCode, 0, fallbackScenePlan.DurationSeconds, fallbackScenePlan.VisualStrategy, need.ObjectCodes.FirstOrDefault(), []));
+                    new WeeklyShotNarrationSync(need.SceneCode, 0, fallbackScenePlan.DurationSeconds, fallbackScenePlan.VisualStrategy, need.ObjectCodes.FirstOrDefault(), []));
             })
             .ToList();
 

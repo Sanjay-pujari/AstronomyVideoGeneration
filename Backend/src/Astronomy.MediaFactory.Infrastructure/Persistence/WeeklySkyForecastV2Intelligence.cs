@@ -1000,7 +1000,13 @@ internal static class FinalRenderSceneOrchestrator
                     continue;
                 }
 
-                final.Add(need with { SceneCode = code });
+                var isDynamicSplit = !code.Equals(need.SceneCode, StringComparison.OrdinalIgnoreCase);
+                final.Add(need with
+                {
+                    SceneCode = code,
+                    SourceSceneCode = isDynamicSplit ? need.SceneCode : need.SourceSceneCode,
+                    IsDynamicSplitScene = isDynamicSplit || need.IsDynamicSplitScene
+                });
             }
         }
 
