@@ -960,7 +960,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
 
         app.Logger.LogInformation("Generating SSC scripts for {SceneCount} Stellarium scenes", stellariumShots.Count);
 
-        await ExecuteOrchestrationStageAsync("Generating SSC scripts", _ =>
+        await ExecuteOrchestrationStageAsync("Generating SSC scripts", ct =>
         {
             var skyObjectsByCode = (weeklySkyfieldContext.EventExtractionResult?.ExtractedEvents ?? [])
                 .SelectMany(e => e.Objects)
