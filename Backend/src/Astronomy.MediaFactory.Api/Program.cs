@@ -930,6 +930,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             var latitude = weeklySkyfieldContext.StellariumBlueprintPackage?.Latitude ?? 24.5854d;
             var longitude = weeklySkyfieldContext.StellariumBlueprintPackage?.Longitude ?? 73.7125d;
             var locationName = weeklySkyfieldContext.Region;
+            var timezone = weeklySkyfieldContext.StellariumBlueprintPackage?.Timezone ?? "UTC";
             const double elevationMeters = 600d;
             var defaultRules = new VisibilityRules
             {
@@ -957,8 +958,8 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     ? (DateTime?)null
                     : request.ScheduledUtc.UtcDateTime;
                 var planBestTimeUtc = scenePlansByCode.TryGetValue(shot.ShotCode, out var fallbackScenePlan) ? fallbackScenePlan.BestTimeUtc : null;
-                var observationUtc = ResolveSceneObservationUtc(shot.DateLocal, shot.TimeLocal, weeklySkyfieldContext.Timezone, planBestTimeUtc, scheduledUtcFallback);
-                var selectedObservationLocal = ConvertUtcToLocal(observationUtc, weeklySkyfieldContext.Timezone);
+                var observationUtc = ResolveSceneObservationUtc(shot.DateLocal, shot.TimeLocal, timezone, planBestTimeUtc, scheduledUtcFallback);
+                var selectedObservationLocal = ConvertUtcToLocal(observationUtc, timezone);
 
                 app.Logger.LogInformation(
                     "WeeklySkyForecast V2 pre-resolution context sceneCode={SceneCode} selectedObservationUtc={SelectedObservationUtc} localTime={LocalTime} region={Region} objectNames={ObjectNames}",
