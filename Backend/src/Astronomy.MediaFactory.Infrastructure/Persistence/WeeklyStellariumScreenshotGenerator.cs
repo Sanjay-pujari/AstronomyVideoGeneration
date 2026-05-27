@@ -15,6 +15,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
 {
     private const long MinScreenshotBytes = 10 * 1024;
     private const int PollDelayMs = 1000;
+    private const int WaitLogIntervalSeconds = 5;
     private const int DefaultTimeoutSeconds = 180;
     private const int MaximumTimeoutSeconds = 180;
     private readonly StellariumOptions _options = options.Value;
@@ -139,9 +140,21 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 launchedExecutable = process.StartInfo.FileName;
                 launchedArguments = process.StartInfo.Arguments;
                 launchedWorkingDirectory = process.StartInfo.WorkingDirectory;
+                process.EnableRaisingEvents = true;
+                process.Exited += (_, _) =>
+                {
+                    logger.LogInformation("Stellarium process exited. ExitCode={ExitCode}, ExitedAtUtc={ExitedAtUtc:O}", process.ExitCode, DateTime.UtcNow);
+                };
+
+                logger.LogInformation("Launching Stellarium with Process.Start");
+                logger.LogInformation("Executable path: {ExecutablePath}", launchedExecutable);
+                logger.LogInformation("Arguments: {Arguments}", launchedArguments);
                 logger.LogInformation("Working directory: {WorkingDirectory}", launchedWorkingDirectory);
+                logger.LogInformation("SSC script path: {SscScriptPath}", scriptFull);
+                logger.LogInformation("Expected screenshot path: {ExpectedScreenshotPath}", screenshotFull);
 
                 process.Start();
+                logger.LogInformation("Stellarium process started.");
                 logger.LogInformation("Stellarium process id: {ProcessId}", process.Id);
                 logger.LogInformation("Stellarium process start info arguments: {Arguments}", process.StartInfo.Arguments);
                 logger.LogInformation("Expected screenshot path: {ExpectedScreenshotPath}", screenshotFull);
@@ -151,7 +164,7 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 var deadline = DateTime.UtcNow.AddSeconds(effectiveTimeoutSeconds);
                 long? screenshotDetectedAtMs = null;
                 long? screenshotStableAtMs = null;
-                var nextWaitLogSecond = 10;
+                var nextWaitLogSecond = WaitLogIntervalSeconds;
                 while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
                 {
                     if (File.Exists(screenshotFull))
@@ -177,8 +190,9 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                     var elapsedSeconds = (int)scriptSw.Elapsed.TotalSeconds;
                     if (elapsedSeconds >= nextWaitLogSecond)
                     {
-                        logger.LogInformation("Screenshot wait elapsed seconds: {ElapsedSeconds}", elapsedSeconds);
-                        nextWaitLogSecond += 10;
+                        var screenshotFound = File.Exists(screenshotFull) && new FileInfo(screenshotFull).Length > MinScreenshotBytes;
+                        logger.LogInformation("Screenshot polling status: found={ScreenshotFound}, processRunning={ProcessRunning}, elapsedSeconds={ElapsedSeconds}", screenshotFound, !process.HasExited, elapsedSeconds);
+                        nextWaitLogSecond += WaitLogIntervalSeconds;
                     }
                     await Task.Delay(PollDelayMs, cancellationToken);
                 }
