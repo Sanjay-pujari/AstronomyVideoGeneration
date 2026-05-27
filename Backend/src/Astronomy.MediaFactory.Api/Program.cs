@@ -1019,7 +1019,10 @@ var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                     "Asia/Kolkata",
                     null,
                     null,
-                    sceneIntent),
+                    sceneIntent,
+                    shot.ShotCode,
+                    shot.ShotPurpose,
+                    sceneSpecificCodes.ToList()),
                     scenesDirectory,
                     screenshotPrefix);
                 if (sscResult.RequiresSplit)
@@ -1027,9 +1030,12 @@ var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                     app.Logger.LogWarning("WeeklySkyForecast V2 scene {SceneId} requires split, fallback to single SSC with computed center/FOV. reason=requiresSplit", shot.ShotCode);
                 }
                 app.Logger.LogInformation(
-                    "WeeklySkyForecast V2 SSC intelligence sceneCode={SceneCode} sceneIntent={SceneIntent} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} isNight={IsNight} sunAltitudeDeg={SunAltitudeDeg} screenshotDirectory={ScreenshotDirectory} screenshotPrefix={ScreenshotPrefix} expectedScreenshotPath={ExpectedScreenshotPath} visibleObjectCount={VisibleObjectCount} removedObjectCount={RemovedObjectCount} cameraAltitudeBeforeBias={CameraAltitudeBeforeBias} cameraAltitudeAfterBias={CameraAltitude} cameraAzimuth={CameraAzimuth} fov={Fov} requiresSplit={RequiresSplit}",
+                    "WeeklySkyForecast V2 SSC intelligence sceneCode={SceneCode} sceneIntent={SceneIntent} primaryTargets={PrimaryTargets} secondaryTargets={SecondaryTargets} contextTargets={ContextTargets} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} isNight={IsNight} sunAltitudeDeg={SunAltitudeDeg} screenshotDirectory={ScreenshotDirectory} screenshotPrefix={ScreenshotPrefix} expectedScreenshotPath={ExpectedScreenshotPath} visibleObjectCount={VisibleObjectCount} removedObjectCount={RemovedObjectCount} rawCameraAltitude={RawCameraAltitude} adjustedCameraAltitude={CameraAltitude} cameraAzimuth={CameraAzimuth} fov={Fov} compositionBiasReason={CompositionBiasReason} requiresSplit={RequiresSplit}",
                     shot.ShotCode,
                     sceneIntent,
+                    string.Join(",", sscResult.PrimaryTargets),
+                    string.Join(",", sscResult.SecondaryTargets),
+                    string.Join(",", sscResult.ContextTargets),
                     sscResult.NightWindow.BestObservationUtc,
                     sscResult.NightWindow.BestObservationLocalTime,
                     sscResult.NightWindow.IsNight,
@@ -1039,10 +1045,11 @@ var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                     expectedScreenshotPath,
                     sscResult.VisibleObjects.Count,
                     sscResult.RemovedObjects.Count,
-                    skyPositions.Average(x => x.Position.AltitudeDeg),
+                    sscResult.RawCameraAltitudeDeg,
                     sscResult.CameraAltitudeDeg,
                     sscResult.CameraAzimuthDeg,
                     sscResult.FovDeg,
+                    sscResult.CompositionBiasReason,
                     sscResult.RequiresSplit);
                 var scriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc");
                 var header = string.Join(Environment.NewLine, new[] {

@@ -4,5 +4,5 @@ namespace Astronomy.SscIntelligence.Camera;
 
 public interface ICameraCenterCalculator
 {
-    (double AltitudeDeg, double AzimuthDeg) CalculateCenter(IReadOnlyList<SkyObjectPosition> visibleObjects);
+    (double AltitudeDeg, double AzimuthDeg) CalculateCenter(IReadOnlyList<SkyObjectPosition> weightedObjects);
 }

@@ -1,4 +1,5 @@
 using Astronomy.SscIntelligence.Camera;
+using Astronomy.SscIntelligence.Composition;
 using Astronomy.SscIntelligence.Contracts;
 using Astronomy.SscIntelligence.NightWindow;
 using Astronomy.SscIntelligence.Rendering;
@@ -13,14 +14,18 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
     private readonly IVisibilityFilter _visibilityFilter;
     private readonly ICameraCenterCalculator _cameraCenterCalculator;
     private readonly IDynamicFovCalculator _dynamicFovCalculator;
+    private readonly IPrimaryTargetResolver _primaryTargetResolver;
+    private readonly ICompositionBiasResolver _compositionBiasResolver;
     private readonly IStellariumSscRenderer _renderer;
 
-    public SscIntelligenceService(INightWindowResolver nightWindowResolver, IVisibilityFilter visibilityFilter, ICameraCenterCalculator cameraCenterCalculator, IDynamicFovCalculator dynamicFovCalculator, IStellariumSscRenderer renderer)
+    public SscIntelligenceService(INightWindowResolver nightWindowResolver, IVisibilityFilter visibilityFilter, ICameraCenterCalculator cameraCenterCalculator, IDynamicFovCalculator dynamicFovCalculator, IPrimaryTargetResolver primaryTargetResolver, ICompositionBiasResolver compositionBiasResolver, IStellariumSscRenderer renderer)
     {
         _nightWindowResolver = nightWindowResolver;
         _visibilityFilter = visibilityFilter;
         _cameraCenterCalculator = cameraCenterCalculator;
         _dynamicFovCalculator = dynamicFovCalculator;
+        _primaryTargetResolver = primaryTargetResolver;
+        _compositionBiasResolver = compositionBiasResolver;
         _renderer = renderer;
     }
 
@@ -35,9 +40,12 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
             throw new InvalidOperationException("No visible objects were available after filtering.");
         }
 
-        var (rawAltitude, azimuth) = _cameraCenterCalculator.CalculateCenter(visible);
-        var altitude = Math.Clamp(rawAltitude + GetAltitudeBias(request.SceneIntent), 12d, 80d);
-        var camera = _dynamicFovCalculator.Calculate(visible, altitude, azimuth, rules, request.SceneIntent);
+        var targets = _primaryTargetResolver.Resolve(visible, request.SceneCode, request.SceneTitle, request.ExplicitTargetObjectNames);
+        var weighted = targets.AllTargets;
+        var (rawAltitude, azimuth) = _cameraCenterCalculator.CalculateCenter(weighted);
+        var spread = weighted.Count > 1 ? weighted.Max(x => x.AltitudeDeg) - weighted.Min(x => x.AltitudeDeg) : 0d;
+        var bias = _compositionBiasResolver.Resolve(request.SceneIntent, rawAltitude, azimuth, spread, (weighted.Min(x => x.AltitudeDeg), weighted.Max(x => x.AltitudeDeg)));
+        var camera = _dynamicFovCalculator.Calculate(visible, targets.PrimaryTargets, targets.SecondaryTargets, targets.ContextTargets, bias.AltitudeDeg, bias.AzimuthDeg, rules, request.SceneIntent);
 
         var script = _renderer.Render(new SscRenderRequest(
             nightWindow.BestObservationUtc,
@@ -51,15 +59,6 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
             screenshotDirectory ?? ".",
             screenshotFileNameWithoutExtension ?? "scene"));
 
-        return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, script.Script, nightWindow);
+        return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, rawAltitude, bias.Reason, targets.PrimaryTargets.Select(x => x.Name).ToList(), targets.SecondaryTargets.Select(x => x.Name).ToList(), targets.ContextTargets.Select(x => x.Name).ToList(), script.Script, nightWindow);
     }
-
-    private static double GetAltitudeBias(SceneIntentType intent) => intent switch
-    {
-        SceneIntentType.HeroShot => 6d,
-        SceneIntentType.WideNight => 8d,
-        SceneIntentType.Educational => 5d,
-        SceneIntentType.CloseUp => 2d,
-        _ => 4d
-    };
 }
