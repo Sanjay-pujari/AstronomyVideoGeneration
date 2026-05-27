@@ -30,9 +30,13 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
         var warnings = new List<string>();
         var scripts = new List<WeeklyStellariumScriptInfo>();
 
+        var stellariumSceneCodes = ResolveStellariumSceneCodes(cinematicShotPackage);
         var shotOrder = 0;
-        foreach (var shot in cinematicShotPackage.SceneSequences.SelectMany(x => x.Shots))
+        foreach (var sequence in cinematicShotPackage.SceneSequences)
         {
+            if (!stellariumSceneCodes.Contains(sequence.SceneCode)) continue;
+            foreach (var shot in sequence.Shots)
+            {
             shotOrder++;
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -108,12 +112,15 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
             }
             var isDiagnostic = shot.ShotCode.StartsWith("_", StringComparison.Ordinal);
             scripts.Add(new WeeklyStellariumScriptInfo(shot.ShotCode, scriptFullPath, ToSscPath(screenshotFullPath), shot.PlannedSscCommands?.Count ?? 0, isValid, shotOrder, isDiagnostic));
+            }
         }
 
         var diagnosticsPath = Path.Combine(debugDir, "weekly-stellarium-script-package.json");
         var diagnostics = new
         {
             scriptCount = scripts.Count,
+            GeneratedStellariumScriptsCount = scripts.Count,
+            stellariumSceneCodes,
             scripts,
             validationIssues,
             warnings
@@ -249,5 +256,17 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
         }
 
         return adjusted;
+    }
+
+    private static HashSet<string> ResolveStellariumSceneCodes(WeeklyCinematicShotPackage package)
+    {
+        var sceneCodes = package.SceneSequences
+            .Select(s => s.SceneCode)
+            .Where(sceneCode =>
+                sceneCode.Equals("hero_western_grouping_scene", StringComparison.OrdinalIgnoreCase)
+                || sceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return sceneCodes;
     }
 }
