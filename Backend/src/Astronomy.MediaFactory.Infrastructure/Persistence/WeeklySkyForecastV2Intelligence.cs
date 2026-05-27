@@ -501,7 +501,14 @@ internal static class WeeklySkyForecastV2HybridScenePlanBuilder
         var mappingByVisual = visualPackage.SegmentVisualMappings.GroupBy(x => x.VisualCode, StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.Key, x => x.ToList(), StringComparer.OrdinalIgnoreCase);
         var segmentMappings = visualPackage.SegmentVisualMappings.Select(m => new WeeklySegmentSceneMapping(m.SegmentCode, $"{m.VisualCode}_scene", m.TimingHint, m.ShouldReuse)).ToList();
         var assetNeeds = BuildAssetNeeds();
-        var stellariumNeeds = scenePlans.Where(s => s.RequiresStellarium).Select(s => new WeeklyStellariumNeed(s.SceneCode, s.TargetDate, s.BestTimeUtc, regionId, s.ObjectCodes, s.SceneType, s.SceneCode == "best_night_wide_scene" ? 90 : 75, "StillFrameOrSlowPanReference", s.RenderIntent)).ToList();
+        var initialStellariumNeeds = scenePlans.Where(s => s.RequiresStellarium).Select(s => new WeeklyStellariumNeed(s.SceneCode, s.TargetDate, s.BestTimeUtc, regionId, s.ObjectCodes, s.SceneType, s.SceneCode == "best_night_wide_scene" ? 90 : 75, "StillFrameOrSlowPanReference", s.RenderIntent)).ToList();
+        var finalRender = FinalRenderSceneOrchestrator.Build(initialStellariumNeeds, new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["hero_western_grouping_scene"] = ["western_planet_grouping_scene", "moon_hero_scene"],
+            ["best_night_wide_scene"] = ["best_night_wide_scene"]
+        });
+        var stellariumNeeds = finalRender.FinalScenes;
+
         var overlays = scenePlans.Where(s => s.OverlayInstructions.Count > 0 && !s.OverlayInstructions.Contains("none", StringComparer.OrdinalIgnoreCase)).Select(s => new WeeklyOverlayPlan(s.SceneCode, s.OverlayInstructions, "minimal_cinematic", "segment-aligned", "title-safe-lower-third")).ToList();
         var transitions = new List<WeeklyTransitionPlan>
         {
@@ -969,3 +976,36 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
         return new InvalidOperationException($"Could not resolve scene code '{expectedSceneCode}' from {source}. Available scene codes: [{available}]");
     }
 }
+internal static class FinalRenderSceneOrchestrator
+{
+    internal sealed record FinalRenderSceneResult(IReadOnlyList<WeeklyStellariumNeed> FinalScenes, IReadOnlyDictionary<string, IReadOnlyList<string>> SceneGraph);
+
+    public static FinalRenderSceneResult Build(IReadOnlyList<WeeklyStellariumNeed> initialNeeds, IReadOnlyDictionary<string, IReadOnlyList<string>> splitReplacements)
+    {
+        var final = new List<WeeklyStellariumNeed>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var graph = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var need in initialNeeds)
+        {
+            var replacementCodes = splitReplacements.TryGetValue(need.SceneCode, out var mapped) && mapped.Count > 0
+                ? mapped
+                : [need.SceneCode];
+
+            graph[need.SceneCode] = replacementCodes;
+            foreach (var code in replacementCodes)
+            {
+                if (!seen.Add(code))
+                {
+                    continue;
+                }
+
+                final.Add(need with { SceneCode = code });
+            }
+        }
+
+        return new FinalRenderSceneResult(final, graph);
+    }
+}
+
+
