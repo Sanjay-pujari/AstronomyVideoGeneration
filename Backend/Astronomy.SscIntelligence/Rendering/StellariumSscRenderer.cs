@@ -22,14 +22,13 @@ public sealed class StellariumSscRenderer : IStellariumSscRenderer
         sb.AppendLine("ConstellationMgr.setFlagLabels(true);");
         sb.AppendLine();
         sb.AppendLine($"core.moveToAltAzi(\"{Fmt(request.CameraAltitudeDeg)}d\", \"{Fmt(request.CameraAzimuthDeg)}d\", 1);");
+        sb.AppendLine("core.wait(2);");
+        sb.AppendLine();
         sb.AppendLine($"StelMovementMgr.zoomTo({Fmt(request.FovDeg)}, 2);");
-        sb.AppendLine();
-        sb.AppendLine("core.wait(3);");
-        sb.AppendLine();
-        sb.AppendLine($"core.screenshot(\"{Escape(request.ScreenshotFileNameWithoutExtension)}\", false, \"{Escape(request.ScreenshotDirectory)}\", true);");
         sb.AppendLine("core.wait(5);");
         sb.AppendLine();
-        sb.AppendLine("core.wait(2);");
+        sb.AppendLine($"core.screenshot(\"{Escape(request.ScreenshotFileNameWithoutExtension)}\", false, \"{Escape(request.ScreenshotDirectory)}\", true);");
+        sb.AppendLine("core.wait(10);");
         sb.Append("core.quitStellarium();");
 
         return new SscRenderResult(sb.ToString());
