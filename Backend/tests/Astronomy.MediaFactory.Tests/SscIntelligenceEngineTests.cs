@@ -184,6 +184,8 @@ public sealed partial class SscIntelligenceEngineTests
             new Astronomy.SscIntelligence.Composition.CompositionBiasResolver(),
             new Astronomy.SscIntelligence.Composition.DynamicBiasLimiter(),
             new Astronomy.SscIntelligence.Composition.ScreenSpaceFramingSolver(),
+            new Astronomy.SscIntelligence.Composition.CinematicAnchorSolver(),
+            new Astronomy.SscIntelligence.SceneIntent.SceneIntentResolver(),
             new StellariumSscRenderer(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<Astronomy.SscIntelligence.SscIntelligenceService>.Instance);
 
@@ -194,5 +196,45 @@ public sealed partial class SscIntelligenceEngineTests
 
         var result = service.Generate(request);
         result.Script.Should().Contain($"core.moveToAltAzi({result.CameraAltitudeDeg:0.###}, {result.CameraAzimuthDeg:0.###}, 0);");
+    }
+}
+
+
+public sealed partial class SscIntelligenceEngineTests
+{
+    [Fact]
+    public void CinematicAnchorProfile_UsesExpectedHeroAndWideAnchors()
+    {
+        Astronomy.SscIntelligence.Composition.CinematicAnchorProfile.For(Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot).DesiredY.Should().Be(0.64);
+        Astronomy.SscIntelligence.Composition.CinematicAnchorProfile.For(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight).DesiredY.Should().Be(0.74);
+    }
+
+    [Fact]
+    public void CinematicAnchorSolver_SolvesHeroAltitudeFromFormula()
+    {
+        var solver = new Astronomy.SscIntelligence.Composition.CinematicAnchorSolver();
+        var result = solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot, 42, 180, 50,
+            [new SkyObjectPosition("Moon", 40, 180, -12)],
+            [new SkyObjectPosition("Moon", 40, 180, -12)],
+            [],
+            []);
+
+        result.AnchoredCameraAltitudeDeg.Should().BeApproximately(47, 0.001);
+    }
+
+    [Fact]
+    public void CinematicAnchorSolver_ClampsAltitude()
+    {
+        var solver = new Astronomy.SscIntelligence.Composition.CinematicAnchorSolver();
+        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight, 40, 180, 80, [new SkyObjectPosition("A", 80, 180, -2)], [new SkyObjectPosition("A", 80, 180, -2)], [], []).AnchoredCameraAltitudeDeg.Should().BeLessOrEqualTo(82);
+        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.CloseUp, 40, 180, 80, [new SkyObjectPosition("A", 0, 180, -2)], [new SkyObjectPosition("A", 0, 180, -2)], [], []).AnchoredCameraAltitudeDeg.Should().BeGreaterOrEqualTo(12);
+    }
+
+    [Fact]
+    public void FinalSafetyPass_PreventsClipping_AfterAnchor()
+    {
+        var framing = new Astronomy.SscIntelligence.Composition.ScreenSpaceFramingSolver();
+        var result = framing.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot, 20, 180, 25, [new SkyObjectPosition("Moon", 70, 180, -12)], []);
+        result.FinalCameraAltitudeDeg.Should().BeGreaterThan(20);
     }
 }
