@@ -191,18 +191,35 @@ public sealed partial class SscIntelligenceEngineTests
     [Fact]
     public void SpatialCompositionAnalyzer_Classifies_Impossible_AndSuggestsSplitGroups()
     {
-        var analyzer = new Astronomy.SscIntelligence.Composition.SpatialCompositionAnalyzer();
+        var analyzer = new Astronomy.SscIntelligence.Spatial.AstronomicalSpatialCompositionEngine();
         var analysis = analyzer.Analyze([
             new SkyObjectPosition("Moon", 62, 181, -12),
             new SkyObjectPosition("Venus", 22, 288, -4),
             new SkyObjectPosition("Jupiter", 35, 280, -2)]);
 
-        analysis.Classification.Should().Be(Astronomy.SscIntelligence.Composition.SpatialGroupingClassification.ImpossibleGrouping);
-        analysis.SplitScene.Should().BeTrue();
+        analysis.CompositionClass.Should().Be(Astronomy.SscIntelligence.Spatial.SpatialCompositionClass.ImpossibleGrouping);
+        analysis.SplitRecommended.Should().BeTrue();
         analysis.PairDistances.Should().NotBeEmpty();
-        analysis.SuggestedSceneGroups.Count.Should().BeGreaterThan(1);
+        analysis.Clusters.Count.Should().Be(2);
+        analysis.DominantCluster.ObjectNames.Should().Contain(["Jupiter", "Venus"]);
     }
 
+
+    [Fact]
+    public void SpatialCompositionEngine_HandlesAzimuthWraparoundAsTightGrouping()
+    {
+        var engine = new Astronomy.SscIntelligence.Spatial.AstronomicalSpatialCompositionEngine();
+        var result = engine.Analyze([new SkyObjectPosition("A", 30, 359, 1), new SkyObjectPosition("B", 31, 1, 1)]);
+        result.CompositionClass.Should().Be(Astronomy.SscIntelligence.Spatial.SpatialCompositionClass.TightGrouping);
+    }
+
+    [Fact]
+    public void SpatialCompositionEngine_ClassifiesWidePanorama()
+    {
+        var engine = new Astronomy.SscIntelligence.Spatial.AstronomicalSpatialCompositionEngine();
+        var result = engine.Analyze([new SkyObjectPosition("A", 30, 0, 1), new SkyObjectPosition("B", 30, 60, 1)]);
+        result.CompositionClass.Should().Be(Astronomy.SscIntelligence.Spatial.SpatialCompositionClass.WidePanorama);
+    }
     [Fact]
     public void SscIntelligenceService_UsesFinalFramedAltitude_ForRender()
     {
@@ -215,6 +232,7 @@ public sealed partial class SscIntelligenceEngineTests
             new Astronomy.SscIntelligence.Composition.UnifiedCameraComposer(),
             new Astronomy.SscIntelligence.SceneIntent.SceneIntentResolver(),
             new StellariumSscRenderer(),
+            new Astronomy.SscIntelligence.Spatial.AstronomicalSpatialCompositionEngine(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<Astronomy.SscIntelligence.SscIntelligenceService>.Instance);
 
         var request = new Astronomy.SscIntelligence.SscIntelligenceRequest(
