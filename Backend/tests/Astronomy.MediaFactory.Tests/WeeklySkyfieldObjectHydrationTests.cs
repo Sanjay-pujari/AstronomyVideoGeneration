@@ -51,7 +51,7 @@ public class WeeklySkyfieldObjectHydrationTests
             "Moon");
 
         candidates.Should().HaveCountGreaterThan(0);
-        candidates.Select(c => c.Name).Should().BeEquivalentTo(["MOON", "JUPITER", "VENUS"]);
+        candidates.Select(c => c.ObjectName).Should().BeEquivalentTo(["MOON", "JUPITER", "VENUS"]);
         candidates.Should().OnlyContain(c => c.SnapshotUtc == eventUtc && c.AltitudeDegrees != 0 && c.AzimuthDegrees != 0);
     }
 
@@ -116,9 +116,9 @@ public class WeeklySkyfieldObjectHydrationTests
             "moon");
 
         candidates.Should().HaveCount(3);
-        candidates.Select(c => c.Name).Should().BeEquivalentTo(["MOON", "VENUS", "JUPITER"]);
-        candidates.Should().ContainSingle(c => c.Name == "MOON" && c.AltitudeDegrees == 24.5 && c.AzimuthDegrees == 210.3);
-        candidates.Should().ContainSingle(c => c.Name == "VENUS" && c.AltitudeDegrees == 19.1 && c.AzimuthDegrees == 199.4);
-        candidates.Should().ContainSingle(c => c.Name == "JUPITER" && c.AltitudeDegrees == 12.2 && c.AzimuthDegrees == 188.0);
+        candidates.Select(c => c.ObjectName).Should().BeEquivalentTo(["MOON", "VENUS", "JUPITER"]);
+        candidates.Should().ContainSingle(c => c.ObjectName == "MOON" && c.AltitudeDegrees == 24.5 && c.AzimuthDegrees == 210.3);
+        candidates.Should().ContainSingle(c => c.ObjectName == "VENUS" && c.AltitudeDegrees == 19.1 && c.AzimuthDegrees == 199.4);
+        candidates.Should().ContainSingle(c => c.ObjectName == "JUPITER" && c.AltitudeDegrees == 12.2 && c.AzimuthDegrees == 188.0);
     }
 }
