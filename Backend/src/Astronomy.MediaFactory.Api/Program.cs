@@ -942,29 +942,61 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         });
 
         var screenshots = new List<string>();
-        var screenshotExecutionQueue = shots.Select(shot => new
-        {
-            ScriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc"),
-            ScreenshotDirectory = scenesDirectory,
-            ExpectedScreenshotPath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png")
-        }).ToList();
+        var stellariumNeedsByScene = weeklyScenePlan.StellariumNeeds
+            .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
+        var executionCandidates = shots
+            .Where(shot =>
+                stellariumNeedsByScene.ContainsKey(shot.ShotCode)
+                || weeklyScenePlan.ScenePlans.Any(scene =>
+                    scene.SceneCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase)
+                    && scene.RequiresStellarium))
+            .Select(shot => new
+            {
+                Shot = shot,
+                ScriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc"),
+                ScreenshotDirectory = scenesDirectory,
+                ScreenshotPath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png")
+            })
+            .ToList();
 
-        app.Logger.LogInformation("USING_SHARED_STELLARIUM_EXECUTOR_FOR_WEEKLY_SKYFORECAST");
-        app.Logger.LogInformation("Starting WeeklySkyForecast Stellarium execution using shared executor");
+        var orderedScreenshotExecutionQueue = executionCandidates
+            .OrderBy(item => item.Shot.ShotCode.Equals("hero_western_grouping_scene", StringComparison.OrdinalIgnoreCase) ? 0
+                : item.Shot.ShotCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) ? 1
+                : 2)
+            .ThenBy(item => item.Shot.ShotCode, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        foreach (var item in screenshotExecutionQueue)
+        foreach (var item in orderedScreenshotExecutionQueue)
         {
+            var scriptContent = await File.ReadAllTextAsync(item.ScriptPath, ct);
+            if (!scriptContent.Contains("core.quitStellarium();", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Generated SSC script missing core.quitStellarium();: {item.ScriptPath}");
+
+            var timeoutSeconds = 180;
+            var executablePath = Environment.GetEnvironmentVariable("STELLARIUM_PATH")
+                ?? Environment.GetEnvironmentVariable("StellariumPath")
+                ?? "stellarium";
+            var scriptPathForArgs = item.ScriptPath.Replace("\\", "/");
+            var arguments = $"--startup-script \"{scriptPathForArgs}\"";
+
+            app.Logger.LogInformation("USING_SHARED_STELLARIUM_EXECUTOR_FOR_WEEKLY_SKYFORECAST");
+            app.Logger.LogInformation("sceneCode={SceneCode}", item.Shot.ShotCode);
+            app.Logger.LogInformation("scriptPath={ScriptPath}", item.ScriptPath);
+            app.Logger.LogInformation("screenshotPath={ScreenshotPath}", item.ScreenshotPath);
+            app.Logger.LogInformation("exePath={ExePath}", executablePath);
+            app.Logger.LogInformation("arguments={Arguments}", arguments);
+
             await sharedStellariumExecutor.ExecuteAsync(
                 workingDirectoryRoot: root,
                 scriptPath: item.ScriptPath,
-                expectedScreenshotPath: item.ExpectedScreenshotPath,
-                timeoutSeconds: request.StellariumTimeoutSeconds > 0
-                    ? request.StellariumTimeoutSeconds.Value
-                    : 180,
+                expectedScreenshotPath: item.ScreenshotPath,
+                timeoutSeconds: timeoutSeconds,
                 cancellationToken: ct);
 
-            if (File.Exists(item.ExpectedScreenshotPath) && new FileInfo(item.ExpectedScreenshotPath).Length > 10 * 1024)
-                screenshots.Add(item.ExpectedScreenshotPath);
+            if (!File.Exists(item.ScreenshotPath) || new FileInfo(item.ScreenshotPath).Length == 0)
+                throw new InvalidOperationException($"Expected screenshot was not generated: {item.ScreenshotPath}");
+
+            screenshots.Add(item.ScreenshotPath);
         }
 
         var warnings = weeklySkyfieldContext.Warnings.Concat(compositionPackage.Errors).Distinct().ToList();
