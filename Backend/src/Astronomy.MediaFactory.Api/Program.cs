@@ -718,7 +718,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, IWeeklySscSceneBuilder sscSceneBuilder, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, IWeeklySscSceneBuilder sscSceneBuilder, IStellariumScriptExecutionService sharedStellariumExecutor, CancellationToken ct) =>
 {
     try
     {
@@ -941,31 +941,31 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return Task.FromResult(true);
         });
 
-        var waitTimeout = TimeSpan.FromSeconds(Math.Clamp(request.StellariumTimeoutSeconds ?? 90, 30, 600));
         var screenshots = new List<string>();
-        await ExecuteOrchestrationStageAsync("Building screenshot execution queue", stageCt =>
+        var screenshotExecutionQueue = shots.Select(shot => new
         {
-            var queuedScreenshotPaths = shots.Select(shot => Path.Combine(scenesDirectory, $"{shot.ShotCode}.png")).ToList();
-            _ = queuedScreenshotPaths.Count;
-            return Task.FromResult(true);
-        });
-        await ExecuteOrchestrationStageAsync("Launching Stellarium execution", async stageCt =>
+            ScriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc"),
+            ScreenshotDirectory = scenesDirectory,
+            ExpectedScreenshotPath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png")
+        }).ToList();
+
+        app.Logger.LogInformation("USING_SHARED_STELLARIUM_EXECUTOR_FOR_WEEKLY_SKYFORECAST");
+        app.Logger.LogInformation("Starting WeeklySkyForecast Stellarium execution using shared executor");
+
+        foreach (var item in screenshotExecutionQueue)
         {
-            foreach (var shot in shots)
-            {
-                var expectedImagePath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png");
-                var started = DateTime.UtcNow;
-                while (DateTime.UtcNow - started < waitTimeout)
-                {
-                    if (File.Exists(expectedImagePath) && new FileInfo(expectedImagePath).Length > 10 * 1024)
-                        break;
-                    await Task.Delay(500, stageCt);
-                }
-                if (File.Exists(expectedImagePath) && new FileInfo(expectedImagePath).Length > 10 * 1024)
-                    screenshots.Add(expectedImagePath);
-            }
-            return true;
-        });
+            await sharedStellariumExecutor.ExecuteAsync(
+                workingDirectoryRoot: root,
+                scriptPath: item.ScriptPath,
+                expectedScreenshotPath: item.ExpectedScreenshotPath,
+                timeoutSeconds: request.StellariumTimeoutSeconds > 0
+                    ? request.StellariumTimeoutSeconds.Value
+                    : 180,
+                cancellationToken: ct);
+
+            if (File.Exists(item.ExpectedScreenshotPath) && new FileInfo(item.ExpectedScreenshotPath).Length > 10 * 1024)
+                screenshots.Add(item.ExpectedScreenshotPath);
+        }
 
         var warnings = weeklySkyfieldContext.Warnings.Concat(compositionPackage.Errors).Distinct().ToList();
         if (screenshots.Count < shots.Count)
