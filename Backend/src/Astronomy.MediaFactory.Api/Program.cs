@@ -972,7 +972,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     : shotObservationUtc;
                 var screenshotPrefix = shot.ShotCode;
                 var expectedScreenshotPath = Path.Combine(scenesDirectory, $"{screenshotPrefix}.png");
-                var sceneIntent = sceneIntentResolver.Resolve(shot.ShotCode, composition.VisualNarrative);
+                var sceneIntent = sceneIntentResolver.Resolve(shot.ShotCode, shot.ShotPurpose);
                 var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                     observationUtc,
                     longitude,
