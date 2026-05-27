@@ -263,7 +263,12 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
                 list.Add($"var targets = [{targetsArray}];");
                 list.Add("for (var i = 0; i < targets.length; i++) {");
                 list.Add("  var objectName = targets[i];");
-                list.Add("  core.selectObjectByName(objectName, false);");
+                list.Add("  if (typeof LabelMgr !== \"undefined\" && typeof LabelMgr.labelObject === \"function\") {");
+                list.Add("    LabelMgr.labelObject(objectName, objectName, true, 20, \"#ffff66\", \"NE\", 15, \"Line\", false, 0);");
+                list.Add("  }");
+                list.Add("  if (typeof HighlightMgr !== \"undefined\" && typeof HighlightMgr.highlightObject === \"function\") {");
+                list.Add("    HighlightMgr.highlightObject(objectName, true);");
+                list.Add("  }");
                 list.Add("}");
             }
             list.Add("core.wait(3);");
@@ -276,6 +281,7 @@ public sealed class WeeklySscSceneBuilder : IWeeklySscSceneBuilder
             list.Add($"core.screenshot(\"{sceneCode}\", false, \"{screenshotDirectory}\", true, \"png\");");
             list.Add("core.wait(2);");
         }
+        list.Add("core.quitStellarium();");
 
         var reportPath = string.IsNullOrWhiteSpace(scriptPath)
             ? "grouped-ssc-validation-report.json"
