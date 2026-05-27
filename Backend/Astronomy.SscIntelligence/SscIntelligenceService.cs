@@ -89,5 +89,4 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
         if (text.Contains("educational")) flags.Add("educational");
         return flags.Count == 0 ? "none" : string.Join(",", flags);
     }
-    }
 }
