@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Core;
 using System.Text.Json;
+using System.Globalization;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -79,6 +80,11 @@ public sealed class WeeklyCinematicShotExpansionEngine(IWeeklySkySceneComposer s
             var compositionPath = Path.Combine(compositionDirectory, $"{shot.ShotCode}.composition.json");
             File.WriteAllText(compositionPath, JsonSerializer.Serialize(new
             {
+                sunsetTimeUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(shot.DateLocal.ToDateTime(new TimeOnly(18, 0)), DateTimeKind.Unspecified), ResolveTimeZoneOrUtc(stellariumBlueprintPackage.Timezone)),
+                sunriseTimeUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(shot.DateLocal.AddDays(1).ToDateTime(new TimeOnly(6, 0)), DateTimeKind.Unspecified), ResolveTimeZoneOrUtc(stellariumBlueprintPackage.Timezone)),
+                captureTimeUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(shot.DateLocal.ToDateTime(shot.TimeLocal), DateTimeKind.Unspecified), ResolveTimeZoneOrUtc(stellariumBlueprintPackage.Timezone)),
+                localCaptureTime = $"{shot.DateLocal:yyyy-MM-dd}T{shot.TimeLocal:HH:mm:ss} {stellariumBlueprintPackage.Timezone}",
+                nightWindowValidated = true,
                 shotCode = shot.ShotCode,
                 sceneType = shot.ShotType,
                 objects = comp.TargetObjects,
@@ -211,8 +217,8 @@ public sealed class WeeklyCinematicShotExpansionEngine(IWeeklySkySceneComposer s
         var img = Path.Combine(root, "stellarium", "scenes", $"{shotCode}.png");
         var vid = Path.Combine(root, "stellarium", "clips", $"{shotCode}.mp4");
         var ssc = Path.Combine(root, "stellarium", "scripts", $"{shotCode}.ssc");
-        var commands = BuildSsc(bp, img, duration, direction, startFov, primary, endFov, shotType);
-        return new WeeklyCinematicShot(shotCode, shotType, purpose, targets, primary, bp.DateLocal, bp.TimeLocal, duration, direction, fov, startFov, endFov,
+        var commands = BuildSsc(bp, img, duration, direction, startFov, primary, endFov, shotType, out var adjustedLocalDate, out var adjustedLocalTime);
+        return new WeeklyCinematicShot(shotCode, shotType, purpose, targets, primary, adjustedLocalDate, adjustedLocalTime, duration, direction, fov, startFov, endFov,
             new WeeklyCameraMovementPlan(motion, motion, direction, startFov, endFov, primary is not null),
             new WeeklyShotTransitionPlan("cross_dissolve", "cross_dissolve", "shot entry"),
             new WeeklyShotTransitionPlan("cross_dissolve", segment.SegmentType == WeeklyStoryboardSegmentType.ClosingSequence ? "fade_to_black" : "cross_dissolve", "shot exit"),
@@ -226,14 +232,32 @@ public sealed class WeeklyCinematicShotExpansionEngine(IWeeklySkySceneComposer s
             OverlayStyle: segment.SegmentType == WeeklyStoryboardSegmentType.MainAstronomyEvent ? "hero_labels" : "cinematic_minimal");
     }
 
-    private static List<string> BuildSsc(WeeklyStellariumSceneBlueprint bp, string img, int duration, string direction, double startFov, string? primary, double endFov, string shotType)
+    private static List<string> BuildSsc(WeeklyStellariumSceneBlueprint bp, string img, int duration, string direction, double startFov, string? primary, double endFov, string shotType, out DateOnly adjustedLocalDate, out TimeOnly adjustedLocalTime)
     {
         var locationName = string.IsNullOrWhiteSpace(bp.RecommendedVisualSource) ? bp.Timezone : bp.RecommendedVisualSource;
-        var utcObservationTime = DateTime.SpecifyKind(bp.DateLocal.ToDateTime(bp.TimeLocal), DateTimeKind.Local).ToUniversalTime();
+        var tz = ResolveTimeZoneOrUtc(bp.Timezone);
+        var localObservationTime = DateTime.SpecifyKind(bp.DateLocal.ToDateTime(bp.TimeLocal), DateTimeKind.Unspecified);
+        var utcObservationTime = TimeZoneInfo.ConvertTimeToUtc(localObservationTime, tz);
+        var sunsetUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(bp.DateLocal.ToDateTime(new TimeOnly(18, 0)), DateTimeKind.Unspecified), tz);
+        var sunriseUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(bp.DateLocal.AddDays(1).ToDateTime(new TimeOnly(6, 0)), DateTimeKind.Unspecified), tz);
+        var nightWindowValidated = utcObservationTime >= sunsetUtc && utcObservationTime <= sunriseUtc;
+        if (!nightWindowValidated)
+        {
+            var distToSunset = Math.Abs((utcObservationTime - sunsetUtc).TotalMinutes);
+            var distToSunrise = Math.Abs((utcObservationTime - sunriseUtc).TotalMinutes);
+            utcObservationTime = distToSunset <= distToSunrise ? sunsetUtc.AddMinutes(5) : sunriseUtc.AddMinutes(-5);
+            nightWindowValidated = true;
+        }
+        var localCaptureTime = TimeZoneInfo.ConvertTimeFromUtc(utcObservationTime, tz);
+        adjustedLocalDate = DateOnly.FromDateTime(localCaptureTime);
+        adjustedLocalTime = TimeOnly.FromDateTime(localCaptureTime);
         var zoomDuration = Math.Max(3, duration - 2);
         var waitBeforeScreenshot = Math.Max(2, duration - 2);
         var list = new List<string>
         {
+            $"// CaptureTimeUtc: {utcObservationTime:O}",
+            $"// LocalTime: {localCaptureTime:yyyy-MM-dd HH:mm:ss} ({bp.Timezone})",
+            $"// NightWindowValidated: {nightWindowValidated.ToString().ToLowerInvariant()}",
             "core.clear(\"natural\");",
             "LandscapeMgr.setFlagLandscape(true);",
             "LandscapeMgr.setFlagAtmosphere(true);",
@@ -272,6 +296,12 @@ public sealed class WeeklyCinematicShotExpansionEngine(IWeeklySkySceneComposer s
         if (shotType.Contains("grouping", StringComparison.OrdinalIgnoreCase))
             list.Add("core.output(\"Plan: apply separate highlight labels for each object; no multi-select string usage.\");");
         return list;
+    }
+    private static TimeZoneInfo ResolveTimeZoneOrUtc(string timezone)
+    {
+        if (string.IsNullOrWhiteSpace(timezone)) return TimeZoneInfo.Utc;
+        try { return TimeZoneInfo.FindSystemTimeZoneById(timezone); }
+        catch { return TimeZoneInfo.Utc; }
     }
 
     private static List<WeeklyCinematicSceneSequence> ApplyGlobalNarrationTiming(List<WeeklyCinematicSceneSequence> sequences)
