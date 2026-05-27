@@ -2631,25 +2631,15 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     var selectedDateCollections = "ExtractedEvents.Objects";
     var selectedDateObjectNames = string.Join(",", selectedDateEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
     var selectedDateTimestamps = string.Join(",", selectedDateEvents.Select(e => ResolveEventUtc(e)).Where(x => x.HasValue).Select(x => x!.Value.ToString("O")).Distinct().OrderBy(x => x));
-    var candidates = (weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
-        .SelectMany(ev => (ev.Objects ?? [])
-            .Where(o => MatchesWeeklyObjectAliases(o.ObjectCode, o.ObjectName, targetAliases)
-                && o.AltitudeDegrees.HasValue
-                && o.AzimuthDegrees.HasValue)
-            .Select(o =>
-            {
-                var eventUtc = ResolveEventUtc(ev);
-                if (!eventUtc.HasValue) return null;
-                return new SkyfieldTemporalCandidate(
-                    o.ObjectName ?? o.ObjectCode ?? objectCodeOrName,
-                    eventUtc.Value,
-                    o.AltitudeDegrees!.Value,
-                    o.AzimuthDegrees!.Value,
-                    o.Magnitude);
-            }))
-        .Where(x => x is not null)
-        .Select(x => x!)
-        .ToList();
+    var candidates = WeeklySkyfieldObjectHydration.BuildTemporalCandidates(
+        extractedEvents,
+        targetAliases,
+        ResolveEventUtc,
+        NormalizeWeeklyObjectName,
+        MatchesWeeklyObjectAliases,
+        logger,
+        sceneCode,
+        directObject?.ObjectName ?? objectCodeOrName).ToList();
     logger.LogInformation(
         "TEMPORAL_RESOLVER_ENTER sceneCode={SceneCode} object={Object} requestedUtc={RequestedUtc} candidateCount={CandidateCount} toleranceMinutes={ToleranceMinutes}",
         sceneCode,
@@ -2724,6 +2714,16 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
 
     var candidateNames = string.Join(",", extractedEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
     var candidateTimes = string.Join(",", extractedEvents.Select(e => ResolveEventUtc(e)).Where(x => x.HasValue).Select(x => x!.Value.ToString("O")).Distinct().OrderBy(x => x));
+    if (!string.IsNullOrWhiteSpace(candidateNames) && candidates.Count == 0)
+    {
+        logger.LogCritical(
+            "OBJECT_HYDRATION_CRITICAL_EMPTY_CANDIDATES sceneCode={SceneCode} object={Object} rawObjectNames={RawObjectNames} selectedDateObjectNames={SelectedDateObjectNames} selectedDateTimestamps={SelectedDateTimestamps}",
+            sceneCode,
+            directObject?.ObjectName ?? objectCodeOrName,
+            candidateNames,
+            selectedDateObjectNames,
+            selectedDateTimestamps);
+    }
     var fallbackResolution = new WeeklyObjectPositionResolution(
         (double)composition.CenterAltitude,
         (double)composition.CenterAzimuth,
