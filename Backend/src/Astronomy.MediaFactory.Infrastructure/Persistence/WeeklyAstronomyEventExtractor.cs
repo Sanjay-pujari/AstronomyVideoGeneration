@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Core;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
