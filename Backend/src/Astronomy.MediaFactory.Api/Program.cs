@@ -968,19 +968,39 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     selectedObservationLocal,
                     weeklySkyfieldContext.Region,
                     string.Join(",", sceneSpecificCodes));
+                app.Logger.LogInformation(
+                    "SKYFIELD_OBJECT_RESOLUTION_TRACE sceneCode={SceneCode} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} requestedTargetObjects={RequestedTargetObjects}",
+                    shot.ShotCode,
+                    observationUtc,
+                    selectedObservationLocal,
+                    string.Join(",", sceneSpecificCodes));
 
                 var skyPositions = sceneSpecificCodes
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Select(code =>
                     {
                         skyObjectsByCode.TryGetValue(code, out var obj);
-                        var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, shot.DateLocal, composition, obj, weeklySkyfieldContext);
+                        var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, shot.DateLocal, composition, obj, weeklySkyfieldContext, sceneSpecificCodes);
                         var objectName = obj?.ObjectName ?? code;
                         var objectType = ResolveObjectType(obj?.ObjectName ?? code);
                         var isPrimaryTarget = sceneSpecificCodes.Contains(code, StringComparer.OrdinalIgnoreCase)
                             || composition.TargetObjects.Contains(code, StringComparer.OrdinalIgnoreCase)
                             || (scenePlan?.ObjectCodes?.Contains(code, StringComparer.OrdinalIgnoreCase) ?? false);
                         var source = $"{ResolveObjectSource(code, composition, scenePlan, shot, weeklySkyfieldContext)}|{resolution.Source}";
+                        app.Logger.LogInformation(
+                            "SKYFIELD_OBJECT_RESOLUTION_TRACE object={Object} normalized={Normalized} dateKey={DateKey} timeKey={TimeKey} collection={Collection} matchFound={MatchFound} candidateNames={CandidateNames} candidateTimes={CandidateTimes} topLevelKeys={TopLevelKeys} availableDates={AvailableDates} selectedDateCollections={SelectedDateCollections} selectedDateObjectNames={SelectedDateObjectNames}",
+                            resolution.RequestedName,
+                            resolution.NormalizedName,
+                            resolution.DateKey,
+                            resolution.TimeKey,
+                            resolution.CollectionSearched,
+                            resolution.MatchFound,
+                            resolution.CandidateNames,
+                            resolution.CandidateTimes,
+                            resolution.TopLevelKeys,
+                            resolution.AvailableDates,
+                            resolution.SelectedDateCollections,
+                            resolution.SelectedDateObjectNames);
                         var weight = ResolveObjectWeight(objectName, objectType, isPrimaryTarget);
                         return new WeeklySceneObjectSelection(
                             new SkyObjectPosition(
@@ -2578,12 +2598,24 @@ static string ResolveObjectSource(string code, dynamic composition, WeeklySceneP
 static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     string objectCodeOrName,
     DateTime sceneObservationUtc,
+    DateTime sceneObservationLocal,
     DateOnly sceneDateLocal,
     dynamic composition,
     WeeklyAstronomyEventObject? directObject,
-    WeeklySkyForecastV2IntelligenceResponse weeklyContext)
+    WeeklySkyForecastV2IntelligenceResponse weeklyContext,
+    IReadOnlyCollection<string> requestedTargetObjects)
 {
     var targetAliases = ResolveWeeklyObjectAliases(objectCodeOrName, directObject?.ObjectName);
+    var normalizedRequestedName = NormalizeWeeklyObjectName(directObject?.ObjectName ?? objectCodeOrName);
+    var selectedDateKey = sceneDateLocal.ToString("yyyy-MM-dd");
+    var selectedTimeKey = sceneObservationUtc.ToString("HH:mm");
+    var extractedEvents = weeklyContext.EventExtractionResult?.ExtractedEvents ?? [];
+    var topLevelKeys = string.Join(",", typeof(WeeklyAstronomyEventExtractionResult).GetProperties().Select(p => p.Name));
+    var availableDates = string.Join(",", extractedEvents.Where(e => e.BestDateLocal.HasValue).Select(e => e.BestDateLocal!.Value.ToString("yyyy-MM-dd")).Distinct().OrderBy(x => x));
+    var selectedDateEvents = extractedEvents.Where(e => e.BestDateLocal.HasValue && e.BestDateLocal.Value == sceneDateLocal).ToList();
+    var selectedDateCollections = "ExtractedEvents.Objects";
+    var selectedDateObjectNames = string.Join(",", selectedDateEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
+    var selectedDateTimestamps = string.Join(",", selectedDateEvents.Select(e => ResolveEventUtc(e)).Where(x => x.HasValue).Select(x => x!.Value.ToString("O")).Distinct().OrderBy(x => x));
     var exact = (weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
         .Where(ev => ev.BestDateLocal.HasValue && ev.BestDateLocal.Value == sceneDateLocal)
         .SelectMany(ev => (ev.Objects ?? [])
@@ -2604,7 +2636,19 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
             exact.Object.AltitudeDegrees!.Value,
             exact.Object.AzimuthDegrees!.Value,
             exact.Object.Magnitude ?? 5.5d,
-            "source=skyfield.exact");
+            "source=skyfield.exact",
+            directObject?.ObjectName ?? objectCodeOrName,
+            normalizedRequestedName,
+            selectedDateKey,
+            selectedTimeKey,
+            "EventExtractionResult.ExtractedEvents[].Objects",
+            true,
+            string.Empty,
+            selectedDateTimestamps,
+            topLevelKeys,
+            availableDates,
+            selectedDateCollections,
+            selectedDateObjectNames);
     }
 
     var nearest = (weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
@@ -2630,14 +2674,40 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
             nearest.AltitudeDegrees!.Value,
             nearest.AzimuthDegrees!.Value,
             nearest.Magnitude ?? 5.5d,
-            "source=skyfield.closest-time");
+            "source=skyfield.closest-time",
+            directObject?.ObjectName ?? objectCodeOrName,
+            normalizedRequestedName,
+            selectedDateKey,
+            selectedTimeKey,
+            "EventExtractionResult.ExtractedEvents[].Objects",
+            true,
+            string.Empty,
+            selectedDateTimestamps,
+            topLevelKeys,
+            availableDates,
+            selectedDateCollections,
+            selectedDateObjectNames);
     }
 
+    var candidateNames = string.Join(",", extractedEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
+    var candidateTimes = string.Join(",", extractedEvents.Select(e => ResolveEventUtc(e)).Where(x => x.HasValue).Select(x => x!.Value.ToString("O")).Distinct().OrderBy(x => x));
     return new WeeklyObjectPositionResolution(
         (double)composition.CenterAltitude,
         (double)composition.CenterAzimuth,
         4d,
-        "source=fallback");
+        "source=fallback",
+        directObject?.ObjectName ?? objectCodeOrName,
+        normalizedRequestedName,
+        selectedDateKey,
+        selectedTimeKey,
+        "EventExtractionResult.ExtractedEvents[].Objects",
+        false,
+        candidateNames,
+        candidateTimes,
+        topLevelKeys,
+        availableDates,
+        selectedDateCollections,
+        selectedDateObjectNames);
 }
 
 static HashSet<string> ResolveWeeklyObjectAliases(string objectCodeOrName, string? directName)
@@ -2723,4 +2793,4 @@ public sealed record GenerateDailyPlanResponse(
     string Status);
 
 sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
-sealed record WeeklyObjectPositionResolution(double AltitudeDeg, double AzimuthDeg, double Magnitude, string Source);
+sealed record WeeklyObjectPositionResolution(double AltitudeDeg, double AzimuthDeg, double Magnitude, string Source, string RequestedName, string NormalizedName, string DateKey, string TimeKey, string CollectionSearched, bool MatchFound, string CandidateNames, string CandidateTimes, string TopLevelKeys, string AvailableDates, string SelectedDateCollections, string SelectedDateObjectNames);
