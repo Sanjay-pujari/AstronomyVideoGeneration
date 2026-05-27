@@ -173,6 +173,37 @@ public sealed partial class SscIntelligenceEngineTests
     }
 
     [Fact]
+    public void DynamicFovCalculator_MarksImpossibleGrouping_ForVeryDistantObjects()
+    {
+        var calculator = new DynamicFovCalculator();
+        var objects = new[]
+        {
+            new SkyObjectPosition("Moon", 62, 181, -12),
+            new SkyObjectPosition("Venus", 22, 288, -4),
+            new SkyObjectPosition("Jupiter", 35, 280, -2)
+        };
+
+        var result = calculator.Calculate(objects, objects, Array.Empty<SkyObjectPosition>(), Array.Empty<SkyObjectPosition>(), 40, 250, new VisibilityRules(), Astronomy.SscIntelligence.SceneIntent.SceneIntent.Grouping);
+        result.RequiresSplit.Should().BeTrue();
+        result.FovDeg.Should().BeLessOrEqualTo(60);
+    }
+
+    [Fact]
+    public void SpatialCompositionAnalyzer_Classifies_Impossible_AndSuggestsSplitGroups()
+    {
+        var analyzer = new Astronomy.SscIntelligence.Composition.SpatialCompositionAnalyzer();
+        var analysis = analyzer.Analyze([
+            new SkyObjectPosition("Moon", 62, 181, -12),
+            new SkyObjectPosition("Venus", 22, 288, -4),
+            new SkyObjectPosition("Jupiter", 35, 280, -2)]);
+
+        analysis.Classification.Should().Be(Astronomy.SscIntelligence.Composition.SpatialGroupingClassification.ImpossibleGrouping);
+        analysis.SplitScene.Should().BeTrue();
+        analysis.PairDistances.Should().NotBeEmpty();
+        analysis.SuggestedSceneGroups.Count.Should().BeGreaterThan(1);
+    }
+
+    [Fact]
     public void SscIntelligenceService_UsesFinalFramedAltitude_ForRender()
     {
         var service = new Astronomy.SscIntelligence.SscIntelligenceService(
