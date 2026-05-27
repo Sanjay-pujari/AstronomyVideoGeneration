@@ -827,7 +827,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             }
         }
 
-        async Task ExecuteOrchestrationStageAsync(string stageName, Func<CancellationToken, Task> action)
+        async Task ExecuteOrchestrationStageAsyncNonGeneric(string stageName, Func<CancellationToken, Task> action)
         {
             await ExecuteOrchestrationStageAsync<object?>(stageName, async stageCt =>
             {
@@ -845,7 +845,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         });
 
         var scenePlanPath = Path.Combine(scenePlansDirectory, "weekly-scene-plan.json");
-        await ExecuteOrchestrationStageAsync("Persisting weekly scene plan", stageCt =>
+        await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly scene plan", stageCt =>
             File.WriteAllTextAsync(scenePlanPath, JsonSerializer.Serialize(weeklyScenePlan, new JsonSerializerOptions { WriteIndented = true }), stageCt));
 
         var shotTimeline = await ExecuteOrchestrationStageAsync("Building cinematic shot timeline", _ =>
@@ -881,7 +881,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         });
         var shots = shotTimeline.SceneSequences.SelectMany(sequence => sequence.Shots).ToList();
         var shotTimelinePath = Path.Combine(scenePlansDirectory, "weekly-cinematic-shot-timeline.json");
-        await ExecuteOrchestrationStageAsync("Persisting cinematic shot timeline", stageCt =>
+        await ExecuteOrchestrationStageAsyncNonGeneric("Persisting cinematic shot timeline", stageCt =>
             File.WriteAllTextAsync(shotTimelinePath, JsonSerializer.Serialize(shotTimeline, new JsonSerializerOptions { WriteIndented = true }), stageCt));
 
         var compositionPackage = await ExecuteOrchestrationStageAsync("Generating compositions", _ =>
@@ -943,9 +943,10 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
 
         var waitTimeout = TimeSpan.FromSeconds(Math.Clamp(request.StellariumTimeoutSeconds ?? 90, 30, 600));
         var screenshots = new List<string>();
-        await ExecuteOrchestrationStageAsync("Building screenshot execution queue", _ =>
+        await ExecuteOrchestrationStageAsync("Building screenshot execution queue", stageCt =>
         {
-            _ = shots.Select(shot => Path.Combine(scenesDirectory, $"{shot.ShotCode}.png")).ToList();
+            var queuedScreenshotPaths = shots.Select(shot => Path.Combine(scenesDirectory, $"{shot.ShotCode}.png")).ToList();
+            _ = queuedScreenshotPaths.Count;
             return Task.FromResult(true);
         });
         await ExecuteOrchestrationStageAsync("Launching Stellarium execution", async stageCt =>
