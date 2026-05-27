@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
 using Microsoft.EntityFrameworkCore;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Astronomy.MediaFactory.Api;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -899,6 +900,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var compositionPaths = new List<string>();
         var scriptPaths = new List<string>();
         var generatedScripts = new List<(string ScriptPath, string ScriptContent)>();
+        var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         await ExecuteOrchestrationStageAsync("Persisting composition files", async stageCt =>
         {
             foreach (var shot in shots)
