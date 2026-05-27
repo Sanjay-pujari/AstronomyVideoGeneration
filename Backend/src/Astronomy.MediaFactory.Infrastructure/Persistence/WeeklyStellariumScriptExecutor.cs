@@ -88,38 +88,26 @@ public sealed class WeeklyStellariumScriptExecutor(
             logger.LogInformation("Stellarium process started");
             logger.LogInformation("Waiting for screenshot");
 
-            var deadline = DateTime.UtcNow.AddSeconds(effectiveTimeoutSeconds);
-            while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+            var stabilizationResult = await WaitForScreenshotStabilizationAsync(screenshotFull, effectiveTimeoutSeconds, cancellationToken);
+            timedOut = !stabilizationResult.Completed;
+            if (stabilizationResult.FileExists)
             {
-                if (File.Exists(screenshotFull))
-                {
-                    var detectedSize = new FileInfo(screenshotFull).Length;
-                    logger.LogInformation("Screenshot detected");
-                    logger.LogInformation("Screenshot file size: {ScreenshotFileSize}", detectedSize);
-                    if (detectedSize > 0)
-                    {
-                        logger.LogInformation("Screenshot validated");
-                        break;
-                    }
-                }
-
-                await Task.Delay(PollDelayMilliseconds, cancellationToken);
+                logger.LogInformation("Screenshot file size: {ScreenshotFileSize}", stabilizationResult.LastObservedSizeBytes);
             }
 
-            timedOut = !(File.Exists(screenshotFull) && new FileInfo(screenshotFull).Length > 0);
             if (timedOut)
             {
-                logger.LogWarning("Timeout reached while waiting for screenshot");
+                logger.LogWarning("Timeout reached while waiting for screenshot stabilization");
             }
-
-            if (!process.HasExited)
+            else
             {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(CancellationToken.None);
-                logger.LogInformation("Process killed/closed");
+                logger.LogInformation("Screenshot write completion confirmed");
+                logger.LogInformation("Screenshot stabilization duration (ms): {ScreenshotStabilizationDurationMs}", stabilizationResult.StabilizationDurationMs);
             }
 
-            if (process.HasExited) exitCode = process.ExitCode;
+            await process.WaitForExitAsync(cancellationToken);
+            exitCode = process.ExitCode;
+            logger.LogInformation("Stellarium exited with code {ExitCode}", exitCode);
         }
 
         var screenshotExists = File.Exists(screenshotFull);
@@ -156,4 +144,46 @@ public sealed class WeeklyStellariumScriptExecutor(
         logger.LogInformation("Execution completed");
         return result;
     }
+    private static async Task<ScreenshotStabilizationResult> WaitForScreenshotStabilizationAsync(string screenshotPath, int timeoutSeconds, CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        var stabilizationStart = Stopwatch.StartNew();
+        long lastSize = -1;
+        var consecutiveStableChecks = 0;
+
+        while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        {
+            if (File.Exists(screenshotPath))
+            {
+                var size = new FileInfo(screenshotPath).Length;
+                if (size > 0)
+                {
+                    if (size == lastSize)
+                    {
+                        consecutiveStableChecks++;
+                        if (consecutiveStableChecks >= 2)
+                        {
+                            stabilizationStart.Stop();
+                            return new ScreenshotStabilizationResult(true, true, size, stabilizationStart.ElapsedMilliseconds);
+                        }
+                    }
+                    else
+                    {
+                        lastSize = size;
+                        consecutiveStableChecks = 0;
+                    }
+                }
+            }
+
+            await Task.Delay(PollDelayMilliseconds, cancellationToken);
+        }
+
+        stabilizationStart.Stop();
+        var exists = File.Exists(screenshotPath);
+        var finalSize = exists ? new FileInfo(screenshotPath).Length : 0;
+        return new ScreenshotStabilizationResult(false, exists, finalSize, stabilizationStart.ElapsedMilliseconds);
+    }
+
+    private sealed record ScreenshotStabilizationResult(bool Completed, bool FileExists, long LastObservedSizeBytes, long StabilizationDurationMs);
+
 }

@@ -72,6 +72,6 @@ public sealed class SscIntelligenceEngineTests
         var script = renderer.Render(new SscRenderRequest(DateTime.UtcNow, 10, 20, 50, "Test", 30, 60, 40)).Script;
 
         script.Should().Contain("core.quitStellarium();");
-        script.TrimEnd().Should().EndWith("core.wait(2);\ncore.quitStellarium();");
+        script.TrimEnd().Should().EndWith("core.wait(10);\ncore.quitStellarium();");
     }
 }
