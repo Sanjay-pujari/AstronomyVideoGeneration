@@ -4,6 +4,7 @@ using Astronomy.SscIntelligence.NightWindow;
 using Astronomy.SscIntelligence.Rendering;
 using Astronomy.SscIntelligence.SceneIntent;
 using Astronomy.SscIntelligence.Storytelling;
+using Astronomy.SscIntelligence.Spatial;
 using Astronomy.SscIntelligence.Visibility;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -25,6 +26,7 @@ public static class DependencyInjection
         services.AddSingleton<IUnifiedCameraComposer, UnifiedCameraComposer>();
         services.AddSingleton<IStellariumSscRenderer, StellariumSscRenderer>();
         services.AddSingleton<ISceneIntentResolver, SceneIntentResolver>();
+        services.AddSingleton<IAstronomicalSpatialCompositionEngine, AstronomicalSpatialCompositionEngine>();
         services.AddSingleton<IAngularRelationshipAnalyzer, AngularRelationshipAnalyzer>();
         services.AddSingleton<ICelestialEventClassifier, CelestialEventClassifier>();
         services.AddSingleton<IVisualSignificanceEngine, VisualSignificanceEngine>();
