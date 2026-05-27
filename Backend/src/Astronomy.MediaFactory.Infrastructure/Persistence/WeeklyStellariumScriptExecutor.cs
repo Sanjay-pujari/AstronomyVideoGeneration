@@ -11,7 +11,7 @@ public sealed class WeeklyStellariumScriptExecutor(
     IOptions<StellariumOptions> options,
     ILogger<WeeklyStellariumScriptExecutor> logger) : IWeeklyStellariumScriptExecutor, IStellariumScriptExecutionService
 {
-    private const int MaxWaitSeconds = 60;
+    private const string ExecutorName = nameof(StellariumImageCaptureExecutor);
     private const int PollDelayMilliseconds = 500;
     private readonly StellariumOptions _options = options.Value;
 
@@ -25,9 +25,8 @@ public sealed class WeeklyStellariumScriptExecutor(
         var processStarted = false;
         int? processId = null;
 
+        var effectiveTimeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : 180;
         logger.LogInformation("Starting Stellarium execution");
-        logger.LogInformation("Script path: {ScriptPath}", scriptPath);
-        logger.LogInformation("Expected screenshot path: {ExpectedScreenshotPath}", expectedScreenshotPath);
 
         if (!File.Exists(scriptPath)) errors.Add($"Script file does not exist: {scriptPath}");
         var rootFull = Path.GetFullPath(workingDirectoryRoot);
@@ -70,9 +69,17 @@ public sealed class WeeklyStellariumScriptExecutor(
             {
                 FileName = _options.ExecutablePath,
                 Arguments = $"--startup-script \"{scriptFull}\"",
+                WorkingDirectory = rootFull,
                 UseShellExecute = false,
                 CreateNoWindow = false
             };
+            logger.LogInformation("executorName={ExecutorName}", ExecutorName);
+            logger.LogInformation("stellariumExePath={StellariumExePath}", psi.FileName);
+            logger.LogInformation("scriptPath={ScriptPath}", scriptFull);
+            logger.LogInformation("arguments={Arguments}", psi.Arguments);
+            logger.LogInformation("workingDirectory={WorkingDirectory}", psi.WorkingDirectory);
+            logger.LogInformation("expectedScreenshotPath={ExpectedScreenshotPath}", screenshotFull);
+            logger.LogInformation("timeoutSeconds={TimeoutSeconds}", effectiveTimeoutSeconds);
 
             using var process = new Process { StartInfo = psi };
             process.Start();
@@ -81,7 +88,7 @@ public sealed class WeeklyStellariumScriptExecutor(
             logger.LogInformation("Stellarium process started");
             logger.LogInformation("Waiting for screenshot");
 
-            var deadline = DateTime.UtcNow.AddSeconds(MaxWaitSeconds);
+            var deadline = DateTime.UtcNow.AddSeconds(effectiveTimeoutSeconds);
             while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
             {
                 if (File.Exists(screenshotFull))
@@ -119,7 +126,7 @@ public sealed class WeeklyStellariumScriptExecutor(
         var screenshotSize = screenshotExists ? new FileInfo(screenshotFull).Length : 0;
         if (!screenshotExists) errors.Add("Expected screenshot was not created.");
         else if (screenshotSize <= 0) errors.Add($"Screenshot exists but file size is zero bytes: {screenshotSize} bytes.");
-        if (timedOut) errors.Add($"Stellarium execution timed out after {MaxWaitSeconds} seconds.");
+        if (timedOut) errors.Add($"Stellarium execution timed out after {effectiveTimeoutSeconds} seconds.");
 
         stopwatch.Stop();
         var debugDir = Path.Combine(rootFull, "debug");
@@ -137,7 +144,7 @@ public sealed class WeeklyStellariumScriptExecutor(
             expectedScreenshotPath,
             screenshotExists,
             screenshotFileSize = screenshotSize,
-            timeoutSeconds = MaxWaitSeconds,
+            timeoutSeconds = effectiveTimeoutSeconds,
             constellationLinesEnabled = true,
             constellationLabelsEnabled = true,
             objectLabelsEnabled = true,
