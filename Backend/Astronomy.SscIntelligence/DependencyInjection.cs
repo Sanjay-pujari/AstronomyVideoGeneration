@@ -1,5 +1,6 @@
 using Astronomy.SscIntelligence.Camera;
 using Astronomy.SscIntelligence.Composition;
+using Astronomy.SscIntelligence.Narrative;
 using Astronomy.SscIntelligence.NightWindow;
 using Astronomy.SscIntelligence.Rendering;
 using Astronomy.SscIntelligence.SceneIntent;
@@ -28,6 +29,7 @@ public static class DependencyInjection
         services.AddSingleton<ISceneIntentResolver, SceneIntentResolver>();
         services.AddSingleton<IAstronomicalSpatialCompositionEngine, AstronomicalSpatialCompositionEngine>();
         services.AddSingleton<IAngularRelationshipAnalyzer, AngularRelationshipAnalyzer>();
+        services.AddSingleton<INarrativeSceneSplitter, NarrativeSceneSplitter>();
         services.AddSingleton<ICelestialEventClassifier, CelestialEventClassifier>();
         services.AddSingleton<IVisualSignificanceEngine, VisualSignificanceEngine>();
         services.AddSingleton<IAstronomicalSceneScorer, AstronomicalSceneScorer>();
