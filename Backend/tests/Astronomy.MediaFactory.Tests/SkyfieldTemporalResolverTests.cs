@@ -1,4 +1,5 @@
 using Astronomy.SscIntelligence.Resolution;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 

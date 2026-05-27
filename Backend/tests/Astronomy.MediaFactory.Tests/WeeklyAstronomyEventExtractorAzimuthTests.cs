@@ -2,6 +2,7 @@ using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using FluentAssertions;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 

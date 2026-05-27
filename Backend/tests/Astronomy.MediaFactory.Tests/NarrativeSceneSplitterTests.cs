@@ -3,6 +3,7 @@ using Astronomy.SscIntelligence.Narrative;
 using Astronomy.SscIntelligence.NightWindow;
 using Astronomy.SscIntelligence.Spatial;
 using FluentAssertions;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
