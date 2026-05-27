@@ -1130,6 +1130,12 @@ if (splitResult.SplitApplied)
                         var splitScriptPath = Path.Combine(scriptsDirectory, $"{splitScene.SceneCode}.ssc");
                         var splitHeader = string.Join(Environment.NewLine, new[] {"// Source: NarrativeSceneSplitter",$"// SourceSceneCode: {shot.ShotCode}",$"// Region: {weeklySkyfieldContext.Region}",$"// TargetDate: {stellariumNeed.TargetDate:yyyy-MM-dd}",$"// SelectedObservationUtc: {observationUtc:O}",$"// ScreenshotDirectory: {scenesDirectory.Replace('\\', '/')}",string.Empty});
                         generatedScripts.Add((splitScriptPath, splitHeader + splitResultSsc.SscScript));
+                        if (!scriptSourceSceneCodes.TryGetValue(splitScene.SceneCode, out var splitSources))
+                        {
+                            splitSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            scriptSourceSceneCodes[splitScene.SceneCode] = splitSources;
+                        }
+                        splitSources.Add(shot.ShotCode);
                     }
                     continue;
                 }
@@ -1213,18 +1219,40 @@ var sscResult = splitProbeSsc;
                     string.Empty
                 });
                 generatedScripts.Add((scriptPath, header + sscResult.SscScript));
+                if (!scriptSourceSceneCodes.TryGetValue(shot.ShotCode, out var originalSources))
+                {
+                    originalSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    scriptSourceSceneCodes[shot.ShotCode] = originalSources;
+                }
+                originalSources.Add(shot.ShotCode);
             }
             return Task.FromResult(true);
         });
+        var finalScenes = WeeklySscSceneFinalizer.Build(
+            scriptsDirectory,
+            scenesDirectory,
+            generatedScripts.Select(x =>
+            {
+                var sceneCode = Path.GetFileNameWithoutExtension(x.ScriptPath);
+                scriptSourceSceneCodes.TryGetValue(sceneCode, out var sourceCodes);
+                return (sceneCode, (IEnumerable<string>)(sourceCodes ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase) { sceneCode }));
+            }));
+
         await ExecuteOrchestrationStageAsync("Persisting SSC scripts", async stageCt =>
         {
+            var finalScriptsByPath = generatedScripts
+                .GroupBy(x => x.ScriptPath, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Last().ScriptContent, StringComparer.OrdinalIgnoreCase);
+
             app.Logger.LogInformation(
                 "FINAL_STELLARIUM_SCENE_LIST sceneCodes={SceneCodes}",
-                string.Join(",", generatedScripts.Select(x => Path.GetFileNameWithoutExtension(x.ScriptPath))));
-            foreach (var generatedScript in generatedScripts)
+                string.Join(",", finalScenes.Select(x => x.SceneCode)));
+            foreach (var finalScene in finalScenes)
             {
-                await File.WriteAllTextAsync(generatedScript.ScriptPath, generatedScript.ScriptContent, stageCt);
-                scriptPaths.Add(generatedScript.ScriptPath);
+                var scriptContent = finalScriptsByPath[finalScene.ScriptPath];
+                await File.WriteAllTextAsync(finalScene.ScriptPath, scriptContent, stageCt);
+                scriptPaths.Add(finalScene.ScriptPath);
+                app.Logger.LogInformation("FINAL_SSC_SCRIPT_PATHS sceneCode={SceneCode} path={ScriptPath}", finalScene.SceneCode, finalScene.ScriptPath);
             }
             return true;
         });
@@ -1255,26 +1283,21 @@ var sscResult = splitProbeSsc;
         });
 
         var screenshots = new List<string>();
-        var executionCandidates = stellariumShots
-            .Where(shot =>
-                stellariumNeedsByScene.ContainsKey(shot.ShotCode)
-                || weeklyScenePlan.ScenePlans.Any(scene =>
-                    scene.SceneCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase)
-                    && scene.RequiresStellarium))
-            .Select(shot => new
+        var executionCandidates = finalScenes
+            .Select(scene => new
             {
-                Shot = shot,
-                ScriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc"),
+                SceneCode = scene.SceneCode,
+                ScriptPath = scene.ScriptPath,
                 ScreenshotDirectory = scenesDirectory,
-                ScreenshotPath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png")
+                ScreenshotPath = scene.ScreenshotPath
             })
             .ToList();
 
         var orderedScreenshotExecutionQueue = executionCandidates
-            .OrderBy(item => item.Shot.ShotCode.Equals("hero_western_grouping_scene", StringComparison.OrdinalIgnoreCase) ? 0
-                : item.Shot.ShotCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) ? 1
+            .OrderBy(item => item.SceneCode.Equals("hero_western_grouping_scene", StringComparison.OrdinalIgnoreCase) ? 0
+                : item.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) ? 1
                 : 2)
-            .ThenBy(item => item.Shot.ShotCode, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.SceneCode, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         foreach (var item in orderedScreenshotExecutionQueue)
@@ -1291,7 +1314,7 @@ var sscResult = splitProbeSsc;
             var arguments = $"--startup-script \"{scriptPathForArgs}\"";
 
             app.Logger.LogInformation("USING_SHARED_STELLARIUM_EXECUTOR_FOR_WEEKLY_SKYFORECAST");
-            app.Logger.LogInformation("sceneCode={SceneCode}", item.Shot.ShotCode);
+            app.Logger.LogInformation("sceneCode={SceneCode}", item.SceneCode);
             app.Logger.LogInformation("scriptPath={ScriptPath}", item.ScriptPath);
             app.Logger.LogInformation("screenshotPath={ScreenshotPath}", item.ScreenshotPath);
             app.Logger.LogInformation("exePath={ExePath}", executablePath);
@@ -1311,21 +1334,22 @@ var sscResult = splitProbeSsc;
         }
 
         var warnings = weeklySkyfieldContext.Warnings.Concat(compositionPackage.Errors).Distinct().ToList();
-        if (screenshots.Count < stellariumShots.Count)
+        if (screenshots.Count < finalScenes.Count)
         {
-            warnings.Add($"Only {screenshots.Count} screenshots were detected out of {stellariumShots.Count} planned Stellarium shots.");
+            warnings.Add($"Only {screenshots.Count} screenshots were detected out of {finalScenes.Count} planned Stellarium shots.");
         }
 
         var narrationManifestPath = Path.Combine(manifestsDirectory, "weekly-scenes-manifest.json");
-        var sscManifestEntries = stellariumShots.Select(shot =>
+        var sscManifestEntries = finalScenes.Select(scene =>
         {
-            var screenshotPath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png");
+            var screenshotPath = scene.ScreenshotPath;
             return new
             {
-                sceneCode = shot.ShotCode,
-                sceneType = shot.ShotType,
-                objects = shot.TargetObjects,
-                sscPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc"),
+                sceneCode = scene.SceneCode,
+                sceneType = "FinalSplitScene",
+                objects = Array.Empty<string>(),
+                sourceSceneCodes = scene.SourceSceneCodes.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray(),
+                sscPath = scene.ScriptPath,
                 screenshotPath,
                 screenshotExists = File.Exists(screenshotPath) && new FileInfo(screenshotPath).Length > 10 * 1024
             };
@@ -1334,11 +1358,11 @@ var sscResult = splitProbeSsc;
         var executionSummary = new
         {
             plannedSceneCount = shots.Count,
-            plannedStellariumSceneCount = stellariumShots.Count,
+            plannedStellariumSceneCount = finalScenes.Count,
             compositionFileCount = compositionPaths.Count,
             sscScriptCount = scriptPaths.Count,
             screenshotCount = screenshots.Count,
-            screenshotMissingCount = Math.Max(0, stellariumShots.Count - screenshots.Count)
+            screenshotMissingCount = Math.Max(0, finalScenes.Count - screenshots.Count)
         };
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
