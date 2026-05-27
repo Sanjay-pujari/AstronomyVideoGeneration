@@ -18,6 +18,8 @@ public static class DependencyInjection
         services.AddSingleton<IDynamicFovCalculator, DynamicFovCalculator>();
         services.AddSingleton<IPrimaryTargetResolver, PrimaryTargetResolver>();
         services.AddSingleton<ICompositionBiasResolver, CompositionBiasResolver>();
+        services.AddSingleton<IDynamicBiasLimiter, DynamicBiasLimiter>();
+        services.AddSingleton<IScreenSpaceFramingSolver, ScreenSpaceFramingSolver>();
         services.AddSingleton<IStellariumSscRenderer, StellariumSscRenderer>();
         services.AddSingleton<ISceneIntentResolver, SceneIntentResolver>();
         services.AddSingleton<ISscIntelligenceService, SscIntelligenceService>();
