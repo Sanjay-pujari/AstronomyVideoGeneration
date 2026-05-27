@@ -81,7 +81,7 @@ public sealed class WeeklyStellariumScriptWriter(IOptions<StellariumOptions> opt
                 lines.AddRange(ApplyApiStartupStabilization(shot.PlannedSscCommands, warmupSeconds, cameraSettleSeconds));
                 lines.Add($"core.wait({preScreenshotWaitSeconds:0.###});");
                 lines.Add($"core.screenshot(\"{EscapeForSscDoubleQuotedString(shot.ShotCode)}\", false, \"{EscapeForSscDoubleQuotedString(sceneFolderSscPath)}\", true, \"png\");");
-                lines.Add("core.wait(2.0);");
+                lines.Add("core.wait(2);");
                 lines.Add("core.quitStellarium();");
 
                 var sscValidation = ValidateGeneratedSsc(lines);
