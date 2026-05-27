@@ -23,7 +23,7 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
         _renderer = renderer;
     }
 
-    public SscIntelligenceResult Generate(SscIntelligenceRequest request)
+    public SscIntelligenceResult Generate(SscIntelligenceRequest request, string? screenshotDirectory = null, string? screenshotFileNameWithoutExtension = null)
     {
         var rules = request.VisibilityRules ?? new VisibilityRules();
         var nightWindow = _nightWindowResolver.Resolve(request.ObservationUtc, rules, request.SunAltitudeDeg);
@@ -45,7 +45,9 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
             request.LocationName,
             camera.AltitudeDeg,
             camera.AzimuthDeg,
-            camera.FovDeg));
+            camera.FovDeg,
+            screenshotDirectory ?? ".",
+            screenshotFileNameWithoutExtension ?? "scene"));
 
         return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, script.Script, nightWindow);
     }

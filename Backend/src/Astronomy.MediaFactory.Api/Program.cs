@@ -959,7 +959,19 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             Weight: weight);
                     })
                     .ToList();
-                var observationUtc = DateTime.SpecifyKind(shot.DateLocal.ToDateTime(shot.TimeLocal), DateTimeKind.Utc);
+                var scheduledUtcFallback = request.ScheduledUtc == default || request.ScheduledUtc == DateTimeOffset.MinValue
+                    ? (DateTime?)null
+                    : request.ScheduledUtc.UtcDateTime;
+                var fallbackObservationUtc = (scenePlansByCode.TryGetValue(shot.ShotCode, out var fallbackScenePlan) ? fallbackScenePlan.BestTimeUtc : null)
+                    ?? scheduledUtcFallback;
+                var shotObservationUtc = DateTime.SpecifyKind(shot.DateLocal.ToDateTime(shot.TimeLocal), DateTimeKind.Utc);
+                var isInvalidShotObservation = shotObservationUtc == default
+                    || shotObservationUtc == DateTime.SpecifyKind(shot.DateLocal.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc);
+                var observationUtc = isInvalidShotObservation && fallbackObservationUtc.HasValue
+                    ? fallbackObservationUtc.Value
+                    : shotObservationUtc;
+                var screenshotPrefix = shot.ShotCode;
+                var expectedScreenshotPath = Path.Combine(scenesDirectory, $"{screenshotPrefix}.png");
                 var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                     observationUtc,
                     longitude,
@@ -967,14 +979,20 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     elevationMeters,
                     locationName,
                     skyPositions,
-                    defaultRules));
+                    defaultRules),
+                    scenesDirectory,
+                    screenshotPrefix);
                 if (sscResult.RequiresSplit)
                 {
                     app.Logger.LogWarning("WeeklySkyForecast V2 scene {SceneId} requires split, fallback to single SSC with computed center/FOV. reason=requiresSplit", shot.ShotCode);
                 }
                 app.Logger.LogInformation(
-                    "WeeklySkyForecast V2 SSC intelligence scene={SceneId} visibleObjectCount={VisibleObjectCount} removedObjectCount={RemovedObjectCount} cameraAltitude={CameraAltitude} cameraAzimuth={CameraAzimuth} fov={Fov} requiresSplit={RequiresSplit}",
+                    "WeeklySkyForecast V2 SSC intelligence sceneCode={SceneCode} observationUtc={ObservationUtc} screenshotDirectory={ScreenshotDirectory} screenshotPrefix={ScreenshotPrefix} expectedScreenshotPath={ExpectedScreenshotPath} visibleObjectCount={VisibleObjectCount} removedObjectCount={RemovedObjectCount} cameraAltitude={CameraAltitude} cameraAzimuth={CameraAzimuth} fov={Fov} requiresSplit={RequiresSplit}",
                     shot.ShotCode,
+                    observationUtc,
+                    scenesDirectory,
+                    screenshotPrefix,
+                    expectedScreenshotPath,
                     sscResult.VisibleObjects.Count,
                     sscResult.RemovedObjects.Count,
                     sscResult.CameraAltitudeDeg,
@@ -1008,6 +1026,21 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 var info = new FileInfo(scriptPath);
                 if (!info.Exists || info.Length == 0)
                     throw new InvalidOperationException($"SSC script validation failed for '{scriptPath}'.");
+                var scriptContent = File.ReadAllText(scriptPath);
+                var requiredSnippets = new[]
+                {
+                    "core.screenshot(",
+                    "core.quitStellarium();",
+                    "ConstellationMgr.setFlagLines(true);",
+                    "ConstellationMgr.setFlagLabels(true);",
+                    "core.moveToAltAzi",
+                    "StelMovementMgr.zoomTo"
+                };
+                foreach (var snippet in requiredSnippets)
+                {
+                    if (!scriptContent.Contains(snippet, StringComparison.Ordinal))
+                        throw new InvalidOperationException($"SSC script validation failed for '{scriptPath}'; missing required token '{snippet}'.");
+                }
             }
             return Task.FromResult(true);
         });
