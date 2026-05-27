@@ -956,14 +956,17 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 var scheduledUtcFallback = request.ScheduledUtc == default || request.ScheduledUtc == DateTimeOffset.MinValue
                     ? (DateTime?)null
                     : request.ScheduledUtc.UtcDateTime;
-                var fallbackObservationUtc = (scenePlansByCode.TryGetValue(shot.ShotCode, out var fallbackScenePlan) ? fallbackScenePlan.BestTimeUtc : null)
-                    ?? scheduledUtcFallback;
-                var shotObservationUtc = DateTime.SpecifyKind(shot.DateLocal.ToDateTime(shot.TimeLocal), DateTimeKind.Utc);
-                var isInvalidShotObservation = shotObservationUtc == default
-                    || shotObservationUtc == DateTime.SpecifyKind(shot.DateLocal.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc);
-                var observationUtc = isInvalidShotObservation && fallbackObservationUtc.HasValue
-                    ? fallbackObservationUtc.Value
-                    : shotObservationUtc;
+                var planBestTimeUtc = scenePlansByCode.TryGetValue(shot.ShotCode, out var fallbackScenePlan) ? fallbackScenePlan.BestTimeUtc : null;
+                var observationUtc = ResolveSceneObservationUtc(shot.DateLocal, shot.TimeLocal, weeklySkyfieldContext.Timezone, planBestTimeUtc, scheduledUtcFallback);
+                var selectedObservationLocal = ConvertUtcToLocal(observationUtc, weeklySkyfieldContext.Timezone);
+
+                app.Logger.LogInformation(
+                    "WeeklySkyForecast V2 pre-resolution context sceneCode={SceneCode} selectedObservationUtc={SelectedObservationUtc} localTime={LocalTime} region={Region} objectNames={ObjectNames}",
+                    shot.ShotCode,
+                    observationUtc,
+                    selectedObservationLocal,
+                    weeklySkyfieldContext.Region,
+                    string.Join(",", sceneSpecificCodes));
 
                 var skyPositions = sceneSpecificCodes
                     .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1012,6 +1015,15 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                         selected.Position.AzimuthDeg,
                         selected.Position.Magnitude,
                         selected.Source);
+                    if (selected.Source.Contains("source=skyfield.exact", StringComparison.OrdinalIgnoreCase))
+                    {
+                        app.Logger.LogInformation(
+                            "WeeklySkyForecast V2 post-resolution exact objectName={ObjectName} source=skyfield.exact altitude={Altitude} azimuth={Azimuth} magnitude={Magnitude}",
+                            selected.Position.Name,
+                            selected.Position.AltitudeDeg,
+                            selected.Position.AzimuthDeg,
+                            selected.Position.Magnitude);
+                    }
                 }
 var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                     observationUtc,
@@ -2444,6 +2456,49 @@ static IReadOnlyCollection<string> GetChangedFields(RunPipelineRequest original,
     if (original.TargetDate != result.TargetDate) changed.Add(nameof(RunPipelineRequest.TargetDate));
     if (original.RegionId != result.RegionId) changed.Add(nameof(RunPipelineRequest.RegionId));
     return changed;
+}
+
+
+static DateTime ResolveSceneObservationUtc(DateOnly sceneDateLocal, TimeOnly shotTimeLocal, string timezoneId, DateTime? planBestTimeUtc, DateTime? scheduledUtcFallback)
+{
+    if (planBestTimeUtc.HasValue && planBestTimeUtc.Value != default)
+    {
+        return DateTime.SpecifyKind(planBestTimeUtc.Value, DateTimeKind.Utc);
+    }
+
+    var localCandidate = sceneDateLocal.ToDateTime(shotTimeLocal);
+    if (localCandidate != default && shotTimeLocal != TimeOnly.MinValue)
+    {
+        try
+        {
+            var tz = string.IsNullOrWhiteSpace(timezoneId) ? TimeZoneInfo.Utc : TimeZoneInfo.FindSystemTimeZoneById(timezoneId);
+            return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localCandidate, DateTimeKind.Unspecified), tz);
+        }
+        catch
+        {
+            return DateTime.SpecifyKind(localCandidate, DateTimeKind.Utc);
+        }
+    }
+
+    if (scheduledUtcFallback.HasValue && scheduledUtcFallback.Value != default)
+    {
+        return DateTime.SpecifyKind(scheduledUtcFallback.Value, DateTimeKind.Utc);
+    }
+
+    return DateTime.SpecifyKind(sceneDateLocal.ToDateTime(new TimeOnly(21, 0)), DateTimeKind.Utc);
+}
+
+static DateTime ConvertUtcToLocal(DateTime utc, string timezoneId)
+{
+    try
+    {
+        var tz = string.IsNullOrWhiteSpace(timezoneId) ? TimeZoneInfo.Utc : TimeZoneInfo.FindSystemTimeZoneById(timezoneId);
+        return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), tz);
+    }
+    catch
+    {
+        return DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+    }
 }
 
 static string ResolveObjectType(string objectName)
