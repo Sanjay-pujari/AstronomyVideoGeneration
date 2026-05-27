@@ -62,5 +62,4 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
         SceneIntent.CloseUp => 2d,
         _ => 4d
     };
-    }
 }
