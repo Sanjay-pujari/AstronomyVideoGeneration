@@ -901,6 +901,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var scriptPaths = new List<string>();
         var generatedScripts = new List<(string ScriptPath, string ScriptContent)>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
         await ExecuteOrchestrationStageAsync("Persisting composition files", async stageCt =>
         {
             foreach (var shot in shots)
@@ -926,9 +927,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     return matchingShot;
                 }
 
-                var fallbackScenePlan = scenePlansByCode.TryGetValue(need.SceneCode, out var resolvedScenePlan)
-                    ? resolvedScenePlan
-                    : throw new InvalidOperationException($"Stellarium need '{need.SceneCode}' has no matching scene plan.");
+                var fallbackScenePlan = DynamicSplitScenePlanResolver.Resolve(need.SceneCode, scenePlansByCode, generatedSplitMetadataBySceneCode, out var sourceSceneCode, out var metadataSource)
+                    ?? throw new InvalidOperationException($"Stellarium need '{need.SceneCode}' has no matching scene plan.");
+                if (!string.IsNullOrWhiteSpace(sourceSceneCode))
+                {
+                    app.Logger.LogInformation("DYNAMIC_SPLIT_SCENE_RESOLVED sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} metadataSource={MetadataSource}", need.SceneCode, sourceSceneCode, metadataSource);
+                }
                 return new WeeklyCinematicShot(
                     fallbackScenePlan.SceneCode,
                     fallbackScenePlan.SceneType,
@@ -980,7 +984,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     ? resolvedNeed
                     : throw new InvalidOperationException($"Missing Stellarium need for scene '{shot.ShotCode}'.");
                 var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
-                var scenePlan = scenePlansByCode.TryGetValue(shot.ShotCode, out var resolvedScenePlan) ? resolvedScenePlan : null;
+                var scenePlan = DynamicSplitScenePlanResolver.Resolve(shot.ShotCode, scenePlansByCode, generatedSplitMetadataBySceneCode, out _, out _);
                 var sceneSpecificCodes = ResolveSceneSpecificObjectCodes(shot, composition, scenePlan, weeklySkyfieldContext);
                 if (stellariumNeed.ObjectCodes.Count > 0)
                 {
@@ -999,7 +1003,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 var scheduledUtcFallback = request.ScheduledUtc == default || request.ScheduledUtc == DateTimeOffset.MinValue
                     ? (DateTime?)null
                     : request.ScheduledUtc.UtcDateTime;
-                var planBestTimeUtc = scenePlansByCode.TryGetValue(shot.ShotCode, out var fallbackScenePlan) ? fallbackScenePlan.BestTimeUtc : null;
+                var planBestTimeUtc = scenePlan?.BestTimeUtc;
                 var observationUtc = ResolveSceneObservationUtc(shot.DateLocal, shot.TimeLocal, timezone, planBestTimeUtc, scheduledUtcFallback);
                 var selectedObservationLocal = ConvertUtcToLocal(observationUtc, timezone);
 
@@ -1132,6 +1136,18 @@ if (splitResult.SplitApplied)
                         var splitScriptPath = Path.Combine(scriptsDirectory, $"{splitScene.SceneCode}.ssc");
                         var splitHeader = string.Join(Environment.NewLine, new[] {"// Source: NarrativeSceneSplitter",$"// SourceSceneCode: {shot.ShotCode}",$"// Region: {weeklySkyfieldContext.Region}",$"// TargetDate: {stellariumNeed.TargetDate:yyyy-MM-dd}",$"// SelectedObservationUtc: {observationUtc:O}",$"// ScreenshotDirectory: {scenesDirectory.Replace('\\', '/')}",string.Empty});
                         generatedScripts.Add((splitScriptPath, splitHeader + splitResultSsc.SscScript));
+                        generatedSplitMetadataBySceneCode[splitScene.SceneCode] = new GeneratedSplitSceneMetadata(
+                            splitScene.SceneCode,
+                            splitScene.SourceSceneCode,
+                            splitScene.TargetObjects.Select(x => x.Name).ToList(),
+                            splitScene.TargetObjects.FirstOrDefault()?.Name,
+                            splitScene.SceneIntent.ToString(),
+                            shot.ShotPurpose,
+                            shot.DurationSeconds,
+                            stellariumNeed.TargetDate,
+                            observationUtc,
+                            splitScriptPath,
+                            Path.Combine(scenesDirectory, $"{splitScene.SceneCode}.png"));
                         if (!scriptSourceSceneCodes.TryGetValue(splitScene.SceneCode, out var splitSources))
                         {
                             splitSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
