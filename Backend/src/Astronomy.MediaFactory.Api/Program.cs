@@ -904,9 +904,23 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return true;
         });
 
+        var stellariumNeedsByScene = weeklyScenePlan.StellariumNeeds
+            .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
+        var scenePlansByCode = weeklyScenePlan.ScenePlans
+            .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
+        var stellariumShots = shots
+            .Where(shot =>
+                stellariumNeedsByScene.ContainsKey(shot.ShotCode)
+                || (scenePlansByCode.TryGetValue(shot.ShotCode, out var plan)
+                    && (plan.RequiresStellarium
+                        || string.Equals(plan.VisualSourceType, "Stellarium", StringComparison.OrdinalIgnoreCase))))
+            .ToList();
+
+        app.Logger.LogInformation("Generating SSC scripts for {SceneCount} Stellarium scenes", stellariumShots.Count);
+
         await ExecuteOrchestrationStageAsync("Generating SSC scripts", _ =>
         {
-            foreach (var shot in shots)
+            foreach (var shot in stellariumShots)
             {
                 var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
                 var commands = sscSceneBuilder.Build(shot with { ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png") }, composition);
@@ -942,9 +956,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         });
 
         var screenshots = new List<string>();
-        var stellariumNeedsByScene = weeklyScenePlan.StellariumNeeds
-            .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
-        var executionCandidates = shots
+        var executionCandidates = stellariumShots
             .Where(shot =>
                 stellariumNeedsByScene.ContainsKey(shot.ShotCode)
                 || weeklyScenePlan.ScenePlans.Any(scene =>
@@ -1000,13 +1012,13 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         }
 
         var warnings = weeklySkyfieldContext.Warnings.Concat(compositionPackage.Errors).Distinct().ToList();
-        if (screenshots.Count < shots.Count)
+        if (screenshots.Count < stellariumShots.Count)
         {
-            warnings.Add($"Only {screenshots.Count} screenshots were detected out of {shots.Count} planned shots.");
+            warnings.Add($"Only {screenshots.Count} screenshots were detected out of {stellariumShots.Count} planned Stellarium shots.");
         }
 
         var narrationManifestPath = Path.Combine(manifestsDirectory, "weekly-scenes-manifest.json");
-        var sscManifestEntries = shots.Select(shot =>
+        var sscManifestEntries = stellariumShots.Select(shot =>
         {
             var screenshotPath = Path.Combine(scenesDirectory, $"{shot.ShotCode}.png");
             return new
@@ -1023,10 +1035,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var executionSummary = new
         {
             plannedSceneCount = shots.Count,
+            plannedStellariumSceneCount = stellariumShots.Count,
             compositionFileCount = compositionPaths.Count,
             sscScriptCount = scriptPaths.Count,
             screenshotCount = screenshots.Count,
-            screenshotMissingCount = Math.Max(0, shots.Count - screenshots.Count)
+            screenshotMissingCount = Math.Max(0, stellariumShots.Count - screenshots.Count)
         };
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
