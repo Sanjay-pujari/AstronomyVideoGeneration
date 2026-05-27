@@ -176,6 +176,7 @@ class VisibleObjectForecastItem(BaseModel):
     set_utc: Annotated[str | None, Field(alias="setUtc")] = None
     transit_utc: Annotated[str | None, Field(alias="transitUtc")] = None
     max_altitude_degrees: Annotated[float | None, Field(alias="maxAltitudeDegrees")] = None
+    best_viewing_azimuth_degrees: Annotated[float | None, Field(alias="bestViewingAzimuthDegrees")] = None
     best_viewing_time_utc: Annotated[str | None, Field(alias="bestViewingTimeUtc")] = None
     visibility_score: Annotated[float, Field(alias="visibilityScore")]
     photography_score: Annotated[float, Field(alias="photographyScore")]
@@ -501,6 +502,7 @@ def weekly_sky_forecast(req: WeeklySkyForecastRequest):
 
                 max_sample = max(samples, key=lambda x: x[1])
                 max_altitude = round(max_sample[1], 2)
+                best_azimuth = round(max_sample[2], 2)
                 best_viewing_utc = max_sample[0]
                 viewing_direction = _cardinal(max_sample[2])
                 visible = max_altitude >= 10.0
@@ -556,6 +558,7 @@ def weekly_sky_forecast(req: WeeklySkyForecastRequest):
                     setUtc=set_utc,
                     transitUtc=best_viewing_utc.isoformat().replace("+00:00", "Z"),
                     maxAltitudeDegrees=max_altitude,
+                    bestViewingAzimuthDegrees=best_azimuth,
                     bestViewingTimeUtc=best_viewing_utc.isoformat().replace("+00:00", "Z"),
                     visibilityScore=visibility_score,
                     photographyScore=photography_score,

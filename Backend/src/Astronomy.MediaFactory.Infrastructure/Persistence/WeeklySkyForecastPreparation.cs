@@ -202,7 +202,7 @@ public sealed class WeeklySkyForecastContextBuilder(
                 var normalizedCode = WeeklySkyForecastObjectCodeResolver.NormalizeObjectCode(v.ObjectCode);
                 if (!string.Equals(normalizedCode, v.ObjectCode, StringComparison.Ordinal))
                     normalizedObjectCount++;
-                return new WeeklySkyForecastVisibleObjectItem(normalizedCode, v.ObjectName, v.ObjectType, v.Visible, v.RiseUtc, v.SetUtc, v.TransitUtc, v.MaxAltitudeDegrees, v.BestViewingTimeUtc, v.VisibilityScore, v.PhotographyScore, v.ViewingDirection, v.Reason);
+                return new WeeklySkyForecastVisibleObjectItem(normalizedCode, v.ObjectName, v.ObjectType, v.Visible, v.RiseUtc, v.SetUtc, v.TransitUtc, v.MaxAltitudeDegrees, v.BestViewingAzimuthDegrees, v.BestViewingTimeUtc, v.VisibilityScore, v.PhotographyScore, v.ViewingDirection, v.Reason);
             }).ToList(),
             d.Events.Select(e => new WeeklySkyForecastEventItem(e.EventType, e.Title, e.Description, e.EventTimeUtc, e.ImportanceScore, e.ViralityScore, e.PrimaryObjectCode, e.ViewingDirection, e.ViewingTip)).ToList(),
             d.BestViewingStartUtc, d.BestViewingEndUtc, d.OverallViewingScore, d.ViewingSummary)).ToList();

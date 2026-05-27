@@ -277,6 +277,7 @@ public sealed class VisibleObjectForecastItem
     public DateTime? SetUtc { get; set; }
     public DateTime? TransitUtc { get; set; }
     public double? MaxAltitudeDegrees { get; set; }
+    public double? BestViewingAzimuthDegrees { get; set; }
     public DateTime? BestViewingTimeUtc { get; set; }
     public double VisibilityScore { get; set; }
     public double PhotographyScore { get; set; }
