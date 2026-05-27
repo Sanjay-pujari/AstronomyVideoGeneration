@@ -20,7 +20,10 @@ public sealed record SscIntelligenceRequest(
     string Timezone = "Asia/Kolkata",
     DateTime? AstronomicalNightStartUtc = null,
     DateTime? AstronomicalNightEndUtc = null,
-    SceneIntentType SceneIntent = SceneIntentType.Grouping);
+    SceneIntentType SceneIntent = SceneIntentType.Grouping,
+    string? SceneCode = null,
+    string? SceneTitle = null,
+    IReadOnlyList<string>? ExplicitTargetObjectNames = null);
 
 public sealed record SscIntelligenceResult(
     IReadOnlyList<SkyObjectPosition> VisibleObjects,
@@ -29,5 +32,10 @@ public sealed record SscIntelligenceResult(
     double CameraAzimuthDeg,
     double FovDeg,
     bool RequiresSplit,
+    double RawCameraAltitudeDeg,
+    string CompositionBiasReason,
+    IReadOnlyList<string> PrimaryTargets,
+    IReadOnlyList<string> SecondaryTargets,
+    IReadOnlyList<string> ContextTargets,
     string SscScript,
     NightWindowResult NightWindow);

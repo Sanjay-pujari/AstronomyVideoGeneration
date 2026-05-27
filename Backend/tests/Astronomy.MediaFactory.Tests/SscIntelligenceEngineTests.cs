@@ -7,7 +7,7 @@ using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
-public sealed class SscIntelligenceEngineTests
+public sealed partial class SscIntelligenceEngineTests
 {
     [Fact]
     public void CameraCenterCalculator_UsesCircularMean_ForAzimuthWraparound()
@@ -34,7 +34,7 @@ public sealed class SscIntelligenceEngineTests
             new SkyObjectPosition("B", 20, 40, 1),
         };
 
-        var result = calculator.Calculate(objects, 20, 25, new VisibilityRules());
+        var result = calculator.Calculate(objects, objects, Array.Empty<SkyObjectPosition>(), Array.Empty<SkyObjectPosition>(), 20, 25, new VisibilityRules(), Astronomy.SscIntelligence.SceneIntent.SceneIntent.Grouping);
 
         result.FovDeg.Should().BeApproximately(48, 1.0);
     }
@@ -99,8 +99,35 @@ public sealed class SscIntelligenceEngineTests
     {
         var calculator = new DynamicFovCalculator();
         var one = new[] { new SkyObjectPosition("Moon", 20, 30, 1) };
-        calculator.Calculate(one, 20, 30, new VisibilityRules(), Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot).FovDeg.Should().Be(25);
-        calculator.Calculate(one, 20, 30, new VisibilityRules(), Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight).FovDeg.Should().Be(55);
+        calculator.Calculate(one, one, Array.Empty<SkyObjectPosition>(), Array.Empty<SkyObjectPosition>(), 20, 30, new VisibilityRules(), Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot).FovDeg.Should().Be(25);
+        calculator.Calculate(one, one, Array.Empty<SkyObjectPosition>(), Array.Empty<SkyObjectPosition>(), 20, 30, new VisibilityRules(), Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight).FovDeg.Should().Be(55);
     }
 
+}
+
+public sealed partial class SscIntelligenceEngineTests
+{
+    [Fact]
+    public void PrimaryTargetResolver_PrioritizesMoonAndVenus_AndLimitsToThree()
+    {
+        var resolver = new Astronomy.SscIntelligence.Composition.PrimaryTargetResolver();
+        var result = resolver.Resolve([
+            new SkyObjectPosition("Moon", 30, 20, -12),
+            new SkyObjectPosition("Venus", 32, 30, -4),
+            new SkyObjectPosition("Jupiter", 28, 40, -2),
+            new SkyObjectPosition("Saturn", 25, 60, 1),
+            new SkyObjectPosition("Orion Constellation", 27, 80, 3, "Constellation")
+        ], "hero_moon_venus", "Moon and Venus", []);
+        result.PrimaryTargets.Count.Should().Be(3);
+        result.PrimaryTargets.Select(x => x.Name).Should().Contain(["Moon", "Venus", "Jupiter"]);
+        result.ContextTargets.Select(x => x.Name).Should().Contain("Orion Constellation");
+    }
+
+    [Fact]
+    public void CompositionBiasResolver_AppliesHeroAndWideAndClamp()
+    {
+        var resolver = new Astronomy.SscIntelligence.Composition.CompositionBiasResolver();
+        resolver.Resolve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot, 40, 180, 20, (20, 50)).AltitudeDeg.Should().Be(52);
+        resolver.Resolve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight, 70, 180, 20, (20, 50)).AltitudeDeg.Should().Be(82);
+    }
 }

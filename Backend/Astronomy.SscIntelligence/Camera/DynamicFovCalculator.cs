@@ -5,11 +5,20 @@ namespace Astronomy.SscIntelligence.Camera;
 
 public sealed class DynamicFovCalculator : IDynamicFovCalculator
 {
-    public CameraSolution Calculate(IReadOnlyList<SkyObjectPosition> visibleObjects, double centerAltitudeDeg, double centerAzimuthDeg, VisibilityRules rules, SceneIntentType intent)
+    public CameraSolution Calculate(IReadOnlyList<SkyObjectPosition> visibleObjects, IReadOnlyList<SkyObjectPosition> primaryTargets, IReadOnlyList<SkyObjectPosition> secondaryTargets, IReadOnlyList<SkyObjectPosition> contextTargets, double centerAltitudeDeg, double centerAzimuthDeg, VisibilityRules rules, SceneIntentType intent)
     {
         ArgumentNullException.ThrowIfNull(visibleObjects);
         if (visibleObjects.Count == 0) throw new ArgumentException("At least one visible object is required.", nameof(visibleObjects));
-        var spread = CalculateAngularSpread(visibleObjects);
+        var scoped = intent switch
+        {
+            SceneIntentType.HeroShot or SceneIntentType.CloseUp when primaryTargets.Count > 0 => primaryTargets,
+            SceneIntentType.WideNight => visibleObjects,
+            SceneIntentType.Grouping => primaryTargets.Concat(secondaryTargets).ToList(),
+            SceneIntentType.Educational => primaryTargets.Concat(secondaryTargets).Concat(contextTargets).ToList(),
+            _ => visibleObjects
+        };
+        if (scoped.Count == 0) scoped = visibleObjects;
+        var spread = CalculateAngularSpread(scoped);
         var fov = visibleObjects.Count == 1 ? Single(intent) : Clamp(intent, spread * Pad(intent));
         return new CameraSolution(centerAltitudeDeg, centerAzimuthDeg, fov, spread > rules.MaximumGroupSpreadDeg, spread);
     }
