@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Astronomy.SscIntelligence;
 using Astronomy.SscIntelligence.Contracts;
+using Astronomy.SscIntelligence.Resolution;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.Core;
@@ -1044,6 +1045,16 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             selected.Position.AltitudeDeg,
                             selected.Position.AzimuthDeg,
                             selected.Position.Magnitude);
+                    }
+                    else if (selected.Source.Contains("source=skyfield.nearest-time", StringComparison.OrdinalIgnoreCase))
+                    {
+                        app.Logger.LogInformation(
+                            "WeeklySkyForecast V2 post-resolution nearest-time objectName={ObjectName} source=skyfield.nearest-time altitude={Altitude} azimuth={Azimuth} magnitude={Magnitude} trace={Trace}",
+                            selected.Position.Name,
+                            selected.Position.AltitudeDeg,
+                            selected.Position.AzimuthDeg,
+                            selected.Position.Magnitude,
+                            selected.Source);
                     }
                 }
 var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
@@ -2605,6 +2616,7 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     WeeklySkyForecastV2IntelligenceResponse weeklyContext,
     IReadOnlyCollection<string> requestedTargetObjects)
 {
+    var temporalResolver = new SkyfieldTemporalResolver();
     var targetAliases = ResolveWeeklyObjectAliases(objectCodeOrName, directObject?.ObjectName);
     var normalizedRequestedName = NormalizeWeeklyObjectName(directObject?.ObjectName ?? objectCodeOrName);
     var selectedDateKey = sceneDateLocal.ToString("yyyy-MM-dd");
@@ -2616,65 +2628,41 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     var selectedDateCollections = "ExtractedEvents.Objects";
     var selectedDateObjectNames = string.Join(",", selectedDateEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
     var selectedDateTimestamps = string.Join(",", selectedDateEvents.Select(e => ResolveEventUtc(e)).Where(x => x.HasValue).Select(x => x!.Value.ToString("O")).Distinct().OrderBy(x => x));
-    var exact = (weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
-        .Where(ev => ev.BestDateLocal.HasValue && ev.BestDateLocal.Value == sceneDateLocal)
-        .SelectMany(ev => (ev.Objects ?? [])
-            .Where(o => o.AltitudeDegrees.HasValue
-                && o.AzimuthDegrees.HasValue
-                && MatchesWeeklyObjectAliases(o.ObjectCode, o.ObjectName, targetAliases))
-            .Select(o => new { Event = ev, Object = o }))
-        .OrderBy(item =>
-        {
-            var eventUtc = ResolveEventUtc(item.Event);
-            return eventUtc.HasValue ? Math.Abs((eventUtc.Value - sceneObservationUtc).TotalMinutes) : double.MaxValue;
-        })
-        .FirstOrDefault();
-
-    if (exact is not null)
-    {
-        return new WeeklyObjectPositionResolution(
-            exact.Object.AltitudeDegrees!.Value,
-            exact.Object.AzimuthDegrees!.Value,
-            exact.Object.Magnitude ?? 5.5d,
-            "source=skyfield.exact",
-            directObject?.ObjectName ?? objectCodeOrName,
-            normalizedRequestedName,
-            selectedDateKey,
-            selectedTimeKey,
-            "EventExtractionResult.ExtractedEvents[].Objects",
-            true,
-            string.Empty,
-            selectedDateTimestamps,
-            topLevelKeys,
-            availableDates,
-            selectedDateCollections,
-            selectedDateObjectNames);
-    }
-
-    var nearest = (weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
+    var candidates = (weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
         .SelectMany(ev => (ev.Objects ?? [])
             .Where(o => MatchesWeeklyObjectAliases(o.ObjectCode, o.ObjectName, targetAliases)
                 && o.AltitudeDegrees.HasValue
                 && o.AzimuthDegrees.HasValue)
-            .Select(o => new { Event = ev, Object = o }))
-        .Select(item =>
-        {
-            var eventUtc = ResolveEventUtc(item.Event);
-            var delta = eventUtc.HasValue ? Math.Abs((eventUtc.Value - sceneObservationUtc).TotalMinutes) : double.MaxValue;
-            var sameDatePenalty = item.Event.BestDateLocal.HasValue && item.Event.BestDateLocal.Value != sceneDateLocal ? 24d * 60d : 0d;
-            return new { item.Object, Score = delta + sameDatePenalty };
-        })
-        .OrderBy(x => x.Score)
-        .Select(x => x.Object)
-        .FirstOrDefault();
+            .Select(o =>
+            {
+                var eventUtc = ResolveEventUtc(ev);
+                if (!eventUtc.HasValue) return null;
+                return new SkyfieldTemporalCandidate(
+                    o.ObjectName ?? o.ObjectCode ?? objectCodeOrName,
+                    eventUtc.Value,
+                    o.AltitudeDegrees!.Value,
+                    o.AzimuthDegrees!.Value,
+                    o.Magnitude);
+            }))
+        .Where(x => x is not null)
+        .Select(x => x!)
+        .ToList();
 
-    if (nearest is not null)
+    var temporal = temporalResolver.Resolve(
+        directObject?.ObjectName ?? objectCodeOrName,
+        sceneObservationUtc,
+        candidates,
+        SkyfieldTemporalResolver.DefaultMaximumDeltaMinutes);
+
+    if (temporal.MatchFound && temporal.AltitudeDegrees.HasValue && temporal.AzimuthDegrees.HasValue)
     {
+        var source = temporal.ExactMatch ? "source=skyfield.exact" : "source=skyfield.nearest-time";
+        var temporalTrace = $"{source};requestedTimeUtc={temporal.RequestedTimeUtc:O};matchedTimeUtc={temporal.MatchedTimeUtc:O};deltaMinutes={temporal.DeltaMinutes?.ToString("0.###") ?? "0"}";
         return new WeeklyObjectPositionResolution(
-            nearest.AltitudeDegrees!.Value,
-            nearest.AzimuthDegrees!.Value,
-            nearest.Magnitude ?? 5.5d,
-            "source=skyfield.closest-time",
+            temporal.AltitudeDegrees.Value,
+            temporal.AzimuthDegrees.Value,
+            temporal.Magnitude ?? 5.5d,
+            temporalTrace,
             directObject?.ObjectName ?? objectCodeOrName,
             normalizedRequestedName,
             selectedDateKey,
@@ -2695,7 +2683,7 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
         (double)composition.CenterAltitude,
         (double)composition.CenterAzimuth,
         4d,
-        "source=fallback",
+        $"source=fallback;requestedTimeUtc={sceneObservationUtc:O};matchedTimeUtc={(temporal.MatchedTimeUtc.HasValue ? temporal.MatchedTimeUtc.Value.ToString("O") : "null")};deltaMinutes={(temporal.DeltaMinutes?.ToString("0.###") ?? "null")}",
         directObject?.ObjectName ?? objectCodeOrName,
         normalizedRequestedName,
         selectedDateKey,
