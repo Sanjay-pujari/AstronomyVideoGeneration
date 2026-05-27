@@ -11,13 +11,11 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class WeeklyStellariumScreenshotGenerator(
     IOptions<StellariumOptions> options,
+    IStellariumScriptExecutionService stellariumExecutionService,
     ILogger<WeeklyStellariumScreenshotGenerator> logger) : IWeeklyStellariumScreenshotGenerator
 {
     private const long MinScreenshotBytes = 10 * 1024;
-    private const int PollDelayMs = 1000;
-    private const int WaitLogIntervalSeconds = 5;
     private const int DefaultTimeoutSeconds = 180;
-    private const int MaximumTimeoutSeconds = 180;
     private readonly StellariumOptions _options = options.Value;
 
     public async Task<WeeklyStellariumScreenshotGenerationResult> GenerateAsync(string workingDirectoryRoot, WeeklyStellariumScriptPackage scriptPackage, string? executeShotCode = null, string? testMode = null, int? maxScriptCount = null, bool executeAllScripts = false, bool confirmFullBatch = false, bool continueOnFailure = true, int timeoutSeconds = 90, CancellationToken cancellationToken = default)
@@ -126,76 +124,13 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                     logger.LogInformation("SSC screenshot command: {SscScreenshotCommand}", screenshotCommand);
                 }
 
-                using var process = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = _options.ExecutablePath,
-                        Arguments = $"--startup-script \"{script.ScriptPath}\"",
-                        WorkingDirectory = rootFull,
-                        UseShellExecute = false,
-                        CreateNoWindow = false
-                    }
-                };
-                launchedExecutable = process.StartInfo.FileName;
-                launchedArguments = process.StartInfo.Arguments;
-                launchedWorkingDirectory = process.StartInfo.WorkingDirectory;
-                process.EnableRaisingEvents = true;
-                process.Exited += (_, _) =>
-                {
-                    logger.LogInformation("Stellarium process exited. ExitCode={ExitCode}, ExitedAtUtc={ExitedAtUtc:O}", process.ExitCode, DateTime.UtcNow);
-                };
-
-                logger.LogInformation("Launching Stellarium with Process.Start");
-                logger.LogInformation("Executable path: {ExecutablePath}", launchedExecutable);
-                logger.LogInformation("Arguments: {Arguments}", launchedArguments);
-                logger.LogInformation("Working directory: {WorkingDirectory}", launchedWorkingDirectory);
-                logger.LogInformation("SSC script path: {SscScriptPath}", scriptFull);
-                logger.LogInformation("Expected screenshot path: {ExpectedScreenshotPath}", screenshotFull);
-
-                process.Start();
-                logger.LogInformation("Stellarium process started.");
-                logger.LogInformation("Stellarium process id: {ProcessId}", process.Id);
-                logger.LogInformation("Stellarium process start info arguments: {Arguments}", process.StartInfo.Arguments);
-                logger.LogInformation("Expected screenshot path: {ExpectedScreenshotPath}", screenshotFull);
-                logger.LogInformation("Screenshot wait started");
-
-                var effectiveTimeoutSeconds = Math.Clamp(timeoutSeconds <= 0 ? DefaultTimeoutSeconds : timeoutSeconds, 1, MaximumTimeoutSeconds);
-                var deadline = DateTime.UtcNow.AddSeconds(effectiveTimeoutSeconds);
-                long? screenshotDetectedAtMs = null;
-                long? screenshotStableAtMs = null;
-                var nextWaitLogSecond = WaitLogIntervalSeconds;
-                while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
-                {
-                    if (File.Exists(screenshotFull))
-                    {
-                        screenshotSize = new FileInfo(screenshotFull).Length;
-                        if (screenshotSize > MinScreenshotBytes)
-                        {
-                            logger.LogInformation("Screenshot detected");
-                            logger.LogInformation("Screenshot file size: {ScreenshotSize}", screenshotSize);
-                            screenshotDetectedAtMs = scriptSw.ElapsedMilliseconds;
-                            await Task.Delay(1000, cancellationToken);
-                            var sizeAfterDelay = File.Exists(screenshotFull) ? new FileInfo(screenshotFull).Length : 0;
-                            await Task.Delay(1000, cancellationToken);
-                            var sizeSecondCheck = File.Exists(screenshotFull) ? new FileInfo(screenshotFull).Length : 0;
-                            if (sizeAfterDelay > MinScreenshotBytes && sizeAfterDelay == sizeSecondCheck)
-                            {
-                                screenshotStableAtMs = scriptSw.ElapsedMilliseconds;
-                                logger.LogInformation("Screenshot validated");
-                                break;
-                            }
-                        }
-                    }
-                    var elapsedSeconds = (int)scriptSw.Elapsed.TotalSeconds;
-                    if (elapsedSeconds >= nextWaitLogSecond)
-                    {
-                        var screenshotFound = File.Exists(screenshotFull) && new FileInfo(screenshotFull).Length > MinScreenshotBytes;
-                        logger.LogInformation("Screenshot polling status: found={ScreenshotFound}, processRunning={ProcessRunning}, elapsedSeconds={ElapsedSeconds}", screenshotFound, !process.HasExited, elapsedSeconds);
-                        nextWaitLogSecond += WaitLogIntervalSeconds;
-                    }
-                    await Task.Delay(PollDelayMs, cancellationToken);
-                }
+                var effectiveTimeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : DefaultTimeoutSeconds;
+                var execution = await stellariumExecutionService.ExecuteAsync(rootFull, scriptFull, screenshotFull, effectiveTimeoutSeconds, cancellationToken);
+                launchedExecutable = _options.ExecutablePath;
+                launchedArguments = $"--startup-script \"{scriptFull}\"";
+                launchedWorkingDirectory = rootFull;
+                long? screenshotDetectedAtMs = execution.ScreenshotExists ? execution.ExecutionTimeMs : null;
+                long? screenshotStableAtMs = execution.ScreenshotExists ? execution.ExecutionTimeMs : null;
 
                 var screenshotExists = File.Exists(screenshotFull);
                 screenshotSize = screenshotExists ? new FileInfo(screenshotFull).Length : 0;
@@ -214,23 +149,9 @@ public sealed class WeeklyStellariumScreenshotGenerator(
                 }
                 logger.LogInformation("Screenshot exists: {ScreenshotExists}", screenshotExists);
                 logger.LogInformation("Screenshot file size: {ScreenshotSize}", screenshotSize);
-                timedOut = !(screenshotExists && screenshotSize > MinScreenshotBytes);
+                timedOut = execution.TimedOut || !(screenshotExists && screenshotSize > MinScreenshotBytes);
                 logger.LogInformation("Screenshot found/not found: {Status}", timedOut ? "not found" : "found");
-                if (!process.HasExited)
-                {
-                    logger.LogInformation("Killing/closing Stellarium");
-                    process.Kill(entireProcessTree: true);
-                    await process.WaitForExitAsync(CancellationToken.None);
-                    logger.LogInformation("Process terminated: true");
-                    logger.LogInformation("Process killed/closed");
-                    if (!timedOut) warnings.Add($"Stellarium had to be killed after screenshot capture for shot {script.ShotCode}.");
-                }
-                else if (!timedOut)
-                {
-                    warnings.Add($"Script completed but process did not exit naturally for shot {script.ShotCode}.");
-                }
-
-                exitCode = process.HasExited ? process.ExitCode : null;
+                exitCode = execution.ExitCode;
                 if (exitCode.HasValue) logger.LogInformation("Stellarium process exit code: {ExitCode}", exitCode.Value);
                 if (timedOut)
                 {
