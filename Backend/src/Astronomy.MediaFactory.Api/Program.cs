@@ -2412,9 +2412,9 @@ static double ResolveObjectWeight(string objectName, string objectType, bool isP
     return isPrimaryTarget ? 1.1d : 0.8d;
 }
 
-file sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
+sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
 
-static List<string> ResolveSceneSpecificObjectCodes(dynamic shot, dynamic composition, WeeklyScenePlan? scenePlan, WeeklySkyForecastV2Context weeklyContext)
+static List<string> ResolveSceneSpecificObjectCodes(dynamic shot, dynamic composition, WeeklyScenePlan? scenePlan, WeeklySkyForecastV2IntelligenceResponse weeklyContext)
 {
     var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     foreach (var c in composition.TargetObjects ?? Array.Empty<string>()) if (!string.IsNullOrWhiteSpace(c)) codes.Add(c.Trim());
@@ -2425,7 +2425,7 @@ static List<string> ResolveSceneSpecificObjectCodes(dynamic shot, dynamic compos
     }
 
     var sceneKeywords = string.Join(" ", new[] { shot.ShotCode as string, shot.ShotPurpose as string, scenePlan?.CompositionDescription, scenePlan?.VisualCode })
-        .Split(' ', '-', '_', ',', '.', ';', ':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Split([' ', '-', '_', ',', '.', ';', ':'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Where(k => k.Length >= 3)
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -2445,7 +2445,7 @@ static List<string> ResolveSceneSpecificObjectCodes(dynamic shot, dynamic compos
     return codes.ToList();
 }
 
-static string ResolveObjectSource(string code, dynamic composition, WeeklyScenePlan? scenePlan, dynamic shot, WeeklySkyForecastV2Context weeklyContext)
+static string ResolveObjectSource(string code, dynamic composition, WeeklyScenePlan? scenePlan, dynamic shot, WeeklySkyForecastV2IntelligenceResponse weeklyContext)
 {
     if ((composition.TargetObjects as IReadOnlyList<string>)?.Contains(code, StringComparer.OrdinalIgnoreCase) ?? false) return "scene.targetObjects";
     if ((scenePlan?.ObjectCodes?.Contains(code, StringComparer.OrdinalIgnoreCase) ?? false)) return "scenePlan.objectCodes";
