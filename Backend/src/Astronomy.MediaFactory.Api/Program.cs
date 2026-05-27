@@ -961,11 +961,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     .ToList();
                 var observationUtc = DateTime.SpecifyKind(shot.DateLocal.ToDateTime(shot.TimeLocal), DateTimeKind.Utc);
                 var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
-                    locationName,
-                    latitude,
-                    longitude,
                     observationUtc,
+                    longitude,
+                    latitude,
                     elevationMeters,
+                    locationName,
                     skyPositions,
                     defaultRules));
                 if (sscResult.RequiresSplit)
@@ -976,7 +976,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     "WeeklySkyForecast V2 SSC intelligence scene={SceneId} visibleObjectCount={VisibleObjectCount} removedObjectCount={RemovedObjectCount} cameraAltitude={CameraAltitude} cameraAzimuth={CameraAzimuth} fov={Fov} requiresSplit={RequiresSplit}",
                     shot.ShotCode,
                     sscResult.VisibleObjects.Count,
-                    sscResult.RemovedObjectReasons.Count,
+                    sscResult.RemovedObjects.Count,
                     sscResult.CameraAltitudeDeg,
                     sscResult.CameraAzimuthDeg,
                     sscResult.FovDeg,
