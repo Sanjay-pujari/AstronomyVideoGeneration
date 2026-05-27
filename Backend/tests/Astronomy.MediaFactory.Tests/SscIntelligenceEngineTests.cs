@@ -59,7 +59,7 @@ public sealed partial class SscIntelligenceEngineTests
     public void Renderer_AlwaysIncludesConstellationLinesAndLabels()
     {
         var renderer = new StellariumSscRenderer();
-        var script = renderer.Render(new SscRenderRequest(DateTime.UtcNow, 10, 20, 50, "Test", 30, 60, 40)).Script;
+        var script = renderer.Render(new SscRenderRequest(DateTime.UtcNow, 10, 20, 50, "Test", 30, 60, 40, "shots", "test")).Script;
 
         script.Should().Contain("ConstellationMgr.setFlagLines(true);");
         script.Should().Contain("ConstellationMgr.setFlagLabels(true);");
@@ -69,7 +69,7 @@ public sealed partial class SscIntelligenceEngineTests
     public void Renderer_AlwaysTerminatesWithQuitStellarium()
     {
         var renderer = new StellariumSscRenderer();
-        var script = renderer.Render(new SscRenderRequest(DateTime.UtcNow, 10, 20, 50, "Test", 30, 60, 40)).Script;
+        var script = renderer.Render(new SscRenderRequest(DateTime.UtcNow, 10, 20, 50, "Test", 30, 60, 40, "shots", "test")).Script;
 
         script.Should().Contain("core.quitStellarium();");
         script.TrimEnd().Should().EndWith("core.wait(10);\ncore.quitStellarium();");
@@ -158,8 +158,8 @@ public sealed partial class SscIntelligenceEngineTests
     public void ScreenSpaceFramingSolver_ClampsFinalAltitude()
     {
         var solver = new Astronomy.SscIntelligence.Composition.ScreenSpaceFramingSolver();
-        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight, 90, 180, 55, [new SkyObjectPosition("Moon", 89, 180, -10)], []).FinalCameraAltitudeDeg.Should().BeLessOrEqualTo(82);
-        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight, 5, 180, 55, [new SkyObjectPosition("Moon", 2, 180, -10)], []).FinalCameraAltitudeDeg.Should().BeGreaterOrEqualTo(12);
+        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight, 90, 180, 55, [new SkyObjectPosition("Moon", 89, 180, -10)], []).FinalCameraAltitudeDeg.Should().BeLessThanOrEqualTo(82);
+        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight, 5, 180, 55, [new SkyObjectPosition("Moon", 2, 180, -10)], []).FinalCameraAltitudeDeg.Should().BeGreaterThanOrEqualTo(12);
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public sealed partial class SscIntelligenceEngineTests
 
         var result = calculator.Calculate(objects, objects, Array.Empty<SkyObjectPosition>(), Array.Empty<SkyObjectPosition>(), 40, 250, new VisibilityRules(), Astronomy.SscIntelligence.SceneIntent.SceneIntent.Grouping);
         result.RequiresSplit.Should().BeTrue();
-        result.FovDeg.Should().BeLessOrEqualTo(60);
+        result.FovDeg.Should().BeLessThanOrEqualTo(60);
     }
 
     [Fact]
@@ -236,12 +236,24 @@ public sealed partial class SscIntelligenceEngineTests
             Microsoft.Extensions.Logging.Abstractions.NullLogger<Astronomy.SscIntelligence.SscIntelligenceService>.Instance);
 
         var request = new Astronomy.SscIntelligence.SscIntelligenceRequest(
-            DateTime.UtcNow, "UTC", 0, 0, 0, "Test",
+            DateTime.UtcNow,
+            0,
+            0,
+            0,
+            "Test",
             [new SkyObjectPosition("Moon", 70, 180, -12), new SkyObjectPosition("Venus", 68, 182, -4)],
-            Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot, "grouping", "grouping", null, null, null, null, null, null);
+            VisibilityRules: null,
+            SunAltitudeDeg: null,
+            Timezone: "UTC",
+            AstronomicalNightStartUtc: null,
+            AstronomicalNightEndUtc: null,
+            SceneIntent: Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot,
+            SceneCode: "grouping",
+            SceneTitle: "grouping",
+            ExplicitTargetObjectNames: null);
 
         var result = service.Generate(request);
-        result.Script.Should().Contain($"core.moveToAltAzi({result.CameraAltitudeDeg:0.###}, {result.CameraAzimuthDeg:0.###}, 0);");
+        result.SscScript.Should().Contain($"core.moveToAltAzi({result.CameraAltitudeDeg:0.###}, {result.CameraAzimuthDeg:0.###}, 0);");
     }
 }
 
@@ -272,8 +284,8 @@ public sealed partial class SscIntelligenceEngineTests
     public void CinematicAnchorSolver_ClampsAltitude()
     {
         var solver = new Astronomy.SscIntelligence.Composition.CinematicAnchorSolver();
-        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight, 40, 180, 80, [new SkyObjectPosition("A", 80, 180, -2)], [new SkyObjectPosition("A", 80, 180, -2)], [], []).AnchoredCameraAltitudeDeg.Should().BeLessOrEqualTo(82);
-        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.CloseUp, 40, 180, 80, [new SkyObjectPosition("A", 0, 180, -2)], [new SkyObjectPosition("A", 0, 180, -2)], [], []).AnchoredCameraAltitudeDeg.Should().BeGreaterOrEqualTo(12);
+        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight, 40, 180, 80, [new SkyObjectPosition("A", 80, 180, -2)], [new SkyObjectPosition("A", 80, 180, -2)], [], []).AnchoredCameraAltitudeDeg.Should().BeLessThanOrEqualTo(82);
+        solver.Solve(Astronomy.SscIntelligence.SceneIntent.SceneIntent.CloseUp, 40, 180, 80, [new SkyObjectPosition("A", 0, 180, -2)], [new SkyObjectPosition("A", 0, 180, -2)], [], []).AnchoredCameraAltitudeDeg.Should().BeGreaterThanOrEqualTo(12);
     }
 
     [Fact]
@@ -324,9 +336,9 @@ public sealed partial class SscIntelligenceEngineTests
 
         composer.Compose(Astronomy.SscIntelligence.SceneIntent.SceneIntent.WideNight, 40, 180, 80,
             [new SkyObjectPosition("A", 80, 180, -2)],
-            [new SkyObjectPosition("A", 80, 180, -2)], [], []).FinalCameraAltitudeDeg.Should().BeLessOrEqualTo(82);
+            [new SkyObjectPosition("A", 80, 180, -2)], [], []).FinalCameraAltitudeDeg.Should().BeLessThanOrEqualTo(82);
         composer.Compose(Astronomy.SscIntelligence.SceneIntent.SceneIntent.CloseUp, 40, 180, 80,
             [new SkyObjectPosition("A", 0, 180, -2)],
-            [new SkyObjectPosition("A", 0, 180, -2)], [], []).FinalCameraAltitudeDeg.Should().BeGreaterOrEqualTo(12);
+            [new SkyObjectPosition("A", 0, 180, -2)], [], []).FinalCameraAltitudeDeg.Should().BeGreaterThanOrEqualTo(12);
     }
 }
