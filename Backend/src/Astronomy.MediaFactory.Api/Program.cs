@@ -941,22 +941,39 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             foreach (var shot in stellariumShots)
             {
                 var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
-                var skyPositions = composition.IncludedObjects
-                    .Concat(composition.TargetObjects)
+                var scenePlan = scenePlansByCode.TryGetValue(shot.ShotCode, out var resolvedScenePlan) ? resolvedScenePlan : null;
+                var sceneSpecificCodes = ResolveSceneSpecificObjectCodes(shot, composition, scenePlan, weeklySkyfieldContext);
+                var usedFallback = sceneSpecificCodes.Count == 0;
+                if (usedFallback)
+                {
+                    app.Logger.LogWarning("SCENE_OBJECT_MAPPING_FALLBACK_USED sceneCode={SceneCode}", shot.ShotCode);
+                    sceneSpecificCodes = composition.IncludedObjects
+                        .Concat(composition.TargetObjects)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                }
+
+                var skyPositions = sceneSpecificCodes
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Select(code =>
                     {
                         skyObjectsByCode.TryGetValue(code, out var obj);
                         var objectName = obj?.ObjectName ?? code;
                         var objectType = ResolveObjectType(obj?.ObjectName ?? code);
-                        var weight = ResolveObjectWeight(objectName, objectType);
-                        return new SkyObjectPosition(
-                            Name: objectName,
-                            AltitudeDeg: obj?.AltitudeDegrees ?? composition.CenterAltitude,
-                            AzimuthDeg: obj?.AzimuthDegrees ?? composition.CenterAzimuth,
-                            Magnitude: obj?.Magnitude ?? 4d,
-                            ObjectType: objectType,
-                            Weight: weight);
+                        var isPrimaryTarget = sceneSpecificCodes.Contains(code, StringComparer.OrdinalIgnoreCase)
+                            || composition.TargetObjects.Contains(code, StringComparer.OrdinalIgnoreCase)
+                            || (scenePlan?.ObjectCodes?.Contains(code, StringComparer.OrdinalIgnoreCase) ?? false);
+                        var source = ResolveObjectSource(code, composition, scenePlan, shot, weeklySkyfieldContext);
+                        var weight = ResolveObjectWeight(objectName, objectType, isPrimaryTarget);
+                        return new WeeklySceneObjectSelection(
+                            new SkyObjectPosition(
+                                Name: objectName,
+                                AltitudeDeg: obj?.AltitudeDegrees ?? composition.CenterAltitude,
+                                AzimuthDeg: obj?.AzimuthDegrees ?? composition.CenterAzimuth,
+                                Magnitude: obj?.Magnitude ?? 4d,
+                                ObjectType: objectType,
+                                Weight: weight),
+                            source);
                     })
                     .ToList();
                 var scheduledUtcFallback = request.ScheduledUtc == default || request.ScheduledUtc == DateTimeOffset.MinValue
@@ -973,13 +990,30 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 var screenshotPrefix = shot.ShotCode;
                 var expectedScreenshotPath = Path.Combine(scenesDirectory, $"{screenshotPrefix}.png");
                 var sceneIntent = sceneIntentResolver.Resolve(shot.ShotCode, shot.ShotPurpose);
-                var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
+                                app.Logger.LogInformation(
+                    "WeeklySkyForecast V2 scene object mapping sceneCode={SceneCode} selectedObjectCount={SelectedObjectCount} selectedObjectNames={SelectedObjectNames} fallbackUsed={FallbackUsed}",
+                    shot.ShotCode,
+                    skyPositions.Count,
+                    string.Join(",", skyPositions.Select(x => x.Position.Name)),
+                    usedFallback);
+                foreach (var selected in skyPositions)
+                {
+                    app.Logger.LogInformation(
+                        "WeeklySkyForecast V2 scene object detail sceneCode={SceneCode} objectName={ObjectName} alt={Altitude} az={Azimuth} magnitude={Magnitude} source={Source}",
+                        shot.ShotCode,
+                        selected.Position.Name,
+                        selected.Position.AltitudeDeg,
+                        selected.Position.AzimuthDeg,
+                        selected.Position.Magnitude,
+                        selected.Source);
+                }
+var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                     observationUtc,
                     longitude,
                     latitude,
                     elevationMeters,
                     locationName,
-                    skyPositions,
+                    skyPositions.Select(x => x.Position).ToList(),
                     defaultRules,
                     null,
                     "Asia/Kolkata",
@@ -1005,7 +1039,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     expectedScreenshotPath,
                     sscResult.VisibleObjects.Count,
                     sscResult.RemovedObjects.Count,
-                    skyPositions.Average(x => x.AltitudeDeg),
+                    skyPositions.Average(x => x.Position.AltitudeDeg),
                     sscResult.CameraAltitudeDeg,
                     sscResult.CameraAzimuthDeg,
                     sscResult.FovDeg,
@@ -2366,16 +2400,57 @@ static string ResolveObjectType(string objectName)
     };
 }
 
-static double ResolveObjectWeight(string objectName, string objectType)
+static double ResolveObjectWeight(string objectName, string objectType, bool isPrimaryTarget)
 {
     var key = objectName.Trim().ToLowerInvariant();
-    if (key == "moon") return 3.0d;
-    if (key == "venus") return 2.5d;
-    if (key == "jupiter") return 2.2d;
-    if (key is "saturn" or "mars" or "mercury") return 2.0d;
-    if (objectType.Equals("starordeepsky", StringComparison.OrdinalIgnoreCase) && key is "sirius" or "canopus" or "arcturus" or "vega" or "capella" or "rigel" or "procyon" or "betelgeuse" or "achernar" or "aldebaran" or "antares" or "spica" or "pollux") return 1.2d;
-    if (key.Contains("constellation", StringComparison.OrdinalIgnoreCase) || key.Contains("nebula", StringComparison.OrdinalIgnoreCase)) return 0.5d;
-    return 1.0d;
+    if (key == "moon") return isPrimaryTarget ? 3.2d : 1.1d;
+    if (key == "venus") return isPrimaryTarget ? 2.7d : 1.05d;
+    if (key == "jupiter") return isPrimaryTarget ? 2.4d : 1.0d;
+    if (key is "saturn" or "mars" or "mercury") return isPrimaryTarget ? 2.2d : 1.0d;
+    if (objectType.Equals("starordeepsky", StringComparison.OrdinalIgnoreCase) && key is "sirius" or "canopus" or "arcturus" or "vega" or "capella" or "rigel" or "procyon" or "betelgeuse" or "achernar" or "aldebaran" or "antares" or "spica" or "pollux") return isPrimaryTarget ? 1.3d : 0.85d;
+    if (key.Contains("constellation", StringComparison.OrdinalIgnoreCase) || key.Contains("nebula", StringComparison.OrdinalIgnoreCase)) return isPrimaryTarget ? 0.8d : 0.45d;
+    return isPrimaryTarget ? 1.1d : 0.8d;
+}
+
+file sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
+
+static List<string> ResolveSceneSpecificObjectCodes(dynamic shot, dynamic composition, WeeklyScenePlan? scenePlan, WeeklySkyForecastV2Context weeklyContext)
+{
+    var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var c in composition.TargetObjects ?? Array.Empty<string>()) if (!string.IsNullOrWhiteSpace(c)) codes.Add(c.Trim());
+    foreach (var c in composition.IncludedObjects ?? Array.Empty<string>()) if (!string.IsNullOrWhiteSpace(c) && !c.Equals("SKY", StringComparison.OrdinalIgnoreCase)) codes.Add(c.Trim());
+    if (scenePlan is not null)
+    {
+        foreach (var c in scenePlan.ObjectCodes ?? Array.Empty<string>()) if (!string.IsNullOrWhiteSpace(c)) codes.Add(c.Trim());
+    }
+
+    var sceneKeywords = string.Join(" ", new[] { shot.ShotCode as string, shot.ShotPurpose as string, scenePlan?.CompositionDescription, scenePlan?.VisualCode })
+        .Split(' ', '-', '_', ',', '.', ';', ':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(k => k.Length >= 3)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    foreach (var ev in weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
+    {
+        var sameDate = ev.EventDate == default || ev.EventDate == shot.DateLocal;
+        if (!sameDate) continue;
+        foreach (var o in ev.Objects ?? [])
+        {
+            if (sceneKeywords.Contains(o.ObjectCode) || sceneKeywords.Contains(o.ObjectName) || codes.Contains(o.ObjectCode))
+            {
+                if (!string.IsNullOrWhiteSpace(o.ObjectCode)) codes.Add(o.ObjectCode.Trim());
+            }
+        }
+    }
+
+    return codes.ToList();
+}
+
+static string ResolveObjectSource(string code, dynamic composition, WeeklyScenePlan? scenePlan, dynamic shot, WeeklySkyForecastV2Context weeklyContext)
+{
+    if ((composition.TargetObjects as IReadOnlyList<string>)?.Contains(code, StringComparer.OrdinalIgnoreCase) ?? false) return "scene.targetObjects";
+    if ((scenePlan?.ObjectCodes?.Contains(code, StringComparer.OrdinalIgnoreCase) ?? false)) return "scenePlan.objectCodes";
+    if ((composition.IncludedObjects as IReadOnlyList<string>)?.Contains(code, StringComparer.OrdinalIgnoreCase) ?? false) return "composition.objects";
+    return "skyfield.scene-date-match";
 }
 
 public sealed record GenerateDailyPlanRequest(
