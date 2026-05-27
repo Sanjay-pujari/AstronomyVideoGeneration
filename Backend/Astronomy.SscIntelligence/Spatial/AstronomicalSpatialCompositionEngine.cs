@@ -22,7 +22,7 @@ public sealed class AstronomicalSpatialCompositionEngine : IAstronomicalSpatialC
 
         var max = pairs.Count == 0 ? 0 : pairs.Max(x => x.AngularDistanceDeg);
         var compositionClass = max switch { < 15 => SpatialCompositionClass.TightGrouping, <= 40 => SpatialCompositionClass.MediumGrouping, <= 90 => SpatialCompositionClass.WidePanorama, _ => SpatialCompositionClass.ImpossibleGrouping };
-        var range = compositionClass switch
+        (double MinFovDeg, double MaxFovDeg)? range = compositionClass switch
         {
             SpatialCompositionClass.TightGrouping => (18d, 35d),
             SpatialCompositionClass.MediumGrouping => (35d, 65d),
