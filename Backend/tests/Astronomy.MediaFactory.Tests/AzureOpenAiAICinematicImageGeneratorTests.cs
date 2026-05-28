@@ -81,6 +81,7 @@ public sealed class AzureOpenAICinematicImageGeneratorTests
         => new(
             new HttpClient(handler),
             Options.Create(options),
+            Options.Create(new WeeklySkyForecastAICinematicAssetsOptions()),
             NullLogger<AzureOpenAICinematicImageGenerator>.Instance);
 
     private static AICinematicAssetRequest CreateRequest(string plannedPath) => new(
