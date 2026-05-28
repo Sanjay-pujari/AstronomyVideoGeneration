@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.AstroData.Clients;
@@ -18,6 +19,7 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
     {
         PropertyNameCaseInsensitive = true
     };
+    private static bool _loggedDailyRawSample;
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<SkyfieldSidecarClient> _logger;
@@ -46,12 +48,21 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
                 return null;
             }
 
-            var payload = await response.Content.ReadFromJsonAsync<SkyfieldDailySkyResponse>(JsonOptions, cancellationToken);
+            var rawBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!_loggedDailyRawSample && request.Date == "2026-05-25")
+            {
+                _logger.LogInformation("SKYFIELD_DAILY_RAW_RESPONSE_SAMPLE date={Date} body={Body}", request.Date, rawBody);
+                _loggedDailyRawSample = true;
+            }
+
+            var payload = JsonSerializer.Deserialize<SkyfieldDailySkyResponse>(rawBody, JsonOptions);
             if (payload is null)
             {
                 _logger.LogWarning("Skyfield sidecar returned an empty payload for {Date} at {LocationName}.", request.Date, request.LocationName);
                 return null;
             }
+
+            PopulateGeometryEventsFromRawJson(payload, rawBody);
 
             if (!payload.TryNormalizeAndValidate(out var responseValidationError))
             {
@@ -66,6 +77,90 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
             _logger.LogError(ex, "Skyfield sidecar call failed for {Date} at {LocationName}.", request.Date, request.LocationName);
             return null;
         }
+    }
+
+    private static void PopulateGeometryEventsFromRawJson(SkyfieldDailySkyResponse payload, string rawBody)
+    {
+        if (payload.Events.Any(e => e.TimeUtc.HasValue && e.AltitudeDegrees.HasValue && e.AzimuthDegrees.HasValue))
+        {
+            return;
+        }
+
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(rawBody);
+        }
+        catch
+        {
+            return;
+        }
+
+        var candidateArrays = new[] { "events", "visibleObjects", "visible_objects", "geometry", "geometryRecords", "records", "observations" };
+        foreach (var key in candidateArrays)
+        {
+            if (node?[key] is not JsonArray arr)
+                continue;
+
+            foreach (var item in arr.OfType<JsonObject>())
+            {
+                var objectName = ReadString(item, "objectName", "object_name", "objectCode", "object_code");
+                var timeText = ReadString(item, "timeUtc", "time_utc", "observationUtc", "observation_utc", "utcTime", "utc_time", "bestUtcTime", "best_utc_time");
+                var altitude = ReadDouble(item, "altitudeDegrees", "altitude_degrees", "altitude", "maxAltitudeDegrees", "max_altitude_degrees");
+                var azimuth = ReadDouble(item, "azimuthDegrees", "azimuth_degrees", "azimuth", "bestViewingAzimuthDegrees", "best_viewing_azimuth_degrees");
+                var magnitude = ReadDouble(item, "magnitude");
+                var eventTime = DateTime.TryParse(timeText, out var parsedTime) ? parsedTime : (DateTime?)null;
+                if (string.IsNullOrWhiteSpace(objectName) || !eventTime.HasValue || !altitude.HasValue || !azimuth.HasValue)
+                    continue;
+
+                payload.Events.Add(new SkyfieldDailySkyEvent
+                {
+                    Category = ReadString(item, "category", "objectType", "object_type") ?? "geometry",
+                    ObjectName = objectName,
+                    VisibilityWindow = ReadString(item, "visibilityWindow", "visibility_window") ?? "Unknown",
+                    Direction = ReadString(item, "direction", "directionLabel", "direction_label") ?? "Unknown",
+                    ObservationTool = ReadString(item, "observationTool", "observation_tool") ?? "Unknown",
+                    Details = ReadString(item, "details", "reason") ?? "Extracted from Skyfield geometry record.",
+                    TimeUtc = eventTime,
+                    AltitudeDegrees = altitude,
+                    AzimuthDegrees = azimuth,
+                    Magnitude = magnitude
+                });
+            }
+
+            if (payload.Events.Any(e => e.TimeUtc.HasValue && e.AltitudeDegrees.HasValue && e.AzimuthDegrees.HasValue))
+                return;
+        }
+    }
+
+    private static string? ReadString(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (obj.TryGetPropertyValue(key, out var value))
+            {
+                var text = value?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(text))
+                    return text;
+            }
+        }
+
+        return null;
+    }
+
+    private static double? ReadDouble(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!obj.TryGetPropertyValue(key, out var value) || value is null)
+                continue;
+            if (value.TryGetValue<double>(out var asDouble))
+                return asDouble;
+            if (value.TryGetValue<string>(out var asText) && double.TryParse(asText, out var parsed))
+                return parsed;
+        }
+
+        return null;
     }
 
     public async Task<bool> CheckHealthAsync(CancellationToken cancellationToken)
@@ -448,3 +543,4 @@ public sealed class SkyfieldVisualIdea
 
     public bool IsValid() => !string.IsNullOrWhiteSpace(Title) && !string.IsNullOrWhiteSpace(Description);
 }
+    private static bool _loggedDailyRawSample;
