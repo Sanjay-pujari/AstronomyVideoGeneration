@@ -411,6 +411,10 @@ public sealed class SkyfieldDailySkyEvent
     public string Direction { get; set; } = "";
     public string ObservationTool { get; set; } = "";
     public string Details { get; set; } = "";
+    public DateTime? TimeUtc { get; set; }
+    public double? AltitudeDegrees { get; set; }
+    public double? AzimuthDegrees { get; set; }
+    public double? Magnitude { get; set; }
 
     public void Normalize()
     {

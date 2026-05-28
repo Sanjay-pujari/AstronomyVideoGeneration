@@ -760,8 +760,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var debugRoot = Path.Combine(root, "debug");
         Directory.CreateDirectory(debugRoot);
         var skyfieldResponsePath = Path.Combine(debugRoot, "skyfield-weekly-response.json");
+        var skyfieldFullResponsePath = Path.Combine(debugRoot, "skyfield-weekly-full-response.json");
         var skyfieldErrorsPath = Path.Combine(debugRoot, "skyfield-weekly-errors.json");
         await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.SkyfieldSummary, new JsonSerializerOptions { WriteIndented = true }), ct);
+        var skyfieldFullResponseJson = WeeklySkyForecastPreparationDiagnostics.GetJson("WeeklySkyForecast.SkyfieldWeeklyResponse");
+        if (!string.IsNullOrWhiteSpace(skyfieldFullResponseJson))
+            await File.WriteAllTextAsync(skyfieldFullResponsePath, skyfieldFullResponseJson, ct);
         await File.WriteAllTextAsync(skyfieldErrorsPath, "[]", ct);
 
         var narrationDirectory = Path.Combine(root, "narration");
@@ -894,6 +898,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
 
         var compositionPackage = await ExecuteOrchestrationStageAsync("Generating compositions", _ =>
         {
+            var dailyForecastCount = weeklySkyfieldContext.SkyfieldSummary?.DailyForecastCount ?? 0;
+            var geometryCount = (weeklySkyfieldContext.EventExtractionResult?.ExtractedEvents ?? [])
+                .SelectMany(e => e.Objects ?? [])
+                .Count(o => o.AltitudeDegrees.HasValue && o.AzimuthDegrees.HasValue);
+            if (dailyForecastCount > 0 && geometryCount == 0)
+                throw new InvalidOperationException("Skyfield geometry missing from persisted weekly response");
             var package = sceneComposer.Compose(shotTimeline, weeklySkyfieldContext.EventExtractionResult ?? throw new InvalidOperationException("Missing event extraction result."), root);
             return Task.FromResult(package);
         });
