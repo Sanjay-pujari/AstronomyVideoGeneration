@@ -1001,9 +1001,17 @@ internal static class FinalRenderSceneOrchestrator
                 }
 
                 var isDynamicSplit = !code.Equals(need.SceneCode, StringComparison.OrdinalIgnoreCase);
+                var resolvedTargets = ResolveSceneTargets(code, need);
+                var shouldRejectWideNightHeroGrouping = IsWideNightScene(code, need) && IsHeroGroupingTargets(resolvedTargets);
+                if (shouldRejectWideNightHeroGrouping)
+                {
+                    continue;
+                }
+
                 final.Add(need with
                 {
                     SceneCode = code,
+                    ObjectCodes = resolvedTargets,
                     SourceSceneCode = isDynamicSplit ? need.SceneCode : need.SourceSceneCode,
                     IsDynamicSplitScene = isDynamicSplit || need.IsDynamicSplitScene
                 });
@@ -1012,5 +1020,40 @@ internal static class FinalRenderSceneOrchestrator
 
         return new FinalRenderSceneResult(final, graph);
     }
+
+    private static IReadOnlyList<string> ResolveSceneTargets(string sceneCode, WeeklyStellariumNeed scene)
+    {
+        if (!string.IsNullOrWhiteSpace(scene.ScenePurpose) && scene.ObjectCodes.Count > 0 && !scene.IsDynamicSplitScene)
+        {
+            return scene.ObjectCodes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        var derived = new List<string>();
+        var tokenSource = $"{sceneCode} {scene.CaptureMode} {scene.ScenePurpose}".ToUpperInvariant();
+        if (tokenSource.Contains("MOON")) derived.Add("MOON");
+        if (tokenSource.Contains("JUPITER")) derived.Add("JUPITER");
+        if (tokenSource.Contains("VENUS")) derived.Add("VENUS");
+        if (tokenSource.Contains("SATURN")) derived.Add("SATURN");
+
+        if (derived.Count == 0)
+        {
+            if (scene.CaptureMode.Contains("wide", StringComparison.OrdinalIgnoreCase)) derived.Add("MILKY_WAY");
+            else if (scene.CaptureMode.Contains("group", StringComparison.OrdinalIgnoreCase)) derived.AddRange(["MOON", "VENUS"]);
+        }
+
+        return derived.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static bool IsWideNightScene(string sceneCode, WeeklyStellariumNeed scene)
+        => sceneCode.Contains("wide", StringComparison.OrdinalIgnoreCase)
+           || scene.ScenePurpose.Contains("wide", StringComparison.OrdinalIgnoreCase)
+           || scene.CaptureMode.Contains("wide", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsHeroGroupingTargets(IReadOnlyList<string> objectCodes)
+        => objectCodes.Count >= 3
+           && objectCodes.Contains("MOON", StringComparer.OrdinalIgnoreCase)
+           && objectCodes.Contains("VENUS", StringComparer.OrdinalIgnoreCase)
+           && objectCodes.Contains("JUPITER", StringComparer.OrdinalIgnoreCase);
+
 }
 

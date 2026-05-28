@@ -322,6 +322,17 @@ public sealed class WeeklySkySceneComposer(IWeeklyConjunctionFramingEngine frami
             var mode = shot.TargetObjects.Count>=3?"Grouping":shot.TargetObjects.Count==2?"Conjunction":shot.ShotType.Contains("wide",StringComparison.OrdinalIgnoreCase)?"Panorama":shot.ShotType.Contains("guide",StringComparison.OrdinalIgnoreCase)?"ObservationGuide":"SingleFocus";
             var objs = shot.TargetObjects.Where(byObj.ContainsKey).Select(x=>byObj[x]).ToList(); var excluded=new List<string>();
             objs = objs.Where(o=>{ if (o.ObjectCode.Equals("NEPTUNE",StringComparison.OrdinalIgnoreCase)){excluded.Add("NEPTUNE:ExcludedNakedEye"); return false;} if ((o.AltitudeDegrees??0)<=5){excluded.Add(o.ObjectCode+":LowAltitude"); return false;} if (o.VisibilityScore<=20){excluded.Add(o.ObjectCode+":LowVisibility"); return false;} return true;}).ToList();
+            var hydrated = objs.Where(o => o.AzimuthDegrees.HasValue && o.AltitudeDegrees.HasValue).ToList();
+            if (hydrated.Count > 1)
+            {
+                var allSameAz = hydrated.All(o => Math.Abs(o.AzimuthDegrees!.Value - hydrated[0].AzimuthDegrees!.Value) < 0.0001d);
+                var allSameAlt = hydrated.All(o => Math.Abs(o.AltitudeDegrees!.Value - hydrated[0].AltitudeDegrees!.Value) < 0.0001d);
+                if (allSameAz && allSameAlt)
+                {
+                    errors.Add($"{shot.ShotCode} rejected: all hydrated object alt/az are identical (DeferredHydrationFailure).");
+                    continue;
+                }
+            }
             var fr = framing.Compute(objs, eventExtractionResult.SelectedPrimaryEvent?.Direction, mode);
             var fov = (fr.ValidAzimuthCount == 0 ? mode switch { "Grouping" => 70d, "Conjunction" => 45d, _ => 82d } : fovCalc.Compute(mode, eventExtractionResult.SelectedPrimaryEvent?.AngularSeparationDegrees, fr.AzSpread, fr.AltSpread, shot.TargetObjects));
             if (shot.ShotCode.Contains("s3_multi_object_grouping_01", StringComparison.OrdinalIgnoreCase) || mode == "Grouping")
