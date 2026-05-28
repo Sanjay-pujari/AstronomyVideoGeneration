@@ -108,6 +108,7 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             }
 
             var cinematicPlan = BuildCinematicVisualPlan(req, visualPlan);
+            if (req.CinematicDirection is not null) logger.LogInformation("CINEMATIC_DIRECTION_APPLIED_TO_CAMERA_PLAN {SceneCode} {FramingRule}", req.SceneCode, req.CinematicDirection.FramingRule);
             try
             {
                 using var sceneTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -584,9 +585,18 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             _ => Enumerable.Range(0, Math.Min(6, count)).Select(i => new RectangleF(80 + (i * 150), 90 + ((i % 2 == 0) ? i * 28 : i * 44), Math.Max(120, 380 - (i * 35)), Math.Max(120, 380 - (i * 35)))).ToList()
         };
     }
-    private static CinematicVisualPlan BuildCinematicVisualPlan(SceneRenderRequest req, CelestialObjectVisualPlan visualPlan) => new(
-        req.SceneCode, req.SceneCode, visualPlan.RequiredObjects, visualPlan.SelectedAssets, "EpicReveal", visualPlan.VisualLayoutType,
-        req.SceneCode.Contains("viewing_tip", StringComparison.OrdinalIgnoreCase) ? "PeacefulZoomOut" : "SlowPushIn", "FadeFromBlack", "CinematicCrossfade", [], ["Starfield", "NebulaFog", "Vignette"], [], 0, req.DurationSeconds, req.DurationSeconds);
+    private static CinematicVisualPlan BuildCinematicVisualPlan(SceneRenderRequest req, CelestialObjectVisualPlan visualPlan)
+    {
+        var motion = req.CinematicDirection?.MotionIntent switch
+        {
+            "slow-drift" => "SlowPushIn",
+            "gentle-pan" => "PeacefulZoomOut",
+            "slow-panorama" => "PeacefulZoomOut",
+            _ => req.SceneCode.Contains("viewing_tip", StringComparison.OrdinalIgnoreCase) ? "PeacefulZoomOut" : "SlowPushIn"
+        };
+        return new(req.SceneCode, req.SceneCode, visualPlan.RequiredObjects, visualPlan.SelectedAssets, "EpicReveal", visualPlan.VisualLayoutType,
+            motion, "FadeFromBlack", "CinematicCrossfade", [], ["Starfield", "NebulaFog", "Vignette"], [], 0, req.DurationSeconds, req.DurationSeconds);
+    }
     private static async Task WriteCinematicDiagnosticsAsync(string root, RenderPreparationPackage prep, List<CelestialObjectVisualPlan> plans, Dictionary<string, int> sceneObjects, int thumbnailObjectCount, CancellationToken ct)
     {
         var path = Path.Combine(root, "debug", "cinematic-visual-diagnostics.json");

@@ -887,6 +887,28 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
             "thumbnail_story_scene",
             "best_night_wide_closing_reuse"
         };
+        Console.WriteLine("AI_CINEMATIC_DIRECTOR_START");
+        var cinematicDirections = execution.ExecutionScenes.Select(scene =>
+        {
+            var lower = scene.SceneCode.ToLowerInvariant();
+            var isMoon = lower.Contains("moon");
+            var isGrouping = lower.Contains("hero_western_grouping") || scene.SceneCode.Contains("grouping", StringComparison.OrdinalIgnoreCase);
+            CinematicSceneDirection direction = isMoon
+                ? new(scene.SceneCode, scene.SceneCode, "intimate-lunar-hero", "wonder", "contemplative", 100, "MOON", scene.NarrationSegmentCodes, true, false, true, 0.80, 0.20, "upper-middle-rule-of-thirds", 1.15, "upper-middle", "slow-drift", ["keep moon as hero"], [])
+                : isGrouping
+                    ? new(scene.SceneCode, scene.SceneCode, "western-planetary-grouping", "awe", "balanced", 90, "PLANET_GROUP", scene.NarrationSegmentCodes, true, true, true, 0.72, 0.28, "balanced-grouping", 1.25, "lower-middle", "gentle-pan", ["preserve horizon", "preserve grouping"], [])
+                    : new(scene.SceneCode, scene.SceneCode, "epic-night-orientation", "scale", "expansive", 80, "NIGHT_SKY", scene.NarrationSegmentCodes, true, true, true, 0.65, 0.35, "wide-context", 1.40, "horizon-lower-third", "slow-panorama", ["retain context"], []);
+            Console.WriteLine($"AI_CINEMATIC_DIRECTION scene={scene.SceneCode} style={direction.CinematicStyle}");
+            return direction;
+        }).ToList();
+        var cinematicResponse = new CinematicDirectorResponse(cinematicDirections);
+        var cinematicDir = Path.Combine(dirs.RootPath, "cinematic");
+        Directory.CreateDirectory(cinematicDir);
+        var cinematicPath = Path.Combine(cinematicDir, "cinematic-directions.json");
+        File.WriteAllText(cinematicPath, System.Text.Json.JsonSerializer.Serialize(cinematicResponse, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        Console.WriteLine($"CINEMATIC_DIRECTION_ARTIFACT_WRITTEN path={cinematicPath}");
+        Console.WriteLine("AI_CINEMATIC_DIRECTOR_COMPLETE");
+
         var sceneRequests = requiredSceneCodes.Select((sceneCode, i) =>
         {
             var timelineItem = sceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase)
@@ -918,7 +940,8 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
                 sceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase),
                 true,
                 sceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase),
-                sceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase) ? "best_night_wide_scene" : null);
+                sceneCode.Equals("best_night_wide_closing_reuse", StringComparison.OrdinalIgnoreCase) ? "best_night_wide_scene" : null,
+                cinematicDirections.FirstOrDefault(d => d.SceneCode.Equals(canonicalSceneCode, StringComparison.OrdinalIgnoreCase)));
         }).ToList();
 
         var thumbnailRequestId = "rr-thumb-thumbnail_story_scene";
@@ -961,7 +984,7 @@ internal static class WeeklySkyForecastV2RenderPreparationBuilder
         var validation = new RenderPreparationValidation(blocking.Count == 0, sceneRequestCountValid, assetItems.Count > 0, stellariumJobs.Count > 0, overlayJobs.Count > 0, timelineValid, thumbnailPlanValid, workingDirValid, blocking.Count == 0, false, blocking, []);
         var freezeStatus = new RenderPreparationFreezeStatus(true, true, ["working_directory_plan", "scene_render_requests", "asset_resolution_plan", "stellarium_render_plan", "overlay_render_plan", "timeline_render_plan", "thumbnail_render_plan", "render_preparation_validation"], [], []);
 
-        return new RenderPreparationPackage($"prep-{execution.ExecutionId}", dirs, sceneRequests, new AssetResolutionPlan(assetItems), new StellariumRenderPlan(stellariumJobs), new OverlayRenderPlan(overlayJobs), new TimelineRenderPlan(110, longForm.Count, longForm.Count - 1, longForm.Count(s => s.HasOverlap), 100, longForm), thumbnailPlan, validation, freezeStatus);
+        return new RenderPreparationPackage($"prep-{execution.ExecutionId}", dirs, sceneRequests, new AssetResolutionPlan(assetItems), new StellariumRenderPlan(stellariumJobs), new OverlayRenderPlan(overlayJobs), new TimelineRenderPlan(110, longForm.Count, longForm.Count - 1, longForm.Count(s => s.HasOverlap), 100, longForm), thumbnailPlan, validation, freezeStatus, cinematicResponse);
     }
 
     private static Guid BuildDeterministicGuid(string value)
