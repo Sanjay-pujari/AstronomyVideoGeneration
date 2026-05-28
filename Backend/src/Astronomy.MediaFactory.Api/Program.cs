@@ -899,6 +899,9 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         });
         var compositionPaths = new List<string>();
         var scriptPaths = new List<string>();
+        app.Logger.LogInformation("WEEKLY_SCENE_PLAN_COUNT={Count}", weeklyScenePlan.ScenePlans.Count);
+        app.Logger.LogInformation("CINEMATIC_TIMELINE_SCENE_COUNT={Count}", shots.Count);
+        app.Logger.LogInformation("COMPOSITION_SCENE_COUNT={Count}", compositionPackage.Entries.Count);
         var generatedScripts = new List<(string ScriptPath, string ScriptContent)>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
@@ -971,11 +974,37 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return true;
         });
 
+        var renderSceneManifest = new
+        {
+            StellariumScenes = weeklyScenePlan.StellariumNeeds
+                .Select(x => new
+                {
+                    SourceSceneCode = string.IsNullOrWhiteSpace(x.SourceSceneCode) ? x.SceneCode : x.SourceSceneCode,
+                    SceneCode = x.SceneCode,
+                    RenderEngine = "Stellarium",
+                    TargetObjects = x.ObjectCodes,
+                    PrimaryObject = x.ObjectCodes.FirstOrDefault(),
+                    ExpectedSscScriptPath = Path.Combine(scriptsDirectory, $"{x.SceneCode}.ssc"),
+                    ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{x.SceneCode}.png")
+                }).ToList(),
+            CelestialAssetScenes = weeklyScenePlan.ScenePlans.Where(scene => scene.RequiresCelestialAssets)
+                .Select(scene => new { SourceSceneCode = scene.SceneCode, SceneCode = scene.SceneCode, RenderEngine = "CelestialAsset", TargetObjects = scene.ObjectCodes, PrimaryObject = scene.ObjectCodes.FirstOrDefault(), ExpectedSscScriptPath = string.Empty, ExpectedOutputImagePath = string.Empty }).ToList(),
+            OverlayScenes = weeklyScenePlan.ScenePlans.Where(scene => scene.RequiresOverlayComposite)
+                .Select(scene => new { SourceSceneCode = scene.SceneCode, SceneCode = scene.SceneCode, RenderEngine = "Overlay", TargetObjects = scene.ObjectCodes, PrimaryObject = scene.ObjectCodes.FirstOrDefault(), ExpectedSscScriptPath = string.Empty, ExpectedOutputImagePath = string.Empty }).ToList(),
+            ThumbnailScenes = weeklyScenePlan.ScenePlans.Where(scene => scene.SceneType.Contains("thumbnail", StringComparison.OrdinalIgnoreCase))
+                .Select(scene => new { SourceSceneCode = scene.SceneCode, SceneCode = scene.SceneCode, RenderEngine = "Thumbnail", TargetObjects = scene.ObjectCodes, PrimaryObject = scene.ObjectCodes.FirstOrDefault(), ExpectedSscScriptPath = string.Empty, ExpectedOutputImagePath = string.Empty }).ToList(),
+            DeferredScenes = weeklyScenePlan.ScenePlans.Where(scene => !scene.RequiresStellarium && !scene.RequiresCelestialAssets && !scene.RequiresOverlayComposite)
+                .Select(scene => new { SourceSceneCode = scene.SceneCode, SceneCode = scene.SceneCode, RenderEngine = "Deferred", TargetObjects = scene.ObjectCodes, PrimaryObject = scene.ObjectCodes.FirstOrDefault(), ExpectedSscScriptPath = string.Empty, ExpectedOutputImagePath = string.Empty }).ToList()
+        };
+        app.Logger.LogInformation("RENDER_SCENE_MANIFEST={Manifest}", JsonSerializer.Serialize(renderSceneManifest));
+        app.Logger.LogInformation("STELLARIUM_RENDER_SCENE_COUNT={Count}", renderSceneManifest.StellariumScenes.Count);
+
         var stellariumNeedsByScene = weeklyScenePlan.StellariumNeeds
             .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
         var scenePlansByCode = weeklyScenePlan.ScenePlans
             .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
-        var stellariumShots = weeklyScenePlan.StellariumNeeds
+        var stellariumShots = renderSceneManifest.StellariumScenes
+            .Select(renderScene => weeklyScenePlan.StellariumNeeds.First(need => need.SceneCode.Equals(renderScene.SceneCode, StringComparison.OrdinalIgnoreCase)))
             .Select(need =>
             {
                 var matchingShot = shots.FirstOrDefault(shot => shot.ShotCode.Equals(need.SceneCode, StringComparison.OrdinalIgnoreCase));
@@ -1481,6 +1510,13 @@ var sscResult = splitProbeSsc;
             };
         }).ToList();
 
+        app.Logger.LogInformation("temporal match summary: resolvedCandidates={Count}", generatedScripts.Count);
+        app.Logger.LogInformation("spatial composition summary: compositionScenes={Count}", compositionPackage.Entries.Count);
+        app.Logger.LogInformation("render split summary: stellariumScenes={Count}", finalScenes.Count);
+        app.Logger.LogInformation("final SSC path summary: {Paths}", string.Join(",", scriptPaths));
+        app.Logger.LogInformation("SSC_SCRIPT_COUNT={Count}", scriptPaths.Count);
+        app.Logger.LogInformation("SCREENSHOT_COUNT={Count}", screenshots.Count);
+
         var executionSummary = new
         {
             plannedSceneCount = shots.Count,
@@ -1490,6 +1526,11 @@ var sscResult = splitProbeSsc;
             screenshotCount = screenshots.Count,
             screenshotMissingCount = Math.Max(0, finalScenes.Count - screenshots.Count)
         };
+
+        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || finalScenes.Count != 2 || scriptPaths.Count != 2 || screenshots.Count != 2)
+        {
+            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Stellarium={finalScenes.Count}, SscScripts={scriptPaths.Count}, Screenshots={screenshots.Count}");
+        }
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
@@ -3051,3 +3092,4 @@ public sealed record GenerateDailyPlanResponse(
 
 sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
 sealed record WeeklyObjectPositionResolution(double AltitudeDeg, double AzimuthDeg, double Magnitude, string Source, string RequestedName, string NormalizedName, string DateKey, string TimeKey, string CollectionSearched, bool MatchFound, string CandidateNames, string CandidateTimes, string TopLevelKeys, string AvailableDates, string SelectedDateCollections, string SelectedDateObjectNames);
+
