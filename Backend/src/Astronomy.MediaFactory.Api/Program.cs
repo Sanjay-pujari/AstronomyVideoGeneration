@@ -17,6 +17,7 @@ using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Api;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -1571,6 +1572,15 @@ var sscResult = splitProbeSsc;
                     app.Logger.LogError("SSC_SKIPPED_FALLBACK_CAMERA sceneCode={SceneCode} cameraAlt={CameraAlt} cameraAz={CameraAz}", shot.ShotCode, sscResult.CameraAltitudeDeg, sscResult.CameraAzimuthDeg);
                     continue;
                 }
+                var framingMode = sscResult.CinematicQualityReport?.CameraPlan.FramingMode;
+                var compositionMode = ResolveCinematicCompositionMode(shot.ShotCode, framingMode);
+                app.Logger.LogInformation("CINEMATIC_COMPOSITION_MODE_RESOLVED sceneCode={SceneCode} framingMode={FramingMode} compositionMode={CompositionMode}", shot.ShotCode, framingMode, compositionMode);
+                var subjectOffset = ComputeSubjectOffset(compositionMode, skyPositions.Select(x => x.Position).ToList(), sscResult.CameraAzimuthDeg, sscResult.CameraAltitudeDeg);
+                var attentionPolicy = BuildAttentionPolicy(compositionMode, sceneSpecificCodes.FirstOrDefault() ?? string.Empty);
+                app.Logger.LogInformation("SUBJECT_OFFSET_COMPOSITION sceneCode={SceneCode} intent={Intent} primarySubject={PrimarySubject} originalCameraAz={OriginalCameraAz} originalCameraAlt={OriginalCameraAlt} offsetCameraAz={OffsetCameraAz} offsetCameraAlt={OffsetCameraAlt} targetScreenX={TargetScreenX} targetScreenY={TargetScreenY} offsetReason={OffsetReason} safetyWarnings={SafetyWarnings}",
+                    shot.ShotCode, sceneIntent, sceneSpecificCodes.FirstOrDefault() ?? string.Empty, sscResult.CameraAzimuthDeg, sscResult.CameraAltitudeDeg, subjectOffset.OffsetAz, subjectOffset.OffsetAlt, subjectOffset.TargetX, subjectOffset.TargetY, subjectOffset.Reason, string.Join("|", subjectOffset.Warnings));
+                app.Logger.LogInformation("ATTENTION_GUIDANCE_POLICY sceneCode={SceneCode} attentionMode={AttentionMode} overlayDensity={OverlayDensity} labelPriority={LabelPriority} suppressPeripheralLabels={SuppressPeripheralLabels} highlightPrimarySubject={HighlightPrimarySubject} reason={Reason}",
+                    shot.ShotCode, attentionPolicy.Mode, attentionPolicy.OverlayDensity, attentionPolicy.LabelPriority, attentionPolicy.SuppressPeripheralLabels, attentionPolicy.HighlightPrimarySubject, attentionPolicy.Reason);
                 List<(CinematicFrameType frameType, string name, double fovScale, double? minFov, double? maxFov, double? subjectX, double? subjectY, bool preserveHorizon, bool preserveLabels, bool preserveLines, string purpose)> variants = compositionMode switch
                 {
                     "MoonHero" =>
