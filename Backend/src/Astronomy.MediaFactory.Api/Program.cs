@@ -19,7 +19,9 @@ using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using SixLabors.ImageSharp;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration
@@ -1705,7 +1707,8 @@ var sscResult = splitProbeSsc;
             framePlans = allFramePlans,
             selectedPrimaryFrame = "BalancedStoryFrame",
             frameCount = allFramePlans.Sum(x => x.FramePlans.Count),
-            sceneQuality = cinematicQualityReports
+            sceneQuality = cinematicQualityReports,
+            attentionGuidance = cinematicQualityReports.Select(x => x.attentionGuidance).ToList()
         }, new JsonSerializerOptions { WriteIndented = true }));
 
         var finalScenes = allFramePlans
@@ -1900,9 +1903,34 @@ var sscResult = splitProbeSsc;
             screenshotMissingCount = Math.Max(0, finalScenes.Count - screenshots.Count)
         };
 
-        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || finalScenes.Count != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || primaryScreenshots.Count != 2)
+        const long minimumScreenshotBytes = 10 * 1024;
+        var seenFrameHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var screenshotPath in screenshots)
         {
-            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Stellarium={finalScenes.Count}, SscScripts={scriptPaths.Count}, Screenshots={screenshots.Count}, PrimaryScreenshots={primaryScreenshots.Count}");
+            var info = new FileInfo(screenshotPath);
+            if (!info.Exists)
+                throw new InvalidOperationException($"Final image validation failed: file does not exist '{screenshotPath}'.");
+            if (info.Length <= minimumScreenshotBytes)
+                throw new InvalidOperationException($"Final image validation failed: file '{screenshotPath}' is too small ({info.Length} bytes).");
+
+            IImageInfo? imageInfo;
+            using (var imageStream = File.OpenRead(screenshotPath))
+            {
+                imageInfo = Image.Identify(imageStream, out _);
+            }
+            if (imageInfo is null || imageInfo.Width <= 0 || imageInfo.Height <= 0)
+                throw new InvalidOperationException($"Final image validation failed: invalid image dimensions for '{screenshotPath}'.");
+
+            using var hashStream = File.OpenRead(screenshotPath);
+            var hash = Convert.ToHexString(SHA256.HashData(hashStream));
+            if (seenFrameHashes.TryGetValue(hash, out var originalPath))
+                throw new InvalidOperationException($"Final image validation failed: duplicate frame detected between '{originalPath}' and '{screenshotPath}'.");
+            seenFrameHashes[hash] = screenshotPath;
+        }
+
+        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count != 2 || allFramePlans.Sum(x => x.FramePlans.Count) != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || primaryScreenshots.Count != 2 || warnings.Count != 0)
+        {
+            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Composition={compositionPaths.Count}, RenderScenes={allFramePlans.Count}, FramePlans={allFramePlans.Sum(x => x.FramePlans.Count)}, SscScripts={scriptPaths.Count}, Screenshots={screenshots.Count}, fallbackUsed={(warnings.Count > 0 ? "true" : "false")}");
         }
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
@@ -1932,8 +1960,9 @@ var sscResult = splitProbeSsc;
             skyfieldResponsePath,
             storyBeatsPath,
             narrationManifestPath,
+            primaryScreenshots.Count,
             scriptPaths.Count,
-            scriptPaths.Count,
+            screenshots.Count,
             screenshots,
             warnings,
             allFramePlans.Sum(x => x.FramePlans.Count),

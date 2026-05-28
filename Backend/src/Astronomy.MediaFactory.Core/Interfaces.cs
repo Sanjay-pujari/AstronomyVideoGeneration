@@ -1254,6 +1254,7 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     string ScenePlanPath,
     int GeneratedScenes,
     int GeneratedSscScripts,
+    int GeneratedFrameScreenshots,
     IReadOnlyList<string> Screenshots,
     IReadOnlyList<string> Warnings,
     int GeneratedFramePlans = 0,
