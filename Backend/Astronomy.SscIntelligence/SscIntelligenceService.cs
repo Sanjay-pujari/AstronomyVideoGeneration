@@ -98,6 +98,27 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
             cameraPlan.FramingMode,
             cameraPlan.Reason);
 
+        var shotType = cameraPlan.FramingMode;
+        var paddingMultiplier = shotType switch
+        {
+            "HeroObject" => 1.6d,
+            "PlanetGrouping" => 1.8d,
+            "OrientationWide" => 2.2d,
+            _ => sceneIntent == SceneIntentType.WideNight ? 2.5d : 1.8d
+        };
+        _logger.LogInformation("WEEKLY_V2_STELLARIUM_SCENE_DEBUG: sceneId={SceneId}, shotType={ShotType}, targetObjects={TargetObjects}, cameraAz={CameraAz:0.##}, cameraAlt={CameraAlt:0.##}, computedFov={ComputedFov:0.##}, paddingMultiplier={PaddingMultiplier:0.##}, safeFrameMarginApplied={SafeFrameMarginApplied}, verticalBiasApplied={VerticalBiasApplied:0.##}, geometrySource={GeometrySource}, fallbackUsed={FallbackUsed}",
+            request.SceneCode ?? "unknown",
+            shotType,
+            string.Join(",", cameraObjects.Select(o => o.Name)),
+            cameraPlan.CameraAzimuth,
+            cameraPlan.CameraAltitude,
+            cameraPlan.FovDegrees,
+            paddingMultiplier,
+            true,
+            cameraPlan.VerticalBias,
+            "skyfield-nearest-time-resolver",
+            false);
+
         var script = _renderer.Render(new SscRenderRequest(nightWindow.BestObservationUtc, request.Longitude, request.Latitude, request.ElevationMeters, request.LocationName, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, screenshotDirectory ?? ".", screenshotFileNameWithoutExtension ?? "scene"));
         return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, cameraAltitudeRaw, composition.Reason, targets.PrimaryTargets.Select(x => x.Name).ToList(), targets.SecondaryTargets.Select(x => x.Name).ToList(), targets.ContextTargets.Select(x => x.Name).ToList(), script.Script, nightWindow);
     }
