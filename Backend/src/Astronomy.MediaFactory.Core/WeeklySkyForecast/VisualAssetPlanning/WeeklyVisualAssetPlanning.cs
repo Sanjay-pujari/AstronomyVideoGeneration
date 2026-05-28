@@ -86,7 +86,12 @@ public sealed record WeeklyVisualBalanceReport(
     IReadOnlyList<string> VisualRepetitionIndicators,
     IReadOnlyList<string> MissingAssetCategories,
     IReadOnlyList<string> RetentionImprovementSuggestions,
-    bool VisualBalanceHealthy);
+    bool VisualBalanceHealthy,
+    int AICinematicAssetsPlanned = 0,
+    int AICinematicAssetsGenerated = 0,
+    int AICinematicProductionReadyCount = 0,
+    int RemainingAICinematicGap = 0,
+    string VisualBalanceAfterAICinematicAssets = "NotEvaluated");
 
 public sealed record WeeklyVisualAssetPlan(
     Guid PipelineRunId,

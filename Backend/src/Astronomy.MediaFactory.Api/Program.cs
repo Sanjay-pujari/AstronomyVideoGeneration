@@ -12,6 +12,7 @@ using Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentDiversification;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -734,7 +735,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
 {
     try
     {
@@ -2107,6 +2108,16 @@ var sscResult = splitProbeSsc;
                 root,
                 stageCt));
 
+        var aiCinematicAssets = await ExecuteOrchestrationStageAsync("Generating planned AI cinematic still assets", stageCt =>
+            aiCinematicAssetGenerationService.GenerateAndPersistAsync(
+                visualAssetPlanning.Plan,
+                visualAssetPlanning.BalanceReport,
+                segmentDiversification.Plan,
+                episodeArchitecture,
+                weeklySkyfieldContext,
+                root,
+                stageCt));
+
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
             pipelineRunId,
@@ -2149,7 +2160,7 @@ var sscResult = splitProbeSsc;
                 segmentDiversificationReady = segmentDiversification.Plan.SegmentDiversificationReady,
                 diversifiedLongformSegmentCount = segmentDiversification.Plan.DiversifiedLongformSegmentCount,
                 diversifiedShortformSegmentCount = segmentDiversification.Plan.DiversifiedShortformSegmentCount,
-                assetExpansionRequired = segmentDiversification.Plan.AssetExpansionRequired,
+                assetExpansionRequired = segmentDiversification.Plan.AssetExpansionRequired || aiCinematicAssets.RemainingGap > 0,
                 highestRetentionRiskScore = segmentDiversification.Plan.HighestRetentionRiskScore,
                 highestRepetitionRiskScore = segmentDiversification.Plan.HighestRepetitionRiskScore
             },
@@ -2165,6 +2176,17 @@ var sscResult = splitProbeSsc;
                 plannedNASAAssetCount = visualAssetPlanning.Plan.PlannedNASAAssetCount,
                 plannedJWSTAssetCount = visualAssetPlanning.Plan.PlannedJWSTAssetCount,
                 visualBalanceHealthy = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
+            },
+            aiCinematicAssets = new
+            {
+                aiCinematicAssetPlanPath = aiCinematicAssets.PlanPath,
+                aiCinematicAssetResultsPath = aiCinematicAssets.ResultsPath,
+                aiCinematicAssetGenerationReady = aiCinematicAssets.GenerationReady,
+                plannedAICinematicAssetCount = aiCinematicAssets.PlannedCount,
+                generatedAICinematicAssetCount = aiCinematicAssets.GeneratedCount,
+                productionReadyAICinematicAssetCount = aiCinematicAssets.ProductionReadyCount,
+                aiCinematicProviderConfigured = aiCinematicAssets.ProviderConfigured,
+                remainingAICinematicGap = aiCinematicAssets.RemainingGap
             },
             selectedImageCount = imageSequencePlan.TotalImages,
             estimatedImageSequenceDurationSeconds = imageSequencePlan.EstimatedDurationSeconds,
@@ -2219,7 +2241,7 @@ var sscResult = splitProbeSsc;
             segmentDiversification.Plan.SegmentDiversificationReady,
             segmentDiversification.Plan.DiversifiedLongformSegmentCount,
             segmentDiversification.Plan.DiversifiedShortformSegmentCount,
-            segmentDiversification.Plan.AssetExpansionRequired,
+            segmentDiversification.Plan.AssetExpansionRequired || aiCinematicAssets.RemainingGap > 0,
             segmentDiversification.Plan.HighestRetentionRiskScore,
             segmentDiversification.Plan.HighestRepetitionRiskScore,
             visualAssetPlanning.PlanPath,
@@ -2231,7 +2253,14 @@ var sscResult = splitProbeSsc;
             visualAssetPlanning.Plan.PlannedAICinematicCount,
             visualAssetPlanning.Plan.PlannedNASAAssetCount,
             visualAssetPlanning.Plan.PlannedJWSTAssetCount,
-            visualAssetPlanning.BalanceReport.VisualBalanceHealthy);
+            visualAssetPlanning.BalanceReport.VisualBalanceHealthy,
+            aiCinematicAssets.PlanPath,
+            aiCinematicAssets.ResultsPath,
+            aiCinematicAssets.GenerationReady,
+            aiCinematicAssets.PlannedCount,
+            aiCinematicAssets.GeneratedCount,
+            aiCinematicAssets.ProductionReadyCount,
+            aiCinematicAssets.ProviderConfigured);
 
         return Results.Ok(output);
     }
