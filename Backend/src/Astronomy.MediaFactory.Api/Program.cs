@@ -2116,7 +2116,12 @@ var sscResult = splitProbeSsc;
                 episodeArchitecture,
                 weeklySkyfieldContext,
                 root,
-                stageCt));
+                stageCt,
+                request.ContinueOnFailure));
+
+        var visualBalanceHealthyAfterAICinematicAssets = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
+            && aiCinematicAssets.PlannedCount == aiCinematicAssets.ProductionReadyCount
+            && aiCinematicAssets.GeneratedCount >= aiCinematicAssets.PlannedCount;
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
@@ -2175,7 +2180,7 @@ var sscResult = splitProbeSsc;
                 plannedAICinematicCount = visualAssetPlanning.Plan.PlannedAICinematicCount,
                 plannedNASAAssetCount = visualAssetPlanning.Plan.PlannedNASAAssetCount,
                 plannedJWSTAssetCount = visualAssetPlanning.Plan.PlannedJWSTAssetCount,
-                visualBalanceHealthy = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
+                visualBalanceHealthy = visualBalanceHealthyAfterAICinematicAssets
             },
             aiCinematicAssets = new
             {
@@ -2186,6 +2191,7 @@ var sscResult = splitProbeSsc;
                 generatedAICinematicAssetCount = aiCinematicAssets.GeneratedCount,
                 productionReadyAICinematicAssetCount = aiCinematicAssets.ProductionReadyCount,
                 aiCinematicProviderConfigured = aiCinematicAssets.ProviderConfigured,
+                azureImageDeploymentUsed = aiCinematicAssets.AzureImageDeploymentUsed,
                 remainingAICinematicGap = aiCinematicAssets.RemainingGap
             },
             selectedImageCount = imageSequencePlan.TotalImages,
@@ -2253,14 +2259,15 @@ var sscResult = splitProbeSsc;
             visualAssetPlanning.Plan.PlannedAICinematicCount,
             visualAssetPlanning.Plan.PlannedNASAAssetCount,
             visualAssetPlanning.Plan.PlannedJWSTAssetCount,
-            visualAssetPlanning.BalanceReport.VisualBalanceHealthy,
+            visualBalanceHealthyAfterAICinematicAssets,
             aiCinematicAssets.PlanPath,
             aiCinematicAssets.ResultsPath,
             aiCinematicAssets.GenerationReady,
             aiCinematicAssets.PlannedCount,
             aiCinematicAssets.GeneratedCount,
             aiCinematicAssets.ProductionReadyCount,
-            aiCinematicAssets.ProviderConfigured);
+            aiCinematicAssets.ProviderConfigured,
+            aiCinematicAssets.AzureImageDeploymentUsed);
 
         return Results.Ok(output);
     }

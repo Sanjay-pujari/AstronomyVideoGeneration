@@ -9,16 +9,15 @@ using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 
-public sealed class AzureOpenAiAICinematicImageGeneratorTests
+public sealed class AzureOpenAICinematicImageGeneratorTests
 {
     [Fact]
     public async Task GenerateAsync_ReturnsProviderNotConfigured_WhenImageDeploymentMissing()
     {
-        var sut = CreateGenerator(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP should not be called.")), new AzureOpenAiOptions
+        var sut = CreateGenerator(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP should not be called.")), new AzureOpenAIForImageOptions
         {
             Endpoint = "https://example.openai.azure.com",
-            ApiKey = "test-key",
-            ChatDeployment = "gpt-test"
+            ApiKey = "test-key"
         });
 
         var result = await sut.GenerateAsync(CreateRequest(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "image.png")), CancellationToken.None);
@@ -26,7 +25,7 @@ public sealed class AzureOpenAiAICinematicImageGeneratorTests
         Assert.False(sut.IsConfigured);
         Assert.False(result.ProviderConfigured);
         Assert.Equal("ProviderNotConfigured", result.GenerationStatus);
-        Assert.Contains(result.Warnings, warning => warning.Contains("AzureOpenAI:ImageDeployment", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Warnings, warning => warning.Contains("AzureOpenAIForImage:ImageDeployment", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -51,11 +50,10 @@ public sealed class AzureOpenAiAICinematicImageGeneratorTests
             };
         });
 
-        var sut = CreateGenerator(handler, new AzureOpenAiOptions
+        var sut = CreateGenerator(handler, new AzureOpenAIForImageOptions
         {
             Endpoint = "https://example.openai.azure.com",
             ApiKey = "test-key",
-            ChatDeployment = "gpt-test",
             ImageDeployment = "image-test"
         });
 
@@ -79,11 +77,11 @@ public sealed class AzureOpenAiAICinematicImageGeneratorTests
         }
     }
 
-    private static AzureOpenAiAICinematicImageGenerator CreateGenerator(HttpMessageHandler handler, AzureOpenAiOptions options)
+    private static AzureOpenAICinematicImageGenerator CreateGenerator(HttpMessageHandler handler, AzureOpenAIForImageOptions options)
         => new(
             new HttpClient(handler),
             Options.Create(options),
-            NullLogger<AzureOpenAiAICinematicImageGenerator>.Instance);
+            NullLogger<AzureOpenAICinematicImageGenerator>.Instance);
 
     private static AICinematicAssetRequest CreateRequest(string plannedPath) => new(
         AssetId: "asset-1",

@@ -56,6 +56,10 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(AzureOpenAiOptions.SectionName))
             .ValidateOnStart();
 
+        services.AddOptions<AzureOpenAIForImageOptions>()
+            .Bind(configuration.GetSection(AzureOpenAIForImageOptions.SectionName))
+            .ValidateOnStart();
+
         services.AddSingleton<IValidateOptions<AzureOpenAiOptions>, AzureOpenAiOptionsValidator>();
 
         services.AddOptions<AzureSpeechOptions>()
@@ -356,7 +360,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IMetadataOptimizationService, MetadataOptimizationService>();
         services.AddScoped<IContentMonetizationService, ContentMonetizationService>();
         services.AddHttpClient<AzureOpenAiContentGenerationService>();
-        services.AddHttpClient<AzureOpenAiAICinematicImageGenerator>();
+        services.AddHttpClient<AzureOpenAICinematicImageGenerator>();
         services.AddScoped<IMetadataOptimizationModelClient>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IShortsScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
@@ -523,7 +527,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicPromptBuilder>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetPersister>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetValidator>();
-        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicImageGenerator>(sp => sp.GetRequiredService<AzureOpenAiAICinematicImageGenerator>());
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicImageGenerator>(sp => sp.GetRequiredService<AzureOpenAICinematicImageGenerator>());
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.WeeklyAICinematicAssetGenerationService>();
         services.AddScoped<IWeeklyStoryboardComposer, WeeklyStoryboardComposer>();
         services.AddScoped<IWeeklyConjunctionFramingEngine, WeeklyConjunctionFramingEngine>();

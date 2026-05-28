@@ -1362,7 +1362,8 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     int PlannedAICinematicAssetCount = 0,
     int GeneratedAICinematicAssetCount = 0,
     int ProductionReadyAICinematicAssetCount = 0,
-    bool AICinematicProviderConfigured = false);
+    bool AICinematicProviderConfigured = false,
+    string AzureImageDeploymentUsed = "");
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
