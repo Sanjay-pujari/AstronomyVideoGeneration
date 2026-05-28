@@ -72,11 +72,12 @@ public sealed class AstronomicalSpatialCompositionEngine : IAstronomicalSpatialC
 
     private static double CalculateAzimuthSpread(IEnumerable<double> azimuths)
     {
-        var sorted = azimuths.OrderBy(a => a).ToArray(); if (sorted.Length <= 1) return 0;
+        var sorted = azimuths.Select(NormalizeDegrees).OrderBy(a => a).ToArray(); if (sorted.Length <= 1) return 0;
         double largestGap = 0; for (var i = 1; i < sorted.Length; i++) largestGap = Math.Max(largestGap, sorted[i] - sorted[i - 1]);
-        largestGap = Math.Max(largestGap, 360 - sorted[^1] + sorted[0]); return 360 - largestGap;
+        largestGap = Math.Max(largestGap, 360 - sorted[^1] + sorted[0]); return Math.Clamp(360 - largestGap, 0, 360);
     }
-    private static double CircularAzimuthDelta(double a, double b) { var d = Math.Abs(a - b) % 360; return d > 180 ? 360 - d : d; }
+    private static double CircularAzimuthDelta(double a, double b) { var d = Math.Abs(NormalizeDegrees(a) - NormalizeDegrees(b)) % 360; return d > 180 ? 360 - d : d; }
+    private static double NormalizeDegrees(double degrees) { var normalized = degrees % 360; return normalized < 0 ? normalized + 360 : normalized; }
     private static double AngularSeparationDeg(SkyObjectPosition a, SkyObjectPosition b)
     {
         var alt1 = a.AltitudeDeg * Math.PI / 180; var az1 = a.AzimuthDeg * Math.PI / 180; var alt2 = b.AltitudeDeg * Math.PI / 180; var az2 = b.AzimuthDeg * Math.PI / 180;
