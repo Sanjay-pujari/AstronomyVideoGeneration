@@ -1240,6 +1240,13 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     continue;
                 }
 
+                var hasRealAltAz = skyPositions.Any(x => !x.Source.Contains("source=fallback", StringComparison.OrdinalIgnoreCase));
+                if (!hasRealAltAz)
+                {
+                    app.Logger.LogError("SSC_SKIPPED_NO_REAL_GEOMETRY sceneCode={SceneCode} requestedObjects={RequestedObjects}", shot.ShotCode, string.Join(",", sceneSpecificCodes));
+                    continue;
+                }
+
                 var compositionObjectsForSplit = skyPositions.Select(x => x.Position).ToList();
                 var spatialComposition = spatialCompositionEngine.Analyze(compositionObjectsForSplit);
                 var splitProbeSceneIntent = sceneIntentResolver.Resolve(shot.ShotCode, shot.ShotPurpose);
@@ -1361,6 +1368,14 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                         var splitResultSsc = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                             observationUtc,longitude,latitude,elevationMeters,locationName,splitSkyPositions.Select(x => x.Position).ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitObjectCodes),
                             scenesDirectory,splitPrefix);
+                        if (splitFallbackCount > 0)
+                        {
+                            throw new InvalidOperationException($"FallbackGeometryForbidden: split scene '{splitScene.SceneCode}' contains fallback geometry.");
+                        }
+                        if (Math.Abs(splitResultSsc.CameraAltitudeDeg - 30d) < 0.0001d && Math.Abs(splitResultSsc.CameraAzimuthDeg - 270d) < 0.0001d)
+                        {
+                            throw new InvalidOperationException($"FallbackCameraForbidden: split scene '{splitScene.SceneCode}' produced fallback camera alt/az.");
+                        }
                         var splitScriptPath = Path.Combine(scriptsDirectory, $"{splitScene.SceneCode}.ssc");
                         var splitHeader = string.Join(Environment.NewLine, new[] {"// Source: NarrativeSceneSplitter",$"// SourceSceneCode: {shot.ShotCode}",$"// Region: {weeklySkyfieldContext.Region}",$"// TargetDate: {stellariumNeed.TargetDate:yyyy-MM-dd}",$"// SelectedObservationUtc: {observationUtc:O}",$"// ScreenshotDirectory: {scenesDirectory.Replace('\\', '/')}",string.Empty});
                         generatedScripts.Add((splitScriptPath, splitHeader + splitResultSsc.SscScript));
@@ -1406,6 +1421,11 @@ var sscResult = splitProbeSsc;
                 }
 
                 var syntheticFallbackUsed = skyPositions.Any(x => x.Source.Contains("source=fallback", StringComparison.OrdinalIgnoreCase));
+                if (syntheticFallbackUsed)
+                {
+                    app.Logger.LogWarning("SSC_SKIPPED_FALLBACK_GEOMETRY sceneCode={SceneCode} requestedObjects={RequestedObjects}", shot.ShotCode, string.Join(",", sceneSpecificCodes));
+                    continue;
+                }
                 var identicalGeometry = skyPositions
                     .Select(x => $"{Math.Round(x.Position.AltitudeDeg, 3)}|{Math.Round(x.Position.AzimuthDeg, 3)}")
                     .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1470,6 +1490,11 @@ var sscResult = splitProbeSsc;
                     sscResult.FovDeg,
                     sscResult.CompositionBiasReason,
                     sscResult.RequiresSplit);
+                if (Math.Abs(sscResult.CameraAltitudeDeg - 30d) < 0.0001d && Math.Abs(sscResult.CameraAzimuthDeg - 270d) < 0.0001d)
+                {
+                    app.Logger.LogError("SSC_SKIPPED_FALLBACK_CAMERA sceneCode={SceneCode} cameraAlt={CameraAlt} cameraAz={CameraAz}", shot.ShotCode, sscResult.CameraAltitudeDeg, sscResult.CameraAzimuthDeg);
+                    continue;
+                }
                 var scriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc");
                 app.Logger.LogInformation(
                     "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects} fallbackUsed={FallbackUsed} cameraAlt={CameraAlt} cameraAz={CameraAz} fov={Fov} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
