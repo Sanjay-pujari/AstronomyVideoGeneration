@@ -922,33 +922,62 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var cinematicQualityReports = new List<object>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
+        enum CinematicCompositionMode
+        {
+            MoonHero,
+            PlanetGrouping,
+            WideOrientation,
+            HorizonEpic,
+            DeepSkyIsolation
+        }
+
+        static CinematicCompositionMode ResolveCinematicCompositionMode(string? sceneCode, string? framingMode)
+        {
+            if (!string.IsNullOrWhiteSpace(sceneCode))
+            {
+                if (sceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.MoonHero;
+                if (sceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.PlanetGrouping;
+                if (sceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.WideOrientation;
+                if (sceneCode.Equals("viewing_tip_wide_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.WideOrientation;
+                if (sceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.HorizonEpic;
+            }
+
+            if (!string.IsNullOrWhiteSpace(framingMode))
+            {
+                if (framingMode.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.PlanetGrouping;
+                if (framingMode.Equals("OrientationWide", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.WideOrientation;
+                if (framingMode.Equals("HeroObject", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.MoonHero;
+            }
+
+            return CinematicCompositionMode.DeepSkyIsolation;
+        }
+
         static (double OffsetAz, double OffsetAlt, double TargetX, double TargetY, string Reason, List<string> Warnings) ComputeSubjectOffset(
-            string sceneIntent,
+            CinematicCompositionMode compositionMode,
             IReadOnlyList<SkyObjectPosition> visibleObjects,
             double cameraAz,
             double cameraAlt)
         {
             var warnings = new List<string>();
-            var normalizedIntent = sceneIntent ?? string.Empty;
             var targetX = 0.50d;
             var targetY = 0.50d;
             var azOffset = 0d;
             var altOffset = 0d;
             var reason = "No offset policy matched; preserving baseline camera.";
-            if (normalizedIntent.Contains("hero", StringComparison.OrdinalIgnoreCase) || visibleObjects.Any(o => o.Name.Equals("MOON", StringComparison.OrdinalIgnoreCase)))
+            if (compositionMode == CinematicCompositionMode.MoonHero)
             {
                 targetX = 0.58d; targetY = 0.42d; azOffset = -3.5d; altOffset = 4d;
-                reason = "Moon Hero framing: slight rule-of-thirds shift with upper-middle placement.";
+                reason = "MoonHero framing";
             }
-            else if (normalizedIntent.Contains("group", StringComparison.OrdinalIgnoreCase))
+            else if (compositionMode == CinematicCompositionMode.PlanetGrouping)
             {
                 targetX = 0.50d; targetY = 0.62d; azOffset = 0d; altOffset = -3d;
-                reason = "PlanetGrouping framing: lower-middle group while preserving horizontal center.";
+                reason = "PlanetGrouping framing";
             }
-            else if (normalizedIntent.Contains("wide", StringComparison.OrdinalIgnoreCase) || normalizedIntent.Contains("orientation", StringComparison.OrdinalIgnoreCase))
+            else if (compositionMode == CinematicCompositionMode.WideOrientation)
             {
                 targetX = 0.50d; targetY = 0.65d; azOffset = 0d; altOffset = -1.5d;
-                reason = "WideOrientation framing: preserve horizon with lower-third bias.";
+                reason = "WideOrientation framing";
             }
             if (targetX < 0.20d || targetX > 0.80d || targetY < 0.20d || targetY > 0.80d)
             {
@@ -959,13 +988,13 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return (cameraAz + azOffset, Math.Clamp(cameraAlt + altOffset, -5d, 85d), targetX, targetY, reason, warnings);
         }
 
-        static object BuildAttentionPolicy(string sceneIntent, string primarySubject)
+        static object BuildAttentionPolicy(CinematicCompositionMode compositionMode, string primarySubject)
         {
-            if (sceneIntent.Contains("group", StringComparison.OrdinalIgnoreCase))
+            if (compositionMode == CinematicCompositionMode.PlanetGrouping)
                 return new { attentionMode = "GroupFocus", overlayDensity = "medium", labelPriority = "primary+secondary", suppressPeripheralLabels = false, highlightPrimarySubject = true, attentionWarnings = Array.Empty<string>(), reason = "PlanetGrouping policy." };
-            if (sceneIntent.Contains("wide", StringComparison.OrdinalIgnoreCase) || sceneIntent.Contains("orientation", StringComparison.OrdinalIgnoreCase))
+            if (compositionMode == CinematicCompositionMode.WideOrientation)
                 return new { attentionMode = "ContextualSky", overlayDensity = "medium-high", labelPriority = "balanced", suppressPeripheralLabels = false, highlightPrimarySubject = false, attentionWarnings = Array.Empty<string>(), reason = "WideOrientation policy." };
-            return new { attentionMode = "PrimarySubject", overlayDensity = "low-medium", labelPriority = string.IsNullOrWhiteSpace(primarySubject) ? "primary" : primarySubject, suppressPeripheralLabels = true, highlightPrimarySubject = true, attentionWarnings = Array.Empty<string>(), reason = "HeroObject policy." };
+            return new { attentionMode = "PrimarySubject", overlayDensity = "low-medium", labelPriority = string.IsNullOrWhiteSpace(primarySubject) ? "primary" : primarySubject, suppressPeripheralLabels = true, highlightPrimarySubject = true, attentionWarnings = Array.Empty<string>(), reason = "MoonHero policy." };
         }
         WeeklyScenePlan? ResolveRenderSceneArtifactScenePlan(string sceneCode, string? sourceSceneCode, IReadOnlyDictionary<string, WeeklyScenePlan> scenePlanIndex)
         {
@@ -1563,8 +1592,10 @@ var sscResult = splitProbeSsc;
                     sscResult.FovDeg,
                     sceneSpecificCodes.FirstOrDefault() ?? string.Empty,
                     stellariumNeed.IsDynamicSplitScene);
-                var subjectOffset = ComputeSubjectOffset(sceneIntent.ToString(), skyPositions.Select(x => x.Position).ToList(), sscResult.CameraAzimuthDeg, sscResult.CameraAltitudeDeg);
-                var attentionPolicy = BuildAttentionPolicy(sceneIntent.ToString(), sceneSpecificCodes.FirstOrDefault() ?? string.Empty);
+                var compositionMode = ResolveCinematicCompositionMode(shot.ShotCode, sscResult.FramingMode);
+                app.Logger.LogInformation("CINEMATIC_COMPOSITION_MODE_RESOLVED sceneCode={SceneCode} framingMode={FramingMode} compositionMode={CompositionMode}", shot.ShotCode, sscResult.FramingMode, compositionMode);
+                var subjectOffset = ComputeSubjectOffset(compositionMode, skyPositions.Select(x => x.Position).ToList(), sscResult.CameraAzimuthDeg, sscResult.CameraAltitudeDeg);
+                var attentionPolicy = BuildAttentionPolicy(compositionMode, sceneSpecificCodes.FirstOrDefault() ?? string.Empty);
                 app.Logger.LogInformation("SUBJECT_OFFSET_COMPOSITION sceneCode={SceneCode} intent={Intent} primarySubject={PrimarySubject} originalCameraAz={OriginalCameraAz} originalCameraAlt={OriginalCameraAlt} offsetCameraAz={OffsetCameraAz} offsetCameraAlt={OffsetCameraAlt} targetScreenX={TargetScreenX} targetScreenY={TargetScreenY} offsetReason={OffsetReason} safetyWarnings={SafetyWarnings}",
                     shot.ShotCode, sceneIntent, sceneSpecificCodes.FirstOrDefault() ?? string.Empty, sscResult.CameraAzimuthDeg, sscResult.CameraAltitudeDeg, subjectOffset.OffsetAz, subjectOffset.OffsetAlt, subjectOffset.TargetX, subjectOffset.TargetY, subjectOffset.Reason, string.Join("|", subjectOffset.Warnings));
                 app.Logger.LogInformation("ATTENTION_GUIDANCE_POLICY sceneCode={SceneCode} attentionMode={AttentionMode} overlayDensity={OverlayDensity} labelPriority={LabelPriority} suppressPeripheralLabels={SuppressPeripheralLabels} highlightPrimarySubject={HighlightPrimarySubject} reason={Reason}",
