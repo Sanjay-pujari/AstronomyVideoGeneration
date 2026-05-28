@@ -926,6 +926,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var cinematicQualityReports = new List<object>();
         var cinematicAttentionGuidanceReports = new List<object>();
         var allFramePlans = new List<CinematicSceneFramePlan>();
+        var finalRenderSceneDescriptors = new List<FinalRenderSceneDescriptor>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
         static string ResolveCinematicCompositionMode(string? sceneCode, string? framingMode)
@@ -1664,6 +1665,15 @@ var sscResult = splitProbeSsc;
                         $"core.screenshot(\"{frameScreenshotFileName.Replace("\"", "\\\"")}\", false, \"{frameScreenshotDirectory.Replace("\"", "\\\"")}\", true, \"png\");",
                         RegexOptions.CultureInvariant);
                     generatedScripts.Add((scriptPath, frameSsc));
+                    finalRenderSceneDescriptors.Add(new FinalRenderSceneDescriptor(
+                        shot.ShotCode,
+                        frame.FrameId,
+                        frame.FrameGenerationUsedFallback,
+                        frame.FallbackReason ?? string.Empty,
+                        string.Join("|", skyPositions.Select(x => x.Source)),
+                        frame.ScriptPath,
+                        frame.ImagePath,
+                        true));
                     app.Logger.LogInformation("FRAME_SSC_GENERATED sceneCode={SceneCode} frameType={FrameType} frameIndex={FrameIndex} cameraAz={CameraAz} cameraAlt={CameraAlt} fov={Fov} outputImageName={OutputImageName} scriptPath={ScriptPath} imagePath={ImagePath} safetyWarnings={SafetyWarnings}",
                         shot.ShotCode, frame.FrameType, frame.FrameIndex, frame.CameraAzimuth, frame.CameraAltitude, frame.Fov, frame.OutputImageName, frame.ScriptPath, frame.ImagePath, string.Join("|", frame.SafetyWarnings));
                     app.Logger.LogInformation("FRAME_SCRIPT_PATH_RESOLVED sceneCode={SceneCode} frameIndex={FrameIndex} frameType={FrameType} scriptPath={ScriptPath} imagePath={ImagePath}",
@@ -1703,15 +1713,24 @@ var sscResult = splitProbeSsc;
         Directory.CreateDirectory(qualityDirectory);
         var framePlanPath = Path.Combine(qualityDirectory, "cinematic-frame-plan.json");
         var qualityPath = Path.Combine(qualityDirectory, "cinematic-quality-report.json");
-        await File.WriteAllTextAsync(framePlanPath, JsonSerializer.Serialize(allFramePlans, new JsonSerializerOptions { WriteIndented = true }));
-        await File.WriteAllTextAsync(qualityPath, JsonSerializer.Serialize(new
+        await File.WriteAllTextAsync(framePlanPath, JsonSerializer.Serialize(allFramePlans, new JsonSerializerOptions { WriteIndented = true }), ct);
+        try
         {
-            framePlans = allFramePlans,
-            selectedPrimaryFrame = "BalancedStoryFrame",
-            frameCount = allFramePlans.Sum(x => x.FramePlans.Count),
-            sceneQuality = cinematicQualityReports,
-            attentionGuidance = cinematicAttentionGuidanceReports
-        }, new JsonSerializerOptions { WriteIndented = true }));
+            await File.WriteAllTextAsync(qualityPath, JsonSerializer.Serialize(new
+            {
+                framePlans = allFramePlans,
+                finalRenderSceneDescriptors,
+                selectedPrimaryFrame = "BalancedStoryFrame",
+                frameCount = allFramePlans.Sum(x => x.FramePlans.Count),
+                sceneQuality = cinematicQualityReports,
+                attentionGuidance = cinematicAttentionGuidanceReports
+            }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        }
+        catch (Exception ex)
+        {
+            app.Logger.LogError(ex, "CINEMATIC_QUALITY_REPORT_WRITE_FAILED path={Path}", qualityPath);
+            throw new InvalidOperationException($"CINEMATIC_QUALITY_REPORT_WRITE_FAILED path='{qualityPath}' exception='{ex.Message}'", ex);
+        }
 
         var finalScenes = allFramePlans
             .SelectMany(plan => plan.FramePlans.Select(frame => new WeeklySscSceneFinalizer.FinalSscScene(
@@ -1927,9 +1946,47 @@ var sscResult = splitProbeSsc;
             seenFrameHashes[hash] = screenshotPath;
         }
 
-        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count != 2 || allFramePlans.Sum(x => x.FramePlans.Count) != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || primaryScreenshots.Count != 2 || warnings.Count != 0)
+        var finalScriptPathSet = scriptPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var generatedFramePlans = allFramePlans.SelectMany(x => x.FramePlans).ToList();
+        var producedRenderSceneDescriptors = finalRenderSceneDescriptors
+            .Where(x => x.ProducedSscScript && finalScriptPathSet.Contains(x.ScriptPath))
+            .ToList();
+
+        foreach (var descriptor in producedRenderSceneDescriptors)
         {
-            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Composition={compositionPaths.Count}, RenderScenes={allFramePlans.Count}, FramePlans={allFramePlans.Sum(x => x.FramePlans.Count)}, SscScripts={scriptPaths.Count}, Screenshots={screenshots.Count}, fallbackUsed={(warnings.Count > 0 ? "true" : "false")}");
+            app.Logger.LogInformation(
+                "FINAL_FALLBACK_VALIDATION_SOURCE renderSceneCode={RenderSceneCode} frameId={FrameId} fallbackUsed={FallbackUsed} fallbackReason={FallbackReason} geometrySource={GeometrySource} scriptPath={ScriptPath} imagePath={ImagePath}",
+                descriptor.RenderSceneCode,
+                descriptor.FrameId,
+                descriptor.FallbackUsed,
+                descriptor.FallbackReason,
+                descriptor.GeometrySource,
+                descriptor.ScriptPath,
+                descriptor.ImagePath);
+        }
+
+        var fallbackFramePlans = generatedFramePlans
+            .Where(x => x.FrameGenerationUsedFallback)
+            .Select(x => new { SceneCode = x.RenderSceneCode, x.FrameId, FallbackReason = x.FallbackReason ?? string.Empty })
+            .ToList();
+        var fallbackDescriptors = producedRenderSceneDescriptors
+            .Where(x => x.FallbackUsed)
+            .Select(x => new { SceneCode = x.RenderSceneCode, x.FrameId, x.FallbackReason })
+            .ToList();
+        var offendingFallbackFrames = fallbackFramePlans.Concat(fallbackDescriptors)
+            .GroupBy(x => $"{x.SceneCode}|{x.FrameId}", StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderBy(x => x.SceneCode, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.FrameId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var fallbackUsed = fallbackFramePlans.Count > 0 || fallbackDescriptors.Count > 0;
+
+        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count != 2 || generatedFramePlans.Count != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || primaryScreenshots.Count != 2 || fallbackUsed)
+        {
+            var offendingFramesText = offendingFallbackFrames.Count == 0
+                ? string.Empty
+                : Environment.NewLine + "OffendingFrames:" + Environment.NewLine + string.Join(Environment.NewLine, offendingFallbackFrames.Select(x => $"- sceneCode={x.SceneCode}" + Environment.NewLine + $"- frameId={x.FrameId}" + Environment.NewLine + $"- fallbackReason={x.FallbackReason}")));
+            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Composition={compositionPaths.Count}, RenderScenes={allFramePlans.Count}, FramePlans={generatedFramePlans.Count}, SscScripts={scriptPaths.Count}, Screenshots={screenshots.Count}, fallbackUsed={(fallbackUsed ? "true" : "false")}{offendingFramesText}");
         }
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
@@ -3526,3 +3583,14 @@ public sealed record GenerateDailyPlanResponse(
 
 sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
 sealed record WeeklyObjectPositionResolution(double AltitudeDeg, double AzimuthDeg, double Magnitude, string Source, string RequestedName, string NormalizedName, string DateKey, string TimeKey, string CollectionSearched, bool MatchFound, string CandidateNames, string CandidateTimes, string TopLevelKeys, string AvailableDates, string SelectedDateCollections, string SelectedDateObjectNames);
+
+
+public sealed record FinalRenderSceneDescriptor(
+    string RenderSceneCode,
+    string FrameId,
+    bool FallbackUsed,
+    string FallbackReason,
+    string GeometrySource,
+    string ScriptPath,
+    string ImagePath,
+    bool ProducedSscScript);
