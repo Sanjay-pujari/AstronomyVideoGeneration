@@ -2895,7 +2895,7 @@ static IReadOnlyCollection<string> GetChangedFields(RunPipelineRequest original,
 }
 
 
-static DateTime ResolveSceneObservationUtc(string sceneCode, DateOnly sceneDateLocal, TimeOnly shotTimeLocal, string timezoneId, IReadOnlyList<string> targetObjectCodes, IReadOnlyList<WeeklyAstronomyEvent> extractedEvents, DateTime? planBestTimeUtc, DateTime? scheduledUtcFallback, ILogger logger)
+static DateTime ResolveSceneObservationUtc(string sceneCode, DateOnly sceneDateLocal, TimeOnly shotTimeLocal, string timezoneId, IReadOnlyList<string> targetObjectCodes, IReadOnlyList<WeeklyAstronomyEvent> extractedEvents, DateTime? planBestTimeUtc, DateTime? scheduledUtcFallback, Microsoft.Extensions.Logging.ILogger logger)
 {
     if (TryResolveFromSkyfieldEvent(sceneCode, timezoneId, extractedEvents, targetObjectCodes, out var skyfieldResolved, out var bestDateLocal, out var bestTimeLocal))
     {
@@ -2937,7 +2937,11 @@ static bool TryResolveFromSkyfieldEvent(string sceneCode, string timezoneId, IRe
         selected = candidates.FirstOrDefault(e => e.Objects.Any(o => NormalizeWeeklyObjectName(o.ObjectCode)=="moon" || NormalizeWeeklyObjectName(o.ObjectName)=="moon"));
     }
 
-    selected ??= candidates.OrderByDescending(e => e.Score).FirstOrDefault();
+    selected ??= candidates
+        .OrderByDescending(e => e.ImportanceScore)
+        .ThenByDescending(e => e.VisibilityScore)
+        .ThenByDescending(e => e.RarityScore)
+        .FirstOrDefault();
     if (selected is null) return false;
 
     bestDateLocal = selected.BestDateLocal!.Value;
