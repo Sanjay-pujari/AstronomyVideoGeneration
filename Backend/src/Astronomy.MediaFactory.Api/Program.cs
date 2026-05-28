@@ -1083,7 +1083,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return (deduped, deduped.FirstOrDefault() ?? string.Empty);
         }
 
-        var finalRenderSceneDescriptors = weeklyScenePlan.StellariumNeeds
+        var renderSceneManifestDescriptors = weeklyScenePlan.StellariumNeeds
             .Select(x =>
             {
                 var resolvedTargets = ResolveManifestTargets(x.SceneCode, x.ObjectCodes);
@@ -1112,11 +1112,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 };
             }).ToList();
         app.Logger.LogInformation("PRODUCTION_RENDER_FLOW_SOURCE source=ScenePlan+Timeline+Composition+InMemorySplit");
-        app.Logger.LogInformation("STELLARIUM_RENDER_SCENE_COUNT={Count}", finalRenderSceneDescriptors.Count);
+        app.Logger.LogInformation("STELLARIUM_RENDER_SCENE_COUNT={Count}", renderSceneManifestDescriptors.Count);
         if (request.Diagnostics)
         {
             var renderSceneManifestPath = Path.Combine(manifestsDirectory, "render-scene-manifest.json");
-            await File.WriteAllTextAsync(renderSceneManifestPath, JsonSerializer.Serialize(new { StellariumScenes = finalRenderSceneDescriptors }, new JsonSerializerOptions { WriteIndented = true }), ct);
+            await File.WriteAllTextAsync(renderSceneManifestPath, JsonSerializer.Serialize(new { StellariumScenes = renderSceneManifestDescriptors }, new JsonSerializerOptions { WriteIndented = true }), ct);
             app.Logger.LogInformation("DEBUG_RENDER_SCENE_MANIFEST_PATH={Path}", renderSceneManifestPath);
         }
 
@@ -1124,7 +1124,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
         var scenePlansByCode = weeklyScenePlan.ScenePlans
             .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
-        var stellariumShots = finalRenderSceneDescriptors
+        var stellariumShots = renderSceneManifestDescriptors
             .Select(renderScene => weeklyScenePlan.StellariumNeeds.First(need => need.SceneCode.Equals(renderScene.SceneCode, StringComparison.OrdinalIgnoreCase)))
             .Select(need =>
             {
@@ -1971,7 +1971,7 @@ var sscResult = splitProbeSsc;
             .ToList();
         var fallbackDescriptors = producedRenderSceneDescriptors
             .Where(x => x.FallbackUsed)
-            .Select(x => new { SceneCode = x.RenderSceneCode, x.FrameId, x.FallbackReason })
+            .Select(x => new { SceneCode = x.RenderSceneCode, x.FrameId, FallbackReason = x.FallbackReason ?? string.Empty })
             .ToList();
         var offendingFallbackFrames = fallbackFramePlans.Concat(fallbackDescriptors)
             .GroupBy(x => $"{x.SceneCode}|{x.FrameId}", StringComparer.OrdinalIgnoreCase)
@@ -1985,7 +1985,16 @@ var sscResult = splitProbeSsc;
         {
             var offendingFramesText = offendingFallbackFrames.Count == 0
                 ? string.Empty
-                : Environment.NewLine + "OffendingFrames:" + Environment.NewLine + string.Join(Environment.NewLine, offendingFallbackFrames.Select(x => $"- sceneCode={x.SceneCode}" + Environment.NewLine + $"- frameId={x.FrameId}" + Environment.NewLine + $"- fallbackReason={x.FallbackReason}")));
+                : Environment.NewLine
+                    + "OffendingFrames:"
+                    + Environment.NewLine
+                    + string.Join(
+                        Environment.NewLine,
+                        offendingFallbackFrames.Select(x => string.Join(
+                            Environment.NewLine,
+                            $"- sceneCode={x.SceneCode}",
+                            $"- frameId={x.FrameId}",
+                            $"- fallbackReason={x.FallbackReason}")));
             throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Composition={compositionPaths.Count}, RenderScenes={allFramePlans.Count}, FramePlans={generatedFramePlans.Count}, SscScripts={scriptPaths.Count}, Screenshots={screenshots.Count}, fallbackUsed={(fallbackUsed ? "true" : "false")}{offendingFramesText}");
         }
 
