@@ -103,7 +103,7 @@ public static class WeeklySkyfieldObjectHydration
 
     private static void LogHydratedMappingAttempt(Microsoft.Extensions.Logging.ILogger logger, string sceneCode, string requestedObject, string? sourceName, string normalizedName, DateTime? timestamp, double? altitude, double? azimuth, double? magnitude, string? rejectionReason)
     {
-        logger.LogInformation(
+        logger.LogDebug(
             "HYDRATED_OBJECT_MAPPING sceneCode={SceneCode} object={Object} sourceName={SourceName} normalizedName={NormalizedName} timestamp={Timestamp} altitudeField=AltitudeDegrees altitudeValue={AltitudeValue} azimuthField=AzimuthDegrees azimuthValue={AzimuthValue} magnitudeField=Magnitude magnitudeValue={MagnitudeValue} rejectionReason={RejectionReason}",
             sceneCode,
             requestedObject,
