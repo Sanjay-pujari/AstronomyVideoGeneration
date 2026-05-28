@@ -1212,29 +1212,43 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             selected.Source);
                     }
                 }
-if (splitResult.SplitApplied)
+                if (splitResult.SplitApplied)
                 {
                     foreach (var splitScene in splitResult.Scenes.Take(3))
                     {
+                        var splitObjectCodes = splitScene.TargetObjects
+                            .Select(x => x.Name)
+                            .Where(x => !string.IsNullOrWhiteSpace(x))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                        var splitPrimaryObject = splitObjectCodes.FirstOrDefault() ?? splitScene.TargetObjects.FirstOrDefault()?.Name;
                         var splitPrefix = splitScene.SceneCode;
                         var splitResultSsc = sscIntelligenceService.Generate(new SscIntelligenceRequest(
-                            observationUtc,longitude,latitude,elevationMeters,locationName,splitScene.TargetObjects.ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitScene.TargetObjects.Select(x=>x.Name).ToList()),
+                            observationUtc,longitude,latitude,elevationMeters,locationName,splitScene.TargetObjects.ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitObjectCodes),
                             scenesDirectory,splitPrefix);
                         var splitScriptPath = Path.Combine(scriptsDirectory, $"{splitScene.SceneCode}.ssc");
                         var splitHeader = string.Join(Environment.NewLine, new[] {"// Source: NarrativeSceneSplitter",$"// SourceSceneCode: {shot.ShotCode}",$"// Region: {weeklySkyfieldContext.Region}",$"// TargetDate: {stellariumNeed.TargetDate:yyyy-MM-dd}",$"// SelectedObservationUtc: {observationUtc:O}",$"// ScreenshotDirectory: {scenesDirectory.Replace('\\', '/')}",string.Empty});
                         generatedScripts.Add((splitScriptPath, splitHeader + splitResultSsc.SscScript));
+                        var splitExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{splitScene.SceneCode}.png");
                         generatedSplitMetadataBySceneCode[splitScene.SceneCode] = new GeneratedSplitSceneMetadata(
                             splitScene.SceneCode,
                             splitScene.SourceSceneCode,
-                            splitScene.TargetObjects.Select(x => x.Name).ToList(),
-                            splitScene.TargetObjects.FirstOrDefault()?.Name,
+                            splitObjectCodes,
+                            splitPrimaryObject,
+                            splitScene.SceneRole.ToString(),
                             splitScene.SceneIntent.ToString(),
-                            shot.ShotPurpose,
                             shot.DurationSeconds,
                             stellariumNeed.TargetDate,
                             observationUtc,
                             splitScriptPath,
-                            Path.Combine(scenesDirectory, $"{splitScene.SceneCode}.png"));
+                            splitExpectedOutputImagePath);
+                        app.Logger.LogInformation(
+                            "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} objectNames={ObjectNames} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
+                            splitScene.SceneCode,
+                            splitScene.SourceSceneCode,
+                            string.Join(",", splitObjectCodes),
+                            splitPrimaryObject,
+                            true);
                         if (!scriptSourceSceneCodes.TryGetValue(splitScene.SceneCode, out var splitSources))
                         {
                             splitSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1317,6 +1331,13 @@ var sscResult = splitProbeSsc;
                     sscResult.CompositionBiasReason,
                     sscResult.RequiresSplit);
                 var scriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc");
+                app.Logger.LogInformation(
+                    "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} objectNames={ObjectNames} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
+                    shot.ShotCode,
+                    stellariumNeed.SourceSceneCode ?? string.Empty,
+                    string.Join(",", sceneSpecificCodes),
+                    sceneSpecificCodes.FirstOrDefault() ?? string.Empty,
+                    stellariumNeed.IsDynamicSplitScene);
                 var header = string.Join(Environment.NewLine, new[] {
                     "// Source: WeeklyScenePlan",
                     $"// CompositionPath: {Path.Combine(compositionDirectory, $"{shot.ShotCode}.composition.json").Replace("\\", "/")}",
