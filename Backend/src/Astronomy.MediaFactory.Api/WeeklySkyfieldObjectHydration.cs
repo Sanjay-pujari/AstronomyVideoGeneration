@@ -1,5 +1,8 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.SscIntelligence.Resolution;
+using System.Globalization;
+using System.Reflection;
+using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Api;
 
@@ -26,62 +29,58 @@ public static class WeeklySkyfieldObjectHydration
         var hydrated = new List<HydratedTemporalObject>();
         foreach (var item in events.SelectMany(ev => (ev.Objects ?? []).Select(o => new { Event = ev, Object = o })))
         {
-            var sourceName = item.Object.ObjectCode ?? item.Object.ObjectName;
+            var sourceName = ResolveRawString(item.Object, ["objectCode", "objectName", "name", "body", "target"]) ?? item.Object.ObjectCode ?? item.Object.ObjectName;
             var normalizedName = normalizeName(sourceName);
-            var timestamp = resolveEventUtc(item.Event);
-            var altitude = item.Object.AltitudeDegrees;
-            var azimuth = item.Object.AzimuthDegrees;
-            var magnitude = item.Object.Magnitude;
+            var timestamp = ResolveRawTimestamp(item.Object, item.Event, resolveEventUtc);
+            var altitude = ResolveRawDouble(item.Object, ["altitudeDegrees", "altitudeDeg", "altitude", "alt"]) ?? item.Object.AltitudeDegrees;
+            var azimuth = ResolveRawDouble(item.Object, ["azimuthDegrees", "azimuthDeg", "azimuth", "az"]) ?? item.Object.AzimuthDegrees;
+            var magnitude = ResolveRawDouble(item.Object, ["magnitude", "apparentMagnitude"]) ?? item.Object.Magnitude;
 
-            if (!matchesAliases(item.Object.ObjectCode, item.Object.ObjectName, targetAliases))
+            var matches = MatchesRawAliases(item.Object, targetAliases, matchesAliases) || matchesAliases(item.Object.ObjectCode, item.Object.ObjectName, targetAliases);
+
+            if (!matches)
             {
-                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "normalization mismatch");
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, timestamp, altitude, azimuth, magnitude, false, "normalization mismatch");
                 continue;
             }
 
             if (!timestamp.HasValue)
             {
-                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "timestamp parse failure");
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, timestamp, altitude, azimuth, magnitude, false, "timestamp parse failure");
                 continue;
             }
 
             if (!altitude.HasValue)
             {
-                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "null altitude");
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, timestamp, altitude, azimuth, magnitude, false, "null altitude");
                 continue;
             }
 
             if (double.IsNaN(altitude.Value))
             {
-                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "NaN value (altitude)");
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, timestamp, altitude, azimuth, magnitude, false, "NaN value (altitude)");
                 continue;
             }
 
             if (!azimuth.HasValue)
             {
-                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "invalid azimuth");
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, timestamp, altitude, azimuth, magnitude, false, "invalid azimuth");
                 continue;
             }
 
             if (double.IsNaN(azimuth.Value))
             {
-                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "NaN value (azimuth)");
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, timestamp, altitude, azimuth, magnitude, false, "NaN value (azimuth)");
                 continue;
             }
 
             if (magnitude.HasValue && double.IsNaN(magnitude.Value))
             {
-                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "NaN value (magnitude)");
+                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, timestamp, altitude, azimuth, magnitude, false, "NaN value (magnitude)");
                 continue;
             }
 
-            if (item.Object.GetType().Name != nameof(WeeklyAstronomyEventObject))
-            {
-                LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, "unsupported DTO");
-                continue;
-            }
-
-            LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, normalizedName, timestamp, altitude, azimuth, magnitude, null);
+            LogHydratedMappingAttempt(logger, sceneCode, requestedObject, sourceName, timestamp, altitude, azimuth, magnitude, true, null);
             hydrated.Add(new HydratedTemporalObject(normalizedName, timestamp.Value, altitude.Value, azimuth.Value, magnitude, item.Object.GetType().Name));
         }
 
@@ -101,19 +100,70 @@ public static class WeeklySkyfieldObjectHydration
             .ToList();
     }
 
-    private static void LogHydratedMappingAttempt(Microsoft.Extensions.Logging.ILogger logger, string sceneCode, string requestedObject, string? sourceName, string normalizedName, DateTime? timestamp, double? altitude, double? azimuth, double? magnitude, string? rejectionReason)
+    private static void LogHydratedMappingAttempt(Microsoft.Extensions.Logging.ILogger logger, string sceneCode, string requestedObject, string? rawName, DateTime? rawTimestamp, double? rawAltitude, double? rawAzimuth, double? rawMagnitude, bool mapped, string? rejectionReason)
     {
-        logger.LogDebug(
-            "HYDRATED_OBJECT_MAPPING sceneCode={SceneCode} object={Object} sourceName={SourceName} normalizedName={NormalizedName} timestamp={Timestamp} altitudeField=AltitudeDegrees altitudeValue={AltitudeValue} azimuthField=AzimuthDegrees azimuthValue={AzimuthValue} magnitudeField=Magnitude magnitudeValue={MagnitudeValue} rejectionReason={RejectionReason}",
-            sceneCode,
-            requestedObject,
-            sourceName ?? string.Empty,
-            normalizedName,
-            timestamp?.ToString("O") ?? string.Empty,
-            altitude,
-            azimuth,
-            magnitude,
-            rejectionReason ?? "accepted");
+        logger.LogInformation(
+            "SKYFIELD_RAW_OBJECT_FIELD_DUMP sceneCode={SceneCode} requestedObject={RequestedObject} rawName={RawName} rawTimestamp={RawTimestamp} rawAltitude={RawAltitude} rawAzimuth={RawAzimuth} rawMagnitude={RawMagnitude} mapped={Mapped} rejectReason={RejectReason}",
+            sceneCode, requestedObject, rawName ?? string.Empty, rawTimestamp?.ToString("O") ?? string.Empty, rawAltitude, rawAzimuth, rawMagnitude, mapped, rejectionReason ?? string.Empty);
+    }
+
+    private static bool MatchesRawAliases(object source, HashSet<string> targetAliases, Func<string?, string?, HashSet<string>, bool> matchesAliases)
+        => matchesAliases(ResolveRawString(source, ["objectCode", "target", "body"]), ResolveRawString(source, ["objectName", "name"]), targetAliases);
+
+    private static DateTime? ResolveRawTimestamp(object source, WeeklyAstronomyEvent weeklyEvent, Func<WeeklyAstronomyEvent, DateTime?> resolveEventUtc)
+    {
+        var raw = ResolveRawString(source, ["timeUtc", "timestampUtc", "observationUtc", "utc", "dateTimeUtc", "timestamp"]);
+        if (DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var parsed)) return parsed;
+        return resolveEventUtc(weeklyEvent);
+    }
+
+    private static string? ResolveRawString(object source, IReadOnlyList<string> aliases)
+    {
+        foreach (var alias in aliases)
+        {
+            var value = ResolvePropertyValue(source, alias);
+            if (value is null) continue;
+            if (value is string s && !string.IsNullOrWhiteSpace(s)) return s;
+            if (value is JsonElement e)
+            {
+                if (e.ValueKind == JsonValueKind.String) return e.GetString();
+                return e.ToString();
+            }
+            var text = value.ToString();
+            if (!string.IsNullOrWhiteSpace(text)) return text;
+        }
+
+        return null;
+    }
+
+    private static double? ResolveRawDouble(object source, IReadOnlyList<string> aliases)
+    {
+        foreach (var alias in aliases)
+        {
+            var value = ResolvePropertyValue(source, alias);
+            if (value is null) continue;
+            if (value is double d) return d;
+            if (value is float f) return f;
+            if (value is decimal m) return (double)m;
+            if (value is int i) return i;
+            if (value is long l) return l;
+            if (value is JsonElement e)
+            {
+                if (e.ValueKind == JsonValueKind.Number && e.TryGetDouble(out var number)) return number;
+                if (e.ValueKind == JsonValueKind.String && double.TryParse(e.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var fromString)) return fromString;
+            }
+
+            if (double.TryParse(value.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)) return parsed;
+        }
+
+        return null;
+    }
+
+    private static object? ResolvePropertyValue(object source, string alias)
+    {
+        var prop = source.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(p => string.Equals(p.Name, alias, StringComparison.OrdinalIgnoreCase));
+        return prop?.GetValue(source);
     }
 
     private static void LogStage(Microsoft.Extensions.Logging.ILogger logger, string sceneCode, string requestedObject, string stage, int count, IEnumerable<string?> names, IEnumerable<DateTime?> timestamps, string dtoType)
