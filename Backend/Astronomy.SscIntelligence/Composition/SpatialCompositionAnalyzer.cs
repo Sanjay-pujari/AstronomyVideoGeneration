@@ -74,18 +74,25 @@ public sealed class SpatialCompositionAnalyzer
 
     private static double CalculateAzimuthSpread(IEnumerable<double> azimuths)
     {
-        var sorted = azimuths.OrderBy(a => a).ToArray();
+        var sorted = azimuths.Select(NormalizeDegrees).OrderBy(a => a).ToArray();
         if (sorted.Length <= 1) return 0;
         double largestGap = 0;
         for (var i = 1; i < sorted.Length; i++) largestGap = Math.Max(largestGap, sorted[i] - sorted[i - 1]);
         largestGap = Math.Max(largestGap, 360 - sorted[^1] + sorted[0]);
-        return 360 - largestGap;
+        return Math.Clamp(360 - largestGap, 0, 360);
     }
 
     private static double CircularAzimuthDelta(double a, double b)
     {
-        var d = Math.Abs(a - b) % 360;
+        var d = Math.Abs(NormalizeDegrees(a) - NormalizeDegrees(b)) % 360;
         return d > 180 ? 360 - d : d;
+    }
+
+    private static double NormalizeDegrees(double degrees)
+    {
+        var normalized = degrees % 360;
+        if (normalized < 0) normalized += 360;
+        return normalized;
     }
 
     private static double AngularSeparationDeg(SkyObjectPosition a, SkyObjectPosition b)

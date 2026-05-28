@@ -20,20 +20,21 @@ public sealed class CameraCenterCalculator : ICameraCenterCalculator
         foreach (var obj in visibleObjects)
         {
             var w = obj.Weight <= 0 ? 1.0 : obj.Weight;
-            var radians = DegreesToRadians(obj.AzimuthDeg);
+            var radians = DegreesToRadians(NormalizeDegrees(obj.AzimuthDeg));
             x += Math.Cos(radians) * w;
             y += Math.Sin(radians) * w;
         }
 
-        var azimuthDeg = RadiansToDegrees(Math.Atan2(y, x));
-        if (azimuthDeg < 0)
-        {
-            azimuthDeg += 360;
-        }
+        var azimuthDeg = NormalizeDegrees(RadiansToDegrees(Math.Atan2(y, x)));
 
         return (altitude, azimuthDeg);
     }
 
     private static double DegreesToRadians(double degrees) => degrees * Math.PI / 180.0;
     private static double RadiansToDegrees(double radians) => radians * 180.0 / Math.PI;
+    private static double NormalizeDegrees(double degrees)
+    {
+        var normalized = degrees % 360;
+        return normalized < 0 ? normalized + 360 : normalized;
+    }
 }

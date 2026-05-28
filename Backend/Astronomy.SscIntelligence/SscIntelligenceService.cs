@@ -62,6 +62,13 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
         var composition = _unifiedCameraComposer.Compose(sceneIntent, cameraAltitudeRaw, cameraAzimuthRaw, fovInput, visible, cameraObjects, Array.Empty<SkyObjectPosition>(), Array.Empty<SkyObjectPosition>());
         var camera = preliminaryCamera with { AltitudeDeg = composition.FinalCameraAltitudeDeg, AzimuthDeg = composition.FinalCameraAzimuthDeg, FovDeg = fovInput };
 
+        _logger.LogInformation("AZIMUTH_WRAP_CALCULATION: sceneCode={SceneCode}, inputAzimuths={InputAzimuths}, normalizedCenter={NormalizedCenter:0.##}, normalizedSpread={NormalizedSpread:0.##}, computedFov={ComputedFov:0.##}",
+            request.SceneCode,
+            string.Join(",", cameraObjects.Select(x => $"{x.Name}:{NormalizeDegrees(x.AzimuthDeg):0.##}")),
+            NormalizeDegrees(cameraAzimuthRaw),
+            spatialAnalysis.AzimuthSpreadDeg,
+            camera.FovDeg);
+
         _logger.LogInformation("SPATIAL_COMPOSITION_ANALYSIS: sceneCode={SceneCode}, objectNames={ObjectNames}, pairDistances={PairDistances}, maxAngularSeparation={MaxAngularSeparation:0.##}, altitudeSpread={AltitudeSpread:0.##}, azimuthSpread={AzimuthSpread:0.##}, compositionClass={CompositionClass}, recommendedFov={RecommendedFov}, splitRecommended={SplitRecommended}, clusters={Clusters}, dominantCluster={DominantCluster}, deferredObjects={DeferredObjects}",
             request.SceneCode,
             string.Join(",", compositionObjects.Select(x => x.Name)),
@@ -78,5 +85,11 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
 
         var script = _renderer.Render(new SscRenderRequest(nightWindow.BestObservationUtc, request.Longitude, request.Latitude, request.ElevationMeters, request.LocationName, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, screenshotDirectory ?? ".", screenshotFileNameWithoutExtension ?? "scene"));
         return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, cameraAltitudeRaw, composition.Reason, targets.PrimaryTargets.Select(x => x.Name).ToList(), targets.SecondaryTargets.Select(x => x.Name).ToList(), targets.ContextTargets.Select(x => x.Name).ToList(), script.Script, nightWindow);
+    }
+
+    private static double NormalizeDegrees(double degrees)
+    {
+        var normalized = degrees % 360;
+        return normalized < 0 ? normalized + 360 : normalized;
     }
 }
