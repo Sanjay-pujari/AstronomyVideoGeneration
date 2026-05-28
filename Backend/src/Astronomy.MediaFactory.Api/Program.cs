@@ -902,11 +902,68 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var generatedScripts = new List<(string ScriptPath, string ScriptContent)>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
+        WeeklyScenePlan? ResolveRenderSceneArtifactScenePlan(string sceneCode, string? sourceSceneCode, IReadOnlyDictionary<string, WeeklyScenePlan> scenePlanIndex)
+        {
+            if (scenePlanIndex.TryGetValue(sceneCode, out var direct))
+            {
+                app.Logger.LogInformation("SSC_ARTIFACT_RESOLUTION sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} artifactType={ArtifactType} matchedBy={MatchedBy}", sceneCode, sourceSceneCode, "ScenePlan", "SceneCode");
+                return direct;
+            }
+
+            if (!string.IsNullOrWhiteSpace(sourceSceneCode) && scenePlanIndex.TryGetValue(sourceSceneCode, out var source))
+            {
+                app.Logger.LogInformation("SSC_ARTIFACT_RESOLUTION sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} artifactType={ArtifactType} matchedBy={MatchedBy}", sceneCode, sourceSceneCode, "ScenePlan", "SourceSceneCode");
+                return source;
+            }
+
+            if (generatedSplitMetadataBySceneCode.TryGetValue(sceneCode, out var split) && scenePlanIndex.TryGetValue(split.SourceSceneCode, out var splitSource))
+            {
+                app.Logger.LogInformation("SSC_ARTIFACT_RESOLUTION sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} artifactType={ArtifactType} matchedBy={MatchedBy}", sceneCode, split.SourceSceneCode, "ScenePlan", "DerivedFallback");
+                return splitSource;
+            }
+
+            app.Logger.LogError("SSC_ARTIFACT_RESOLUTION_FAILED sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} artifactType={ArtifactType} availableSceneCodes={AvailableSceneCodes}", sceneCode, sourceSceneCode, "ScenePlan", string.Join(',', scenePlanIndex.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
+            return null;
+        }
+
+        WeeklySceneComposition? ResolveRenderSceneArtifactComposition(string sceneCode, string? sourceSceneCode)
+        {
+            var direct = compositionPackage.Entries.FirstOrDefault(x => x.ShotCode.Equals(sceneCode, StringComparison.OrdinalIgnoreCase));
+            if (direct is not null)
+            {
+                app.Logger.LogInformation("SSC_ARTIFACT_RESOLUTION sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} artifactType={ArtifactType} matchedBy={MatchedBy}", sceneCode, sourceSceneCode, "Composition", "SceneCode");
+                return direct;
+            }
+
+            if (!string.IsNullOrWhiteSpace(sourceSceneCode))
+            {
+                var source = compositionPackage.Entries.FirstOrDefault(x => x.ShotCode.Equals(sourceSceneCode, StringComparison.OrdinalIgnoreCase));
+                if (source is not null)
+                {
+                    app.Logger.LogInformation("SSC_ARTIFACT_RESOLUTION sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} artifactType={ArtifactType} matchedBy={MatchedBy}", sceneCode, sourceSceneCode, "Composition", "SourceSceneCode");
+                    return source;
+                }
+            }
+
+            if (generatedSplitMetadataBySceneCode.TryGetValue(sceneCode, out var split))
+            {
+                var splitSource = compositionPackage.Entries.FirstOrDefault(x => x.ShotCode.Equals(split.SourceSceneCode, StringComparison.OrdinalIgnoreCase));
+                if (splitSource is not null)
+                {
+                    app.Logger.LogInformation("SSC_ARTIFACT_RESOLUTION sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} artifactType={ArtifactType} matchedBy={MatchedBy}", sceneCode, split.SourceSceneCode, "Composition", "DerivedFallback");
+                    return splitSource;
+                }
+            }
+
+            app.Logger.LogError("SSC_ARTIFACT_RESOLUTION_FAILED sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} artifactType={ArtifactType} availableSceneCodes={AvailableSceneCodes}", sceneCode, sourceSceneCode, "Composition", string.Join(',', compositionPackage.Entries.Select(x => x.ShotCode).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
+            return null;
+        }
         await ExecuteOrchestrationStageAsync("Persisting composition files", async stageCt =>
         {
             foreach (var shot in shots)
             {
-                var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
+                var composition = ResolveRenderSceneArtifactComposition(shot.ShotCode, null)
+                    ?? throw new InvalidOperationException($"Unable to resolve composition for scene '{shot.ShotCode}'.");
                 var compositionPath = Path.Combine(compositionDirectory, $"{shot.ShotCode}.composition.json");
                 await File.WriteAllTextAsync(compositionPath, JsonSerializer.Serialize(composition, new JsonSerializerOptions { WriteIndented = true }), stageCt);
                 compositionPaths.Add(compositionPath);
@@ -1011,8 +1068,10 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 var stellariumNeed = stellariumNeedsByScene.TryGetValue(shot.ShotCode, out var resolvedNeed)
                     ? resolvedNeed
                     : throw new InvalidOperationException($"Missing Stellarium need for scene '{shot.ShotCode}'.");
-                var composition = compositionPackage.Entries.First(x => x.ShotCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase));
-                var scenePlan = DynamicSplitScenePlanResolver.Resolve(shot.ShotCode, scenePlansByCode, generatedSplitMetadataBySceneCode, out _, out _);
+                var composition = ResolveRenderSceneArtifactComposition(shot.ShotCode, stellariumNeed.SourceSceneCode)
+                    ?? throw new InvalidOperationException($"Unable to resolve composition for SSC scene '{shot.ShotCode}'.");
+                var scenePlan = ResolveRenderSceneArtifactScenePlan(shot.ShotCode, stellariumNeed.SourceSceneCode, scenePlansByCode)
+                    ?? DynamicSplitScenePlanResolver.Resolve(shot.ShotCode, scenePlansByCode, generatedSplitMetadataBySceneCode, out _, out _);
                 var sceneSpecificCodes = ResolveSceneSpecificObjectCodes(shot, composition, scenePlan, weeklySkyfieldContext);
                 if (stellariumNeed.ObjectCodes.Count > 0)
                 {
