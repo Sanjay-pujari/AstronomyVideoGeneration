@@ -1239,7 +1239,9 @@ public sealed record CinematicFramePlan(
     string ImagePath,
     string RelativeScriptPath,
     string RelativeImagePath,
-    IReadOnlyList<string> SafetyWarnings);
+    IReadOnlyList<string> SafetyWarnings,
+    bool FrameGenerationUsedFallback = false,
+    string? FallbackReason = null);
 
 public sealed record CinematicSceneFramePlan(
     string RenderSceneCode,
