@@ -11,6 +11,7 @@ internal static class AzureConfigurationValidation
                            || HasValue(options.Endpoint)
                            || HasValue(options.ApiKey)
                            || HasValue(options.ChatDeployment)
+                           || HasValue(options.ImageDeployment)
                            || HasValue(options.ManagedIdentityClientId);
 
         if (!isConfigured)
