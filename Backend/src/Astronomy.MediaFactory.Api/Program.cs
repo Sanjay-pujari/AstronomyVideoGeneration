@@ -1378,7 +1378,6 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                         var splitResultSsc = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                             observationUtc,longitude,latitude,elevationMeters,locationName,splitSkyPositions.Select(x => x.Position).ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitObjectCodes),
                             scenesDirectory,splitPrefix);
-                        if (splitResultSsc.CinematicQualityReport is not null) cinematicQualityReports.Add(splitResultSsc.CinematicQualityReport);
                         if (splitFallbackCount > 0)
                         {
                             throw new InvalidOperationException($"FallbackGeometryForbidden: split scene '{splitScene.SceneCode}' contains fallback geometry.");
@@ -1426,7 +1425,6 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 }
 
 var sscResult = splitProbeSsc;
-                if (sscResult.CinematicQualityReport is not null) cinematicQualityReports.Add(sscResult.CinematicQualityReport);
                 if (sscResult.RequiresSplit)
                 {
                     app.Logger.LogWarning("WeeklySkyForecast V2 scene {SceneId} requires split, fallback to single SSC with computed center/FOV. reason=requiresSplit", shot.ShotCode);
