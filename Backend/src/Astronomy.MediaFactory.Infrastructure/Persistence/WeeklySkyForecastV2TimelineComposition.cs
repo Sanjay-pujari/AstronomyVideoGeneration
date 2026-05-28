@@ -46,6 +46,11 @@ public sealed class WeeklySkyForecastTimelineCompositionOrchestrator(
                 blocking.Add($"Missing rendered scene output for '{segment.SceneCode}'.");
                 continue;
             }
+            var req = prep.SceneRenderRequests.FirstOrDefault(r => r.SceneCode.Equals(segment.SceneCode, StringComparison.OrdinalIgnoreCase));
+            if (req?.CinematicDirection is not null)
+            {
+                Console.WriteLine($"CINEMATIC_DIRECTION_APPLIED_TO_COMPOSITION scene={segment.SceneCode} framing={req.CinematicDirection.FramingRule}");
+            }
 
             var warnings = new List<string>();
             var errors = new List<string>();
