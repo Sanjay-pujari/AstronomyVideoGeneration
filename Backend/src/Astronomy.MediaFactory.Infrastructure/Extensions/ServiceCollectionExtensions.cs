@@ -60,6 +60,13 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(AzureOpenAIForImageOptions.SectionName))
             .ValidateOnStart();
 
+        services.AddOptions<WeeklySkyForecastAICinematicAssetsOptions>()
+            .Bind(configuration.GetSection(WeeklySkyForecastAICinematicAssetsOptions.SectionName))
+            .Validate(options => options.MaxAssetsPerRun >= 0, "WeeklySkyForecast:AICinematicAssets:MaxAssetsPerRun must be zero or greater.")
+            .Validate(options => options.GenerationTimeoutSeconds > 0, "WeeklySkyForecast:AICinematicAssets:GenerationTimeoutSeconds must be greater than zero.")
+            .Validate(options => options.SingleImageTimeoutSeconds > 0, "WeeklySkyForecast:AICinematicAssets:SingleImageTimeoutSeconds must be greater than zero.")
+            .ValidateOnStart();
+
         services.AddSingleton<IValidateOptions<AzureOpenAiOptions>, AzureOpenAiOptionsValidator>();
 
         services.AddOptions<AzureSpeechOptions>()

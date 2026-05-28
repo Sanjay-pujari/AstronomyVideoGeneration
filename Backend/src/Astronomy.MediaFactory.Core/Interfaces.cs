@@ -1361,7 +1361,10 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     bool AICinematicAssetGenerationReady = false,
     int PlannedAICinematicAssetCount = 0,
     int GeneratedAICinematicAssetCount = 0,
+    int DeferredAICinematicAssetCount = 0,
     int ProductionReadyAICinematicAssetCount = 0,
+    bool AICinematicGenerationPartial = false,
+    int AICinematicMaxAssetsPerRun = 0,
     bool AICinematicProviderConfigured = false,
     string AzureImageDeploymentUsed = "");
 

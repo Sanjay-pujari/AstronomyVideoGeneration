@@ -15,22 +15,24 @@ namespace Astronomy.MediaFactory.ContentGen;
 public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenerator
 {
     private const string ApiVersion = "2024-10-21";
-    private const int AzureOpenAiImageTimeoutSeconds = 180;
     private static readonly string[] PreferredLandscapeSizes = ["1792x1024", "1536x1024", "1024x1024"];
     private static readonly AzureTokenRequestContext AzureCognitiveServicesScope = new(["https://cognitiveservices.azure.com/.default"]);
 
     private readonly HttpClient _httpClient;
     private readonly AzureOpenAIForImageOptions _options;
+    private readonly WeeklySkyForecastAICinematicAssetsOptions _aiCinematicOptions;
     private readonly ILogger<AzureOpenAICinematicImageGenerator> _logger;
     private readonly TokenCredential? _credential;
 
     public AzureOpenAICinematicImageGenerator(
         HttpClient httpClient,
         IOptions<AzureOpenAIForImageOptions> options,
+        IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptions,
         ILogger<AzureOpenAICinematicImageGenerator> logger)
     {
         _httpClient = httpClient;
         _options = options.Value;
+        _aiCinematicOptions = aiCinematicOptions.Value;
         _logger = logger;
         _credential = _options.UseManagedIdentity
             ? new DefaultAzureCredential(new DefaultAzureCredentialOptions
@@ -188,8 +190,9 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
 
         var startedUtc = DateTimeOffset.UtcNow;
         var stopwatch = Stopwatch.StartNew();
+        var timeoutSeconds = Math.Max(1, _aiCinematicOptions.SingleImageTimeoutSeconds);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(AzureOpenAiImageTimeoutSeconds));
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         _logger.LogInformation(
             "AI_IMAGE_GENERATION_REQUEST_START deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} targetWidth={TargetWidth} targetHeight={TargetHeight} size={Size} startedUtc={StartedUtc:o} timeoutSeconds={TimeoutSeconds}",
             DeploymentName,
@@ -201,7 +204,7 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
             assetRequest.TargetHeight,
             size,
             startedUtc,
-            AzureOpenAiImageTimeoutSeconds);
+            timeoutSeconds);
 
         using var response = await _httpClient.SendAsync(request, timeoutCts.Token);
         var payload = await response.Content.ReadAsStringAsync(cancellationToken);

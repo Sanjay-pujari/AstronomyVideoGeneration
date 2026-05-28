@@ -735,7 +735,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
 {
     try
     {
@@ -841,12 +841,13 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         Directory.CreateDirectory(manifestsDirectory);
         var orchestrationStageTimeout = TimeSpan.FromSeconds(60);
 
-        async Task<T> ExecuteOrchestrationStageAsync<T>(string stageName, Func<CancellationToken, Task<T>> action)
+        async Task<T> ExecuteOrchestrationStageAsync<T>(string stageName, Func<CancellationToken, Task<T>> action, TimeSpan? stageTimeoutOverride = null)
         {
+            var stageTimeout = stageTimeoutOverride ?? orchestrationStageTimeout;
             app.Logger.LogInformation("[INF] Starting {StageName}", stageName);
             var stageStopwatch = Stopwatch.StartNew();
             using var stageTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            stageTimeoutCts.CancelAfter(orchestrationStageTimeout);
+            stageTimeoutCts.CancelAfter(stageTimeout);
             try
             {
                 var result = await action(stageTimeoutCts.Token);
@@ -857,8 +858,8 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             catch (OperationCanceledException oce) when (!ct.IsCancellationRequested && stageTimeoutCts.IsCancellationRequested)
             {
                 stageStopwatch.Stop();
-                app.Logger.LogWarning(oce, "[WRN] Timeout after {ElapsedMs}ms for stage {StageName}. TimeoutMs={TimeoutMs}", stageStopwatch.ElapsedMilliseconds, stageName, orchestrationStageTimeout.TotalMilliseconds);
-                throw new TimeoutException($"WeeklySkyForecast orchestration stage timed out after {orchestrationStageTimeout.TotalSeconds:0}s: {stageName}", oce);
+                app.Logger.LogWarning(oce, "[WRN] Timeout after {ElapsedMs}ms for stage {StageName}. TimeoutMs={TimeoutMs}", stageStopwatch.ElapsedMilliseconds, stageName, stageTimeout.TotalMilliseconds);
+                throw new TimeoutException($"WeeklySkyForecast orchestration stage timed out after {stageTimeout.TotalSeconds:0}s: {stageName}", oce);
             }
         }
 
@@ -2108,6 +2109,7 @@ var sscResult = splitProbeSsc;
                 root,
                 stageCt));
 
+        var aiCinematicOptions = aiCinematicOptionsAccessor.Value;
         var aiCinematicAssets = await ExecuteOrchestrationStageAsync("Generating planned AI cinematic still assets", stageCt =>
             aiCinematicAssetGenerationService.GenerateAndPersistAsync(
                 visualAssetPlanning.Plan,
@@ -2117,7 +2119,8 @@ var sscResult = splitProbeSsc;
                 weeklySkyfieldContext,
                 root,
                 stageCt,
-                request.ContinueOnFailure));
+                request.ContinueOnFailure && aiCinematicOptions.ContinueOnFailure),
+            TimeSpan.FromSeconds(Math.Max(1, aiCinematicOptions.GenerationTimeoutSeconds)));
 
         var visualBalanceHealthyAfterAICinematicAssets = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
             && aiCinematicAssets.PlannedCount == aiCinematicAssets.ProductionReadyCount
@@ -2189,7 +2192,10 @@ var sscResult = splitProbeSsc;
                 aiCinematicAssetGenerationReady = aiCinematicAssets.GenerationReady,
                 plannedAICinematicAssetCount = aiCinematicAssets.PlannedCount,
                 generatedAICinematicAssetCount = aiCinematicAssets.GeneratedCount,
+                deferredAICinematicAssetCount = aiCinematicAssets.DeferredCount,
                 productionReadyAICinematicAssetCount = aiCinematicAssets.ProductionReadyCount,
+                aiCinematicGenerationPartial = aiCinematicAssets.Partial,
+                aiCinematicMaxAssetsPerRun = aiCinematicAssets.MaxAssetsPerRun,
                 aiCinematicProviderConfigured = aiCinematicAssets.ProviderConfigured,
                 azureImageDeploymentUsed = aiCinematicAssets.AzureImageDeploymentUsed,
                 remainingAICinematicGap = aiCinematicAssets.RemainingGap
@@ -2265,7 +2271,10 @@ var sscResult = splitProbeSsc;
             aiCinematicAssets.GenerationReady,
             aiCinematicAssets.PlannedCount,
             aiCinematicAssets.GeneratedCount,
+            aiCinematicAssets.DeferredCount,
             aiCinematicAssets.ProductionReadyCount,
+            aiCinematicAssets.Partial,
+            aiCinematicAssets.MaxAssetsPerRun,
             aiCinematicAssets.ProviderConfigured,
             aiCinematicAssets.AzureImageDeploymentUsed);
 
