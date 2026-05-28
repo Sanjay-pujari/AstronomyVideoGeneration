@@ -1,4 +1,5 @@
 using Astronomy.SscIntelligence.Contracts;
+using Astronomy.SscIntelligence.Camera;
 using SceneIntentType = Astronomy.SscIntelligence.SceneIntent.SceneIntent;
 
 namespace Astronomy.SscIntelligence;
@@ -38,4 +39,5 @@ public sealed record SscIntelligenceResult(
     IReadOnlyList<string> SecondaryTargets,
     IReadOnlyList<string> ContextTargets,
     string SscScript,
-    NightWindowResult NightWindow);
+    NightWindowResult NightWindow,
+    CinematicQualitySceneReport? CinematicQualityReport = null);
