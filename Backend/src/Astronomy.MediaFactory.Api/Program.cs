@@ -924,6 +924,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         app.Logger.LogInformation("COMPOSITION_SCENE_COUNT={Count}", compositionPackage.Entries.Count);
         var generatedScripts = new List<(string ScriptPath, string ScriptContent)>();
         var cinematicQualityReports = new List<object>();
+        var cinematicAttentionGuidanceReports = new List<object>();
         var allFramePlans = new List<CinematicSceneFramePlan>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
@@ -1688,6 +1689,7 @@ var sscResult = splitProbeSsc;
                     finalCameraAfterOffset = new { cameraAzimuth = subjectOffset.OffsetAz, cameraAltitude = subjectOffset.OffsetAlt, fov = sscResult.FovDeg },
                     safetyWarnings = subjectOffset.Warnings
                 });
+                cinematicAttentionGuidanceReports.Add(attentionPolicy);
                 if (!scriptSourceSceneCodes.TryGetValue(shot.ShotCode, out var originalSources))
                 {
                     originalSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1708,7 +1710,7 @@ var sscResult = splitProbeSsc;
             selectedPrimaryFrame = "BalancedStoryFrame",
             frameCount = allFramePlans.Sum(x => x.FramePlans.Count),
             sceneQuality = cinematicQualityReports,
-            attentionGuidance = cinematicQualityReports.Select(x => x.attentionGuidance).ToList()
+            attentionGuidance = cinematicAttentionGuidanceReports
         }, new JsonSerializerOptions { WriteIndented = true }));
 
         var finalScenes = allFramePlans
@@ -1913,10 +1915,10 @@ var sscResult = splitProbeSsc;
             if (info.Length <= minimumScreenshotBytes)
                 throw new InvalidOperationException($"Final image validation failed: file '{screenshotPath}' is too small ({info.Length} bytes).");
 
-            IImageInfo? imageInfo;
+            var imageInfo = default(SixLabors.ImageSharp.Formats.IImageInfo);
             using (var imageStream = File.OpenRead(screenshotPath))
             {
-                imageInfo = Image.Identify(imageStream, out _);
+                imageInfo = Image.Identify(imageStream);
             }
             if (imageInfo is null || imageInfo.Width <= 0 || imageInfo.Height <= 0)
                 throw new InvalidOperationException($"Final image validation failed: invalid image dimensions for '{screenshotPath}'.");
