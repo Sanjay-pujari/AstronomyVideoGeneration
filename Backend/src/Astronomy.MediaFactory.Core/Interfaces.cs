@@ -1326,7 +1326,13 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     bool AllSelectedImagesValid = false,
     bool DuplicateImagesDetected = false,
     bool PrimaryScreenshotsDeprecated = true,
-    string ProductionImageSource = "frameScreenshots");
+    string ProductionImageSource = "frameScreenshots",
+    string? WeeklyEpisodePlanPath = null,
+    string? WeeklyLongformPlanPath = null,
+    string? WeeklyShortformPlanPath = null,
+    int LongformTargetDurationSeconds = 0,
+    int ShortformTargetDurationSeconds = 0,
+    bool EpisodeArchitectureReady = false);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {

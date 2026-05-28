@@ -499,6 +499,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklySkyForecastV2NarrationTextGenerator, WeeklySkyForecastV2NarrationTextGenerator>();
         services.AddScoped<IWeeklySkyForecastV2AssetResolver, WeeklySkyForecastV2AssetResolver>();
         services.AddScoped<IWeeklySkyForecastV2EditorialNormalizer, WeeklySkyForecastV2EditorialNormalizer>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodeStructurePolicy>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodeDurationPolicy>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodeVisualPolicy>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodeNarrationPolicy>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodePlanPersister>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodeArchitectureService>();
         services.AddScoped<IWeeklyStoryboardComposer, WeeklyStoryboardComposer>();
         services.AddScoped<IWeeklyConjunctionFramingEngine, WeeklyConjunctionFramingEngine>();
         services.AddScoped<IAstronomicalGroupingComposer, AstronomicalGroupingComposer>();
