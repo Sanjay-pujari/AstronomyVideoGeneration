@@ -981,13 +981,13 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return (cameraAz + azOffset, Math.Clamp(cameraAlt + altOffset, -5d, 85d), targetX, targetY, reason, warnings);
         }
 
-        static object BuildAttentionPolicy(string compositionMode, string primarySubject)
+        static (string attentionMode, string overlayDensity, string labelPriority, bool suppressPeripheralLabels, bool highlightPrimarySubject, string[] attentionWarnings, string reason) BuildAttentionPolicy(string compositionMode, string primarySubject)
         {
             if (compositionMode == "PlanetGrouping")
-                return new { attentionMode = "GroupFocus", overlayDensity = "medium", labelPriority = "primary+secondary", suppressPeripheralLabels = false, highlightPrimarySubject = true, attentionWarnings = Array.Empty<string>(), reason = "PlanetGrouping policy." };
+                return ("GroupFocus", "medium", "primary+secondary", false, true, Array.Empty<string>(), "PlanetGrouping policy.");
             if (compositionMode == "WideOrientation")
-                return new { attentionMode = "ContextualSky", overlayDensity = "medium-high", labelPriority = "balanced", suppressPeripheralLabels = false, highlightPrimarySubject = false, attentionWarnings = Array.Empty<string>(), reason = "WideOrientation policy." };
-            return new { attentionMode = "PrimarySubject", overlayDensity = "low-medium", labelPriority = string.IsNullOrWhiteSpace(primarySubject) ? "primary" : primarySubject, suppressPeripheralLabels = true, highlightPrimarySubject = true, attentionWarnings = Array.Empty<string>(), reason = "MoonHero policy." };
+                return ("ContextualSky", "medium-high", "balanced", false, false, Array.Empty<string>(), "WideOrientation policy.");
+            return ("PrimarySubject", "low-medium", string.IsNullOrWhiteSpace(primarySubject) ? "primary" : primarySubject, true, true, Array.Empty<string>(), "MoonHero policy.");
         }
         WeeklyScenePlan? ResolveRenderSceneArtifactScenePlan(string sceneCode, string? sourceSceneCode, IReadOnlyDictionary<string, WeeklyScenePlan> scenePlanIndex)
         {
