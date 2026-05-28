@@ -1355,7 +1355,14 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     int PlannedAICinematicCount = 0,
     int PlannedNASAAssetCount = 0,
     int PlannedJWSTAssetCount = 0,
-    bool VisualBalanceHealthy = false);
+    bool VisualBalanceHealthy = false,
+    string? AICinematicAssetPlanPath = null,
+    string? AICinematicAssetResultsPath = null,
+    bool AICinematicAssetGenerationReady = false,
+    int PlannedAICinematicAssetCount = 0,
+    int GeneratedAICinematicAssetCount = 0,
+    int ProductionReadyAICinematicAssetCount = 0,
+    bool AICinematicProviderConfigured = false);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
