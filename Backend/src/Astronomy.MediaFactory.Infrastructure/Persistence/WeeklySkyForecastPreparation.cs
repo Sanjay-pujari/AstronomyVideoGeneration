@@ -78,10 +78,8 @@ public sealed class WeeklySkyForecastContextBuilder(
         logger.LogInformation("WeeklySkyForecast end date: {EndDate}", weekEnd);
 
         var skyfieldRequest = new Astronomy.MediaFactory.AstroData.Clients.WeeklySkyForecastSkyfieldRequest { RegionId = resolution.CanonicalRegionId, LocationName = resolvedLocationName, Latitude = resolution.Latitude, Longitude = resolution.Longitude, Timezone = resolution.Timezone, WeekStartDate = weekStart.ToString("yyyy-MM-dd"), Days = 7, Language = request.Language };
-        var successfulDays = new List<DailySkyForecastItem>();
         var failedDays = new List<object>();
-        var debugWarnings = new List<string>();
-        var geometrySource = "unknown";
+        var geometrySource = "weekly-sky";
         WeeklySkyForecastSkyfieldResponse? response = null;
         try
         {
@@ -92,115 +90,24 @@ public sealed class WeeklySkyForecastContextBuilder(
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
             logger.LogWarning(ex, "SKYFIELD_WEEKLY_TIMEOUT");
-            debugWarnings.Add("Skyfield weekly API timed out; used day-by-day fallback.");
+            failedDays.Add(new { endpoint = "/forecast/weekly-sky", error = "Skyfield weekly API timed out." });
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Skyfield weekly API call threw; falling back to day-by-day requests.");
-            debugWarnings.Add("Skyfield weekly API threw exception; used day-by-day fallback.");
+            logger.LogWarning(ex, "Skyfield weekly API call threw.");
+            failedDays.Add(new { endpoint = "/forecast/weekly-sky", error = ex.Message });
         }
 
-        if (response is not null && response.Success)
+        logger.LogInformation("SKYFIELD_GEOMETRY_SOURCE value={Source}", geometrySource);
+        logger.LogInformation("SKYFIELD_GEOMETRY_ENDPOINT_USED endpoint=/forecast/weekly-sky");
+
+        if (response is null || !response.Success)
         {
-            geometrySource = "weekly-sky";
-            logger.LogInformation("SKYFIELD_GEOMETRY_SOURCE value={Source}", geometrySource);
-            logger.LogInformation("SKYFIELD_GEOMETRY_ENDPOINT_USED endpoint=/forecast/weekly-sky");
-            successfulDays.AddRange(response.Days);
-        }
-        else
-        {
-            geometrySource = "daily-fallback";
-            logger.LogInformation("SKYFIELD_GEOMETRY_SOURCE value={Source}", geometrySource);
-            debugWarnings.Add("Weekly Skyfield API failed; retrying day-by-day.");
-            for (var offset = 0; offset < 7; offset++)
-            {
-                var day = weekStart.AddDays(offset);
-                try
-                {
-                    logger.LogInformation("SKYFIELD_DAILY_FALLBACK_START date={Date}", day.ToString("yyyy-MM-dd"));
-                    using var dailyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    dailyTimeoutCts.CancelAfter(TimeSpan.FromSeconds(45));
-                    var dailyForecast = await sidecarClient.GetDailySkyAsync(new SkyfieldDailySkyRequest
-                    {
-                        Date = day.ToString("yyyy-MM-dd"),
-                        LocationName = resolvedLocationName,
-                        Latitude = resolution.Latitude,
-                        Longitude = resolution.Longitude,
-                        Timezone = resolution.Timezone
-                    }, dailyTimeoutCts.Token);
-                    if (dailyForecast is null)
-                    {
-                        failedDays.Add(new { date = day.ToString("yyyy-MM-dd"), error = "Daily Skyfield response was null." });
-                        logger.LogWarning("SKYFIELD_DAILY_FALLBACK_FAILED date={Date}", day.ToString("yyyy-MM-dd"));
-                        logger.LogWarning("Skyfield daily fallback failed for {Date}: null response.", day);
-                        continue;
-                    }
-
-                    var targetDate = DateOnly.TryParse(dailyForecast.Date, out var parsedDate) ? parsedDate : day;
-                    var startUtc = DateTime.UtcNow;
-                    var endUtc = startUtc.AddHours(8);
-                    var fallbackVisibleObjects = dailyForecast.Events
-                        .Where(e => !string.IsNullOrWhiteSpace(e.ObjectName))
-                        .GroupBy(e => e.ObjectName.Trim(), StringComparer.OrdinalIgnoreCase)
-                        .Select(g => new VisibleObjectForecastItem
-                        {
-                            ObjectCode = WeeklySkyForecastObjectCodeResolver.NormalizeObjectCode(g.Key),
-                            ObjectName = g.Key,
-                            ObjectType = g.First().Category,
-                            Visible = true,
-                            ViewingDirection = g.First().Direction,
-                            Reason = g.First().Details,
-                            VisibilityScore = 0.5,
-                            PhotographyScore = 0.5
-                        }).ToList();
-
-                    successfulDays.Add(new DailySkyForecastItem
-                    {
-                        Date = targetDate.ToString("yyyy-MM-dd"),
-                        SunsetUtc = startUtc,
-                        SunriseUtc = endUtc,
-                        MoonPhase = "",
-                        MoonIlluminationPercent = 0,
-                        MoonRiseUtc = null,
-                        MoonSetUtc = null,
-                        VisibleObjects = fallbackVisibleObjects,
-                        Events = [],
-                        BestViewingStartUtc = startUtc,
-                        BestViewingEndUtc = endUtc,
-                        OverallViewingScore = fallbackVisibleObjects.Count == 0 ? 0 : fallbackVisibleObjects.Average(x => x.VisibilityScore),
-                        ViewingSummary = string.Join(" ", dailyForecast.VisualIdeas.Select(v => v.Description).Where(v => !string.IsNullOrWhiteSpace(v))).Trim()
-                    });
-                    logger.LogInformation("SKYFIELD_DAILY_FALLBACK_SUCCESS date={Date}", day.ToString("yyyy-MM-dd"));
-                }
-                catch (Exception ex)
-                {
-                    failedDays.Add(new { date = day.ToString("yyyy-MM-dd"), error = ex.Message });
-                    logger.LogWarning("SKYFIELD_DAILY_FALLBACK_FAILED date={Date}", day.ToString("yyyy-MM-dd"));
-                    logger.LogWarning(ex, "Skyfield daily fallback failed for {Date}.", day);
-                }
-            }
-
-            response = new WeeklySkyForecastSkyfieldResponse
-            {
-                Success = successfulDays.Count > 0,
-                RegionId = resolution.CanonicalRegionId,
-                LocationName = resolvedLocationName,
-                Timezone = resolution.Timezone,
-                WeekStartDate = weekStart.ToString("yyyy-MM-dd"),
-                WeekEndDate = weekEnd.ToString("yyyy-MM-dd"),
-                Days = successfulDays.OrderBy(x => x.Date).ToList(),
-                WeeklyHighlights = [],
-                RecommendedNights = [],
-                Warnings = [..debugWarnings],
-                ErrorMessage = successfulDays.Count == 0 ? "Skyfield sidecar unavailable or timed out. Check localhost:8010 and timeout settings." : null
-            };
+            throw new InvalidOperationException("Skyfield weekly-sky endpoint failed. Geometry fallback to daily-sky is disabled for WeeklySkyForecast V2.");
         }
 
-        logger.LogInformation("Skyfield daily fallback summary: successfulDays={SuccessfulDays}, failedDays={FailedDays}", successfulDays.Count, failedDays.Count);
-        if (successfulDays.Count == 0)
-        {
-            throw new InvalidOperationException("Skyfield sidecar unavailable or timed out. Check localhost:8010 and timeout settings.");
-        }
+        var successfulDays = response.Days?.Count ?? 0;
+        logger.LogInformation("Skyfield weekly-sky summary: successfulDays={SuccessfulDays}, failedDays={FailedDays}", successfulDays, failedDays.Count);
 
         if (failedDays.Count > 0)
         {
@@ -213,11 +120,6 @@ public sealed class WeeklySkyForecastContextBuilder(
             .SelectMany(d => d.VisibleObjects ?? [])
             .Count(o => o.BestViewingTimeUtc.HasValue && o.MaxAltitudeDegrees.HasValue && o.BestViewingAzimuthDegrees.HasValue);
         logger.LogInformation("SKYFIELD_GEOMETRY_RECORD_COUNT count={Count}", geometryRecords);
-        if (string.Equals(geometrySource, "daily-fallback", StringComparison.OrdinalIgnoreCase))
-        {
-            logger.LogWarning("SKYFIELD_GEOMETRY_DAILY_SOURCE_REJECTED source={Source}", geometrySource);
-            geometryRecords = 0;
-        }
         var geometrySample = response.Days
             .SelectMany(d => d.VisibleObjects ?? [])
             .FirstOrDefault(o => o.BestViewingTimeUtc.HasValue && o.MaxAltitudeDegrees.HasValue && o.BestViewingAzimuthDegrees.HasValue);
