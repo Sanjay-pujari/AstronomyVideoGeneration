@@ -1886,6 +1886,7 @@ var sscResult = splitProbeSsc;
         app.Logger.LogInformation("CINEMATIC_FRAME_PLANNER_COMPLETE generatedFramePlans={GeneratedFramePlans}", allFramePlans.Sum(x => x.FramePlans.Count));
 
         var warnings = weeklySkyfieldContext.Warnings.Concat(compositionPackage.Errors).Distinct().ToList();
+        warnings.Add("primaryScreenshots are compatibility-only; frameScreenshots are the production image source.");
         if (screenshots.Count < finalScenes.Count)
         {
             warnings.Add($"Only {screenshots.Count} screenshots were detected out of {finalScenes.Count} planned Stellarium shots.");
@@ -1950,6 +1951,7 @@ var sscResult = splitProbeSsc;
         var imageSequencePlanPath = Path.Combine(qualityDirectory, "image-sequence-plan.json");
         var imageSequenceSummaryPath = Path.Combine(qualityDirectory, "image-sequence-summary.json");
         app.Logger.LogInformation("IMAGE_SEQUENCE_SELECTION_START pipelineRunId={PipelineRunId} frameScreenshots={FrameScreenshotCount} framePlans={FramePlanCount}", pipelineRunId, screenshots.Count, generatedFramePlans.Count);
+        app.Logger.LogInformation("IMAGE_SEQUENCE_VALIDATION_START pipelineRunId={PipelineRunId} expectedImageCount={ExpectedImageCount} productionImageSource={ProductionImageSource}", pipelineRunId, 6, "frameScreenshots");
         var imageSequencePlan = BuildWeeklyImageSequencePlan(
             pipelineRunId,
             request.ContentCategoryCode,
@@ -1958,7 +1960,9 @@ var sscResult = splitProbeSsc;
             weekStartDate,
             allFramePlans,
             screenshots,
+            primaryScreenshots,
             app.Logger);
+        app.Logger.LogInformation("IMAGE_SEQUENCE_PLAN_ENRICHED path={Path} validationStatus={ValidationStatus} selectedImageCount={SelectedImageCount} totalDurationSeconds={TotalDurationSeconds} productionReady={ProductionReady} productionImageSource={ProductionImageSource}", imageSequencePlanPath, imageSequencePlan.ValidationStatus, imageSequencePlan.SelectedImageCount, imageSequencePlan.TotalDurationSeconds, imageSequencePlan.ProductionReady, imageSequencePlan.ProductionImageSource);
         await File.WriteAllTextAsync(imageSequencePlanPath, JsonSerializer.Serialize(imageSequencePlan, new JsonSerializerOptions { WriteIndented = true }), ct);
         await File.WriteAllTextAsync(imageSequenceSummaryPath, JsonSerializer.Serialize(new
         {
@@ -1967,8 +1971,14 @@ var sscResult = splitProbeSsc;
             imageSequencePlan.RegionId,
             imageSequencePlan.Language,
             imageSequencePlan.WeekStartDate,
-            selectedImageCount = imageSequencePlan.TotalImages,
+            productionReady = imageSequencePlan.ProductionReady,
+            validationStatus = imageSequencePlan.ValidationStatus,
+            selectedImageCount = imageSequencePlan.SelectedImageCount,
+            totalDurationSeconds = imageSequencePlan.TotalDurationSeconds,
             estimatedImageSequenceDurationSeconds = imageSequencePlan.EstimatedDurationSeconds,
+            productionImageSource = imageSequencePlan.ProductionImageSource,
+            validationWarnings = imageSequencePlan.ValidationWarnings ?? Array.Empty<string>(),
+            primaryScreenshotsDeprecated = imageSequencePlan.PrimaryScreenshotsDeprecated,
             imageSequencePlanPath,
             sequence = imageSequencePlan.Sequences.Select(x => new
             {
@@ -1977,10 +1987,14 @@ var sscResult = splitProbeSsc;
                 x.FrameType,
                 x.ImagePath,
                 x.SuggestedDurationSeconds,
+                x.ImageValidation,
+                x.SequenceRole,
                 x.TransitionIntent,
-                x.MotionIntentForFutureVideo
+                x.MotionIntentForFutureVideo,
+                x.IsProductionSelected
             })
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        app.Logger.LogInformation("IMAGE_SEQUENCE_SUMMARY_ENRICHED path={Path} validationStatus={ValidationStatus} productionReady={ProductionReady} validationWarnings={ValidationWarnings}", imageSequenceSummaryPath, imageSequencePlan.ValidationStatus, imageSequencePlan.ProductionReady, string.Join("|", imageSequencePlan.ValidationWarnings ?? Array.Empty<string>()));
         app.Logger.LogInformation("IMAGE_SEQUENCE_PLAN_WRITTEN path={Path} summaryPath={SummaryPath} selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlanPath, imageSequenceSummaryPath, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
         app.Logger.LogInformation("IMAGE_SEQUENCE_VALIDATION_COMPLETE selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
 
@@ -2018,7 +2032,10 @@ var sscResult = splitProbeSsc;
             .ToList();
         var fallbackUsed = fallbackFramePlans.Count > 0 || fallbackDescriptors.Count > 0;
 
-        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count != 2 || generatedFramePlans.Count != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || imageSequencePlan.TotalImages != 6 || imageSequencePlan.EstimatedDurationSeconds != 30 || fallbackUsed)
+        var allSelectedImagesValid = imageSequencePlan.Sequences.All(x => x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase));
+        app.Logger.LogInformation("IMAGE_SEQUENCE_FINAL_VALIDATION ScenePlan={ScenePlan} Timeline={Timeline} Composition={Composition} RenderScenes={RenderScenes} FramePlans={FramePlans} SscScripts={SscScripts} FrameScreenshots={FrameScreenshots} SelectedImages={SelectedImages} ImageSequenceDuration={ImageSequenceDuration} AllSelectedImagesValid={AllSelectedImagesValid} DuplicateImages={DuplicateImages} ProductionImageSource={ProductionImageSource} fallbackUsed={FallbackUsed}", weeklyScenePlan.ScenePlans.Count, shots.Count, compositionPaths.Count, allFramePlans.Count, generatedFramePlans.Count, scriptPaths.Count, screenshots.Count, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds, allSelectedImagesValid, imageSequencePlan.DuplicateImagesDetected, imageSequencePlan.ProductionImageSource, fallbackUsed);
+
+        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count != 2 || generatedFramePlans.Count != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || imageSequencePlan.TotalImages != 6 || imageSequencePlan.EstimatedDurationSeconds != 30 || !allSelectedImagesValid || imageSequencePlan.DuplicateImagesDetected || !imageSequencePlan.ProductionImageSource.Equals("frameScreenshots", StringComparison.OrdinalIgnoreCase) || fallbackUsed)
         {
             var offendingFramesText = offendingFallbackFrames.Count == 0
                 ? string.Empty
@@ -2032,8 +2049,20 @@ var sscResult = splitProbeSsc;
                             $"- sceneCode={x.SceneCode}",
                             $"- frameId={x.FrameId}",
                             $"- fallbackReason={x.FallbackReason}")));
-            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Composition={compositionPaths.Count}, RenderScenes={allFramePlans.Count}, FramePlans={generatedFramePlans.Count}, SscScripts={scriptPaths.Count}, FrameScreenshots={screenshots.Count}, SelectedImages={imageSequencePlan.TotalImages}, ImageSequenceDuration={imageSequencePlan.EstimatedDurationSeconds}, fallbackUsed={(fallbackUsed ? "true" : "false")}{offendingFramesText}");
+            var invalidImagesText = imageSequencePlan.Sequences.Any(x => !x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase))
+                ? Environment.NewLine
+                    + "InvalidImages:"
+                    + Environment.NewLine
+                    + string.Join(
+                        Environment.NewLine,
+                        imageSequencePlan.Sequences
+                            .Where(x => !x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase))
+                            .Select(x => $"- sequenceIndex={x.SequenceIndex} sceneCode={x.RenderSceneCode} frameId={x.FrameId} imagePath={x.ImagePath} validationStatus={x.ValidationStatus} warnings={string.Join("|", x.ValidationWarnings ?? Array.Empty<string>())}"))
+                : string.Empty;
+            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Composition={compositionPaths.Count}, RenderScenes={allFramePlans.Count}, FramePlans={generatedFramePlans.Count}, SscScripts={scriptPaths.Count}, FrameScreenshots={screenshots.Count}, SelectedImages={imageSequencePlan.TotalImages}, ImageSequenceDuration={imageSequencePlan.EstimatedDurationSeconds}, AllSelectedImagesValid={allSelectedImagesValid}, DuplicateImages={imageSequencePlan.DuplicateImagesDetected}, ProductionImageSource={imageSequencePlan.ProductionImageSource}, fallbackUsed={(fallbackUsed ? "true" : "false")}{invalidImagesText}{offendingFramesText}");
         }
+
+        app.Logger.LogInformation("IMAGE_PIPELINE_LOCKED_PRODUCTION_READY pipelineRunId={PipelineRunId} selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds} productionImageSource={ProductionImageSource}", pipelineRunId, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds, imageSequencePlan.ProductionImageSource);
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
@@ -2055,6 +2084,12 @@ var sscResult = splitProbeSsc;
             imageSequencePlanPath,
             selectedImageCount = imageSequencePlan.TotalImages,
             estimatedImageSequenceDurationSeconds = imageSequencePlan.EstimatedDurationSeconds,
+            imagePipelineProductionReady = imageSequencePlan.ProductionReady,
+            imageSequenceValidationStatus = imageSequencePlan.ValidationStatus,
+            allSelectedImagesValid,
+            duplicateImagesDetected = imageSequencePlan.DuplicateImagesDetected,
+            primaryScreenshotsDeprecated = imageSequencePlan.PrimaryScreenshotsDeprecated,
+            productionImageSource = imageSequencePlan.ProductionImageSource,
             warnings,
             executionSummary
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
@@ -2077,7 +2112,13 @@ var sscResult = splitProbeSsc;
             qualityPath,
             imageSequencePlanPath,
             imageSequencePlan.TotalImages,
-            imageSequencePlan.EstimatedDurationSeconds);
+            imageSequencePlan.EstimatedDurationSeconds,
+            imageSequencePlan.ProductionReady,
+            imageSequencePlan.ValidationStatus,
+            allSelectedImagesValid,
+            imageSequencePlan.DuplicateImagesDetected,
+            imageSequencePlan.PrimaryScreenshotsDeprecated,
+            imageSequencePlan.ProductionImageSource);
 
         return Results.Ok(output);
     }
@@ -3630,12 +3671,22 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
     DateOnly weekStartDate,
     IReadOnlyList<CinematicSceneFramePlan> sceneFramePlans,
     IReadOnlyList<string> frameScreenshots,
+    IReadOnlyList<string> primaryScreenshots,
     Microsoft.Extensions.Logging.ILogger logger)
 {
+    const int expectedImageCount = 6;
+    const int expectedDurationSeconds = 30;
+    const long minimumProductionImageBytes = 50 * 1024;
+    const string productionImageSource = "frameScreenshots";
+
     var screenshotPathSet = frameScreenshots.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var primaryScreenshotPathSet = primaryScreenshots.ToHashSet(StringComparer.OrdinalIgnoreCase);
     var framePlanLookup = sceneFramePlans
         .SelectMany(scene => scene.FramePlans)
         .ToDictionary(frame => $"{frame.RenderSceneCode}|{frame.FrameType}", StringComparer.OrdinalIgnoreCase);
+    var frameIdLookup = sceneFramePlans
+        .SelectMany(scene => scene.FramePlans)
+        .ToDictionary(frame => frame.FrameId, StringComparer.OrdinalIgnoreCase);
 
     var deterministicOrder = new (string RenderSceneCode, CinematicFrameType FrameType)[]
     {
@@ -3648,15 +3699,13 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
     };
 
     var sequenceItems = new List<ImageSequenceItem>();
+    var planValidationWarnings = new List<string>();
     for (var i = 0; i < deterministicOrder.Length; i++)
     {
         var (renderSceneCode, frameType) = deterministicOrder[i];
         var key = $"{renderSceneCode}|{frameType}";
         if (!framePlanLookup.TryGetValue(key, out var framePlan))
             throw new InvalidOperationException($"IMAGE_SEQUENCE_FRAME_PLAN_MISSING renderSceneCode='{renderSceneCode}' frameType='{frameType}'.");
-
-        if (!screenshotPathSet.Contains(framePlan.ImagePath))
-            throw new InvalidOperationException($"IMAGE_SEQUENCE_FRAME_SCREENSHOT_MISSING renderSceneCode='{renderSceneCode}' frameId='{framePlan.FrameId}' imagePath='{framePlan.ImagePath}'. Phase 5 only selects from frameScreenshots.");
 
         logger.LogInformation(
             "IMAGE_SEQUENCE_ITEM_SELECTED sequenceIndex={SequenceIndex} sourceSceneCode={SourceSceneCode} renderSceneCode={RenderSceneCode} frameId={FrameId} frameType={FrameType} imagePath={ImagePath}",
@@ -3667,25 +3716,77 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
             framePlan.FrameType,
             framePlan.ImagePath);
 
+        var validationWarnings = new List<string>();
         var imageInfo = new FileInfo(framePlan.ImagePath);
+        var imageExists = imageInfo.Exists;
+        var fileSizeBytes = imageExists ? imageInfo.Length : 0;
         var extension = Path.GetExtension(framePlan.ImagePath);
-        if (!imageInfo.Exists)
-            throw new InvalidOperationException($"Image sequence validation failed: file does not exist '{framePlan.ImagePath}'.");
-        if (imageInfo.Length == 0)
-            throw new InvalidOperationException($"Image sequence validation failed: file is empty '{framePlan.ImagePath}'.");
-        if (imageInfo.Length <= 50 * 1024)
-            throw new InvalidOperationException($"Image sequence validation failed: file '{framePlan.ImagePath}' is too small for production sequence ({imageInfo.Length} bytes).");
+        var width = 0;
+        var height = 0;
+
+        if (!imageExists)
+            validationWarnings.Add("imagePath does not exist.");
         if (!extension.Equals(".png", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"Image sequence validation failed: file '{framePlan.ImagePath}' must be a .png image.");
+            validationWarnings.Add($"imagePath extension must be .png but was '{extension}'.");
+        if (fileSizeBytes <= minimumProductionImageBytes)
+            validationWarnings.Add($"image file size must be greater than {minimumProductionImageBytes} bytes but was {fileSizeBytes}.");
+        if (!frameIdLookup.TryGetValue(framePlan.FrameId, out var frameIdPlan))
+            validationWarnings.Add($"frameId '{framePlan.FrameId}' does not exist in cinematic-frame-plan.");
+        else if (!string.Equals(frameIdPlan.ImagePath, framePlan.ImagePath, StringComparison.OrdinalIgnoreCase))
+            validationWarnings.Add($"imagePath '{framePlan.ImagePath}' does not match cinematic-frame-plan imagePath '{frameIdPlan.ImagePath}'.");
+        if (!screenshotPathSet.Contains(framePlan.ImagePath))
+            validationWarnings.Add("imagePath was not selected from frameScreenshots.");
+        if (primaryScreenshotPathSet.Contains(framePlan.ImagePath))
+            validationWarnings.Add("imagePath resolves to primaryScreenshots, which are compatibility-only and not a production source.");
+
+        if (imageExists)
+        {
+            try
+            {
+                using var imageStream = File.OpenRead(framePlan.ImagePath);
+                var identifiedImage = Image.Identify(imageStream);
+                if (identifiedImage is null)
+                {
+                    validationWarnings.Add("image could not be opened/read by ImageSharp.");
+                }
+                else
+                {
+                    width = identifiedImage.Width;
+                    height = identifiedImage.Height;
+                    if (width < 1280)
+                        validationWarnings.Add($"image width must be at least 1280 but was {width}.");
+                    if (height < 720)
+                        validationWarnings.Add($"image height must be at least 720 but was {height}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                validationWarnings.Add($"image could not be opened/read: {ex.Message}");
+            }
+        }
+
+        var validationStatus = validationWarnings.Count == 0 ? "Passed" : "Failed";
+        if (validationWarnings.Count > 0)
+            planValidationWarnings.AddRange(validationWarnings.Select(w => $"sequenceIndex={i + 1}; frameId={framePlan.FrameId}; imagePath={framePlan.ImagePath}; {w}"));
+
+        var imageValidation = new ImageSequenceImageValidation(
+            ImageExists: imageExists,
+            FileSizeBytes: fileSizeBytes,
+            Width: width,
+            Height: height,
+            ValidationStatus: validationStatus,
+            ValidationWarnings: validationWarnings,
+            PerceptualHash: null);
 
         logger.LogInformation(
-            "IMAGE_SEQUENCE_IMAGE_VALIDATED sequenceIndex={SequenceIndex} frameId={FrameId} imagePath={ImagePath} sizeBytes={SizeBytes} extension={Extension} associatedFramePlanExists={AssociatedFramePlanExists}",
+            "IMAGE_SEQUENCE_IMAGE_VALIDATED sequenceIndex={SequenceIndex} frameId={FrameId} imagePath={ImagePath} fileSizeBytes={FileSizeBytes} width={Width} height={Height} validationStatus={ValidationStatus}",
             i + 1,
             framePlan.FrameId,
             framePlan.ImagePath,
-            imageInfo.Length,
-            extension,
-            true);
+            fileSizeBytes,
+            width,
+            height,
+            validationStatus);
 
         sequenceItems.Add(new ImageSequenceItem(
             SequenceIndex: i + 1,
@@ -3701,7 +3802,59 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
             MotionIntentForFutureVideo: ResolveImageSequenceMotionIntent(framePlan.FrameType),
             ImportanceScore: ResolveImageSequenceImportanceScore(framePlan.RenderSceneCode, framePlan.FrameType),
             SelectionReason: "Selected by deterministic Phase 5 image-sequence order from generated frameScreenshots; no primaryScreenshots were used as production source.",
-            Warnings: framePlan.SafetyWarnings));
+            Warnings: framePlan.SafetyWarnings,
+            ImageExists: imageExists,
+            FileSizeBytes: fileSizeBytes,
+            Width: width,
+            Height: height,
+            ValidationStatus: validationStatus,
+            ValidationWarnings: validationWarnings,
+            ImageValidation: imageValidation,
+            SequenceRole: ResolveImageSequenceRole(i + 1, framePlan.FrameType),
+            IsProductionSelected: true,
+            PerceptualHash: null));
+    }
+
+    var duplicateWarnings = DetectImageSequenceStructuralDuplicates(sequenceItems);
+    var duplicateImagePaths = sequenceItems
+        .GroupBy(x => x.ImagePath, StringComparer.OrdinalIgnoreCase)
+        .Where(g => g.Count() > 1)
+        .Select(g => g.Key)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var duplicateFrameIds = sequenceItems
+        .GroupBy(x => x.FrameId, StringComparer.OrdinalIgnoreCase)
+        .Where(g => g.Count() > 1)
+        .Select(g => g.Key)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var duplicateImagesDetected = duplicateWarnings.Count > 0;
+    planValidationWarnings.AddRange(duplicateWarnings);
+    foreach (var item in sequenceItems)
+    {
+        logger.LogInformation(
+            "IMAGE_SEQUENCE_DUPLICATE_CHECK sequenceIndex={SequenceIndex} frameId={FrameId} imagePath={ImagePath} fileSizeBytes={FileSizeBytes} width={Width} height={Height} validationStatus={ValidationStatus} duplicateImagePath={DuplicateImagePath} duplicateFrameId={DuplicateFrameId}",
+            item.SequenceIndex,
+            item.FrameId,
+            item.ImagePath,
+            item.FileSizeBytes,
+            item.Width,
+            item.Height,
+            item.ValidationStatus,
+            duplicateImagePaths.Contains(item.ImagePath),
+            duplicateFrameIds.Contains(item.FrameId));
+    }
+
+    var totalDurationSeconds = sequenceItems.Sum(x => x.SuggestedDurationSeconds);
+    var allImagesValid = sequenceItems.All(x => x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase));
+    var validationStatus = allImagesValid && !duplicateImagesDetected ? "Passed" : "Failed";
+    var productionReady = validationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase)
+        && sequenceItems.Count == expectedImageCount
+        && totalDurationSeconds == expectedDurationSeconds
+        && productionImageSource.Equals("frameScreenshots", StringComparison.OrdinalIgnoreCase);
+
+    if (!productionReady)
+    {
+        throw new InvalidOperationException(
+            $"Image sequence production validation failed: selectedImageCount={sequenceItems.Count}, expectedImageCount={expectedImageCount}, totalDurationSeconds={totalDurationSeconds}, expectedDurationSeconds={expectedDurationSeconds}, validationStatus={validationStatus}, duplicateImagesDetected={duplicateImagesDetected}, productionImageSource={productionImageSource}. Details: {string.Join(" | ", planValidationWarnings)}");
     }
 
     return new ImageSequencePlan(
@@ -3711,9 +3864,45 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
         language,
         weekStartDate,
         sequenceItems.Count,
-        sequenceItems.Sum(x => x.SuggestedDurationSeconds),
-        sequenceItems);
+        totalDurationSeconds,
+        sequenceItems,
+        ValidationStatus: validationStatus,
+        SelectedImageCount: sequenceItems.Count,
+        ExpectedImageCount: expectedImageCount,
+        TotalDurationSeconds: totalDurationSeconds,
+        ProductionReady: productionReady,
+        ProductionImageSource: productionImageSource,
+        PrimaryScreenshotsDeprecated: true,
+        DuplicateImagesDetected: duplicateImagesDetected,
+        ValidationWarnings: planValidationWarnings);
 }
+
+static IReadOnlyList<string> DetectImageSequenceStructuralDuplicates(IReadOnlyList<ImageSequenceItem> sequenceItems)
+{
+    var duplicateWarnings = new List<string>();
+
+    duplicateWarnings.AddRange(sequenceItems
+        .GroupBy(x => x.ImagePath, StringComparer.OrdinalIgnoreCase)
+        .Where(g => g.Count() > 1)
+        .Select(g => $"Duplicate imagePath detected: imagePath={g.Key}; sequenceIndexes={string.Join(",", g.Select(x => x.SequenceIndex))}; frameIds={string.Join(",", g.Select(x => x.FrameId))}."));
+
+    duplicateWarnings.AddRange(sequenceItems
+        .GroupBy(x => x.FrameId, StringComparer.OrdinalIgnoreCase)
+        .Where(g => g.Count() > 1)
+        .Select(g => $"Duplicate frameId detected: frameId={g.Key}; sequenceIndexes={string.Join(",", g.Select(x => x.SequenceIndex))}; imagePaths={string.Join(",", g.Select(x => x.ImagePath))}."));
+
+    return duplicateWarnings;
+}
+
+static string ResolveImageSequenceRole(int sequenceIndex, CinematicFrameType frameType) => frameType switch
+{
+    CinematicFrameType.EstablishingWide => sequenceIndex == 1 ? "opening_establishing_production_frame" : "establishing_production_frame",
+    CinematicFrameType.HeroCloseup => "hero_emphasis_production_frame",
+    CinematicFrameType.HorizonContext => "horizon_context_production_frame",
+    CinematicFrameType.AlignmentWide => "alignment_context_production_frame",
+    CinematicFrameType.BalancedStoryFrame => "story_bridge_production_frame",
+    _ => "production_frame"
+};
 
 static int ResolveImageSequenceDuration(string renderSceneCode, CinematicFrameType frameType)
 {

@@ -1248,6 +1248,15 @@ public sealed record CinematicSceneFramePlan(
     string SourceSceneCode,
     IReadOnlyList<CinematicFramePlan> FramePlans);
 
+public sealed record ImageSequenceImageValidation(
+    bool ImageExists,
+    long FileSizeBytes,
+    int Width,
+    int Height,
+    string ValidationStatus,
+    IReadOnlyList<string> ValidationWarnings,
+    string? PerceptualHash = null);
+
 public sealed record ImageSequencePlan(
     Guid PipelineRunId,
     string ContentCategoryCode,
@@ -1256,7 +1265,16 @@ public sealed record ImageSequencePlan(
     DateOnly WeekStartDate,
     int TotalImages,
     int EstimatedDurationSeconds,
-    IReadOnlyList<ImageSequenceItem> Sequences);
+    IReadOnlyList<ImageSequenceItem> Sequences,
+    string ValidationStatus = "NotValidated",
+    int SelectedImageCount = 0,
+    int ExpectedImageCount = 6,
+    int TotalDurationSeconds = 0,
+    bool ProductionReady = false,
+    string ProductionImageSource = "frameScreenshots",
+    bool PrimaryScreenshotsDeprecated = true,
+    bool DuplicateImagesDetected = false,
+    IReadOnlyList<string>? ValidationWarnings = null);
 
 public sealed record ImageSequenceItem(
     int SequenceIndex,
@@ -1272,7 +1290,17 @@ public sealed record ImageSequenceItem(
     string MotionIntentForFutureVideo,
     double ImportanceScore,
     string SelectionReason,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    bool ImageExists = false,
+    long FileSizeBytes = 0,
+    int Width = 0,
+    int Height = 0,
+    string ValidationStatus = "NotValidated",
+    IReadOnlyList<string>? ValidationWarnings = null,
+    ImageSequenceImageValidation? ImageValidation = null,
+    string SequenceRole = "production_frame",
+    bool IsProductionSelected = true,
+    string? PerceptualHash = null);
 
 public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     Guid PipelineRunId,
@@ -1292,7 +1320,13 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     string? CinematicQualityReportPath = null,
     string? ImageSequencePlanPath = null,
     int SelectedImageCount = 0,
-    int EstimatedImageSequenceDurationSeconds = 0);
+    int EstimatedImageSequenceDurationSeconds = 0,
+    bool ImagePipelineProductionReady = false,
+    string ImageSequenceValidationStatus = "NotValidated",
+    bool AllSelectedImagesValid = false,
+    bool DuplicateImagesDetected = false,
+    bool PrimaryScreenshotsDeprecated = true,
+    string ProductionImageSource = "frameScreenshots");
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
