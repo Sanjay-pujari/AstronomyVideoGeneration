@@ -20,6 +20,8 @@ public sealed class CinematicDirectionPersister
     }
 }
 
+public sealed record CinematicDirectorRequest(IReadOnlyList<ResolvedWeeklyScene> Scenes);
+
 public sealed class WeeklyCinematicDirectorService(ILogger<WeeklyCinematicDirectorService> logger)
 {
     public async Task<CinematicDirectorResponse> BuildAsync(CinematicDirectorRequest request, CancellationToken cancellationToken)
