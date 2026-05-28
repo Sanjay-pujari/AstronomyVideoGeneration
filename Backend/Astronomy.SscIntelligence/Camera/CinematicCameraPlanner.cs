@@ -26,7 +26,7 @@ public sealed class CinematicCameraPlanner : ICinematicCameraPlanner
 
         if (framingMode == "HeroObject")
         {
-            var hero = cameraObjects.OrderBy(x => x.VisualMagnitude).First();
+            var hero = cameraObjects.OrderBy(x => x.Magnitude).First();
             centerAltitude = hero.AltitudeDeg;
             centerAzimuth = hero.AzimuthDeg;
             fov = Math.Clamp(Math.Min(fovRecommendationDeg, 34d), 18d, 40d);
