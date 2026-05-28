@@ -974,18 +974,55 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return true;
         });
 
+        static (List<string> TargetObjects, string PrimaryObject) ResolveManifestTargets(string sceneCode, IReadOnlyList<string> defaultTargets)
+        {
+            if (sceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase))
+            {
+                return (new List<string> { "JUPITER", "VENUS" }, "JUPITER");
+            }
+
+            if (sceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase))
+            {
+                return (new List<string> { "MOON" }, "MOON");
+            }
+
+            var deduped = defaultTargets
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return (deduped, deduped.FirstOrDefault() ?? string.Empty);
+        }
+
         var renderSceneManifest = new
         {
             StellariumScenes = weeklyScenePlan.StellariumNeeds
-                .Select(x => new
+                .Select(x =>
                 {
-                    SourceSceneCode = string.IsNullOrWhiteSpace(x.SourceSceneCode) ? x.SceneCode : x.SourceSceneCode,
-                    SceneCode = x.SceneCode,
-                    RenderEngine = "Stellarium",
-                    TargetObjects = x.ObjectCodes,
-                    PrimaryObject = x.ObjectCodes.FirstOrDefault(),
-                    ExpectedSscScriptPath = Path.Combine(scriptsDirectory, $"{x.SceneCode}.ssc"),
-                    ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{x.SceneCode}.png")
+                    var resolvedTargets = ResolveManifestTargets(x.SceneCode, x.ObjectCodes);
+                    if (x.SceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase)
+                        && resolvedTargets.TargetObjects.Contains("MOON", StringComparer.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException("Manifest corruption: western_planet_grouping_scene contains MOON");
+                    }
+
+                    if (x.SceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase)
+                        && (resolvedTargets.TargetObjects.Count != 1
+                            || !resolvedTargets.TargetObjects[0].Equals("MOON", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        throw new InvalidOperationException("Manifest corruption: moon_hero_scene target objects invalid");
+                    }
+
+                    return new
+                    {
+                        SourceSceneCode = string.IsNullOrWhiteSpace(x.SourceSceneCode) ? x.SceneCode : x.SourceSceneCode,
+                        SceneCode = x.SceneCode,
+                        RenderEngine = "Stellarium",
+                        TargetObjects = resolvedTargets.TargetObjects,
+                        PrimaryObject = resolvedTargets.PrimaryObject,
+                        ExpectedSscScriptPath = Path.Combine(scriptsDirectory, $"{x.SceneCode}.ssc"),
+                        ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{x.SceneCode}.png")
+                    };
                 }).ToList(),
             CelestialAssetScenes = weeklyScenePlan.ScenePlans.Where(scene => scene.RequiresCelestialAssets)
                 .Select(scene => new { SourceSceneCode = scene.SceneCode, SceneCode = scene.SceneCode, RenderEngine = "CelestialAsset", TargetObjects = scene.ObjectCodes, PrimaryObject = scene.ObjectCodes.FirstOrDefault(), ExpectedSscScriptPath = string.Empty, ExpectedOutputImagePath = string.Empty }).ToList(),
@@ -1102,10 +1139,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 var scenePlan = ResolveRenderSceneArtifactScenePlan(shot.ShotCode, stellariumNeed.SourceSceneCode, scenePlansByCode)
                     ?? DynamicSplitScenePlanResolver.Resolve(shot.ShotCode, scenePlansByCode, generatedSplitMetadataBySceneCode, out _, out _);
                 var sceneSpecificCodes = ResolveSceneSpecificObjectCodes(shot, composition, scenePlan, weeklySkyfieldContext);
-                if (stellariumNeed.ObjectCodes.Count > 0)
+                var resolvedNeedTargets = ResolveManifestTargets(shot.ShotCode, stellariumNeed.ObjectCodes);
+                if (resolvedNeedTargets.TargetObjects.Count > 0)
                 {
-                    sceneSpecificCodes = stellariumNeed.ObjectCodes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    sceneSpecificCodes = resolvedNeedTargets.TargetObjects;
                 }
+                app.Logger.LogInformation("SSC_INPUT_TARGET_OBJECTS sceneCode={SceneCode} targetObjects={TargetObjects}", shot.ShotCode, string.Join(",", sceneSpecificCodes));
                 var usedFallback = sceneSpecificCodes.Count == 0;
                 if (usedFallback)
                 {
@@ -1175,6 +1214,21 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             source);
                     })
                     .ToList();
+                var missingRequestedObjects = skyPositions
+                    .Where(x => x.Source.Contains("source=fallback", StringComparison.OrdinalIgnoreCase))
+                    .Select(x => x.Position.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (missingRequestedObjects.Count > 0)
+                {
+                    app.Logger.LogError("SKYFIELD_OBJECTS_MISSING sceneCode={SceneCode} missingObjects={MissingObjects}", shot.ShotCode, string.Join(",", missingRequestedObjects));
+                }
+                if (skyPositions.Count > 0 && missingRequestedObjects.Count == skyPositions.Count)
+                {
+                    app.Logger.LogError("SSC_SKIPPED_ALL_TARGETS_MISSING sceneCode={SceneCode} requestedObjects={RequestedObjects}", shot.ShotCode, string.Join(",", sceneSpecificCodes));
+                    continue;
+                }
+
                 var compositionObjectsForSplit = skyPositions.Select(x => x.Position).ToList();
                 var spatialComposition = spatialCompositionEngine.Analyze(compositionObjectsForSplit);
                 var splitProbeSceneIntent = sceneIntentResolver.Resolve(shot.ShotCode, shot.ShotPurpose);
@@ -1279,6 +1333,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                                     source);
                             })
                             .ToList();
+                        app.Logger.LogInformation("SSC_INPUT_TARGET_OBJECTS sceneCode={SceneCode} targetObjects={TargetObjects}", splitScene.SceneCode, string.Join(",", splitObjectCodes));
                         var splitFallbackCount = splitSkyPositions.Count(x => x.Source.Contains("source=fallback", StringComparison.OrdinalIgnoreCase));
                         if (splitSkyPositions.Count > 0 && splitFallbackCount == splitSkyPositions.Count)
                         {
