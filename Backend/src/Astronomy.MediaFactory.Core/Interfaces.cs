@@ -1203,6 +1203,45 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesRequest(
     Guid? ContentGenerationPlanId = null,
     Guid? PipelineRunId = null);
 
+public enum CinematicFrameType
+{
+    EstablishingWide,
+    BalancedStoryFrame,
+    HeroCloseup,
+    NegativeSpaceFrame,
+    EducationalContext,
+    HorizonContext,
+    AlignmentWide,
+    DetailFocus
+}
+
+public sealed record CinematicFramePlan(
+    string FrameId,
+    string SourceSceneCode,
+    string RenderSceneCode,
+    CinematicFrameType FrameType,
+    int FrameIndex,
+    IReadOnlyList<string> TargetObjects,
+    string? PrimaryObject,
+    double CameraAzimuth,
+    double CameraAltitude,
+    double Fov,
+    bool PreserveHorizon,
+    bool PreserveConstellationLabels,
+    bool PreserveConstellationLines,
+    double SubjectScreenX,
+    double SubjectScreenY,
+    string VisualPurpose,
+    string NarrationUse,
+    string OutputScriptName,
+    string OutputImageName,
+    IReadOnlyList<string> SafetyWarnings);
+
+public sealed record CinematicSceneFramePlan(
+    string RenderSceneCode,
+    string SourceSceneCode,
+    IReadOnlyList<CinematicFramePlan> FramePlans);
+
 public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     Guid PipelineRunId,
     string WorkingDirectoryRoot,
@@ -1212,7 +1251,12 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     int GeneratedScenes,
     int GeneratedSscScripts,
     IReadOnlyList<string> Screenshots,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    int GeneratedFramePlans = 0,
+    IReadOnlyList<string>? FrameScreenshots = null,
+    IReadOnlyList<string>? PrimaryScreenshots = null,
+    string? CinematicFramePlanPath = null,
+    string? CinematicQualityReportPath = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
