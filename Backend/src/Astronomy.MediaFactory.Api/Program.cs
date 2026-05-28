@@ -1633,6 +1633,10 @@ var sscResult = splitProbeSsc;
                         "WeeklySkyForecastV2",
                         $"{i + 1:00}_{v.name}.ssc",
                         $"{i + 1:00}_{v.name}.png",
+                        Path.Combine(frameScriptDir, $"{i + 1:00}_{v.name}.ssc"),
+                        Path.Combine(frameSceneDir, $"{i + 1:00}_{v.name}.png"),
+                        Path.Combine("stellarium", "scripts", shot.ShotCode, $"{i + 1:00}_{v.name}.ssc"),
+                        Path.Combine("stellarium", "scenes", shot.ShotCode, $"{i + 1:00}_{v.name}.png"),
                         subjectOffset.Warnings);
                     framePlans.Add(framePlan);
                     app.Logger.LogInformation("CINEMATIC_FRAME_PLAN_CREATED sceneCode={SceneCode} frameType={FrameType} frameIndex={FrameIndex} cameraAz={CameraAz} cameraAlt={CameraAlt} fov={Fov} outputImageName={OutputImageName} safetyWarnings={SafetyWarnings}", shot.ShotCode, framePlan.FrameType, framePlan.FrameIndex, framePlan.CameraAzimuth, framePlan.CameraAltitude, framePlan.Fov, framePlan.OutputImageName, string.Join("|", framePlan.SafetyWarnings));
@@ -1643,15 +1647,17 @@ var sscResult = splitProbeSsc;
                     shot.ShotCode, primaryFrame.FrameType, primaryFrame.FrameIndex, primaryFrame.CameraAzimuth, primaryFrame.CameraAltitude, primaryFrame.Fov, primaryFrame.OutputImageName, string.Join("|", primaryFrame.SafetyWarnings));
                 foreach (var frame in framePlans)
                 {
-                    var scriptPath = Path.Combine(frameScriptDir, frame.OutputScriptName);
-                    var frameImagePath = Path.Combine(frameSceneDir, frame.OutputImageName);
+                    var scriptPath = frame.ScriptPath;
+                    var frameImagePath = frame.ImagePath;
                     var frameSsc = sscResult.SscScript
                         .Replace($"core.moveToAltAzi({sscResult.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}, {sscResult.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"core.moveToAltAzi({frame.CameraAltitude.ToString("0.###", CultureInfo.InvariantCulture)}, {frame.CameraAzimuth.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal)
                         .Replace($"StelMovementMgr.zoomTo({sscResult.FovDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"StelMovementMgr.zoomTo({frame.Fov.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal)
                         .Replace($"core.screenshot(\"{Path.GetFileNameWithoutExtension(expectedScreenshotPath)}\"", $"core.screenshot(\"{Path.GetFileNameWithoutExtension(frameImagePath)}\"", StringComparison.Ordinal);
                     generatedScripts.Add((scriptPath, frameSsc));
-                    app.Logger.LogInformation("FRAME_SSC_GENERATED sceneCode={SceneCode} frameType={FrameType} frameIndex={FrameIndex} cameraAz={CameraAz} cameraAlt={CameraAlt} fov={Fov} outputImageName={OutputImageName} safetyWarnings={SafetyWarnings}",
-                        shot.ShotCode, frame.FrameType, frame.FrameIndex, frame.CameraAzimuth, frame.CameraAltitude, frame.Fov, frame.OutputImageName, string.Join("|", frame.SafetyWarnings));
+                    app.Logger.LogInformation("FRAME_SSC_GENERATED sceneCode={SceneCode} frameType={FrameType} frameIndex={FrameIndex} cameraAz={CameraAz} cameraAlt={CameraAlt} fov={Fov} outputImageName={OutputImageName} scriptPath={ScriptPath} imagePath={ImagePath} safetyWarnings={SafetyWarnings}",
+                        shot.ShotCode, frame.FrameType, frame.FrameIndex, frame.CameraAzimuth, frame.CameraAltitude, frame.Fov, frame.OutputImageName, frame.ScriptPath, frame.ImagePath, string.Join("|", frame.SafetyWarnings));
+                    app.Logger.LogInformation("FRAME_SCRIPT_PATH_RESOLVED sceneCode={SceneCode} frameIndex={FrameIndex} frameType={FrameType} scriptPath={ScriptPath} imagePath={ImagePath}",
+                        shot.ShotCode, frame.FrameIndex, frame.FrameType, frame.ScriptPath, frame.ImagePath);
                 }
                 app.Logger.LogInformation(
                     "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects} fallbackUsed={FallbackUsed} cameraAlt={CameraAlt} cameraAz={CameraAz} fov={Fov} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
@@ -1695,15 +1701,14 @@ var sscResult = splitProbeSsc;
             sceneQuality = cinematicQualityReports
         }, new JsonSerializerOptions { WriteIndented = true }));
 
-        var finalScenes = WeeklySscSceneFinalizer.Build(
-            scriptsDirectory,
-            scenesDirectory,
-            generatedScripts.Select(x =>
-            {
-                var sceneCode = Path.GetFileNameWithoutExtension(x.ScriptPath);
-                scriptSourceSceneCodes.TryGetValue(sceneCode, out var sourceCodes);
-                return (sceneCode, (IEnumerable<string>)(sourceCodes ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase) { sceneCode }));
-            }));
+        var finalScenes = allFramePlans
+            .SelectMany(plan => plan.FramePlans.Select(frame => new WeeklySscSceneFinalizer.FinalSscScene(
+                SceneCode: $"{plan.RenderSceneCode}/{frame.OutputScriptName}",
+                ScriptPath: frame.ScriptPath,
+                ScreenshotPath: frame.ImagePath,
+                SourceSceneCodes: new HashSet<string>(StringComparer.OrdinalIgnoreCase) { plan.SourceSceneCode, plan.RenderSceneCode })))
+            .OrderBy(x => x.SceneCode, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         await ExecuteOrchestrationStageAsync("Persisting SSC scripts", async stageCt =>
         {
@@ -1768,8 +1773,18 @@ var sscResult = splitProbeSsc;
             .ThenBy(item => item.SceneCode, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        var generatedScriptsByPath = generatedScripts
+            .GroupBy(x => x.ScriptPath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Last().ScriptContent, StringComparer.OrdinalIgnoreCase);
+
         foreach (var item in orderedScreenshotExecutionQueue)
         {
+            if (!generatedScriptsByPath.ContainsKey(item.ScriptPath))
+            {
+                app.Logger.LogError("FRAME_SCRIPT_PATH_NOT_GENERATED requestedScriptPath={RequestedScriptPath} availableScriptPaths={AvailableScriptPaths}", item.ScriptPath, string.Join(",", generatedScriptsByPath.Keys));
+                throw new InvalidOperationException($"Frame SSC script path was not generated: {item.ScriptPath}. Available script paths: {string.Join(", ", generatedScriptsByPath.Keys)}");
+            }
+
             var scriptContent = await File.ReadAllTextAsync(item.ScriptPath, ct);
             if (!scriptContent.Contains("core.quitStellarium();", StringComparison.Ordinal))
                 throw new InvalidOperationException($"Generated SSC script missing core.quitStellarium();: {item.ScriptPath}");
