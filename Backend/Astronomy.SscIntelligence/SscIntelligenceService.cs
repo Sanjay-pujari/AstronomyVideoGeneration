@@ -112,7 +112,7 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
         var shotType = cameraPlan.FramingMode;
         var overlayPolicy = new ConstellationOverlayPolicyResult(true, true, false, false, "medium", "default-policy-preserve-context");
         _logger.LogInformation("CONSTELLATION_OVERLAY_POLICY sceneCode={SceneCode} sceneIntent={SceneIntent} showLines={ShowLines} showLabels={ShowLabels} overlayDensity={OverlayDensity} reason={Reason}", request.SceneCode, sceneIntent, overlayPolicy.ShowConstellationLines, overlayPolicy.ShowConstellationLabels, overlayPolicy.OverlayDensity, overlayPolicy.Reason);
-        var sortedByMag = cameraObjects.OrderBy(x => x.Magnitude ?? 99d).ToList();
+        var sortedByMag = cameraObjects.OrderBy(x => x.Magnitude).ToList();
         var primary = targets.PrimaryTargets.FirstOrDefault()?.Name ?? cameraObjects.First().Name;
         var secondaries = targets.SecondaryTargets.Select(x => x.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var brightest = sortedByMag.FirstOrDefault()?.Name ?? primary;
