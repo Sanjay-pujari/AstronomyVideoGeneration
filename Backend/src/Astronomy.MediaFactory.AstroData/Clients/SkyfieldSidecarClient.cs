@@ -11,6 +11,7 @@ public interface ISkyfieldSidecarClient
     Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken);
     Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken);
     Task<WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken);
+    Task<SkyfieldWeeklyGeometryResponse?> GetWeeklyGeometryAsync(SkyfieldWeeklyGeometryRequest request, CancellationToken cancellationToken);
 }
 
 public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
@@ -226,6 +227,61 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
             return null;
         }
     }
+
+    public async Task<SkyfieldWeeklyGeometryResponse?> GetWeeklyGeometryAsync(SkyfieldWeeklyGeometryRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _httpClient.PostAsJsonAsync("/ephemeris/weekly-geometry", request, JsonOptions, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Skyfield weekly-geometry returned non-success status code {StatusCode}.", (int)response.StatusCode);
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync<SkyfieldWeeklyGeometryResponse>(JsonOptions, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Skyfield sidecar weekly-geometry call failed.");
+            return null;
+        }
+    }
+}
+
+public sealed class SkyfieldWeeklyGeometryRequest
+{
+    public string RegionId { get; set; } = "";
+    public string LocationName { get; set; } = "";
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public string Timezone { get; set; } = "UTC";
+    public string StartDate { get; set; } = "";
+    public string EndDate { get; set; } = "";
+    public List<string> Objects { get; set; } = new();
+    public int SampleIntervalMinutes { get; set; } = 30;
+}
+
+public sealed class SkyfieldWeeklyGeometryResponse
+{
+    public bool Success { get; set; }
+    public List<SkyfieldWeeklyGeometryDay> Days { get; set; } = new();
+}
+
+public sealed class SkyfieldWeeklyGeometryDay
+{
+    public string Date { get; set; } = "";
+    public List<SkyfieldWeeklyGeometryObject> Objects { get; set; } = new();
+}
+
+public sealed class SkyfieldWeeklyGeometryObject
+{
+    public string ObjectCode { get; set; } = "";
+    public string ObjectName { get; set; } = "";
+    public DateTime? TimeUtc { get; set; }
+    public double? AltitudeDegrees { get; set; }
+    public double? AzimuthDegrees { get; set; }
+    public double? Magnitude { get; set; }
 }
 
 public sealed class SkyfieldNightPlanRequest
