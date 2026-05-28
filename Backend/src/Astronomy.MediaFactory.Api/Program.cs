@@ -919,6 +919,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         app.Logger.LogInformation("CINEMATIC_TIMELINE_SCENE_COUNT={Count}", shots.Count);
         app.Logger.LogInformation("COMPOSITION_SCENE_COUNT={Count}", compositionPackage.Entries.Count);
         var generatedScripts = new List<(string ScriptPath, string ScriptContent)>();
+        var cinematicQualityReports = new List<object>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
         WeeklyScenePlan? ResolveRenderSceneArtifactScenePlan(string sceneCode, string? sourceSceneCode, IReadOnlyDictionary<string, WeeklyScenePlan> scenePlanIndex)
@@ -1377,6 +1378,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                         var splitResultSsc = sscIntelligenceService.Generate(new SscIntelligenceRequest(
                             observationUtc,longitude,latitude,elevationMeters,locationName,splitSkyPositions.Select(x => x.Position).ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitObjectCodes),
                             scenesDirectory,splitPrefix);
+                        if (splitResultSsc.CinematicQualityReport is not null) cinematicQualityReports.Add(splitResultSsc.CinematicQualityReport);
                         if (splitFallbackCount > 0)
                         {
                             throw new InvalidOperationException($"FallbackGeometryForbidden: split scene '{splitScene.SceneCode}' contains fallback geometry.");
@@ -1424,6 +1426,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 }
 
 var sscResult = splitProbeSsc;
+                if (sscResult.CinematicQualityReport is not null) cinematicQualityReports.Add(sscResult.CinematicQualityReport);
                 if (sscResult.RequiresSplit)
                 {
                     app.Logger.LogWarning("WeeklySkyForecast V2 scene {SceneId} requires split, fallback to single SSC with computed center/FOV. reason=requiresSplit", shot.ShotCode);
@@ -1533,6 +1536,11 @@ var sscResult = splitProbeSsc;
             }
             return Task.FromResult(true);
         });
+        var qualityDirectory = Path.Combine(root, "cinematic");
+        Directory.CreateDirectory(qualityDirectory);
+        var qualityPath = Path.Combine(qualityDirectory, "cinematic-quality-report.json");
+        await File.WriteAllTextAsync(qualityPath, JsonSerializer.Serialize(cinematicQualityReports, new JsonSerializerOptions { WriteIndented = true }));
+
         var finalScenes = WeeklySscSceneFinalizer.Build(
             scriptsDirectory,
             scenesDirectory,

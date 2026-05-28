@@ -63,7 +63,18 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
 
         var composition = _unifiedCameraComposer.Compose(sceneIntent, cameraAltitudeRaw, cameraAzimuthRaw, fovInput, visible, cameraObjects, Array.Empty<SkyObjectPosition>(), Array.Empty<SkyObjectPosition>());
         var cameraPlan = _cinematicCameraPlanner.Plan(request.SceneCode, sceneIntent, cameraObjects, composition.FinalCameraAltitudeDeg, composition.FinalCameraAzimuthDeg, fovInput, request.LocationName, nightWindow.BestObservationUtc);
-        var camera = preliminaryCamera with { AltitudeDeg = cameraPlan.CameraAltitude, AzimuthDeg = cameraPlan.CameraAzimuth, FovDeg = cameraPlan.FovDegrees };
+        var preserveHorizon = request.SceneCode?.Contains("wide", StringComparison.OrdinalIgnoreCase) == true || request.SceneTitle?.Contains("horizon", StringComparison.OrdinalIgnoreCase) == true;
+        var horizonRefinement = CinematicRefinementEngine.RefineHorizon(cameraPlan, request.SceneCode, cameraObjects, preserveHorizon);
+        _logger.LogInformation("HORIZON_COMPOSITION_REFINEMENT sceneCode={SceneCode} preserveHorizon={PreserveHorizon} targetAltitudeRange={TargetAltitudeRange} originalCameraAlt={OriginalCameraAlt:0.##} refinedCameraAlt={RefinedCameraAlt:0.##} originalFov={OriginalFov:0.##} refinedFov={RefinedFov:0.##} reason={Reason}",
+            request.SceneCode,
+            preserveHorizon,
+            $"{cameraObjects.Min(x=>x.AltitudeDeg):0.#}-{cameraObjects.Max(x=>x.AltitudeDeg):0.#}",
+            cameraPlan.CameraAltitude,
+            horizonRefinement.RefinedCameraAltitude,
+            cameraPlan.FovDegrees,
+            horizonRefinement.RefinedFov,
+            horizonRefinement.Reason);
+        var camera = preliminaryCamera with { AltitudeDeg = horizonRefinement.RefinedCameraAltitude, AzimuthDeg = cameraPlan.CameraAzimuth, FovDeg = horizonRefinement.RefinedFov };
 
         _logger.LogInformation("AZIMUTH_WRAP_CALCULATION: sceneCode={SceneCode}, inputAzimuths={InputAzimuths}, normalizedCenter={NormalizedCenter:0.##}, normalizedSpread={NormalizedSpread:0.##}, computedFov={ComputedFov:0.##}",
             request.SceneCode,
@@ -99,6 +110,27 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
             cameraPlan.Reason);
 
         var shotType = cameraPlan.FramingMode;
+        var overlayPolicy = new ConstellationOverlayPolicyResult(true, true, false, false, "medium", "default-policy-preserve-context");
+        _logger.LogInformation("CONSTELLATION_OVERLAY_POLICY sceneCode={SceneCode} sceneIntent={SceneIntent} showLines={ShowLines} showLabels={ShowLabels} overlayDensity={OverlayDensity} reason={Reason}", request.SceneCode, sceneIntent, overlayPolicy.ShowConstellationLines, overlayPolicy.ShowConstellationLabels, overlayPolicy.OverlayDensity, overlayPolicy.Reason);
+        var sortedByMag = cameraObjects.OrderBy(x => x.Magnitude ?? 99d).ToList();
+        var primary = targets.PrimaryTargets.FirstOrDefault()?.Name ?? cameraObjects.First().Name;
+        var secondaries = targets.SecondaryTargets.Select(x => x.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var brightest = sortedByMag.FirstOrDefault()?.Name ?? primary;
+        var emphasis = new ObjectEmphasisPolicyResult(primary, secondaries, brightest, primary, shotType == "HeroObject" ? "Hero" : "Context");
+        _logger.LogInformation("OBJECT_EMPHASIS_POLICY sceneCode={SceneCode} primary={Primary} secondary={Secondary} brightest={Brightest} visualAnchor={VisualAnchor} emphasisMode={EmphasisMode}", request.SceneCode, emphasis.PrimaryObject, string.Join(',', emphasis.SecondaryObjects), emphasis.BrightestObject, emphasis.VisualAnchorObject, emphasis.EmphasisMode);
+        var significanceScore = 0;
+        if (cameraObjects.Any(x => x.Name.Contains("moon", StringComparison.OrdinalIgnoreCase))) significanceScore += 35;
+        if (cameraObjects.Any(x => x.Name.Contains("venus", StringComparison.OrdinalIgnoreCase)) && cameraObjects.Any(x => x.Name.Contains("jupiter", StringComparison.OrdinalIgnoreCase))) significanceScore += 45;
+        if (cameraObjects.Count > 2) significanceScore += 20;
+        if (cameraObjects.Any(x => x.AltitudeDeg > 20d)) significanceScore += 10;
+        if (spatialAnalysis.MaxAngularSeparationDeg is >= 5 and <= 30) significanceScore += 10;
+        if (preserveHorizon) significanceScore += 5;
+        if (cameraObjects.Any(x => x.AltitudeDeg < 10d)) significanceScore -= 20;
+        if (spatialAnalysis.MaxAngularSeparationDeg > 70d) significanceScore -= 20;
+        significanceScore = Math.Clamp(significanceScore, 0, 100);
+        var significanceClass = significanceScore >= 85 ? "Hero" : significanceScore >= 65 ? "High" : significanceScore >= 40 ? "Medium" : "Low";
+        var significance = new NarrativeSignificanceResult(significanceScore, significanceClass, $"intent={sceneIntent};separation={spatialAnalysis.MaxAngularSeparationDeg:0.#}");
+        _logger.LogInformation("NARRATIVE_SIGNIFICANCE_SCORE sceneCode={SceneCode} score={Score} class={Class} reason={Reason}", request.SceneCode, significance.SignificanceScore, significance.SignificanceClass, significance.Reason);
         var paddingMultiplier = shotType switch
         {
             "HeroObject" => 1.6d,
@@ -120,7 +152,8 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
             false);
 
         var script = _renderer.Render(new SscRenderRequest(nightWindow.BestObservationUtc, request.Longitude, request.Latitude, request.ElevationMeters, request.LocationName, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, screenshotDirectory ?? ".", screenshotFileNameWithoutExtension ?? "scene"));
-        return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, cameraAltitudeRaw, composition.Reason, targets.PrimaryTargets.Select(x => x.Name).ToList(), targets.SecondaryTargets.Select(x => x.Name).ToList(), targets.ContextTargets.Select(x => x.Name).ToList(), script.Script, nightWindow);
+        var qualityReport = new CinematicQualitySceneReport(request.SceneCode ?? "unknown", shotType, cameraPlan with { CameraAltitude = horizonRefinement.RefinedCameraAltitude, FovDegrees = horizonRefinement.RefinedFov }, horizonRefinement, overlayPolicy, emphasis, significance, horizonRefinement.Warnings);
+        return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, cameraAltitudeRaw, composition.Reason, targets.PrimaryTargets.Select(x => x.Name).ToList(), targets.SecondaryTargets.Select(x => x.Name).ToList(), targets.ContextTargets.Select(x => x.Name).ToList(), script.Script, nightWindow, qualityReport);
     }
 
     private static double NormalizeDegrees(double degrees)
