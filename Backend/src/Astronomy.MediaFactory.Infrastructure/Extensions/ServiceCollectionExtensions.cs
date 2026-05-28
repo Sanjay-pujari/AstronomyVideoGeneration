@@ -505,6 +505,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodeNarrationPolicy>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodePlanPersister>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture.WeeklyEpisodeArchitectureService>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification.WeeklySegmentClassificationPolicy>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification.WeeklySegmentClassifier>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification.WeeklySegmentClassificationPersister>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification.WeeklySegmentClassificationService>();
         services.AddScoped<IWeeklyStoryboardComposer, WeeklyStoryboardComposer>();
         services.AddScoped<IWeeklyConjunctionFramingEngine, WeeklyConjunctionFramingEngine>();
         services.AddScoped<IAstronomicalGroupingComposer, AstronomicalGroupingComposer>();

@@ -1332,7 +1332,13 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     string? WeeklyShortformPlanPath = null,
     int LongformTargetDurationSeconds = 0,
     int ShortformTargetDurationSeconds = 0,
-    bool EpisodeArchitectureReady = false);
+    bool EpisodeArchitectureReady = false,
+    string? WeeklySegmentClassificationPlanPath = null,
+    bool SegmentClassificationReady = false,
+    int ClassifiedLongformSegmentCount = 0,
+    int ClassifiedShortformSegmentCount = 0,
+    string? HeroEventSegmentType = null,
+    IReadOnlyList<string>? HeroEventObjects = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {

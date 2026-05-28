@@ -9,6 +9,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -731,7 +732,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
 {
     try
     {
@@ -878,6 +879,14 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var scenePlanPath = Path.Combine(scenePlansDirectory, "weekly-scene-plan.json");
         await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly scene plan", stageCt =>
             File.WriteAllTextAsync(scenePlanPath, JsonSerializer.Serialize(weeklyScenePlan, new JsonSerializerOptions { WriteIndented = true }), stageCt));
+
+        var segmentClassification = await ExecuteOrchestrationStageAsync("Classifying weekly episode segments", stageCt =>
+            segmentClassificationService.ClassifyAndPersistAsync(
+                episodeArchitecture,
+                weeklySkyfieldContext,
+                weeklyScenePlan,
+                root,
+                stageCt));
 
         var shotTimeline = await ExecuteOrchestrationStageAsync("Building cinematic shot timeline", _ =>
         {
@@ -2100,6 +2109,15 @@ var sscResult = splitProbeSsc;
                 shortformTargetDurationSeconds = episodeArchitecture.ShortFormPlan.TotalTargetDurationSeconds,
                 episodeArchitectureReady = episodeArchitecture.EpisodeArchitectureReady
             },
+            segmentClassification = new
+            {
+                weeklySegmentClassificationPlanPath = segmentClassification.Path,
+                segmentClassificationReady = segmentClassification.Plan.SegmentClassificationReady,
+                classifiedLongformSegmentCount = segmentClassification.Plan.ClassifiedLongformSegmentCount,
+                classifiedShortformSegmentCount = segmentClassification.Plan.ClassifiedShortformSegmentCount,
+                heroEventSegmentType = segmentClassification.Plan.HeroEventSegmentType,
+                heroEventObjects = segmentClassification.Plan.HeroEventObjects
+            },
             selectedImageCount = imageSequencePlan.TotalImages,
             estimatedImageSequenceDurationSeconds = imageSequencePlan.EstimatedDurationSeconds,
             imagePipelineProductionReady = imageSequencePlan.ProductionReady,
@@ -2142,7 +2160,13 @@ var sscResult = splitProbeSsc;
             episodeArchitecture.WeeklyShortformPlanPath,
             episodeArchitecture.LongFormPlan.TotalTargetDurationSeconds,
             episodeArchitecture.ShortFormPlan.TotalTargetDurationSeconds,
-            episodeArchitecture.EpisodeArchitectureReady);
+            episodeArchitecture.EpisodeArchitectureReady,
+            segmentClassification.Path,
+            segmentClassification.Plan.SegmentClassificationReady,
+            segmentClassification.Plan.ClassifiedLongformSegmentCount,
+            segmentClassification.Plan.ClassifiedShortformSegmentCount,
+            segmentClassification.Plan.HeroEventSegmentType,
+            segmentClassification.Plan.HeroEventObjects);
 
         return Results.Ok(output);
     }
