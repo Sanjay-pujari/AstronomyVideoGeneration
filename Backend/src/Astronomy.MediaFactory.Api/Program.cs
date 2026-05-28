@@ -3630,7 +3630,7 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
     DateOnly weekStartDate,
     IReadOnlyList<CinematicSceneFramePlan> sceneFramePlans,
     IReadOnlyList<string> frameScreenshots,
-    ILogger logger)
+    Microsoft.Extensions.Logging.ILogger logger)
 {
     var screenshotPathSet = frameScreenshots.ToHashSet(StringComparer.OrdinalIgnoreCase);
     var framePlanLookup = sceneFramePlans
