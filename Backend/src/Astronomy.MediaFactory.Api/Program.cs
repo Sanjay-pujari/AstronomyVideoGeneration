@@ -920,6 +920,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         app.Logger.LogInformation("COMPOSITION_SCENE_COUNT={Count}", compositionPackage.Entries.Count);
         var generatedScripts = new List<(string ScriptPath, string ScriptContent)>();
         var cinematicQualityReports = new List<object>();
+        var allFramePlans = new List<CinematicSceneFramePlan>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
         static string ResolveCinematicCompositionMode(string? sceneCode, string? framingMode)
@@ -1570,7 +1571,78 @@ var sscResult = splitProbeSsc;
                     app.Logger.LogError("SSC_SKIPPED_FALLBACK_CAMERA sceneCode={SceneCode} cameraAlt={CameraAlt} cameraAz={CameraAz}", shot.ShotCode, sscResult.CameraAltitudeDeg, sscResult.CameraAzimuthDeg);
                     continue;
                 }
-                var scriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc");
+                List<(CinematicFrameType frameType, string name, double fovScale, double? minFov, double? maxFov, double? subjectX, double? subjectY, bool preserveHorizon, bool preserveLabels, bool preserveLines, string purpose)> variants = compositionMode switch
+                {
+                    "MoonHero" =>
+                    [
+                        (CinematicFrameType.EstablishingWide, "establishing_wide", 1.35d, 15d, 75d, 0.55d, 0.45d, false, true, true, "Wider contextual moon framing."),
+                        (CinematicFrameType.BalancedStoryFrame, "balanced_story_frame", 1.00d, 15d, 75d, subjectOffset.TargetX, subjectOffset.TargetY, false, true, true, "Primary narrative-balanced frame."),
+                        (CinematicFrameType.HeroCloseup, "hero_closeup", 0.65d, 18d, 75d, 0.58d, 0.42d, false, false, false, "Hero close-up emphasizing moon.")
+                    ],
+                    "PlanetGrouping" =>
+                    [
+                        (CinematicFrameType.HorizonContext, "horizon_context", 1.25d, 15d, 65d, 0.50d, 0.62d, true, true, true, "Horizon anchored contextual grouping."),
+                        (CinematicFrameType.BalancedStoryFrame, "balanced_story_frame", 1.00d, 15d, 75d, subjectOffset.TargetX, subjectOffset.TargetY, false, true, true, "Primary narrative-balanced grouping frame."),
+                        (CinematicFrameType.AlignmentWide, "alignment_wide", 1.15d, 15d, 60d, 0.50d, 0.55d, false, true, true, "Slightly wider alignment context.")
+                    ],
+                    _ =>
+                    [
+                        (CinematicFrameType.EstablishingWide, "establishing_wide", 1.20d, 15d, 75d, subjectOffset.TargetX, subjectOffset.TargetY, false, true, true, "Wide contextual frame."),
+                        (CinematicFrameType.EducationalContext, "educational_context", 1.00d, 15d, 75d, subjectOffset.TargetX, subjectOffset.TargetY, true, true, true, "Educational contextual frame.")
+                    ]
+                };
+                app.Logger.LogInformation("CINEMATIC_FRAME_PLANNER_START sceneCode={SceneCode}", shot.ShotCode);
+                var framePlans = new List<CinematicFramePlan>();
+                var frameScriptDir = Path.Combine(scriptsDirectory, shot.ShotCode);
+                var frameSceneDir = Path.Combine(scenesDirectory, shot.ShotCode);
+                Directory.CreateDirectory(frameScriptDir);
+                Directory.CreateDirectory(frameSceneDir);
+                for (var i = 0; i < variants.Count; i++)
+                {
+                    var v = variants[i];
+                    var rawFov = sscResult.FovDeg * v.fovScale;
+                    var boundedMax = v.maxFov ?? 75d;
+                    var fov = Math.Clamp(rawFov, v.minFov ?? 15d, Math.Min(75d, boundedMax));
+                    var framePlan = new CinematicFramePlan(
+                        $"{shot.ShotCode}_{i + 1:00}_{v.name}",
+                        stellariumNeed.SourceSceneCode ?? shot.ShotCode,
+                        shot.ShotCode,
+                        v.frameType,
+                        i + 1,
+                        sceneSpecificCodes,
+                        sceneSpecificCodes.FirstOrDefault(),
+                        subjectOffset.OffsetAz,
+                        subjectOffset.OffsetAlt,
+                        fov,
+                        v.preserveHorizon,
+                        v.preserveLabels,
+                        v.preserveLines,
+                        v.subjectX ?? subjectOffset.TargetX,
+                        v.subjectY ?? subjectOffset.TargetY,
+                        v.purpose,
+                        "WeeklySkyForecastV2",
+                        $"{i + 1:00}_{v.name}.ssc",
+                        $"{i + 1:00}_{v.name}.png",
+                        subjectOffset.Warnings);
+                    framePlans.Add(framePlan);
+                    app.Logger.LogInformation("CINEMATIC_FRAME_PLAN_CREATED sceneCode={SceneCode} frameType={FrameType} frameIndex={FrameIndex} cameraAz={CameraAz} cameraAlt={CameraAlt} fov={Fov} outputImageName={OutputImageName} safetyWarnings={SafetyWarnings}", shot.ShotCode, framePlan.FrameType, framePlan.FrameIndex, framePlan.CameraAzimuth, framePlan.CameraAltitude, framePlan.Fov, framePlan.OutputImageName, string.Join("|", framePlan.SafetyWarnings));
+                }
+                allFramePlans.Add(new CinematicSceneFramePlan(shot.ShotCode, stellariumNeed.SourceSceneCode ?? shot.ShotCode, framePlans));
+                var primaryFrame = framePlans.First(x => x.FrameType == CinematicFrameType.BalancedStoryFrame);
+                app.Logger.LogInformation("PRIMARY_FRAME_SELECTED sceneCode={SceneCode} frameType={FrameType} frameIndex={FrameIndex} cameraAz={CameraAz} cameraAlt={CameraAlt} fov={Fov} outputImageName={OutputImageName} safetyWarnings={SafetyWarnings}",
+                    shot.ShotCode, primaryFrame.FrameType, primaryFrame.FrameIndex, primaryFrame.CameraAzimuth, primaryFrame.CameraAltitude, primaryFrame.Fov, primaryFrame.OutputImageName, string.Join("|", primaryFrame.SafetyWarnings));
+                foreach (var frame in framePlans)
+                {
+                    var scriptPath = Path.Combine(frameScriptDir, frame.OutputScriptName);
+                    var frameImagePath = Path.Combine(frameSceneDir, frame.OutputImageName);
+                    var frameSsc = sscResult.SscScript
+                        .Replace($"core.moveToAltAzi({sscResult.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}, {sscResult.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"core.moveToAltAzi({frame.CameraAltitude.ToString("0.###", CultureInfo.InvariantCulture)}, {frame.CameraAzimuth.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal)
+                        .Replace($"StelMovementMgr.zoomTo({sscResult.FovDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"StelMovementMgr.zoomTo({frame.Fov.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal)
+                        .Replace($"core.screenshot(\"{Path.GetFileNameWithoutExtension(expectedScreenshotPath)}\"", $"core.screenshot(\"{Path.GetFileNameWithoutExtension(frameImagePath)}\"", StringComparison.Ordinal);
+                    generatedScripts.Add((scriptPath, frameSsc));
+                    app.Logger.LogInformation("FRAME_SSC_GENERATED sceneCode={SceneCode} frameType={FrameType} frameIndex={FrameIndex} cameraAz={CameraAz} cameraAlt={CameraAlt} fov={Fov} outputImageName={OutputImageName} safetyWarnings={SafetyWarnings}",
+                        shot.ShotCode, frame.FrameType, frame.FrameIndex, frame.CameraAzimuth, frame.CameraAltitude, frame.Fov, frame.OutputImageName, string.Join("|", frame.SafetyWarnings));
+                }
                 app.Logger.LogInformation(
                     "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects} fallbackUsed={FallbackUsed} cameraAlt={CameraAlt} cameraAz={CameraAz} fov={Fov} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
                     shot.ShotCode,
@@ -1606,13 +1678,6 @@ var sscResult = splitProbeSsc;
                     finalCameraAfterOffset = new { cameraAzimuth = subjectOffset.OffsetAz, cameraAltitude = subjectOffset.OffsetAlt, fov = sscResult.FovDeg },
                     safetyWarnings = subjectOffset.Warnings
                 });
-                var header = string.Join(Environment.NewLine, new[] {
-                    "// Source: WeeklyScenePlan",
-                    $"// CompositionPath: {Path.Combine(compositionDirectory, $"{shot.ShotCode}.composition.json").Replace("\\", "/")}",
-                    $"// ScreenshotDirectory: {scenesDirectory.Replace("\\", "/")}",
-                    string.Empty
-                });
-                generatedScripts.Add((scriptPath, header + sscResult.SscScript));
                 if (!scriptSourceSceneCodes.TryGetValue(shot.ShotCode, out var originalSources))
                 {
                     originalSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1624,8 +1689,16 @@ var sscResult = splitProbeSsc;
         });
         var qualityDirectory = Path.Combine(root, "cinematic");
         Directory.CreateDirectory(qualityDirectory);
+        var framePlanPath = Path.Combine(qualityDirectory, "cinematic-frame-plan.json");
         var qualityPath = Path.Combine(qualityDirectory, "cinematic-quality-report.json");
-        await File.WriteAllTextAsync(qualityPath, JsonSerializer.Serialize(cinematicQualityReports, new JsonSerializerOptions { WriteIndented = true }));
+        await File.WriteAllTextAsync(framePlanPath, JsonSerializer.Serialize(allFramePlans, new JsonSerializerOptions { WriteIndented = true }));
+        await File.WriteAllTextAsync(qualityPath, JsonSerializer.Serialize(new
+        {
+            framePlans = allFramePlans,
+            selectedPrimaryFrame = "BalancedStoryFrame",
+            frameCount = allFramePlans.Sum(x => x.FramePlans.Count),
+            sceneQuality = cinematicQualityReports
+        }, new JsonSerializerOptions { WriteIndented = true }));
 
         var finalScenes = WeeklySscSceneFinalizer.Build(
             scriptsDirectory,
@@ -1682,6 +1755,7 @@ var sscResult = splitProbeSsc;
         });
 
         var screenshots = new List<string>();
+        var primaryScreenshots = new List<string>();
         var executionCandidates = finalScenes
             .Select(scene => new
             {
@@ -1730,7 +1804,21 @@ var sscResult = splitProbeSsc;
                 throw new InvalidOperationException($"Expected screenshot was not generated: {item.ScreenshotPath}");
 
             screenshots.Add(item.ScreenshotPath);
+            app.Logger.LogInformation("FRAME_SCREENSHOT_CAPTURED sceneCode={SceneCode} outputImageName={OutputImageName}", item.SceneCode, Path.GetFileName(item.ScreenshotPath));
         }
+        foreach (var plan in allFramePlans)
+        {
+            var balanced = plan.FramePlans.FirstOrDefault(x => x.FrameType == CinematicFrameType.BalancedStoryFrame);
+            if (balanced is null) continue;
+            var source = Path.Combine(scenesDirectory, plan.RenderSceneCode, balanced.OutputImageName);
+            var target = Path.Combine(scenesDirectory, $"{plan.RenderSceneCode}.png");
+            if (File.Exists(source))
+            {
+                File.Copy(source, target, overwrite: true);
+                primaryScreenshots.Add(target);
+            }
+        }
+        app.Logger.LogInformation("CINEMATIC_FRAME_PLANNER_COMPLETE generatedFramePlans={GeneratedFramePlans}", allFramePlans.Sum(x => x.FramePlans.Count));
 
         var warnings = weeklySkyfieldContext.Warnings.Concat(compositionPackage.Errors).Distinct().ToList();
         if (screenshots.Count < finalScenes.Count)
@@ -1771,9 +1859,9 @@ var sscResult = splitProbeSsc;
             screenshotMissingCount = Math.Max(0, finalScenes.Count - screenshots.Count)
         };
 
-        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || finalScenes.Count != 2 || scriptPaths.Count != 2 || screenshots.Count != 2)
+        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || finalScenes.Count != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || primaryScreenshots.Count != 2)
         {
-            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Stellarium={finalScenes.Count}, SscScripts={scriptPaths.Count}, Screenshots={screenshots.Count}");
+            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Stellarium={finalScenes.Count}, SscScripts={scriptPaths.Count}, Screenshots={screenshots.Count}, PrimaryScreenshots={primaryScreenshots.Count}");
         }
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
@@ -1806,7 +1894,12 @@ var sscResult = splitProbeSsc;
             scriptPaths.Count,
             scriptPaths.Count,
             screenshots,
-            warnings);
+            warnings,
+            allFramePlans.Sum(x => x.FramePlans.Count),
+            screenshots,
+            primaryScreenshots,
+            framePlanPath,
+            qualityPath);
 
         return Results.Ok(output);
     }
