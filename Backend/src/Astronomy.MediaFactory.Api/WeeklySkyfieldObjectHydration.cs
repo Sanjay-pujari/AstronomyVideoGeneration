@@ -108,6 +108,8 @@ public static class WeeklySkyfieldObjectHydration
     }
 
     private static readonly string[] SkyfieldJsonProbePaths = [
+        Path.Combine("debug", "skyfield-weekly-full-response.json"),
+        Path.Combine("Backend", "debug", "skyfield-weekly-full-response.json"),
         Path.Combine("debug", "skyfield-weekly-response.json"),
         Path.Combine("Backend", "debug", "skyfield-weekly-response.json")
     ];

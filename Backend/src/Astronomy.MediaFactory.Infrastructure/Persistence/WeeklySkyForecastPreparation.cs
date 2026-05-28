@@ -144,6 +144,9 @@ public sealed class WeeklySkyForecastContextBuilder(
                             Visible = true,
                             ViewingDirection = g.First().Direction,
                             Reason = g.First().Details,
+                            BestViewingTimeUtc = g.Select(x => x.TimeUtc).FirstOrDefault(x => x.HasValue),
+                            MaxAltitudeDegrees = g.Select(x => x.AltitudeDegrees).Where(x => x.HasValue).Select(x => (double?)x!.Value).DefaultIfEmpty(null).Max(),
+                            BestViewingAzimuthDegrees = g.Select(x => x.AzimuthDegrees).FirstOrDefault(x => x.HasValue),
                             VisibilityScore = 0.5,
                             PhotographyScore = 0.5
                         })
@@ -204,6 +207,22 @@ public sealed class WeeklySkyForecastContextBuilder(
         response.Warnings = response.Warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         WeeklySkyForecastPreparationDiagnostics.SetJson("WeeklySkyForecast.SkyfieldWeeklyResponse", JsonSerializer.Serialize(response));
         WeeklySkyForecastPreparationDiagnostics.SetJson("WeeklySkyForecast.SkyfieldWeeklyErrors", JsonSerializer.Serialize(failedDays));
+        var geometryRecords = response.Days
+            .SelectMany(d => d.VisibleObjects ?? [])
+            .Count(o => o.BestViewingTimeUtc.HasValue && o.MaxAltitudeDegrees.HasValue && o.BestViewingAzimuthDegrees.HasValue);
+        logger.LogInformation("SKYFIELD_GEOMETRY_RECORD_COUNT count={Count}", geometryRecords);
+        var geometrySample = response.Days
+            .SelectMany(d => d.VisibleObjects ?? [])
+            .FirstOrDefault(o => o.BestViewingTimeUtc.HasValue && o.MaxAltitudeDegrees.HasValue && o.BestViewingAzimuthDegrees.HasValue);
+        if (geometrySample is not null)
+        {
+            logger.LogInformation(
+                "SKYFIELD_GEOMETRY_SAMPLE object={Object} timeUtc={TimeUtc} alt={Alt} az={Az}",
+                geometrySample.ObjectCode ?? geometrySample.ObjectName,
+                geometrySample.BestViewingTimeUtc?.ToString("O"),
+                geometrySample.MaxAltitudeDegrees,
+                geometrySample.BestViewingAzimuthDegrees);
+        }
 
         var normalizedObjectCount = 0;
         var correctedHighlightCount = 0;
