@@ -166,6 +166,18 @@ class WeeklySkyForecastRequest(BaseModel):
         datetime.strptime(v, "%Y-%m-%d")
         return v
 
+class WeeklyGeometryRequest(BaseModel):
+    region_id: Annotated[str, Field(alias="regionId", min_length=1)]
+    location_name: Annotated[str, Field(alias="locationName", min_length=2)]
+    latitude: Annotated[float, Field(ge=-90, le=90)]
+    longitude: Annotated[float, Field(ge=-180, le=180)]
+    timezone: Annotated[str, Field(min_length=1)]
+    start_date: Annotated[str, Field(alias="startDate")]
+    end_date: Annotated[str, Field(alias="endDate")]
+    objects: list[str] = []
+    sample_interval_minutes: Annotated[int, Field(alias="sampleIntervalMinutes", ge=5, le=120)] = 30
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
 
 class VisibleObjectForecastItem(BaseModel):
     object_code: Annotated[str, Field(alias="objectCode")]
@@ -633,3 +645,35 @@ def weekly_sky_forecast(req: WeeklySkyForecastRequest):
     darkest_day = min(day_items, key=lambda x: x.moon_illumination_percent)
     highlights.append(WeeklyHighlightItem(order=5, highlightType="dark_sky_night", title="Darkest sky opportunity", description="Lowest moon illumination night this week.", date=darkest_day.date, bestTimeUtc=None, objectCode="MOON", score=100 - darkest_day.moon_illumination_percent, suggestedSceneType="deep_sky"))
     return WeeklySkyForecastResponse(success=True, regionId=req.region_id, locationName=req.location_name, timezone=req.timezone, weekStartDate=req.week_start_date, weekEndDate=(start_date + timedelta(days=req.days - 1)).isoformat(), days=day_items, weeklyHighlights=highlights, recommendedNights=recommended, bestPlanetOfWeek=best_planet, bestMoonNight=RecommendedObservationNight(date=best_moon_day.date, score=best_moon_day.moon_illumination_percent, reason="Strong moon presentation for visual observation.", bestObjects=["MOON"], bestStartUtc=best_moon_day.best_viewing_start_utc, bestEndUtc=best_moon_day.best_viewing_end_utc), bestPhotographyNight=RecommendedObservationNight(date=best_photo_day.date, score=best_photo_day.overall_viewing_score, reason="Best combined visibility and darkness balance.", bestObjects=[x.object_code for x in best_photo_objects[:3]], bestStartUtc=best_photo_day.best_viewing_start_utc, bestEndUtc=best_photo_day.best_viewing_end_utc), warnings=warnings, errorMessage=None)
+
+@app.post('/ephemeris/weekly-geometry')
+def weekly_geometry(req: WeeklyGeometryRequest):
+    tz = ZoneInfo(req.timezone)
+    start_date = datetime.strptime(req.start_date, "%Y-%m-%d").date()
+    end_date = datetime.strptime(req.end_date, "%Y-%m-%d").date()
+    object_codes = req.objects or ["MOON", "VENUS", "JUPITER"]
+    days = []
+    observer_loc = wgs84.latlon(req.latitude, req.longitude)
+    observer = eph["earth"] + observer_loc
+    for day in [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]:
+        local_noon = datetime.combine(day, datetime.min.time()).replace(tzinfo=tz) + timedelta(hours=12)
+        t_utc = local_noon.astimezone(ZoneInfo("UTC"))
+        objs = []
+        for code in object_codes:
+            name = code.title()
+            key = OBJECT_MAP.get(name, code)
+            body = eph.get(key)
+            if body is None:
+                continue
+            apparent = observer.at(ts.from_datetime(t_utc)).observe(body).apparent()
+            alt, az, _ = apparent.altaz()
+            objs.append({
+                "objectCode": code.upper(),
+                "objectName": "Moon" if code.upper() == "MOON" else name,
+                "timeUtc": t_utc.isoformat().replace("+00:00", "Z"),
+                "altitudeDegrees": round(float(alt.degrees), 2),
+                "azimuthDegrees": round(float(az.degrees), 2),
+                "magnitude": None
+            })
+        days.append({"date": day.isoformat(), "objects": objs})
+    return {"success": True, "days": days}
