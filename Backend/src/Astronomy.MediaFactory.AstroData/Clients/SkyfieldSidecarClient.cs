@@ -19,7 +19,6 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
     {
         PropertyNameCaseInsensitive = true
     };
-    private static bool _loggedDailyRawSample;
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<SkyfieldSidecarClient> _logger;
@@ -154,9 +153,9 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
         {
             if (!obj.TryGetPropertyValue(key, out var value) || value is null)
                 continue;
-            if (value.TryGetValue<double>(out var asDouble))
+            if (value is JsonValue jsonValue && jsonValue.TryGetValue<double>(out var asDouble))
                 return asDouble;
-            if (value.TryGetValue<string>(out var asText) && double.TryParse(asText, out var parsed))
+            if (value is JsonValue textValue && textValue.TryGetValue<string>(out var asText) && double.TryParse(asText, out var parsed))
                 return parsed;
         }
 
@@ -543,4 +542,3 @@ public sealed class SkyfieldVisualIdea
 
     public bool IsValid() => !string.IsNullOrWhiteSpace(Title) && !string.IsNullOrWhiteSpace(Description);
 }
-    private static bool _loggedDailyRawSample;
