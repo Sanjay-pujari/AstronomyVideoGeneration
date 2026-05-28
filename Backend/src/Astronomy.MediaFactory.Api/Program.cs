@@ -19,6 +19,7 @@ using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration
@@ -1649,10 +1650,16 @@ var sscResult = splitProbeSsc;
                 {
                     var scriptPath = frame.ScriptPath;
                     var frameImagePath = frame.ImagePath;
+                    var frameScreenshotDirectory = (Path.GetDirectoryName(frameImagePath) ?? scenesDirectory).Replace("\\", "/");
+                    var frameScreenshotFileName = Path.GetFileNameWithoutExtension(frameImagePath);
                     var frameSsc = sscResult.SscScript
                         .Replace($"core.moveToAltAzi({sscResult.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}, {sscResult.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"core.moveToAltAzi({frame.CameraAltitude.ToString("0.###", CultureInfo.InvariantCulture)}, {frame.CameraAzimuth.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal)
-                        .Replace($"StelMovementMgr.zoomTo({sscResult.FovDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"StelMovementMgr.zoomTo({frame.Fov.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal)
-                        .Replace($"core.screenshot(\"{Path.GetFileNameWithoutExtension(expectedScreenshotPath)}\"", $"core.screenshot(\"{Path.GetFileNameWithoutExtension(frameImagePath)}\"", StringComparison.Ordinal);
+                        .Replace($"StelMovementMgr.zoomTo({sscResult.FovDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"StelMovementMgr.zoomTo({frame.Fov.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal);
+                    frameSsc = Regex.Replace(
+                        frameSsc,
+                        @"core\.screenshot\([^\)]*\);",
+                        $"core.screenshot(\"{frameScreenshotFileName.Replace("\"", "\\\"")}\", false, \"{frameScreenshotDirectory.Replace("\"", "\\\"")}\", true, \"png\");",
+                        RegexOptions.CultureInvariant);
                     generatedScripts.Add((scriptPath, frameSsc));
                     app.Logger.LogInformation("FRAME_SSC_GENERATED sceneCode={SceneCode} frameType={FrameType} frameIndex={FrameIndex} cameraAz={CameraAz} cameraAlt={CameraAlt} fov={Fov} outputImageName={OutputImageName} scriptPath={ScriptPath} imagePath={ImagePath} safetyWarnings={SafetyWarnings}",
                         shot.ShotCode, frame.FrameType, frame.FrameIndex, frame.CameraAzimuth, frame.CameraAltitude, frame.Fov, frame.OutputImageName, frame.ScriptPath, frame.ImagePath, string.Join("|", frame.SafetyWarnings));
@@ -1786,6 +1793,8 @@ var sscResult = splitProbeSsc;
             }
 
             var scriptContent = await File.ReadAllTextAsync(item.ScriptPath, ct);
+            var screenshotCommandMatch = Regex.Match(scriptContent, @"core\.screenshot\([^\)]*\);");
+            app.Logger.LogInformation("FRAME_SCREENSHOT_COMMAND_PATH sceneCode={SceneCode} command={Command}", item.SceneCode, screenshotCommandMatch.Success ? screenshotCommandMatch.Value : "MISSING");
             if (!scriptContent.Contains("core.quitStellarium();", StringComparison.Ordinal))
                 throw new InvalidOperationException($"Generated SSC script missing core.quitStellarium();: {item.ScriptPath}");
 
@@ -1802,18 +1811,40 @@ var sscResult = splitProbeSsc;
             app.Logger.LogInformation("screenshotPath={ScreenshotPath}", item.ScreenshotPath);
             app.Logger.LogInformation("exePath={ExePath}", executablePath);
             app.Logger.LogInformation("arguments={Arguments}", arguments);
+            var frameScreenshotTargetPath = item.ScreenshotPath;
+            app.Logger.LogInformation("FRAME_SCREENSHOT_TARGET_RESOLVED sceneCode={SceneCode} targetPath={TargetPath}", item.SceneCode, frameScreenshotTargetPath);
+            var frameScreenshotDirectory = Path.GetDirectoryName(frameScreenshotTargetPath) ?? scenesDirectory;
+            Directory.CreateDirectory(frameScreenshotDirectory);
+            app.Logger.LogInformation("FRAME_SCREENSHOT_DIRECTORY_CREATED sceneCode={SceneCode} directoryPath={DirectoryPath}", item.SceneCode, frameScreenshotDirectory);
+            var flatTempCaptureDirectory = Path.Combine(scenesDirectory, "__frames_temp__");
+            Directory.CreateDirectory(flatTempCaptureDirectory);
+            var flatTempCapturePath = Path.Combine(flatTempCaptureDirectory, Path.GetFileName(frameScreenshotTargetPath));
 
             await sharedStellariumExecutor.ExecuteAsync(
                 workingDirectoryRoot: root,
                 scriptPath: item.ScriptPath,
-                expectedScreenshotPath: item.ScreenshotPath,
+                expectedScreenshotPath: frameScreenshotTargetPath,
                 timeoutSeconds: timeoutSeconds,
                 cancellationToken: ct);
 
-            if (!File.Exists(item.ScreenshotPath) || new FileInfo(item.ScreenshotPath).Length == 0)
-                throw new InvalidOperationException($"Expected screenshot was not generated: {item.ScreenshotPath}");
+            var screenshotExistsAfterCapture = File.Exists(frameScreenshotTargetPath) && new FileInfo(frameScreenshotTargetPath).Length > 0;
+            app.Logger.LogInformation("FRAME_SCREENSHOT_FILE_EXISTS_AFTER_CAPTURE sceneCode={SceneCode} exists={Exists}", item.SceneCode, screenshotExistsAfterCapture);
+            var movedIfRequired = false;
+            if (!screenshotExistsAfterCapture && File.Exists(flatTempCapturePath) && new FileInfo(flatTempCapturePath).Length > 0)
+            {
+                Directory.CreateDirectory(frameScreenshotDirectory);
+                File.Copy(flatTempCapturePath, frameScreenshotTargetPath, overwrite: true);
+                movedIfRequired = true;
+                screenshotExistsAfterCapture = File.Exists(frameScreenshotTargetPath) && new FileInfo(frameScreenshotTargetPath).Length > 0;
+            }
+            app.Logger.LogInformation("FRAME_SCREENSHOT_MOVED_IF_REQUIRED sceneCode={SceneCode} moved={Moved} tempPath={TempPath} targetPath={TargetPath}", item.SceneCode, movedIfRequired, flatTempCapturePath, frameScreenshotTargetPath);
+            if (!File.Exists(frameScreenshotTargetPath))
+            {
+                app.Logger.LogError("FRAME_SCREENSHOT_CAPTURE_FAILED sceneCode={SceneCode} screenshotPath={ScreenshotPath}", item.SceneCode, frameScreenshotTargetPath);
+                throw new InvalidOperationException($"Expected screenshot was not generated: {frameScreenshotTargetPath}");
+            }
 
-            screenshots.Add(item.ScreenshotPath);
+            screenshots.Add(frameScreenshotTargetPath);
             app.Logger.LogInformation("FRAME_SCREENSHOT_CAPTURED sceneCode={SceneCode} outputImageName={OutputImageName}", item.SceneCode, Path.GetFileName(item.ScreenshotPath));
         }
         foreach (var plan in allFramePlans)
