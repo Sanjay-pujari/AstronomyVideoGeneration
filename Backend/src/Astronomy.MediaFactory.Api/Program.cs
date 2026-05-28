@@ -3765,7 +3765,7 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
             }
         }
 
-        var validationStatus = validationWarnings.Count == 0 ? "Passed" : "Failed";
+        var imageValidationStatus = validationWarnings.Count == 0 ? "Passed" : "Failed";
         if (validationWarnings.Count > 0)
             planValidationWarnings.AddRange(validationWarnings.Select(w => $"sequenceIndex={i + 1}; frameId={framePlan.FrameId}; imagePath={framePlan.ImagePath}; {w}"));
 
@@ -3774,7 +3774,7 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
             FileSizeBytes: fileSizeBytes,
             Width: width,
             Height: height,
-            ValidationStatus: validationStatus,
+            ValidationStatus: imageValidationStatus,
             ValidationWarnings: validationWarnings,
             PerceptualHash: null);
 
@@ -3786,7 +3786,7 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
             fileSizeBytes,
             width,
             height,
-            validationStatus);
+            imageValidationStatus);
 
         sequenceItems.Add(new ImageSequenceItem(
             SequenceIndex: i + 1,
@@ -3807,7 +3807,7 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
             FileSizeBytes: fileSizeBytes,
             Width: width,
             Height: height,
-            ValidationStatus: validationStatus,
+            ValidationStatus: imageValidationStatus,
             ValidationWarnings: validationWarnings,
             ImageValidation: imageValidation,
             SequenceRole: ResolveImageSequenceRole(i + 1, framePlan.FrameType),
