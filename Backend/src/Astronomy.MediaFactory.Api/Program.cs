@@ -1583,8 +1583,9 @@ var sscResult = splitProbeSsc;
                     sscResult.FovDeg,
                     sceneSpecificCodes.FirstOrDefault() ?? string.Empty,
                     stellariumNeed.IsDynamicSplitScene);
-                var compositionMode = ResolveCinematicCompositionMode(shot.ShotCode, sscResult.FramingMode);
-                app.Logger.LogInformation("CINEMATIC_COMPOSITION_MODE_RESOLVED sceneCode={SceneCode} framingMode={FramingMode} compositionMode={CompositionMode}", shot.ShotCode, sscResult.FramingMode, compositionMode);
+                var framingMode = sscResult.CinematicQualityReport?.CameraPlan.FramingMode;
+                var compositionMode = ResolveCinematicCompositionMode(shot.ShotCode, framingMode);
+                app.Logger.LogInformation("CINEMATIC_COMPOSITION_MODE_RESOLVED sceneCode={SceneCode} framingMode={FramingMode} compositionMode={CompositionMode}", shot.ShotCode, framingMode, compositionMode);
                 var subjectOffset = ComputeSubjectOffset(compositionMode, skyPositions.Select(x => x.Position).ToList(), sscResult.CameraAzimuthDeg, sscResult.CameraAltitudeDeg);
                 var attentionPolicy = BuildAttentionPolicy(compositionMode, sceneSpecificCodes.FirstOrDefault() ?? string.Empty);
                 app.Logger.LogInformation("SUBJECT_OFFSET_COMPOSITION sceneCode={SceneCode} intent={Intent} primarySubject={PrimarySubject} originalCameraAz={OriginalCameraAz} originalCameraAlt={OriginalCameraAlt} offsetCameraAz={OffsetCameraAz} offsetCameraAlt={OffsetCameraAlt} targetScreenX={TargetScreenX} targetScreenY={TargetScreenY} offsetReason={OffsetReason} safetyWarnings={SafetyWarnings}",
