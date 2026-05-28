@@ -1245,15 +1245,55 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 {
                     foreach (var splitScene in splitResult.Scenes.Take(3))
                     {
-                        var splitObjectCodes = splitScene.TargetObjects
-                            .Select(x => x.Name)
+                        var splitObjectCodes = splitScene.SourceCluster
                             .Where(x => !string.IsNullOrWhiteSpace(x))
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToList();
+                        if (splitObjectCodes.Count == 0)
+                        {
+                            splitObjectCodes = splitScene.TargetObjects
+                                .Select(x => x.Name)
+                                .Where(x => !string.IsNullOrWhiteSpace(x))
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToList();
+                        }
                         var splitPrimaryObject = splitObjectCodes.FirstOrDefault() ?? splitScene.TargetObjects.FirstOrDefault()?.Name;
                         var splitPrefix = splitScene.SceneCode;
+                        var splitSkyPositions = splitObjectCodes
+                            .Select(code =>
+                            {
+                                skyObjectsByCode.TryGetValue(code, out var obj);
+                                var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, shot.DateLocal, composition, obj, weeklySkyfieldContext, splitObjectCodes, temporalResolver, app.Logger, splitScene.SceneCode);
+                                var objectName = obj?.ObjectName ?? code;
+                                var objectType = ResolveObjectType(obj?.ObjectName ?? code);
+                                var source = $"{ResolveObjectSource(code, composition, scenePlan, shot, weeklySkyfieldContext)}|{resolution.Source}";
+                                var weight = ResolveObjectWeight(objectName, objectType, true);
+                                return new WeeklySceneObjectSelection(
+                                    new SkyObjectPosition(
+                                        Name: objectName,
+                                        AltitudeDeg: resolution.AltitudeDeg,
+                                        AzimuthDeg: resolution.AzimuthDeg,
+                                        Magnitude: resolution.Magnitude,
+                                        ObjectType: objectType,
+                                        Weight: weight),
+                                    source);
+                            })
+                            .ToList();
+                        var splitFallbackCount = splitSkyPositions.Count(x => x.Source.Contains("source=fallback", StringComparison.OrdinalIgnoreCase));
+                        if (splitSkyPositions.Count > 0 && splitFallbackCount == splitSkyPositions.Count)
+                        {
+                            throw new InvalidOperationException($"DeferredHydrationFailure: split scene '{splitScene.SceneCode}' could not resolve real geometry for target objects [{string.Join(",", splitObjectCodes)}].");
+                        }
+                        var splitDistinctAltAzCount = splitSkyPositions
+                            .Select(x => $"{Math.Round(x.Position.AltitudeDeg, 3)}|{Math.Round(x.Position.AzimuthDeg, 3)}")
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Count();
+                        if (splitDistinctAltAzCount == 1 && splitObjectCodes.Count > 1)
+                        {
+                            throw new InvalidOperationException($"Identical fallback geometry detected for split scene '{splitScene.SceneCode}'.");
+                        }
                         var splitResultSsc = sscIntelligenceService.Generate(new SscIntelligenceRequest(
-                            observationUtc,longitude,latitude,elevationMeters,locationName,splitScene.TargetObjects.ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitObjectCodes),
+                            observationUtc,longitude,latitude,elevationMeters,locationName,splitSkyPositions.Select(x => x.Position).ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitObjectCodes),
                             scenesDirectory,splitPrefix);
                         var splitScriptPath = Path.Combine(scriptsDirectory, $"{splitScene.SceneCode}.ssc");
                         var splitHeader = string.Join(Environment.NewLine, new[] {"// Source: NarrativeSceneSplitter",$"// SourceSceneCode: {shot.ShotCode}",$"// Region: {weeklySkyfieldContext.Region}",$"// TargetDate: {stellariumNeed.TargetDate:yyyy-MM-dd}",$"// SelectedObservationUtc: {observationUtc:O}",$"// ScreenshotDirectory: {scenesDirectory.Replace('\\', '/')}",string.Empty});
@@ -1272,10 +1312,15 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             splitScriptPath,
                             splitExpectedOutputImagePath);
                         app.Logger.LogInformation(
-                            "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} objectNames={ObjectNames} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
+                            "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects} fallbackUsed={FallbackUsed} cameraAlt={CameraAlt} cameraAz={CameraAz} fov={Fov} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
                             splitScene.SceneCode,
                             splitScene.SourceSceneCode,
                             string.Join(",", splitObjectCodes),
+                            string.Join(",", splitSkyPositions.Select(x => x.Position.Name)),
+                            splitFallbackCount > 0,
+                            splitResultSsc.CameraAltitudeDeg,
+                            splitResultSsc.CameraAzimuthDeg,
+                            splitResultSsc.FovDeg,
                             splitPrimaryObject,
                             true);
                         if (!scriptSourceSceneCodes.TryGetValue(splitScene.SceneCode, out var splitSources))
@@ -1361,10 +1406,15 @@ var sscResult = splitProbeSsc;
                     sscResult.RequiresSplit);
                 var scriptPath = Path.Combine(scriptsDirectory, $"{shot.ShotCode}.ssc");
                 app.Logger.LogInformation(
-                    "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} objectNames={ObjectNames} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
+                    "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects} fallbackUsed={FallbackUsed} cameraAlt={CameraAlt} cameraAz={CameraAz} fov={Fov} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
                     shot.ShotCode,
                     stellariumNeed.SourceSceneCode ?? string.Empty,
                     string.Join(",", sceneSpecificCodes),
+                    string.Join(",", skyPositions.Select(x => x.Position.Name)),
+                    syntheticFallbackUsed,
+                    sscResult.CameraAltitudeDeg,
+                    sscResult.CameraAzimuthDeg,
+                    sscResult.FovDeg,
                     sceneSpecificCodes.FirstOrDefault() ?? string.Empty,
                     stellariumNeed.IsDynamicSplitScene);
                 var header = string.Join(Environment.NewLine, new[] {
@@ -3092,4 +3142,3 @@ public sealed record GenerateDailyPlanResponse(
 
 sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
 sealed record WeeklyObjectPositionResolution(double AltitudeDeg, double AzimuthDeg, double Magnitude, string Source, string RequestedName, string NormalizedName, string DateKey, string TimeKey, string CollectionSearched, bool MatchFound, string CandidateNames, string CandidateTimes, string TopLevelKeys, string AvailableDates, string SelectedDateCollections, string SelectedDateObjectNames);
-
