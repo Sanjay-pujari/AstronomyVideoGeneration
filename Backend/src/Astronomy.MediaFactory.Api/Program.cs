@@ -1946,8 +1946,45 @@ var sscResult = splitProbeSsc;
             seenFrameHashes[hash] = screenshotPath;
         }
 
-        var finalScriptPathSet = scriptPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var generatedFramePlans = allFramePlans.SelectMany(x => x.FramePlans).ToList();
+        var imageSequencePlanPath = Path.Combine(qualityDirectory, "image-sequence-plan.json");
+        var imageSequenceSummaryPath = Path.Combine(qualityDirectory, "image-sequence-summary.json");
+        app.Logger.LogInformation("IMAGE_SEQUENCE_SELECTION_START pipelineRunId={PipelineRunId} frameScreenshots={FrameScreenshotCount} framePlans={FramePlanCount}", pipelineRunId, screenshots.Count, generatedFramePlans.Count);
+        var imageSequencePlan = BuildWeeklyImageSequencePlan(
+            pipelineRunId,
+            request.ContentCategoryCode,
+            request.RegionId,
+            request.Language,
+            weekStartDate,
+            allFramePlans,
+            screenshots,
+            app.Logger);
+        await File.WriteAllTextAsync(imageSequencePlanPath, JsonSerializer.Serialize(imageSequencePlan, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await File.WriteAllTextAsync(imageSequenceSummaryPath, JsonSerializer.Serialize(new
+        {
+            imageSequencePlan.PipelineRunId,
+            imageSequencePlan.ContentCategoryCode,
+            imageSequencePlan.RegionId,
+            imageSequencePlan.Language,
+            imageSequencePlan.WeekStartDate,
+            selectedImageCount = imageSequencePlan.TotalImages,
+            estimatedImageSequenceDurationSeconds = imageSequencePlan.EstimatedDurationSeconds,
+            imageSequencePlanPath,
+            sequence = imageSequencePlan.Sequences.Select(x => new
+            {
+                x.SequenceIndex,
+                x.RenderSceneCode,
+                x.FrameType,
+                x.ImagePath,
+                x.SuggestedDurationSeconds,
+                x.TransitionIntent,
+                x.MotionIntentForFutureVideo
+            })
+        }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        app.Logger.LogInformation("IMAGE_SEQUENCE_PLAN_WRITTEN path={Path} summaryPath={SummaryPath} selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlanPath, imageSequenceSummaryPath, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
+        app.Logger.LogInformation("IMAGE_SEQUENCE_VALIDATION_COMPLETE selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
+
+        var finalScriptPathSet = scriptPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var producedRenderSceneDescriptors = finalRenderSceneDescriptors
             .Where(x => x.ProducedSscScript && finalScriptPathSet.Contains(x.ScriptPath))
             .ToList();
@@ -1981,7 +2018,7 @@ var sscResult = splitProbeSsc;
             .ToList();
         var fallbackUsed = fallbackFramePlans.Count > 0 || fallbackDescriptors.Count > 0;
 
-        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count != 2 || generatedFramePlans.Count != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || primaryScreenshots.Count != 2 || fallbackUsed)
+        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count != 2 || generatedFramePlans.Count != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || imageSequencePlan.TotalImages != 6 || imageSequencePlan.EstimatedDurationSeconds != 30 || fallbackUsed)
         {
             var offendingFramesText = offendingFallbackFrames.Count == 0
                 ? string.Empty
@@ -1995,7 +2032,7 @@ var sscResult = splitProbeSsc;
                             $"- sceneCode={x.SceneCode}",
                             $"- frameId={x.FrameId}",
                             $"- fallbackReason={x.FallbackReason}")));
-            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Composition={compositionPaths.Count}, RenderScenes={allFramePlans.Count}, FramePlans={generatedFramePlans.Count}, SscScripts={scriptPaths.Count}, Screenshots={screenshots.Count}, fallbackUsed={(fallbackUsed ? "true" : "false")}{offendingFramesText}");
+            throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Composition={compositionPaths.Count}, RenderScenes={allFramePlans.Count}, FramePlans={generatedFramePlans.Count}, SscScripts={scriptPaths.Count}, FrameScreenshots={screenshots.Count}, SelectedImages={imageSequencePlan.TotalImages}, ImageSequenceDuration={imageSequencePlan.EstimatedDurationSeconds}, fallbackUsed={(fallbackUsed ? "true" : "false")}{offendingFramesText}");
         }
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
@@ -2015,6 +2052,9 @@ var sscResult = splitProbeSsc;
             compositionFiles = compositionPaths,
             sscScripts = sscManifestEntries,
             screenshotOutputs = screenshots,
+            imageSequencePlanPath,
+            selectedImageCount = imageSequencePlan.TotalImages,
+            estimatedImageSequenceDurationSeconds = imageSequencePlan.EstimatedDurationSeconds,
             warnings,
             executionSummary
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
@@ -2034,7 +2074,10 @@ var sscResult = splitProbeSsc;
             screenshots,
             primaryScreenshots,
             framePlanPath,
-            qualityPath);
+            qualityPath,
+            imageSequencePlanPath,
+            imageSequencePlan.TotalImages,
+            imageSequencePlan.EstimatedDurationSeconds);
 
         return Results.Ok(output);
     }
@@ -3577,6 +3620,182 @@ static DateTime? ResolveEventUtc(WeeklyAstronomyEvent weeklyEvent)
     if (!weeklyEvent.BestDateLocal.HasValue || !weeklyEvent.BestTimeLocal.HasValue) return null;
     var local = weeklyEvent.BestDateLocal.Value.ToDateTime(weeklyEvent.BestTimeLocal.Value, DateTimeKind.Utc);
     return DateTime.SpecifyKind(local, DateTimeKind.Utc);
+}
+
+static ImageSequencePlan BuildWeeklyImageSequencePlan(
+    Guid pipelineRunId,
+    string contentCategoryCode,
+    string regionId,
+    string language,
+    DateOnly weekStartDate,
+    IReadOnlyList<CinematicSceneFramePlan> sceneFramePlans,
+    IReadOnlyList<string> frameScreenshots,
+    ILogger logger)
+{
+    var screenshotPathSet = frameScreenshots.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var framePlanLookup = sceneFramePlans
+        .SelectMany(scene => scene.FramePlans)
+        .ToDictionary(frame => $"{frame.RenderSceneCode}|{frame.FrameType}", StringComparer.OrdinalIgnoreCase);
+
+    var deterministicOrder = new (string RenderSceneCode, CinematicFrameType FrameType)[]
+    {
+        ("moon_hero_scene", CinematicFrameType.EstablishingWide),
+        ("moon_hero_scene", CinematicFrameType.BalancedStoryFrame),
+        ("moon_hero_scene", CinematicFrameType.HeroCloseup),
+        ("western_planet_grouping_scene", CinematicFrameType.HorizonContext),
+        ("western_planet_grouping_scene", CinematicFrameType.BalancedStoryFrame),
+        ("western_planet_grouping_scene", CinematicFrameType.AlignmentWide)
+    };
+
+    var sequenceItems = new List<ImageSequenceItem>();
+    for (var i = 0; i < deterministicOrder.Length; i++)
+    {
+        var (renderSceneCode, frameType) = deterministicOrder[i];
+        var key = $"{renderSceneCode}|{frameType}";
+        if (!framePlanLookup.TryGetValue(key, out var framePlan))
+            throw new InvalidOperationException($"IMAGE_SEQUENCE_FRAME_PLAN_MISSING renderSceneCode='{renderSceneCode}' frameType='{frameType}'.");
+
+        if (!screenshotPathSet.Contains(framePlan.ImagePath))
+            throw new InvalidOperationException($"IMAGE_SEQUENCE_FRAME_SCREENSHOT_MISSING renderSceneCode='{renderSceneCode}' frameId='{framePlan.FrameId}' imagePath='{framePlan.ImagePath}'. Phase 5 only selects from frameScreenshots.");
+
+        logger.LogInformation(
+            "IMAGE_SEQUENCE_ITEM_SELECTED sequenceIndex={SequenceIndex} sourceSceneCode={SourceSceneCode} renderSceneCode={RenderSceneCode} frameId={FrameId} frameType={FrameType} imagePath={ImagePath}",
+            i + 1,
+            framePlan.SourceSceneCode,
+            framePlan.RenderSceneCode,
+            framePlan.FrameId,
+            framePlan.FrameType,
+            framePlan.ImagePath);
+
+        var imageInfo = new FileInfo(framePlan.ImagePath);
+        var extension = Path.GetExtension(framePlan.ImagePath);
+        if (!imageInfo.Exists)
+            throw new InvalidOperationException($"Image sequence validation failed: file does not exist '{framePlan.ImagePath}'.");
+        if (imageInfo.Length == 0)
+            throw new InvalidOperationException($"Image sequence validation failed: file is empty '{framePlan.ImagePath}'.");
+        if (imageInfo.Length <= 50 * 1024)
+            throw new InvalidOperationException($"Image sequence validation failed: file '{framePlan.ImagePath}' is too small for production sequence ({imageInfo.Length} bytes).");
+        if (!extension.Equals(".png", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Image sequence validation failed: file '{framePlan.ImagePath}' must be a .png image.");
+
+        logger.LogInformation(
+            "IMAGE_SEQUENCE_IMAGE_VALIDATED sequenceIndex={SequenceIndex} frameId={FrameId} imagePath={ImagePath} sizeBytes={SizeBytes} extension={Extension} associatedFramePlanExists={AssociatedFramePlanExists}",
+            i + 1,
+            framePlan.FrameId,
+            framePlan.ImagePath,
+            imageInfo.Length,
+            extension,
+            true);
+
+        sequenceItems.Add(new ImageSequenceItem(
+            SequenceIndex: i + 1,
+            SourceSceneCode: framePlan.SourceSceneCode,
+            RenderSceneCode: framePlan.RenderSceneCode,
+            FrameId: framePlan.FrameId,
+            FrameType: framePlan.FrameType.ToString(),
+            ImagePath: framePlan.ImagePath,
+            VisualPurpose: framePlan.VisualPurpose,
+            NarrationUse: ResolveImageSequenceNarrationUse(framePlan),
+            SuggestedDurationSeconds: ResolveImageSequenceDuration(framePlan.RenderSceneCode, framePlan.FrameType),
+            TransitionIntent: ResolveImageSequenceTransitionIntent(i + 1),
+            MotionIntentForFutureVideo: ResolveImageSequenceMotionIntent(framePlan.FrameType),
+            ImportanceScore: ResolveImageSequenceImportanceScore(framePlan.RenderSceneCode, framePlan.FrameType),
+            SelectionReason: "Selected by deterministic Phase 5 image-sequence order from generated frameScreenshots; no primaryScreenshots were used as production source.",
+            Warnings: framePlan.SafetyWarnings));
+    }
+
+    return new ImageSequencePlan(
+        pipelineRunId,
+        contentCategoryCode,
+        regionId,
+        language,
+        weekStartDate,
+        sequenceItems.Count,
+        sequenceItems.Sum(x => x.SuggestedDurationSeconds),
+        sequenceItems);
+}
+
+static int ResolveImageSequenceDuration(string renderSceneCode, CinematicFrameType frameType)
+{
+    if (renderSceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase))
+    {
+        return frameType switch
+        {
+            CinematicFrameType.EstablishingWide => 4,
+            CinematicFrameType.BalancedStoryFrame => 5,
+            CinematicFrameType.HeroCloseup => 5,
+            _ => 4
+        };
+    }
+
+    if (renderSceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase))
+    {
+        return frameType switch
+        {
+            CinematicFrameType.HorizonContext => 5,
+            CinematicFrameType.BalancedStoryFrame => 6,
+            CinematicFrameType.AlignmentWide => 5,
+            _ => 5
+        };
+    }
+
+    return 5;
+}
+
+static string ResolveImageSequenceMotionIntent(CinematicFrameType frameType) => frameType switch
+{
+    CinematicFrameType.EstablishingWide => "slow_push_in",
+    CinematicFrameType.BalancedStoryFrame => "gentle_hold",
+    CinematicFrameType.HeroCloseup => "micro_zoom_in",
+    CinematicFrameType.HorizonContext => "slow_tilt_up",
+    CinematicFrameType.AlignmentWide => "slow_pan_across_group",
+    _ => "gentle_hold"
+};
+
+static string ResolveImageSequenceTransitionIntent(int sequenceIndex) => sequenceIndex switch
+{
+    1 => "soft_push",
+    2 => "cinematic_zoom",
+    3 => "crossfade",
+    4 => "soft_push",
+    5 => "wide_reveal",
+    _ => "final_hold"
+};
+
+static double ResolveImageSequenceImportanceScore(string renderSceneCode, CinematicFrameType frameType)
+{
+    if (renderSceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase) && frameType == CinematicFrameType.HeroCloseup) return 0.96d;
+    if (renderSceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase) && frameType == CinematicFrameType.BalancedStoryFrame) return 0.95d;
+    if (frameType == CinematicFrameType.BalancedStoryFrame) return 0.92d;
+    if (frameType == CinematicFrameType.EstablishingWide || frameType == CinematicFrameType.AlignmentWide) return 0.90d;
+    return 0.88d;
+}
+
+static string ResolveImageSequenceNarrationUse(CinematicFramePlan framePlan)
+{
+    if (framePlan.RenderSceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase))
+    {
+        return framePlan.FrameType switch
+        {
+            CinematicFrameType.EstablishingWide => "Opening moon hero narration segment; establishes the week sky-viewing context.",
+            CinematicFrameType.BalancedStoryFrame => "Moon hero story beat; supports the main lunar viewing guidance.",
+            CinematicFrameType.HeroCloseup => "Moon hero emphasis beat; reinforces the Moon as the emotional subject.",
+            _ => "Moon hero narration segment."
+        };
+    }
+
+    if (framePlan.RenderSceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase))
+    {
+        return framePlan.FrameType switch
+        {
+            CinematicFrameType.HorizonContext => "Western horizon setup narration segment; orients viewers after sunset.",
+            CinematicFrameType.BalancedStoryFrame => "Planet grouping story beat; supports Jupiter and Venus viewing guidance.",
+            CinematicFrameType.AlignmentWide => "Wide alignment narration segment; closes the grouping with spatial context.",
+            _ => "Western planet grouping narration segment."
+        };
+    }
+
+    return framePlan.NarrationUse;
 }
 
 public sealed record GenerateDailyPlanRequest(

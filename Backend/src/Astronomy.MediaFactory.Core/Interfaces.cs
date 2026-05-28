@@ -1248,6 +1248,32 @@ public sealed record CinematicSceneFramePlan(
     string SourceSceneCode,
     IReadOnlyList<CinematicFramePlan> FramePlans);
 
+public sealed record ImageSequencePlan(
+    Guid PipelineRunId,
+    string ContentCategoryCode,
+    string RegionId,
+    string Language,
+    DateOnly WeekStartDate,
+    int TotalImages,
+    int EstimatedDurationSeconds,
+    IReadOnlyList<ImageSequenceItem> Sequences);
+
+public sealed record ImageSequenceItem(
+    int SequenceIndex,
+    string SourceSceneCode,
+    string RenderSceneCode,
+    string FrameId,
+    string FrameType,
+    string ImagePath,
+    string VisualPurpose,
+    string NarrationUse,
+    int SuggestedDurationSeconds,
+    string TransitionIntent,
+    string MotionIntentForFutureVideo,
+    double ImportanceScore,
+    string SelectionReason,
+    IReadOnlyList<string> Warnings);
+
 public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     Guid PipelineRunId,
     string WorkingDirectoryRoot,
@@ -1263,7 +1289,10 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     IReadOnlyList<string>? FrameScreenshots = null,
     IReadOnlyList<string>? PrimaryScreenshots = null,
     string? CinematicFramePlanPath = null,
-    string? CinematicQualityReportPath = null);
+    string? CinematicQualityReportPath = null,
+    string? ImageSequencePlanPath = null,
+    int SelectedImageCount = 0,
+    int EstimatedImageSequenceDurationSeconds = 0);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
