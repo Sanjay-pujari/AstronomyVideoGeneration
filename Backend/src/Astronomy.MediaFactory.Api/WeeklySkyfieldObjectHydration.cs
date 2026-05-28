@@ -84,6 +84,13 @@ public static class WeeklySkyfieldObjectHydration
             hydrated.Add(new HydratedTemporalObject(normalizedName, timestamp.Value, altitude.Value, azimuth.Value, magnitude, item.Object.GetType().Name));
         }
 
+        TryHydrateFromPersistedJson(hydrated, targetAliases, normalizeName, matchesAliases, logger, sceneCode, requestedObject);
+
+        hydrated = hydrated
+            .GroupBy(h => new { Name = h.NormalizedName.ToUpperInvariant(), Time = h.SnapshotUtc, Alt = Math.Round(h.AltitudeDegrees, 6), Az = Math.Round(h.AzimuthDegrees, 6) })
+            .Select(g => g.First())
+            .ToList();
+
         LogStage(logger, sceneCode, requestedObject, "OBJECT_HYDRATION_STAGE", hydrated.Count, hydrated.Select(h => h.NormalizedName), hydrated.Select(h => (DateTime?)h.SnapshotUtc), nameof(HydratedTemporalObject));
         if (objects.Count > 0 && hydrated.Count == 0)
         {
@@ -100,6 +107,11 @@ public static class WeeklySkyfieldObjectHydration
             .ToList();
     }
 
+    private static readonly string[] SkyfieldJsonProbePaths = [
+        Path.Combine("debug", "skyfield-weekly-response.json"),
+        Path.Combine("Backend", "debug", "skyfield-weekly-response.json")
+    ];
+
     private static void LogHydratedMappingAttempt(Microsoft.Extensions.Logging.ILogger logger, string sceneCode, string requestedObject, string? rawName, DateTime? rawTimestamp, double? rawAltitude, double? rawAzimuth, double? rawMagnitude, bool mapped, string? rejectionReason)
     {
         logger.LogInformation(
@@ -115,6 +127,92 @@ public static class WeeklySkyfieldObjectHydration
         var raw = ResolveRawString(source, ["timeUtc", "timestampUtc", "observationUtc", "utc", "dateTimeUtc", "timestamp"]);
         if (DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var parsed)) return parsed;
         return resolveEventUtc(weeklyEvent);
+    }
+
+    private static void TryHydrateFromPersistedJson(
+        List<HydratedTemporalObject> hydrated,
+        HashSet<string> targetAliases,
+        Func<string?, string> normalizeName,
+        Func<string?, string?, HashSet<string>, bool> matchesAliases,
+        Microsoft.Extensions.Logging.ILogger logger,
+        string sceneCode,
+        string requestedObject)
+    {
+        var jsonPath = SkyfieldJsonProbePaths.FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(jsonPath)) return;
+
+        using var document = JsonDocument.Parse(File.ReadAllText(jsonPath));
+        TraverseNode(document.RootElement, "$", null, logger, sceneCode, requestedObject, targetAliases, normalizeName, matchesAliases, hydrated, jsonPath);
+    }
+
+    private static void TraverseNode(JsonElement node, string path, DateTime? inheritedTimeUtc, Microsoft.Extensions.Logging.ILogger logger, string sceneCode, string requestedObject, HashSet<string> targetAliases, Func<string?, string> normalizeName, Func<string?, string?, HashSet<string>, bool> matchesAliases, List<HydratedTemporalObject> hydrated, string jsonFilePath)
+    {
+        var nodeTimestamp = ResolveTimestampFromJsonNode(node) ?? inheritedTimeUtc;
+        if (node.ValueKind == JsonValueKind.Object)
+        {
+            var rawName = TryGetString(node, ["objectCode", "objectName", "name", "body", "target"]);
+            var rawAlt = TryGetDouble(node, ["altitudeDegrees", "altitudeDeg", "altitude", "alt"]);
+            var rawAz = TryGetDouble(node, ["azimuthDegrees", "azimuthDeg", "azimuth", "az"]);
+            var rawMagnitude = TryGetDouble(node, ["magnitude", "apparentMagnitude"]);
+            if (!string.IsNullOrWhiteSpace(rawName) && rawAlt.HasValue && rawAz.HasValue)
+            {
+                var matches = matchesAliases(rawName, rawName, targetAliases);
+                if (matches && nodeTimestamp.HasValue)
+                {
+                    logger.LogInformation("SKYFIELD_JSON_PATH_USED object={Object} jsonPath={JsonPath} time={Time} alt={Alt} az={Az} magnitude={Magnitude}", rawName, path, nodeTimestamp.Value.ToString("O"), rawAlt.Value, rawAz.Value, rawMagnitude);
+                    hydrated.Add(new HydratedTemporalObject(normalizeName(rawName), nodeTimestamp.Value, rawAlt.Value, rawAz.Value, rawMagnitude, "SkyfieldJsonElement"));
+                }
+            }
+
+            foreach (var p in node.EnumerateObject())
+            {
+                TraverseNode(p.Value, $"{path}.{p.Name}", nodeTimestamp, logger, sceneCode, requestedObject, targetAliases, normalizeName, matchesAliases, hydrated, jsonFilePath);
+            }
+        }
+        else if (node.ValueKind == JsonValueKind.Array)
+        {
+            var idx = 0;
+            foreach (var child in node.EnumerateArray())
+            {
+                TraverseNode(child, $"{path}[{idx++}]", nodeTimestamp, logger, sceneCode, requestedObject, targetAliases, normalizeName, matchesAliases, hydrated, jsonFilePath);
+            }
+        }
+    }
+
+    private static DateTime? ResolveTimestampFromJsonNode(JsonElement node)
+    {
+        var raw = TryGetString(node, ["timeUtc", "timestampUtc", "observationUtc", "utc", "dateTimeUtc", "timestamp", "bestTimeUtc", "bestStartUtc"]);
+        if (DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var parsed)) return parsed;
+
+        var date = TryGetString(node, ["date", "bestDateLocal"]);
+        var time = TryGetString(node, ["time", "bestTimeLocal", "observationTimeLocal"]);
+        if (!string.IsNullOrWhiteSpace(date) && !string.IsNullOrWhiteSpace(time) && DateTime.TryParse($"{date} {time}", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var combined))
+        {
+            return combined;
+        }
+        return null;
+    }
+
+    private static string? TryGetString(JsonElement node, IReadOnlyList<string> aliases)
+    {
+        if (node.ValueKind != JsonValueKind.Object) return null;
+        foreach (var alias in aliases)
+        {
+            foreach (var p in node.EnumerateObject())
+            {
+                if (!string.Equals(p.Name, alias, StringComparison.OrdinalIgnoreCase)) continue;
+                if (p.Value.ValueKind == JsonValueKind.String) return p.Value.GetString();
+                return p.Value.ToString();
+            }
+        }
+        return null;
+    }
+
+    private static double? TryGetDouble(JsonElement node, IReadOnlyList<string> aliases)
+    {
+        var raw = TryGetString(node, aliases);
+        if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)) return parsed;
+        return null;
     }
 
     private static string? ResolveRawString(object source, IReadOnlyList<string> aliases)
