@@ -924,7 +924,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
         static (double OffsetAz, double OffsetAlt, double TargetX, double TargetY, string Reason, List<string> Warnings) ComputeSubjectOffset(
             string sceneIntent,
-            IReadOnlyList<SkyPosition> visibleObjects,
+            IReadOnlyList<SkyObjectPosition> visibleObjects,
             double cameraAz,
             double cameraAlt)
         {
