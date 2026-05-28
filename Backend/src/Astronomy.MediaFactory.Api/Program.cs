@@ -10,6 +10,7 @@ using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentDiversification;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -732,7 +733,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
 {
     try
     {
@@ -2082,6 +2083,17 @@ var sscResult = splitProbeSsc;
 
         app.Logger.LogInformation("IMAGE_PIPELINE_LOCKED_PRODUCTION_READY pipelineRunId={PipelineRunId} selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds} productionImageSource={ProductionImageSource}", pipelineRunId, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds, imageSequencePlan.ProductionImageSource);
 
+        var segmentDiversification = await ExecuteOrchestrationStageAsync("Diversifying weekly episode segments", stageCt =>
+            segmentDiversificationService.DiversifyAndPersistAsync(
+                segmentClassification.Plan,
+                episodeArchitecture,
+                weeklyScenePlan,
+                imageSequencePlan,
+                allFramePlans,
+                weeklySkyfieldContext,
+                root,
+                stageCt));
+
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
             pipelineRunId,
@@ -2117,6 +2129,16 @@ var sscResult = splitProbeSsc;
                 classifiedShortformSegmentCount = segmentClassification.Plan.ClassifiedShortformSegmentCount,
                 heroEventSegmentType = segmentClassification.Plan.HeroEventSegmentType,
                 heroEventObjects = segmentClassification.Plan.HeroEventObjects
+            },
+            segmentDiversification = new
+            {
+                weeklySegmentDiversificationPlanPath = segmentDiversification.Path,
+                segmentDiversificationReady = segmentDiversification.Plan.SegmentDiversificationReady,
+                diversifiedLongformSegmentCount = segmentDiversification.Plan.DiversifiedLongformSegmentCount,
+                diversifiedShortformSegmentCount = segmentDiversification.Plan.DiversifiedShortformSegmentCount,
+                assetExpansionRequired = segmentDiversification.Plan.AssetExpansionRequired,
+                highestRetentionRiskScore = segmentDiversification.Plan.HighestRetentionRiskScore,
+                highestRepetitionRiskScore = segmentDiversification.Plan.HighestRepetitionRiskScore
             },
             selectedImageCount = imageSequencePlan.TotalImages,
             estimatedImageSequenceDurationSeconds = imageSequencePlan.EstimatedDurationSeconds,
@@ -2166,7 +2188,14 @@ var sscResult = splitProbeSsc;
             segmentClassification.Plan.ClassifiedLongformSegmentCount,
             segmentClassification.Plan.ClassifiedShortformSegmentCount,
             segmentClassification.Plan.HeroEventSegmentType,
-            segmentClassification.Plan.HeroEventObjects);
+            segmentClassification.Plan.HeroEventObjects,
+            segmentDiversification.Path,
+            segmentDiversification.Plan.SegmentDiversificationReady,
+            segmentDiversification.Plan.DiversifiedLongformSegmentCount,
+            segmentDiversification.Plan.DiversifiedShortformSegmentCount,
+            segmentDiversification.Plan.AssetExpansionRequired,
+            segmentDiversification.Plan.HighestRetentionRiskScore,
+            segmentDiversification.Plan.HighestRepetitionRiskScore);
 
         return Results.Ok(output);
     }
