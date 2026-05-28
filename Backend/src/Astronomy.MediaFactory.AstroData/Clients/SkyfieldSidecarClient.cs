@@ -22,6 +22,7 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<SkyfieldSidecarClient> _logger;
+    private bool _loggedDailyRawSample;
 
     public SkyfieldSidecarClient(HttpClient httpClient, ILogger<SkyfieldSidecarClient> logger)
     {
