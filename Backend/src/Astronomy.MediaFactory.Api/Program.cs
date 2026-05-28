@@ -926,7 +926,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return null;
         }
 
-        WeeklySceneComposition? ResolveRenderSceneArtifactComposition(string sceneCode, string? sourceSceneCode)
+        WeeklySceneCompositionEntry? ResolveRenderSceneArtifactComposition(string sceneCode, string? sourceSceneCode)
         {
             var direct = compositionPackage.Entries.FirstOrDefault(x => x.ShotCode.Equals(sceneCode, StringComparison.OrdinalIgnoreCase));
             if (direct is not null)
