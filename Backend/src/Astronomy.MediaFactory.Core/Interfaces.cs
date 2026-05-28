@@ -1235,6 +1235,10 @@ public sealed record CinematicFramePlan(
     string NarrationUse,
     string OutputScriptName,
     string OutputImageName,
+    string ScriptPath,
+    string ImagePath,
+    string RelativeScriptPath,
+    string RelativeImagePath,
     IReadOnlyList<string> SafetyWarnings);
 
 public sealed record CinematicSceneFramePlan(
