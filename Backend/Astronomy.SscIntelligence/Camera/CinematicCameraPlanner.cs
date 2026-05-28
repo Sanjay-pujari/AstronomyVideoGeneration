@@ -5,6 +5,10 @@ namespace Astronomy.SscIntelligence.Camera;
 
 public sealed class CinematicCameraPlanner : ICinematicCameraPlanner
 {
+    private static readonly object CameraMemoryLock = new();
+    private static string? _previousSceneCode;
+    private static double? _previousAzimuth;
+
     public CinematicCameraPlan Plan(string? sceneCode, SceneIntentType sceneIntent, IReadOnlyList<SkyObjectPosition> cameraObjects, double compositionCameraAltitudeDeg, double compositionCameraAzimuthDeg, double fovRecommendationDeg, string? regionId, DateTime observationUtc)
     {
         if (cameraObjects.Count == 0)
@@ -29,7 +33,11 @@ public sealed class CinematicCameraPlanner : ICinematicCameraPlanner
             var hero = cameraObjects.OrderBy(x => x.Magnitude).First();
             centerAltitude = hero.AltitudeDeg;
             centerAzimuth = hero.AzimuthDeg;
-            fov = Math.Clamp(Math.Min(fovRecommendationDeg, 34d), 18d, 40d);
+            fov = Math.Min(fovRecommendationDeg, 34d);
+            if (hero.Name.Contains("moon", StringComparison.OrdinalIgnoreCase))
+            {
+                verticalBias = 4d;
+            }
             reason = $"hero target {hero.Name} center from resolved object Alt/Az";
         }
         else if (framingMode == "PlanetGrouping")
@@ -38,18 +46,22 @@ public sealed class CinematicCameraPlanner : ICinematicCameraPlanner
             {
                 throw new InvalidOperationException("Planet grouping requires at least two resolved objects. Fallback camera generation is disabled.");
             }
-
-            fov = Math.Clamp(spread + 16d, 28d, 68d);
+            verticalBias = -3d;
+            fov = spread + 16d;
             reason = $"grouping center from circular azimuth mean; fov from spread ({spread:0.##}°) + cinematic padding";
         }
         else if (framingMode == "OrientationWide")
         {
-            fov = Math.Clamp(Math.Max(fovRecommendationDeg, spread + 22d), 45d, 85d);
+            fov = Math.Max(fovRecommendationDeg, spread + 22d);
             reason = "wide orientation for constellation/horizon context";
         }
 
+        var paddingMultiplier = ResolvePaddingMultiplier(framingMode, sceneIntent);
+        fov *= paddingMultiplier;
+        fov = ClampFovByFramingMode(framingMode, fov);
+
         var plannedAltitude = Math.Clamp(centerAltitude + verticalBias - horizonBias, 2d, 85d);
-        var plannedAzimuth = Normalize(centerAzimuth);
+        var plannedAzimuth = ApplyContinuityBlend(sceneCode, Normalize(centerAzimuth));
         if (Math.Abs(plannedAltitude - compositionCameraAltitudeDeg) > 20)
         {
             warnings.Add("composition-plan altitude delta > 20°; verify horizon safety");
@@ -61,6 +73,47 @@ public sealed class CinematicCameraPlanner : ICinematicCameraPlanner
             warnings,
             $"{reason}; region={regionId ?? "unknown"}; utc={observationUtc:O}; compositionAz={compositionCameraAzimuthDeg:0.##}");
     }
+
+    private static double ApplyContinuityBlend(string? sceneCode, double currentAzimuth)
+    {
+        lock (CameraMemoryLock)
+        {
+            if (_previousAzimuth.HasValue)
+            {
+                var delta = CircularDistance(_previousAzimuth.Value, currentAzimuth);
+                if (delta < 25d)
+                {
+                    currentAzimuth = Normalize((_previousAzimuth.Value * 0.45d) + (currentAzimuth * 0.55d));
+                }
+            }
+
+            _previousAzimuth = currentAzimuth;
+            _previousSceneCode = sceneCode;
+            return currentAzimuth;
+        }
+    }
+
+    private static double CircularDistance(double a, double b)
+    {
+        var delta = Math.Abs(Normalize(a) - Normalize(b));
+        return delta > 180d ? 360d - delta : delta;
+    }
+
+    private static double ResolvePaddingMultiplier(string framingMode, SceneIntentType sceneIntent) => framingMode switch
+    {
+        "HeroObject" => 1.6d,
+        "PlanetGrouping" => 1.8d,
+        "OrientationWide" => 2.2d,
+        _ => sceneIntent == SceneIntentType.WideNight ? 2.5d : 1.8d
+    };
+
+    private static double ClampFovByFramingMode(string framingMode, double fov) => framingMode switch
+    {
+        "HeroObject" => Math.Clamp(fov, 18d, 55d),
+        "PlanetGrouping" => Math.Clamp(Math.Max(fov, 35d), 35d, 68d),
+        "OrientationWide" => Math.Clamp(fov, 45d, 95d),
+        _ => Math.Clamp(fov, 25d, 75d)
+    };
 
     private static string ResolveFramingMode(string? sceneCode, SceneIntentType sceneIntent, int objectCount)
     {

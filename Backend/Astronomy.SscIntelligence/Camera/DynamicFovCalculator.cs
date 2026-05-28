@@ -6,6 +6,7 @@ namespace Astronomy.SscIntelligence.Camera;
 
 public sealed class DynamicFovCalculator : IDynamicFovCalculator
 {
+    private const double SafeFrameMarginPercent = 15d;
     private readonly SpatialCompositionAnalyzer _spatialAnalyzer = new();
 
     public CameraSolution Calculate(IReadOnlyList<SkyObjectPosition> visibleObjects, IReadOnlyList<SkyObjectPosition> primaryTargets, IReadOnlyList<SkyObjectPosition> secondaryTargets, IReadOnlyList<SkyObjectPosition> contextTargets, double centerAltitudeDeg, double centerAzimuthDeg, VisibilityRules rules, SceneIntentType intent)
@@ -28,8 +29,17 @@ public sealed class DynamicFovCalculator : IDynamicFovCalculator
             : analysis.Classification == SpatialGroupingClassification.ImpossibleGrouping
                 ? Math.Min(60, analysis.RecommendedFovDeg)
                 : Clamp(intent, spread * Pad(intent));
+
+        fov = ApplySafeFrameMargin(fov);
         var requiresSplit = analysis.SplitScene || spread > rules.MaximumGroupSpreadDeg;
         return new CameraSolution(centerAltitudeDeg, centerAzimuthDeg, fov, requiresSplit, spread);
+    }
+
+    private static double ApplySafeFrameMargin(double fovDeg)
+    {
+        var usableFramePercent = 100d - SafeFrameMarginPercent;
+        var expansionFactor = 100d / usableFramePercent;
+        return fovDeg * expansionFactor;
     }
     static double Single(SceneIntentType i)=>i switch{SceneIntentType.HeroShot=>25,SceneIntentType.CloseUp=>18,SceneIntentType.WideNight=>55,SceneIntentType.Educational=>45,_=>35};
     static double Pad(SceneIntentType i)=>i switch{SceneIntentType.HeroShot=>1.35,SceneIntentType.WideNight=>1.85,SceneIntentType.Educational=>1.7,SceneIntentType.CloseUp=>1.25,_=>1.55};
