@@ -6,6 +6,7 @@ namespace Astronomy.MediaFactory.AstroData.Clients;
 
 public interface ISkyfieldSidecarClient
 {
+    Task<bool> CheckHealthAsync(CancellationToken cancellationToken);
     Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken);
     Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken);
     Task<WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken);
@@ -67,6 +68,20 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
         }
     }
 
+    public async Task<bool> CheckHealthAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await _httpClient.GetAsync("/health", cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Skyfield sidecar health check failed.");
+            return false;
+        }
+    }
+
     public async Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken)
     {
         try
@@ -94,6 +109,13 @@ public sealed class SkyfieldSidecarClient : ISkyfieldSidecarClient
     {
         try
         {
+            var healthy = await CheckHealthAsync(cancellationToken);
+            if (!healthy)
+            {
+                _logger.LogWarning("Skyfield sidecar health check did not return success before weekly-sky request.");
+                return null;
+            }
+
             var response = await _httpClient.PostAsJsonAsync("/forecast/weekly-sky", request, JsonOptions, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {

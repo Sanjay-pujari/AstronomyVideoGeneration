@@ -304,6 +304,7 @@ public static class ServiceCollectionExtensions
         {
             var options = sp.GetRequiredService<IOptions<SkyfieldSidecarOptions>>().Value;
             client.BaseAddress = new Uri(options.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(Math.Max(120, options.TimeoutSeconds));
         });
         services.AddHttpClient<ISkyfieldVisibilityClient, SkyfieldVisibilityClient>((sp, client) =>
         {

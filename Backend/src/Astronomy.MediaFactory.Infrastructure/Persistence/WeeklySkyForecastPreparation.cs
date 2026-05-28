@@ -84,7 +84,14 @@ public sealed class WeeklySkyForecastContextBuilder(
         WeeklySkyForecastSkyfieldResponse? response = null;
         try
         {
-            response = await sidecarClient.GetWeeklySkyForecastAsync(skyfieldRequest, cancellationToken);
+            using var weeklyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            weeklyTimeoutCts.CancelAfter(TimeSpan.FromSeconds(120));
+            response = await sidecarClient.GetWeeklySkyForecastAsync(skyfieldRequest, weeklyTimeoutCts.Token);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "SKYFIELD_WEEKLY_TIMEOUT");
+            debugWarnings.Add("Skyfield weekly API timed out; used day-by-day fallback.");
         }
         catch (Exception ex)
         {
@@ -104,6 +111,9 @@ public sealed class WeeklySkyForecastContextBuilder(
                 var day = weekStart.AddDays(offset);
                 try
                 {
+                    logger.LogInformation("SKYFIELD_DAILY_FALLBACK_START date={Date}", day.ToString("yyyy-MM-dd"));
+                    using var dailyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    dailyTimeoutCts.CancelAfter(TimeSpan.FromSeconds(45));
                     var dailyForecast = await sidecarClient.GetDailySkyAsync(new SkyfieldDailySkyRequest
                     {
                         Date = day.ToString("yyyy-MM-dd"),
@@ -111,10 +121,11 @@ public sealed class WeeklySkyForecastContextBuilder(
                         Latitude = resolution.Latitude,
                         Longitude = resolution.Longitude,
                         Timezone = resolution.Timezone
-                    }, cancellationToken);
+                    }, dailyTimeoutCts.Token);
                     if (dailyForecast is null)
                     {
                         failedDays.Add(new { date = day.ToString("yyyy-MM-dd"), error = "Daily Skyfield response was null." });
+                        logger.LogWarning("SKYFIELD_DAILY_FALLBACK_FAILED date={Date}", day.ToString("yyyy-MM-dd"));
                         logger.LogWarning("Skyfield daily fallback failed for {Date}: null response.", day);
                         continue;
                     }
@@ -154,10 +165,12 @@ public sealed class WeeklySkyForecastContextBuilder(
                         OverallViewingScore = fallbackVisibleObjects.Count == 0 ? 0 : fallbackVisibleObjects.Average(x => x.VisibilityScore),
                         ViewingSummary = string.Join(" ", dailyForecast.VisualIdeas.Select(v => v.Description).Where(v => !string.IsNullOrWhiteSpace(v))).Trim()
                     });
+                    logger.LogInformation("SKYFIELD_DAILY_FALLBACK_SUCCESS date={Date}", day.ToString("yyyy-MM-dd"));
                 }
                 catch (Exception ex)
                 {
                     failedDays.Add(new { date = day.ToString("yyyy-MM-dd"), error = ex.Message });
+                    logger.LogWarning("SKYFIELD_DAILY_FALLBACK_FAILED date={Date}", day.ToString("yyyy-MM-dd"));
                     logger.LogWarning(ex, "Skyfield daily fallback failed for {Date}.", day);
                 }
             }
@@ -174,14 +187,14 @@ public sealed class WeeklySkyForecastContextBuilder(
                 WeeklyHighlights = [],
                 RecommendedNights = [],
                 Warnings = [..debugWarnings],
-                ErrorMessage = successfulDays.Count == 0 ? "Unable to compute weekly forecast for all requested days." : null
+                ErrorMessage = successfulDays.Count == 0 ? "Skyfield sidecar unavailable or timed out. Check localhost:8010 and timeout settings." : null
             };
         }
 
         logger.LogInformation("Skyfield daily fallback summary: successfulDays={SuccessfulDays}, failedDays={FailedDays}", successfulDays.Count, failedDays.Count);
         if (successfulDays.Count == 0)
         {
-            throw new InvalidOperationException("Skyfield weekly forecast failed: Unable to compute weekly forecast for all requested days.");
+            throw new InvalidOperationException("Skyfield sidecar unavailable or timed out. Check localhost:8010 and timeout settings.");
         }
 
         if (failedDays.Count > 0)
