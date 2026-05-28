@@ -223,6 +223,24 @@ public sealed class WeeklySkyForecastContextBuilder(
                 geometrySample.MaxAltitudeDegrees,
                 geometrySample.BestViewingAzimuthDegrees);
         }
+        else if (geometryRecords == 0)
+        {
+            var availableTopLevelKeys = string.Join(",", new[]
+            {
+                nameof(WeeklySkyForecastSkyfieldResponse.Success),
+                nameof(WeeklySkyForecastSkyfieldResponse.RegionId),
+                nameof(WeeklySkyForecastSkyfieldResponse.LocationName),
+                nameof(WeeklySkyForecastSkyfieldResponse.Timezone),
+                nameof(WeeklySkyForecastSkyfieldResponse.WeekStartDate),
+                nameof(WeeklySkyForecastSkyfieldResponse.WeekEndDate),
+                nameof(WeeklySkyForecastSkyfieldResponse.Days),
+                nameof(WeeklySkyForecastSkyfieldResponse.WeeklyHighlights),
+                nameof(WeeklySkyForecastSkyfieldResponse.RecommendedNights),
+                nameof(WeeklySkyForecastSkyfieldResponse.Warnings),
+                nameof(WeeklySkyForecastSkyfieldResponse.ErrorMessage)
+            });
+            throw new InvalidOperationException($"Skyfield daily response parsed but no geometry records extracted (availableTopLevelKeys={availableTopLevelKeys})");
+        }
 
         var normalizedObjectCount = 0;
         var correctedHighlightCount = 0;
