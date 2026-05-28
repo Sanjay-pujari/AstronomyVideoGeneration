@@ -12,48 +12,74 @@ using AzureTokenRequestContext = Azure.Core.TokenRequestContext;
 
 namespace Astronomy.MediaFactory.ContentGen;
 
-public sealed class AzureOpenAiAICinematicImageGenerator : IAICinematicImageGenerator
+public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenerator
 {
     private const string ApiVersion = "2024-10-21";
     private const int AzureOpenAiImageTimeoutSeconds = 180;
-    private static readonly string[] PreferredLandscapeSizes = ["1792x1024", "1536x1024"];
+    private static readonly string[] PreferredLandscapeSizes = ["1792x1024", "1536x1024", "1024x1024"];
     private static readonly AzureTokenRequestContext AzureCognitiveServicesScope = new(["https://cognitiveservices.azure.com/.default"]);
 
     private readonly HttpClient _httpClient;
-    private readonly AzureOpenAiOptions _options;
-    private readonly ILogger<AzureOpenAiAICinematicImageGenerator> _logger;
+    private readonly AzureOpenAIForImageOptions _options;
+    private readonly ILogger<AzureOpenAICinematicImageGenerator> _logger;
     private readonly TokenCredential? _credential;
 
-    public AzureOpenAiAICinematicImageGenerator(
+    public AzureOpenAICinematicImageGenerator(
         HttpClient httpClient,
-        IOptions<AzureOpenAiOptions> options,
-        ILogger<AzureOpenAiAICinematicImageGenerator> logger,
-        TokenCredential? credential = null)
+        IOptions<AzureOpenAIForImageOptions> options,
+        ILogger<AzureOpenAICinematicImageGenerator> logger)
     {
         _httpClient = httpClient;
         _options = options.Value;
         _logger = logger;
         _credential = _options.UseManagedIdentity
-            ? credential ?? new DefaultAzureCredential(new DefaultAzureCredentialOptions
+            ? new DefaultAzureCredential(new DefaultAzureCredentialOptions
             {
                 ManagedIdentityClientId = string.IsNullOrWhiteSpace(_options.ManagedIdentityClientId) ? null : _options.ManagedIdentityClientId.Trim()
             })
-            : credential;
+            : null;
     }
 
     public bool IsConfigured => GetConfigurationWarnings().Count == 0;
 
+    public string DeploymentName => _options.ImageDeployment?.Trim() ?? string.Empty;
+
     public async Task<AICinematicProviderResult> GenerateAsync(AICinematicAssetRequest request, CancellationToken cancellationToken)
     {
+        _logger.LogInformation(
+            "AI_IMAGE_PROVIDER_CONFIG_CHECK deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus}",
+            DeploymentName,
+            request.AssetCode,
+            request.SegmentType,
+            request.PlannedImagePath,
+            "ConfigCheck");
+
         var configurationWarnings = GetConfigurationWarnings();
         if (configurationWarnings.Count > 0)
         {
+            _logger.LogWarning(
+                "AI_IMAGE_PROVIDER_NOT_CONFIGURED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} warnings={Warnings}",
+                DeploymentName,
+                request.AssetCode,
+                request.SegmentType,
+                request.PlannedImagePath,
+                "ProviderNotConfigured",
+                string.Join(" | ", configurationWarnings));
+
             return new AICinematicProviderResult(
                 "ProviderNotConfigured",
                 null,
                 ProviderConfigured: false,
                 configurationWarnings);
         }
+
+        _logger.LogInformation(
+            "AI_IMAGE_PROVIDER_CONFIGURED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus}",
+            DeploymentName,
+            request.AssetCode,
+            request.SegmentType,
+            request.PlannedImagePath,
+            "Configured");
 
         Directory.CreateDirectory(Path.GetDirectoryName(request.PlannedImagePath) ?? Directory.GetCurrentDirectory());
         var warnings = new List<string>();
@@ -64,6 +90,17 @@ public sealed class AzureOpenAiAICinematicImageGenerator : IAICinematicImageGene
             {
                 var imageBytes = await RequestImageBytesAsync(request, size, cancellationToken);
                 await File.WriteAllBytesAsync(request.PlannedImagePath, imageBytes, cancellationToken);
+                var fileSize = new FileInfo(request.PlannedImagePath).Length;
+                _logger.LogInformation(
+                    "AI_IMAGE_FILE_SAVED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} size={Size} fileSizeBytes={FileSizeBytes}",
+                    DeploymentName,
+                    request.AssetCode,
+                    request.SegmentType,
+                    request.PlannedImagePath,
+                    "Generated",
+                    size,
+                    fileSize);
+
                 return new AICinematicProviderResult(
                     "Generated",
                     request.PlannedImagePath,
@@ -76,14 +113,29 @@ public sealed class AzureOpenAiAICinematicImageGenerator : IAICinematicImageGene
             }
             catch (HttpRequestException ex) when (IsLikelyUnsupportedSize(ex))
             {
-                _logger.LogWarning(ex, "Azure OpenAI image generation rejected size {Size} for deployment {Deployment}.", size, _options.ImageDeployment);
+                _logger.LogWarning(
+                    ex,
+                    "AI_IMAGE_VALIDATION_FAILED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} size={Size}",
+                    DeploymentName,
+                    request.AssetCode,
+                    request.SegmentType,
+                    request.PlannedImagePath,
+                    "UnsupportedSize",
+                    size);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Azure OpenAI image generation failed for assetId={AssetId} deployment={Deployment}.", request.AssetId, _options.ImageDeployment);
+                _logger.LogError(
+                    ex,
+                    "AI_IMAGE_VALIDATION_FAILED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus}",
+                    DeploymentName,
+                    request.AssetCode,
+                    request.SegmentType,
+                    request.PlannedImagePath,
+                    "Failed");
                 warnings.Add($"Azure OpenAI image generation failed: {ex.Message}");
                 return new AICinematicProviderResult(
-                    "GenerationFailed",
+                    "Failed",
                     null,
                     ProviderConfigured: true,
                     warnings);
@@ -92,7 +144,7 @@ public sealed class AzureOpenAiAICinematicImageGenerator : IAICinematicImageGene
 
         warnings.Add("Azure OpenAI image generation failed because no supported landscape image size was accepted by the configured deployment.");
         return new AICinematicProviderResult(
-            "GenerationFailed",
+            "Failed",
             null,
             ProviderConfigured: true,
             warnings);
@@ -101,10 +153,9 @@ public sealed class AzureOpenAiAICinematicImageGenerator : IAICinematicImageGene
     private IReadOnlyList<string> GetConfigurationWarnings()
     {
         var warnings = new List<string>();
-        if (string.IsNullOrWhiteSpace(_options.Endpoint)) warnings.Add("AzureOpenAI:Endpoint is required for AI cinematic image generation.");
-        if (!_options.UseManagedIdentity && string.IsNullOrWhiteSpace(_options.ApiKey)) warnings.Add("AzureOpenAI:ApiKey is required for AI cinematic image generation unless AzureOpenAI:UseManagedIdentity=true.");
-        if (_options.UseManagedIdentity && _credential is null) warnings.Add("Azure OpenAI managed identity credential is not available for AI cinematic image generation.");
-        if (string.IsNullOrWhiteSpace(_options.ImageDeployment)) warnings.Add("AzureOpenAI:ImageDeployment is required for AI cinematic image generation.");
+        if (string.IsNullOrWhiteSpace(_options.Endpoint)) warnings.Add("AzureOpenAIForImage:Endpoint is required for AI cinematic image generation.");
+        if (string.IsNullOrWhiteSpace(_options.ImageDeployment)) warnings.Add("AzureOpenAIForImage:ImageDeployment is required for AI cinematic image generation.");
+        if (!_options.UseManagedIdentity && string.IsNullOrWhiteSpace(_options.ApiKey)) warnings.Add("AzureOpenAIForImage:ApiKey is required for AI cinematic image generation unless AzureOpenAIForImage:UseManagedIdentity=true.");
         return warnings;
     }
 
@@ -118,7 +169,8 @@ public sealed class AzureOpenAiAICinematicImageGenerator : IAICinematicImageGene
             assetRequest.Prompt,
             $"Style profile: {assetRequest.StyleProfile}.",
             $"Negative constraints: {assetRequest.NegativePrompt}",
-            "Create one clean production still image only. Do not include text, labels, watermarks, logos, borders, or UI."
+            "Atmosphere/support visual only; astronomical truth must come from verified Skyfield and Stellarium data.",
+            "Create one clean production still image only. Do not include text, labels, watermarks, logos, borders, UI, thumbnails, fake exact star maps, false object labels, fake rare conjunctions, scientific diagrams, or misleading object alignments."
         });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -139,9 +191,14 @@ public sealed class AzureOpenAiAICinematicImageGenerator : IAICinematicImageGene
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(AzureOpenAiImageTimeoutSeconds));
         _logger.LogInformation(
-            "Azure OpenAI image call starting. imageDeployment={Deployment}; assetId={AssetId}; size={Size}; startedUtc={StartedUtc:o}; timeoutSeconds={TimeoutSeconds}",
-            _options.ImageDeployment,
-            assetRequest.AssetId,
+            "AI_IMAGE_GENERATION_REQUEST_START deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} targetWidth={TargetWidth} targetHeight={TargetHeight} size={Size} startedUtc={StartedUtc:o} timeoutSeconds={TimeoutSeconds}",
+            DeploymentName,
+            assetRequest.AssetCode,
+            assetRequest.SegmentType,
+            assetRequest.PlannedImagePath,
+            "Started",
+            assetRequest.TargetWidth,
+            assetRequest.TargetHeight,
             size,
             startedUtc,
             AzureOpenAiImageTimeoutSeconds);
@@ -159,9 +216,12 @@ public sealed class AzureOpenAiAICinematicImageGenerator : IAICinematicImageGene
         }
 
         _logger.LogInformation(
-            "Azure OpenAI image call completed. imageDeployment={Deployment}; assetId={AssetId}; size={Size}; startedUtc={StartedUtc:o}; completedUtc={CompletedUtc:o}; elapsedMs={ElapsedMs}; responseLength={ResponseLength}",
-            _options.ImageDeployment,
-            assetRequest.AssetId,
+            "AI_IMAGE_GENERATION_REQUEST_COMPLETE deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} size={Size} startedUtc={StartedUtc:o} completedUtc={CompletedUtc:o} elapsedMs={ElapsedMs} responseLength={ResponseLength}",
+            DeploymentName,
+            assetRequest.AssetCode,
+            assetRequest.SegmentType,
+            assetRequest.PlannedImagePath,
+            "Generated",
             size,
             startedUtc,
             DateTimeOffset.UtcNow,

@@ -63,17 +63,21 @@ public sealed record AICinematicAssetGenerationSummary(
     int GeneratedCount,
     int ProductionReadyCount,
     bool ProviderConfigured,
-    int RemainingGap);
+    int RemainingGap,
+    string AzureImageDeploymentUsed);
 
 public interface IAICinematicImageGenerator
 {
     bool IsConfigured { get; }
+    string DeploymentName { get; }
     Task<AICinematicProviderResult> GenerateAsync(AICinematicAssetRequest request, CancellationToken cancellationToken);
 }
 
 public sealed class DisabledAICinematicImageGenerator : IAICinematicImageGenerator
 {
     public bool IsConfigured => false;
+
+    public string DeploymentName => string.Empty;
 
     public Task<AICinematicProviderResult> GenerateAsync(AICinematicAssetRequest request, CancellationToken cancellationToken) =>
         Task.FromResult(new AICinematicProviderResult(
@@ -240,7 +244,7 @@ public sealed class AICinematicAssetValidator
             else
             {
                 if (format is not ("PNG" or "JPEG")) warnings.Add("Generated file format is not PNG or JPEG.");
-                if (width < 1280) warnings.Add("Generated image width is below 1280 pixels.");
+                if (width < 1024) warnings.Add("Generated image width is below 1024 pixels.");
                 if (height < 720) warnings.Add("Generated image height is below 720 pixels.");
             }
         }
@@ -248,16 +252,29 @@ public sealed class AICinematicAssetValidator
         if (request.PlaceholderAsset)
             warnings.Add("Placeholder assets cannot be marked production-ready.");
 
+        if (!string.IsNullOrWhiteSpace(providerResult.ImagePath))
+        {
+            var extension = Path.GetExtension(providerResult.ImagePath);
+            if (extension is not (".png" or ".jpg" or ".jpeg" or ".PNG" or ".JPG" or ".JPEG"))
+                warnings.Add("Generated file extension is not PNG or JPEG.");
+        }
+
         var productionReady = providerResult.ProviderConfigured
             && providerResult.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase)
             && !request.PlaceholderAsset
             && fileSizeBytes > 50 * 1024
-            && width >= 1280
+            && width >= 1024
             && height >= 720
             && warnings.Count == 0;
 
         if (productionReady) validationStatus = "Passed";
         else if (!providerResult.ProviderConfigured) validationStatus = "ProviderNotConfigured";
+
+        var generationStatus = providerResult.GenerationStatus;
+        if (providerResult.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase) && !productionReady)
+        {
+            generationStatus = "GeneratedButInvalid";
+        }
 
         return new AICinematicAssetResult(
             request.AssetId,
@@ -270,7 +287,7 @@ public sealed class AICinematicAssetValidator
             request.StyleProfile,
             imagePath,
             "AICinematic",
-            providerResult.GenerationStatus,
+            generationStatus,
             width,
             height,
             fileSizeBytes,
@@ -343,10 +360,10 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         WeeklyEpisodeArchitectureResult episodeArchitecture,
         object? weeklyContext,
         string workingDirectoryRoot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool continueOnFailure = true)
     {
         logger.LogInformation("AI_CINEMATIC_ASSET_GENERATION_START pipelineRunId={PipelineRunId}", visualAssetPlan.PipelineRunId);
-        _ = visualBalanceReport;
         _ = diversificationPlan;
         _ = episodeArchitecture;
         _ = weeklyContext;
@@ -365,9 +382,50 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             logger.LogInformation("AI_CINEMATIC_ASSET_REQUEST_CREATED assetId={AssetId} segmentId={SegmentId} assetCode={AssetCode}", request.AssetId, request.SegmentId, request.AssetCode);
             var targetDirectory = Path.GetDirectoryName(request.PlannedImagePath);
             if (!string.IsNullOrWhiteSpace(targetDirectory)) Directory.CreateDirectory(targetDirectory);
-            var providerResult = await generator.GenerateAsync(request, cancellationToken);
+            AICinematicProviderResult providerResult;
+            try
+            {
+                providerResult = await generator.GenerateAsync(request, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (continueOnFailure)
+            {
+                logger.LogError(ex, "AI_CINEMATIC_ASSET_GENERATION_FAILED_CONTINUING assetId={AssetId} segmentType={SegmentType} assetCode={AssetCode}", request.AssetId, request.SegmentType, request.AssetCode);
+                providerResult = new AICinematicProviderResult(
+                    "Failed",
+                    null,
+                    generator.IsConfigured,
+                    [$"Unexpected AI cinematic image generation failure: {ex.Message}"]);
+            }
+
             logger.LogInformation("AI_CINEMATIC_ASSET_GENERATED assetId={AssetId} status={GenerationStatus}", request.AssetId, providerResult.GenerationStatus);
             var result = validator.Validate(request, providerResult);
+            if (result.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase))
+            {
+                logger.LogInformation(
+                    "AI_IMAGE_VALIDATION_PASSED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} validationStatus={ValidationStatus}",
+                    generator.DeploymentName,
+                    request.AssetCode,
+                    request.SegmentType,
+                    request.PlannedImagePath,
+                    result.GenerationStatus,
+                    result.ValidationStatus);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "AI_IMAGE_VALIDATION_FAILED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} validationStatus={ValidationStatus} warnings={Warnings}",
+                    generator.DeploymentName,
+                    request.AssetCode,
+                    request.SegmentType,
+                    request.PlannedImagePath,
+                    result.GenerationStatus,
+                    result.ValidationStatus,
+                    string.Join(" | ", result.ValidationWarnings));
+            }
             logger.LogInformation("AI_CINEMATIC_ASSET_VALIDATED assetId={AssetId} validationStatus={ValidationStatus} productionReady={ProductionReady}", result.AssetId, result.ValidationStatus, result.ProductionReady);
             results.Add(result);
         }
@@ -375,7 +433,9 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         var (planPath, resultsPath) = await persister.WriteAsync(workingDirectoryRoot, materializedRequests, results, cancellationToken);
         logger.LogInformation("AI_CINEMATIC_ASSET_PLAN_WRITTEN path={PlanPath}", planPath);
         logger.LogInformation("AI_CINEMATIC_ASSET_RESULTS_WRITTEN path={ResultsPath}", resultsPath);
-        await UpdateVisualBalanceReportAsync(visualAssetPlan, workingDirectoryRoot, materializedRequests.Count, results.Count(x => x.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase)), results.Count(x => x.ProductionReady), cancellationToken);
+        var generatedCount = results.Count(IsGeneratedStatus);
+        var productionReadyCount = results.Count(x => x.ProductionReady);
+        await UpdateVisualBalanceReportAsync(visualAssetPlan, visualBalanceReport, workingDirectoryRoot, materializedRequests.Count, generatedCount, productionReadyCount, cancellationToken);
 
         var summary = new AICinematicAssetGenerationSummary(
             materializedRequests,
@@ -384,10 +444,11 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             resultsPath,
             GenerationReady: true,
             PlannedCount: materializedRequests.Count,
-            GeneratedCount: results.Count(x => x.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase)),
-            ProductionReadyCount: results.Count(x => x.ProductionReady),
+            GeneratedCount: generatedCount,
+            ProductionReadyCount: productionReadyCount,
             ProviderConfigured: generator.IsConfigured,
-            RemainingGap: materializedRequests.Count - results.Count(x => x.ProductionReady));
+            RemainingGap: materializedRequests.Count - productionReadyCount,
+            AzureImageDeploymentUsed: generator.DeploymentName);
         logger.LogInformation("AI_CINEMATIC_ASSET_GENERATION_COMPLETE planned={PlannedCount} generated={GeneratedCount} productionReady={ProductionReadyCount}", summary.PlannedCount, summary.GeneratedCount, summary.ProductionReadyCount);
         return summary;
     }
@@ -451,7 +512,11 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         return string.IsNullOrWhiteSpace(normalized) ? "ai_cinematic_asset" : normalized;
     }
 
-    private static async Task UpdateVisualBalanceReportAsync(WeeklyVisualAssetPlan plan, string workingDirectoryRoot, int planned, int generated, int productionReady, CancellationToken cancellationToken)
+    private static bool IsGeneratedStatus(AICinematicAssetResult result) =>
+        result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase)
+        || result.GenerationStatus.Equals("GeneratedButInvalid", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task UpdateVisualBalanceReportAsync(WeeklyVisualAssetPlan plan, WeeklyVisualBalanceReport originalBalanceReport, string workingDirectoryRoot, int planned, int generated, int productionReady, CancellationToken cancellationToken)
     {
         var balancePath = Path.Combine(workingDirectoryRoot, "episode", "weekly-visual-balance-report.json");
         if (!File.Exists(balancePath)) return;
@@ -467,7 +532,9 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         data["aiCinematicAssetsGenerated"] = generated;
         data["aiCinematicProductionReadyCount"] = productionReady;
         data["remainingAICinematicGap"] = Math.Max(0, planned - productionReady);
+        var allPlannedAssetsProductionReady = planned == 0 || productionReady >= planned;
         data["visualBalanceAfterAICinematicAssets"] = productionReady > 0 && plan.PlannedAICinematicCount > 0 ? "ImprovedWithProductionReadyAssets" : "PlanningOnlyProviderNotConfigured";
+        data["visualBalanceHealthy"] = originalBalanceReport.VisualBalanceHealthy && allPlannedAssetsProductionReady && generated >= planned;
         await File.WriteAllTextAsync(balancePath, JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 }

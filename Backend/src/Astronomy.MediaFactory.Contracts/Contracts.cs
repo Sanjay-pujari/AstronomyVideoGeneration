@@ -520,3 +520,13 @@ public sealed class AzureOpenAiOptions
     public bool UseManagedIdentity { get; set; }
     public string? ManagedIdentityClientId { get; set; }
 }
+
+public sealed class AzureOpenAIForImageOptions
+{
+    public const string SectionName = "AzureOpenAIForImage";
+    public string Endpoint { get; set; } = "";
+    public string ApiKey { get; set; } = "";
+    public string ImageDeployment { get; set; } = "";
+    public bool UseManagedIdentity { get; set; }
+    public string? ManagedIdentityClientId { get; set; }
+}
