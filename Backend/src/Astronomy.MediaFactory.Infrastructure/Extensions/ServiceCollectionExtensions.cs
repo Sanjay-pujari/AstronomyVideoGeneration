@@ -514,6 +514,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentDiversification.SegmentPacingDiversityAnalyzer>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentDiversification.SegmentDiversificationPersister>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentDiversification.WeeklySegmentDiversificationService>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning.VisualAssetPriorityScorer>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning.VisualAssetMixAnalyzer>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning.VisualAssetPlanningPersister>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning.WeeklyVisualAssetPlanningService>();
         services.AddScoped<IWeeklyStoryboardComposer, WeeklyStoryboardComposer>();
         services.AddScoped<IWeeklyConjunctionFramingEngine, WeeklyConjunctionFramingEngine>();
         services.AddScoped<IAstronomicalGroupingComposer, AstronomicalGroupingComposer>();
