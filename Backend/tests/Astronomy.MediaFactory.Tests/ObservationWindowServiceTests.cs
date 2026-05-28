@@ -26,6 +26,7 @@ sealed class StubSkyfieldClient : ISkyfieldSidecarClient
 {
     private readonly SkyfieldNightPlanResponse _response;
     public StubSkyfieldClient(SkyfieldNightPlanResponse response) => _response = response;
+    public Task<bool> CheckHealthAsync(CancellationToken cancellationToken) => Task.FromResult(true);
     public Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => Task.FromResult<SkyfieldDailySkyResponse?>(null);
     public Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => Task.FromResult<SkyfieldNightPlanResponse?>(_response);
     public Task<WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken) => Task.FromResult<WeeklySkyForecastSkyfieldResponse?>(null);

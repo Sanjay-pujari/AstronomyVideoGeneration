@@ -202,6 +202,7 @@ private static CoreModel.WeeklySkyForecastContext BuildContext()
 
     private sealed class StubSkyfieldSidecarClient : SidecarModel.ISkyfieldSidecarClient
     {
+        public Task<bool> CheckHealthAsync(CancellationToken cancellationToken) => Task.FromResult(true);
         public SidecarModel.WeeklySkyForecastSkyfieldRequest? LastRequest { get; private set; }
         public Task<SidecarModel.SkyfieldDailySkyResponse?> GetDailySkyAsync(SidecarModel.SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<SidecarModel.SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SidecarModel.SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
@@ -227,6 +228,7 @@ private static CoreModel.WeeklySkyForecastContext BuildContext()
     
     private sealed class StubSkyfieldSidecarClientWithMoonNight : SidecarModel.ISkyfieldSidecarClient
     {
+        public Task<bool> CheckHealthAsync(CancellationToken cancellationToken) => Task.FromResult(true);
         public Task<SidecarModel.SkyfieldDailySkyResponse?> GetDailySkyAsync(SidecarModel.SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<SidecarModel.SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SidecarModel.SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<SidecarModel.WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(SidecarModel.WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken)
@@ -248,6 +250,7 @@ private static CoreModel.WeeklySkyForecastContext BuildContext()
 
     private sealed class StubSkyfieldSidecarClientWithBestObjects : SidecarModel.ISkyfieldSidecarClient
     {
+        public Task<bool> CheckHealthAsync(CancellationToken cancellationToken) => Task.FromResult(true);
         public Task<SidecarModel.SkyfieldDailySkyResponse?> GetDailySkyAsync(SidecarModel.SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<SidecarModel.SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SidecarModel.SkyfieldNightPlanRequest request, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<SidecarModel.WeeklySkyForecastSkyfieldResponse?> GetWeeklySkyForecastAsync(SidecarModel.WeeklySkyForecastSkyfieldRequest request, CancellationToken cancellationToken)
