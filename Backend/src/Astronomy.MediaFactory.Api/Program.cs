@@ -1915,11 +1915,8 @@ var sscResult = splitProbeSsc;
             if (info.Length <= minimumScreenshotBytes)
                 throw new InvalidOperationException($"Final image validation failed: file '{screenshotPath}' is too small ({info.Length} bytes).");
 
-            var imageInfo = default(SixLabors.ImageSharp.Formats.IImageInfo);
-            using (var imageStream = File.OpenRead(screenshotPath))
-            {
-                imageInfo = Image.Identify(imageStream);
-            }
+            using var imageStream = File.OpenRead(screenshotPath);
+            var imageInfo = Image.Identify(imageStream);
             if (imageInfo is null || imageInfo.Width <= 0 || imageInfo.Height <= 0)
                 throw new InvalidOperationException($"Final image validation failed: invalid image dimensions for '{screenshotPath}'.");
 
