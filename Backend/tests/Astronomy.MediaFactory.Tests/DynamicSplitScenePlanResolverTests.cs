@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Api;
 using Astronomy.MediaFactory.Core;
+using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
 

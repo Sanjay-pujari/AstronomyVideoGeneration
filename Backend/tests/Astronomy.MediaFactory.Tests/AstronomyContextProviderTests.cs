@@ -320,6 +320,7 @@ public sealed class AstronomyContextProviderTests
         private readonly SkyfieldNightPlanResponse? _response;
         public SkyfieldNightPlanRequest? LastNightPlanRequest { get; private set; }
         public FakeSkyfieldSidecarClient(SkyfieldNightPlanResponse? response) => _response = response;
+        public Task<bool> CheckHealthAsync(CancellationToken cancellationToken) => Task.FromResult(true);
         public Task<SkyfieldDailySkyResponse?> GetDailySkyAsync(SkyfieldDailySkyRequest request, CancellationToken cancellationToken) => Task.FromResult<SkyfieldDailySkyResponse?>(null);
         public Task<SkyfieldNightPlanResponse?> GetNightVisibilityPlanAsync(SkyfieldNightPlanRequest request, CancellationToken cancellationToken)
         {
