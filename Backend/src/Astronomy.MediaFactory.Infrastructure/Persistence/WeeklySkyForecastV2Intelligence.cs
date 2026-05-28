@@ -125,12 +125,12 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
         try
         {
             using var skyfieldTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            skyfieldTimeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+            skyfieldTimeoutCts.CancelAfter(TimeSpan.FromSeconds(120));
             ctx = await contextBuilder.BuildAsync(orchestrationContext, skyfieldTimeoutCts.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new InvalidOperationException("Validation failed: stuck phase 'weekly_skyfield_context' timed out after 30 seconds.");
+            throw new InvalidOperationException("Validation failed: stuck phase 'weekly_skyfield_context' timed out after 120 seconds.");
         }
         if (ctx.DailyForecasts.Count != 7)
             throw new InvalidOperationException("Skyfield weekly response must include 7 days.");
@@ -1013,5 +1013,4 @@ internal static class FinalRenderSceneOrchestrator
         return new FinalRenderSceneResult(final, graph);
     }
 }
-
 
