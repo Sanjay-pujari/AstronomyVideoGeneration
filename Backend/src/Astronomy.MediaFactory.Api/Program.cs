@@ -762,10 +762,16 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var skyfieldResponsePath = Path.Combine(debugRoot, "skyfield-weekly-response.json");
         var skyfieldFullResponsePath = Path.Combine(debugRoot, "skyfield-weekly-full-response.json");
         var skyfieldErrorsPath = Path.Combine(debugRoot, "skyfield-weekly-errors.json");
-        await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.SkyfieldSummary, new JsonSerializerOptions { WriteIndented = true }), ct);
         var skyfieldFullResponseJson = WeeklySkyForecastPreparationDiagnostics.GetJson("WeeklySkyForecast.SkyfieldWeeklyResponse");
         if (!string.IsNullOrWhiteSpace(skyfieldFullResponseJson))
+        {
+            await File.WriteAllTextAsync(skyfieldResponsePath, skyfieldFullResponseJson, ct);
             await File.WriteAllTextAsync(skyfieldFullResponsePath, skyfieldFullResponseJson, ct);
+        }
+        else
+        {
+            await File.WriteAllTextAsync(skyfieldResponsePath, JsonSerializer.Serialize(response.EventExtractionResult, new JsonSerializerOptions { WriteIndented = true }), ct);
+        }
         await File.WriteAllTextAsync(skyfieldErrorsPath, "[]", ct);
 
         var narrationDirectory = Path.Combine(root, "narration");
@@ -1004,53 +1010,48 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return (deduped, deduped.FirstOrDefault() ?? string.Empty);
         }
 
-        var renderSceneManifest = new
-        {
-            StellariumScenes = weeklyScenePlan.StellariumNeeds
-                .Select(x =>
+        var finalRenderSceneDescriptors = weeklyScenePlan.StellariumNeeds
+            .Select(x =>
+            {
+                var resolvedTargets = ResolveManifestTargets(x.SceneCode, x.ObjectCodes);
+                if (x.SceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase)
+                    && resolvedTargets.TargetObjects.Contains("MOON", StringComparer.OrdinalIgnoreCase))
                 {
-                    var resolvedTargets = ResolveManifestTargets(x.SceneCode, x.ObjectCodes);
-                    if (x.SceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase)
-                        && resolvedTargets.TargetObjects.Contains("MOON", StringComparer.OrdinalIgnoreCase))
-                    {
-                        throw new InvalidOperationException("Manifest corruption: western_planet_grouping_scene contains MOON");
-                    }
+                    throw new InvalidOperationException("Manifest corruption: western_planet_grouping_scene contains MOON");
+                }
 
-                    if (x.SceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase)
-                        && (resolvedTargets.TargetObjects.Count != 1
-                            || !resolvedTargets.TargetObjects[0].Equals("MOON", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        throw new InvalidOperationException("Manifest corruption: moon_hero_scene target objects invalid");
-                    }
+                if (x.SceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase)
+                    && (resolvedTargets.TargetObjects.Count != 1
+                        || !resolvedTargets.TargetObjects[0].Equals("MOON", StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new InvalidOperationException("Manifest corruption: moon_hero_scene target objects invalid");
+                }
 
-                    return new
-                    {
-                        SourceSceneCode = string.IsNullOrWhiteSpace(x.SourceSceneCode) ? x.SceneCode : x.SourceSceneCode,
-                        SceneCode = x.SceneCode,
-                        RenderEngine = "Stellarium",
-                        TargetObjects = resolvedTargets.TargetObjects,
-                        PrimaryObject = resolvedTargets.PrimaryObject,
-                        ExpectedSscScriptPath = Path.Combine(scriptsDirectory, $"{x.SceneCode}.ssc"),
-                        ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{x.SceneCode}.png")
-                    };
-                }).ToList(),
-            CelestialAssetScenes = weeklyScenePlan.ScenePlans.Where(scene => scene.RequiresCelestialAssets)
-                .Select(scene => new { SourceSceneCode = scene.SceneCode, SceneCode = scene.SceneCode, RenderEngine = "CelestialAsset", TargetObjects = scene.ObjectCodes, PrimaryObject = scene.ObjectCodes.FirstOrDefault(), ExpectedSscScriptPath = string.Empty, ExpectedOutputImagePath = string.Empty }).ToList(),
-            OverlayScenes = weeklyScenePlan.ScenePlans.Where(scene => scene.RequiresOverlayComposite)
-                .Select(scene => new { SourceSceneCode = scene.SceneCode, SceneCode = scene.SceneCode, RenderEngine = "Overlay", TargetObjects = scene.ObjectCodes, PrimaryObject = scene.ObjectCodes.FirstOrDefault(), ExpectedSscScriptPath = string.Empty, ExpectedOutputImagePath = string.Empty }).ToList(),
-            ThumbnailScenes = weeklyScenePlan.ScenePlans.Where(scene => scene.SceneType.Contains("thumbnail", StringComparison.OrdinalIgnoreCase))
-                .Select(scene => new { SourceSceneCode = scene.SceneCode, SceneCode = scene.SceneCode, RenderEngine = "Thumbnail", TargetObjects = scene.ObjectCodes, PrimaryObject = scene.ObjectCodes.FirstOrDefault(), ExpectedSscScriptPath = string.Empty, ExpectedOutputImagePath = string.Empty }).ToList(),
-            DeferredScenes = weeklyScenePlan.ScenePlans.Where(scene => !scene.RequiresStellarium && !scene.RequiresCelestialAssets && !scene.RequiresOverlayComposite)
-                .Select(scene => new { SourceSceneCode = scene.SceneCode, SceneCode = scene.SceneCode, RenderEngine = "Deferred", TargetObjects = scene.ObjectCodes, PrimaryObject = scene.ObjectCodes.FirstOrDefault(), ExpectedSscScriptPath = string.Empty, ExpectedOutputImagePath = string.Empty }).ToList()
-        };
-        app.Logger.LogInformation("RENDER_SCENE_MANIFEST={Manifest}", JsonSerializer.Serialize(renderSceneManifest));
-        app.Logger.LogInformation("STELLARIUM_RENDER_SCENE_COUNT={Count}", renderSceneManifest.StellariumScenes.Count);
+                return new
+                {
+                    SourceSceneCode = string.IsNullOrWhiteSpace(x.SourceSceneCode) ? x.SceneCode : x.SourceSceneCode,
+                    SceneCode = x.SceneCode,
+                    RenderEngine = "Stellarium",
+                    TargetObjects = resolvedTargets.TargetObjects,
+                    PrimaryObject = resolvedTargets.PrimaryObject,
+                    ExpectedSscScriptPath = Path.Combine(scriptsDirectory, $"{x.SceneCode}.ssc"),
+                    ExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{x.SceneCode}.png")
+                };
+            }).ToList();
+        app.Logger.LogInformation("PRODUCTION_RENDER_FLOW_SOURCE source=ScenePlan+Timeline+Composition+InMemorySplit");
+        app.Logger.LogInformation("STELLARIUM_RENDER_SCENE_COUNT={Count}", finalRenderSceneDescriptors.Count);
+        if (request.Diagnostics)
+        {
+            var renderSceneManifestPath = Path.Combine(manifestsDirectory, "render-scene-manifest.json");
+            await File.WriteAllTextAsync(renderSceneManifestPath, JsonSerializer.Serialize(new { StellariumScenes = finalRenderSceneDescriptors }, new JsonSerializerOptions { WriteIndented = true }), ct);
+            app.Logger.LogInformation("DEBUG_RENDER_SCENE_MANIFEST_PATH={Path}", renderSceneManifestPath);
+        }
 
         var stellariumNeedsByScene = weeklyScenePlan.StellariumNeeds
             .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
         var scenePlansByCode = weeklyScenePlan.ScenePlans
             .ToDictionary(x => x.SceneCode, StringComparer.OrdinalIgnoreCase);
-        var stellariumShots = renderSceneManifest.StellariumScenes
+        var stellariumShots = finalRenderSceneDescriptors
             .Select(renderScene => weeklyScenePlan.StellariumNeeds.First(need => need.SceneCode.Equals(renderScene.SceneCode, StringComparison.OrdinalIgnoreCase)))
             .Select(need =>
             {
