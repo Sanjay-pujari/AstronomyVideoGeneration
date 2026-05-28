@@ -922,38 +922,29 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var cinematicQualityReports = new List<object>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
-        enum CinematicCompositionMode
-        {
-            MoonHero,
-            PlanetGrouping,
-            WideOrientation,
-            HorizonEpic,
-            DeepSkyIsolation
-        }
-
-        static CinematicCompositionMode ResolveCinematicCompositionMode(string? sceneCode, string? framingMode)
+        static string ResolveCinematicCompositionMode(string? sceneCode, string? framingMode)
         {
             if (!string.IsNullOrWhiteSpace(sceneCode))
             {
-                if (sceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.MoonHero;
-                if (sceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.PlanetGrouping;
-                if (sceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.WideOrientation;
-                if (sceneCode.Equals("viewing_tip_wide_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.WideOrientation;
-                if (sceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.HorizonEpic;
+                if (sceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase)) return "MoonHero";
+                if (sceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
+                if (sceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase)) return "WideOrientation";
+                if (sceneCode.Equals("viewing_tip_wide_scene", StringComparison.OrdinalIgnoreCase)) return "WideOrientation";
+                if (sceneCode.Equals("thumbnail_story_scene", StringComparison.OrdinalIgnoreCase)) return "HorizonEpic";
             }
 
             if (!string.IsNullOrWhiteSpace(framingMode))
             {
-                if (framingMode.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.PlanetGrouping;
-                if (framingMode.Equals("OrientationWide", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.WideOrientation;
-                if (framingMode.Equals("HeroObject", StringComparison.OrdinalIgnoreCase)) return CinematicCompositionMode.MoonHero;
+                if (framingMode.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
+                if (framingMode.Equals("OrientationWide", StringComparison.OrdinalIgnoreCase)) return "WideOrientation";
+                if (framingMode.Equals("HeroObject", StringComparison.OrdinalIgnoreCase)) return "MoonHero";
             }
 
-            return CinematicCompositionMode.DeepSkyIsolation;
+            return "DeepSkyIsolation";
         }
 
         static (double OffsetAz, double OffsetAlt, double TargetX, double TargetY, string Reason, List<string> Warnings) ComputeSubjectOffset(
-            CinematicCompositionMode compositionMode,
+            string compositionMode,
             IReadOnlyList<SkyObjectPosition> visibleObjects,
             double cameraAz,
             double cameraAlt)
@@ -964,17 +955,17 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             var azOffset = 0d;
             var altOffset = 0d;
             var reason = "No offset policy matched; preserving baseline camera.";
-            if (compositionMode == CinematicCompositionMode.MoonHero)
+            if (compositionMode == "MoonHero")
             {
                 targetX = 0.58d; targetY = 0.42d; azOffset = -3.5d; altOffset = 4d;
                 reason = "MoonHero framing";
             }
-            else if (compositionMode == CinematicCompositionMode.PlanetGrouping)
+            else if (compositionMode == "PlanetGrouping")
             {
                 targetX = 0.50d; targetY = 0.62d; azOffset = 0d; altOffset = -3d;
                 reason = "PlanetGrouping framing";
             }
-            else if (compositionMode == CinematicCompositionMode.WideOrientation)
+            else if (compositionMode == "WideOrientation")
             {
                 targetX = 0.50d; targetY = 0.65d; azOffset = 0d; altOffset = -1.5d;
                 reason = "WideOrientation framing";
@@ -988,11 +979,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return (cameraAz + azOffset, Math.Clamp(cameraAlt + altOffset, -5d, 85d), targetX, targetY, reason, warnings);
         }
 
-        static object BuildAttentionPolicy(CinematicCompositionMode compositionMode, string primarySubject)
+        static object BuildAttentionPolicy(string compositionMode, string primarySubject)
         {
-            if (compositionMode == CinematicCompositionMode.PlanetGrouping)
+            if (compositionMode == "PlanetGrouping")
                 return new { attentionMode = "GroupFocus", overlayDensity = "medium", labelPriority = "primary+secondary", suppressPeripheralLabels = false, highlightPrimarySubject = true, attentionWarnings = Array.Empty<string>(), reason = "PlanetGrouping policy." };
-            if (compositionMode == CinematicCompositionMode.WideOrientation)
+            if (compositionMode == "WideOrientation")
                 return new { attentionMode = "ContextualSky", overlayDensity = "medium-high", labelPriority = "balanced", suppressPeripheralLabels = false, highlightPrimarySubject = false, attentionWarnings = Array.Empty<string>(), reason = "WideOrientation policy." };
             return new { attentionMode = "PrimarySubject", overlayDensity = "low-medium", labelPriority = string.IsNullOrWhiteSpace(primarySubject) ? "primary" : primarySubject, suppressPeripheralLabels = true, highlightPrimarySubject = true, attentionWarnings = Array.Empty<string>(), reason = "MoonHero policy." };
         }
