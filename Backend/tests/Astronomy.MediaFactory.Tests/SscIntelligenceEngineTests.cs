@@ -229,6 +229,7 @@ public sealed partial class SscIntelligenceEngineTests
             new CameraCenterCalculator(),
             new DynamicFovCalculator(),
             new Astronomy.SscIntelligence.Composition.PrimaryTargetResolver(),
+            new Astronomy.SscIntelligence.Camera.CinematicCameraPlanner(),
             new Astronomy.SscIntelligence.Composition.UnifiedCameraComposer(),
             new Astronomy.SscIntelligence.SceneIntent.SceneIntentResolver(),
             new StellariumSscRenderer(),

@@ -18,19 +18,21 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
     private readonly ICameraCenterCalculator _cameraCenterCalculator;
     private readonly IDynamicFovCalculator _dynamicFovCalculator;
     private readonly IPrimaryTargetResolver _primaryTargetResolver;
+    private readonly ICinematicCameraPlanner _cinematicCameraPlanner;
     private readonly IUnifiedCameraComposer _unifiedCameraComposer;
     private readonly ISceneIntentResolver _sceneIntentResolver;
     private readonly IStellariumSscRenderer _renderer;
     private readonly IAstronomicalSpatialCompositionEngine _spatialCompositionEngine;
     private readonly ILogger<SscIntelligenceService> _logger;
 
-    public SscIntelligenceService(INightWindowResolver nightWindowResolver, IVisibilityFilter visibilityFilter, ICameraCenterCalculator cameraCenterCalculator, IDynamicFovCalculator dynamicFovCalculator, IPrimaryTargetResolver primaryTargetResolver, IUnifiedCameraComposer unifiedCameraComposer, ISceneIntentResolver sceneIntentResolver, IStellariumSscRenderer renderer, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, ILogger<SscIntelligenceService> logger)
+    public SscIntelligenceService(INightWindowResolver nightWindowResolver, IVisibilityFilter visibilityFilter, ICameraCenterCalculator cameraCenterCalculator, IDynamicFovCalculator dynamicFovCalculator, IPrimaryTargetResolver primaryTargetResolver, ICinematicCameraPlanner cinematicCameraPlanner, IUnifiedCameraComposer unifiedCameraComposer, ISceneIntentResolver sceneIntentResolver, IStellariumSscRenderer renderer, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, ILogger<SscIntelligenceService> logger)
     {
         _nightWindowResolver = nightWindowResolver;
         _visibilityFilter = visibilityFilter;
         _cameraCenterCalculator = cameraCenterCalculator;
         _dynamicFovCalculator = dynamicFovCalculator;
         _primaryTargetResolver = primaryTargetResolver;
+        _cinematicCameraPlanner = cinematicCameraPlanner;
         _unifiedCameraComposer = unifiedCameraComposer;
         _sceneIntentResolver = sceneIntentResolver;
         _renderer = renderer;
@@ -60,7 +62,8 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
         var fovInput = spatialAnalysis.RecommendedFovRange is { } range ? (range.MinDeg + range.MaxDeg) / 2d : preliminaryCamera.FovDeg;
 
         var composition = _unifiedCameraComposer.Compose(sceneIntent, cameraAltitudeRaw, cameraAzimuthRaw, fovInput, visible, cameraObjects, Array.Empty<SkyObjectPosition>(), Array.Empty<SkyObjectPosition>());
-        var camera = preliminaryCamera with { AltitudeDeg = composition.FinalCameraAltitudeDeg, AzimuthDeg = composition.FinalCameraAzimuthDeg, FovDeg = fovInput };
+        var cameraPlan = _cinematicCameraPlanner.Plan(request.SceneCode, sceneIntent, cameraObjects, composition.FinalCameraAltitudeDeg, composition.FinalCameraAzimuthDeg, fovInput, request.LocationName, nightWindow.BestObservationUtc);
+        var camera = preliminaryCamera with { AltitudeDeg = cameraPlan.CameraAltitude, AzimuthDeg = cameraPlan.CameraAzimuth, FovDeg = cameraPlan.FovDegrees };
 
         _logger.LogInformation("AZIMUTH_WRAP_CALCULATION: sceneCode={SceneCode}, inputAzimuths={InputAzimuths}, normalizedCenter={NormalizedCenter:0.##}, normalizedSpread={NormalizedSpread:0.##}, computedFov={ComputedFov:0.##}",
             request.SceneCode,
@@ -82,6 +85,18 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
             string.Join(" | ", spatialAnalysis.Clusters.Select(c => $"[{string.Join(',', c.ObjectNames)}]")),
             $"[{string.Join(',', spatialAnalysis.DominantCluster.ObjectNames)}]",
             string.Join(",", spatialAnalysis.DeferredObjects.Select(x => x.Name)));
+
+
+        _logger.LogInformation("CINEMATIC_CAMERA_PLAN sceneCode={SceneCode} intent={Intent} objects={Objects} inputAltAz={InputAltAz} cameraAz={CameraAz:0.##} cameraAlt={CameraAlt:0.##} fov={Fov:0.##} framingMode={FramingMode} reason={Reason}",
+            request.SceneCode,
+            sceneIntent,
+            string.Join(",", cameraObjects.Select(o => o.Name)),
+            string.Join(";", cameraObjects.Select(o => $"{o.Name}@{o.AltitudeDeg:0.##}/{NormalizeDegrees(o.AzimuthDeg):0.##}")),
+            cameraPlan.CameraAzimuth,
+            cameraPlan.CameraAltitude,
+            cameraPlan.FovDegrees,
+            cameraPlan.FramingMode,
+            cameraPlan.Reason);
 
         var script = _renderer.Render(new SscRenderRequest(nightWindow.BestObservationUtc, request.Longitude, request.Latitude, request.ElevationMeters, request.LocationName, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, screenshotDirectory ?? ".", screenshotFileNameWithoutExtension ?? "scene"));
         return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, cameraAltitudeRaw, composition.Reason, targets.PrimaryTargets.Select(x => x.Name).ToList(), targets.SecondaryTargets.Select(x => x.Name).ToList(), targets.ContextTargets.Select(x => x.Name).ToList(), script.Script, nightWindow);
