@@ -11,7 +11,7 @@ public sealed record GeneratedSplitSceneMetadata(
     string RenderIntent,
     int DurationSeconds,
     DateOnly TargetDate,
-    DateTime? BestTimeUtc,
+    DateTime? SelectedObservationUtc,
     string ExpectedSscScriptPath,
     string ExpectedOutputImagePath);
 
@@ -49,7 +49,7 @@ public static class DynamicSplitScenePlanResolver
                 "Stellarium",
                 splitMetadata.RenderIntent,
                 splitMetadata.TargetDate,
-                splitMetadata.BestTimeUtc,
+                splitMetadata.SelectedObservationUtc,
                 splitMetadata.TargetObjects,
                 splitMetadata.DurationSeconds,
                 $"Dynamic split scene derived from {splitMetadata.SourceSceneCode}",
