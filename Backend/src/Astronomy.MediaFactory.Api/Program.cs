@@ -8,6 +8,7 @@ using Astronomy.SscIntelligence.Resolution;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -730,7 +731,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
 {
     try
     {
@@ -793,6 +794,14 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
 
         var weekStartDate = request.WeekStartDate ?? DateOnly.FromDateTime(request.ScheduledUtc.UtcDateTime);
         var weekEndDate = weekStartDate.AddDays(6);
+
+        var episodeArchitecture = await episodeArchitectureService.BuildAndPersistAsync(
+            pipelineRunId,
+            request.RegionId,
+            request.Language,
+            weekStartDate,
+            root,
+            ct);
 
         app.Logger.LogInformation(
             "WeeklySkyForecast generate-weekly-scenes before orchestration visual generation: weekStartDate={WeekStartDate}, weekEndDate={WeekEndDate}, scheduledUtc={ScheduledUtc}, dryRun={DryRun}, generateSscScripts={GenerateSscScripts}, captureStellariumScenes={CaptureStellariumScenes}, diagnostics={Diagnostics}, flags={Flags}",
@@ -2082,6 +2091,15 @@ var sscResult = splitProbeSsc;
             sscScripts = sscManifestEntries,
             screenshotOutputs = screenshots,
             imageSequencePlanPath,
+            episodeArchitecture = new
+            {
+                weeklyEpisodePlanPath = episodeArchitecture.WeeklyEpisodePlanPath,
+                weeklyLongformPlanPath = episodeArchitecture.WeeklyLongformPlanPath,
+                weeklyShortformPlanPath = episodeArchitecture.WeeklyShortformPlanPath,
+                longformTargetDurationSeconds = episodeArchitecture.LongFormPlan.TotalTargetDurationSeconds,
+                shortformTargetDurationSeconds = episodeArchitecture.ShortFormPlan.TotalTargetDurationSeconds,
+                episodeArchitectureReady = episodeArchitecture.EpisodeArchitectureReady
+            },
             selectedImageCount = imageSequencePlan.TotalImages,
             estimatedImageSequenceDurationSeconds = imageSequencePlan.EstimatedDurationSeconds,
             imagePipelineProductionReady = imageSequencePlan.ProductionReady,
@@ -2118,7 +2136,13 @@ var sscResult = splitProbeSsc;
             allSelectedImagesValid,
             imageSequencePlan.DuplicateImagesDetected,
             imageSequencePlan.PrimaryScreenshotsDeprecated,
-            imageSequencePlan.ProductionImageSource);
+            imageSequencePlan.ProductionImageSource,
+            episodeArchitecture.WeeklyEpisodePlanPath,
+            episodeArchitecture.WeeklyLongformPlanPath,
+            episodeArchitecture.WeeklyShortformPlanPath,
+            episodeArchitecture.LongFormPlan.TotalTargetDurationSeconds,
+            episodeArchitecture.ShortFormPlan.TotalTargetDurationSeconds,
+            episodeArchitecture.EpisodeArchitectureReady);
 
         return Results.Ok(output);
     }
