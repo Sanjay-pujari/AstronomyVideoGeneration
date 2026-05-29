@@ -737,7 +737,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, WeeklyAssetExpansionService assetExpansionService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IOptions<WeeklySkyForecastAssetExpansionOptions> assetExpansionOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, WeeklyAssetRealizationService assetRealizationService, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, WeeklyAssetExpansionService assetExpansionService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IOptions<WeeklySkyForecastAssetExpansionOptions> assetExpansionOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, WeeklyAssetRealizationService assetRealizationService, WeeklyNarrationVisualTimelineComposer narrationVisualTimelineComposer, CancellationToken ct) =>
 {
     try
     {
@@ -2194,6 +2194,29 @@ var sscResult = splitProbeSsc;
         warnings.AddRange(assetRealization.RealizationReport.Warnings);
         warnings = warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
+        var narrationVisualTimeline = await ExecuteOrchestrationStageAsync("Composing narration visual timeline", stageCt =>
+            narrationVisualTimelineComposer.ComposeAndPersistAsync(
+                new WeeklyNarrationVisualTimelineInput(
+                    root,
+                    assetRealization.WeeklyProductionAssetManifestPath,
+                    assetRealization.WeeklyAssetRealizationReportPath,
+                    assetRealization.WeeklyVideoReadinessReportPath,
+                    episodeArchitecture.WeeklyEpisodePlanPath,
+                    episodeArchitecture.WeeklyLongformPlanPath,
+                    episodeArchitecture.WeeklyShortformPlanPath,
+                    storyBeatsPath,
+                    assetRealization.Manifest,
+                    assetRealization.RealizationReport,
+                    assetRealization.VideoReadinessReport,
+                    episodeArchitecture.LongFormPlan,
+                    episodeArchitecture.ShortFormPlan,
+                    weeklySkyfieldContext.GeneratedNarrationPackage,
+                    allProductionImageAssets,
+                    screenshots,
+                    expandedStellariumExecution.ExpandedFrameScreenshots,
+                    aiCinematicImagePaths),
+                stageCt));
+
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
             pipelineRunId,
@@ -2271,6 +2294,19 @@ var sscResult = splitProbeSsc;
                 aiCinematicProviderConfigured = aiCinematicAssets.ProviderConfigured,
                 azureImageDeploymentUsed = aiCinematicAssets.AzureImageDeploymentUsed,
                 remainingAICinematicGap = aiCinematicAssets.RemainingGap
+            },
+            narrationVisualTimeline = new
+            {
+                weeklyNarrationVisualTimelinePath = narrationVisualTimeline.WeeklyNarrationVisualTimelinePath,
+                weeklyTimelineValidationReportPath = narrationVisualTimeline.WeeklyTimelineValidationReportPath,
+                narrationVisualTimelineReady = narrationVisualTimeline.NarrationVisualTimelineReady,
+                longformTimelineReadyForTest = narrationVisualTimeline.ValidationReport.LongformTimelineReadyForTest,
+                shortformTimelineReadyForTest = narrationVisualTimeline.ValidationReport.ShortformTimelineReadyForTest,
+                longformTimelineReadyForFinalVideo = narrationVisualTimeline.ValidationReport.LongformTimelineReadyForFinalVideo,
+                shortformTimelineReadyForFinalVideo = narrationVisualTimeline.ValidationReport.ShortformTimelineReadyForFinalVideo,
+                totalTimelineShotCount = narrationVisualTimeline.ValidationReport.TotalShotCount,
+                totalTimelineDurationSeconds = narrationVisualTimeline.ValidationReport.TotalTimelineDurationSeconds,
+                timelineValidationStatus = narrationVisualTimeline.ValidationReport.TimelineValidationStatus
             },
             assetRealization = new
             {
@@ -2440,7 +2476,17 @@ var sscResult = splitProbeSsc;
             assetRealization.VideoReadinessReport.FinalVideoPipelineReady,
             assetRealization.VideoReadinessReport.ReadySegmentCountForTest,
             assetRealization.VideoReadinessReport.ReadySegmentCountForFinal,
-            assetRealization.VideoReadinessReport.NotReadySegments.Count);
+            assetRealization.VideoReadinessReport.NotReadySegments.Count,
+            narrationVisualTimeline.WeeklyNarrationVisualTimelinePath,
+            narrationVisualTimeline.WeeklyTimelineValidationReportPath,
+            narrationVisualTimeline.NarrationVisualTimelineReady,
+            narrationVisualTimeline.ValidationReport.LongformTimelineReadyForTest,
+            narrationVisualTimeline.ValidationReport.ShortformTimelineReadyForTest,
+            narrationVisualTimeline.ValidationReport.LongformTimelineReadyForFinalVideo,
+            narrationVisualTimeline.ValidationReport.ShortformTimelineReadyForFinalVideo,
+            narrationVisualTimeline.ValidationReport.TotalShotCount,
+            narrationVisualTimeline.ValidationReport.TotalTimelineDurationSeconds,
+            narrationVisualTimeline.ValidationReport.TimelineValidationStatus);
 
         return Results.Ok(output);
     }

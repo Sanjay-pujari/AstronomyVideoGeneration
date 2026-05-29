@@ -547,6 +547,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.WeeklyAssetRealizationPersister>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.WeeklyAssetRealizationValidator>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.WeeklyAssetRealizationService>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.WeeklyNarrationVisualTimelineComposer>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicStylePolicy>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicPromptBuilder>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetPersister>();
