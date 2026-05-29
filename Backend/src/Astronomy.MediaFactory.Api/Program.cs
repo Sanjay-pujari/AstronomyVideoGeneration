@@ -2186,6 +2186,7 @@ var sscResult = splitProbeSsc;
                     episodeArchitecture.ShortFormPlan,
                     segmentClassification.Plan,
                     visualAssetPlanning.Plan,
+                    visualAssetPlanning.PlanPath,
                     screenshots,
                     expandedStellariumExecution.ExpandedFrameScreenshots,
                     aiCinematicImagePaths,
@@ -2193,6 +2194,10 @@ var sscResult = splitProbeSsc;
                 stageCt));
         warnings.AddRange(assetRealization.RealizationReport.Warnings);
         warnings = warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var realizedAllProductionImageAssets = allProductionImageAssets
+            .Concat(assetRealization.NasaImagePaths)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         var narrationVisualTimeline = await ExecuteOrchestrationStageAsync("Composing narration visual timeline", stageCt =>
             narrationVisualTimelineComposer.ComposeAndPersistAsync(
@@ -2211,7 +2216,7 @@ var sscResult = splitProbeSsc;
                     episodeArchitecture.LongFormPlan,
                     episodeArchitecture.ShortFormPlan,
                     weeklySkyfieldContext.GeneratedNarrationPackage,
-                    allProductionImageAssets,
+                    realizedAllProductionImageAssets,
                     screenshots,
                     expandedStellariumExecution.ExpandedFrameScreenshots,
                     aiCinematicImagePaths),
@@ -2237,7 +2242,8 @@ var sscResult = splitProbeSsc;
             expandedFrameScreenshots = expandedStellariumExecution.ExpandedFrameScreenshots,
             allProductionFrameScreenshots = stellariumProductionFrameScreenshots,
             aiCinematicImagePaths,
-            allProductionImageAssets,
+            nasaImagePaths = assetRealization.NasaImagePaths,
+            allProductionImageAssets = realizedAllProductionImageAssets,
             imageSequencePlanPath,
             episodeArchitecture = new
             {
@@ -2319,6 +2325,13 @@ var sscResult = splitProbeSsc;
                 expandedStellariumAssetCount = assetRealization.Manifest.ExpandedStellariumAssetCount,
                 aiCinematicImageCount = assetRealization.Manifest.AICinematicAssetCount,
                 nasaImageCount = assetRealization.Manifest.NASAAssetCount,
+                nasaAssetPlanPath = assetRealization.NasaAssetPlanPath,
+                nasaAssetResultsPath = assetRealization.NasaAssetResultsPath,
+                plannedNASAAssetCount = assetRealization.PlannedNASAAssetCount,
+                generatedNASAAssetCount = assetRealization.GeneratedNASAAssetCount,
+                productionReadyNASAAssetCount = assetRealization.ProductionReadyNASAAssetCount,
+                nasaImagePaths = assetRealization.NasaImagePaths,
+                nasaProviderConfigured = assetRealization.NasaProviderConfigured,
                 jwstImageCount = assetRealization.Manifest.JWSTAssetCount,
                 motionGraphicsImageCount = assetRealization.Manifest.MotionGraphicsAssetCount,
                 educationalOverlayImageCount = assetRealization.Manifest.EducationalOverlayAssetCount,
@@ -2459,7 +2472,7 @@ var sscResult = splitProbeSsc;
             expandedStellariumExecution.ExpandedFrameScreenshots,
             stellariumProductionFrameScreenshots,
             aiCinematicImagePaths,
-            allProductionImageAssets,
+            realizedAllProductionImageAssets,
             assetRealization.WeeklyProductionAssetManifestPath,
             assetRealization.WeeklyAssetRealizationReportPath,
             assetRealization.WeeklyVideoReadinessReportPath,
@@ -2469,6 +2482,12 @@ var sscResult = splitProbeSsc;
             assetRealization.Manifest.ExpandedStellariumAssetCount,
             assetRealization.Manifest.AICinematicAssetCount,
             assetRealization.Manifest.NASAAssetCount,
+            assetRealization.NasaAssetPlanPath,
+            assetRealization.NasaAssetResultsPath,
+            assetRealization.GeneratedNASAAssetCount,
+            assetRealization.ProductionReadyNASAAssetCount,
+            assetRealization.NasaImagePaths,
+            assetRealization.NasaProviderConfigured,
             assetRealization.Manifest.JWSTAssetCount,
             assetRealization.Manifest.MotionGraphicsAssetCount,
             assetRealization.Manifest.EducationalOverlayAssetCount,

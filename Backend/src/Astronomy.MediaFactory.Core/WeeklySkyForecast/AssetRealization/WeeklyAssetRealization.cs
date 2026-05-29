@@ -116,7 +116,14 @@ public sealed record WeeklyAssetRealizationResult(
     string WeeklyProductionAssetManifestPath,
     string WeeklyAssetRealizationReportPath,
     string WeeklyVideoReadinessReportPath,
-    bool AssetRealizationReady);
+    bool AssetRealizationReady,
+    string NasaAssetPlanPath,
+    string NasaAssetResultsPath,
+    int PlannedNASAAssetCount,
+    int GeneratedNASAAssetCount,
+    int ProductionReadyNASAAssetCount,
+    IReadOnlyList<string> NasaImagePaths,
+    bool NasaProviderConfigured);
 
 public sealed record WeeklyAssetRealizationInput(
     Guid PipelineRunId,
@@ -131,6 +138,7 @@ public sealed record WeeklyAssetRealizationInput(
     WeeklyEpisodePlan ShortformPlan,
     WeeklySegmentClassificationPlan SegmentClassificationPlan,
     WeeklyVisualAssetPlan VisualAssetPlan,
+    string WeeklyVisualAssetPlanPath,
     IReadOnlyList<string> FrameScreenshots,
     IReadOnlyList<string> ExpandedFrameScreenshots,
     IReadOnlyList<string> AICinematicImagePaths,
@@ -139,6 +147,7 @@ public sealed record WeeklyAssetRealizationInput(
 public sealed class WeeklyAssetRealizationService(
     WeeklyAssetRealizationPersister persister,
     WeeklyAssetRealizationValidator validator,
+    INasaImageAssetProvider nasaImageAssetProvider,
     ILogger<WeeklyAssetRealizationService> logger)
 {
     public async Task<WeeklyAssetRealizationResult> RealizeAndPersistAsync(WeeklyAssetRealizationInput input, CancellationToken cancellationToken)
@@ -146,30 +155,44 @@ public sealed class WeeklyAssetRealizationService(
         logger.LogInformation("ASSET_REALIZATION_START pipelineRunId={PipelineRunId} root={Root}", input.PipelineRunId, input.RootPath);
         var assets = RegisterAssets(input);
         var bundles = BuildSegmentBundles(input, assets);
-        var manifest = new WeeklyProductionAssetManifest(
-            input.PipelineRunId,
-            input.RegionId,
-            input.Language,
-            input.WeekStartDate,
-            input.WeekEndDate,
-            input.LongformPlan.TotalTargetDurationSeconds,
-            input.ShortformPlan.TotalTargetDurationSeconds,
-            assets.Count,
-            Count(assets, RealizedVisualAssetSourceType.StellariumBase),
-            Count(assets, RealizedVisualAssetSourceType.StellariumExpanded),
-            Count(assets, RealizedVisualAssetSourceType.AICinematic),
-            Count(assets, RealizedVisualAssetSourceType.NASA),
-            Count(assets, RealizedVisualAssetSourceType.JWST),
-            Count(assets, RealizedVisualAssetSourceType.MotionGraphics),
-            Count(assets, RealizedVisualAssetSourceType.EducationalOverlay),
-            bundles);
-
+        var manifest = BuildManifest(input, assets, bundles);
         var report = BuildCoverageReport(input, assets, bundles);
         var readiness = validator.BuildVideoReadinessReport(input, manifest, report);
         var paths = await persister.PersistAsync(input.RootPath, manifest, report, readiness, cancellationToken);
-        logger.LogInformation("ASSET_REALIZATION_COMPLETE pipelineRunId={PipelineRunId} testReady={TestReady} finalReady={FinalReady} segmentCount={SegmentCount}", input.PipelineRunId, readiness.TestVideoPipelineReady, readiness.FinalVideoPipelineReady, bundles.Count);
-        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady);
+
+        var nasaAssets = await nasaImageAssetProvider.RealizeAsync(input.RootPath, input.WeeklyVisualAssetPlanPath, paths.ManifestPath, continueOnFailure: true, cancellationToken);
+        if (nasaAssets.Results.NasaImagePaths.Count > 0)
+        {
+            var enrichedInput = input with { AllProductionImageAssets = input.AllProductionImageAssets.Concat(nasaAssets.Results.NasaImagePaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList() };
+            assets = RegisterAssets(enrichedInput);
+            bundles = BuildSegmentBundles(enrichedInput, assets);
+            manifest = BuildManifest(enrichedInput, assets, bundles);
+            report = BuildCoverageReport(enrichedInput, assets, bundles);
+            readiness = validator.BuildVideoReadinessReport(enrichedInput, manifest, report);
+            paths = await persister.PersistAsync(enrichedInput.RootPath, manifest, report, readiness, cancellationToken);
+        }
+
+        logger.LogInformation("ASSET_REALIZATION_COMPLETE pipelineRunId={PipelineRunId} testReady={TestReady} finalReady={FinalReady} segmentCount={SegmentCount} nasaGenerated={NasaGenerated} nasaProductionReady={NasaProductionReady}", input.PipelineRunId, readiness.TestVideoPipelineReady, readiness.FinalVideoPipelineReady, bundles.Count, nasaAssets.Results.GeneratedNASAAssetCount, nasaAssets.Results.ProductionReadyNASAAssetCount);
+        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.Results.PlannedNASAAssetCount, nasaAssets.Results.GeneratedNASAAssetCount, nasaAssets.Results.ProductionReadyNASAAssetCount, nasaAssets.Results.NasaImagePaths, nasaAssets.Results.ProviderConfigured);
     }
+
+    private static WeeklyProductionAssetManifest BuildManifest(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset> assets, IReadOnlyList<SegmentProductionAssetBundle> bundles) => new(
+        input.PipelineRunId,
+        input.RegionId,
+        input.Language,
+        input.WeekStartDate,
+        input.WeekEndDate,
+        input.LongformPlan.TotalTargetDurationSeconds,
+        input.ShortformPlan.TotalTargetDurationSeconds,
+        assets.Count,
+        Count(assets, RealizedVisualAssetSourceType.StellariumBase),
+        Count(assets, RealizedVisualAssetSourceType.StellariumExpanded),
+        Count(assets, RealizedVisualAssetSourceType.AICinematic),
+        Count(assets, RealizedVisualAssetSourceType.NASA),
+        Count(assets, RealizedVisualAssetSourceType.JWST),
+        Count(assets, RealizedVisualAssetSourceType.MotionGraphics),
+        Count(assets, RealizedVisualAssetSourceType.EducationalOverlay),
+        bundles);
 
     private List<RealizedVisualAsset> RegisterAssets(WeeklyAssetRealizationInput input)
     {
