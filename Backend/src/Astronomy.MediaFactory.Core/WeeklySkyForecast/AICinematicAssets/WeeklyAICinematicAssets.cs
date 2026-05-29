@@ -29,7 +29,8 @@ public sealed record AICinematicAssetRequest(
     int AssetPriority = 0,
     bool PacingResetCandidate = false,
     bool EmotionalResetCandidate = false,
-    int SegmentOrder = int.MaxValue);
+    int SegmentOrder = int.MaxValue,
+    string GenerationStatus = "Planned");
 
 public sealed record AICinematicAssetResult(
     string AssetId,
@@ -400,8 +401,8 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         var maxAssetsPerRun = Math.Max(0, aiOptions.MaxAssetsPerRun);
         var requests = BuildRequests(visualAssetPlan)
             .OrderByDescending(request => request.AssetPriority)
-            .ThenByDescending(request => request.PacingResetCandidate)
             .ThenByDescending(request => request.EmotionalResetCandidate)
+            .ThenByDescending(request => request.PacingResetCandidate)
             .ThenBy(request => request.SegmentOrder)
             .ToList();
         logger.LogInformation(
@@ -414,10 +415,44 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             .Select(request => request with { PlannedImagePath = persister.ResolveImagePath(workingDirectoryRoot, request) })
             .ToList();
 
+        var alreadyGeneratedInCurrentRun = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var selectionCandidates = materializedRequests
+            .Where(request => generator.IsConfigured)
+            .Where(request => maxAssetsPerRun > 0)
+            .Where(request => !alreadyGeneratedInCurrentRun.Contains(request.AssetId))
+            .Where(request => IsSelectableGenerationStatus(request.GenerationStatus))
+            .GroupBy(request => request.AssetId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderByDescending(request => request.AssetPriority)
+            .ThenByDescending(request => request.EmotionalResetCandidate)
+            .ThenByDescending(request => request.PacingResetCandidate)
+            .ThenBy(request => request.SegmentOrder)
+            .ToList();
+
+        logger.LogInformation("AI_CINEMATIC_SELECTION_START planned={PlannedCount} max={MaxAssetsPerRun}", materializedRequests.Count, maxAssetsPerRun);
+
         var activeRequests = aiOptions.Enabled
-            ? materializedRequests.Take(maxAssetsPerRun).ToList()
+            ? selectionCandidates.Take(maxAssetsPerRun).ToList()
             : new List<AICinematicAssetRequest>();
-        var deferredRequests = materializedRequests.Skip(activeRequests.Count).ToList();
+        var activeRequestIds = activeRequests.Select(request => request.AssetId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var deferredRequests = materializedRequests.Where(request => !activeRequestIds.Contains(request.AssetId)).ToList();
+
+        foreach (var request in activeRequests)
+        {
+            logger.LogInformation("AI_CINEMATIC_ASSET_SELECTED assetCode={AssetCode}", request.AssetCode);
+        }
+
+        foreach (var request in deferredRequests)
+        {
+            logger.LogInformation("AI_CINEMATIC_ASSET_DEFERRED assetCode={AssetCode} reason=BatchLimit", request.AssetCode);
+        }
+
+        logger.LogInformation("AI_CINEMATIC_SELECTION_COMPLETE selected={SelectedCount} deferred={DeferredCount}", activeRequests.Count, deferredRequests.Count);
+        if (activeRequests.Count == 0 && generator.IsConfigured && materializedRequests.Count > 0)
+        {
+            logger.LogError("AI_CINEMATIC_SELECTION_EMPTY_UNEXPECTED planned={PlannedCount} max={MaxAssetsPerRun} providerConfigured={ProviderConfigured}", materializedRequests.Count, maxAssetsPerRun, generator.IsConfigured);
+        }
+
         if (!aiOptions.Enabled)
         {
             logger.LogInformation("AI_CINEMATIC_ASSET_GENERATION_DISABLED plannedCount={PlannedCount}", materializedRequests.Count);
@@ -460,6 +495,10 @@ public sealed class WeeklyAICinematicAssetGenerationService(
                 var result = validator.Validate(request, providerResult);
                 LogValidation(request, result);
                 results.Add(result);
+                if (IsGeneratedStatus(result))
+                {
+                    alreadyGeneratedInCurrentRun.Add(request.AssetId);
+                }
             }
             catch (OperationCanceledException) when (continueAfterFailure)
             {
@@ -640,6 +679,13 @@ public sealed class WeeklyAICinematicAssetGenerationService(
     private static bool IsGeneratedStatus(AICinematicAssetResult result) =>
         result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase)
         || result.GenerationStatus.Equals("GeneratedButInvalid", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSelectableGenerationStatus(string generationStatus) =>
+        string.IsNullOrWhiteSpace(generationStatus)
+        || generationStatus.Equals("Planned", StringComparison.OrdinalIgnoreCase)
+        || generationStatus.Equals("Pending", StringComparison.OrdinalIgnoreCase)
+        || generationStatus.Equals("Deferred", StringComparison.OrdinalIgnoreCase)
+        || generationStatus.Equals("NotStarted", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsDeferredStatus(AICinematicAssetResult result) =>
         result.GenerationStatus.Equals("Deferred", StringComparison.OrdinalIgnoreCase);
