@@ -2110,23 +2110,6 @@ var sscResult = splitProbeSsc;
                 root,
                 stageCt));
 
-        var aiCinematicOptions = aiCinematicOptionsAccessor.Value;
-        var aiCinematicAssets = await ExecuteOrchestrationStageAsync("Generating planned AI cinematic still assets", stageCt =>
-            aiCinematicAssetGenerationService.GenerateAndPersistAsync(
-                visualAssetPlanning.Plan,
-                visualAssetPlanning.BalanceReport,
-                segmentDiversification.Plan,
-                episodeArchitecture,
-                weeklySkyfieldContext,
-                root,
-                stageCt,
-                request.ContinueOnFailure && aiCinematicOptions.ContinueOnFailure),
-            TimeSpan.FromSeconds(Math.Max(1, aiCinematicOptions.GenerationTimeoutSeconds)));
-
-        var visualBalanceHealthyAfterAICinematicAssets = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
-            && aiCinematicAssets.PlannedCount == aiCinematicAssets.ProductionReadyCount
-            && aiCinematicAssets.GeneratedCount >= aiCinematicAssets.PlannedCount;
-
         var assetExpansion = await ExecuteOrchestrationStageAsync("Expanding weekly segment asset packages", stageCt =>
             assetExpansionService.ExpandAndPersistAsync(
                 episodeArchitecture,
@@ -2137,7 +2120,7 @@ var sscResult = splitProbeSsc;
                 imageSequencePlan,
                 allFramePlans,
                 weeklySkyfieldContext,
-                aiCinematicAssets,
+                null,
                 root,
                 stageCt));
 
@@ -2155,9 +2138,27 @@ var sscResult = splitProbeSsc;
                 temporalResolver,
                 request.ScheduledUtc.UtcDateTime,
                 app.Logger,
-                stageCt));
+                stageCt),
+            TimeSpan.FromSeconds(Math.Max(1, assetExpansionOptions.ExpandedExecutionTimeoutSeconds)));
         warnings.AddRange(expandedStellariumExecution.Warnings);
         warnings = warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        var aiCinematicOptions = aiCinematicOptionsAccessor.Value;
+        var aiCinematicAssets = await ExecuteOrchestrationStageAsync("Generating planned AI cinematic still assets", stageCt =>
+            aiCinematicAssetGenerationService.GenerateAndPersistAsync(
+                visualAssetPlanning.Plan,
+                visualAssetPlanning.BalanceReport,
+                segmentDiversification.Plan,
+                episodeArchitecture,
+                weeklySkyfieldContext,
+                root,
+                stageCt,
+                request.ContinueOnFailure && aiCinematicOptions.ContinueOnFailure),
+            TimeSpan.FromSeconds(Math.Max(1, aiCinematicOptions.GenerationTimeoutSeconds)));
+
+        var visualBalanceHealthyAfterAICinematicAssets = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
+            && aiCinematicAssets.PlannedCount == aiCinematicAssets.ProductionReadyCount
+            && aiCinematicAssets.GeneratedCount >= aiCinematicAssets.PlannedCount;
 
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
@@ -2250,6 +2251,10 @@ var sscResult = splitProbeSsc;
                 assetExpansionPlanningMode = assetExpansion.Plan.AssetExpansionPlanningMode,
                 weeklyExpandedStellariumExecutionReportPath = expandedStellariumExecution.ReportPath,
                 expandedStellariumExecutionReady = expandedStellariumExecution.Ready,
+                expandedStellariumExecutionPartial = expandedStellariumExecution.Partial,
+                expandedStellariumExecutionTimedOut = expandedStellariumExecution.TimedOut,
+                expandedStellariumMaxScenesPerRun = expandedStellariumExecution.MaxExpandedScenesPerRun,
+                expandedStellariumMaxFramesPerScene = expandedStellariumExecution.MaxFramesPerExpandedScene,
                 executedExpandedSceneCount = expandedStellariumExecution.ExecutedExpandedSceneCount,
                 skippedExpandedSceneCount = expandedStellariumExecution.SkippedExpandedSceneCount,
                 generatedExpandedSscScriptCount = expandedStellariumExecution.GeneratedExpandedSscScriptCount,
@@ -2348,6 +2353,10 @@ var sscResult = splitProbeSsc;
             assetExpansion.Plan.AssetExpansionPlanningMode,
             expandedStellariumExecution.ReportPath,
             expandedStellariumExecution.Ready,
+            expandedStellariumExecution.Partial,
+            expandedStellariumExecution.TimedOut,
+            expandedStellariumExecution.MaxExpandedScenesPerRun,
+            expandedStellariumExecution.MaxFramesPerExpandedScene,
             expandedStellariumExecution.ExecutedExpandedSceneCount,
             expandedStellariumExecution.SkippedExpandedSceneCount,
             expandedStellariumExecution.GeneratedExpandedSscScriptCount,
@@ -4250,198 +4259,242 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
     var warnings = new List<string>();
     var generatedScripts = new List<string>();
     var generatedScreenshots = new List<string>();
+    var timedOut = false;
+    var partialExecution = false;
 
-    logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_START mode={Mode} requestedExpandedSceneCount={RequestedCount} maxExpandedScenesPerRun={MaxExpandedScenesPerRun} maxFramesPerExpandedScene={MaxFramesPerExpandedScene}", mode, requestedCount, options.MaxExpandedScenesPerRun, options.MaxFramesPerExpandedScene);
+    logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_START mode={Mode} requestedExpandedSceneCount={RequestedCount} maxExpandedScenesPerRun={MaxExpandedScenesPerRun} maxFramesPerExpandedScene={MaxFramesPerExpandedScene} expandedExecutionTimeoutSeconds={ExpandedExecutionTimeoutSeconds}", mode, requestedCount, options.MaxExpandedScenesPerRun, options.MaxFramesPerExpandedScene, options.ExpandedExecutionTimeoutSeconds);
 
     if (!string.Equals(mode, AssetExpansionPolicy.ExecuteExpandedScenesMode, StringComparison.OrdinalIgnoreCase))
     {
         warnings.Add($"Expanded Stellarium execution skipped because mode is {mode}.");
-        await WriteExpandedStellariumExecutionReportAsync(reportPath, requestedCount, expandedScenes, skippedScenes, warnings, cancellationToken);
+        await WriteExpandedStellariumExecutionReportAsync(reportPath, requestedCount, expandedScenes, skippedScenes, warnings, partialExecution, timedOut, generatedScripts.Count, generatedScreenshots.Count, CancellationToken.None);
         logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_REPORT_WRITTEN path={Path}", reportPath);
-        logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_COMPLETE executedExpandedSceneCount=0 skippedExpandedSceneCount={SkippedCount} generatedExpandedSscScriptCount=0 generatedExpandedScreenshotCount=0", skippedScenes.Count);
-        return new ExpandedStellariumExecutionSummary(reportPath, false, mode, 0, skippedScenes.Count, 0, 0, [], warnings);
+        logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_COMPLETE executedExpandedSceneCount=0 skippedExpandedSceneCount={SkippedCount} generatedExpandedSscScriptCount=0 generatedExpandedScreenshotCount=0 partialExecution={PartialExecution} timedOut={TimedOut}", skippedScenes.Count, partialExecution, timedOut);
+        return new ExpandedStellariumExecutionSummary(reportPath, false, partialExecution, timedOut, options.MaxExpandedScenesPerRun, options.MaxFramesPerExpandedScene, mode, 0, skippedScenes.Count, 0, 0, [], warnings);
     }
 
-    var scriptsExpandedRoot = Path.Combine(root, "stellarium", "scripts", "expanded");
-    var scenesExpandedRoot = Path.Combine(root, "stellarium", "scenes", "expanded");
-    Directory.CreateDirectory(scriptsExpandedRoot);
-    Directory.CreateDirectory(scenesExpandedRoot);
-
-    var adapter = new ExpandedRenderSceneRequirementToStellariumSceneAdapter();
-    var latitude = weeklyContext.StellariumBlueprintPackage?.Latitude ?? 24.5854d;
-    var longitude = weeklyContext.StellariumBlueprintPackage?.Longitude ?? 73.7125d;
-    var timezone = weeklyContext.StellariumBlueprintPackage?.Timezone ?? "UTC";
-    var locationName = weeklyContext.Region;
-    const double elevationMeters = 600d;
-    var defaultRules = new VisibilityRules
+    try
     {
-        MinimumObjectAltitudeDeg = 10d,
-        TwilightSunAltitudeThresholdDeg = -12d,
-        MaximumMagnitude = 6d,
-        MaximumGroupSpreadDeg = 70d
-    };
-    var skyObjectsByCode = (weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
-        .SelectMany(e => e.Objects)
-        .GroupBy(o => o.ObjectCode, StringComparer.OrdinalIgnoreCase)
-        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var scriptsExpandedRoot = Path.Combine(root, "stellarium", "scripts", "expanded");
+        var scenesExpandedRoot = Path.Combine(root, "stellarium", "scenes", "expanded");
+        Directory.CreateDirectory(scriptsExpandedRoot);
+        Directory.CreateDirectory(scenesExpandedRoot);
 
-    var expandedRequirementExecutionCandidates = renderScenePlanRequirements
-        .Select(requirement => new
+        var adapter = new ExpandedRenderSceneRequirementToStellariumSceneAdapter();
+        var latitude = weeklyContext.StellariumBlueprintPackage?.Latitude ?? 24.5854d;
+        var longitude = weeklyContext.StellariumBlueprintPackage?.Longitude ?? 73.7125d;
+        var timezone = weeklyContext.StellariumBlueprintPackage?.Timezone ?? "UTC";
+        var locationName = weeklyContext.Region;
+        const double elevationMeters = 600d;
+        var defaultRules = new VisibilityRules
         {
-            Requirement = requirement,
-            ResolvedFrameTypes = ResolveExpandedFrameTypes(requirement.RequiredFrameTypes, requirement.SourceSegmentType, requirement.VisualRole)
-        })
-        .ToList();
+            MinimumObjectAltitudeDeg = 10d,
+            TwilightSunAltitudeThresholdDeg = -12d,
+            MaximumMagnitude = 6d,
+            MaximumGroupSpreadDeg = 70d
+        };
+        var skyObjectsByCode = (weeklyContext.EventExtractionResult?.ExtractedEvents ?? [])
+            .SelectMany(e => e.Objects)
+            .GroupBy(o => o.ObjectCode, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-    var selectedRequirements = expandedRequirementExecutionCandidates
-        .OrderBy(x => x.Requirement.Priority)
-        .Where(x => IsExecutableExpandedRequirement(x.Requirement, x.ResolvedFrameTypes))
-        .Take(Math.Max(0, options.MaxExpandedScenesPerRun))
-        .Select(x => x.Requirement)
-        .ToList();
+        var expandedRequirementExecutionCandidates = renderScenePlanRequirements
+            .Select(requirement => new
+            {
+                Requirement = requirement,
+                ResolvedFrameTypes = ResolveExpandedFrameTypes(requirement.RequiredFrameTypes, requirement.SourceSegmentType, requirement.VisualRole)
+            })
+            .ToList();
 
-    foreach (var skipped in expandedRequirementExecutionCandidates.Where(x => !selectedRequirements.Contains(x.Requirement)))
-    {
-        var reason = ResolveExpandedSkipReason(skipped.Requirement, skipped.ResolvedFrameTypes);
-        LogExpandedRequirementSkipped(logger, skipped.Requirement, skipped.ResolvedFrameTypes, reason);
-        skippedScenes.Add(new ExpandedStellariumSkippedScene(skipped.Requirement.RenderSceneCode, skipped.Requirement.SourceSegmentType, skipped.Requirement.TargetObjects, reason, skipped.Requirement.Warnings));
-    }
+        var selectedRequirements = expandedRequirementExecutionCandidates
+            .OrderBy(x => x.Requirement.Priority)
+            .Where(x => IsExecutableExpandedRequirement(x.Requirement, x.ResolvedFrameTypes))
+            .Take(Math.Max(0, options.MaxExpandedScenesPerRun))
+            .Select(x => x.Requirement)
+            .ToList();
 
-    foreach (var requirement in selectedRequirements)
-    {
-        try
+        foreach (var skipped in expandedRequirementExecutionCandidates.Where(x => !selectedRequirements.Contains(x.Requirement)))
         {
-            logger.LogInformation("EXPANDED_REQUIREMENT_SELECTED renderSceneCode={RenderSceneCode} sourceSegmentType={SourceSegmentType} targetObjects={TargetObjects}", requirement.RenderSceneCode, requirement.SourceSegmentType, string.Join(',', requirement.TargetObjects));
-            var adapted = adapter.Adapt(requirement, scheduledUtcFallback);
-            logger.LogInformation("EXPANDED_REQUIREMENT_ADAPTED_TO_SCENE renderSceneCode={RenderSceneCode} visualRole={VisualRole} selectedObservationUtc={SelectedObservationUtc}", adapted.RenderSceneCode, adapted.VisualRole, adapted.PreferredObservationUtc);
+            var reason = ResolveExpandedSkipReason(skipped.Requirement, skipped.ResolvedFrameTypes);
+            LogExpandedRequirementSkipped(logger, skipped.Requirement, skipped.ResolvedFrameTypes, reason);
+            skippedScenes.Add(new ExpandedStellariumSkippedScene(skipped.Requirement.RenderSceneCode, skipped.Requirement.SourceSegmentType, skipped.Requirement.TargetObjects, reason, skipped.Requirement.Warnings));
+        }
 
-            var observationUtc = DateTime.SpecifyKind(adapted.PreferredObservationUtc, DateTimeKind.Utc);
-            var selectedObservationLocal = ConvertUtcToLocal(observationUtc, timezone);
-            var sceneDateLocal = DateOnly.FromDateTime(selectedObservationLocal);
-            var compositionFallback = new
-            {
-                CenterAltitude = 30d,
-                CenterAzimuth = 270d,
-                TargetObjects = adapted.TargetObjects,
-                IncludedObjects = adapted.TargetObjects
-            };
-
-            var skyPositions = adapted.TargetObjects
-                .Select(code =>
-                {
-                    skyObjectsByCode.TryGetValue(code, out var obj);
-                    var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, sceneDateLocal, compositionFallback, obj, weeklyContext, adapted.TargetObjects, temporalResolver, logger, adapted.RenderSceneCode);
-                    var objectName = obj?.ObjectName ?? code;
-                    var objectType = ResolveObjectType(objectName);
-                    var weight = ResolveObjectWeight(objectName, objectType, adapted.TargetObjects.FirstOrDefault()?.Equals(code, StringComparison.OrdinalIgnoreCase) == true);
-                    return new WeeklySceneObjectSelection(
-                        new SkyObjectPosition(objectName, resolution.AltitudeDeg, resolution.AzimuthDeg, resolution.Magnitude, objectType, weight),
-                        $"expandedRequirement|{resolution.Source}");
-                })
-                .ToList();
-
-            var missingGeometryObjects = skyPositions
-                .Where(x => x.Source.Contains("source=fallback", StringComparison.OrdinalIgnoreCase))
-                .Select(x => x.Position.Name)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            if (missingGeometryObjects.Count > 0)
-            {
-                var warning = $"SkippedMissingGeometry: expanded scene '{adapted.RenderSceneCode}' missing geometry for [{string.Join(',', missingGeometryObjects)}].";
-                warnings.Add(warning);
-                logger.LogInformation("EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=SkippedMissingGeometry skipReason=SkippedMissingGeometry missingObjects={MissingObjects}", adapted.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', adapted.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(adapted.RequiredFrameTypes, adapted.SourceSegmentType, adapted.VisualRole)), requirement.ProductionStatus, string.Join(',', missingGeometryObjects));
-                skippedScenes.Add(new ExpandedStellariumSkippedScene(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, "SkippedMissingGeometry", requirement.Warnings.Concat([warning]).ToList()));
-                continue;
-            }
-
-            var sceneIntent = sceneIntentResolver.Resolve(adapted.RenderSceneCode, adapted.DesiredCameraIntent);
-            var sceneDirectory = Path.Combine(scenesExpandedRoot, adapted.RenderSceneCode);
-            var scriptDirectory = Path.Combine(scriptsExpandedRoot, adapted.RenderSceneCode);
-            Directory.CreateDirectory(sceneDirectory);
-            Directory.CreateDirectory(scriptDirectory);
-            var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
-                observationUtc,
-                longitude,
-                latitude,
-                elevationMeters,
-                locationName,
-                skyPositions.Select(x => x.Position).ToList(),
-                defaultRules,
-                null,
-                timezone,
-                null,
-                null,
-                sceneIntent,
-                adapted.RenderSceneCode,
-                adapted.DesiredCameraIntent,
-                adapted.TargetObjects),
-                sceneDirectory,
-                adapted.RenderSceneCode);
-
-            if (Math.Abs(sscResult.CameraAltitudeDeg - 30d) < 0.0001d && Math.Abs(sscResult.CameraAzimuthDeg - 270d) < 0.0001d)
-            {
-                var warning = $"SkippedMissingGeometry: expanded scene '{adapted.RenderSceneCode}' produced fallback camera geometry.";
-                warnings.Add(warning);
-                logger.LogInformation("EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=SkippedMissingGeometry skipReason=SkippedMissingGeometry", adapted.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', adapted.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(adapted.RequiredFrameTypes, adapted.SourceSegmentType, adapted.VisualRole)), requirement.ProductionStatus);
-                skippedScenes.Add(new ExpandedStellariumSkippedScene(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, "SkippedMissingGeometry", requirement.Warnings.Concat([warning]).ToList()));
-                continue;
-            }
-
-            var frameTypes = ResolveExpandedFrameTypes(adapted.RequiredFrameTypes, adapted.SourceSegmentType, adapted.VisualRole)
-                .Take(Math.Max(1, options.MaxFramesPerExpandedScene))
-                .ToList();
+        foreach (var requirement in selectedRequirements)
+        {
             var sceneScripts = new List<string>();
             var sceneScreenshots = new List<string>();
-            var frameIndex = 0;
-            foreach (var frameType in frameTypes)
+            var currentRenderSceneCode = requirement.RenderSceneCode;
+            var currentSourceSegmentType = requirement.SourceSegmentType;
+            var currentTargetObjects = requirement.TargetObjects;
+
+            try
             {
-                frameIndex++;
-                var variant = ResolveExpandedFrameVariant(frameType);
-                var fov = Math.Clamp(sscResult.FovDeg * variant.FovScale, variant.MinFov, variant.MaxFov);
-                var scriptName = $"{frameIndex:00}_{variant.Name}.ssc";
-                var imageName = $"{frameIndex:00}_{variant.Name}.png";
-                var scriptPath = ResolveExpandedOutputPath(scriptDirectory, scriptName);
-                var imagePath = ResolveExpandedOutputPath(sceneDirectory, imageName);
-                var frameSsc = sscResult.SscScript
-                    .Replace($"core.moveToAltAzi({sscResult.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}, {sscResult.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"core.moveToAltAzi({sscResult.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}, {sscResult.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal)
-                    .Replace($"StelMovementMgr.zoomTo({sscResult.FovDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"StelMovementMgr.zoomTo({fov.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal);
-                frameSsc = Regex.Replace(
-                    frameSsc,
-                    @"core\.screenshot\([^\)]*\);",
-                    $"core.screenshot(\"{Path.GetFileNameWithoutExtension(imagePath).Replace("\"", "\\\"")}\", false, \"{sceneDirectory.Replace("\\", "/").Replace("\"", "\\\"")}\", true, \"png\");",
-                    RegexOptions.CultureInvariant);
-                ValidateExpandedSscScript(frameSsc, scriptPath);
-                await File.WriteAllTextAsync(scriptPath, frameSsc, cancellationToken);
-                sceneScripts.Add(scriptPath);
-                generatedScripts.Add(scriptPath);
-                logger.LogInformation("EXPANDED_SSC_GENERATED renderSceneCode={RenderSceneCode} frameType={FrameType} scriptPath={ScriptPath}", adapted.RenderSceneCode, frameType, scriptPath);
+                logger.LogInformation("EXPANDED_REQUIREMENT_SELECTED renderSceneCode={RenderSceneCode} sourceSegmentType={SourceSegmentType} targetObjects={TargetObjects}", requirement.RenderSceneCode, requirement.SourceSegmentType, string.Join(',', requirement.TargetObjects));
+                var adapted = adapter.Adapt(requirement, scheduledUtcFallback);
+                currentRenderSceneCode = adapted.RenderSceneCode;
+                currentSourceSegmentType = adapted.SourceSegmentType;
+                currentTargetObjects = adapted.TargetObjects;
+                logger.LogInformation("EXPANDED_REQUIREMENT_ADAPTED_TO_SCENE renderSceneCode={RenderSceneCode} visualRole={VisualRole} selectedObservationUtc={SelectedObservationUtc}", adapted.RenderSceneCode, adapted.VisualRole, adapted.PreferredObservationUtc);
 
-                await sharedStellariumExecutor.ExecuteAsync(root, scriptPath, imagePath, 180, cancellationToken);
-                if (!File.Exists(imagePath) || new FileInfo(imagePath).Length == 0)
-                    throw new InvalidOperationException($"Expected expanded screenshot was not generated: {imagePath}");
-                sceneScreenshots.Add(imagePath);
-                generatedScreenshots.Add(imagePath);
-                logger.LogInformation("EXPANDED_SCREENSHOT_CAPTURED renderSceneCode={RenderSceneCode} frameType={FrameType} screenshotPath={ScreenshotPath}", adapted.RenderSceneCode, frameType, imagePath);
+                var observationUtc = DateTime.SpecifyKind(adapted.PreferredObservationUtc, DateTimeKind.Utc);
+                var selectedObservationLocal = ConvertUtcToLocal(observationUtc, timezone);
+                var sceneDateLocal = DateOnly.FromDateTime(selectedObservationLocal);
+                var compositionFallback = new
+                {
+                    CenterAltitude = 30d,
+                    CenterAzimuth = 270d,
+                    TargetObjects = adapted.TargetObjects,
+                    IncludedObjects = adapted.TargetObjects
+                };
+
+                var skyPositions = adapted.TargetObjects
+                    .Select(code =>
+                    {
+                        skyObjectsByCode.TryGetValue(code, out var obj);
+                        var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, sceneDateLocal, compositionFallback, obj, weeklyContext, adapted.TargetObjects, temporalResolver, logger, adapted.RenderSceneCode);
+                        var objectName = obj?.ObjectName ?? code;
+                        var objectType = ResolveObjectType(objectName);
+                        var weight = ResolveObjectWeight(objectName, objectType, adapted.TargetObjects.FirstOrDefault()?.Equals(code, StringComparison.OrdinalIgnoreCase) == true);
+                        return new WeeklySceneObjectSelection(
+                            new SkyObjectPosition(objectName, resolution.AltitudeDeg, resolution.AzimuthDeg, resolution.Magnitude, objectType, weight),
+                            $"expandedRequirement|{resolution.Source}");
+                    })
+                    .ToList();
+
+                var missingGeometryObjects = skyPositions
+                    .Where(x => x.Source.Contains("source=fallback", StringComparison.OrdinalIgnoreCase))
+                    .Select(x => x.Position.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (missingGeometryObjects.Count > 0)
+                {
+                    var warning = $"SkippedMissingGeometry: expanded scene '{adapted.RenderSceneCode}' missing geometry for [{string.Join(',', missingGeometryObjects)}].";
+                    warnings.Add(warning);
+                    logger.LogInformation("EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=SkippedMissingGeometry skipReason=SkippedMissingGeometry missingObjects={MissingObjects}", adapted.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', adapted.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(adapted.RequiredFrameTypes, adapted.SourceSegmentType, adapted.VisualRole)), requirement.ProductionStatus, string.Join(',', missingGeometryObjects));
+                    skippedScenes.Add(new ExpandedStellariumSkippedScene(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, "SkippedMissingGeometry", requirement.Warnings.Concat([warning]).ToList()));
+                    continue;
+                }
+
+                var sceneIntent = sceneIntentResolver.Resolve(adapted.RenderSceneCode, adapted.DesiredCameraIntent);
+                var sceneDirectory = Path.Combine(scenesExpandedRoot, adapted.RenderSceneCode);
+                var scriptDirectory = Path.Combine(scriptsExpandedRoot, adapted.RenderSceneCode);
+                Directory.CreateDirectory(sceneDirectory);
+                Directory.CreateDirectory(scriptDirectory);
+                var sscResult = sscIntelligenceService.Generate(new SscIntelligenceRequest(
+                    observationUtc,
+                    longitude,
+                    latitude,
+                    elevationMeters,
+                    locationName,
+                    skyPositions.Select(x => x.Position).ToList(),
+                    defaultRules,
+                    null,
+                    timezone,
+                    null,
+                    null,
+                    sceneIntent,
+                    adapted.RenderSceneCode,
+                    adapted.DesiredCameraIntent,
+                    adapted.TargetObjects),
+                    sceneDirectory,
+                    adapted.RenderSceneCode);
+
+                if (Math.Abs(sscResult.CameraAltitudeDeg - 30d) < 0.0001d && Math.Abs(sscResult.CameraAzimuthDeg - 270d) < 0.0001d)
+                {
+                    var warning = $"SkippedMissingGeometry: expanded scene '{adapted.RenderSceneCode}' produced fallback camera geometry.";
+                    warnings.Add(warning);
+                    logger.LogInformation("EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=SkippedMissingGeometry skipReason=SkippedMissingGeometry", adapted.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', adapted.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(adapted.RequiredFrameTypes, adapted.SourceSegmentType, adapted.VisualRole)), requirement.ProductionStatus);
+                    skippedScenes.Add(new ExpandedStellariumSkippedScene(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, "SkippedMissingGeometry", requirement.Warnings.Concat([warning]).ToList()));
+                    continue;
+                }
+
+                var frameTypes = ResolveExpandedFrameTypes(adapted.RequiredFrameTypes, adapted.SourceSegmentType, adapted.VisualRole)
+                    .Take(Math.Max(1, options.MaxFramesPerExpandedScene))
+                    .ToList();
+                var frameIndex = 0;
+                foreach (var frameType in frameTypes)
+                {
+                    frameIndex++;
+                    var variant = ResolveExpandedFrameVariant(frameType);
+                    var fov = Math.Clamp(sscResult.FovDeg * variant.FovScale, variant.MinFov, variant.MaxFov);
+                    var scriptName = $"{frameIndex:00}_{variant.Name}.ssc";
+                    var imageName = $"{frameIndex:00}_{variant.Name}.png";
+                    var scriptPath = ResolveExpandedOutputPath(scriptDirectory, scriptName);
+                    var imagePath = ResolveExpandedOutputPath(sceneDirectory, imageName);
+                    var frameSsc = sscResult.SscScript
+                        .Replace($"core.moveToAltAzi({sscResult.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}, {sscResult.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"core.moveToAltAzi({sscResult.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}, {sscResult.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal)
+                        .Replace($"StelMovementMgr.zoomTo({sscResult.FovDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"StelMovementMgr.zoomTo({fov.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal);
+                    frameSsc = Regex.Replace(
+                        frameSsc,
+                        @"core\.screenshot\([^\)]*\);",
+                        $"core.screenshot(\"{Path.GetFileNameWithoutExtension(imagePath).Replace("\"", "\\\"")}\", false, \"{sceneDirectory.Replace("\\", "/").Replace("\"", "\\\"")}\", true, \"png\");",
+                        RegexOptions.CultureInvariant);
+                    ValidateExpandedSscScript(frameSsc, scriptPath);
+                    await File.WriteAllTextAsync(scriptPath, frameSsc, cancellationToken);
+                    sceneScripts.Add(scriptPath);
+                    generatedScripts.Add(scriptPath);
+                    logger.LogInformation("EXPANDED_SSC_GENERATED renderSceneCode={RenderSceneCode} frameType={FrameType} scriptPath={ScriptPath}", adapted.RenderSceneCode, frameType, scriptPath);
+
+                    await sharedStellariumExecutor.ExecuteAsync(root, scriptPath, imagePath, 180, cancellationToken);
+                    if (!File.Exists(imagePath) || new FileInfo(imagePath).Length == 0)
+                        throw new InvalidOperationException($"Expected expanded screenshot was not generated: {imagePath}");
+                    sceneScreenshots.Add(imagePath);
+                    generatedScreenshots.Add(imagePath);
+                    logger.LogInformation("EXPANDED_SCREENSHOT_CAPTURED renderSceneCode={RenderSceneCode} frameType={FrameType} screenshotPath={ScreenshotPath}", adapted.RenderSceneCode, frameType, imagePath);
+                }
+
+                expandedScenes.Add(new ExpandedStellariumSceneExecution(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, sceneScripts, sceneScreenshots, "Executed", true));
             }
-
-            expandedScenes.Add(new ExpandedStellariumSceneExecution(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, sceneScripts, sceneScreenshots, "Executed", true));
-        }
-        catch (Exception ex) when (options.ContinueOnFailure)
-        {
-            var warning = $"Expanded scene '{requirement.RenderSceneCode}' failed: {ex.Message}";
-            warnings.Add(warning);
-            logger.LogWarning(ex, "EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=ExecutionFailed skipReason=ExecutionFailed", requirement.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', requirement.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(requirement.RequiredFrameTypes, requirement.SourceSegmentType, requirement.VisualRole)), requirement.ProductionStatus);
-            skippedScenes.Add(new ExpandedStellariumSkippedScene(requirement.RenderSceneCode, requirement.SourceSegmentType, requirement.TargetObjects, "ExecutionFailed", requirement.Warnings.Concat([warning]).ToList()));
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+            {
+                timedOut = true;
+                partialExecution = true;
+                var warning = $"Expanded Stellarium execution timed out while processing scene '{currentRenderSceneCode}': {ex.Message}";
+                warnings.Add(warning);
+                logger.LogWarning(ex, "EXPANDED_STELLARIUM_EXECUTION_TIMED_OUT renderSceneCode={RenderSceneCode} generatedExpandedScreenshotCount={GeneratedExpandedScreenshotCount}", currentRenderSceneCode, generatedScreenshots.Count);
+                if (sceneScripts.Count > 0 || sceneScreenshots.Count > 0)
+                {
+                    expandedScenes.Add(new ExpandedStellariumSceneExecution(currentRenderSceneCode, currentSourceSegmentType, currentTargetObjects, sceneScripts, sceneScreenshots, "Partial", sceneScreenshots.Count > 0));
+                }
+                if (!options.ContinueOnFailure)
+                    throw;
+                break;
+            }
+            catch (Exception ex) when (options.ContinueOnFailure)
+            {
+                partialExecution = true;
+                var warning = $"Expanded scene '{requirement.RenderSceneCode}' failed: {ex.Message}";
+                warnings.Add(warning);
+                logger.LogWarning(ex, "EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=ExecutionFailed skipReason=ExecutionFailed", requirement.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', requirement.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(requirement.RequiredFrameTypes, requirement.SourceSegmentType, requirement.VisualRole)), requirement.ProductionStatus);
+                if (sceneScripts.Count > 0 || sceneScreenshots.Count > 0)
+                {
+                    expandedScenes.Add(new ExpandedStellariumSceneExecution(currentRenderSceneCode, currentSourceSegmentType, currentTargetObjects, sceneScripts, sceneScreenshots, "Partial", sceneScreenshots.Count > 0));
+                }
+                skippedScenes.Add(new ExpandedStellariumSkippedScene(requirement.RenderSceneCode, requirement.SourceSegmentType, requirement.TargetObjects, "ExecutionFailed", requirement.Warnings.Concat([warning]).ToList()));
+            }
         }
     }
+    catch (OperationCanceledException ex) when (options.ContinueOnFailure)
+    {
+        timedOut = true;
+        partialExecution = true;
+        var warning = $"Expanded Stellarium execution timed out: {ex.Message}";
+        warnings.Add(warning);
+        logger.LogWarning(ex, "EXPANDED_STELLARIUM_EXECUTION_TIMED_OUT generatedExpandedScreenshotCount={GeneratedExpandedScreenshotCount}", generatedScreenshots.Count);
+    }
+    finally
+    {
+        partialExecution = partialExecution || timedOut;
+        await WriteExpandedStellariumExecutionReportAsync(reportPath, requestedCount, expandedScenes, skippedScenes, warnings, partialExecution, timedOut, generatedScripts.Count, generatedScreenshots.Count, CancellationToken.None);
+        logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_REPORT_WRITTEN path={Path}", reportPath);
+    }
 
-    await WriteExpandedStellariumExecutionReportAsync(reportPath, requestedCount, expandedScenes, skippedScenes, warnings, cancellationToken);
-    logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_REPORT_WRITTEN path={Path}", reportPath);
-    logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_COMPLETE executedExpandedSceneCount={ExecutedCount} skippedExpandedSceneCount={SkippedCount} generatedExpandedSscScriptCount={ScriptCount} generatedExpandedScreenshotCount={ScreenshotCount}", expandedScenes.Count, skippedScenes.Count, generatedScripts.Count, generatedScreenshots.Count);
+    var ready = generatedScreenshots.Count > 0 && generatedScripts.Count > 0;
+    logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_COMPLETE executedExpandedSceneCount={ExecutedCount} skippedExpandedSceneCount={SkippedCount} generatedExpandedSscScriptCount={ScriptCount} generatedExpandedScreenshotCount={ScreenshotCount} partialExecution={PartialExecution} timedOut={TimedOut}", expandedScenes.Count, skippedScenes.Count, generatedScripts.Count, generatedScreenshots.Count, partialExecution, timedOut);
 
-    return new ExpandedStellariumExecutionSummary(reportPath, expandedScenes.Count > 0 && generatedScripts.Count > 0 && generatedScreenshots.Count > 0, mode, expandedScenes.Count, skippedScenes.Count, generatedScripts.Count, generatedScreenshots.Count, generatedScreenshots, warnings);
+    return new ExpandedStellariumExecutionSummary(reportPath, ready, partialExecution, timedOut, options.MaxExpandedScenesPerRun, options.MaxFramesPerExpandedScene, mode, expandedScenes.Count, skippedScenes.Count, generatedScripts.Count, generatedScreenshots.Count, generatedScreenshots, warnings);
 }
-
 
 static async Task<IReadOnlyList<ExpandedRenderSceneRequirement>> ReadExpandedRenderSceneRequirementsAsync(
     string expandedRenderScenePlanPath,
@@ -4591,6 +4644,10 @@ static async Task WriteExpandedStellariumExecutionReportAsync(
     IReadOnlyList<ExpandedStellariumSceneExecution> expandedScenes,
     IReadOnlyList<ExpandedStellariumSkippedScene> skippedScenes,
     IReadOnlyList<string> warnings,
+    bool partialExecution,
+    bool timedOut,
+    int generatedExpandedSscScriptCount,
+    int generatedExpandedScreenshotCount,
     CancellationToken cancellationToken)
 {
     await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(new
@@ -4598,8 +4655,10 @@ static async Task WriteExpandedStellariumExecutionReportAsync(
         requestedExpandedSceneCount = requestedCount,
         executedExpandedSceneCount = expandedScenes.Count,
         skippedExpandedSceneCount = skippedScenes.Count,
-        generatedExpandedSscScriptCount = expandedScenes.Sum(x => x.GeneratedScripts.Count),
-        generatedExpandedScreenshotCount = expandedScenes.Sum(x => x.GeneratedScreenshots.Count),
+        generatedExpandedSscScriptCount,
+        generatedExpandedScreenshotCount,
+        partialExecution,
+        timedOut,
         expandedScenes,
         skippedScenes,
         warnings
@@ -4609,6 +4668,10 @@ static async Task WriteExpandedStellariumExecutionReportAsync(
 sealed record ExpandedStellariumExecutionSummary(
     string ReportPath,
     bool Ready,
+    bool Partial,
+    bool TimedOut,
+    int MaxExpandedScenesPerRun,
+    int MaxFramesPerExpandedScene,
     string Mode,
     int ExecutedExpandedSceneCount,
     int SkippedExpandedSceneCount,

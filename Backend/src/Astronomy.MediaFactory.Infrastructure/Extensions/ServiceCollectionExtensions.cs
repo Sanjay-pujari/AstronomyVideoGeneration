@@ -72,6 +72,7 @@ public static class ServiceCollectionExtensions
             .Validate(options => string.Equals(options.Mode, "PlanningOnly", StringComparison.OrdinalIgnoreCase) || string.Equals(options.Mode, "ExecuteExpandedScenes", StringComparison.OrdinalIgnoreCase), "WeeklySkyForecast:AssetExpansion:Mode must be PlanningOnly or ExecuteExpandedScenes.")
             .Validate(options => options.MaxExpandedScenesPerRun >= 0, "WeeklySkyForecast:AssetExpansion:MaxExpandedScenesPerRun must be zero or greater.")
             .Validate(options => options.MaxFramesPerExpandedScene > 0, "WeeklySkyForecast:AssetExpansion:MaxFramesPerExpandedScene must be greater than zero.")
+            .Validate(options => options.ExpandedExecutionTimeoutSeconds > 0, "WeeklySkyForecast:AssetExpansion:ExpandedExecutionTimeoutSeconds must be greater than zero.")
             .ValidateOnStart();
 
         services.AddSingleton<IValidateOptions<AzureOpenAiOptions>, AzureOpenAiOptionsValidator>();
