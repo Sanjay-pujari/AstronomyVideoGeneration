@@ -4495,16 +4495,16 @@ static void LogExpandedRequirementSkipped(Microsoft.Extensions.Logging.ILogger l
         requirement.RenderEngine,
         requirement.GeometryAvailable,
         string.Join(',', requirement.TargetObjects.Where(x => !string.IsNullOrWhiteSpace(x))),
-        string.Join(',', ResolveExpandedFrameTypeNames(resolvedFrameTypes)),
+        string.Join(',', FormatExpandedFrameTypeNames(resolvedFrameTypes)),
         requirement.ProductionStatus,
         skipReason,
         skipReason);
 }
 
 static IReadOnlyList<string> ResolveExpandedFrameTypeNames(IReadOnlyList<string> requestedFrameTypes, string sourceSegmentType, string visualRole) =>
-    ResolveExpandedFrameTypeNames(ResolveExpandedFrameTypes(requestedFrameTypes, sourceSegmentType, visualRole));
+    FormatExpandedFrameTypeNames(ResolveExpandedFrameTypes(requestedFrameTypes, sourceSegmentType, visualRole));
 
-static IReadOnlyList<string> ResolveExpandedFrameTypeNames(IReadOnlyList<CinematicFrameType> frameTypes) =>
+static IReadOnlyList<string> FormatExpandedFrameTypeNames(IReadOnlyList<CinematicFrameType> frameTypes) =>
     frameTypes.Select(x => x.ToString()).ToList();
 
 static IReadOnlyList<CinematicFrameType> ResolveExpandedFrameTypes(IReadOnlyList<string> requestedFrameTypes, string sourceSegmentType, string visualRole)
