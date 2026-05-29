@@ -1395,7 +1395,24 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     IReadOnlyList<string>? ExpandedFrameScreenshots = null,
     IReadOnlyList<string>? AllProductionFrameScreenshots = null,
     IReadOnlyList<string>? AICinematicImagePaths = null,
-    IReadOnlyList<string>? AllProductionImageAssets = null);
+    IReadOnlyList<string>? AllProductionImageAssets = null,
+    string? WeeklyProductionAssetManifestPath = null,
+    string? WeeklyAssetRealizationReportPath = null,
+    string? WeeklyVideoReadinessReportPath = null,
+    bool AssetRealizationReady = false,
+    int TotalProductionImageAssetCount = 0,
+    int StellariumBaseAssetCount = 0,
+    int ExpandedStellariumAssetCount = 0,
+    int AICinematicImageCount = 0,
+    int NasaImageCount = 0,
+    int JwstImageCount = 0,
+    int MotionGraphicsImageCount = 0,
+    int EducationalOverlayImageCount = 0,
+    bool TestVideoPipelineReady = false,
+    bool FinalVideoPipelineReady = false,
+    int ReadySegmentCountForTest = 0,
+    int ReadySegmentCountForFinal = 0,
+    int NotReadySegmentCount = 0);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
