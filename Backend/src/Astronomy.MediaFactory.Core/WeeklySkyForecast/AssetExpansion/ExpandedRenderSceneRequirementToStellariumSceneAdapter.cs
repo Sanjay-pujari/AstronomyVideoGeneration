@@ -30,6 +30,13 @@ public sealed class ExpandedRenderSceneRequirementToStellariumSceneAdapter
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        var visualRole = string.IsNullOrWhiteSpace(requirement.VisualRole)
+            ? requirement.SourceSegmentType
+            : requirement.VisualRole;
+        var desiredCameraIntent = string.IsNullOrWhiteSpace(requirement.DesiredCameraIntent)
+            ? visualRole
+            : requirement.DesiredCameraIntent;
+
         return new ExpandedStellariumSceneRequirement(
             renderSceneCode,
             requirement.SourceSegmentId,
@@ -38,8 +45,8 @@ public sealed class ExpandedRenderSceneRequirementToStellariumSceneAdapter
             DateTime.SpecifyKind(requirement.PreferredObservationUtc ?? fallbackObservationUtc, DateTimeKind.Utc),
             requirement.PreferredObservationLocal,
             requiredFrameTypes,
-            requirement.DesiredCameraIntent,
-            requirement.VisualRole,
+            desiredCameraIntent,
+            visualRole,
             requirement.Priority,
             requirement.GeometrySource,
             requirement.Warnings);

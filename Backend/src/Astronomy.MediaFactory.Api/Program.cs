@@ -4285,17 +4285,26 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
         .GroupBy(o => o.ObjectCode, StringComparer.OrdinalIgnoreCase)
         .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-    var selectedRequirements = renderScenePlanRequirements
-        .OrderBy(x => x.Priority)
-        .Where(IsExecutableExpandedRequirement)
-        .Take(Math.Max(0, options.MaxExpandedScenesPerRun))
+    var expandedRequirementExecutionCandidates = renderScenePlanRequirements
+        .Select(requirement => new
+        {
+            Requirement = requirement,
+            ResolvedFrameTypes = ResolveExpandedFrameTypes(requirement.RequiredFrameTypes, requirement.SourceSegmentType, requirement.VisualRole)
+        })
         .ToList();
 
-    foreach (var skipped in renderScenePlanRequirements.Except(selectedRequirements))
+    var selectedRequirements = expandedRequirementExecutionCandidates
+        .OrderBy(x => x.Requirement.Priority)
+        .Where(x => IsExecutableExpandedRequirement(x.Requirement, x.ResolvedFrameTypes))
+        .Take(Math.Max(0, options.MaxExpandedScenesPerRun))
+        .Select(x => x.Requirement)
+        .ToList();
+
+    foreach (var skipped in expandedRequirementExecutionCandidates.Where(x => !selectedRequirements.Contains(x.Requirement)))
     {
-        var reason = ResolveExpandedSkipReason(skipped);
-        logger.LogInformation("EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} reason={Reason}", skipped.RenderSceneCode, reason);
-        skippedScenes.Add(new ExpandedStellariumSkippedScene(skipped.RenderSceneCode, skipped.SourceSegmentType, skipped.TargetObjects, reason, skipped.Warnings));
+        var reason = ResolveExpandedSkipReason(skipped.Requirement, skipped.ResolvedFrameTypes);
+        LogExpandedRequirementSkipped(logger, skipped.Requirement, skipped.ResolvedFrameTypes, reason);
+        skippedScenes.Add(new ExpandedStellariumSkippedScene(skipped.Requirement.RenderSceneCode, skipped.Requirement.SourceSegmentType, skipped.Requirement.TargetObjects, reason, skipped.Requirement.Warnings));
     }
 
     foreach (var requirement in selectedRequirements)
@@ -4340,7 +4349,7 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
             {
                 var warning = $"SkippedMissingGeometry: expanded scene '{adapted.RenderSceneCode}' missing geometry for [{string.Join(',', missingGeometryObjects)}].";
                 warnings.Add(warning);
-                logger.LogInformation("EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} reason=SkippedMissingGeometry missingObjects={MissingObjects}", adapted.RenderSceneCode, string.Join(',', missingGeometryObjects));
+                logger.LogInformation("EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=SkippedMissingGeometry skipReason=SkippedMissingGeometry missingObjects={MissingObjects}", adapted.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', adapted.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(adapted.RequiredFrameTypes, adapted.SourceSegmentType, adapted.VisualRole)), requirement.ProductionStatus, string.Join(',', missingGeometryObjects));
                 skippedScenes.Add(new ExpandedStellariumSkippedScene(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, "SkippedMissingGeometry", requirement.Warnings.Concat([warning]).ToList()));
                 continue;
             }
@@ -4373,12 +4382,12 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
             {
                 var warning = $"SkippedMissingGeometry: expanded scene '{adapted.RenderSceneCode}' produced fallback camera geometry.";
                 warnings.Add(warning);
-                logger.LogInformation("EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} reason=SkippedMissingGeometry", adapted.RenderSceneCode);
+                logger.LogInformation("EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=SkippedMissingGeometry skipReason=SkippedMissingGeometry", adapted.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', adapted.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(adapted.RequiredFrameTypes, adapted.SourceSegmentType, adapted.VisualRole)), requirement.ProductionStatus);
                 skippedScenes.Add(new ExpandedStellariumSkippedScene(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, "SkippedMissingGeometry", requirement.Warnings.Concat([warning]).ToList()));
                 continue;
             }
 
-            var frameTypes = ResolveExpandedFrameTypes(adapted.RequiredFrameTypes, adapted.VisualRole)
+            var frameTypes = ResolveExpandedFrameTypes(adapted.RequiredFrameTypes, adapted.SourceSegmentType, adapted.VisualRole)
                 .Take(Math.Max(1, options.MaxFramesPerExpandedScene))
                 .ToList();
             var sceneScripts = new List<string>();
@@ -4391,8 +4400,8 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
                 var fov = Math.Clamp(sscResult.FovDeg * variant.FovScale, variant.MinFov, variant.MaxFov);
                 var scriptName = $"{frameIndex:00}_{variant.Name}.ssc";
                 var imageName = $"{frameIndex:00}_{variant.Name}.png";
-                var scriptPath = Path.Combine(scriptDirectory, scriptName);
-                var imagePath = Path.Combine(sceneDirectory, imageName);
+                var scriptPath = ResolveExpandedOutputPath(scriptDirectory, scriptName);
+                var imagePath = ResolveExpandedOutputPath(sceneDirectory, imageName);
                 var frameSsc = sscResult.SscScript
                     .Replace($"core.moveToAltAzi({sscResult.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}, {sscResult.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"core.moveToAltAzi({sscResult.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}, {sscResult.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal)
                     .Replace($"StelMovementMgr.zoomTo({sscResult.FovDeg.ToString("0.###", CultureInfo.InvariantCulture)}", $"StelMovementMgr.zoomTo({fov.ToString("0.###", CultureInfo.InvariantCulture)}", StringComparison.Ordinal);
@@ -4421,7 +4430,7 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
         {
             var warning = $"Expanded scene '{requirement.RenderSceneCode}' failed: {ex.Message}";
             warnings.Add(warning);
-            logger.LogWarning(ex, "EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} reason=ExecutionFailed", requirement.RenderSceneCode);
+            logger.LogWarning(ex, "EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=ExecutionFailed skipReason=ExecutionFailed", requirement.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', requirement.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(requirement.RequiredFrameTypes, requirement.SourceSegmentType, requirement.VisualRole)), requirement.ProductionStatus);
             skippedScenes.Add(new ExpandedStellariumSkippedScene(requirement.RenderSceneCode, requirement.SourceSegmentType, requirement.TargetObjects, "ExecutionFailed", requirement.Warnings.Concat([warning]).ToList()));
         }
     }
@@ -4453,23 +4462,52 @@ static async Task<IReadOnlyList<ExpandedRenderSceneRequirement>> ReadExpandedRen
     }) ?? fallbackRequirements;
 }
 
-static bool IsExecutableExpandedRequirement(ExpandedRenderSceneRequirement requirement) =>
+static bool IsExecutableExpandedRequirement(ExpandedRenderSceneRequirement requirement, IReadOnlyList<CinematicFrameType> resolvedFrameTypes) =>
     string.Equals(requirement.RenderEngine, "Stellarium", StringComparison.OrdinalIgnoreCase)
     && requirement.GeometryAvailable
-    && (string.Equals(requirement.ProductionStatus, "Executable", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(requirement.ProductionStatus, "Planned", StringComparison.OrdinalIgnoreCase))
-    && requirement.TargetObjects.Any(x => !string.IsNullOrWhiteSpace(x));
+    && requirement.TargetObjects.Any(x => !string.IsNullOrWhiteSpace(x))
+    && resolvedFrameTypes.Count > 0
+    && IsAllowedExpandedProductionStatus(requirement.ProductionStatus);
 
-static string ResolveExpandedSkipReason(ExpandedRenderSceneRequirement requirement)
+static bool IsAllowedExpandedProductionStatus(string productionStatus) =>
+    string.Equals(productionStatus, "Planned", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(productionStatus, "Required", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(productionStatus, "ReadyForExecution", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(productionStatus, "ReadyForRender", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(productionStatus, "Executable", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(productionStatus, "NeedsAssetGeneration", StringComparison.OrdinalIgnoreCase);
+
+static string ResolveExpandedSkipReason(ExpandedRenderSceneRequirement requirement, IReadOnlyList<CinematicFrameType> resolvedFrameTypes)
 {
     if (!string.Equals(requirement.RenderEngine, "Stellarium", StringComparison.OrdinalIgnoreCase)) return "SkippedNonStellarium";
     if (!requirement.GeometryAvailable) return "SkippedMissingGeometry";
     if (!requirement.TargetObjects.Any(x => !string.IsNullOrWhiteSpace(x))) return "SkippedNoTargetObjects";
-    if (!string.Equals(requirement.ProductionStatus, "Executable", StringComparison.OrdinalIgnoreCase) && !string.Equals(requirement.ProductionStatus, "Planned", StringComparison.OrdinalIgnoreCase)) return "SkippedNotExecutable";
+    if (resolvedFrameTypes.Count == 0) return "SkippedNoFrameTypes";
+    if (!IsAllowedExpandedProductionStatus(requirement.ProductionStatus)) return "SkippedNotExecutable";
     return "SkippedByRunLimit";
 }
 
-static IReadOnlyList<CinematicFrameType> ResolveExpandedFrameTypes(IReadOnlyList<string> requestedFrameTypes, string visualRole)
+static void LogExpandedRequirementSkipped(Microsoft.Extensions.Logging.ILogger logger, ExpandedRenderSceneRequirement requirement, IReadOnlyList<CinematicFrameType> resolvedFrameTypes, string skipReason)
+{
+    logger.LogInformation(
+        "EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason={Reason} skipReason={SkipReason}",
+        requirement.RenderSceneCode,
+        requirement.RenderEngine,
+        requirement.GeometryAvailable,
+        string.Join(',', requirement.TargetObjects.Where(x => !string.IsNullOrWhiteSpace(x))),
+        string.Join(',', ResolveExpandedFrameTypeNames(resolvedFrameTypes)),
+        requirement.ProductionStatus,
+        skipReason,
+        skipReason);
+}
+
+static IReadOnlyList<string> ResolveExpandedFrameTypeNames(IReadOnlyList<string> requestedFrameTypes, string sourceSegmentType, string visualRole) =>
+    ResolveExpandedFrameTypeNames(ResolveExpandedFrameTypes(requestedFrameTypes, sourceSegmentType, visualRole));
+
+static IReadOnlyList<string> ResolveExpandedFrameTypeNames(IReadOnlyList<CinematicFrameType> frameTypes) =>
+    frameTypes.Select(x => x.ToString()).ToList();
+
+static IReadOnlyList<CinematicFrameType> ResolveExpandedFrameTypes(IReadOnlyList<string> requestedFrameTypes, string sourceSegmentType, string visualRole)
 {
     var parsed = requestedFrameTypes
         .Select(x => Enum.TryParse<CinematicFrameType>(x, ignoreCase: true, out var parsedType) ? parsedType : (CinematicFrameType?)null)
@@ -4479,14 +4517,23 @@ static IReadOnlyList<CinematicFrameType> ResolveExpandedFrameTypes(IReadOnlyList
         .ToList();
     if (parsed.Count > 0) return parsed;
 
-    return visualRole switch
+    return ResolveExpandedFallbackFrameTypes(sourceSegmentType, visualRole);
+}
+
+static IReadOnlyList<CinematicFrameType> ResolveExpandedFallbackFrameTypes(string sourceSegmentType, string visualRole)
+{
+    var segmentType = string.IsNullOrWhiteSpace(sourceSegmentType) ? visualRole : sourceSegmentType;
+    if (string.IsNullOrWhiteSpace(segmentType)) segmentType = visualRole;
+
+    return segmentType?.Trim().ToLowerInvariant() switch
     {
-        "HeroEvent" => [CinematicFrameType.EstablishingWide, CinematicFrameType.BalancedStoryFrame, CinematicFrameType.HeroCloseup],
-        "MoonHighlights" => [CinematicFrameType.EstablishingWide, CinematicFrameType.BalancedStoryFrame, CinematicFrameType.HeroCloseup],
-        "PlanetHighlights" => [CinematicFrameType.HorizonContext, CinematicFrameType.BalancedStoryFrame, CinematicFrameType.AlignmentWide],
-        "BestObservationWindow" => [CinematicFrameType.HorizonContext, CinematicFrameType.BalancedStoryFrame, CinematicFrameType.DirectionGuide],
-        "WeeklySkyOverview" => [CinematicFrameType.EstablishingWide, CinematicFrameType.BalancedStoryFrame],
-        "WhereToLook" => [CinematicFrameType.HorizonContext, CinematicFrameType.DirectionGuide],
+        "heroevent" => [CinematicFrameType.EstablishingWide, CinematicFrameType.BalancedStoryFrame, CinematicFrameType.HeroCloseup],
+        "moonhighlights" => [CinematicFrameType.EstablishingWide, CinematicFrameType.BalancedStoryFrame, CinematicFrameType.HeroCloseup],
+        "planethighlights" => [CinematicFrameType.HorizonContext, CinematicFrameType.BalancedStoryFrame, CinematicFrameType.AlignmentWide],
+        "weeklyskyoverview" => [CinematicFrameType.EstablishingWide, CinematicFrameType.BalancedStoryFrame],
+        "bestobservationwindow" => [CinematicFrameType.HorizonContext, CinematicFrameType.DirectionGuide],
+        "astrophotographytip" => [CinematicFrameType.BalancedStoryFrame, CinematicFrameType.HeroCloseup],
+        "wheretolook" => [CinematicFrameType.HorizonContext, CinematicFrameType.DirectionGuide],
         _ => [CinematicFrameType.EstablishingWide, CinematicFrameType.BalancedStoryFrame]
     };
 }
@@ -4502,6 +4549,23 @@ static (string Name, double FovScale, double MinFov, double MaxFov) ResolveExpan
     _ => (frameType.ToString().ToLowerInvariant(), 1.00d, 15d, 75d)
 };
 
+
+
+static string ResolveExpandedOutputPath(string directory, string fileName)
+{
+    var path = Path.Combine(directory, fileName);
+    if (!File.Exists(path)) return path;
+
+    var extension = Path.GetExtension(fileName);
+    var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
+    for (var suffix = 2; suffix < 10_000; suffix++)
+    {
+        var candidate = Path.Combine(directory, $"{fileNameWithoutExtension}_{suffix:00}{extension}");
+        if (!File.Exists(candidate)) return candidate;
+    }
+
+    throw new IOException($"Unable to allocate a unique expanded Stellarium output path in '{directory}' for '{fileName}'.");
+}
 
 static void ValidateExpandedSscScript(string scriptContent, string scriptPath)
 {
