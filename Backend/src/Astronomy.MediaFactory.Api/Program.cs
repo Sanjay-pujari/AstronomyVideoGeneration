@@ -13,6 +13,7 @@ using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentDiversification;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetExpansion;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -735,7 +736,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, WeeklyAssetExpansionService assetExpansionService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, CancellationToken ct) =>
 {
     try
     {
@@ -2126,6 +2127,20 @@ var sscResult = splitProbeSsc;
             && aiCinematicAssets.PlannedCount == aiCinematicAssets.ProductionReadyCount
             && aiCinematicAssets.GeneratedCount >= aiCinematicAssets.PlannedCount;
 
+        var assetExpansion = await ExecuteOrchestrationStageAsync("Expanding weekly segment asset packages", stageCt =>
+            assetExpansionService.ExpandAndPersistAsync(
+                episodeArchitecture,
+                segmentClassification.Plan,
+                segmentDiversification.Plan,
+                visualAssetPlanning.Plan,
+                weeklyScenePlan,
+                imageSequencePlan,
+                allFramePlans,
+                weeklySkyfieldContext,
+                aiCinematicAssets,
+                root,
+                stageCt));
+
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
             pipelineRunId,
@@ -2199,6 +2214,20 @@ var sscResult = splitProbeSsc;
                 aiCinematicProviderConfigured = aiCinematicAssets.ProviderConfigured,
                 azureImageDeploymentUsed = aiCinematicAssets.AzureImageDeploymentUsed,
                 remainingAICinematicGap = aiCinematicAssets.RemainingGap
+            },
+            assetExpansion = new
+            {
+                weeklyAssetExpansionPlanPath = assetExpansion.PlanPath,
+                weeklySegmentCoverageReportPath = assetExpansion.CoverageReportPath,
+                weeklyExpandedRenderScenePlanPath = assetExpansion.RenderScenePlanPath,
+                assetExpansionPlanningReady = assetExpansion.Plan.AssetExpansionPlanningReady,
+                longformVisualPackageCount = assetExpansion.Plan.LongformVisualPackageCount,
+                shortformVisualPackageCount = assetExpansion.Plan.ShortformVisualPackageCount,
+                expandedRenderSceneRequirementCount = assetExpansion.Plan.ExpandedRenderSceneRequirementCount,
+                uniqueAstronomySceneRequirementCount = assetExpansion.Plan.UniqueAstronomySceneRequirementCount,
+                readyForVideoPlanningSegmentCount = assetExpansion.Plan.ReadyForVideoPlanningSegmentCount,
+                needsAssetGenerationSegmentCount = assetExpansion.Plan.NeedsAssetGenerationSegmentCount,
+                assetExpansionPlanningMode = assetExpansion.Plan.AssetExpansionPlanningMode
             },
             selectedImageCount = imageSequencePlan.TotalImages,
             estimatedImageSequenceDurationSeconds = imageSequencePlan.EstimatedDurationSeconds,
@@ -2276,7 +2305,18 @@ var sscResult = splitProbeSsc;
             aiCinematicAssets.Partial,
             aiCinematicAssets.MaxAssetsPerRun,
             aiCinematicAssets.ProviderConfigured,
-            aiCinematicAssets.AzureImageDeploymentUsed);
+            aiCinematicAssets.AzureImageDeploymentUsed,
+            assetExpansion.PlanPath,
+            assetExpansion.CoverageReportPath,
+            assetExpansion.RenderScenePlanPath,
+            assetExpansion.Plan.AssetExpansionPlanningReady,
+            assetExpansion.Plan.LongformVisualPackageCount,
+            assetExpansion.Plan.ShortformVisualPackageCount,
+            assetExpansion.Plan.ExpandedRenderSceneRequirementCount,
+            assetExpansion.Plan.UniqueAstronomySceneRequirementCount,
+            assetExpansion.Plan.ReadyForVideoPlanningSegmentCount,
+            assetExpansion.Plan.NeedsAssetGenerationSegmentCount,
+            assetExpansion.Plan.AssetExpansionPlanningMode);
 
         return Results.Ok(output);
     }
