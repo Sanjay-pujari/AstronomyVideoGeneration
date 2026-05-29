@@ -1212,6 +1212,7 @@ public enum CinematicFrameType
     EducationalContext,
     HorizonContext,
     AlignmentWide,
+    DirectionGuide,
     DetailFocus
 }
 
@@ -1377,7 +1378,18 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     int UniqueAstronomySceneRequirementCount = 0,
     int ReadyForVideoPlanningSegmentCount = 0,
     int NeedsAssetGenerationSegmentCount = 0,
-    string AssetExpansionPlanningMode = "PlanningOnly");
+    string AssetExpansionPlanningMode = "PlanningOnly",
+    string? WeeklyExpandedStellariumExecutionReportPath = null,
+    bool ExpandedStellariumExecutionReady = false,
+    int ExecutedExpandedSceneCount = 0,
+    int SkippedExpandedSceneCount = 0,
+    int GeneratedExpandedSscScriptCount = 0,
+    int GeneratedExpandedScreenshotCount = 0,
+    int TotalGeneratedSscScriptsIncludingExpanded = 0,
+    int TotalGeneratedScreenshotsIncludingExpanded = 0,
+    string AssetExpansionExecutionMode = "PlanningOnly",
+    IReadOnlyList<string>? ExpandedFrameScreenshots = null,
+    IReadOnlyList<string>? AllProductionFrameScreenshots = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {

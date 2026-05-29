@@ -540,3 +540,13 @@ public sealed class WeeklySkyForecastAICinematicAssetsOptions
     public int SingleImageTimeoutSeconds { get; set; } = 180;
     public bool ContinueOnFailure { get; set; } = true;
 }
+
+
+public sealed class WeeklySkyForecastAssetExpansionOptions
+{
+    public const string SectionName = "WeeklySkyForecast:AssetExpansion";
+    public string Mode { get; set; } = "PlanningOnly";
+    public int MaxExpandedScenesPerRun { get; set; } = 6;
+    public int MaxFramesPerExpandedScene { get; set; } = 3;
+    public bool ContinueOnFailure { get; set; } = true;
+}
