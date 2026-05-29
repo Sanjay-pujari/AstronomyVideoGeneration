@@ -375,7 +375,8 @@ public sealed class NasaImageSearchClient(HttpClient httpClient, IOptions<NasaIm
 
     private static int Score(NasaAssetRequirement requirement, NasaSearchData data, string link)
     {
-        var haystack = $"{data.Title} {data.Description} {data.Keywords is null ? string.Empty : string.Join(' ', data.Keywords)} {link}";
+        var keywords = data.Keywords is null ? string.Empty : string.Join(' ', data.Keywords);
+        var haystack = $"{data.Title} {data.Description} {keywords} {link}";
         var score = 0;
         foreach (var term in requirement.TargetNasaAssetCategory.Split(' ', StringSplitOptions.RemoveEmptyEntries))
             if (haystack.Contains(term, StringComparison.OrdinalIgnoreCase)) score += 10;
