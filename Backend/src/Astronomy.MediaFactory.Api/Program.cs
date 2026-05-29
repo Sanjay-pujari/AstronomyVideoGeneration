@@ -4466,11 +4466,11 @@ static bool IsExecutableExpandedRequirement(ExpandedRenderSceneRequirement requi
     string.Equals(requirement.RenderEngine, "Stellarium", StringComparison.OrdinalIgnoreCase)
     && requirement.GeometryAvailable
     && requirement.TargetObjects.Any(x => !string.IsNullOrWhiteSpace(x))
-    && resolvedFrameTypes.Count > 0
     && IsAllowedExpandedProductionStatus(requirement.ProductionStatus);
 
 static bool IsAllowedExpandedProductionStatus(string productionStatus) =>
-    string.Equals(productionStatus, "Planned", StringComparison.OrdinalIgnoreCase)
+    string.Equals(productionStatus, "RequirementReadyForPlanningOnly", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(productionStatus, "Planned", StringComparison.OrdinalIgnoreCase)
     || string.Equals(productionStatus, "Required", StringComparison.OrdinalIgnoreCase)
     || string.Equals(productionStatus, "ReadyForExecution", StringComparison.OrdinalIgnoreCase)
     || string.Equals(productionStatus, "ReadyForRender", StringComparison.OrdinalIgnoreCase)
@@ -4482,8 +4482,8 @@ static string ResolveExpandedSkipReason(ExpandedRenderSceneRequirement requireme
     if (!string.Equals(requirement.RenderEngine, "Stellarium", StringComparison.OrdinalIgnoreCase)) return "SkippedNonStellarium";
     if (!requirement.GeometryAvailable) return "SkippedMissingGeometry";
     if (!requirement.TargetObjects.Any(x => !string.IsNullOrWhiteSpace(x))) return "SkippedNoTargetObjects";
-    if (resolvedFrameTypes.Count == 0) return "SkippedNoFrameTypes";
     if (!IsAllowedExpandedProductionStatus(requirement.ProductionStatus)) return "SkippedNotExecutable";
+    if (resolvedFrameTypes.Count == 0) return "SkippedNoFrameTypes";
     return "SkippedByRunLimit";
 }
 
