@@ -1412,7 +1412,17 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     bool FinalVideoPipelineReady = false,
     int ReadySegmentCountForTest = 0,
     int ReadySegmentCountForFinal = 0,
-    int NotReadySegmentCount = 0);
+    int NotReadySegmentCount = 0,
+    string? WeeklyNarrationVisualTimelinePath = null,
+    string? WeeklyTimelineValidationReportPath = null,
+    bool NarrationVisualTimelineReady = false,
+    bool LongformTimelineReadyForTest = false,
+    bool ShortformTimelineReadyForTest = false,
+    bool LongformTimelineReadyForFinalVideo = false,
+    bool ShortformTimelineReadyForFinalVideo = false,
+    int TotalTimelineShotCount = 0,
+    int TotalTimelineDurationSeconds = 0,
+    string TimelineValidationStatus = "NotValidated");
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
