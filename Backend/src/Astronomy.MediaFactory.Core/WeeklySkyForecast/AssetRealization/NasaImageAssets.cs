@@ -436,17 +436,17 @@ public sealed class NasaImageAssetDownloader(HttpClient httpClient, ILogger<Nasa
 
 public sealed class NasaProviderUnavailableException(string message) : Exception(message);
 
-file sealed record NasaSearchResponse(NasaSearchCollection? Collection);
-file sealed record NasaSearchCollection(IReadOnlyList<NasaSearchItem>? Items);
-file sealed record NasaSearchItem(IReadOnlyList<NasaSearchData>? Data, IReadOnlyList<NasaSearchLink>? Links);
-file sealed record NasaSearchData(
+internal sealed record NasaSearchResponse(NasaSearchCollection? Collection);
+internal sealed record NasaSearchCollection(IReadOnlyList<NasaSearchItem>? Items);
+internal sealed record NasaSearchItem(IReadOnlyList<NasaSearchData>? Data, IReadOnlyList<NasaSearchLink>? Links);
+internal sealed record NasaSearchData(
     [property: JsonPropertyName("nasa_id")] string? NasaId,
     string? Title,
     string? Description,
     [property: JsonPropertyName("date_created")] string? DateCreated,
     [property: JsonPropertyName("photographer")] string? Photographer,
     IReadOnlyList<string>? Keywords);
-file sealed record NasaSearchLink(string Href);
-file sealed record NasaAssetResponse(NasaAssetCollection? Collection);
-file sealed record NasaAssetCollection(IReadOnlyList<NasaAssetItem>? Items);
-file sealed record NasaAssetItem(string Href);
+internal sealed record NasaSearchLink(string Href);
+internal sealed record NasaAssetResponse(NasaAssetCollection? Collection);
+internal sealed record NasaAssetCollection(IReadOnlyList<NasaAssetItem>? Items);
+internal sealed record NasaAssetItem(string Href);
