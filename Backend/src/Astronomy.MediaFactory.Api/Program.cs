@@ -4248,7 +4248,7 @@ static string ResolveImageSequenceNarrationUse(CinematicFramePlan framePlan)
     return framePlan.NarrationUse;
 }
 
-static async Task<IReadOnlyList<string>> CollectProductionReadyAICinematicImagePathsAsync(string resultsPath, ILogger logger, CancellationToken cancellationToken)
+static async Task<IReadOnlyList<string>> CollectProductionReadyAICinematicImagePathsAsync(string resultsPath, Microsoft.Extensions.Logging.ILogger logger, CancellationToken cancellationToken)
 {
     if (string.IsNullOrWhiteSpace(resultsPath) || !File.Exists(resultsPath))
     {
@@ -4291,7 +4291,7 @@ static IReadOnlyList<string> BuildAllProductionImageAssets(
     IReadOnlyList<string> aiCinematicImagePaths,
     IReadOnlyList<string> nasaOrJwstImagePaths,
     IReadOnlyList<string> motionGraphicsImagePaths,
-    ILogger logger)
+    Microsoft.Extensions.Logging.ILogger logger)
 {
     var allProductionImageAssets = frameScreenshots
         .Concat(expandedFrameScreenshots)
