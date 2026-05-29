@@ -1408,7 +1408,7 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     string? NasaAssetPlanPath = null,
     string? NasaAssetResultsPath = null,
     string? NasaAssetRealizationReportPath = null,
-    int PlannedNASAAssetCount = 0,
+    int PlannedRealizedNASAAssetCount = 0,
     int GeneratedNASAAssetCount = 0,
     int ProductionReadyNASAAssetCount = 0,
     int FailedNASAAssetCount = 0,
