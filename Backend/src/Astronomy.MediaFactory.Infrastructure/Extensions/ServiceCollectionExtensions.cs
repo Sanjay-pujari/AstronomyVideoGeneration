@@ -15,6 +15,7 @@ using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Infrastructure.Scheduling;
 using Astronomy.MediaFactory.Publishing;
 using Astronomy.MediaFactory.Rendering;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.NasaAssets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -317,9 +318,10 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<NasaApodClient>();
         services.AddHttpClient<NasaNeoWsClient>();
         services.AddHttpClient<ICelestialAssetIngestionService, CelestialAssetIngestionService>(client => client.Timeout = TimeSpan.FromSeconds(20));
-        services.AddHttpClient<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.NasaImageSearchClient>(client => client.Timeout = TimeSpan.FromSeconds(30));
-        services.AddHttpClient<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.NasaImageAssetDownloader>(client => client.Timeout = TimeSpan.FromSeconds(60));
-        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.INasaImageAssetProvider, Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.NasaImageAssetProvider>();
+        services.AddHttpClient<INasaImagesClient, NasaImagesClient>(client => client.Timeout = TimeSpan.FromSeconds(30));
+        services.AddHttpClient<INasaAssetDownloader, NasaAssetDownloader>(client => client.Timeout = TimeSpan.FromSeconds(60));
+        services.AddScoped<INasaAssetSelector, NasaAssetSelector>();
+        services.AddScoped<INasaAssetRealizationService, NasaAssetRealizationService>();
         services.AddScoped<ICelestialAssetProvider, CelestialAssetProvider>();
         services.AddHttpClient<MinorPlanetCenterClient>();
         services.AddHttpClient<ISkyfieldSidecarClient, SkyfieldSidecarClient>((sp, client) =>
