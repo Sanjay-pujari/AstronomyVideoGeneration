@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.NasaAssets;
 using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization;
@@ -119,6 +120,7 @@ public sealed record WeeklyAssetRealizationResult(
     bool AssetRealizationReady,
     string NasaAssetPlanPath,
     string NasaAssetResultsPath,
+    string NasaAssetRealizationReportPath,
     int PlannedNASAAssetCount,
     int GeneratedNASAAssetCount,
     int ProductionReadyNASAAssetCount,
@@ -147,7 +149,7 @@ public sealed record WeeklyAssetRealizationInput(
 public sealed class WeeklyAssetRealizationService(
     WeeklyAssetRealizationPersister persister,
     WeeklyAssetRealizationValidator validator,
-    INasaImageAssetProvider nasaImageAssetProvider,
+    INasaAssetRealizationService nasaAssetRealizationService,
     ILogger<WeeklyAssetRealizationService> logger)
 {
     public async Task<WeeklyAssetRealizationResult> RealizeAndPersistAsync(WeeklyAssetRealizationInput input, CancellationToken cancellationToken)
@@ -160,10 +162,10 @@ public sealed class WeeklyAssetRealizationService(
         var readiness = validator.BuildVideoReadinessReport(input, manifest, report);
         var paths = await persister.PersistAsync(input.RootPath, manifest, report, readiness, cancellationToken);
 
-        var nasaAssets = await nasaImageAssetProvider.RealizeAsync(input.RootPath, input.WeeklyVisualAssetPlanPath, paths.ManifestPath, continueOnFailure: true, cancellationToken);
-        if (nasaAssets.Results.NasaImagePaths.Count > 0)
+        var nasaAssets = await nasaAssetRealizationService.RealizeAsync(input.RootPath, input.WeeklyVisualAssetPlanPath, paths.ManifestPath, paths.RealizationReportPath, continueOnFailure: true, cancellationToken);
+        if (nasaAssets.Report.NasaImagePaths.Count > 0)
         {
-            var enrichedInput = input with { AllProductionImageAssets = input.AllProductionImageAssets.Concat(nasaAssets.Results.NasaImagePaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList() };
+            var enrichedInput = input with { AllProductionImageAssets = input.AllProductionImageAssets.Concat(nasaAssets.Report.NasaImagePaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList() };
             assets = RegisterAssets(enrichedInput);
             bundles = BuildSegmentBundles(enrichedInput, assets);
             manifest = BuildManifest(enrichedInput, assets, bundles);
@@ -172,8 +174,8 @@ public sealed class WeeklyAssetRealizationService(
             paths = await persister.PersistAsync(enrichedInput.RootPath, manifest, report, readiness, cancellationToken);
         }
 
-        logger.LogInformation("ASSET_REALIZATION_COMPLETE pipelineRunId={PipelineRunId} testReady={TestReady} finalReady={FinalReady} segmentCount={SegmentCount} nasaGenerated={NasaGenerated} nasaProductionReady={NasaProductionReady}", input.PipelineRunId, readiness.TestVideoPipelineReady, readiness.FinalVideoPipelineReady, bundles.Count, nasaAssets.Results.GeneratedNASAAssetCount, nasaAssets.Results.ProductionReadyNASAAssetCount);
-        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.Results.PlannedNASAAssetCount, nasaAssets.Results.GeneratedNASAAssetCount, nasaAssets.Results.ProductionReadyNASAAssetCount, nasaAssets.Results.NasaImagePaths, nasaAssets.Results.ProviderConfigured);
+        logger.LogInformation("ASSET_REALIZATION_COMPLETE pipelineRunId={PipelineRunId} testReady={TestReady} finalReady={FinalReady} segmentCount={SegmentCount} nasaGenerated={NasaGenerated} nasaProductionReady={NasaProductionReady}", input.PipelineRunId, readiness.TestVideoPipelineReady, readiness.FinalVideoPipelineReady, bundles.Count, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount);
+        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.NasaImagePaths, nasaAssets.Report.NasaProviderConfigured);
     }
 
     private static WeeklyProductionAssetManifest BuildManifest(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset> assets, IReadOnlyList<SegmentProductionAssetBundle> bundles) => new(
@@ -546,7 +548,7 @@ public sealed class WeeklyAssetRealizationValidator
     }
 }
 
-internal static class ImageDimensionReader
+public static class ImageDimensionReader
 {
     public static (int Width, int Height) Read(string path)
     {
