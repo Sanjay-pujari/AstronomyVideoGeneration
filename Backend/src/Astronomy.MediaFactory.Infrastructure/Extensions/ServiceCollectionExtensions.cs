@@ -317,6 +317,9 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<NasaApodClient>();
         services.AddHttpClient<NasaNeoWsClient>();
         services.AddHttpClient<ICelestialAssetIngestionService, CelestialAssetIngestionService>(client => client.Timeout = TimeSpan.FromSeconds(20));
+        services.AddHttpClient<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.NasaImageSearchClient>(client => client.Timeout = TimeSpan.FromSeconds(30));
+        services.AddHttpClient<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.NasaImageAssetDownloader>(client => client.Timeout = TimeSpan.FromSeconds(60));
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.INasaImageAssetProvider, Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.NasaImageAssetProvider>();
         services.AddScoped<ICelestialAssetProvider, CelestialAssetProvider>();
         services.AddHttpClient<MinorPlanetCenterClient>();
         services.AddHttpClient<ISkyfieldSidecarClient, SkyfieldSidecarClient>((sp, client) =>
