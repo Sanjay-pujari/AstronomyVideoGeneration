@@ -530,6 +530,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning.VisualAssetMixAnalyzer>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning.VisualAssetPlanningPersister>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning.WeeklyVisualAssetPlanningService>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetExpansion.AssetExpansionPolicy>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetExpansion.SegmentCoverageAnalyzer>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetExpansion.UniqueSceneRequirementBuilder>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetExpansion.AssetExpansionPersister>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetExpansion.AssetExpansionValidator>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetExpansion.WeeklyAssetExpansionService>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicStylePolicy>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicPromptBuilder>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetPersister>();

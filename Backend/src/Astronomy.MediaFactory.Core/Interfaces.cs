@@ -1366,7 +1366,18 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     bool AICinematicGenerationPartial = false,
     int AICinematicMaxAssetsPerRun = 0,
     bool AICinematicProviderConfigured = false,
-    string AzureImageDeploymentUsed = "");
+    string AzureImageDeploymentUsed = "",
+    string? WeeklyAssetExpansionPlanPath = null,
+    string? WeeklySegmentCoverageReportPath = null,
+    string? WeeklyExpandedRenderScenePlanPath = null,
+    bool AssetExpansionPlanningReady = false,
+    int LongformVisualPackageCount = 0,
+    int ShortformVisualPackageCount = 0,
+    int ExpandedRenderSceneRequirementCount = 0,
+    int UniqueAstronomySceneRequirementCount = 0,
+    int ReadyForVideoPlanningSegmentCount = 0,
+    int NeedsAssetGenerationSegmentCount = 0,
+    string AssetExpansionPlanningMode = "PlanningOnly");
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
