@@ -1393,7 +1393,9 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     int TotalGeneratedScreenshotsIncludingExpanded = 0,
     string AssetExpansionExecutionMode = "PlanningOnly",
     IReadOnlyList<string>? ExpandedFrameScreenshots = null,
-    IReadOnlyList<string>? AllProductionFrameScreenshots = null);
+    IReadOnlyList<string>? AllProductionFrameScreenshots = null,
+    IReadOnlyList<string>? AICinematicImagePaths = null,
+    IReadOnlyList<string>? AllProductionImageAssets = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {

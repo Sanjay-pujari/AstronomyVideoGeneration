@@ -535,7 +535,7 @@ public sealed class WeeklySkyForecastAICinematicAssetsOptions
 {
     public const string SectionName = "WeeklySkyForecast:AICinematicAssets";
     public bool Enabled { get; set; } = true;
-    public int MaxAssetsPerRun { get; set; } = 3;
+    public int MaxAssetsPerRun { get; set; } = 1;
     public int GenerationTimeoutSeconds { get; set; } = 600;
     public int SingleImageTimeoutSeconds { get; set; } = 180;
     public bool ContinueOnFailure { get; set; } = true;
