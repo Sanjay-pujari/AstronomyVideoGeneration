@@ -546,7 +546,8 @@ public sealed class WeeklySkyForecastAssetExpansionOptions
 {
     public const string SectionName = "WeeklySkyForecast:AssetExpansion";
     public string Mode { get; set; } = "PlanningOnly";
-    public int MaxExpandedScenesPerRun { get; set; } = 6;
-    public int MaxFramesPerExpandedScene { get; set; } = 3;
+    public int MaxExpandedScenesPerRun { get; set; } = 1;
+    public int MaxFramesPerExpandedScene { get; set; } = 1;
+    public int ExpandedExecutionTimeoutSeconds { get; set; } = 300;
     public bool ContinueOnFailure { get; set; } = true;
 }
