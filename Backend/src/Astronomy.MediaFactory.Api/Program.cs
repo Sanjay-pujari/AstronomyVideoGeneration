@@ -2160,6 +2160,16 @@ var sscResult = splitProbeSsc;
             && aiCinematicAssets.PlannedCount == aiCinematicAssets.ProductionReadyCount
             && aiCinematicAssets.GeneratedCount >= aiCinematicAssets.PlannedCount;
 
+        var aiCinematicImagePaths = await CollectProductionReadyAICinematicImagePathsAsync(aiCinematicAssets.ResultsPath, app.Logger, ct);
+        var stellariumProductionFrameScreenshots = screenshots.Concat(expandedStellariumExecution.ExpandedFrameScreenshots).ToList();
+        var allProductionImageAssets = BuildAllProductionImageAssets(
+            screenshots,
+            expandedStellariumExecution.ExpandedFrameScreenshots,
+            aiCinematicImagePaths,
+            [],
+            [],
+            app.Logger);
+
         await File.WriteAllTextAsync(narrationManifestPath, JsonSerializer.Serialize(new
         {
             pipelineRunId,
@@ -2178,7 +2188,9 @@ var sscResult = splitProbeSsc;
             sscScripts = sscManifestEntries,
             screenshotOutputs = screenshots,
             expandedFrameScreenshots = expandedStellariumExecution.ExpandedFrameScreenshots,
-            allProductionFrameScreenshots = screenshots.Concat(expandedStellariumExecution.ExpandedFrameScreenshots).ToList(),
+            allProductionFrameScreenshots = stellariumProductionFrameScreenshots,
+            aiCinematicImagePaths,
+            allProductionImageAssets,
             imageSequencePlanPath,
             episodeArchitecture = new
             {
@@ -2365,7 +2377,9 @@ var sscResult = splitProbeSsc;
             screenshots.Count + expandedStellariumExecution.GeneratedExpandedScreenshotCount,
             expandedStellariumExecution.Mode,
             expandedStellariumExecution.ExpandedFrameScreenshots,
-            screenshots.Concat(expandedStellariumExecution.ExpandedFrameScreenshots).ToList());
+            stellariumProductionFrameScreenshots,
+            aiCinematicImagePaths,
+            allProductionImageAssets);
 
         return Results.Ok(output);
     }
@@ -4232,6 +4246,69 @@ static string ResolveImageSequenceNarrationUse(CinematicFramePlan framePlan)
     }
 
     return framePlan.NarrationUse;
+}
+
+static async Task<IReadOnlyList<string>> CollectProductionReadyAICinematicImagePathsAsync(string resultsPath, ILogger logger, CancellationToken cancellationToken)
+{
+    if (string.IsNullOrWhiteSpace(resultsPath) || !File.Exists(resultsPath))
+    {
+        return [];
+    }
+
+    try
+    {
+        await using var stream = File.OpenRead(resultsPath);
+        var results = await JsonSerializer.DeserializeAsync<IReadOnlyList<AICinematicAssetResult>>(
+            stream,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+            cancellationToken) ?? [];
+
+        var imagePaths = results
+            .Where(result => result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase))
+            .Where(result => result.ProductionReady)
+            .Where(result => !string.IsNullOrWhiteSpace(result.ImagePath))
+            .GroupBy(result => result.ImagePath, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+
+        foreach (var result in imagePaths)
+        {
+            logger.LogInformation("AI_CINEMATIC_PRODUCTION_IMAGE_COLLECTED assetCode={AssetCode} imagePath={ImagePath}", result.AssetCode, result.ImagePath);
+        }
+
+        return imagePaths.Select(result => result.ImagePath).ToList();
+    }
+    catch (JsonException ex)
+    {
+        logger.LogWarning(ex, "AI_CINEMATIC_PRODUCTION_IMAGE_COLLECTION_FAILED resultsPath={ResultsPath}", resultsPath);
+        return [];
+    }
+}
+
+static IReadOnlyList<string> BuildAllProductionImageAssets(
+    IReadOnlyList<string> frameScreenshots,
+    IReadOnlyList<string> expandedFrameScreenshots,
+    IReadOnlyList<string> aiCinematicImagePaths,
+    IReadOnlyList<string> nasaOrJwstImagePaths,
+    IReadOnlyList<string> motionGraphicsImagePaths,
+    ILogger logger)
+{
+    var allProductionImageAssets = frameScreenshots
+        .Concat(expandedFrameScreenshots)
+        .Concat(aiCinematicImagePaths)
+        .Concat(nasaOrJwstImagePaths)
+        .Concat(motionGraphicsImagePaths)
+        .Where(path => !string.IsNullOrWhiteSpace(path))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    logger.LogInformation(
+        "PRODUCTION_IMAGE_ASSET_LIST_BUILT stellarium={StellariumCount} expanded={ExpandedCount} ai={AICinematicCount}",
+        frameScreenshots.Count,
+        expandedFrameScreenshots.Count,
+        aiCinematicImagePaths.Count);
+
+    return allProductionImageAssets;
 }
 
 static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumScenesAsync(
