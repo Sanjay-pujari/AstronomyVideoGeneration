@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentDiversification;
