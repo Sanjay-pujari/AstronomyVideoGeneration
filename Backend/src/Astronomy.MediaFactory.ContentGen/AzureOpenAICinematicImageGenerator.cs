@@ -12,7 +12,7 @@ using AzureTokenRequestContext = Azure.Core.TokenRequestContext;
 
 namespace Astronomy.MediaFactory.ContentGen;
 
-public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenerator
+public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenerator, IAICinematicAssetGenerator
 {
     private const string ApiVersion = "2024-10-21";
     private static readonly string[] PreferredLandscapeSizes = ["1792x1024", "1536x1024", "1024x1024"];

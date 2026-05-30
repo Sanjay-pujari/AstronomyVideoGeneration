@@ -2155,13 +2155,15 @@ var sscResult = splitProbeSsc;
                 root,
                 stageCt,
                 request.ContinueOnFailure && aiCinematicOptions.ContinueOnFailure),
-            TimeSpan.FromSeconds(Math.Max(1, aiCinematicOptions.GenerationTimeoutSeconds)));
+            TimeSpan.FromSeconds(Math.Max(1, aiCinematicOptions.EffectiveMaxGenerationSeconds)));
 
         var visualBalanceHealthyAfterAICinematicAssets = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
             && aiCinematicAssets.PlannedCount == aiCinematicAssets.ProductionReadyCount
             && aiCinematicAssets.GeneratedCount >= aiCinematicAssets.PlannedCount;
 
-        var aiCinematicImagePaths = await CollectProductionReadyAICinematicImagePathsAsync(aiCinematicAssets.ResultsPath, app.Logger, ct);
+        var aiCinematicImagePaths = aiCinematicAssets.AICinematicImagePaths?.Count > 0
+            ? aiCinematicAssets.AICinematicImagePaths
+            : await CollectProductionReadyAICinematicImagePathsAsync(aiCinematicAssets.ResultsPath, app.Logger, ct);
         var stellariumProductionFrameScreenshots = screenshots.Concat(expandedStellariumExecution.ExpandedFrameScreenshots).ToList();
         var allProductionImageAssets = BuildAllProductionImageAssets(
             screenshots,
@@ -2290,15 +2292,20 @@ var sscResult = splitProbeSsc;
             {
                 aiCinematicAssetPlanPath = aiCinematicAssets.PlanPath,
                 aiCinematicAssetResultsPath = aiCinematicAssets.ResultsPath,
+                aiCinematicAssetRealizationReportPath = aiCinematicAssets.RealizationReportPath,
                 aiCinematicAssetGenerationReady = aiCinematicAssets.GenerationReady,
                 plannedAICinematicAssetCount = aiCinematicAssets.PlannedCount,
+                selectedAICinematicAssetCount = aiCinematicAssets.SelectedCount,
                 generatedAICinematicAssetCount = aiCinematicAssets.GeneratedCount,
                 deferredAICinematicAssetCount = aiCinematicAssets.DeferredCount,
+                failedAICinematicAssetCount = aiCinematicAssets.FailedCount,
+                skippedExistingValidAICinematicAssetCount = aiCinematicAssets.SkippedExistingValidCount,
                 productionReadyAICinematicAssetCount = aiCinematicAssets.ProductionReadyCount,
                 aiCinematicGenerationPartial = aiCinematicAssets.Partial,
                 aiCinematicMaxAssetsPerRun = aiCinematicAssets.MaxAssetsPerRun,
                 aiCinematicProviderConfigured = aiCinematicAssets.ProviderConfigured,
                 azureImageDeploymentUsed = aiCinematicAssets.AzureImageDeploymentUsed,
+                aiCinematicImagePaths,
                 remainingAICinematicGap = aiCinematicAssets.RemainingGap
             },
             narrationVisualTimeline = new
@@ -2438,10 +2445,14 @@ var sscResult = splitProbeSsc;
             visualBalanceHealthyAfterAICinematicAssets,
             aiCinematicAssets.PlanPath,
             aiCinematicAssets.ResultsPath,
+            aiCinematicAssets.RealizationReportPath,
             aiCinematicAssets.GenerationReady,
             aiCinematicAssets.PlannedCount,
+            aiCinematicAssets.SelectedCount,
             aiCinematicAssets.GeneratedCount,
             aiCinematicAssets.DeferredCount,
+            aiCinematicAssets.FailedCount,
+            aiCinematicAssets.SkippedExistingValidCount,
             aiCinematicAssets.ProductionReadyCount,
             aiCinematicAssets.Partial,
             aiCinematicAssets.MaxAssetsPerRun,
@@ -4395,7 +4406,7 @@ static async Task<IReadOnlyList<string>> CollectProductionReadyAICinematicImageP
             cancellationToken) ?? [];
 
         var imagePaths = results
-            .Where(result => result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase))
+            .Where(result => result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase) || result.GenerationStatus.Equals("SkippedExistingValid", StringComparison.OrdinalIgnoreCase))
             .Where(result => result.ProductionReady)
             .Where(result => !string.IsNullOrWhiteSpace(result.ImagePath))
             .GroupBy(result => result.ImagePath, StringComparer.OrdinalIgnoreCase)
