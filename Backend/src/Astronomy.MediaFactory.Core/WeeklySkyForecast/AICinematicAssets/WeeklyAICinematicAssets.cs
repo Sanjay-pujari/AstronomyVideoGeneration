@@ -32,6 +32,21 @@ public sealed record AICinematicAssetRequest(
     int SegmentOrder = int.MaxValue,
     string GenerationStatus = "Planned");
 
+public sealed record AICinematicAssetRequirement(
+    string AssetCode,
+    string EpisodeType,
+    string SegmentId,
+    string SegmentType,
+    string VisualRole,
+    string Prompt,
+    string NegativePrompt,
+    int Priority,
+    string ExpectedOutputPath,
+    string Status,
+    string SourcePlan,
+    int RetryCount,
+    IReadOnlyList<string> Warnings);
+
 public sealed record AICinematicAssetResult(
     string AssetId,
     string SegmentId,
@@ -52,13 +67,30 @@ public sealed record AICinematicAssetResult(
     string UsageRole,
     string EmotionalTone,
     string PacingRole,
-    bool ProductionReady);
+    bool ProductionReady,
+    int RetryCount = 0,
+    IReadOnlyList<string>? Warnings = null);
 
 public sealed record AICinematicProviderResult(
     string GenerationStatus,
     string? ImagePath,
     bool ProviderConfigured,
     IReadOnlyList<string> Warnings);
+
+public sealed record AICinematicAssetRealizationReport(
+    int PlannedAICinematicAssetCount,
+    int SelectedAICinematicAssetCount,
+    int GeneratedAICinematicAssetCount,
+    int ProductionReadyAICinematicAssetCount,
+    int DeferredAICinematicAssetCount,
+    int FailedAICinematicAssetCount,
+    int SkippedExistingValidAICinematicAssetCount,
+    int AICinematicMaxAssetsPerRun,
+    bool AICinematicGenerationPartial,
+    bool AICinematicProviderConfigured,
+    string AzureImageDeploymentUsed,
+    IReadOnlyList<string> AICinematicImagePaths,
+    IReadOnlyList<AICinematicAssetResult> Results);
 
 public sealed record AICinematicAssetGenerationSummary(
     IReadOnlyList<AICinematicAssetRequest> Requests,
@@ -74,7 +106,37 @@ public sealed record AICinematicAssetGenerationSummary(
     string AzureImageDeploymentUsed,
     int DeferredCount = 0,
     bool Partial = false,
-    int MaxAssetsPerRun = 0);
+    int MaxAssetsPerRun = 0,
+    int SelectedCount = 0,
+    int FailedCount = 0,
+    int SkippedExistingValidCount = 0,
+    string RealizationReportPath = "",
+    IReadOnlyList<string>? AICinematicImagePaths = null);
+
+public sealed class AICinematicAssetRealizationOptions
+{
+    public bool Enabled { get; init; } = true;
+    public int MaxAssetsPerRun { get; init; } = 3;
+    public int MaxGenerationSeconds { get; init; } = 240;
+    public bool ContinueOnFailure { get; init; } = true;
+    public bool SkipExistingValidAssets { get; init; } = true;
+    public bool ResumeExistingRunAssets { get; init; } = true;
+}
+
+public interface IAICinematicAssetRealizationService
+{
+    Task<AICinematicAssetGenerationSummary> GenerateAndPersistAsync(
+        WeeklyVisualAssetPlan visualAssetPlan,
+        WeeklyVisualBalanceReport visualBalanceReport,
+        WeeklySegmentDiversificationPlan diversificationPlan,
+        WeeklyEpisodeArchitectureResult episodeArchitecture,
+        object? weeklyContext,
+        string workingDirectoryRoot,
+        CancellationToken cancellationToken,
+        bool continueOnFailure = true);
+}
+
+public interface IAICinematicAssetGenerator : IAICinematicImageGenerator { }
 
 public interface IAICinematicImageGenerator
 {
@@ -83,7 +145,7 @@ public interface IAICinematicImageGenerator
     Task<AICinematicProviderResult> GenerateAsync(AICinematicAssetRequest request, CancellationToken cancellationToken);
 }
 
-public sealed class DisabledAICinematicImageGenerator : IAICinematicImageGenerator
+public sealed class DisabledAICinematicImageGenerator : IAICinematicImageGenerator, IAICinematicAssetGenerator
 {
     public bool IsConfigured => false;
 
@@ -134,10 +196,10 @@ public sealed class AICinematicPromptBuilder(AICinematicStylePolicy stylePolicy,
         {
             "Create a production-ready cinematic astronomy still image, 16:9 landscape.",
             $"Segment type: {segment.SegmentType}; usage role: {usageRole}; emotional tone: {emotion}; pacing role: {pacing}.",
-            $"Region context: {regionId}; language context: {language}; forecast week starts {weekStartDate:yyyy-MM-dd}.",
+            $"Astronomy weekly forecast context for region: Udaipur, India ({regionId}); Hindi-language content context ({language}) but the image must contain no text unless explicitly requested; forecast week starts {weekStartDate:yyyy-MM-dd}.",
             ResolveSceneDescription(assetCode, segment.SegmentType),
-            "Use astronomy-safe atmosphere only: cinematic night sky, Milky Way atmosphere, cosmic wonder, atmospheric horizon, gentle starlight, telescope silhouette, or abstract educational space backdrop.",
-            "Do not claim exact real alignments, do not render a sky map, do not add object labels, and do not imply a rare event unless supplied by verified astronomy data."
+            "Use a cinematic documentary look with dark sky, space, observatory, Indian desert-city horizon, telescope silhouette, subtle stars, and 16:9 composition as appropriate.",
+            "Do not claim exact real alignments, do not render a sky map, do not add object labels, no fake labels, no fake exact astronomy geometry, no text overlays, no watermarks, and do not imply a rare event unless supplied by verified astronomy data."
         });
 
         logger.LogInformation("AI_CINEMATIC_PROMPT_BUILT segmentId={SegmentId} assetCode={AssetCode} styleProfile={StyleProfile}", segment.SegmentId, assetCode, style);
@@ -195,7 +257,13 @@ public sealed class AICinematicPromptBuilder(AICinematicStylePolicy stylePolicy,
     };
 }
 
-public sealed class AICinematicAssetPersister
+public interface IAICinematicAssetPersister
+{
+    string ResolveImagePath(string workingDirectoryRoot, AICinematicAssetRequest request);
+    Task<(string PlanPath, string ResultsPath)> WriteAsync(string workingDirectoryRoot, IReadOnlyList<AICinematicAssetRequest> requests, IReadOnlyList<AICinematicAssetResult> results, CancellationToken cancellationToken);
+}
+
+public sealed class AICinematicAssetPersister : IAICinematicAssetPersister
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, Converters = { new JsonStringEnumConverter() } };
 
@@ -216,10 +284,46 @@ public sealed class AICinematicAssetPersister
         Directory.CreateDirectory(episodeDirectory);
         var planPath = Path.Combine(episodeDirectory, "ai-cinematic-asset-plan.json");
         var resultsPath = Path.Combine(episodeDirectory, "ai-cinematic-asset-results.json");
-        await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(requests, JsonOptions), cancellationToken);
+        var resultByAssetId = results
+            .GroupBy(result => result.AssetId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var requirements = requests.Select(request => ToRequirement(request, resultByAssetId.TryGetValue(request.AssetId, out var result) ? result : null)).ToList();
+        await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(requirements, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(resultsPath, JsonSerializer.Serialize(results, JsonOptions), cancellationToken);
         return (planPath, resultsPath);
     }
+
+    public async Task<string> WriteReportAsync(string workingDirectoryRoot, AICinematicAssetRealizationReport report, CancellationToken cancellationToken)
+    {
+        var episodeDirectory = Path.Combine(workingDirectoryRoot, "episode");
+        Directory.CreateDirectory(episodeDirectory);
+        var reportPath = Path.Combine(episodeDirectory, "ai-cinematic-asset-realization-report.json");
+        await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
+        return reportPath;
+    }
+
+    public async Task<IReadOnlyList<AICinematicAssetResult>> ReadResultsAsync(string workingDirectoryRoot, CancellationToken cancellationToken)
+    {
+        var resultsPath = Path.Combine(workingDirectoryRoot, "episode", "ai-cinematic-asset-results.json");
+        if (!File.Exists(resultsPath)) return [];
+        await using var stream = File.OpenRead(resultsPath);
+        return await JsonSerializer.DeserializeAsync<IReadOnlyList<AICinematicAssetResult>>(stream, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, cancellationToken) ?? [];
+    }
+
+    private static AICinematicAssetRequirement ToRequirement(AICinematicAssetRequest request, AICinematicAssetResult? result) => new(
+        request.AssetCode,
+        request.EpisodeType,
+        request.SegmentId,
+        request.SegmentType,
+        request.UsageRole,
+        request.Prompt,
+        request.NegativePrompt,
+        request.AssetPriority,
+        request.PlannedImagePath,
+        result?.GenerationStatus ?? request.GenerationStatus,
+        "weekly-visual-asset-plan",
+        result?.RetryCount ?? 0,
+        result?.ValidationWarnings ?? []);
 
     private static string SanitizePathPart(string value)
     {
@@ -242,7 +346,13 @@ public sealed class AICinematicAssetPersister
     }
 }
 
-public sealed class AICinematicAssetValidator
+public interface IAICinematicAssetValidator
+{
+    AICinematicAssetResult Validate(AICinematicAssetRequest request, AICinematicProviderResult providerResult);
+    bool IsProductionReadyImage(string path);
+}
+
+public sealed class AICinematicAssetValidator : IAICinematicAssetValidator
 {
     public AICinematicAssetResult Validate(AICinematicAssetRequest request, AICinematicProviderResult providerResult)
     {
@@ -326,6 +436,19 @@ public sealed class AICinematicAssetValidator
             productionReady);
     }
 
+    public bool IsProductionReadyImage(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return false;
+        var extension = Path.GetExtension(path);
+        if (extension is not (".png" or ".jpg" or ".jpeg" or ".PNG" or ".JPG" or ".JPEG")) return false;
+        var info = new FileInfo(path);
+        return info.Length > 50 * 1024
+            && TryReadImageDimensions(path, out var width, out var height, out var format)
+            && format is "PNG" or "JPEG"
+            && width >= 1024
+            && height >= 720;
+    }
+
     private static bool TryReadImageDimensions(string path, out int width, out int height, out string format)
     {
         width = 0;
@@ -373,13 +496,92 @@ public sealed class AICinematicAssetValidator
     }
 }
 
+public interface IAICinematicAssetQueueBuilder
+{
+    IReadOnlyList<AICinematicAssetRequest> BuildQueue(WeeklyVisualAssetPlan plan);
+}
+
+public interface IAICinematicAssetSelector
+{
+    IReadOnlyList<AICinematicAssetRequest> Select(IReadOnlyList<AICinematicAssetRequest> requests, int maxAssetsPerRun, bool providerConfigured, bool skipExistingValidAssets, IAICinematicAssetValidator validator);
+}
+
+public sealed class AICinematicAssetQueueBuilder : IAICinematicAssetQueueBuilder
+{
+    public IReadOnlyList<AICinematicAssetRequest> BuildQueue(WeeklyVisualAssetPlan plan) => [];
+}
+
+public sealed class AICinematicAssetSelector : IAICinematicAssetSelector
+{
+    public IReadOnlyList<AICinematicAssetRequest> Select(IReadOnlyList<AICinematicAssetRequest> requests, int maxAssetsPerRun, bool providerConfigured, bool skipExistingValidAssets, IAICinematicAssetValidator validator)
+    {
+        if (!providerConfigured || maxAssetsPerRun <= 0) return [];
+        return requests
+            .Where(request => IsSelectableGenerationStatus(request.GenerationStatus))
+            .Where(request => !skipExistingValidAssets || !validator.IsProductionReadyImage(request.PlannedImagePath))
+            .GroupBy(request => request.AssetId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderByDescending(request => request.AssetPriority)
+            .ThenBy(request => EpisodeTypeOrder(request.EpisodeType))
+            .ThenBy(request => SegmentTypeOrder(request.SegmentType))
+            .ThenBy(request => VisualRoleOrder(request.UsageRole))
+            .Take(maxAssetsPerRun)
+            .ToList();
+    }
+
+    private static bool IsSelectableGenerationStatus(string generationStatus) =>
+        string.IsNullOrWhiteSpace(generationStatus)
+        || generationStatus.Equals("Planned", StringComparison.OrdinalIgnoreCase)
+        || generationStatus.Equals("Pending", StringComparison.OrdinalIgnoreCase)
+        || generationStatus.Equals("Deferred", StringComparison.OrdinalIgnoreCase)
+        || generationStatus.Equals("Failed", StringComparison.OrdinalIgnoreCase)
+        || generationStatus.Equals("NotStarted", StringComparison.OrdinalIgnoreCase);
+
+    private static int EpisodeTypeOrder(string episodeType) => episodeType switch
+    {
+        "longform" or "LongFormWeeklyForecast" => 0,
+        "shortform" or "ShortFormWeeklyHighlight" => 1,
+        _ => 99
+    };
+
+    private static int SegmentTypeOrder(string segmentType) => segmentType switch
+    {
+        "OpeningHook" => 0,
+        "WeeklySkyOverview" => 1,
+        "HeroEvent" => 2,
+        "MoonHighlights" => 3,
+        "PlanetHighlights" => 4,
+        "BestObservationWindow" => 5,
+        "AstrophotographyTip" => 6,
+        "WeeklySummary" => 7,
+        "ShortHook" => 8,
+        "StrongestEvent" => 9,
+        "WhereToLook" => 10,
+        "BestTime" => 11,
+        "CallToAction" => 12,
+        _ => 99
+    };
+
+    private static int VisualRoleOrder(string usageRole)
+    {
+        var role = usageRole.ToLowerInvariant();
+        if (role.Contains("hook")) return 0;
+        if (role.Contains("emotional_reset")) return 1;
+        if (role.Contains("recap")) return 2;
+        if (role.Contains("transition")) return 3;
+        if (role.Contains("background")) return 4;
+        if (role.Contains("cta")) return 5;
+        return 99;
+    }
+}
+
 public sealed class WeeklyAICinematicAssetGenerationService(
     AICinematicPromptBuilder promptBuilder,
     AICinematicAssetPersister persister,
     AICinematicAssetValidator validator,
     IAICinematicImageGenerator generator,
     IOptions<WeeklySkyForecastAICinematicAssetsOptions> options,
-    ILogger<WeeklyAICinematicAssetGenerationService> logger)
+    ILogger<WeeklyAICinematicAssetGenerationService> logger) : IAICinematicAssetRealizationService
 {
     public async Task<AICinematicAssetGenerationSummary> GenerateAndPersistAsync(
         WeeklyVisualAssetPlan visualAssetPlan,
@@ -396,50 +598,93 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         _ = episodeArchitecture;
         _ = weeklyContext;
 
+        logger.LogInformation("AI_CINEMATIC_REALIZATION_START pipelineRunId={PipelineRunId}", visualAssetPlan.PipelineRunId);
         var aiOptions = options.Value;
         var continueAfterFailure = continueOnFailure && aiOptions.ContinueOnFailure;
-        var maxAssetsPerRun = Math.Max(0, aiOptions.MaxAssetsPerRun);
+        var maxAssetsPerRun = Math.Max(0, aiOptions.MaxAssetsPerRun == 0 ? 0 : aiOptions.MaxAssetsPerRun);
         var requests = BuildRequests(visualAssetPlan)
             .OrderByDescending(request => request.AssetPriority)
-            .ThenByDescending(request => request.EmotionalResetCandidate)
-            .ThenByDescending(request => request.PacingResetCandidate)
-            .ThenBy(request => request.SegmentOrder)
+            .ThenBy(request => EpisodeTypeOrder(request.EpisodeType))
+            .ThenBy(request => SegmentTypeOrder(request.SegmentType))
+            .ThenBy(request => VisualRoleOrder(request.UsageRole))
             .ToList();
         logger.LogInformation(
-            "AI_CINEMATIC_PROVIDER_STATUS configured={ProviderConfigured} plannedCount={PlannedCount} maxAssetsPerRun={MaxAssetsPerRun}",
+            "AI_CINEMATIC_PROVIDER_STATUS configured={ProviderConfigured} plannedCount={PlannedCount} maxAssetsPerRun={MaxAssetsPerRun} deployment={Deployment}",
             generator.IsConfigured,
             requests.Count,
-            maxAssetsPerRun);
+            maxAssetsPerRun,
+            generator.DeploymentName);
 
         var materializedRequests = requests
             .Select(request => request with { PlannedImagePath = persister.ResolveImagePath(workingDirectoryRoot, request) })
             .ToList();
+        logger.LogInformation("AI_CINEMATIC_PLAN_LOADED planned={PlannedCount}", materializedRequests.Count);
 
-        var alreadyGeneratedInCurrentRun = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<AICinematicAssetResult> previousResults = aiOptions.ResumeExistingRunAssets
+            ? await persister.ReadResultsAsync(workingDirectoryRoot, cancellationToken)
+            : Array.Empty<AICinematicAssetResult>();
+        logger.LogInformation("AI_CINEMATIC_RESULTS_LOADED existingResultCount={ExistingResultCount}", previousResults.Count);
+
+        var previousByAssetId = previousResults
+            .GroupBy(result => result.AssetId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        var results = new List<AICinematicAssetResult>();
+        var preservedAssetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var skippedExistingValidCount = 0;
+        foreach (var request in materializedRequests)
+        {
+            if (previousByAssetId.TryGetValue(request.AssetId, out var previous)
+                && previous.ProductionReady
+                && validator.IsProductionReadyImage(previous.ImagePath))
+            {
+                results.Add(previous);
+                preservedAssetIds.Add(request.AssetId);
+                continue;
+            }
+
+            if (aiOptions.SkipExistingValidAssets && validator.IsProductionReadyImage(request.PlannedImagePath))
+            {
+                var skipped = validator.Validate(request, new AICinematicProviderResult("Generated", request.PlannedImagePath, generator.IsConfigured, [])) with
+                {
+                    GenerationStatus = previousByAssetId.ContainsKey(request.AssetId) ? "Generated" : "SkippedExistingValid"
+                };
+                results.Add(skipped);
+                preservedAssetIds.Add(request.AssetId);
+                skippedExistingValidCount++;
+                logger.LogInformation("AI_CINEMATIC_ASSET_SKIPPED_EXISTING_VALID assetCode={AssetCode} imagePath={ImagePath}", request.AssetCode, request.PlannedImagePath);
+            }
+        }
+
         var selectionCandidates = materializedRequests
+            .Where(request => !preservedAssetIds.Contains(request.AssetId))
             .Where(request => generator.IsConfigured)
             .Where(request => maxAssetsPerRun > 0)
-            .Where(request => !alreadyGeneratedInCurrentRun.Contains(request.AssetId))
-            .Where(request => IsSelectableGenerationStatus(request.GenerationStatus))
+            .Where(request => IsSelectableGenerationStatus(previousByAssetId.TryGetValue(request.AssetId, out var previous) ? previous.GenerationStatus : request.GenerationStatus))
+            .Where(request => !aiOptions.SkipExistingValidAssets || !validator.IsProductionReadyImage(request.PlannedImagePath))
             .GroupBy(request => request.AssetId, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .OrderByDescending(request => request.AssetPriority)
-            .ThenByDescending(request => request.EmotionalResetCandidate)
-            .ThenByDescending(request => request.PacingResetCandidate)
-            .ThenBy(request => request.SegmentOrder)
+            .ThenBy(request => EpisodeTypeOrder(request.EpisodeType))
+            .ThenBy(request => SegmentTypeOrder(request.SegmentType))
+            .ThenBy(request => VisualRoleOrder(request.UsageRole))
             .ToList();
 
+        logger.LogInformation("AI_CINEMATIC_QUEUE_BUILT planned={PlannedCount} existingValid={ExistingValidCount} selectable={SelectableCount} max={MaxAssetsPerRun}", materializedRequests.Count, preservedAssetIds.Count, selectionCandidates.Count, maxAssetsPerRun);
         logger.LogInformation("AI_CINEMATIC_SELECTION_START planned={PlannedCount} max={MaxAssetsPerRun}", materializedRequests.Count, maxAssetsPerRun);
 
         var activeRequests = aiOptions.Enabled
             ? selectionCandidates.Take(maxAssetsPerRun).ToList()
             : new List<AICinematicAssetRequest>();
         var activeRequestIds = activeRequests.Select(request => request.AssetId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var deferredRequests = materializedRequests.Where(request => !activeRequestIds.Contains(request.AssetId)).ToList();
+        var deferredRequests = materializedRequests
+            .Where(request => !preservedAssetIds.Contains(request.AssetId))
+            .Where(request => !activeRequestIds.Contains(request.AssetId))
+            .ToList();
 
         foreach (var request in activeRequests)
         {
-            logger.LogInformation("AI_CINEMATIC_ASSET_SELECTED assetCode={AssetCode}", request.AssetCode);
+            logger.LogInformation("AI_CINEMATIC_ASSET_SELECTED assetCode={AssetCode} priority={Priority} episodeType={EpisodeType} segmentType={SegmentType} visualRole={VisualRole}", request.AssetCode, request.AssetPriority, request.EpisodeType, request.SegmentType, request.UsageRole);
         }
 
         foreach (var request in deferredRequests)
@@ -448,9 +693,9 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         }
 
         logger.LogInformation("AI_CINEMATIC_SELECTION_COMPLETE selected={SelectedCount} deferred={DeferredCount}", activeRequests.Count, deferredRequests.Count);
-        if (activeRequests.Count == 0 && generator.IsConfigured && materializedRequests.Count > 0)
+        if (activeRequests.Count == 0 && generator.IsConfigured && materializedRequests.Count > preservedAssetIds.Count)
         {
-            logger.LogError("AI_CINEMATIC_SELECTION_EMPTY_UNEXPECTED planned={PlannedCount} max={MaxAssetsPerRun} providerConfigured={ProviderConfigured}", materializedRequests.Count, maxAssetsPerRun, generator.IsConfigured);
+            logger.LogError("AI_CINEMATIC_SELECTION_EMPTY_UNEXPECTED planned={PlannedCount} existingValid={ExistingValidCount} max={MaxAssetsPerRun} providerConfigured={ProviderConfigured}", materializedRequests.Count, preservedAssetIds.Count, maxAssetsPerRun, generator.IsConfigured);
         }
 
         if (!aiOptions.Enabled)
@@ -458,7 +703,6 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             logger.LogInformation("AI_CINEMATIC_ASSET_GENERATION_DISABLED plannedCount={PlannedCount}", materializedRequests.Count);
         }
 
-        var results = new List<AICinematicAssetResult>();
         var generationPartial = deferredRequests.Count > 0 || !aiOptions.Enabled;
         AICinematicAssetRequest? timedOutRequest = null;
         foreach (var request in activeRequests)
@@ -467,6 +711,7 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 logger.LogInformation("AI_CINEMATIC_ASSET_REQUEST_CREATED assetId={AssetId} segmentId={SegmentId} assetCode={AssetCode} assetPriority={AssetPriority} segmentOrder={SegmentOrder}", request.AssetId, request.SegmentId, request.AssetCode, request.AssetPriority, request.SegmentOrder);
+                logger.LogInformation("AI_CINEMATIC_GENERATION_START assetId={AssetId} assetCode={AssetCode} imagePath={ImagePath}", request.AssetId, request.AssetCode, request.PlannedImagePath);
                 var targetDirectory = Path.GetDirectoryName(request.PlannedImagePath);
                 if (!string.IsNullOrWhiteSpace(targetDirectory)) Directory.CreateDirectory(targetDirectory);
                 AICinematicProviderResult providerResult;
@@ -491,14 +736,14 @@ public sealed class WeeklyAICinematicAssetGenerationService(
                         [$"Unexpected AI cinematic image generation failure: {ex.Message}"]);
                 }
 
-                logger.LogInformation("AI_CINEMATIC_ASSET_GENERATED assetId={AssetId} status={GenerationStatus}", request.AssetId, providerResult.GenerationStatus);
+                logger.LogInformation("AI_CINEMATIC_GENERATION_COMPLETE assetId={AssetId} status={GenerationStatus}", request.AssetId, providerResult.GenerationStatus);
+                if (!string.IsNullOrWhiteSpace(providerResult.ImagePath))
+                {
+                    logger.LogInformation("AI_CINEMATIC_IMAGE_WRITTEN assetId={AssetId} assetCode={AssetCode} imagePath={ImagePath}", request.AssetId, request.AssetCode, providerResult.ImagePath);
+                }
                 var result = validator.Validate(request, providerResult);
                 LogValidation(request, result);
                 results.Add(result);
-                if (IsGeneratedStatus(result))
-                {
-                    alreadyGeneratedInCurrentRun.Add(request.AssetId);
-                }
             }
             catch (OperationCanceledException) when (continueAfterFailure)
             {
@@ -527,13 +772,42 @@ public sealed class WeeklyAICinematicAssetGenerationService(
                     ? $"Deferred by WeeklySkyForecast:AICinematicAssets:MaxAssetsPerRun={maxAssetsPerRun}."
                     : "Deferred because WeeklySkyForecast:AICinematicAssets:Enabled=false.")));
 
+        if (results.Count(result => result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase)) == 1
+            && maxAssetsPerRun > 1
+            && activeRequests.Count > 1)
+        {
+            logger.LogWarning("AI_CINEMATIC_BATCH_SIZE_NOT_HONORED warning={Warning} selected={SelectedCount} max={MaxAssetsPerRun}", "AI cinematic batch size not honored.", activeRequests.Count, maxAssetsPerRun);
+        }
+
         var writeToken = cancellationToken.IsCancellationRequested && continueAfterFailure ? CancellationToken.None : cancellationToken;
         var (planPath, resultsPath) = await persister.WriteAsync(workingDirectoryRoot, materializedRequests, results, writeToken);
         logger.LogInformation("AI_CINEMATIC_ASSET_PLAN_WRITTEN path={PlanPath}", planPath);
-        logger.LogInformation("AI_CINEMATIC_ASSET_RESULTS_WRITTEN path={ResultsPath}", resultsPath);
+        logger.LogInformation("AI_CINEMATIC_RESULTS_WRITTEN path={ResultsPath}", resultsPath);
         var generatedCount = results.Count(IsGeneratedStatus);
         var productionReadyCount = results.Count(x => x.ProductionReady);
         var deferredCount = results.Count(IsDeferredStatus);
+        var failedCount = results.Count(result => result.GenerationStatus.Equals("Failed", StringComparison.OrdinalIgnoreCase));
+        var imagePaths = results
+            .Where(result => result.ProductionReady)
+            .Where(result => !string.IsNullOrWhiteSpace(result.ImagePath))
+            .Select(result => result.ImagePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var report = new AICinematicAssetRealizationReport(
+            materializedRequests.Count,
+            activeRequests.Count,
+            generatedCount,
+            productionReadyCount,
+            deferredCount,
+            failedCount,
+            skippedExistingValidCount,
+            maxAssetsPerRun,
+            generationPartial || deferredCount > 0,
+            generator.IsConfigured,
+            generator.DeploymentName,
+            imagePaths,
+            results);
+        var reportPath = await persister.WriteReportAsync(workingDirectoryRoot, report, writeToken);
         await UpdateVisualBalanceReportAsync(visualAssetPlan, visualBalanceReport, workingDirectoryRoot, materializedRequests.Count, generatedCount, productionReadyCount, writeToken);
 
         var summary = new AICinematicAssetGenerationSummary(
@@ -546,12 +820,17 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             GeneratedCount: generatedCount,
             ProductionReadyCount: productionReadyCount,
             ProviderConfigured: generator.IsConfigured,
-            RemainingGap: materializedRequests.Count - productionReadyCount,
+            RemainingGap: Math.Max(0, materializedRequests.Count - productionReadyCount),
             AzureImageDeploymentUsed: generator.DeploymentName,
             DeferredCount: deferredCount,
             Partial: generationPartial || deferredCount > 0,
-            MaxAssetsPerRun: maxAssetsPerRun);
-        logger.LogInformation("AI_CINEMATIC_ASSET_GENERATION_COMPLETE planned={PlannedCount} generated={GeneratedCount} deferred={DeferredCount} productionReady={ProductionReadyCount} partial={Partial}", summary.PlannedCount, summary.GeneratedCount, summary.DeferredCount, summary.ProductionReadyCount, summary.Partial);
+            MaxAssetsPerRun: maxAssetsPerRun,
+            SelectedCount: activeRequests.Count,
+            FailedCount: failedCount,
+            SkippedExistingValidCount: skippedExistingValidCount,
+            RealizationReportPath: reportPath,
+            AICinematicImagePaths: imagePaths);
+        logger.LogInformation("AI_CINEMATIC_REALIZATION_COMPLETE planned={PlannedCount} existingValid={ExistingValidCount} selected={SelectedCount} generated={GeneratedCount} deferred={DeferredCount} failed={FailedCount} productionReady={ProductionReadyCount} partial={Partial}", summary.PlannedCount, preservedAssetIds.Count, summary.SelectedCount, summary.GeneratedCount, summary.DeferredCount, summary.FailedCount, summary.ProductionReadyCount, summary.Partial);
         return summary;
     }
 
@@ -590,7 +869,7 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         if (result.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase))
         {
             logger.LogInformation(
-                "AI_IMAGE_VALIDATION_PASSED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} validationStatus={ValidationStatus}",
+                "AI_CINEMATIC_IMAGE_VALIDATION_PASSED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} validationStatus={ValidationStatus}",
                 generator.DeploymentName,
                 request.AssetCode,
                 request.SegmentType,
@@ -601,7 +880,7 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         else
         {
             logger.LogWarning(
-                "AI_IMAGE_VALIDATION_FAILED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} validationStatus={ValidationStatus} warnings={Warnings}",
+                "AI_CINEMATIC_IMAGE_VALIDATION_FAILED deployment={Deployment} assetCode={AssetCode} segmentType={SegmentType} plannedImagePath={PlannedImagePath} generationStatus={GenerationStatus} validationStatus={ValidationStatus} warnings={Warnings}",
                 generator.DeploymentName,
                 request.AssetCode,
                 request.SegmentType,
@@ -685,10 +964,49 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         || generationStatus.Equals("Planned", StringComparison.OrdinalIgnoreCase)
         || generationStatus.Equals("Pending", StringComparison.OrdinalIgnoreCase)
         || generationStatus.Equals("Deferred", StringComparison.OrdinalIgnoreCase)
+        || generationStatus.Equals("Failed", StringComparison.OrdinalIgnoreCase)
         || generationStatus.Equals("NotStarted", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsDeferredStatus(AICinematicAssetResult result) =>
         result.GenerationStatus.Equals("Deferred", StringComparison.OrdinalIgnoreCase);
+
+
+    private static int EpisodeTypeOrder(string episodeType) => episodeType switch
+    {
+        "longform" or "LongFormWeeklyForecast" => 0,
+        "shortform" or "ShortFormWeeklyHighlight" => 1,
+        _ => 99
+    };
+
+    private static int SegmentTypeOrder(string segmentType) => segmentType switch
+    {
+        "OpeningHook" => 0,
+        "WeeklySkyOverview" => 1,
+        "HeroEvent" => 2,
+        "MoonHighlights" => 3,
+        "PlanetHighlights" => 4,
+        "BestObservationWindow" => 5,
+        "AstrophotographyTip" => 6,
+        "WeeklySummary" => 7,
+        "ShortHook" => 8,
+        "StrongestEvent" => 9,
+        "WhereToLook" => 10,
+        "BestTime" => 11,
+        "CallToAction" => 12,
+        _ => 99
+    };
+
+    private static int VisualRoleOrder(string usageRole)
+    {
+        var role = usageRole.ToLowerInvariant();
+        if (role.Contains("hook")) return 0;
+        if (role.Contains("emotional_reset")) return 1;
+        if (role.Contains("recap")) return 2;
+        if (role.Contains("transition")) return 3;
+        if (role.Contains("background")) return 4;
+        if (role.Contains("cta")) return 5;
+        return 99;
+    }
 
     private static async Task UpdateVisualBalanceReportAsync(WeeklyVisualAssetPlan plan, WeeklyVisualBalanceReport originalBalanceReport, string workingDirectoryRoot, int planned, int generated, int productionReady, CancellationToken cancellationToken)
     {

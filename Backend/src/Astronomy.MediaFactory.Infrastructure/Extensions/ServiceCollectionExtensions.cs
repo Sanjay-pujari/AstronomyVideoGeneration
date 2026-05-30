@@ -64,7 +64,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<WeeklySkyForecastAICinematicAssetsOptions>()
             .Bind(configuration.GetSection(WeeklySkyForecastAICinematicAssetsOptions.SectionName))
             .Validate(options => options.MaxAssetsPerRun >= 0, "WeeklySkyForecast:AICinematicAssets:MaxAssetsPerRun must be zero or greater.")
-            .Validate(options => options.GenerationTimeoutSeconds > 0, "WeeklySkyForecast:AICinematicAssets:GenerationTimeoutSeconds must be greater than zero.")
+            .Validate(options => options.EffectiveMaxGenerationSeconds > 0, "WeeklySkyForecast:AICinematicAssets:MaxGenerationSeconds must be greater than zero.")
             .Validate(options => options.SingleImageTimeoutSeconds > 0, "WeeklySkyForecast:AICinematicAssets:SingleImageTimeoutSeconds must be greater than zero.")
             .ValidateOnStart();
 
@@ -555,9 +555,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.WeeklyNarrationVisualTimelineComposer>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicStylePolicy>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicPromptBuilder>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicAssetQueueBuilder, Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetQueueBuilder>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicAssetSelector, Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetSelector>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicAssetPersister, Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetPersister>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetPersister>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicAssetValidator, Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetValidator>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetValidator>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicAssetGenerator>(sp => sp.GetRequiredService<AzureOpenAICinematicImageGenerator>());
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicImageGenerator>(sp => sp.GetRequiredService<AzureOpenAICinematicImageGenerator>());
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicAssetRealizationService, Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.WeeklyAICinematicAssetGenerationService>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.WeeklyAICinematicAssetGenerationService>();
         services.AddScoped<IWeeklyStoryboardComposer, WeeklyStoryboardComposer>();
         services.AddScoped<IWeeklyConjunctionFramingEngine, WeeklyConjunctionFramingEngine>();

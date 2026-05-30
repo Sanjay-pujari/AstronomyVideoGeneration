@@ -535,10 +535,15 @@ public sealed class WeeklySkyForecastAICinematicAssetsOptions
 {
     public const string SectionName = "WeeklySkyForecast:AICinematicAssets";
     public bool Enabled { get; set; } = true;
-    public int MaxAssetsPerRun { get; set; } = 1;
-    public int GenerationTimeoutSeconds { get; set; } = 600;
+    public int MaxAssetsPerRun { get; set; } = 3;
+    public int MaxGenerationSeconds { get; set; } = 240;
+    public int GenerationTimeoutSeconds { get; set; } = 240;
     public int SingleImageTimeoutSeconds { get; set; } = 180;
     public bool ContinueOnFailure { get; set; } = true;
+    public bool SkipExistingValidAssets { get; set; } = true;
+    public bool ResumeExistingRunAssets { get; set; } = true;
+
+    public int EffectiveMaxGenerationSeconds => MaxGenerationSeconds > 0 ? MaxGenerationSeconds : GenerationTimeoutSeconds;
 }
 
 
