@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SixLabors.ImageSharp;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning;
@@ -124,7 +125,18 @@ public sealed record WeeklyAssetRealizationResult(
     int PlannedNASAAssetCount,
     int GeneratedNASAAssetCount,
     int ProductionReadyNASAAssetCount,
+    int FailedNASAAssetCount,
     IReadOnlyList<string> NasaImagePaths,
+    int NasaImageCount,
+    string JwstAssetPlanPath,
+    string JwstAssetResultsPath,
+    string JwstAssetRealizationReportPath,
+    int PlannedJWSTAssetCount,
+    int GeneratedJWSTAssetCount,
+    int ProductionReadyJWSTAssetCount,
+    int FailedJWSTAssetCount,
+    IReadOnlyList<string> JwstImagePaths,
+    int JwstImageCount,
     bool NasaProviderConfigured);
 
 public sealed record WeeklyAssetRealizationInput(
@@ -163,9 +175,10 @@ public sealed class WeeklyAssetRealizationService(
         var paths = await persister.PersistAsync(input.RootPath, manifest, report, readiness, cancellationToken);
 
         var nasaAssets = await nasaAssetRealizationService.RealizeAsync(input.RootPath, input.WeeklyVisualAssetPlanPath, paths.ManifestPath, paths.RealizationReportPath, continueOnFailure: true, cancellationToken);
-        if (nasaAssets.Report.NasaImagePaths.Count > 0)
+        var realizedNasaOrJwstPaths = nasaAssets.Report.NasaImagePaths.Concat(nasaAssets.Report.JwstImagePaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (realizedNasaOrJwstPaths.Count > 0)
         {
-            var enrichedInput = input with { AllProductionImageAssets = input.AllProductionImageAssets.Concat(nasaAssets.Report.NasaImagePaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList() };
+            var enrichedInput = input with { AllProductionImageAssets = input.AllProductionImageAssets.Concat(realizedNasaOrJwstPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList() };
             assets = RegisterAssets(enrichedInput);
             bundles = BuildSegmentBundles(enrichedInput, assets);
             manifest = BuildManifest(enrichedInput, assets, bundles);
@@ -175,7 +188,7 @@ public sealed class WeeklyAssetRealizationService(
         }
 
         logger.LogInformation("ASSET_REALIZATION_COMPLETE pipelineRunId={PipelineRunId} testReady={TestReady} finalReady={FinalReady} segmentCount={SegmentCount} nasaGenerated={NasaGenerated} nasaProductionReady={NasaProductionReady}", input.PipelineRunId, readiness.TestVideoPipelineReady, readiness.FinalVideoPipelineReady, bundles.Count, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount);
-        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.NasaImagePaths, nasaAssets.Report.NasaProviderConfigured);
+        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.FailedNASAAssetCount, nasaAssets.Report.NasaImagePaths, nasaAssets.Report.NasaImagePaths.Count, nasaAssets.JwstPlanPath, nasaAssets.JwstResultsPath, nasaAssets.JwstReportPath, nasaAssets.Report.PlannedJWSTAssetCount, nasaAssets.Report.GeneratedJWSTAssetCount, nasaAssets.Report.ProductionReadyJWSTAssetCount, nasaAssets.Report.FailedJWSTAssetCount, nasaAssets.Report.JwstImagePaths, nasaAssets.Report.JwstImagePaths.Count, nasaAssets.Report.NasaProviderConfigured);
     }
 
     private static WeeklyProductionAssetManifest BuildManifest(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset> assets, IReadOnlyList<SegmentProductionAssetBundle> bundles) => new(
@@ -216,12 +229,17 @@ public sealed class WeeklyAssetRealizationService(
             .ToList();
     }
 
+    private const long MinimumProductionImageBytes = 50L * 1024L;
+    private const int MinimumProductionImageWidth = 1024;
+    private const int MinimumProductionImageHeight = 720;
+
     private RealizedVisualAsset CreateAsset(string path, RealizedVisualAssetSourceType sourceType)
     {
         var exists = File.Exists(path);
         var fileInfo = exists ? new FileInfo(path) : null;
         var (width, height) = exists ? ImageDimensionReader.Read(path) : (0, 0);
         var assetCode = Path.GetFileNameWithoutExtension(path);
+        var productionReady = IsProductionReadyImage(sourceType, exists, fileInfo?.Length ?? 0, width, height);
         var asset = new RealizedVisualAsset(
             $"{sourceType}:{assetCode}",
             sourceType,
@@ -233,9 +251,19 @@ public sealed class WeeklyAssetRealizationService(
             height,
             "ReusableProductionVisual",
             true,
-            exists && fileInfo?.Length > 0 && width > 0 && height > 0);
-        logger.LogInformation("PRODUCTION_ASSET_REGISTERED assetId={AssetId} sourceType={SourceType} path={Path} exists={Exists} size={Size} width={Width} height={Height}", asset.AssetId, asset.SourceType, asset.FilePath, asset.Exists, asset.FileSizeBytes, asset.Width, asset.Height);
+            productionReady);
+        logger.LogInformation("PRODUCTION_ASSET_REGISTERED assetId={AssetId} sourceType={SourceType} path={Path} exists={Exists} size={Size} width={Width} height={Height} productionReady={ProductionReady}", asset.AssetId, asset.SourceType, asset.FilePath, asset.Exists, asset.FileSizeBytes, asset.Width, asset.Height, asset.ProductionReady);
+        if (asset.ProductionReady && asset.SourceType is RealizedVisualAssetSourceType.NASA or RealizedVisualAssetSourceType.JWST)
+            logger.LogInformation("{Provider}_ASSET_REGISTERED_IN_PRODUCTION_MANIFEST path={Path}", asset.SourceType.ToString().ToUpperInvariant(), asset.FilePath);
         return asset;
+    }
+
+    private static bool IsProductionReadyImage(RealizedVisualAssetSourceType sourceType, bool exists, long fileSizeBytes, int width, int height)
+    {
+        if (!exists) return false;
+        if (sourceType is RealizedVisualAssetSourceType.NASA or RealizedVisualAssetSourceType.JWST)
+            return fileSizeBytes > MinimumProductionImageBytes && width >= MinimumProductionImageWidth && height >= MinimumProductionImageHeight;
+        return fileSizeBytes > 0 && width > 0 && height > 0;
     }
 
     private List<SegmentProductionAssetBundle> BuildSegmentBundles(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset> assets)
@@ -551,6 +579,27 @@ public sealed class WeeklyAssetRealizationValidator
 public static class ImageDimensionReader
 {
     public static (int Width, int Height) Read(string path)
+    {
+        var dimensions = ReadWithImageSharp(path);
+        if (dimensions.Width > 0 && dimensions.Height > 0) return dimensions;
+
+        return ReadFromHeaders(path);
+    }
+
+    private static (int Width, int Height) ReadWithImageSharp(string path)
+    {
+        try
+        {
+            var info = Image.Identify(path);
+            return info is null ? (0, 0) : (info.Width, info.Height);
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
+    private static (int Width, int Height) ReadFromHeaders(string path)
     {
         try
         {
