@@ -24,6 +24,7 @@ public sealed record NasaAssetPlan(
     IReadOnlyList<string> Warnings);
 
 public sealed record NasaAssetRequirement(
+    string ProviderName,
     string AssetCode,
     string SegmentId,
     string SegmentType,
@@ -36,6 +37,7 @@ public sealed record NasaAssetRequirement(
     string UsageRole);
 
 public sealed record NasaAssetResult(
+    string ProviderName,
     string AssetCode,
     string SegmentId,
     string SegmentType,
@@ -65,6 +67,12 @@ public sealed record NasaAssetRealizationReport(
     int ProductionReadyNASAAssetCount,
     int FailedNASAAssetCount,
     IReadOnlyList<string> NasaImagePaths,
+    int PlannedJWSTAssetCount,
+    int AttemptedJWSTAssetCount,
+    int GeneratedJWSTAssetCount,
+    int ProductionReadyJWSTAssetCount,
+    int FailedJWSTAssetCount,
+    IReadOnlyList<string> JwstImagePaths,
     IReadOnlyList<NasaAssetResult> Results,
     IReadOnlyList<string> Warnings);
 
@@ -74,7 +82,10 @@ public sealed record NasaAssetRealizationResult(
     NasaAssetRealizationReport Report,
     string PlanPath,
     string ResultsPath,
-    string ReportPath)
+    string ReportPath,
+    string JwstPlanPath,
+    string JwstResultsPath,
+    string JwstReportPath)
 {
     public static NasaAssetRealizationResult Empty(string rootPath, string visualPlanPath, string manifestPath, Guid pipelineRunId, bool configured, IReadOnlyList<string> warnings)
     {
@@ -83,8 +94,11 @@ public sealed record NasaAssetRealizationResult(
         var resultsPath = Path.Combine(episodeDirectory, "nasa-asset-results.json");
         var reportPath = Path.Combine(episodeDirectory, "nasa-asset-realization-report.json");
         var plan = new NasaAssetPlan(pipelineRunId, DateTime.UtcNow, visualPlanPath, manifestPath, null, 0, [], warnings);
-        var report = new NasaAssetRealizationReport(pipelineRunId, DateTime.UtcNow, configured, 0, 0, 0, 0, 0, [], [], warnings);
-        return new NasaAssetRealizationResult(plan, [], report, planPath, resultsPath, reportPath);
+        var jwstPlanPath = Path.Combine(episodeDirectory, "jwst-asset-plan.json");
+        var jwstResultsPath = Path.Combine(episodeDirectory, "jwst-asset-results.json");
+        var jwstReportPath = Path.Combine(episodeDirectory, "jwst-asset-realization-report.json");
+        var report = new NasaAssetRealizationReport(pipelineRunId, DateTime.UtcNow, configured, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, [], [], warnings);
+        return new NasaAssetRealizationResult(plan, [], report, planPath, resultsPath, reportPath, jwstPlanPath, jwstResultsPath, jwstReportPath);
     }
 }
 
