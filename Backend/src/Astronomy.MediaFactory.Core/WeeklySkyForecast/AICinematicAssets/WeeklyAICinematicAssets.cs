@@ -90,7 +90,17 @@ public sealed record AICinematicAssetRealizationReport(
     bool AICinematicProviderConfigured,
     string AzureImageDeploymentUsed,
     IReadOnlyList<string> AICinematicImagePaths,
-    IReadOnlyList<AICinematicAssetResult> Results);
+    IReadOnlyList<AICinematicAssetResult> Results,
+    int AICinematicCandidateCount = 0,
+    int RequiredAICinematicAssetCount = 0,
+    int OptionalAICinematicCandidateCount = 0,
+    int SelectedRequiredAICinematicAssetCount = 0,
+    int GeneratedRequiredAICinematicAssetCount = 0,
+    int ProductionReadyRequiredAICinematicAssetCount = 0,
+    int MissingRequiredAICinematicAssetCount = 0,
+    int GeneratedOptionalAICinematicAssetCount = 0,
+    int DeferredOptionalAICinematicAssetCount = 0,
+    bool AICinematicRequiredPackageReady = false);
 
 public sealed record AICinematicAssetGenerationSummary(
     IReadOnlyList<AICinematicAssetRequest> Requests,
@@ -111,7 +121,17 @@ public sealed record AICinematicAssetGenerationSummary(
     int FailedCount = 0,
     int SkippedExistingValidCount = 0,
     string RealizationReportPath = "",
-    IReadOnlyList<string>? AICinematicImagePaths = null);
+    IReadOnlyList<string>? AICinematicImagePaths = null,
+    int AICinematicCandidateCount = 0,
+    int RequiredAICinematicAssetCount = 0,
+    int OptionalAICinematicCandidateCount = 0,
+    int SelectedRequiredAICinematicAssetCount = 0,
+    int GeneratedRequiredAICinematicAssetCount = 0,
+    int ProductionReadyRequiredAICinematicAssetCount = 0,
+    int MissingRequiredAICinematicAssetCount = 0,
+    int GeneratedOptionalAICinematicAssetCount = 0,
+    int DeferredOptionalAICinematicAssetCount = 0,
+    bool AICinematicRequiredPackageReady = false);
 
 public sealed class AICinematicAssetRealizationOptions
 {
@@ -251,6 +271,8 @@ public sealed class AICinematicPromptBuilder(AICinematicStylePolicy stylePolicy,
         "weekly_recap_cinematic_sky" => "A calm cinematic sky backdrop that feels reflective and educational without specific event claims.",
         "fast_cinematic_sky_hook" => "A high-impact night-sky hook image with dynamic sky contrast and no labels or fake sky-map elements.",
         "subscribe_observe_sky_background" => "An inviting telescope-silhouette night landscape for a call-to-action background, clean and non-thumbnail-like.",
+        "shortform_call_to_action_background" => "An inviting shortform call-to-action night-sky background with telescope silhouette, clean negative space, and no text.",
+        "cosmic_retention_reset" => "A calm cosmic retention-reset backdrop with slow-breathing visual energy, subtle star fields, and broad negative space between information-dense segments.",
         "cosmic_breathing_space" => "A serene cosmic breathing-space backdrop with soft star fields and broad negative space for visual pacing.",
         "deep_space_scale_transition" => "An abstract deep-space scale transition showing depth and wonder without identifying exact objects or alignments.",
         _ => $"A cinematic astronomy-safe still image for {segmentType}, focused on mood, observation, and cosmic wonder without false specificity."
@@ -270,10 +292,20 @@ public sealed class AICinematicAssetPersister : IAICinematicAssetPersister
     public string ResolveImagePath(string workingDirectoryRoot, AICinematicAssetRequest request)
     {
         var safeEpisodeType = SanitizePathPart(request.EpisodeType);
-        var safeSegmentType = SanitizePathPart(ToSnakeCase(request.SegmentType));
+        var safeSegmentType = SanitizePathPart(ResolveOutputSegmentPath(request));
         var safeAssetCode = SanitizePathPart(request.AssetCode);
         return Path.Combine(workingDirectoryRoot, "ai-cinematic", safeEpisodeType, safeSegmentType, safeAssetCode + ".png");
     }
+
+    private static string ResolveOutputSegmentPath(AICinematicAssetRequest request) => request.AssetCode switch
+    {
+        "fast_cinematic_sky_hook" => "short_hook",
+        "cinematic_weekly_sky_reveal" => "opening_hook",
+        "cosmic_closing_background" => "weekly_summary",
+        "shortform_call_to_action_background" => "call_to_action",
+        "cosmic_retention_reset" => "retention_reset",
+        _ => ToSnakeCase(request.SegmentType)
+    };
 
     public async Task<(string PlanPath, string ResultsPath)> WriteAsync(string workingDirectoryRoot, IReadOnlyList<AICinematicAssetRequest> requests, IReadOnlyList<AICinematicAssetResult> results, CancellationToken cancellationToken)
     {
@@ -615,10 +647,21 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             maxAssetsPerRun,
             generator.DeploymentName);
 
-        var materializedRequests = requests
+        var materializedRequests = EnsureRequiredPackage(requests, visualAssetPlan)
             .Select(request => request with { PlannedImagePath = persister.ResolveImagePath(workingDirectoryRoot, request) })
             .ToList();
+        var requiredAssetIds = materializedRequests
+            .Where(IsRequiredPackageAsset)
+            .Select(request => request.AssetId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var requiredCount = requiredAssetIds.Count;
+        var optionalCount = Math.Max(0, materializedRequests.Count - requiredCount);
         logger.LogInformation("AI_CINEMATIC_PLAN_LOADED planned={PlannedCount}", materializedRequests.Count);
+        logger.LogInformation("AI_REQUIRED_PACKAGE_START required={RequiredCount} totalCandidates={CandidateCount} optionalCandidates={OptionalCount}", requiredCount, materializedRequests.Count, optionalCount);
+        foreach (var request in materializedRequests.Where(IsRequiredPackageAsset).OrderByDescending(x => x.AssetPriority))
+        {
+            logger.LogInformation("AI_REQUIRED_ASSET_DEFINED assetCode={AssetCode} episodeType={EpisodeType} segmentType={SegmentType} priority={Priority} imagePath={ImagePath}", request.AssetCode, request.EpisodeType, request.SegmentType, request.AssetPriority, request.PlannedImagePath);
+        }
 
         IReadOnlyList<AICinematicAssetResult> previousResults = aiOptions.ResumeExistingRunAssets
             ? await persister.ReadResultsAsync(workingDirectoryRoot, cancellationToken)
@@ -640,6 +683,8 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             {
                 results.Add(previous);
                 preservedAssetIds.Add(request.AssetId);
+                if (IsRequiredPackageAsset(request))
+                    logger.LogInformation("AI_REQUIRED_ASSET_EXISTING_VALID assetCode={AssetCode} imagePath={ImagePath}", request.AssetCode, previous.ImagePath);
                 continue;
             }
 
@@ -653,13 +698,14 @@ public sealed class WeeklyAICinematicAssetGenerationService(
                 preservedAssetIds.Add(request.AssetId);
                 skippedExistingValidCount++;
                 logger.LogInformation("AI_CINEMATIC_ASSET_SKIPPED_EXISTING_VALID assetCode={AssetCode} imagePath={ImagePath}", request.AssetCode, request.PlannedImagePath);
+                if (IsRequiredPackageAsset(request))
+                    logger.LogInformation("AI_REQUIRED_ASSET_EXISTING_VALID assetCode={AssetCode} imagePath={ImagePath}", request.AssetCode, request.PlannedImagePath);
             }
         }
 
         var selectionCandidates = materializedRequests
             .Where(request => !preservedAssetIds.Contains(request.AssetId))
             .Where(request => generator.IsConfigured)
-            .Where(request => maxAssetsPerRun > 0)
             .Where(request => IsSelectableGenerationStatus(previousByAssetId.TryGetValue(request.AssetId, out var previous) ? previous.GenerationStatus : request.GenerationStatus))
             .Where(request => !aiOptions.SkipExistingValidAssets || !validator.IsProductionReadyImage(request.PlannedImagePath))
             .GroupBy(request => request.AssetId, StringComparer.OrdinalIgnoreCase)
@@ -670,12 +716,23 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             .ThenBy(request => VisualRoleOrder(request.UsageRole))
             .ToList();
 
+        var requiredExistingValidCount = materializedRequests.Count(request => IsRequiredPackageAsset(request) && preservedAssetIds.Contains(request.AssetId));
+        var requiredMissingCandidates = selectionCandidates.Where(IsRequiredPackageAsset).ToList();
+        var optionalMissingCandidates = selectionCandidates.Where(request => !IsRequiredPackageAsset(request)).ToList();
+        foreach (var request in requiredMissingCandidates)
+        {
+            logger.LogInformation("AI_REQUIRED_ASSET_MISSING assetCode={AssetCode} imagePath={ImagePath}", request.AssetCode, request.PlannedImagePath);
+        }
+
         logger.LogInformation("AI_CINEMATIC_QUEUE_BUILT planned={PlannedCount} existingValid={ExistingValidCount} selectable={SelectableCount} max={MaxAssetsPerRun}", materializedRequests.Count, preservedAssetIds.Count, selectionCandidates.Count, maxAssetsPerRun);
         logger.LogInformation("AI_CINEMATIC_SELECTION_START planned={PlannedCount} max={MaxAssetsPerRun}", materializedRequests.Count, maxAssetsPerRun);
 
         var activeRequests = aiOptions.Enabled
-            ? selectionCandidates.Take(maxAssetsPerRun).ToList()
+            ? requiredMissingCandidates
+                .Concat(optionalMissingCandidates.Take(Math.Max(0, maxAssetsPerRun - requiredMissingCandidates.Count)))
+                .ToList()
             : new List<AICinematicAssetRequest>();
+        logger.LogInformation("AI_REQUIRED_PACKAGE_SELECTION_COMPLETE required={RequiredCount} requiredExistingValid={RequiredExistingValidCount} requiredSelected={RequiredSelectedCount} optionalSelected={OptionalSelectedCount}", requiredCount, requiredExistingValidCount, activeRequests.Count(IsRequiredPackageAsset), activeRequests.Count(request => !IsRequiredPackageAsset(request)));
         var activeRequestIds = activeRequests.Select(request => request.AssetId).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var deferredRequests = materializedRequests
             .Where(request => !preservedAssetIds.Contains(request.AssetId))
@@ -712,6 +769,8 @@ public sealed class WeeklyAICinematicAssetGenerationService(
                 cancellationToken.ThrowIfCancellationRequested();
                 logger.LogInformation("AI_CINEMATIC_ASSET_REQUEST_CREATED assetId={AssetId} segmentId={SegmentId} assetCode={AssetCode} assetPriority={AssetPriority} segmentOrder={SegmentOrder}", request.AssetId, request.SegmentId, request.AssetCode, request.AssetPriority, request.SegmentOrder);
                 logger.LogInformation("AI_CINEMATIC_GENERATION_START assetId={AssetId} assetCode={AssetCode} imagePath={ImagePath}", request.AssetId, request.AssetCode, request.PlannedImagePath);
+                if (IsRequiredPackageAsset(request))
+                    logger.LogInformation("AI_REQUIRED_GENERATION_START assetId={AssetId} assetCode={AssetCode} imagePath={ImagePath}", request.AssetId, request.AssetCode, request.PlannedImagePath);
                 var targetDirectory = Path.GetDirectoryName(request.PlannedImagePath);
                 if (!string.IsNullOrWhiteSpace(targetDirectory)) Directory.CreateDirectory(targetDirectory);
                 AICinematicProviderResult providerResult;
@@ -737,6 +796,8 @@ public sealed class WeeklyAICinematicAssetGenerationService(
                 }
 
                 logger.LogInformation("AI_CINEMATIC_GENERATION_COMPLETE assetId={AssetId} status={GenerationStatus}", request.AssetId, providerResult.GenerationStatus);
+                if (IsRequiredPackageAsset(request))
+                    logger.LogInformation("AI_REQUIRED_GENERATION_COMPLETE assetId={AssetId} assetCode={AssetCode} status={GenerationStatus}", request.AssetId, request.AssetCode, providerResult.GenerationStatus);
                 if (!string.IsNullOrWhiteSpace(providerResult.ImagePath))
                 {
                     logger.LogInformation("AI_CINEMATIC_IMAGE_WRITTEN assetId={AssetId} assetCode={AssetCode} imagePath={ImagePath}", request.AssetId, request.AssetCode, providerResult.ImagePath);
@@ -806,9 +867,22 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             generator.IsConfigured,
             generator.DeploymentName,
             imagePaths,
-            results);
+            results,
+            AICinematicCandidateCount: materializedRequests.Count,
+            RequiredAICinematicAssetCount: requiredCount,
+            OptionalAICinematicCandidateCount: optionalCount,
+            SelectedRequiredAICinematicAssetCount: activeRequests.Count(IsRequiredPackageAsset),
+            GeneratedRequiredAICinematicAssetCount: results.Count(result => requiredAssetIds.Contains(result.AssetId) && IsGeneratedStatus(result)),
+            ProductionReadyRequiredAICinematicAssetCount: results.Count(result => requiredAssetIds.Contains(result.AssetId) && result.ProductionReady),
+            MissingRequiredAICinematicAssetCount: Math.Max(0, requiredCount - results.Count(result => requiredAssetIds.Contains(result.AssetId) && result.ProductionReady)),
+            GeneratedOptionalAICinematicAssetCount: results.Count(result => !requiredAssetIds.Contains(result.AssetId) && IsGeneratedStatus(result)),
+            DeferredOptionalAICinematicAssetCount: results.Count(result => !requiredAssetIds.Contains(result.AssetId) && IsDeferredStatus(result)),
+            AICinematicRequiredPackageReady: requiredCount > 0 && results.Count(result => requiredAssetIds.Contains(result.AssetId) && result.ProductionReady) >= requiredCount);
         var reportPath = await persister.WriteReportAsync(workingDirectoryRoot, report, writeToken);
-        await UpdateVisualBalanceReportAsync(visualAssetPlan, visualBalanceReport, workingDirectoryRoot, materializedRequests.Count, generatedCount, productionReadyCount, writeToken);
+        await UpdateVisualBalanceReportAsync(visualAssetPlan, visualBalanceReport, workingDirectoryRoot, requiredCount, report.GeneratedRequiredAICinematicAssetCount, report.ProductionReadyRequiredAICinematicAssetCount, writeToken);
+        if (report.AICinematicRequiredPackageReady)
+            logger.LogInformation("AI_REQUIRED_PACKAGE_READY required={RequiredCount} requiredProductionReady={RequiredProductionReady} requiredMissing={RequiredMissing}", report.RequiredAICinematicAssetCount, report.ProductionReadyRequiredAICinematicAssetCount, report.MissingRequiredAICinematicAssetCount);
+        logger.LogInformation("AI_OPTIONAL_CANDIDATES_DEFERRED optionalDeferred={OptionalDeferred} optionalCandidates={OptionalCandidates}", report.DeferredOptionalAICinematicAssetCount, report.OptionalAICinematicCandidateCount);
 
         var summary = new AICinematicAssetGenerationSummary(
             materializedRequests,
@@ -820,7 +894,7 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             GeneratedCount: generatedCount,
             ProductionReadyCount: productionReadyCount,
             ProviderConfigured: generator.IsConfigured,
-            RemainingGap: Math.Max(0, materializedRequests.Count - productionReadyCount),
+            RemainingGap: report.MissingRequiredAICinematicAssetCount,
             AzureImageDeploymentUsed: generator.DeploymentName,
             DeferredCount: deferredCount,
             Partial: generationPartial || deferredCount > 0,
@@ -829,7 +903,17 @@ public sealed class WeeklyAICinematicAssetGenerationService(
             FailedCount: failedCount,
             SkippedExistingValidCount: skippedExistingValidCount,
             RealizationReportPath: reportPath,
-            AICinematicImagePaths: imagePaths);
+            AICinematicImagePaths: imagePaths,
+            AICinematicCandidateCount: materializedRequests.Count,
+            RequiredAICinematicAssetCount: requiredCount,
+            OptionalAICinematicCandidateCount: optionalCount,
+            SelectedRequiredAICinematicAssetCount: report.SelectedRequiredAICinematicAssetCount,
+            GeneratedRequiredAICinematicAssetCount: report.GeneratedRequiredAICinematicAssetCount,
+            ProductionReadyRequiredAICinematicAssetCount: report.ProductionReadyRequiredAICinematicAssetCount,
+            MissingRequiredAICinematicAssetCount: report.MissingRequiredAICinematicAssetCount,
+            GeneratedOptionalAICinematicAssetCount: report.GeneratedOptionalAICinematicAssetCount,
+            DeferredOptionalAICinematicAssetCount: report.DeferredOptionalAICinematicAssetCount,
+            AICinematicRequiredPackageReady: report.AICinematicRequiredPackageReady);
         logger.LogInformation("AI_CINEMATIC_REALIZATION_COMPLETE planned={PlannedCount} existingValid={ExistingValidCount} selected={SelectedCount} generated={GeneratedCount} deferred={DeferredCount} failed={FailedCount} productionReady={ProductionReadyCount} partial={Partial}", summary.PlannedCount, preservedAssetIds.Count, summary.SelectedCount, summary.GeneratedCount, summary.DeferredCount, summary.FailedCount, summary.ProductionReadyCount, summary.Partial);
         return summary;
     }
@@ -863,6 +947,98 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         }
     }
 
+
+
+    private IReadOnlyList<AICinematicAssetRequest> EnsureRequiredPackage(IReadOnlyList<AICinematicAssetRequest> requests, WeeklyVisualAssetPlan plan)
+    {
+        var result = requests.ToList();
+        foreach (var definition in RequiredPackageDefinitions)
+        {
+            if (result.Any(request => IsRequiredPackageAsset(request) && request.AssetCode.Equals(definition.AssetCode, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            var source = FindSegment(plan, definition.EpisodeType, definition.SegmentType)
+                ?? FindSegment(plan, definition.EpisodeType, definition.FallbackSegmentType)
+                ?? FindSegment(plan, definition.EpisodeType, null);
+            if (source is null)
+                continue;
+
+            var request = promptBuilder.Build(
+                source with { SegmentType = definition.SegmentType },
+                definition.EpisodeType,
+                definition.AssetCode,
+                definition.UsageRole,
+                plan.RegionId,
+                plan.Language,
+                plan.WeekStartDate,
+                definition.Priority) with
+            {
+                AssetId = $"{definition.EpisodeType}_{definition.OutputSegment}_{definition.AssetCode}".ToLowerInvariant(),
+                SegmentId = string.IsNullOrWhiteSpace(source.SegmentId) ? definition.OutputSegment : source.SegmentId,
+                SegmentType = definition.SegmentType,
+                AssetPriority = definition.Priority,
+                PacingResetCandidate = definition.AssetCode.Equals("cosmic_retention_reset", StringComparison.OrdinalIgnoreCase) || source.RetentionMetadata.PacingResetCandidate,
+                EmotionalResetCandidate = source.RetentionMetadata.EmotionalResetCandidate,
+                SegmentOrder = definition.Priority
+            };
+            result.Add(request);
+        }
+
+        return result
+            .Select(NormalizeRequiredPackageRequest)
+            .GroupBy(request => request.AssetId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(IsRequiredPackageAsset).ThenByDescending(request => request.AssetPriority).First())
+            .ToList();
+    }
+
+    private static SegmentVisualAssetPlan? FindSegment(WeeklyVisualAssetPlan plan, string episodeType, string? segmentType)
+    {
+        var segments = episodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase)
+            ? plan.ShortformSegmentVisualPlans
+            : plan.LongformSegmentVisualPlans;
+        return string.IsNullOrWhiteSpace(segmentType)
+            ? segments.FirstOrDefault()
+            : segments.FirstOrDefault(segment => segment.SegmentType.Equals(segmentType, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static AICinematicAssetRequest NormalizeRequiredPackageRequest(AICinematicAssetRequest request)
+    {
+        var definition = RequiredPackageDefinitions.FirstOrDefault(definition =>
+            definition.AssetCode.Equals(request.AssetCode, StringComparison.OrdinalIgnoreCase)
+            && definition.EpisodeType.Equals(request.EpisodeType, StringComparison.OrdinalIgnoreCase));
+        return definition is null
+            ? request
+            : request with
+            {
+                AssetId = $"{definition.EpisodeType}_{definition.OutputSegment}_{definition.AssetCode}".ToLowerInvariant(),
+                SegmentType = definition.SegmentType,
+                UsageRole = definition.UsageRole,
+                AssetPriority = definition.Priority,
+                PacingResetCandidate = request.PacingResetCandidate || definition.AssetCode.Equals("cosmic_retention_reset", StringComparison.OrdinalIgnoreCase)
+            };
+    }
+
+    private static bool IsRequiredPackageAsset(AICinematicAssetRequest request) => RequiredPackageDefinitions.Any(definition =>
+        definition.AssetCode.Equals(request.AssetCode, StringComparison.OrdinalIgnoreCase)
+        && definition.EpisodeType.Equals(request.EpisodeType, StringComparison.OrdinalIgnoreCase));
+
+    private static readonly IReadOnlyList<RequiredAICinematicAssetDefinition> RequiredPackageDefinitions =
+    [
+        new("shortform", "ShortHook", null, "short_hook", "fast_cinematic_sky_hook", "short_hook_cinematic_background", 100),
+        new("longform", "OpeningHook", null, "opening_hook", "cinematic_weekly_sky_reveal", "opening_hook_cinematic_background", 95),
+        new("longform", "WeeklySummary", null, "weekly_summary", "cosmic_closing_background", "weekly_summary_cinematic_background", 90),
+        new("shortform", "CallToAction", null, "call_to_action", "shortform_call_to_action_background", "shortform_cta_background", 85),
+        new("longform", "WeeklySkyOverview", "BestObservationWindow", "retention_reset", "cosmic_retention_reset", "pacing_reset", 80)
+    ];
+
+    private sealed record RequiredAICinematicAssetDefinition(
+        string EpisodeType,
+        string SegmentType,
+        string? FallbackSegmentType,
+        string OutputSegment,
+        string AssetCode,
+        string UsageRole,
+        int Priority);
 
     private void LogValidation(AICinematicAssetRequest request, AICinematicAssetResult result)
     {
@@ -936,13 +1112,14 @@ public sealed class WeeklyAICinematicAssetGenerationService(
         "OpeningHook" => ["cinematic_weekly_sky_reveal", "atmospheric_horizon_wonder"],
         "WeeklySummary" => ["cosmic_closing_background", "weekly_recap_cinematic_sky"],
         "ShortHook" => ["fast_cinematic_sky_hook"],
-        "CallToAction" => ["subscribe_observe_sky_background"],
+        "CallToAction" => ["shortform_call_to_action_background"],
         _ => []
     };
 
     private static string ResolveUsageRole(SegmentVisualAssetPlan segment, string assetCode)
     {
-        if (assetCode.Contains("breathing", StringComparison.OrdinalIgnoreCase) || assetCode.Contains("transition", StringComparison.OrdinalIgnoreCase)) return "pacing_reset";
+        if (assetCode.Contains("breathing", StringComparison.OrdinalIgnoreCase) || assetCode.Contains("transition", StringComparison.OrdinalIgnoreCase) || assetCode.Contains("retention_reset", StringComparison.OrdinalIgnoreCase)) return "pacing_reset";
+        if (assetCode.Contains("call_to_action", StringComparison.OrdinalIgnoreCase)) return "shortform_cta_background";
         return segment.RequiredVisualAssets.FirstOrDefault(x => x.PreferredSource == VisualAssetSourceType.AICinematic)?.UsageRole
             ?? segment.SourcePlans.FirstOrDefault(x => x.SourceType == VisualAssetSourceType.AICinematic)?.UsageRole
             ?? "cinematic_segment_support";

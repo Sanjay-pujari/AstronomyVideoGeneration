@@ -2189,8 +2189,7 @@ var sscResult = splitProbeSsc;
             TimeSpan.FromSeconds(Math.Max(1, aiCinematicOptions.EffectiveMaxGenerationSeconds)));
 
         var visualBalanceHealthyAfterAICinematicAssets = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
-            && aiCinematicAssets.PlannedCount == aiCinematicAssets.ProductionReadyCount
-            && aiCinematicAssets.GeneratedCount >= aiCinematicAssets.PlannedCount;
+            && aiCinematicAssets.AICinematicRequiredPackageReady;
 
         var aiCinematicImagePaths = aiCinematicAssets.AICinematicImagePaths?.Count > 0
             ? aiCinematicAssets.AICinematicImagePaths
@@ -2311,7 +2310,7 @@ var sscResult = splitProbeSsc;
                 segmentDiversificationReady = segmentDiversification.Plan.SegmentDiversificationReady,
                 diversifiedLongformSegmentCount = segmentDiversification.Plan.DiversifiedLongformSegmentCount,
                 diversifiedShortformSegmentCount = segmentDiversification.Plan.DiversifiedShortformSegmentCount,
-                assetExpansionRequired = segmentDiversification.Plan.AssetExpansionRequired || aiCinematicAssets.RemainingGap > 0,
+                assetExpansionRequired = segmentDiversification.Plan.AssetExpansionRequired || aiCinematicAssets.MissingRequiredAICinematicAssetCount > 0,
                 highestRetentionRiskScore = segmentDiversification.Plan.HighestRetentionRiskScore,
                 highestRepetitionRiskScore = segmentDiversification.Plan.HighestRepetitionRiskScore
             },
@@ -2345,6 +2344,16 @@ var sscResult = splitProbeSsc;
                 aiCinematicMaxAssetsPerRun = aiCinematicAssets.MaxAssetsPerRun,
                 aiCinematicProviderConfigured = aiCinematicAssets.ProviderConfigured,
                 azureImageDeploymentUsed = aiCinematicAssets.AzureImageDeploymentUsed,
+                aiCinematicCandidateCount = aiCinematicAssets.AICinematicCandidateCount,
+                requiredAICinematicAssetCount = aiCinematicAssets.RequiredAICinematicAssetCount,
+                optionalAICinematicCandidateCount = aiCinematicAssets.OptionalAICinematicCandidateCount,
+                selectedRequiredAICinematicAssetCount = aiCinematicAssets.SelectedRequiredAICinematicAssetCount,
+                generatedRequiredAICinematicAssetCount = aiCinematicAssets.GeneratedRequiredAICinematicAssetCount,
+                productionReadyRequiredAICinematicAssetCount = aiCinematicAssets.ProductionReadyRequiredAICinematicAssetCount,
+                missingRequiredAICinematicAssetCount = aiCinematicAssets.MissingRequiredAICinematicAssetCount,
+                generatedOptionalAICinematicAssetCount = aiCinematicAssets.GeneratedOptionalAICinematicAssetCount,
+                deferredOptionalAICinematicAssetCount = aiCinematicAssets.DeferredOptionalAICinematicAssetCount,
+                aiCinematicRequiredPackageReady = aiCinematicAssets.AICinematicRequiredPackageReady,
                 aiCinematicImagePaths,
                 remainingAICinematicGap = aiCinematicAssets.RemainingGap
             },
@@ -2500,7 +2509,7 @@ var sscResult = splitProbeSsc;
             segmentDiversification.Plan.SegmentDiversificationReady,
             segmentDiversification.Plan.DiversifiedLongformSegmentCount,
             segmentDiversification.Plan.DiversifiedShortformSegmentCount,
-            segmentDiversification.Plan.AssetExpansionRequired || aiCinematicAssets.RemainingGap > 0,
+            segmentDiversification.Plan.AssetExpansionRequired || aiCinematicAssets.MissingRequiredAICinematicAssetCount > 0,
             segmentDiversification.Plan.HighestRetentionRiskScore,
             segmentDiversification.Plan.HighestRepetitionRiskScore,
             visualAssetPlanning.PlanPath,
@@ -2528,6 +2537,16 @@ var sscResult = splitProbeSsc;
             aiCinematicAssets.MaxAssetsPerRun,
             aiCinematicAssets.ProviderConfigured,
             aiCinematicAssets.AzureImageDeploymentUsed,
+            aiCinematicAssets.AICinematicCandidateCount,
+            aiCinematicAssets.RequiredAICinematicAssetCount,
+            aiCinematicAssets.OptionalAICinematicCandidateCount,
+            aiCinematicAssets.SelectedRequiredAICinematicAssetCount,
+            aiCinematicAssets.GeneratedRequiredAICinematicAssetCount,
+            aiCinematicAssets.ProductionReadyRequiredAICinematicAssetCount,
+            aiCinematicAssets.MissingRequiredAICinematicAssetCount,
+            aiCinematicAssets.GeneratedOptionalAICinematicAssetCount,
+            aiCinematicAssets.DeferredOptionalAICinematicAssetCount,
+            aiCinematicAssets.AICinematicRequiredPackageReady,
             assetExpansion.PlanPath,
             assetExpansion.CoverageReportPath,
             assetExpansion.RenderScenePlanPath,
