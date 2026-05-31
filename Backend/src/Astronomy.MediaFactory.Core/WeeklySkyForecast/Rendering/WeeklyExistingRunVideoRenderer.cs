@@ -332,12 +332,13 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var shortform = episodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase);
         var usage = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var segments = new List<FinalRenderSegment>();
-        foreach (var segment in timeline.Segments)
+        foreach (var segment in timeline.Segments ?? [])
         {
+            var segmentShots = segment.Shots ?? [];
             var pool = SelectRenderAssets(segment, shortform, manifest, productionManifest).ToList();
             if (pool.Count == 0)
             {
-                pool = segment.Shots.Select(s => new RenderAssetCandidate(s.AssetId, s.AssetType, s.AssetPath)).Where(a => !string.IsNullOrWhiteSpace(a.AssetPath)).DistinctBy(a => a.AssetPath, StringComparer.OrdinalIgnoreCase).ToList();
+                pool = segmentShots.Select(s => new RenderAssetCandidate(s.AssetId, s.AssetType, s.AssetPath)).Where(a => !string.IsNullOrWhiteSpace(a.AssetPath)).DistinctBy(a => a.AssetPath, StringComparer.OrdinalIgnoreCase).ToList();
             }
             if (pool.Count == 0)
             {
@@ -378,14 +379,16 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var all = new List<RenderAssetCandidate>();
         if (productionManifest is not null)
         {
-            all.AddRange(productionManifest.SegmentBundles
-                .Where(bundle => bundle.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase) || bundle.SegmentType.Equals(segment.SegmentType, StringComparison.OrdinalIgnoreCase))
-                .SelectMany(bundle => bundle.AssignedVisualAssets)
-                .Where(asset => asset.Exists && !string.IsNullOrWhiteSpace(asset.FilePath))
+            all.AddRange((productionManifest.SegmentBundles ?? [])
+                .Where(bundle => bundle is not null &&
+                    (string.Equals(bundle.SegmentId, segment.SegmentId, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(bundle.SegmentType, segment.SegmentType, StringComparison.OrdinalIgnoreCase)))
+                .SelectMany(bundle => bundle.AssignedVisualAssets ?? [])
+                .Where(asset => asset is not null && asset.Exists && !string.IsNullOrWhiteSpace(asset.FilePath))
                 .Select(asset => new RenderAssetCandidate(asset.AssetId, NormalizeRenderAssetType(asset.SourceType.ToString()), asset.FilePath)));
         }
-        all.AddRange(manifest.Assets.Where(asset => asset.Exists && !string.IsNullOrWhiteSpace(asset.AssetPath)).Select(asset => new RenderAssetCandidate(asset.AssetId, NormalizeRenderAssetType(asset.AssetType), asset.AssetPath)));
-        all.AddRange(segment.Shots.Where(shot => !string.IsNullOrWhiteSpace(shot.AssetPath)).Select(shot => new RenderAssetCandidate(shot.AssetId, NormalizeRenderAssetType(shot.AssetType), shot.AssetPath)));
+        all.AddRange((manifest?.Assets ?? []).Where(asset => asset is not null && asset.Exists && !string.IsNullOrWhiteSpace(asset.AssetPath)).Select(asset => new RenderAssetCandidate(asset.AssetId, NormalizeRenderAssetType(asset.AssetType), asset.AssetPath)));
+        all.AddRange((segment.Shots ?? []).Where(shot => shot is not null && !string.IsNullOrWhiteSpace(shot.AssetPath)).Select(shot => new RenderAssetCandidate(shot.AssetId, NormalizeRenderAssetType(shot.AssetType), shot.AssetPath)));
 
         var preferred = all.Where(asset => SegmentAssetScore(segment.SegmentType, asset) > 0)
             .OrderByDescending(asset => SegmentAssetScore(segment.SegmentType, asset))
