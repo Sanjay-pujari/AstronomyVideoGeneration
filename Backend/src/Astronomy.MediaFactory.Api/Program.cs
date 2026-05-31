@@ -18,6 +18,7 @@ using Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EventScoring;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -741,7 +742,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, WeeklyAssetExpansionService assetExpansionService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IOptions<WeeklySkyForecastAssetExpansionOptions> assetExpansionOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, WeeklyAssetRealizationService assetRealizationService, WeeklyNarrationVisualTimelineComposer narrationVisualTimelineComposer, IWeeklyEventPriorityScoringEngine eventPriorityScoringEngine, IWeeklyNarrationEngineV2 narrationEngineV2, IWeeklyTimelineCompositionEngine timelineCompositionEngine, IWeeklySkyForecastContextBuilderV2 contextBuilder, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, WeeklyAssetExpansionService assetExpansionService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IOptions<WeeklySkyForecastAssetExpansionOptions> assetExpansionOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, WeeklyAssetRealizationService assetRealizationService, WeeklyNarrationVisualTimelineComposer narrationVisualTimelineComposer, IWeeklyEventPriorityScoringEngine eventPriorityScoringEngine, IWeeklyNarrationEngineV2 narrationEngineV2, IWeeklyTimelineCompositionEngine timelineCompositionEngine, IWeeklyFfmpegRenderPreparationEngine ffmpegRenderPreparationEngine, IWeeklySkyForecastContextBuilderV2 contextBuilder, CancellationToken ct) =>
 {
     try
     {
@@ -2538,6 +2539,25 @@ var sscResult = splitProbeSsc;
                     realizedAllProductionImageAssets),
                 stageCt));
 
+        var ffmpegRendererPreparation = await ExecuteOrchestrationStageAsync("Preparing weekly FFmpeg renderer contract", stageCt =>
+            ffmpegRenderPreparationEngine.PrepareAndPersistAsync(
+                new WeeklyFfmpegRenderPreparationInput(
+                    pipelineRunId,
+                    root,
+                    weekStartDate,
+                    request.RegionId,
+                    request.Language,
+                    timelineComposition.FinalRenderTimelinePath,
+                    timelineComposition.FinalRenderShotListPath,
+                    timelineComposition.TimelineTransitionPlanPath,
+                    timelineComposition.SegmentTimelineReportPath,
+                    timelineComposition.RetentionMarkerTimelinePath,
+                    assetRealization.WeeklyProductionAssetManifestPath,
+                    assetRealization.AssetQualityReportPath,
+                    narrationEngine.LongformNarrationPath,
+                    narrationEngine.ShortformNarrationPath),
+                stageCt));
+
         var output = new WeeklySkyForecastV2GenerateWeeklyScenesResponse(
             pipelineRunId,
             root,
@@ -2758,7 +2778,23 @@ var sscResult = splitProbeSsc;
             timelineComposition.ValidationReport.HeroEventRulePassed,
             timelineComposition.ValidationReport.AstrophotographyRulePassed,
             timelineComposition.ValidationReport.SummaryRulePassed,
-            timelineComposition.ValidationReport.ShortformRulePassed);
+            timelineComposition.ValidationReport.ShortformRulePassed,
+            ffmpegRendererPreparation.ValidationReport.RendererPreparationReady,
+            ffmpegRendererPreparation.WeeklyRenderContractPath,
+            ffmpegRendererPreparation.RenderInputManifestPath,
+            ffmpegRendererPreparation.FfmpegFilterGraphPlanPath,
+            ffmpegRendererPreparation.TransitionExecutionPlanPath,
+            ffmpegRendererPreparation.MotionEffectExecutionPlanPath,
+            ffmpegRendererPreparation.AudioAlignmentPlanPath,
+            ffmpegRendererPreparation.RendererValidationReportPath,
+            ffmpegRendererPreparation.ValidationReport.LongformRenderContractReady,
+            ffmpegRendererPreparation.ValidationReport.ShortformRenderContractReady,
+            ffmpegRendererPreparation.ValidationReport.AllTimelineAssetsFound,
+            ffmpegRendererPreparation.ValidationReport.AllTimelineAssetsReadable,
+            ffmpegRendererPreparation.ValidationReport.DurationConsistencyPassed,
+            ffmpegRendererPreparation.ValidationReport.ResolutionPlanPassed,
+            ffmpegRendererPreparation.ValidationReport.TransitionPlanPassed,
+            ffmpegRendererPreparation.ValidationReport.AudioAlignmentPlanReady);
 
         return Results.Ok(output);
     }

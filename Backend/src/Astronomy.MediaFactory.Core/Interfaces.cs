@@ -1523,7 +1523,23 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     bool TimelineHeroEventRulePassed = false,
     bool TimelineAstrophotographyRulePassed = false,
     bool TimelineSummaryRulePassed = false,
-    bool TimelineShortformRulePassed = false);
+    bool TimelineShortformRulePassed = false,
+    bool FfmpegRendererPreparationReady = false,
+    string? WeeklyRenderContractPath = null,
+    string? RenderInputManifestPath = null,
+    string? FfmpegFilterGraphPlanPath = null,
+    string? TransitionExecutionPlanPath = null,
+    string? MotionEffectExecutionPlanPath = null,
+    string? AudioAlignmentPlanPath = null,
+    string? RendererValidationReportPath = null,
+    bool LongformRenderContractReady = false,
+    bool ShortformRenderContractReady = false,
+    bool AllTimelineAssetsFound = false,
+    bool AllTimelineAssetsReadable = false,
+    bool RendererDurationValidationPassed = false,
+    bool RendererResolutionPlanPassed = false,
+    bool RendererTransitionPlanPassed = false,
+    bool RendererAudioAlignmentPlanReady = false);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
