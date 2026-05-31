@@ -2227,11 +2227,13 @@ var sscResult = splitProbeSsc;
                 stageCt));
         warnings.AddRange(assetRealization.RealizationReport.Warnings);
         warnings = warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var failedAssetPaths = new HashSet<string>(assetRealization.FailedAssetPaths ?? [], StringComparer.OrdinalIgnoreCase);
         var realizedAllProductionImageAssets = allProductionImageAssets
             .Concat(assetRealization.NasaImagePaths)
             .Concat(assetRealization.JwstImagePaths)
             .Concat(assetRealization.MotionGraphicPaths ?? [])
             .Concat(assetRealization.EducationalOverlayPaths ?? [])
+            .Where(path => !failedAssetPaths.Contains(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -2401,7 +2403,15 @@ var sscResult = splitProbeSsc;
                 finalVideoPipelineReady = assetRealization.VideoReadinessReport.FinalVideoPipelineReady,
                 readySegmentCountForTest = assetRealization.VideoReadinessReport.ReadySegmentCountForTest,
                 readySegmentCountForFinal = assetRealization.VideoReadinessReport.ReadySegmentCountForFinal,
-                notReadySegmentCount = assetRealization.VideoReadinessReport.NotReadySegments.Count
+                notReadySegmentCount = assetRealization.VideoReadinessReport.NotReadySegments.Count,
+                assetQualityReportPath = assetRealization.AssetQualityReportPath,
+                assetQualityDetailsPath = assetRealization.AssetQualityDetailsPath,
+                totalValidatedAssets = assetRealization.TotalValidatedAssets,
+                productionReadyAssetCount = assetRealization.ProductionReadyAssetCount,
+                productionWarningAssetCount = assetRealization.ProductionWarningAssetCount,
+                productionFailedAssetCount = assetRealization.ProductionFailedAssetCount,
+                qualityGatePassed = assetRealization.QualityGatePassed,
+                failedAssetPaths = assetRealization.FailedAssetPaths
             },
             assetExpansion = new
             {
@@ -2589,7 +2599,14 @@ var sscResult = splitProbeSsc;
             narrationVisualTimeline.ValidationReport.ShortformTimelineReadyForFinalVideo,
             narrationVisualTimeline.ValidationReport.TotalShotCount,
             narrationVisualTimeline.ValidationReport.TotalTimelineDurationSeconds,
-            narrationVisualTimeline.ValidationReport.TimelineValidationStatus);
+            narrationVisualTimeline.ValidationReport.TimelineValidationStatus,
+            assetRealization.AssetQualityReportPath,
+            assetRealization.TotalValidatedAssets,
+            assetRealization.ProductionReadyAssetCount,
+            assetRealization.ProductionWarningAssetCount,
+            assetRealization.ProductionFailedAssetCount,
+            assetRealization.QualityGatePassed,
+            assetRealization.FailedAssetPaths);
 
         return Results.Ok(output);
     }
