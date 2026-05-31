@@ -1473,7 +1473,16 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     int ProductionWarningAssetCount = 0,
     int ProductionFailedAssetCount = 0,
     bool QualityGatePassed = false,
-    IReadOnlyList<string>? FailedAssetPaths = null);
+    IReadOnlyList<string>? FailedAssetPaths = null,
+    string? WeeklyEventPriorityReportPath = null,
+    string? HeroEventSelectionPath = null,
+    string? ThumbnailCandidateReportPath = null,
+    string? OpeningHookCandidateReportPath = null,
+    string? HighestPriorityEventCode = null,
+    int HighestPriorityEventScore = 0,
+    string? HeroEventClassification = null,
+    IReadOnlyList<string>? TopThreeEventCodes = null,
+    bool EventPriorityScoringReady = false);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {

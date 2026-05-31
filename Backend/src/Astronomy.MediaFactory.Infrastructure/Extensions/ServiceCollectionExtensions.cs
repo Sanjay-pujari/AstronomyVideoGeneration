@@ -16,6 +16,7 @@ using Astronomy.MediaFactory.Infrastructure.Scheduling;
 using Astronomy.MediaFactory.Publishing;
 using Astronomy.MediaFactory.Rendering;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NasaAssets;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.EventScoring;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -553,6 +554,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.WeeklyAssetRealizationValidator>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.WeeklyAssetRealizationService>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization.WeeklyNarrationVisualTimelineComposer>();
+        services.AddScoped<IWeeklyEventPriorityScoringEngine, WeeklyEventPriorityScoringEngine>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicStylePolicy>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicPromptBuilder>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicAssetQueueBuilder, Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetQueueBuilder>();
