@@ -538,7 +538,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
             parts.Add("[v0]null[vout]");
             return string.Join(';', parts);
         }
-        var cumulative = shots[0].DurationSeconds;
+        var cumulative = (double)shots[0].DurationSeconds;
         var previous = "v0";
         for (var i = 1; i < shots.Count; i++)
         {
