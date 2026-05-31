@@ -507,7 +507,8 @@ public sealed class WeeklyAssetQualityValidator(ILogger logger)
         logger.LogInformation("ASSET_QUALITY_VALIDATION_START root={Root} assetCount={AssetCount}", root, assets.Count);
         var motionByPath = motionGraphics.ToDictionary(x => x.AssetPath, StringComparer.OrdinalIgnoreCase);
         var overlayByPath = educationalOverlays.ToDictionary(x => x.AssetPath, StringComparer.OrdinalIgnoreCase);
-        var details = assets.Select(asset => Validate(asset, motionByPath.GetValueOrDefault(asset.FilePath), overlayByPath.GetValueOrDefault(asset.FilePath))).ToList();
+        var expandedMetadata = LoadExpandedStellariumMetadata(root);
+        var details = assets.Select(asset => Validate(asset, motionByPath.GetValueOrDefault(asset.FilePath), overlayByPath.GetValueOrDefault(asset.FilePath), expandedMetadata.GetValueOrDefault(asset.FilePath))).ToList();
         var report = BuildReport(details);
 
         var episodeDirectory = Path.Combine(root, "episode");
@@ -521,7 +522,7 @@ public sealed class WeeklyAssetQualityValidator(ILogger logger)
         return new WeeklyAssetQualityValidationResult(report, details, reportPath, detailsPath);
     }
 
-    private WeeklyAssetQualityDetail Validate(RealizedVisualAsset asset, MotionGraphicManifestEntry? motionEntry, EducationalOverlayManifestEntry? overlayEntry)
+    private WeeklyAssetQualityDetail Validate(RealizedVisualAsset asset, MotionGraphicManifestEntry? motionEntry, EducationalOverlayManifestEntry? overlayEntry, ExpandedStellariumAssetMetadata? expandedMetadata)
     {
         logger.LogInformation("ASSET_QUALITY_CHECK assetId={AssetId} sourceType={SourceType} path={Path}", asset.AssetId, asset.SourceType, asset.FilePath);
         var passed = new List<string>();
@@ -554,7 +555,7 @@ public sealed class WeeklyAssetQualityValidator(ILogger logger)
         {
             case RealizedVisualAssetSourceType.StellariumBase:
             case RealizedVisualAssetSourceType.StellariumExpanded:
-                ValidateStellariumSemanticChecks(asset, profile, metrics, passed, failed, reasons);
+                ValidateStellariumSemanticChecks(asset, profile, metrics, passed, failed, reasons, expandedMetadata);
                 break;
             case RealizedVisualAssetSourceType.AICinematic:
                 if (failed.Count == 0) passed.Add("AI cinematic still satisfies production still requirements");
@@ -590,11 +591,27 @@ public sealed class WeeklyAssetQualityValidator(ILogger logger)
         }
     }
 
-    private static void ValidateStellariumSemanticChecks(RealizedVisualAsset asset, string profile, ImageQualityMetrics metrics, List<string> passed, List<string> failed, List<string> reasons)
+    private static void ValidateStellariumSemanticChecks(RealizedVisualAsset asset, string profile, ImageQualityMetrics metrics, List<string> passed, List<string> failed, List<string> reasons, ExpandedStellariumAssetMetadata? expandedMetadata)
     {
+        if (asset.SourceType == RealizedVisualAssetSourceType.StellariumExpanded)
+        {
+            if (expandedMetadata?.SelectedSunAltitudeDeg is { } sunAltitude)
+            {
+                var required = profile.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase) ? -12d : -6d;
+                if (sunAltitude <= required) passed.Add("Expanded night metadata valid");
+                else Fail("Expanded night metadata valid", profile.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase) ? "DaylightOrTwilightExpandedScene" : "DaylightOrTwilightExpandedScene");
+            }
+            else
+            {
+                Fail("Expanded night metadata present", "DaylightOrTwilightExpandedScene");
+            }
+
+            if (metrics.DaylightSkyLikely) Fail("Expanded screenshot night sky", "DaylightSkyDetected");
+        }
+
         if (profile.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase))
         {
-            if (metrics.NightSkyLikely) passed.Add("Night sky required"); else Fail("Night sky required", "Daylight sky");
+            if (metrics.NightSkyLikely) passed.Add("Night sky required"); else Fail("Night sky required", "DaylightSkyDetected");
             if (metrics.TargetObjectLikely) passed.Add("Target object visible");
             else Fail("Target object visible", "Target not visible. Astrophotography objective not satisfied.");
             if (metrics.TargetObjectLikely && metrics.ObjectInsideSafeFrame) passed.Add("Object inside safe frame");
@@ -694,9 +711,64 @@ public sealed class WeeklyAssetQualityValidator(ILogger logger)
         return asset.SourceType.ToString();
     }
 
-    private readonly record struct ImageQualityMetrics(bool Readable, bool IsBlank, bool IsMonochrome, bool IsFullyOverexposed, bool NightSkyLikely, bool HasVisibleObject, bool ObjectInsideSafeFrame, bool TargetObjectLikely)
+    private sealed record ExpandedStellariumAssetMetadata(string SceneType, DateTime? SelectedObservationUtc, DateTime? SelectedObservationLocal, double? SelectedSunAltitudeDeg, string NightValidationStatus);
+
+    private static IReadOnlyDictionary<string, ExpandedStellariumAssetMetadata> LoadExpandedStellariumMetadata(string root)
     {
-        public static ImageQualityMetrics Unreadable => new(false, true, true, false, false, false, false, false);
+        var path = Path.Combine(root, "episode", "weekly-expanded-stellarium-execution-report.json");
+        if (!File.Exists(path)) return new Dictionary<string, ExpandedStellariumAssetMetadata>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            if (!TryGetPropertyIgnoreCase(document.RootElement, "expandedScenes", out var scenes) || scenes.ValueKind != JsonValueKind.Array)
+                return new Dictionary<string, ExpandedStellariumAssetMetadata>(StringComparer.OrdinalIgnoreCase);
+
+            var map = new Dictionary<string, ExpandedStellariumAssetMetadata>(StringComparer.OrdinalIgnoreCase);
+            foreach (var scene in scenes.EnumerateArray())
+            {
+                var sceneType = TryGetPropertyIgnoreCase(scene, "sourceSegmentType", out var st) ? st.GetString() ?? string.Empty : string.Empty;
+                var status = TryGetPropertyIgnoreCase(scene, "nightValidationStatus", out var ns) ? ns.GetString() ?? string.Empty : string.Empty;
+                var utc = TryGetDateTime(scene, "selectedObservationUtc");
+                var local = TryGetDateTime(scene, "selectedObservationLocal");
+                var sun = TryGetPropertyIgnoreCase(scene, "selectedSunAltitudeDeg", out var sa) && sa.ValueKind == JsonValueKind.Number ? sa.GetDouble() : (double?)null;
+                var metadata = new ExpandedStellariumAssetMetadata(sceneType, utc, local, sun, status);
+                if (TryGetPropertyIgnoreCase(scene, "generatedScreenshots", out var screenshots) && screenshots.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var screenshot in screenshots.EnumerateArray())
+                    {
+                        var value = screenshot.GetString();
+                        if (!string.IsNullOrWhiteSpace(value)) map[value] = metadata;
+                    }
+                }
+            }
+            return map;
+        }
+        catch
+        {
+            return new Dictionary<string, ExpandedStellariumAssetMetadata>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        static DateTime? TryGetDateTime(JsonElement element, string property)
+            => TryGetPropertyIgnoreCase(element, property, out var value) && value.ValueKind == JsonValueKind.String && DateTime.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed) ? parsed : null;
+
+        static bool TryGetPropertyIgnoreCase(JsonElement element, string property, out JsonElement value)
+        {
+            if (element.TryGetProperty(property, out value)) return true;
+            foreach (var item in element.EnumerateObject())
+            {
+                if (item.Name.Equals(property, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = item.Value;
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private readonly record struct ImageQualityMetrics(bool Readable, bool IsBlank, bool IsMonochrome, bool IsFullyOverexposed, bool NightSkyLikely, bool HasVisibleObject, bool ObjectInsideSafeFrame, bool TargetObjectLikely, bool DaylightSkyLikely)
+    {
+        public static ImageQualityMetrics Unreadable => new(false, true, true, false, false, false, false, false, false);
 
         public static ImageQualityMetrics TryRead(string path)
         {
@@ -747,7 +819,8 @@ public sealed class WeeklyAssetQualityValidator(ILogger logger)
                 var hasVisibleObject = brightRatio > 0.0005d && stdDev > 4d;
                 var objectInsideSafeFrame = safeBrightRatio > 0.0002d;
                 var targetObjectLikely = safeBrightRatio > 0.0015d;
-                return new ImageQualityMetrics(true, isBlank, isMonochrome, isFullyOverexposed, nightSkyLikely, hasVisibleObject, objectInsideSafeFrame, targetObjectLikely);
+                var daylightSkyLikely = mean > 145d || (averageChroma > 20d && brightRatio > 0.30d && darkRatio < 0.35d);
+                return new ImageQualityMetrics(true, isBlank, isMonochrome, isFullyOverexposed, nightSkyLikely, hasVisibleObject, objectInsideSafeFrame, targetObjectLikely, daylightSkyLikely);
             }
             catch
             {

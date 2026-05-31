@@ -29,6 +29,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration
@@ -2428,6 +2429,12 @@ var sscResult = splitProbeSsc;
                 assetExpansionPlanningMode = assetExpansion.Plan.AssetExpansionPlanningMode,
                 weeklyExpandedStellariumExecutionReportPath = expandedStellariumExecution.ReportPath,
                 expandedStellariumExecutionReady = expandedStellariumExecution.Ready,
+                expandedNightGeometryReady = expandedStellariumExecution.ExpandedNightGeometryReady,
+                expandedSelectedObservationUtc = expandedStellariumExecution.ExpandedSelectedObservationUtc,
+                expandedSelectedObservationLocal = expandedStellariumExecution.ExpandedSelectedObservationLocal,
+                expandedSelectedSunAltitudeDeg = expandedStellariumExecution.ExpandedSelectedSunAltitudeDeg,
+                expandedNightValidationStatus = expandedStellariumExecution.ExpandedNightValidationStatus,
+                failedExpandedAssetReasons = expandedStellariumExecution.FailedExpandedAssetReasons,
                 expandedStellariumExecutionPartial = expandedStellariumExecution.Partial,
                 expandedStellariumExecutionTimedOut = expandedStellariumExecution.TimedOut,
                 expandedStellariumMaxScenesPerRun = expandedStellariumExecution.MaxExpandedScenesPerRun,
@@ -2534,6 +2541,12 @@ var sscResult = splitProbeSsc;
             assetExpansion.Plan.AssetExpansionPlanningMode,
             expandedStellariumExecution.ReportPath,
             expandedStellariumExecution.Ready,
+            expandedStellariumExecution.ExpandedNightGeometryReady,
+            expandedStellariumExecution.ExpandedSelectedObservationUtc,
+            expandedStellariumExecution.ExpandedSelectedObservationLocal,
+            expandedStellariumExecution.ExpandedSelectedSunAltitudeDeg,
+            expandedStellariumExecution.ExpandedNightValidationStatus,
+            expandedStellariumExecution.FailedExpandedAssetReasons,
             expandedStellariumExecution.Partial,
             expandedStellariumExecution.TimedOut,
             expandedStellariumExecution.MaxExpandedScenesPerRun,
@@ -4695,7 +4708,7 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
         await WriteExpandedStellariumExecutionReportAsync(reportPath, requestedCount, expandedScenes, skippedScenes, warnings, partialExecution, timedOut, generatedScripts.Count, generatedScreenshots.Count, CancellationToken.None);
         logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_REPORT_WRITTEN path={Path}", reportPath);
         logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_COMPLETE executedExpandedSceneCount=0 skippedExpandedSceneCount={SkippedCount} generatedExpandedSscScriptCount=0 generatedExpandedScreenshotCount=0 partialExecution={PartialExecution} timedOut={TimedOut}", skippedScenes.Count, partialExecution, timedOut);
-        return new ExpandedStellariumExecutionSummary(reportPath, false, partialExecution, timedOut, options.MaxExpandedScenesPerRun, options.MaxFramesPerExpandedScene, mode, 0, skippedScenes.Count, 0, 0, [], warnings);
+        return new ExpandedStellariumExecutionSummary(reportPath, false, partialExecution, timedOut, options.MaxExpandedScenesPerRun, options.MaxFramesPerExpandedScene, mode, 0, skippedScenes.Count, 0, 0, [], warnings, false, null, null, null, "Skipped", []);
     }
 
     try
@@ -4765,6 +4778,25 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
                 var observationUtc = DateTime.SpecifyKind(adapted.PreferredObservationUtc, DateTimeKind.Utc);
                 var selectedObservationLocal = ConvertUtcToLocal(observationUtc, timezone);
                 var sceneDateLocal = DateOnly.FromDateTime(selectedObservationLocal);
+                var nightGeometry = ResolveExpandedNightGeometry(adapted, weeklyContext, skyObjectsByCode, observationUtc, timezone, latitude, longitude, logger);
+                if (!nightGeometry.Ready)
+                {
+                    var warning = $"NoNightGeometry: expanded scene '{adapted.RenderSceneCode}' has no valid night geometry.";
+                    warnings.Add(warning);
+                    logger.LogWarning("EXPANDED_NIGHT_GEOMETRY_FAILED renderSceneCode={RenderSceneCode} sourceSegmentType={SourceSegmentType} targetObjects={TargetObjects} reason=NoNightGeometry", adapted.RenderSceneCode, adapted.SourceSegmentType, string.Join(',', adapted.TargetObjects));
+                    skippedScenes.Add(new ExpandedStellariumSkippedScene(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, "NoNightGeometry", requirement.Warnings.Concat([warning]).ToList()));
+                    continue;
+                }
+
+                observationUtc = DateTime.SpecifyKind(nightGeometry.SelectedObservationUtc!.Value, DateTimeKind.Utc);
+                selectedObservationLocal = nightGeometry.SelectedObservationLocal!.Value;
+                sceneDateLocal = DateOnly.FromDateTime(selectedObservationLocal);
+                if (!string.IsNullOrWhiteSpace(nightGeometry.SelectedTargetObject) && !adapted.TargetObjects.Contains(nightGeometry.SelectedTargetObject, StringComparer.OrdinalIgnoreCase))
+                {
+                    adapted = adapted with { TargetObjects = [nightGeometry.SelectedTargetObject] };
+                    currentTargetObjects = adapted.TargetObjects;
+                }
+                logger.LogInformation("EXPANDED_SSC_SELECTED_TIME renderSceneCode={RenderSceneCode} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} selectedSunAltitudeDeg={SelectedSunAltitudeDeg} nightValidationStatus={NightValidationStatus}", adapted.RenderSceneCode, observationUtc, selectedObservationLocal, nightGeometry.SelectedSunAltitudeDeg, nightGeometry.ValidationStatus);
                 var compositionFallback = new
                 {
                     CenterAltitude = 30d,
@@ -4820,7 +4852,7 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
                     locationName,
                     skyPositions.Select(x => x.Position).ToList(),
                     defaultRules,
-                    null,
+                    nightGeometry.SelectedSunAltitudeDeg,
                     timezone,
                     null,
                     null,
@@ -4861,6 +4893,12 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
                         @"core\.screenshot\([^\)]*\);",
                         $"core.screenshot(\"{Path.GetFileNameWithoutExtension(imagePath).Replace("\"", "\\\"")}\", false, \"{sceneDirectory.Replace("\\", "/").Replace("\"", "\\\"")}\", true, \"png\");",
                         RegexOptions.CultureInvariant);
+                    frameSsc = string.Join(Environment.NewLine,
+                        $"// ExpandedSelectedObservationUtc: {observationUtc:O}",
+                        $"// ExpandedSelectedObservationLocal: {selectedObservationLocal:O}",
+                        $"// ExpandedSelectedSunAltitudeDeg: {nightGeometry.SelectedSunAltitudeDeg?.ToString("0.###", CultureInfo.InvariantCulture) ?? "null"}",
+                        $"// ExpandedNightValidationStatus: {nightGeometry.ValidationStatus}",
+                        frameSsc);
                     ValidateExpandedSscScript(frameSsc, scriptPath);
                     await File.WriteAllTextAsync(scriptPath, frameSsc, cancellationToken);
                     sceneScripts.Add(scriptPath);
@@ -4870,12 +4908,18 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
                     await sharedStellariumExecutor.ExecuteAsync(root, scriptPath, imagePath, 180, cancellationToken);
                     if (!File.Exists(imagePath) || new FileInfo(imagePath).Length == 0)
                         throw new InvalidOperationException($"Expected expanded screenshot was not generated: {imagePath}");
+                    if (!ValidateExpandedScreenshotNightImage(imagePath))
+                    {
+                        logger.LogWarning("EXPANDED_SCREENSHOT_NIGHT_VALIDATION_FAILED renderSceneCode={RenderSceneCode} frameType={FrameType} screenshotPath={ScreenshotPath} reason=DaylightSkyDetected", adapted.RenderSceneCode, frameType, imagePath);
+                        throw new InvalidOperationException("DaylightSkyDetected");
+                    }
+                    logger.LogInformation("EXPANDED_SCREENSHOT_NIGHT_VALIDATION_PASSED renderSceneCode={RenderSceneCode} frameType={FrameType} screenshotPath={ScreenshotPath}", adapted.RenderSceneCode, frameType, imagePath);
                     sceneScreenshots.Add(imagePath);
                     generatedScreenshots.Add(imagePath);
                     logger.LogInformation("EXPANDED_SCREENSHOT_CAPTURED renderSceneCode={RenderSceneCode} frameType={FrameType} screenshotPath={ScreenshotPath}", adapted.RenderSceneCode, frameType, imagePath);
                 }
 
-                expandedScenes.Add(new ExpandedStellariumSceneExecution(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, sceneScripts, sceneScreenshots, "Executed", true));
+                expandedScenes.Add(new ExpandedStellariumSceneExecution(adapted.RenderSceneCode, adapted.SourceSegmentType, adapted.TargetObjects, sceneScripts, sceneScreenshots, "Executed", true, observationUtc, selectedObservationLocal, nightGeometry.SelectedSunAltitudeDeg, nightGeometry.ValidationStatus));
             }
             catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
@@ -4886,7 +4930,7 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
                 logger.LogWarning(ex, "EXPANDED_STELLARIUM_EXECUTION_TIMED_OUT renderSceneCode={RenderSceneCode} generatedExpandedScreenshotCount={GeneratedExpandedScreenshotCount}", currentRenderSceneCode, generatedScreenshots.Count);
                 if (sceneScripts.Count > 0 || sceneScreenshots.Count > 0)
                 {
-                    expandedScenes.Add(new ExpandedStellariumSceneExecution(currentRenderSceneCode, currentSourceSegmentType, currentTargetObjects, sceneScripts, sceneScreenshots, "Partial", sceneScreenshots.Count > 0));
+                    expandedScenes.Add(new ExpandedStellariumSceneExecution(currentRenderSceneCode, currentSourceSegmentType, currentTargetObjects, sceneScripts, sceneScreenshots, "Partial", sceneScreenshots.Count > 0, null, null, null, "Partial"));
                 }
                 if (!options.ContinueOnFailure)
                     throw;
@@ -4900,7 +4944,7 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
                 logger.LogWarning(ex, "EXPANDED_REQUIREMENT_SKIPPED renderSceneCode={RenderSceneCode} renderEngine={RenderEngine} geometryAvailable={GeometryAvailable} targetObjects={TargetObjects} requiredFrameTypes={RequiredFrameTypes} productionStatus={ProductionStatus} reason=ExecutionFailed skipReason=ExecutionFailed", requirement.RenderSceneCode, requirement.RenderEngine, requirement.GeometryAvailable, string.Join(',', requirement.TargetObjects), string.Join(',', ResolveExpandedFrameTypeNames(requirement.RequiredFrameTypes, requirement.SourceSegmentType, requirement.VisualRole)), requirement.ProductionStatus);
                 if (sceneScripts.Count > 0 || sceneScreenshots.Count > 0)
                 {
-                    expandedScenes.Add(new ExpandedStellariumSceneExecution(currentRenderSceneCode, currentSourceSegmentType, currentTargetObjects, sceneScripts, sceneScreenshots, "Partial", sceneScreenshots.Count > 0));
+                    expandedScenes.Add(new ExpandedStellariumSceneExecution(currentRenderSceneCode, currentSourceSegmentType, currentTargetObjects, sceneScripts, sceneScreenshots, "Partial", sceneScreenshots.Count > 0, null, null, null, "Partial"));
                 }
                 skippedScenes.Add(new ExpandedStellariumSkippedScene(requirement.RenderSceneCode, requirement.SourceSegmentType, requirement.TargetObjects, "ExecutionFailed", requirement.Warnings.Concat([warning]).ToList()));
             }
@@ -4921,11 +4965,211 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
         logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_REPORT_WRITTEN path={Path}", reportPath);
     }
 
-    var ready = generatedScreenshots.Count > 0 && generatedScripts.Count > 0;
+    var failedExpandedAssetReasons = warnings.Where(x => x.Contains("NoNightGeometry", StringComparison.OrdinalIgnoreCase) || x.Contains("Daylight", StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var selectedNightScene = expandedScenes.FirstOrDefault(x => x.SelectedObservationUtc.HasValue);
+    var expandedNightGeometryReady = expandedScenes.Count > 0 && expandedScenes.All(x => x.SelectedSunAltitudeDeg.HasValue && x.SelectedSunAltitudeDeg.Value <= ResolveExpandedRequiredSunAltitudeThreshold(x.RenderSceneCode, x.SourceSegmentType, x.TargetObjects, []));
+    var expandedNightValidationStatus = expandedNightGeometryReady ? "Passed" : (failedExpandedAssetReasons.Count > 0 ? "Failed" : "NotValidated");
+    var ready = generatedScreenshots.Count > 0 && generatedScripts.Count > 0 && expandedNightGeometryReady;
     logger.LogInformation("EXPANDED_STELLARIUM_EXECUTION_COMPLETE executedExpandedSceneCount={ExecutedCount} skippedExpandedSceneCount={SkippedCount} generatedExpandedSscScriptCount={ScriptCount} generatedExpandedScreenshotCount={ScreenshotCount} partialExecution={PartialExecution} timedOut={TimedOut}", expandedScenes.Count, skippedScenes.Count, generatedScripts.Count, generatedScreenshots.Count, partialExecution, timedOut);
 
-    return new ExpandedStellariumExecutionSummary(reportPath, ready, partialExecution, timedOut, options.MaxExpandedScenesPerRun, options.MaxFramesPerExpandedScene, mode, expandedScenes.Count, skippedScenes.Count, generatedScripts.Count, generatedScreenshots.Count, generatedScreenshots, warnings);
+    return new ExpandedStellariumExecutionSummary(reportPath, ready, partialExecution, timedOut, options.MaxExpandedScenesPerRun, options.MaxFramesPerExpandedScene, mode, expandedScenes.Count, skippedScenes.Count, generatedScripts.Count, generatedScreenshots.Count, generatedScreenshots, warnings, expandedNightGeometryReady, selectedNightScene?.SelectedObservationUtc, selectedNightScene?.SelectedObservationLocal, selectedNightScene?.SelectedSunAltitudeDeg, expandedNightValidationStatus, failedExpandedAssetReasons);
 }
+
+
+static ExpandedNightGeometrySelection ResolveExpandedNightGeometry(
+    ExpandedStellariumSceneRequirement requirement,
+    WeeklySkyForecastV2IntelligenceResponse weeklyContext,
+    IReadOnlyDictionary<string, WeeklyAstronomyEventObject> skyObjectsByCode,
+    DateTime preferredObservationUtc,
+    string timezone,
+    double latitude,
+    double longitude,
+    Microsoft.Extensions.Logging.ILogger logger)
+{
+    var threshold = ResolveExpandedRequiredSunAltitudeThreshold(requirement.RenderSceneCode, requirement.SourceSegmentType, requirement.TargetObjects, requirement.RequiredFrameTypes);
+    var preferredThreshold = -12d;
+    logger.LogInformation("EXPANDED_NIGHT_GEOMETRY_START renderSceneCode={RenderSceneCode} sourceSegmentType={SourceSegmentType} targetObjects={TargetObjects} preferredObservationUtc={PreferredObservationUtc} requiredSunAltitudeDeg={RequiredSunAltitudeDeg}", requirement.RenderSceneCode, requirement.SourceSegmentType, string.Join(',', requirement.TargetObjects), preferredObservationUtc, threshold);
+
+    var extractedEvents = weeklyContext.EventExtractionResult?.ExtractedEvents ?? [];
+    var candidatesByTarget = new List<ExpandedNightGeometryCandidate>();
+    foreach (var target in requirement.TargetObjects.Where(x => !string.IsNullOrWhiteSpace(x)))
+    {
+        skyObjectsByCode.TryGetValue(target, out var obj);
+        var aliases = ResolveWeeklyObjectAliases(target, obj?.ObjectName);
+        var objectCandidates = WeeklySkyfieldObjectHydration.BuildTemporalCandidates(
+            extractedEvents,
+            aliases,
+            e => ResolveEventUtc(e),
+            name => NormalizeWeeklyObjectName(name),
+            (code, name, candidateAliases) => MatchesWeeklyObjectAliases(code, name, candidateAliases),
+            logger,
+            requirement.RenderSceneCode,
+            obj?.ObjectName ?? target);
+        foreach (var candidate in objectCandidates)
+        {
+            var utc = DateTime.SpecifyKind(candidate.SnapshotUtc, DateTimeKind.Utc);
+            var local = ConvertUtcToLocal(utc, timezone);
+            var sunAltitude = CalculateSolarAltitudeDeg(utc, latitude, longitude);
+            var expandedCandidate = new ExpandedNightGeometryCandidate(target, utc, local, candidate.AltitudeDegrees, candidate.AzimuthDegrees, sunAltitude);
+            candidatesByTarget.Add(expandedCandidate);
+            logger.LogInformation("EXPANDED_NIGHT_GEOMETRY_CANDIDATE renderSceneCode={RenderSceneCode} targetObject={TargetObject} candidateUtc={CandidateUtc} candidateLocal={CandidateLocal} objectAltitudeDeg={ObjectAltitudeDeg} objectAzimuthDeg={ObjectAzimuthDeg} sunAltitudeDeg={SunAltitudeDeg}", requirement.RenderSceneCode, target, utc, local, candidate.AltitudeDegrees, candidate.AzimuthDegrees, sunAltitude);
+            if (sunAltitude > -6d)
+                logger.LogInformation("EXPANDED_NIGHT_GEOMETRY_REJECTED_DAYLIGHT renderSceneCode={RenderSceneCode} targetObject={TargetObject} candidateUtc={CandidateUtc} sunAltitudeDeg={SunAltitudeDeg}", requirement.RenderSceneCode, target, utc, sunAltitude);
+        }
+    }
+
+    ExpandedNightGeometryCandidate? selected;
+    if (IsExpandedAstrophotographyScene(requirement.RenderSceneCode, requirement.SourceSegmentType) && requirement.TargetObjects.Any(IsMoonTarget))
+    {
+        var moonCandidates = candidatesByTarget.Where(x => IsMoonTarget(x.TargetObject)).ToList();
+        selected = SelectExpandedNightCandidate(moonCandidates, preferredObservationUtc, timezone, -12d, requirement, requireMoonNight: true);
+        if (selected is null)
+        {
+            var planetCandidates = BuildExpandedPlanetNightCandidates(extractedEvents, preferredObservationUtc, timezone, latitude, longitude, logger, requirement.RenderSceneCode);
+            selected = SelectExpandedNightCandidate(planetCandidates, preferredObservationUtc, timezone, -12d, requirement, requireMoonNight: false);
+        }
+    }
+    else
+    {
+        selected = SelectExpandedNightCandidate(candidatesByTarget, preferredObservationUtc, timezone, preferredThreshold, requirement, requireMoonNight: false)
+            ?? (threshold > preferredThreshold ? SelectExpandedNightCandidate(candidatesByTarget, preferredObservationUtc, timezone, threshold, requirement, requireMoonNight: false) : null);
+    }
+
+    if (selected is null)
+        return new ExpandedNightGeometrySelection(false, null, null, null, null, "NoNightGeometry");
+
+    logger.LogInformation("EXPANDED_NIGHT_GEOMETRY_SELECTED renderSceneCode={RenderSceneCode} targetObject={TargetObject} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} selectedSunAltitudeDeg={SelectedSunAltitudeDeg} objectAltitudeDeg={ObjectAltitudeDeg}", requirement.RenderSceneCode, selected.TargetObject, selected.ObservationUtc, selected.ObservationLocal, selected.SunAltitudeDeg, selected.ObjectAltitudeDeg);
+    return new ExpandedNightGeometrySelection(true, selected.ObservationUtc, selected.ObservationLocal, selected.SunAltitudeDeg, selected.TargetObject, "Passed");
+}
+
+static ExpandedNightGeometryCandidate? SelectExpandedNightCandidate(
+    IReadOnlyList<ExpandedNightGeometryCandidate> candidates,
+    DateTime preferredObservationUtc,
+    string timezone,
+    double threshold,
+    ExpandedStellariumSceneRequirement requirement,
+    bool requireMoonNight)
+{
+    var valid = candidates
+        .Where(x => x.SunAltitudeDeg <= threshold && x.ObjectAltitudeDeg > 0d)
+        .Where(x => !requireMoonNight || (IsMoonTarget(x.TargetObject) && x.ObjectAltitudeDeg > 15d && IsEveningNightLocal(x.ObservationLocal)))
+        .ToList();
+    if (valid.Count == 0) return null;
+
+    var exact = valid.FirstOrDefault(x => x.ObservationUtc == preferredObservationUtc);
+    if (exact is not null) return exact;
+
+    var preferredLocalDate = DateOnly.FromDateTime(ConvertUtcToLocal(preferredObservationUtc, timezone));
+    var sameDate = valid
+        .Where(x => DateOnly.FromDateTime(x.ObservationLocal) == preferredLocalDate)
+        .OrderBy(x => Math.Abs((x.ObservationUtc - preferredObservationUtc).TotalMinutes))
+        .FirstOrDefault();
+    if (sameDate is not null) return sameDate;
+
+    var bestForTarget = valid
+        .Where(x => requirement.TargetObjects.Contains(x.TargetObject, StringComparer.OrdinalIgnoreCase))
+        .OrderByDescending(x => x.ObjectAltitudeDeg)
+        .FirstOrDefault();
+    if (bestForTarget is not null) return bestForTarget;
+
+    return valid.OrderByDescending(x => x.ObjectAltitudeDeg).FirstOrDefault();
+}
+
+static IReadOnlyList<ExpandedNightGeometryCandidate> BuildExpandedPlanetNightCandidates(
+    IReadOnlyList<WeeklyAstronomyEvent> extractedEvents,
+    DateTime preferredObservationUtc,
+    string timezone,
+    double latitude,
+    double longitude,
+    Microsoft.Extensions.Logging.ILogger logger,
+    string sceneCode)
+{
+    var planets = new[] { "venus", "jupiter", "saturn", "mars", "mercury" };
+    var results = new List<ExpandedNightGeometryCandidate>();
+    foreach (var planet in planets)
+    {
+        var aliases = ResolveWeeklyObjectAliases(planet, planet);
+        foreach (var candidate in WeeklySkyfieldObjectHydration.BuildTemporalCandidates(extractedEvents, aliases, e => ResolveEventUtc(e), name => NormalizeWeeklyObjectName(name), (code, name, candidateAliases) => MatchesWeeklyObjectAliases(code, name, candidateAliases), logger, sceneCode, planet))
+        {
+            var utc = DateTime.SpecifyKind(candidate.SnapshotUtc, DateTimeKind.Utc);
+            var local = ConvertUtcToLocal(utc, timezone);
+            results.Add(new ExpandedNightGeometryCandidate(planet, utc, local, candidate.AltitudeDegrees, candidate.AzimuthDegrees, CalculateSolarAltitudeDeg(utc, latitude, longitude)));
+        }
+    }
+    return results;
+}
+
+static double ResolveExpandedRequiredSunAltitudeThreshold(string renderSceneCode, string sourceSegmentType, IReadOnlyList<string> targetObjects, IReadOnlyList<string> frameTypes)
+{
+    if (IsExpandedAstrophotographyScene(renderSceneCode, sourceSegmentType)) return -12d;
+    var text = string.Join(' ', new[] { renderSceneCode, sourceSegmentType }.Concat(targetObjects).Concat(frameTypes)).ToLowerInvariant();
+    return text.Contains("horizon", StringComparison.OrdinalIgnoreCase) || text.Contains("planet", StringComparison.OrdinalIgnoreCase) || targetObjects.Any(IsPlanetTarget) ? -6d : -12d;
+}
+
+static bool IsExpandedAstrophotographyScene(string renderSceneCode, string sourceSegmentType)
+    => renderSceneCode.Contains("astrophotography_target_scene", StringComparison.OrdinalIgnoreCase)
+       || sourceSegmentType.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase)
+       || sourceSegmentType.Contains("astro", StringComparison.OrdinalIgnoreCase);
+
+static bool IsMoonTarget(string value) => NormalizeWeeklyObjectName(value) is "moon" or "luna";
+static bool IsPlanetTarget(string value) => NormalizeWeeklyObjectName(value) is "venus" or "jupiter" or "saturn" or "mars" or "mercury";
+static bool IsEveningNightLocal(DateTime local) => local.Hour >= 18 || local.Hour <= 5;
+
+static double CalculateSolarAltitudeDeg(DateTime utc, double latitudeDeg, double longitudeDeg)
+{
+    utc = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+    var day = utc.DayOfYear;
+    var hour = utc.Hour + utc.Minute / 60d + utc.Second / 3600d;
+    var gamma = 2d * Math.PI / 365d * (day - 1 + (hour - 12d) / 24d);
+    var decl = 0.006918d - 0.399912d * Math.Cos(gamma) + 0.070257d * Math.Sin(gamma) - 0.006758d * Math.Cos(2d * gamma) + 0.000907d * Math.Sin(2d * gamma) - 0.002697d * Math.Cos(3d * gamma) + 0.00148d * Math.Sin(3d * gamma);
+    var eqtime = 229.18d * (0.000075d + 0.001868d * Math.Cos(gamma) - 0.032077d * Math.Sin(gamma) - 0.014615d * Math.Cos(2d * gamma) - 0.040849d * Math.Sin(2d * gamma));
+    var trueSolarMinutes = (hour * 60d + eqtime + 4d * longitudeDeg) % 1440d;
+    if (trueSolarMinutes < 0d) trueSolarMinutes += 1440d;
+    var hourAngleDeg = trueSolarMinutes / 4d - 180d;
+    var lat = latitudeDeg * Math.PI / 180d;
+    var ha = hourAngleDeg * Math.PI / 180d;
+    var cosZenith = Math.Sin(lat) * Math.Sin(decl) + Math.Cos(lat) * Math.Cos(decl) * Math.Cos(ha);
+    cosZenith = Math.Clamp(cosZenith, -1d, 1d);
+    return 90d - Math.Acos(cosZenith) * 180d / Math.PI;
+}
+
+static bool ValidateExpandedScreenshotNightImage(string imagePath)
+{
+    try
+    {
+        using var image = Image.Load<Rgba32>(imagePath);
+        var xStep = Math.Max(1, image.Width / 96);
+        var yStep = Math.Max(1, image.Height / 54);
+        var count = 0;
+        var brightBlue = 0;
+        var dark = 0;
+        var lumaSum = 0d;
+        for (var y = 0; y < image.Height; y += yStep)
+        {
+            for (var x = 0; x < image.Width; x += xStep)
+            {
+                var p = image[x, y];
+                var luma = 0.2126d * p.R + 0.7152d * p.G + 0.0722d * p.B;
+                lumaSum += luma;
+                if (luma < 95d) dark++;
+                if (p.B > p.R + 25 && p.B > p.G + 5 && luma > 85d) brightBlue++;
+                count++;
+            }
+        }
+        if (count == 0) return false;
+        var mean = lumaSum / count;
+        var darkRatio = (double)dark / count;
+        var blueRatio = (double)brightBlue / count;
+        return mean < 145d && darkRatio > 0.25d && blueRatio < 0.35d;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+sealed record ExpandedNightGeometrySelection(bool Ready, DateTime? SelectedObservationUtc, DateTime? SelectedObservationLocal, double? SelectedSunAltitudeDeg, string? SelectedTargetObject, string ValidationStatus);
+sealed record ExpandedNightGeometryCandidate(string TargetObject, DateTime ObservationUtc, DateTime ObservationLocal, double ObjectAltitudeDeg, double ObjectAzimuthDeg, double SunAltitudeDeg);
 
 static async Task<IReadOnlyList<ExpandedRenderSceneRequirement>> ReadExpandedRenderSceneRequirementsAsync(
     string expandedRenderScenePlanPath,
@@ -5109,7 +5353,13 @@ sealed record ExpandedStellariumExecutionSummary(
     int GeneratedExpandedSscScriptCount,
     int GeneratedExpandedScreenshotCount,
     IReadOnlyList<string> ExpandedFrameScreenshots,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    bool ExpandedNightGeometryReady,
+    DateTime? ExpandedSelectedObservationUtc,
+    DateTime? ExpandedSelectedObservationLocal,
+    double? ExpandedSelectedSunAltitudeDeg,
+    string ExpandedNightValidationStatus,
+    IReadOnlyList<string> FailedExpandedAssetReasons);
 
 sealed record ExpandedStellariumSceneExecution(
     string RenderSceneCode,
@@ -5118,7 +5368,11 @@ sealed record ExpandedStellariumSceneExecution(
     IReadOnlyList<string> GeneratedScripts,
     IReadOnlyList<string> GeneratedScreenshots,
     string ExecutionStatus,
-    bool ProductionReady);
+    bool ProductionReady,
+    DateTime? SelectedObservationUtc,
+    DateTime? SelectedObservationLocal,
+    double? SelectedSunAltitudeDeg,
+    string NightValidationStatus);
 
 sealed record ExpandedStellariumSkippedScene(
     string RenderSceneCode,
