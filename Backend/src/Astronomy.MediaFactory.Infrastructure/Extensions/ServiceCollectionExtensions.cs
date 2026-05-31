@@ -557,6 +557,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWeeklyEventPriorityScoringEngine, WeeklyEventPriorityScoringEngine>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine.IWeeklyNarrationEngineV2, Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine.WeeklyNarrationEngineV2>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition.IWeeklyTimelineCompositionEngine, Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition.WeeklyTimelineCompositionEngine>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering.IWeeklyFfmpegRenderPreparationEngine, Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering.WeeklyFfmpegRenderPreparationEngine>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicStylePolicy>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicPromptBuilder>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicAssetQueueBuilder, Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetQueueBuilder>();
