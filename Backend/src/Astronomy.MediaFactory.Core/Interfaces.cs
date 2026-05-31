@@ -1450,7 +1450,14 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     bool ShortformTimelineReadyForFinalVideo = false,
     int TotalTimelineShotCount = 0,
     int TotalTimelineDurationSeconds = 0,
-    string TimelineValidationStatus = "NotValidated");
+    string TimelineValidationStatus = "NotValidated",
+    string? AssetQualityReportPath = null,
+    int TotalValidatedAssets = 0,
+    int ProductionReadyAssetCount = 0,
+    int ProductionWarningAssetCount = 0,
+    int ProductionFailedAssetCount = 0,
+    bool QualityGatePassed = false,
+    IReadOnlyList<string>? FailedAssetPaths = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {

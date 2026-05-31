@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.Drawing;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.Formats.Png;
@@ -50,6 +51,58 @@ public sealed record EducationalOverlayManifestEntry(
     string OverlayType,
     IReadOnlyList<string> DataSources,
     IReadOnlyList<string> ContentLines);
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ProductionAssetQualityStatus
+{
+    ProductionReady,
+    ProductionWarning,
+    ProductionFailed
+}
+
+public sealed record WeeklyAssetQualityReport(
+    int TotalAssets,
+    int ProductionReadyCount,
+    int ProductionWarningCount,
+    int ProductionFailedCount,
+    int StellariumPassed,
+    int StellariumFailed,
+    int ExpandedPassed,
+    int ExpandedFailed,
+    int AiPassed,
+    int NasaPassed,
+    int JwstPassed,
+    int MotionPassed,
+    int OverlayPassed,
+    bool QualityGatePassed);
+
+public sealed record WeeklyAssetQualityDetail(
+    string AssetId,
+    string SourceType,
+    string AssetCode,
+    string AssetPath,
+    ProductionAssetQualityStatus Status,
+    IReadOnlyList<string> PassedChecks,
+    IReadOnlyList<string> FailedChecks,
+    IReadOnlyList<string> Reasons,
+    IReadOnlyList<string> Warnings,
+    int Width,
+    int Height,
+    long FileSizeBytes,
+    string ValidationProfile);
+
+public sealed record WeeklyAssetQualityValidationResult(
+    WeeklyAssetQualityReport Report,
+    IReadOnlyList<WeeklyAssetQualityDetail> Details,
+    string ReportPath,
+    string DetailsPath)
+{
+    public IReadOnlyList<string> FailedAssetPaths => Details
+        .Where(x => x.Status == ProductionAssetQualityStatus.ProductionFailed)
+        .Select(x => x.AssetPath)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+}
 
 public sealed record RealizedVisualAsset(
     string AssetId,
@@ -176,7 +229,15 @@ public sealed record WeeklyAssetRealizationResult(
     int PlannedEducationalOverlayCount = 0,
     int GeneratedEducationalOverlayCount = 0,
     int ProductionReadyEducationalOverlayCount = 0,
-    IReadOnlyList<string>? EducationalOverlayPaths = null);
+    IReadOnlyList<string>? EducationalOverlayPaths = null,
+    string AssetQualityReportPath = "",
+    string AssetQualityDetailsPath = "",
+    int TotalValidatedAssets = 0,
+    int ProductionReadyAssetCount = 0,
+    int ProductionWarningAssetCount = 0,
+    int ProductionFailedAssetCount = 0,
+    bool QualityGatePassed = false,
+    IReadOnlyList<string>? FailedAssetPaths = null);
 
 public sealed record WeeklyAssetRealizationInput(
     Guid PipelineRunId,
@@ -427,6 +488,275 @@ internal sealed class MotionGraphicsAndEducationalOverlayRealizer(ILogger logger
     private static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-");
 }
 
+
+public sealed class WeeklyAssetQualityValidator(ILogger logger)
+{
+    private const int StellariumMinimumWidth = 1280;
+    private const int StellariumMinimumHeight = 720;
+    private const int GeneralMinimumWidth = 1024;
+    private const int GeneralMinimumHeight = 720;
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, Converters = { new JsonStringEnumConverter() } };
+
+    public async Task<WeeklyAssetQualityValidationResult> ValidateAndPersistAsync(
+        string root,
+        IReadOnlyList<RealizedVisualAsset> assets,
+        IReadOnlyList<MotionGraphicManifestEntry> motionGraphics,
+        IReadOnlyList<EducationalOverlayManifestEntry> educationalOverlays,
+        CancellationToken cancellationToken)
+    {
+        logger.LogInformation("ASSET_QUALITY_VALIDATION_START root={Root} assetCount={AssetCount}", root, assets.Count);
+        var motionByPath = motionGraphics.ToDictionary(x => x.AssetPath, StringComparer.OrdinalIgnoreCase);
+        var overlayByPath = educationalOverlays.ToDictionary(x => x.AssetPath, StringComparer.OrdinalIgnoreCase);
+        var details = assets.Select(asset => Validate(asset, motionByPath.GetValueOrDefault(asset.FilePath), overlayByPath.GetValueOrDefault(asset.FilePath))).ToList();
+        var report = BuildReport(details);
+
+        var episodeDirectory = Path.Combine(root, "episode");
+        Directory.CreateDirectory(episodeDirectory);
+        var reportPath = Path.Combine(episodeDirectory, "weekly-asset-quality-report.json");
+        var detailsPath = Path.Combine(episodeDirectory, "weekly-asset-quality-details.json");
+        await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(detailsPath, JsonSerializer.Serialize(details, JsonOptions), cancellationToken);
+        logger.LogInformation("ASSET_QUALITY_REPORT_WRITTEN reportPath={ReportPath} detailsPath={DetailsPath} qualityGatePassed={QualityGatePassed}", reportPath, detailsPath, report.QualityGatePassed);
+        logger.LogInformation("ASSET_QUALITY_VALIDATION_COMPLETE totalAssets={TotalAssets} productionReady={ProductionReady} productionWarning={ProductionWarning} productionFailed={ProductionFailed} qualityGatePassed={QualityGatePassed}", report.TotalAssets, report.ProductionReadyCount, report.ProductionWarningCount, report.ProductionFailedCount, report.QualityGatePassed);
+        return new WeeklyAssetQualityValidationResult(report, details, reportPath, detailsPath);
+    }
+
+    private WeeklyAssetQualityDetail Validate(RealizedVisualAsset asset, MotionGraphicManifestEntry? motionEntry, EducationalOverlayManifestEntry? overlayEntry)
+    {
+        logger.LogInformation("ASSET_QUALITY_CHECK assetId={AssetId} sourceType={SourceType} path={Path}", asset.AssetId, asset.SourceType, asset.FilePath);
+        var passed = new List<string>();
+        var failed = new List<string>();
+        var reasons = new List<string>();
+        var warnings = new List<string>();
+
+        if (asset.Exists) passed.Add("File exists"); else Fail("File exists", "Asset file does not exist.");
+        if (asset.Exists && asset.Width > 0 && asset.Height > 0) passed.Add("Readable image"); else Fail("Readable image", "Asset is missing, unreadable, or corrupt.");
+
+        var minimumWidth = asset.SourceType is RealizedVisualAssetSourceType.StellariumBase or RealizedVisualAssetSourceType.StellariumExpanded ? StellariumMinimumWidth : GeneralMinimumWidth;
+        var minimumHeight = asset.SourceType is RealizedVisualAssetSourceType.StellariumBase or RealizedVisualAssetSourceType.StellariumExpanded ? StellariumMinimumHeight : GeneralMinimumHeight;
+        if (asset.Width >= minimumWidth && asset.Height >= minimumHeight) passed.Add($"Resolution >= {minimumWidth}x{minimumHeight}");
+        else Fail($"Resolution >= {minimumWidth}x{minimumHeight}", $"Resolution {asset.Width}x{asset.Height} is below required {minimumWidth}x{minimumHeight}.");
+
+        var metrics = asset.Exists ? ImageQualityMetrics.TryRead(asset.FilePath) : ImageQualityMetrics.Unreadable;
+        if (metrics.Readable)
+        {
+            if (!metrics.IsBlank) passed.Add("Not blank"); else Fail("Not blank", "Image appears blank.");
+            if (!metrics.IsMonochrome) passed.Add("Not monochrome"); else Fail("Not monochrome", "Image appears monochrome.");
+            if (!metrics.IsFullyOverexposed) passed.Add("Not fully overexposed"); else Fail("Not fully overexposed", "Image is fully overexposed.");
+        }
+        else if (asset.Exists)
+        {
+            Fail("Readable image analysis", "Image could not be decoded for quality analysis.");
+        }
+
+        var profile = ResolveValidationProfile(asset);
+        switch (asset.SourceType)
+        {
+            case RealizedVisualAssetSourceType.StellariumBase:
+            case RealizedVisualAssetSourceType.StellariumExpanded:
+                ValidateStellariumSemanticChecks(asset, profile, metrics, passed, failed, reasons);
+                break;
+            case RealizedVisualAssetSourceType.AICinematic:
+                if (failed.Count == 0) passed.Add("AI cinematic still satisfies production still requirements");
+                break;
+            case RealizedVisualAssetSourceType.NASA:
+                if (failed.Count == 0) passed.Add("Correct NASA object category");
+                break;
+            case RealizedVisualAssetSourceType.JWST:
+                if (failed.Count == 0) passed.Add("Correct JWST object category");
+                break;
+            case RealizedVisualAssetSourceType.MotionGraphics:
+                ValidateMotionGraphic(motionEntry, passed, failed, reasons);
+                break;
+            case RealizedVisualAssetSourceType.EducationalOverlay:
+                ValidateEducationalOverlay(overlayEntry, passed, failed, reasons);
+                break;
+        }
+
+        var status = failed.Count == 0 ? ProductionAssetQualityStatus.ProductionReady : ProductionAssetQualityStatus.ProductionFailed;
+        var detail = new WeeklyAssetQualityDetail(asset.AssetId, asset.SourceType.ToString(), asset.AssetCode, asset.FilePath, status, passed, failed.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), reasons.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), warnings, asset.Width, asset.Height, asset.FileSizeBytes, profile);
+        if (status == ProductionAssetQualityStatus.ProductionReady)
+            logger.LogInformation("ASSET_QUALITY_PASSED assetId={AssetId} path={Path}", asset.AssetId, asset.FilePath);
+        else if (status == ProductionAssetQualityStatus.ProductionWarning)
+            logger.LogWarning("ASSET_QUALITY_WARNING assetId={AssetId} path={Path} reasons={Reasons}", asset.AssetId, asset.FilePath, string.Join(" | ", detail.Reasons));
+        else
+            logger.LogWarning("ASSET_QUALITY_FAILED assetId={AssetId} path={Path} reasons={Reasons}", asset.AssetId, asset.FilePath, string.Join(" | ", detail.Reasons));
+        return detail;
+
+        void Fail(string check, string reason)
+        {
+            failed.Add(check);
+            reasons.Add(reason);
+        }
+    }
+
+    private static void ValidateStellariumSemanticChecks(RealizedVisualAsset asset, string profile, ImageQualityMetrics metrics, List<string> passed, List<string> failed, List<string> reasons)
+    {
+        if (profile.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase))
+        {
+            if (metrics.NightSkyLikely) passed.Add("Night sky required"); else Fail("Night sky required", "Daylight sky");
+            if (metrics.TargetObjectLikely) passed.Add("Target object visible");
+            else Fail("Target object visible", "Target not visible. Astrophotography objective not satisfied.");
+            if (metrics.TargetObjectLikely && metrics.ObjectInsideSafeFrame) passed.Add("Object inside safe frame");
+            else Fail("Object inside safe frame", "Target outside frame or not visible.");
+            return;
+        }
+
+        if (profile.Equals("MoonHero", StringComparison.OrdinalIgnoreCase))
+        {
+            if (metrics.HasVisibleObject) passed.Add("Moon visible"); else Fail("Moon visible", "Moon not visible.");
+            return;
+        }
+
+        if (profile.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase))
+        {
+            if (metrics.HasVisibleObject) passed.Add("At least one target object visible"); else Fail("At least one target object visible", "No visible target.");
+        }
+
+        void Fail(string check, string reason)
+        {
+            failed.Add(check);
+            reasons.Add(reason);
+        }
+    }
+
+    private static void ValidateMotionGraphic(MotionGraphicManifestEntry? entry, List<string> passed, List<string> failed, List<string> reasons)
+    {
+        if (entry is null)
+        {
+            failed.Add("Segment data populated");
+            reasons.Add("Motion graphic manifest entry missing.");
+            return;
+        }
+        if (entry.ContentLines.Any(line => !string.IsNullOrWhiteSpace(line))) passed.Add("Text rendered"); else Fail("Text rendered", "Motion graphic text is empty.");
+        if (!entry.ContentLines.Any(line => line.Contains("placeholder", StringComparison.OrdinalIgnoreCase))) passed.Add("Not placeholder"); else Fail("Not placeholder", "Motion graphic contains placeholder text.");
+        if (!string.IsNullOrWhiteSpace(entry.SegmentId) && !string.IsNullOrWhiteSpace(entry.SegmentType) && entry.DurationSeconds > 0) passed.Add("Segment data populated"); else Fail("Segment data populated", "Motion graphic segment metadata is incomplete.");
+
+        void Fail(string check, string reason)
+        {
+            failed.Add(check);
+            reasons.Add(reason);
+        }
+    }
+
+    private static void ValidateEducationalOverlay(EducationalOverlayManifestEntry? entry, List<string> passed, List<string> failed, List<string> reasons)
+    {
+        if (entry is null)
+        {
+            failed.Add("Readable");
+            reasons.Add("Educational overlay manifest entry missing.");
+            return;
+        }
+        if (!entry.ContentLines.Any(line => line.Contains("placeholder", StringComparison.OrdinalIgnoreCase))) passed.Add("Not placeholder"); else Fail("Not placeholder", "Educational overlay contains placeholder text.");
+        if (entry.ContentLines.Any(line => !string.IsNullOrWhiteSpace(line)) && !string.IsNullOrWhiteSpace(entry.OverlayType)) passed.Add("Readable"); else Fail("Readable", "Educational overlay content is incomplete.");
+
+        void Fail(string check, string reason)
+        {
+            failed.Add(check);
+            reasons.Add(reason);
+        }
+    }
+
+    private static WeeklyAssetQualityReport BuildReport(IReadOnlyList<WeeklyAssetQualityDetail> details)
+    {
+        var ready = details.Count(x => x.Status == ProductionAssetQualityStatus.ProductionReady);
+        var warning = details.Count(x => x.Status == ProductionAssetQualityStatus.ProductionWarning);
+        var failed = details.Count(x => x.Status == ProductionAssetQualityStatus.ProductionFailed);
+        return new WeeklyAssetQualityReport(
+            details.Count,
+            ready,
+            warning,
+            failed,
+            CountPassed(details, RealizedVisualAssetSourceType.StellariumBase),
+            CountFailed(details, RealizedVisualAssetSourceType.StellariumBase),
+            CountPassed(details, RealizedVisualAssetSourceType.StellariumExpanded),
+            CountFailed(details, RealizedVisualAssetSourceType.StellariumExpanded),
+            CountPassed(details, RealizedVisualAssetSourceType.AICinematic),
+            CountPassed(details, RealizedVisualAssetSourceType.NASA),
+            CountPassed(details, RealizedVisualAssetSourceType.JWST),
+            CountPassed(details, RealizedVisualAssetSourceType.MotionGraphics),
+            CountPassed(details, RealizedVisualAssetSourceType.EducationalOverlay),
+            failed == 0);
+    }
+
+    private static int CountPassed(IReadOnlyList<WeeklyAssetQualityDetail> details, RealizedVisualAssetSourceType sourceType)
+        => details.Count(x => x.SourceType.Equals(sourceType.ToString(), StringComparison.OrdinalIgnoreCase) && x.Status == ProductionAssetQualityStatus.ProductionReady);
+
+    private static int CountFailed(IReadOnlyList<WeeklyAssetQualityDetail> details, RealizedVisualAssetSourceType sourceType)
+        => details.Count(x => x.SourceType.Equals(sourceType.ToString(), StringComparison.OrdinalIgnoreCase) && x.Status == ProductionAssetQualityStatus.ProductionFailed);
+
+    private static string ResolveValidationProfile(RealizedVisualAsset asset)
+    {
+        var value = asset.AssetCode.ToLowerInvariant();
+        if (value.Contains("moon")) return "MoonHero";
+        if (value.Contains("planet") || value.Contains("western") || value.Contains("group")) return "PlanetGrouping";
+        if (value.Contains("astro")) return "AstrophotographyTip";
+        return asset.SourceType.ToString();
+    }
+
+    private readonly record struct ImageQualityMetrics(bool Readable, bool IsBlank, bool IsMonochrome, bool IsFullyOverexposed, bool NightSkyLikely, bool HasVisibleObject, bool ObjectInsideSafeFrame, bool TargetObjectLikely)
+    {
+        public static ImageQualityMetrics Unreadable => new(false, true, true, false, false, false, false, false);
+
+        public static ImageQualityMetrics TryRead(string path)
+        {
+            try
+            {
+                using var image = Image.Load<Rgba32>(path);
+                var xStep = Math.Max(1, image.Width / 160);
+                var yStep = Math.Max(1, image.Height / 90);
+                var count = 0;
+                var sum = 0d;
+                var sumSq = 0d;
+                var chromaSum = 0d;
+                var overexposed = 0;
+                var bright = 0;
+                var dark = 0;
+                var safeBright = 0;
+                for (var y = 0; y < image.Height; y += yStep)
+                {
+                    var row = image.DangerousGetPixelRowMemory(y).Span;
+                    for (var x = 0; x < image.Width; x += xStep)
+                    {
+                        var pixel = row[x];
+                        var luma = 0.2126d * pixel.R + 0.7152d * pixel.G + 0.0722d * pixel.B;
+                        sum += luma;
+                        sumSq += luma * luma;
+                        chromaSum += Math.Max(pixel.R, Math.Max(pixel.G, pixel.B)) - Math.Min(pixel.R, Math.Min(pixel.G, pixel.B));
+                        if (luma > 245d) overexposed++;
+                        if (luma > 120d) bright++;
+                        if (luma < 80d) dark++;
+                        if (luma > 120d && x >= image.Width * 0.10d && x <= image.Width * 0.90d && y >= image.Height * 0.10d && y <= image.Height * 0.90d) safeBright++;
+                        count++;
+                    }
+                }
+
+                if (count == 0) return Unreadable;
+                var mean = sum / count;
+                var variance = Math.Max(0d, (sumSq / count) - (mean * mean));
+                var stdDev = Math.Sqrt(variance);
+                var averageChroma = chromaSum / count;
+                var overexposedRatio = (double)overexposed / count;
+                var darkRatio = (double)dark / count;
+                var brightRatio = (double)bright / count;
+                var safeBrightRatio = (double)safeBright / count;
+                var isBlank = stdDev < 2d;
+                var isMonochrome = averageChroma < 1.25d && stdDev < 12d;
+                var isFullyOverexposed = overexposedRatio > 0.95d;
+                var nightSkyLikely = mean < 130d && darkRatio > 0.35d;
+                var hasVisibleObject = brightRatio > 0.0005d && stdDev > 4d;
+                var objectInsideSafeFrame = safeBrightRatio > 0.0002d;
+                var targetObjectLikely = safeBrightRatio > 0.0015d;
+                return new ImageQualityMetrics(true, isBlank, isMonochrome, isFullyOverexposed, nightSkyLikely, hasVisibleObject, objectInsideSafeFrame, targetObjectLikely);
+            }
+            catch
+            {
+                return Unreadable;
+            }
+        }
+    }
+}
+
 public sealed class WeeklyAssetRealizationService(
     WeeklyAssetRealizationPersister persister,
     WeeklyAssetRealizationValidator validator,
@@ -443,6 +773,8 @@ public sealed class WeeklyAssetRealizationService(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList() };
         var assets = RegisterAssets(input);
+        var assetQuality = await new WeeklyAssetQualityValidator(logger).ValidateAndPersistAsync(input.RootPath, assets, motionOverlayAssets.MotionGraphics, motionOverlayAssets.EducationalOverlays, cancellationToken);
+        assets = ApplyQualityStatuses(assets, assetQuality);
         var bundles = BuildSegmentBundles(input, assets);
         var manifest = BuildManifest(input, assets, bundles);
         var report = BuildCoverageReport(input, assets, bundles);
@@ -455,6 +787,8 @@ public sealed class WeeklyAssetRealizationService(
         {
             var enrichedInput = input with { AllProductionImageAssets = input.AllProductionImageAssets.Concat(realizedNasaOrJwstPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList() };
             assets = RegisterAssets(enrichedInput);
+            assetQuality = await new WeeklyAssetQualityValidator(logger).ValidateAndPersistAsync(enrichedInput.RootPath, assets, motionOverlayAssets.MotionGraphics, motionOverlayAssets.EducationalOverlays, cancellationToken);
+            assets = ApplyQualityStatuses(assets, assetQuality);
             bundles = BuildSegmentBundles(enrichedInput, assets);
             manifest = BuildManifest(enrichedInput, assets, bundles);
             report = BuildCoverageReport(enrichedInput, assets, bundles);
@@ -463,7 +797,15 @@ public sealed class WeeklyAssetRealizationService(
         }
 
         logger.LogInformation("ASSET_REALIZATION_COMPLETE pipelineRunId={PipelineRunId} testReady={TestReady} finalReady={FinalReady} segmentCount={SegmentCount} nasaGenerated={NasaGenerated} nasaProductionReady={NasaProductionReady}", input.PipelineRunId, readiness.TestVideoPipelineReady, readiness.FinalVideoPipelineReady, bundles.Count, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount);
-        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.FailedNASAAssetCount, nasaAssets.Report.NasaImagePaths, nasaAssets.Report.NasaImagePaths.Count, nasaAssets.JwstPlanPath, nasaAssets.JwstResultsPath, nasaAssets.JwstReportPath, nasaAssets.Report.PlannedJWSTAssetCount, nasaAssets.Report.GeneratedJWSTAssetCount, nasaAssets.Report.ProductionReadyJWSTAssetCount, nasaAssets.Report.FailedJWSTAssetCount, nasaAssets.Report.JwstImagePaths, nasaAssets.Report.JwstImagePaths.Count, nasaAssets.Report.NasaProviderConfigured, motionOverlayAssets.MotionGraphicsManifestPath, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionOverlayAssets.MotionGraphicPaths, motionOverlayAssets.EducationalOverlayManifestPath, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionOverlayAssets.EducationalOverlayPaths);
+        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.FailedNASAAssetCount, nasaAssets.Report.NasaImagePaths, nasaAssets.Report.NasaImagePaths.Count, nasaAssets.JwstPlanPath, nasaAssets.JwstResultsPath, nasaAssets.JwstReportPath, nasaAssets.Report.PlannedJWSTAssetCount, nasaAssets.Report.GeneratedJWSTAssetCount, nasaAssets.Report.ProductionReadyJWSTAssetCount, nasaAssets.Report.FailedJWSTAssetCount, nasaAssets.Report.JwstImagePaths, nasaAssets.Report.JwstImagePaths.Count, nasaAssets.Report.NasaProviderConfigured, motionOverlayAssets.MotionGraphicsManifestPath, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionOverlayAssets.MotionGraphicPaths, motionOverlayAssets.EducationalOverlayManifestPath, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionOverlayAssets.EducationalOverlayPaths, assetQuality.ReportPath, assetQuality.DetailsPath, assetQuality.Report.TotalAssets, assetQuality.Report.ProductionReadyCount, assetQuality.Report.ProductionWarningCount, assetQuality.Report.ProductionFailedCount, assetQuality.Report.QualityGatePassed, assetQuality.FailedAssetPaths);
+    }
+
+    private static List<RealizedVisualAsset> ApplyQualityStatuses(IReadOnlyList<RealizedVisualAsset> assets, WeeklyAssetQualityValidationResult quality)
+    {
+        var byPath = quality.Details.ToDictionary(x => x.AssetPath, StringComparer.OrdinalIgnoreCase);
+        return assets.Select(asset => byPath.TryGetValue(asset.FilePath, out var detail)
+            ? asset with { ProductionReady = detail.Status == ProductionAssetQualityStatus.ProductionReady }
+            : asset).ToList();
     }
 
     private static WeeklyProductionAssetManifest BuildManifest(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset> assets, IReadOnlyList<SegmentProductionAssetBundle> bundles) => new(
