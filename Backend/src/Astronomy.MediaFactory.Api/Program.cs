@@ -17,6 +17,7 @@ using Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetExpansion;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EventScoring;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -740,7 +741,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, WeeklyAssetExpansionService assetExpansionService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IOptions<WeeklySkyForecastAssetExpansionOptions> assetExpansionOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, WeeklyAssetRealizationService assetRealizationService, WeeklyNarrationVisualTimelineComposer narrationVisualTimelineComposer, IWeeklyEventPriorityScoringEngine eventPriorityScoringEngine, IWeeklyNarrationEngineV2 narrationEngineV2, IWeeklySkyForecastContextBuilderV2 contextBuilder, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, WeeklyAssetExpansionService assetExpansionService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IOptions<WeeklySkyForecastAssetExpansionOptions> assetExpansionOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, WeeklyAssetRealizationService assetRealizationService, WeeklyNarrationVisualTimelineComposer narrationVisualTimelineComposer, IWeeklyEventPriorityScoringEngine eventPriorityScoringEngine, IWeeklyNarrationEngineV2 narrationEngineV2, IWeeklyTimelineCompositionEngine timelineCompositionEngine, IWeeklySkyForecastContextBuilderV2 contextBuilder, CancellationToken ct) =>
 {
     try
     {
@@ -2511,6 +2512,32 @@ var sscResult = splitProbeSsc;
                     narrationVisualTimeline.Timeline),
                 stageCt));
 
+        var timelineComposition = await ExecuteOrchestrationStageAsync("Finalizing weekly render timeline composition", stageCt =>
+            timelineCompositionEngine.ComposeAndPersistAsync(
+                new WeeklyTimelineCompositionInput(
+                    pipelineRunId,
+                    root,
+                    narrationEngine.LongformNarrationPath,
+                    narrationEngine.ShortformNarrationPath,
+                    narrationEngine.NarrationAssetMapPath,
+                    narrationEngine.NarrationTimelineMapPath,
+                    narrationEngine.EditorialReviewReportPath,
+                    eventPriorityScoring.WeeklyEventPriorityReportPath,
+                    eventPriorityScoring.HeroEventSelectionPath,
+                    assetRealization.WeeklyProductionAssetManifestPath,
+                    assetRealization.AssetQualityReportPath,
+                    assetRealization.WeeklyVideoReadinessReportPath,
+                    narrationEngine.LongformNarration,
+                    narrationEngine.ShortformNarration,
+                    narrationEngine.NarrationAssetMap,
+                    narrationEngine.NarrationTimelineMap,
+                    narrationEngine.EditorialReviewReport,
+                    eventPriorityScoring.Report,
+                    eventPriorityScoring.HeroEventSelection,
+                    assetRealization.Manifest,
+                    realizedAllProductionImageAssets),
+                stageCt));
+
         var output = new WeeklySkyForecastV2GenerateWeeklyScenesResponse(
             pipelineRunId,
             root,
@@ -2707,7 +2734,31 @@ var sscResult = splitProbeSsc;
             narrationEngine.VisualVarietyPassed,
             narrationEngine.RepeatedAssetSequenceCount,
             narrationEngine.InternalMetadataLeakCount,
-            narrationEngine.EditorialReviewReportPath);
+            narrationEngine.EditorialReviewReportPath,
+            timelineComposition.TimelineCompositionReady,
+            timelineComposition.FinalRenderTimelinePath,
+            timelineComposition.FinalRenderShotListPath,
+            timelineComposition.TimelineTransitionPlanPath,
+            timelineComposition.SegmentTimelineReportPath,
+            timelineComposition.RetentionMarkerTimelinePath,
+            timelineComposition.FinalTimelineValidationReportPath,
+            timelineComposition.LongformFinalTimelineReady,
+            timelineComposition.ShortformFinalTimelineReady,
+            timelineComposition.LongformActualDurationSeconds,
+            timelineComposition.ShortformActualDurationSeconds,
+            timelineComposition.LongformFinalShotCount,
+            timelineComposition.ShortformFinalShotCount,
+            timelineComposition.TotalFinalShotCount,
+            timelineComposition.ValidationReport.AssetValidationPassed,
+            timelineComposition.ValidationReport.NarrationValidationPassed,
+            timelineComposition.ValidationReport.DurationValidationPassed,
+            timelineComposition.ValidationReport.GapValidationPassed,
+            timelineComposition.ValidationReport.OverlapValidationPassed,
+            timelineComposition.ValidationReport.VisualVarietyPassed,
+            timelineComposition.ValidationReport.HeroEventRulePassed,
+            timelineComposition.ValidationReport.AstrophotographyRulePassed,
+            timelineComposition.ValidationReport.SummaryRulePassed,
+            timelineComposition.ValidationReport.ShortformRulePassed);
 
         return Results.Ok(output);
     }

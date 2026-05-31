@@ -1499,7 +1499,31 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     bool VisualVarietyPassed = false,
     int RepeatedAssetSequenceCount = 0,
     int InternalMetadataLeakCount = 0,
-    string? EditorialReviewReportPath = null);
+    string? EditorialReviewReportPath = null,
+    bool TimelineCompositionReady = false,
+    string? FinalRenderTimelinePath = null,
+    string? FinalRenderShotListPath = null,
+    string? TimelineTransitionPlanPath = null,
+    string? SegmentTimelineReportPath = null,
+    string? RetentionMarkerTimelinePath = null,
+    string? FinalTimelineValidationReportPath = null,
+    bool LongformFinalTimelineReady = false,
+    bool ShortformFinalTimelineReady = false,
+    int LongformActualDurationSeconds = 0,
+    int ShortformActualDurationSeconds = 0,
+    int LongformFinalShotCount = 0,
+    int ShortformFinalShotCount = 0,
+    int TotalFinalShotCount = 0,
+    bool TimelineAssetValidationPassed = false,
+    bool TimelineNarrationValidationPassed = false,
+    bool TimelineDurationValidationPassed = false,
+    bool TimelineGapValidationPassed = false,
+    bool TimelineOverlapValidationPassed = false,
+    bool TimelineVisualVarietyPassed = false,
+    bool TimelineHeroEventRulePassed = false,
+    bool TimelineAstrophotographyRulePassed = false,
+    bool TimelineSummaryRulePassed = false,
+    bool TimelineShortformRulePassed = false);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
