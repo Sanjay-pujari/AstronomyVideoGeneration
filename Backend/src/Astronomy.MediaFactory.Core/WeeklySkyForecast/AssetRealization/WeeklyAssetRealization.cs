@@ -70,6 +70,9 @@ public sealed record WeeklyAssetQualityReport(
     int ExpandedPassed,
     int ExpandedFailed,
     int AiPassed,
+    int RequiredAICinematicAssetsPassed,
+    int RequiredAICinematicAssetsFailed,
+    bool AICinematicRequiredPackageReady,
     int NasaPassed,
     int JwstPassed,
     int MotionPassed,
@@ -679,6 +682,9 @@ public sealed class WeeklyAssetQualityValidator(ILogger logger)
         var ready = details.Count(x => x.Status == ProductionAssetQualityStatus.ProductionReady);
         var warning = details.Count(x => x.Status == ProductionAssetQualityStatus.ProductionWarning);
         var failed = details.Count(x => x.Status == ProductionAssetQualityStatus.ProductionFailed);
+        var requiredAiPassed = details.Count(IsRequiredAICinematicPassed);
+        var requiredAiFailed = details.Count(IsRequiredAICinematicFailed);
+        var requiredAiReady = requiredAiPassed >= RequiredAICinematicAssetCodes.Count && requiredAiFailed == 0;
         return new WeeklyAssetQualityReport(
             details.Count,
             ready,
@@ -689,15 +695,37 @@ public sealed class WeeklyAssetQualityValidator(ILogger logger)
             CountPassed(details, RealizedVisualAssetSourceType.StellariumExpanded),
             CountFailed(details, RealizedVisualAssetSourceType.StellariumExpanded),
             CountPassed(details, RealizedVisualAssetSourceType.AICinematic),
+            requiredAiPassed,
+            requiredAiFailed,
+            requiredAiReady,
             CountPassed(details, RealizedVisualAssetSourceType.NASA),
             CountPassed(details, RealizedVisualAssetSourceType.JWST),
             CountPassed(details, RealizedVisualAssetSourceType.MotionGraphics),
             CountPassed(details, RealizedVisualAssetSourceType.EducationalOverlay),
-            failed == 0);
+            failed == 0 && requiredAiReady);
     }
 
     private static int CountPassed(IReadOnlyList<WeeklyAssetQualityDetail> details, RealizedVisualAssetSourceType sourceType)
         => details.Count(x => x.SourceType.Equals(sourceType.ToString(), StringComparison.OrdinalIgnoreCase) && x.Status == ProductionAssetQualityStatus.ProductionReady);
+
+    private static bool IsRequiredAICinematicPassed(WeeklyAssetQualityDetail detail) =>
+        IsRequiredAICinematic(detail) && detail.Status == ProductionAssetQualityStatus.ProductionReady;
+
+    private static bool IsRequiredAICinematicFailed(WeeklyAssetQualityDetail detail) =>
+        IsRequiredAICinematic(detail) && detail.Status == ProductionAssetQualityStatus.ProductionFailed;
+
+    private static bool IsRequiredAICinematic(WeeklyAssetQualityDetail detail) =>
+        detail.SourceType.Equals(RealizedVisualAssetSourceType.AICinematic.ToString(), StringComparison.OrdinalIgnoreCase)
+        && RequiredAICinematicAssetCodes.Contains(detail.AssetCode);
+
+    private static readonly HashSet<string> RequiredAICinematicAssetCodes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "fast_cinematic_sky_hook",
+        "cinematic_weekly_sky_reveal",
+        "cosmic_closing_background",
+        "shortform_call_to_action_background",
+        "cosmic_retention_reset"
+    };
 
     private static int CountFailed(IReadOnlyList<WeeklyAssetQualityDetail> details, RealizedVisualAssetSourceType sourceType)
         => details.Count(x => x.SourceType.Equals(sourceType.ToString(), StringComparison.OrdinalIgnoreCase) && x.Status == ProductionAssetQualityStatus.ProductionFailed);
@@ -1140,7 +1168,10 @@ public sealed class WeeklyAssetRealizationService(
             bundle.Warnings)).ToList();
         var blockers = bundles.Where(x => !x.ProductionReadyForTest).Select(x => $"{x.SegmentId} has no test-ready visual/narration coverage.").ToList();
         var warnings = bundles.SelectMany(x => x.Warnings)
-            .Concat(missingBySource.Where(x => x.Value > 0).Select(x => $"{x.Key} has {x.Value} planned assets not realized."))
+            .Concat(missingBySource.Where(x => x.Value > 0).Select(x =>
+                x.Key.Equals("AICinematic", StringComparison.OrdinalIgnoreCase)
+                    ? $"AICinematic has {x.Value} required assets not realized."
+                    : $"{x.Key} has {x.Value} planned assets not realized."))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         return new WeeklyAssetCoverageAuditReport(
