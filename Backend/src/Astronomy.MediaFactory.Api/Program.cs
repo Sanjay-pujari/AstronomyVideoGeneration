@@ -5168,9 +5168,6 @@ static bool ValidateExpandedScreenshotNightImage(string imagePath)
     }
 }
 
-sealed record ExpandedNightGeometrySelection(bool Ready, DateTime? SelectedObservationUtc, DateTime? SelectedObservationLocal, double? SelectedSunAltitudeDeg, string? SelectedTargetObject, string ValidationStatus);
-sealed record ExpandedNightGeometryCandidate(string TargetObject, DateTime ObservationUtc, DateTime ObservationLocal, double ObjectAltitudeDeg, double ObjectAzimuthDeg, double SunAltitudeDeg);
-
 static async Task<IReadOnlyList<ExpandedRenderSceneRequirement>> ReadExpandedRenderSceneRequirementsAsync(
     string expandedRenderScenePlanPath,
     IReadOnlyList<ExpandedRenderSceneRequirement> fallbackRequirements,
@@ -5339,6 +5336,9 @@ static async Task WriteExpandedStellariumExecutionReportAsync(
         warnings
     }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 }
+
+sealed record ExpandedNightGeometrySelection(bool Ready, DateTime? SelectedObservationUtc, DateTime? SelectedObservationLocal, double? SelectedSunAltitudeDeg, string? SelectedTargetObject, string ValidationStatus);
+sealed record ExpandedNightGeometryCandidate(string TargetObject, DateTime ObservationUtc, DateTime ObservationLocal, double ObjectAltitudeDeg, double ObjectAzimuthDeg, double SunAltitudeDeg);
 
 sealed record ExpandedStellariumExecutionSummary(
     string ReportPath,
