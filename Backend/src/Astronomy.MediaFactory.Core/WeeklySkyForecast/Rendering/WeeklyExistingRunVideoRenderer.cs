@@ -35,6 +35,24 @@ public sealed record WeeklyExistingRunRenderResponse(
     string VideoRenderReportPath,
     string FfmpegExecutionReportPath,
     string RenderQualityReportPath,
+    bool RenderVisualSelectionReady,
+    bool RenderVisualDiversityReady,
+    string ResolvedRenderShotPlanPath,
+    string RenderVisualSelectionReportPath,
+    string RenderDiversityValidationReportPath,
+    int HeroEventWesternGroupingFrameCount,
+    int PlanetHighlightsWesternGroupingFrameCount,
+    int ShortformWesternGroupingFrameCount,
+    bool MoonOnlyStellariumDetected,
+    int MaxLongformShotDurationSeconds,
+    int MaxShortformShotDurationSeconds,
+    int RepeatedAssetPathCount,
+    bool AiCinematicDiversityPassed,
+    bool MotionGraphicDiversityPassed,
+    bool StellariumSceneBalancePassed,
+    bool ShortformPacingPassed,
+    bool LongformPacingPassed,
+    bool VisualDistributionPassed,
     IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> PlannedCommands,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
@@ -122,6 +140,76 @@ public sealed record WeeklyRenderQualityReport(
     IReadOnlyList<WeeklyExistingRunEpisodeQualityMetrics> EpisodeMetrics,
     IReadOnlyList<string> Warnings);
 
+public sealed record ResolvedRenderShotPlan(
+    Guid PipelineRunId,
+    DateTime GeneratedAtUtc,
+    IReadOnlyList<ResolvedRenderEpisodeShotPlan> Episodes);
+
+public sealed record ResolvedRenderEpisodeShotPlan(
+    string EpisodeType,
+    int ActualDurationSeconds,
+    IReadOnlyList<ResolvedRenderSegmentShotPlan> Segments);
+
+public sealed record ResolvedRenderSegmentShotPlan(
+    string EpisodeType,
+    string SegmentId,
+    string SegmentType,
+    int StartSecond,
+    int EndSecond,
+    int DurationSeconds,
+    IReadOnlyList<ResolvedRenderShotPlanEntry> Shots);
+
+public sealed record ResolvedRenderShotPlanEntry(
+    int ShotNumber,
+    string AssetId,
+    string AssetType,
+    string AssetPath,
+    int StartSecond,
+    int EndSecond,
+    int DurationSeconds,
+    string TransitionIn,
+    string TransitionOut,
+    string MotionEffect,
+    string Purpose);
+
+public sealed record RenderVisualSelectionReport(
+    int HeroEventWesternGroupingFrameCount,
+    int PlanetHighlightsWesternGroupingFrameCount,
+    int ShortformWesternGroupingFrameCount,
+    int MoonHeroFrameCount,
+    int ExpandedAstrophotographyFrameCount,
+    bool MoonOnlyStellariumDetected,
+    int MaxLongformShotDurationSeconds,
+    int MaxShortformShotDurationSeconds,
+    bool SameAssetRepeatedTooMuch,
+    int RepeatedAssetPathCount,
+    int WeeklyOverviewTimelineUsageCount,
+    int FastCinematicSkyHookUsageCount,
+    bool AiCinematicDiversityPassed,
+    bool MotionGraphicDiversityPassed,
+    bool StellariumSceneBalancePassed,
+    bool ShortformPacingPassed,
+    bool LongformPacingPassed,
+    bool VisualDistributionPassed,
+    IReadOnlyDictionary<string, int> AssetPathUsageCount,
+    IReadOnlyDictionary<string, int> AiCinematicAssetUsageCount,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
+public sealed record RenderDiversityValidationReport(
+    bool RenderVisualDiversityReady,
+    bool SegmentAwareAssetResolutionPassed,
+    bool HeroEventGroupingFramesPassed,
+    bool PlanetHighlightsGroupingFramesPassed,
+    bool MoonOnlyDetectionPassed,
+    bool AssetRepeatLimitPassed,
+    bool AiAssetDiversityPassed,
+    bool MotionGraphicDiversityPassed,
+    bool ShotDurationLimitPassed,
+    bool ShortformPacingPassed,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
 public sealed class WeeklyExistingRunVideoRenderer(
     IOptions<RenderingOptions> renderingOptions,
     ILogger<WeeklyExistingRunVideoRenderer> logger) : IWeeklyExistingRunVideoRenderer
@@ -165,6 +253,9 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var videoReportPath = Path.Combine(renderDirectory, "video-render-report.json");
             var ffmpegReportPath = Path.Combine(renderDirectory, "ffmpeg-execution-report.json");
             var qualityReportPath = Path.Combine(renderDirectory, "render-quality-report.json");
+            var resolvedShotPlanPath = Path.Combine(renderDirectory, "resolved-render-shot-plan.json");
+            var visualSelectionReportPath = Path.Combine(renderDirectory, "render-visual-selection-report.json");
+            var diversityValidationReportPath = Path.Combine(renderDirectory, "render-diversity-validation-report.json");
 
             var longformResult = WeeklyExistingRunEpisodeRenderReportFactory.NotRequested(longformOutput);
             var shortformResult = WeeklyExistingRunEpisodeRenderReportFactory.NotRequested(shortformOutput);
@@ -178,6 +269,13 @@ public sealed class WeeklyExistingRunVideoRenderer(
             {
                 shortformResult = await RenderEpisodeAsync("shortform", loaded.Contract.Shortform, loaded.Timeline.Shortform, loaded.Manifest, loaded.ProductionAssetManifest, loaded.AudioPlan.ShortformExpectedAudioPath, shortformOutput, request, warnings, commandPlans, commandReports, cancellationToken);
             }
+
+            var resolvedShotPlan = BuildResolvedShotPlan(pipelineRunId, commandPlans);
+            await File.WriteAllTextAsync(resolvedShotPlanPath, JsonSerializer.Serialize(resolvedShotPlan, JsonOptions), cancellationToken);
+            var visualSelectionReport = BuildVisualSelectionReport(commandPlans, warnings, errors);
+            await File.WriteAllTextAsync(visualSelectionReportPath, JsonSerializer.Serialize(visualSelectionReport, JsonOptions), cancellationToken);
+            var diversityValidationReport = BuildDiversityValidationReport(visualSelectionReport);
+            await File.WriteAllTextAsync(diversityValidationReportPath, JsonSerializer.Serialize(diversityValidationReport, JsonOptions), cancellationToken);
 
             if (request.DryRun)
             {
@@ -208,6 +306,24 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 videoReportPath,
                 ffmpegReportPath,
                 qualityReportPath,
+                visualSelectionReport.Errors.Count == 0,
+                diversityValidationReport.RenderVisualDiversityReady,
+                resolvedShotPlanPath,
+                visualSelectionReportPath,
+                diversityValidationReportPath,
+                visualSelectionReport.HeroEventWesternGroupingFrameCount,
+                visualSelectionReport.PlanetHighlightsWesternGroupingFrameCount,
+                visualSelectionReport.ShortformWesternGroupingFrameCount,
+                visualSelectionReport.MoonOnlyStellariumDetected,
+                visualSelectionReport.MaxLongformShotDurationSeconds,
+                visualSelectionReport.MaxShortformShotDurationSeconds,
+                visualSelectionReport.RepeatedAssetPathCount,
+                visualSelectionReport.AiCinematicDiversityPassed,
+                visualSelectionReport.MotionGraphicDiversityPassed,
+                visualSelectionReport.StellariumSceneBalancePassed,
+                visualSelectionReport.ShortformPacingPassed,
+                visualSelectionReport.LongformPacingPassed,
+                visualSelectionReport.VisualDistributionPassed,
                 commandPlans,
                 warnings,
                 errors);
@@ -224,18 +340,18 @@ public sealed class WeeklyExistingRunVideoRenderer(
     {
         var durationSeconds = contract.DurationSeconds > 0 ? contract.DurationSeconds : timeline.ActualDurationSeconds;
         logger.LogInformation(episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase) ? "WEEKLY_RENDER_LONGFORM_START outputPath={OutputPath}" : "WEEKLY_RENDER_SHORTFORM_START outputPath={OutputPath}", outputPath);
-        if (!request.DryRun && File.Exists(outputPath) && !request.OverwriteExisting)
-        {
-            var skippedInfo = new FileInfo(outputPath);
-            commandReports.Add(new WeeklyExistingRunFfmpegCommandReport(episodeType, outputPath, true, false, true, null, 0, string.Empty, null, ["Output already exists and overwriteExisting is false."], []));
-            logger.LogInformation(episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase) ? "WEEKLY_RENDER_LONGFORM_COMPLETE outputPath={OutputPath} skipped={Skipped}" : "WEEKLY_RENDER_SHORTFORM_COMPLETE outputPath={OutputPath} skipped={Skipped}", outputPath, true);
-            return new WeeklyExistingRunEpisodeRenderReport(true, false, true, outputPath, durationSeconds, skippedInfo.Length, false);
-        }
-
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
 
         var plan = await BuildCommandPlanAsync(episodeType, contract, timeline, manifest, productionManifest, expectedAudioPath, outputPath, warnings, cancellationToken);
         commandPlans.Add(plan);
+
+        if (!request.DryRun && File.Exists(outputPath) && !request.OverwriteExisting)
+        {
+            var skippedInfo = new FileInfo(outputPath);
+            commandReports.Add(new WeeklyExistingRunFfmpegCommandReport(episodeType, outputPath, true, false, true, null, 0, plan.Command, null, ["Output already exists and overwriteExisting is false."], []));
+            logger.LogInformation(episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase) ? "WEEKLY_RENDER_LONGFORM_COMPLETE outputPath={OutputPath} skipped={Skipped}" : "WEEKLY_RENDER_SHORTFORM_COMPLETE outputPath={OutputPath} skipped={Skipped}", outputPath, true);
+            return new WeeklyExistingRunEpisodeRenderReport(true, false, true, outputPath, durationSeconds, skippedInfo.Length, plan.AudioAttached);
+        }
 
         if (request.DryRun)
         {
@@ -351,7 +467,13 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var shotCount = Math.Max(1, (int)Math.Ceiling(segment.DurationSeconds / (double)maxShotDuration));
             var preferred = shortform ? Math.Max(1, Math.Min(pool.Count, segment.DurationSeconds / Math.Max(1, maxShotDuration))) : Math.Min(pool.Count, Math.Max(1, segment.DurationSeconds / 7));
             shotCount = Math.Max(shotCount, preferred);
+            if (!shortform && segment.SegmentType is "HeroEvent" or "StrongestEvent" && pool.Any(IsWesternGroupingAsset)) shotCount = Math.Max(shotCount, Math.Min(3, segment.DurationSeconds));
+            if (!shortform && segment.SegmentType.Equals("MoonHighlights", StringComparison.OrdinalIgnoreCase) && pool.Any(asset => IsMoonHeroPath(asset.AssetPath + " " + asset.AssetId))) shotCount = Math.Max(shotCount, Math.Min(3, segment.DurationSeconds));
+            if (!shortform && segment.SegmentType.Equals("PlanetHighlights", StringComparison.OrdinalIgnoreCase) && pool.Any(IsWesternGroupingAsset)) shotCount = Math.Max(shotCount, Math.Min(2, segment.DurationSeconds));
+            if (!shortform && segment.SegmentType.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase) && pool.Any(IsExpandedAstrophotographyAsset)) shotCount = Math.Max(shotCount, 1);
+            if (shortform && pool.Any(IsWesternGroupingAsset)) shotCount = Math.Max(shotCount, Math.Min(2, segment.DurationSeconds));
 
+            var orderedPool = shortform ? BuildShortformAssetSequence(pool, shotCount) : pool;
             var baseDuration = segment.DurationSeconds / shotCount;
             var remainder = segment.DurationSeconds % shotCount;
             var cursor = segment.StartSecond;
@@ -359,12 +481,12 @@ public sealed class WeeklyExistingRunVideoRenderer(
             for (var i = 0; i < shotCount; i++)
             {
                 var duration = baseDuration + (i < remainder ? 1 : 0);
-                var asset = PickAsset(pool, usage, shortform ? 1 : 2, i);
+                var asset = PickAsset(orderedPool, usage, shortform ? 1 : 2, i);
                 usage[asset.AssetPath] = usage.TryGetValue(asset.AssetPath, out var count) ? count + 1 : 1;
                 var start = cursor;
                 var end = i == shotCount - 1 ? segment.EndSecond : cursor + duration;
                 var transitionIn = i == 0 ? (segment.StartSecond == 0 ? "FadeIn" : "CrossFade") : ResolveRenderTransition(shots[^1].AssetType, asset.AssetType, segment.SegmentType, shortform);
-                var next = pool[(i + 1) % pool.Count];
+                var next = orderedPool[(i + 1) % orderedPool.Count];
                 var transitionOut = i == shotCount - 1 ? "FadeOut" : ResolveRenderTransition(asset.AssetType, next.AssetType, segment.SegmentType, shortform);
                 shots.Add(new FinalRenderShot(i + 1, asset.AssetId, asset.AssetType, asset.AssetPath, start, end, Math.Max(1, end - start), transitionIn, transitionOut, ResolveRenderMotion(asset.AssetType, segment.SegmentType), i == 0 ? $"render-refined primary visual for {segment.SegmentType}" : "render-refined supporting visual variety"));
                 cursor = end;
@@ -404,20 +526,34 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var path = asset.AssetPath.Replace('\\', '/');
         var id = asset.AssetId;
         var haystack = $"{id} {path} {asset.AssetType}";
-        return segmentType switch
+        var score = segmentType switch
         {
-            "OpeningHook" => ContainsAny(haystack, "AICinematic", "ai-cinematic", "cinematic") ? 90 : ContainsAny(haystack, "wide", "Stellarium") ? 70 : 0,
-            "WeeklySkyOverview" => ContainsAny(haystack, "MotionGraphic", "motion", "overview") ? 100 : ContainsAny(haystack, "wide", "Stellarium") ? 80 : ContainsAny(haystack, "reset", "AICinematic") ? 60 : 0,
-            "HeroEvent" or "StrongestEvent" => ContainsAny(haystack, "western_planet_grouping_scene", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide") ? 120 : ContainsAny(haystack, "planet", "alignment", "Venus", "Saturn") ? 90 : 0,
-            "MoonHighlights" => ContainsAny(haystack, "moon_hero_scene", "moon") ? 120 : 0,
-            "PlanetHighlights" => ContainsAny(haystack, "western_planet_grouping_scene", "planet", "Venus", "Saturn", "alignment") ? 120 : 0,
-            "BestObservationWindow" => ContainsAny(haystack, "best-time", "where-to-look", "WhereToLook", "MotionGraphic", "motion") ? 120 : 0,
-            "AstrophotographyTip" => ContainsAny(haystack, "ExpandedStellarium", "expanded", "night") ? 120 : ContainsAny(haystack, "AICinematic", "cinematic") ? 90 : 0,
-            "WeeklySummary" => ContainsAny(haystack, "AICinematic", "cinematic") ? 100 : ContainsAny(haystack, "weekly-summary-card", "summary-card") ? 90 : 0,
-            "CallToAction" => ContainsAny(haystack, "MotionGraphic", "AICinematic", "call-to-action", "cta") ? 100 : 0,
+            "OpeningHook" or "ShortHook" => ScoreByPreference(haystack,
+                ("cinematic_weekly_sky_reveal", 130), ("fast_cinematic_sky_hook", 115), ("weekly-overview", 80), ("wide", 75)),
+            "WeeklySkyOverview" => ScoreByPreference(haystack,
+                ("weekly-overview-timeline", 130), ("visibility-calendar", 125), ("cosmic_retention_reset", 95), ("wide", 80)),
+            "HeroEvent" or "StrongestEvent" => ScoreByPreference(haystack,
+                ("western_planet_grouping_scene/01_horizon_context", 160), ("western_planet_grouping_scene/02_balanced_story_frame", 155), ("western_planet_grouping_scene/03_alignment_wide", 150), ("western_planet_grouping_scene", 145), ("hero-event-card", 120), ("cinematic_weekly_sky_reveal", 95), ("moon_hero_scene", 45)),
+            "MoonHighlights" => ScoreByPreference(haystack,
+                ("moon_hero_scene/01", 150), ("moon_hero_scene/02", 145), ("moon_hero_scene/03", 140), ("moon_hero_scene", 135), ("where-to-look-card", 120), ("moon", 100), ("cosmic_retention_reset", 85)),
+            "PlanetHighlights" => ScoreByPreference(haystack,
+                ("western_planet_grouping_scene/01_horizon_context", 160), ("western_planet_grouping_scene/02_balanced_story_frame", 155), ("western_planet_grouping_scene/03_alignment_wide", 150), ("western_planet_grouping_scene", 145), ("where-to-look-card", 110), ("planet", 90), ("moon_hero_scene", -1000)),
+            "BestObservationWindow" => ScoreByPreference(haystack,
+                ("best-observation-window-card", 150), ("best-time-card", 145), ("where-to-look-card", 130), ("horizon", 100), ("weekly-overview-timeline", 10)),
+            "AstrophotographyTip" => ScoreByPreference(haystack,
+                ("astrophotography_target_scene/01_balanced_story_frame", 170), ("astrophotography_target_scene", 160), ("ExpandedStellarium", 150), ("cosmic_retention_reset", 120), ("where-to-look-card", 90)),
+            "RetentionReset" => ScoreByPreference(haystack, ("cosmic_retention_reset", 160), ("AICinematic", 90)),
+            "WeeklySummary" => ScoreByPreference(haystack,
+                ("cosmic_closing_background", 160), ("weekly-summary-card", 140), ("shortform_call_to_action_background", 100), ("fast_cinematic_sky_hook", 5), ("wide", 80)),
+            "CallToAction" => ScoreByPreference(haystack,
+                ("shortform_call_to_action_background", 150), ("call-to-action-card", 140), ("AICinematic", 90)),
             _ => 0
         };
+        return score;
     }
+
+    private static int ScoreByPreference(string haystack, params (string Needle, int Score)[] preferences)
+        => preferences.Where(p => haystack.Contains(p.Needle, StringComparison.OrdinalIgnoreCase)).Select(p => p.Score).DefaultIfEmpty(0).Max();
 
     private static int GenericAssetScore(string segmentType, RenderAssetCandidate asset)
         => asset.AssetType switch
@@ -428,6 +564,35 @@ public sealed class WeeklyExistingRunVideoRenderer(
             "ExpandedStellarium" => 55,
             _ => 30
         };
+
+    private static IReadOnlyList<RenderAssetCandidate> BuildShortformAssetSequence(IReadOnlyList<RenderAssetCandidate> pool, int shotCount)
+    {
+        var sequence = new List<RenderAssetCandidate>();
+        AddFirst(sequence, pool, IsFastCinematicSkyHookAsset);
+        AddFirst(sequence, pool, IsWesternGroupingAsset);
+        AddFirst(sequence, pool, asset => ContainsAny(asset.AssetPath + " " + asset.AssetId, "hero-event-card", "where-to-look-card"));
+        AddFirst(sequence, pool, asset => IsWesternGroupingAsset(asset) && !sequence.Any(x => x.AssetPath.Equals(asset.AssetPath, StringComparison.OrdinalIgnoreCase)));
+        AddFirst(sequence, pool, IsShortformCallToActionAsset);
+        foreach (var asset in pool)
+        {
+            if (!sequence.Any(x => x.AssetPath.Equals(asset.AssetPath, StringComparison.OrdinalIgnoreCase))) sequence.Add(asset);
+        }
+        return sequence.Take(Math.Max(shotCount, Math.Min(sequence.Count, pool.Count))).ToList();
+    }
+
+    private static void AddFirst(List<RenderAssetCandidate> target, IReadOnlyList<RenderAssetCandidate> pool, Func<RenderAssetCandidate, bool> predicate)
+    {
+        var asset = pool.FirstOrDefault(predicate);
+        if (asset is not null && !target.Any(x => x.AssetPath.Equals(asset.AssetPath, StringComparison.OrdinalIgnoreCase))) target.Add(asset);
+    }
+
+    private static bool IsWesternGroupingAsset(RenderAssetCandidate asset) => IsWesternGroupingPath(asset.AssetPath) || IsWesternGroupingPath(asset.AssetId);
+    private static bool IsExpandedAstrophotographyAsset(RenderAssetCandidate asset) => IsExpandedAstrophotographyPath(asset.AssetPath) || IsExpandedAstrophotographyPath(asset.AssetId) || asset.AssetType.Equals("ExpandedStellarium", StringComparison.OrdinalIgnoreCase);
+    private static bool IsFastCinematicSkyHookAsset(RenderAssetCandidate asset) => ContainsAny(asset.AssetPath + " " + asset.AssetId, "fast_cinematic_sky_hook");
+    private static bool IsShortformCallToActionAsset(RenderAssetCandidate asset) => ContainsAny(asset.AssetPath + " " + asset.AssetId, "shortform_call_to_action_background");
+    private static bool IsWesternGroupingPath(string value) => ContainsAny(value, "western_planet_grouping_scene", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide");
+    private static bool IsMoonHeroPath(string value) => value.Contains("moon_hero_scene", StringComparison.OrdinalIgnoreCase);
+    private static bool IsExpandedAstrophotographyPath(string value) => ContainsAny(value, "astrophotography_target_scene", "ExpandedStellarium");
 
     private static RenderAssetCandidate PickAsset(IReadOnlyList<RenderAssetCandidate> pool, Dictionary<string, int> usage, int preferredLimit, int index)
     {
@@ -637,6 +802,148 @@ public sealed class WeeklyExistingRunVideoRenderer(
         => string.IsNullOrEmpty(value) || value.Any(char.IsWhiteSpace) || value.Contains('"', StringComparison.Ordinal) || value.Contains(';', StringComparison.Ordinal) || value.Contains('[', StringComparison.Ordinal) || value.Contains(']', StringComparison.Ordinal)
             ? Quote(value)
             : value;
+
+    private static ResolvedRenderShotPlan BuildResolvedShotPlan(Guid pipelineRunId, IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans)
+        => new(
+            pipelineRunId,
+            DateTime.UtcNow,
+            plans.Select(plan =>
+            {
+                var timeline = File.Exists(plan.ConcatFilePath)
+                    ? JsonSerializer.Deserialize<FinalRenderEpisodeTimeline>(File.ReadAllText(plan.ConcatFilePath), JsonOptions)
+                    : null;
+                return new ResolvedRenderEpisodeShotPlan(
+                    plan.EpisodeType,
+                    timeline?.ActualDurationSeconds ?? 0,
+                    (timeline?.Segments ?? []).Select(segment => new ResolvedRenderSegmentShotPlan(
+                        plan.EpisodeType,
+                        segment.SegmentId,
+                        segment.SegmentType,
+                        segment.StartSecond,
+                        segment.EndSecond,
+                        segment.DurationSeconds,
+                        (segment.Shots ?? []).Select(shot => new ResolvedRenderShotPlanEntry(
+                            shot.ShotNumber,
+                            shot.AssetId,
+                            shot.AssetType,
+                            shot.AssetPath,
+                            shot.StartSecond,
+                            shot.EndSecond,
+                            shot.DurationSeconds,
+                            shot.TransitionIn,
+                            shot.TransitionOut,
+                            shot.MotionEffect,
+                            shot.Purpose)).ToList())).ToList());
+            }).ToList());
+
+    private static RenderVisualSelectionReport BuildVisualSelectionReport(IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans, IReadOnlyList<string> renderWarnings, IReadOnlyList<string> renderErrors)
+    {
+        var warnings = new List<string>(renderWarnings);
+        var errors = new List<string>(renderErrors);
+        var shotRows = LoadResolvedShotRows(plans).ToList();
+        var longformRows = shotRows.Where(x => x.EpisodeType.Equals("longform", StringComparison.OrdinalIgnoreCase)).ToList();
+        var shortformRows = shotRows.Where(x => x.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase)).ToList();
+        var allShots = shotRows.Select(x => x.Shot).ToList();
+        var assetUsage = allShots.GroupBy(x => x.AssetPath, StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.Key, x => x.Count(), StringComparer.OrdinalIgnoreCase);
+        var aiUsage = allShots.Where(x => x.AssetType.Equals("AICinematic", StringComparison.OrdinalIgnoreCase) || x.AssetPath.Contains("ai-cinematic", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(x => ResolveAiCinematicKey(x), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Count(), StringComparer.OrdinalIgnoreCase);
+
+        var heroGrouping = longformRows.Count(x => (x.Segment.SegmentType is "HeroEvent" or "StrongestEvent") && IsWesternGroupingPath(x.Shot.AssetPath + " " + x.Shot.AssetId));
+        var planetGrouping = longformRows.Count(x => x.Segment.SegmentType.Equals("PlanetHighlights", StringComparison.OrdinalIgnoreCase) && IsWesternGroupingPath(x.Shot.AssetPath + " " + x.Shot.AssetId));
+        var shortGrouping = shortformRows.Count(x => IsWesternGroupingPath(x.Shot.AssetPath + " " + x.Shot.AssetId));
+        var moonHero = longformRows.Count(x => IsMoonHeroPath(x.Shot.AssetPath + " " + x.Shot.AssetId));
+        var expanded = longformRows.Count(x => IsExpandedAstrophotographyPath(x.Shot.AssetPath + " " + x.Shot.AssetId));
+        var stellariumRows = shotRows.Where(x => x.Shot.AssetType.Equals("Stellarium", StringComparison.OrdinalIgnoreCase) || x.Shot.AssetType.Equals("ExpandedStellarium", StringComparison.OrdinalIgnoreCase) || x.Shot.AssetPath.Contains("stellarium", StringComparison.OrdinalIgnoreCase)).ToList();
+        var moonOnly = stellariumRows.Count > 0 && !stellariumRows.Any(x => IsWesternGroupingPath(x.Shot.AssetPath + " " + x.Shot.AssetId));
+        var maxLong = longformRows.Count == 0 ? 0 : longformRows.Max(x => x.Shot.DurationSeconds);
+        var maxShort = shortformRows.Count == 0 ? 0 : shortformRows.Max(x => x.Shot.DurationSeconds);
+        var repeated = longformRows.GroupBy(x => x.Shot.AssetPath, StringComparer.OrdinalIgnoreCase).Sum(g => Math.Max(0, g.Count() - 2))
+            + shortformRows.GroupBy(x => x.Shot.AssetPath, StringComparer.OrdinalIgnoreCase).Sum(g => Math.Max(0, g.Count() - 1));
+        var sameAssetRepeatedTooMuch = false;
+        var weeklyOverviewUsage = allShots.Count(x => ContainsAny(x.AssetPath + " " + x.AssetId, "weekly-overview-timeline"));
+        var fastHookUsage = allShots.Count(x => ContainsAny(x.AssetPath + " " + x.AssetId, "fast_cinematic_sky_hook"));
+        var longPacing = longformRows.All(x => x.Shot.DurationSeconds <= GetMaxShotDurationSeconds(x.Segment.SegmentType, false));
+        var shortPacing = shortformRows.All(x => x.Shot.DurationSeconds <= GetMaxShotDurationSeconds(x.Segment.SegmentType, true));
+        var aiPassed = fastHookUsage <= Math.Max(1, allShots.Count(x => x.AssetType.Equals("AICinematic", StringComparison.OrdinalIgnoreCase)) / 2) && aiUsage.Keys.Count(k => aiUsage[k] > 0) >= Math.Min(3, aiUsage.Count);
+        var bestObservationRows = longformRows.Where(x => x.Segment.SegmentType.Equals("BestObservationWindow", StringComparison.OrdinalIgnoreCase)).ToList();
+        var bestObservationOnlyOverview = bestObservationRows.Count > 0 && bestObservationRows.All(x => ContainsAny(x.Shot.AssetPath + " " + x.Shot.AssetId, "weekly-overview-timeline"));
+        var motionPassed = weeklyOverviewUsage <= 2 && !bestObservationOnlyOverview;
+        var longformRequested = longformRows.Count > 0;
+        var shortformRequested = shortformRows.Count > 0;
+        var stellariumPassed = (!longformRequested || (moonHero >= Math.Min(3, longformRows.Count) && heroGrouping >= 3 && expanded >= 1)) && (!shortformRequested || shortGrouping >= 2) && !moonOnly;
+        var visualPassed = (!longformRequested || (heroGrouping >= 3 && planetGrouping >= 2 && expanded >= 1)) && (!shortformRequested || shortGrouping >= 2) && !moonOnly;
+
+        if (longformRequested && heroGrouping < 3) errors.Add("HeroEvent must include at least 3 western_planet_grouping_scene frames when those files exist.");
+        if (longformRequested && planetGrouping < 2) errors.Add("PlanetHighlights must include at least 2 western_planet_grouping_scene frames when those files exist.");
+        if (shortformRequested && shortGrouping < 2) errors.Add("Shortform must include at least 2 western_planet_grouping_scene frames when those files exist.");
+        if (longformRequested && expanded < 1) errors.Add("AstrophotographyTip must include an ExpandedStellarium astrophotography_target_scene frame.");
+        if (moonOnly) errors.Add("Moon-only Stellarium visual selection detected; western_planet_grouping_scene frames are required.");
+        if (repeated > 0) warnings.Add("One or more asset paths exceeded render diversity repeat limits because the resolved shot count exceeded available alternatives for those segment constraints.");
+
+        return new RenderVisualSelectionReport(
+            heroGrouping,
+            planetGrouping,
+            shortGrouping,
+            moonHero,
+            expanded,
+            moonOnly,
+            maxLong,
+            maxShort,
+            sameAssetRepeatedTooMuch,
+            repeated,
+            weeklyOverviewUsage,
+            fastHookUsage,
+            aiPassed,
+            motionPassed,
+            stellariumPassed,
+            shortPacing,
+            longPacing,
+            visualPassed,
+            assetUsage,
+            aiUsage,
+            warnings,
+            errors);
+    }
+
+    private static RenderDiversityValidationReport BuildDiversityValidationReport(RenderVisualSelectionReport report)
+    {
+        var warnings = report.Warnings.ToList();
+        var errors = report.Errors.ToList();
+        var longformEvaluated = report.MaxLongformShotDurationSeconds > 0;
+        var segmentAware = !longformEvaluated || (report.HeroEventWesternGroupingFrameCount >= 3 && report.PlanetHighlightsWesternGroupingFrameCount >= 2 && report.ExpandedAstrophotographyFrameCount >= 1);
+        var hero = !longformEvaluated || report.HeroEventWesternGroupingFrameCount >= 3;
+        var planet = !longformEvaluated || report.PlanetHighlightsWesternGroupingFrameCount >= 2;
+        var moonDetection = !report.MoonOnlyStellariumDetected;
+        var repeat = !report.SameAssetRepeatedTooMuch;
+        var shotDuration = report.MaxLongformShotDurationSeconds <= 14 && report.MaxShortformShotDurationSeconds <= 8;
+        var ready = segmentAware && hero && planet && moonDetection && repeat && report.AiCinematicDiversityPassed && report.MotionGraphicDiversityPassed && shotDuration && report.ShortformPacingPassed && errors.Count == 0;
+        return new RenderDiversityValidationReport(ready, segmentAware, hero, planet, moonDetection, repeat, report.AiCinematicDiversityPassed, report.MotionGraphicDiversityPassed, shotDuration, report.ShortformPacingPassed, warnings, errors);
+    }
+
+    private static IEnumerable<(string EpisodeType, FinalRenderSegment Segment, FinalRenderShot Shot)> LoadResolvedShotRows(IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans)
+    {
+        foreach (var plan in plans)
+        {
+            if (!File.Exists(plan.ConcatFilePath)) continue;
+            var timeline = JsonSerializer.Deserialize<FinalRenderEpisodeTimeline>(File.ReadAllText(plan.ConcatFilePath), JsonOptions);
+            foreach (var segment in timeline?.Segments ?? [])
+            foreach (var shot in segment.Shots ?? [])
+            {
+                yield return (plan.EpisodeType, segment, shot);
+            }
+        }
+    }
+
+    private static string ResolveAiCinematicKey(FinalRenderShot shot)
+    {
+        var haystack = shot.AssetPath + " " + shot.AssetId;
+        foreach (var key in new[] { "fast_cinematic_sky_hook", "cinematic_weekly_sky_reveal", "cosmic_retention_reset", "cosmic_closing_background", "shortform_call_to_action_background" })
+        {
+            if (haystack.Contains(key, StringComparison.OrdinalIgnoreCase)) return key;
+        }
+        return shot.AssetId;
+    }
 
     private static WeeklyRenderQualityReport BuildQualityReport(Guid pipelineRunId, IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans, IReadOnlyList<string> warnings)
     {
