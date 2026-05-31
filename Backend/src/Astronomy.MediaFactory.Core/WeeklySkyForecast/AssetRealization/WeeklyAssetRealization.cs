@@ -15,6 +15,7 @@ using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NasaAssets;
 using Microsoft.Extensions.Logging;
+using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization;
 
