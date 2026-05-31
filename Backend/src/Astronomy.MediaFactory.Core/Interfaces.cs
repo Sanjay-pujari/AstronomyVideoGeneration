@@ -1493,7 +1493,13 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     bool NarrationAssetMappingReady = false,
     bool NarrationTimelineReady = false,
     int TotalLongformNarrationSeconds = 0,
-    int TotalShortformNarrationSeconds = 0);
+    int TotalShortformNarrationSeconds = 0,
+    bool NarrationEditorialRefinementReady = false,
+    bool DocumentaryNarrationReady = false,
+    bool VisualVarietyPassed = false,
+    int RepeatedAssetSequenceCount = 0,
+    int InternalMetadataLeakCount = 0,
+    string? EditorialReviewReportPath = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
