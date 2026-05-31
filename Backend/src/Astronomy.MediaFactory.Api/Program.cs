@@ -737,7 +737,7 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (
     return Results.Ok(result);
 });
 
-app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, WeeklyAssetExpansionService assetExpansionService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IOptions<WeeklySkyForecastAssetExpansionOptions> assetExpansionOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, WeeklyAssetRealizationService assetRealizationService, WeeklyNarrationVisualTimelineComposer narrationVisualTimelineComposer, CancellationToken ct) =>
+app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySkyForecastV2GenerateWeeklyScenesRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, WeeklyEpisodeArchitectureService episodeArchitectureService, WeeklySegmentClassificationService segmentClassificationService, WeeklySegmentDiversificationService segmentDiversificationService, WeeklyVisualAssetPlanningService visualAssetPlanningService, WeeklyAICinematicAssetGenerationService aiCinematicAssetGenerationService, WeeklyAssetExpansionService assetExpansionService, IOptions<WeeklySkyForecastAICinematicAssetsOptions> aiCinematicOptionsAccessor, IOptions<WeeklySkyForecastAssetExpansionOptions> assetExpansionOptionsAccessor, IWeeklySkySceneComposer sceneComposer, ISscIntelligenceService sscIntelligenceService, Astronomy.SscIntelligence.SceneIntent.ISceneIntentResolver sceneIntentResolver, Astronomy.SscIntelligence.Storytelling.IAstronomicalSceneScorer astronomicalSceneScorer, IStellariumScriptExecutionService sharedStellariumExecutor, ISkyfieldTemporalResolver temporalResolver, IAstronomicalSpatialCompositionEngine spatialCompositionEngine, INarrativeSceneSplitter narrativeSceneSplitter, WeeklyAssetRealizationService assetRealizationService, WeeklyNarrationVisualTimelineComposer narrationVisualTimelineComposer, IWeeklySkyForecastContextBuilderV2 contextBuilder, CancellationToken ct) =>
 {
     try
     {
@@ -761,9 +761,39 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             PipelineRunId: pipelineRunId,
             ContentGenerationPlanId: contentPlanId);
 
-        var response = await service.PreviewAsync(intelligenceRequest, ct);
+        using var skyfieldTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        skyfieldTimeoutCts.CancelAfter(TimeSpan.FromSeconds(120));
+        var weeklyForecast = await contextBuilder.BuildAsync(new WeeklySkyForecastV2OrchestrationContext(
+            contentPlanId.Value,
+            pipelineRunId,
+            null,
+            intelligenceRequest,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            DateTime.UtcNow), skyfieldTimeoutCts.Token);
+        var orchestrationContext = new WeeklySkyForecastV2OrchestrationContext(
+            contentPlanId.Value,
+            pipelineRunId,
+            null,
+            intelligenceRequest,
+            null,
+            weeklyForecast,
+            null,
+            null,
+            null,
+            null,
+            DateTime.UtcNow,
+            SkyfieldWeeklyForecastCalls: 1,
+            RegionResolveCalls: 1,
+            ContextReusedAcrossPhases: true);
+
+        var response = await service.PreviewAsync(orchestrationContext, ct);
         var weeklySkyfieldContext = response;
-        app.Logger.LogInformation("Skyfield weekly context loaded once");
+        app.Logger.LogInformation("Skyfield weekly context loaded once and reused for intelligence preview");
         var root = weeklySkyfieldContext.RenderPreparationPackage?.WorkingDirectoryPlan.RootPath;
         if (string.IsNullOrWhiteSpace(root))
             return Results.BadRequest(new { error = "Unable to resolve working directory root for WeeklySkyForecast scene generation." });
@@ -2193,7 +2223,7 @@ var sscResult = splitProbeSsc;
                     expandedStellariumExecution.ExpandedFrameScreenshots,
                     aiCinematicImagePaths,
                     allProductionImageAssets,
-                    weeklySkyfieldContext),
+                    weeklyForecast),
                 stageCt));
         warnings.AddRange(assetRealization.RealizationReport.Warnings);
         warnings = warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
