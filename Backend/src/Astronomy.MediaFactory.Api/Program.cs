@@ -2192,13 +2192,16 @@ var sscResult = splitProbeSsc;
                     screenshots,
                     expandedStellariumExecution.ExpandedFrameScreenshots,
                     aiCinematicImagePaths,
-                    allProductionImageAssets),
+                    allProductionImageAssets,
+                    weeklySkyfieldContext),
                 stageCt));
         warnings.AddRange(assetRealization.RealizationReport.Warnings);
         warnings = warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var realizedAllProductionImageAssets = allProductionImageAssets
             .Concat(assetRealization.NasaImagePaths)
             .Concat(assetRealization.JwstImagePaths)
+            .Concat(assetRealization.MotionGraphicPaths ?? [])
+            .Concat(assetRealization.EducationalOverlayPaths ?? [])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -2247,6 +2250,8 @@ var sscResult = splitProbeSsc;
             aiCinematicImagePaths,
             nasaImagePaths = assetRealization.NasaImagePaths,
             jwstImagePaths = assetRealization.JwstImagePaths,
+            motionGraphicPaths = assetRealization.MotionGraphicPaths,
+            educationalOverlayPaths = assetRealization.EducationalOverlayPaths,
             allProductionImageAssets = realizedAllProductionImageAssets,
             imageSequencePlanPath,
             episodeArchitecture = new
@@ -2354,6 +2359,14 @@ var sscResult = splitProbeSsc;
                 jwstImageCount = assetRealization.JwstImageCount,
                 motionGraphicsImageCount = assetRealization.Manifest.MotionGraphicsAssetCount,
                 educationalOverlayImageCount = assetRealization.Manifest.EducationalOverlayAssetCount,
+                plannedMotionGraphicCount = assetRealization.PlannedMotionGraphicCount,
+                generatedMotionGraphicCount = assetRealization.GeneratedMotionGraphicCount,
+                productionReadyMotionGraphicCount = assetRealization.ProductionReadyMotionGraphicCount,
+                motionGraphicPaths = assetRealization.MotionGraphicPaths,
+                plannedEducationalOverlayCount = assetRealization.PlannedEducationalOverlayCount,
+                generatedEducationalOverlayCount = assetRealization.GeneratedEducationalOverlayCount,
+                productionReadyEducationalOverlayCount = assetRealization.ProductionReadyEducationalOverlayCount,
+                educationalOverlayPaths = assetRealization.EducationalOverlayPaths,
                 testVideoPipelineReady = assetRealization.VideoReadinessReport.TestVideoPipelineReady,
                 finalVideoPipelineReady = assetRealization.VideoReadinessReport.FinalVideoPipelineReady,
                 readySegmentCountForTest = assetRealization.VideoReadinessReport.ReadySegmentCountForTest,
@@ -2525,6 +2538,13 @@ var sscResult = splitProbeSsc;
             assetRealization.JwstImageCount,
             assetRealization.Manifest.MotionGraphicsAssetCount,
             assetRealization.Manifest.EducationalOverlayAssetCount,
+            assetRealization.PlannedMotionGraphicCount,
+            assetRealization.GeneratedMotionGraphicCount,
+            assetRealization.ProductionReadyMotionGraphicCount,
+            assetRealization.MotionGraphicPaths,
+            assetRealization.GeneratedEducationalOverlayCount,
+            assetRealization.ProductionReadyEducationalOverlayCount,
+            assetRealization.EducationalOverlayPaths,
             assetRealization.VideoReadinessReport.TestVideoPipelineReady,
             assetRealization.VideoReadinessReport.FinalVideoPipelineReady,
             assetRealization.VideoReadinessReport.ReadySegmentCountForTest,
