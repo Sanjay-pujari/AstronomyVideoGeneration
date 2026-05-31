@@ -1,7 +1,15 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SixLabors.Fonts;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing;
+using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
+using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.EpisodeArchitecture;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.SegmentClassification;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.VisualAssetPlanning;
@@ -21,6 +29,26 @@ public enum RealizedVisualAssetSourceType
     MotionGraphics,
     EducationalOverlay
 }
+
+public sealed record MotionGraphicManifestEntry(
+    string SegmentId,
+    string SegmentType,
+    string AssetType,
+    string AssetPath,
+    int DurationSeconds,
+    string GraphicType,
+    IReadOnlyList<string> DataSources,
+    IReadOnlyList<string> ContentLines);
+
+public sealed record EducationalOverlayManifestEntry(
+    string SegmentId,
+    string SegmentType,
+    string AssetType,
+    string AssetPath,
+    int DurationSeconds,
+    string OverlayType,
+    IReadOnlyList<string> DataSources,
+    IReadOnlyList<string> ContentLines);
 
 public sealed record RealizedVisualAsset(
     string AssetId,
@@ -137,7 +165,17 @@ public sealed record WeeklyAssetRealizationResult(
     int FailedJWSTAssetCount,
     IReadOnlyList<string> JwstImagePaths,
     int JwstImageCount,
-    bool NasaProviderConfigured);
+    bool NasaProviderConfigured,
+    string MotionGraphicsManifestPath = "",
+    int PlannedMotionGraphicCount = 0,
+    int GeneratedMotionGraphicCount = 0,
+    int ProductionReadyMotionGraphicCount = 0,
+    IReadOnlyList<string>? MotionGraphicPaths = null,
+    string EducationalOverlayManifestPath = "",
+    int PlannedEducationalOverlayCount = 0,
+    int GeneratedEducationalOverlayCount = 0,
+    int ProductionReadyEducationalOverlayCount = 0,
+    IReadOnlyList<string>? EducationalOverlayPaths = null);
 
 public sealed record WeeklyAssetRealizationInput(
     Guid PipelineRunId,
@@ -156,7 +194,237 @@ public sealed record WeeklyAssetRealizationInput(
     IReadOnlyList<string> FrameScreenshots,
     IReadOnlyList<string> ExpandedFrameScreenshots,
     IReadOnlyList<string> AICinematicImagePaths,
-    IReadOnlyList<string> AllProductionImageAssets);
+    IReadOnlyList<string> AllProductionImageAssets,
+    WeeklySkyForecastContext? SkyfieldContext = null);
+
+
+internal sealed record GeneratedMotionEducationalAssets(
+    IReadOnlyList<MotionGraphicManifestEntry> MotionGraphics,
+    IReadOnlyList<EducationalOverlayManifestEntry> EducationalOverlays,
+    string MotionGraphicsManifestPath,
+    string EducationalOverlayManifestPath)
+{
+    public IReadOnlyList<string> MotionGraphicPaths => MotionGraphics.Select(x => x.AssetPath).ToList();
+    public IReadOnlyList<string> EducationalOverlayPaths => EducationalOverlays.Select(x => x.AssetPath).ToList();
+}
+
+internal sealed class MotionGraphicsAndEducationalOverlayRealizer(ILogger logger)
+{
+    private const int Width = 1920;
+    private const int Height = 1080;
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
+    private static readonly string[] DayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+    public async Task<GeneratedMotionEducationalAssets> RealizeAsync(WeeklyAssetRealizationInput input, CancellationToken cancellationToken)
+    {
+        var motionDirectory = Path.Combine(input.RootPath, "assets", "motion-graphics");
+        var overlayDirectory = Path.Combine(input.RootPath, "assets", "educational-overlays");
+        Directory.CreateDirectory(motionDirectory);
+        Directory.CreateDirectory(overlayDirectory);
+
+        var motionEntries = new List<MotionGraphicManifestEntry>();
+        var educationalEntries = new List<EducationalOverlayManifestEntry>();
+        var allPlans = input.VisualAssetPlan.LongformSegmentVisualPlans.Concat(input.VisualAssetPlan.ShortformSegmentVisualPlans).ToList();
+        var allAssignments = input.SegmentClassificationPlan.LongformAssignments.Concat(input.SegmentClassificationPlan.ShortformAssignments).ToList();
+
+        foreach (var plan in allPlans.Where(p => p.SourcePlans.Any(s => s.SourceType == VisualAssetSourceType.MotionGraphics)))
+        {
+            var assignment = allAssignments.FirstOrDefault(a => a.SegmentId.Equals(plan.SegmentId, StringComparison.OrdinalIgnoreCase));
+            var card = BuildMotionCard(input, plan, assignment);
+            await AddMotionAsync(card, plan, motionDirectory, motionEntries, cancellationToken);
+        }
+
+        await EnsureRequiredMotionCardsAsync(input, allPlans, allAssignments, motionDirectory, motionEntries, cancellationToken);
+
+        foreach (var plan in allPlans.Where(p => p.SourcePlans.Any(s => s.SourceType == VisualAssetSourceType.EducationalOverlay)))
+        {
+            var assignment = allAssignments.FirstOrDefault(a => a.SegmentId.Equals(plan.SegmentId, StringComparison.OrdinalIgnoreCase));
+            var overlays = BuildEducationalCards(input, plan, assignment).Take(1).ToList();
+            foreach (var card in overlays)
+            {
+                var path = Path.Combine(overlayDirectory, card.FileName);
+                await RenderCardAsync(path, card.Title, card.Subtitle, card.Lines, card.Accent, cancellationToken);
+                educationalEntries.Add(new EducationalOverlayManifestEntry(plan.SegmentId, plan.SegmentType, "EducationalOverlay", path, Math.Clamp(plan.EstimatedScreenTimeSeconds, 4, 8), card.GraphicType, card.DataSources, card.Lines));
+                logger.LogInformation("EDUCATIONAL_OVERLAY_REALIZED segmentId={SegmentId} segmentType={SegmentType} path={Path}", plan.SegmentId, plan.SegmentType, path);
+            }
+        }
+
+        var episodeDirectory = Path.Combine(input.RootPath, "episode");
+        Directory.CreateDirectory(episodeDirectory);
+        var motionManifestPath = Path.Combine(episodeDirectory, "motion-graphics-manifest.json");
+        var educationalManifestPath = Path.Combine(episodeDirectory, "educational-overlay-manifest.json");
+        await File.WriteAllTextAsync(motionManifestPath, JsonSerializer.Serialize(motionEntries, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(educationalManifestPath, JsonSerializer.Serialize(educationalEntries, JsonOptions), cancellationToken);
+        return new GeneratedMotionEducationalAssets(motionEntries, educationalEntries, motionManifestPath, educationalManifestPath);
+    }
+
+
+    private static async Task AddMotionAsync((string FileName, string GraphicType, string Title, string Subtitle, IReadOnlyList<string> Lines, Color Accent, IReadOnlyList<string> DataSources) card, SegmentVisualAssetPlan plan, string motionDirectory, List<MotionGraphicManifestEntry> motionEntries, CancellationToken cancellationToken)
+    {
+        if (motionEntries.Any(x => Path.GetFileName(x.AssetPath).Equals(card.FileName, StringComparison.OrdinalIgnoreCase))) return;
+        var path = Path.Combine(motionDirectory, card.FileName);
+        await RenderCardAsync(path, card.Title, card.Subtitle, card.Lines, card.Accent, cancellationToken);
+        motionEntries.Add(new MotionGraphicManifestEntry(plan.SegmentId, plan.SegmentType, "MotionGraphic", path, Math.Clamp(plan.EstimatedScreenTimeSeconds, 4, 8), card.GraphicType, card.DataSources, card.Lines));
+    }
+
+    private static async Task EnsureRequiredMotionCardsAsync(WeeklyAssetRealizationInput input, IReadOnlyList<SegmentVisualAssetPlan> allPlans, IReadOnlyList<WeeklySegmentAssignment> allAssignments, string motionDirectory, List<MotionGraphicManifestEntry> motionEntries, CancellationToken cancellationToken)
+    {
+        var overview = allPlans.FirstOrDefault(p => p.SegmentType == "WeeklySkyOverview");
+        if (overview is not null)
+        {
+            var daily = input.SkyfieldContext?.DailyForecasts.OrderBy(d => d.Date).ToList() ?? [];
+            var lines = daily.Take(7).Select(d => $"{d.Date:ddd MM/dd}: Moon {d.MoonIlluminationPercent:0}% • planets {string.Join(", ", d.VisibleObjects.Where(o => o.Visible && o.ObjectType.Contains("planet", StringComparison.OrdinalIgnoreCase)).OrderByDescending(o => o.VisibilityScore).Take(3).Select(o => o.ObjectName))} • score {d.OverallViewingScore:0.00}").ToList();
+            lines.Add($"Best viewing days: {string.Join(", ", input.SkyfieldContext?.RecommendedNights.OrderByDescending(n => n.Score).Take(3).Select(n => n.Date.ToString("ddd MMM d", CultureInfo.InvariantCulture)) ?? [])}");
+            await AddMotionAsync(("visibility-calendar.png", "VisibilityCalendar", "Visibility Calendar", $"{input.WeekStartDate:MMM d}–{input.WeekEndDate:MMM d}", lines, Color.Teal, DataSources(overview)), overview, motionDirectory, motionEntries, cancellationToken);
+        }
+
+        var hero = allPlans.FirstOrDefault(p => p.SegmentType == "HeroEvent");
+        if (hero is not null)
+        {
+            var heroCard = BuildMotionCard(input, hero, allAssignments.FirstOrDefault(a => a.SegmentId == hero.SegmentId));
+            await AddMotionAsync(("hero-event-card.png", "HeroEvent", heroCard.Title, heroCard.Subtitle, heroCard.Lines, heroCard.Accent, heroCard.DataSources), hero, motionDirectory, motionEntries, cancellationToken);
+        }
+
+        var where = allPlans.FirstOrDefault(p => p.SegmentType is "MoonHighlights" or "PlanetHighlights" or "WhereToLook");
+        if (where is not null)
+        {
+            var assignment = allAssignments.FirstOrDefault(a => a.SegmentId == where.SegmentId);
+            var obj = BestObject(input.SkyfieldContext, assignment);
+            await AddMotionAsync(("where-to-look-card.png", "WhereToLook", "Where To Look", string.Join(" + ", where.AssignedObjects.DefaultIfEmpty(obj?.ObjectName ?? "Sky target")), [$"Direction: {obj?.ViewingDirection ?? assignment?.VisibilitySummary ?? "verified horizon direction"}", $"Altitude: {FormatDegrees(obj?.MaxAltitudeDegrees)}", $"Azimuth: {FormatDegrees(obj?.BestViewingAzimuthDegrees)}", $"Viewing recommendation: {obj?.Reason ?? assignment?.VisibilitySummary ?? "Use the verified Skyfield viewing window."}", $"Priority score: {where.AssetPriority}/100"], Color.Orange, DataSources(where)), where, motionDirectory, motionEntries, cancellationToken);
+        }
+    }
+
+    private static (string FileName, string GraphicType, string Title, string Subtitle, IReadOnlyList<string> Lines, Color Accent, IReadOnlyList<string> DataSources) BuildMotionCard(WeeklyAssetRealizationInput input, SegmentVisualAssetPlan plan, WeeklySegmentAssignment? assignment)
+    {
+        var context = input.SkyfieldContext;
+        var topEvents = TopEvents(context, assignment).ToList();
+        var bestNight = context?.RecommendedNights.OrderByDescending(x => x.Score).FirstOrDefault();
+        var bestObject = BestObject(context, assignment);
+        var eventLine = topEvents.FirstOrDefault()?.Title ?? assignment?.AssignedEventType ?? "Verified weekly sky event";
+        var bestDate = assignment?.AssignedDateLocal ?? bestNight?.Date ?? input.WeekStartDate;
+        var bestTime = assignment?.AssignedBestTimeLocal?.ToString("HH:mm", CultureInfo.InvariantCulture) ?? FormatUtc(bestObject?.BestViewingTimeUtc ?? bestNight?.BestStartUtc);
+        var direction = assignment?.VisibilitySummary.Contains("direction", StringComparison.OrdinalIgnoreCase) == true ? assignment.VisibilitySummary : bestObject?.ViewingDirection ?? topEvents.FirstOrDefault()?.Direction ?? "Use local horizon direction from Skyfield data";
+        var visibility = topEvents.FirstOrDefault()?.VisibilityScore ?? bestObject?.VisibilityScore ?? bestNight?.Score ?? plan.AssetPriority / 100d;
+        var skyQuality = Daily(context, bestDate)?.OverallViewingScore ?? bestNight?.Score ?? visibility;
+        var moon = Daily(context, bestDate)?.MoonIlluminationPercent;
+
+        return plan.SegmentType switch
+        {
+            "WeeklySkyOverview" => BuildWeeklyOverview(input, context, topEvents),
+            "BestObservationWindow" or "BestTime" => (Name(plan, "best-observation-window-card.png"), "BestObservationWindow", "Best Observation Window", $"{bestDate:MMM d} • {bestTime}", [
+                $"Date: {bestDate:dddd, MMM d}", $"Time: {bestTime}", $"Direction: {direction}", $"Moon illumination: {(moon.HasValue ? moon.Value.ToString("0", CultureInfo.InvariantCulture) + "%" : "Skyfield moon data unavailable")}", $"Sky quality score: {skyQuality:0.00}", $"Priority score: {plan.AssetPriority}/100"], Color.DeepSkyBlue, DataSources(plan)),
+            "WhereToLook" => (Name(plan, "where-to-look-card.png"), "WhereToLook", "Where To Look", string.Join(" + ", plan.AssignedObjects.DefaultIfEmpty(bestObject?.ObjectName ?? "Sky target")), [
+                $"Direction: {direction}", $"Altitude: {FormatDegrees(bestObject?.MaxAltitudeDegrees)}", $"Azimuth: {FormatDegrees(bestObject?.BestViewingAzimuthDegrees)}", $"Viewing recommendation: {bestObject?.Reason ?? assignment?.VisibilitySummary ?? "Use the verified best viewing window."}", $"Priority score: {plan.AssetPriority}/100"], Color.Orange, DataSources(plan)),
+            "WeeklySummary" or "CallToAction" => (Name(plan, "weekly-summary-card.png"), "WeeklySummary", "Weekly Summary", $"{input.WeekStartDate:MMM d}–{input.WeekEndDate:MMM d}", [
+                $"Top events: {string.Join(" • ", topEvents.Take(3).Select(e => e.Title)).Trim()}", $"Best night: {(bestNight is null ? bestDate.ToString("MMM d", CultureInfo.InvariantCulture) : bestNight.Date.ToString("MMM d", CultureInfo.InvariantCulture))}", $"Best viewing window: {FormatUtc(bestNight?.BestStartUtc)}–{FormatUtc(bestNight?.BestEndUtc)}", $"Best objects: {string.Join(", ", bestNight?.BestObjects ?? plan.AssignedObjects)}", $"Priority score: {plan.AssetPriority}/100"], Color.MediumPurple, DataSources(plan)),
+            _ => (Name(plan, "hero-event-card.png"), "HeroEvent", eventLine, $"{bestDate:MMM d} • {bestTime}", [
+                $"Hero Event Name: {eventLine}", $"Date: {bestDate:dddd, MMM d}", $"Best Viewing Time: {bestTime}", $"Direction: {direction}", $"Visibility Score: {visibility:0.00}", $"Priority Score: {plan.AssetPriority}/100"], Color.Gold, DataSources(plan))
+        };
+    }
+
+    private static (string FileName, string GraphicType, string Title, string Subtitle, IReadOnlyList<string> Lines, Color Accent, IReadOnlyList<string> DataSources) BuildWeeklyOverview(WeeklyAssetRealizationInput input, WeeklySkyForecastContext? context, IReadOnlyList<WeeklyAstronomyEvent> topEvents)
+    {
+        var daily = context?.DailyForecasts.OrderBy(x => x.Date).ToList() ?? [];
+        var lines = new List<string> { $"Week Start: {input.WeekStartDate:yyyy-MM-dd}", $"Week End: {input.WeekEndDate:yyyy-MM-dd}" };
+        for (var i = 0; i < 7; i++)
+        {
+            var date = input.WeekStartDate.AddDays(i);
+            var day = daily.FirstOrDefault(d => d.Date == date);
+            var events = topEvents.Where(e => e.BestDateLocal == date).Select(e => e.Title).Take(2).ToList();
+            var visible = day?.VisibleObjects.Where(o => o.Visible).OrderByDescending(o => o.VisibilityScore).Take(2).Select(o => o.ObjectName).ToList() ?? [];
+            lines.Add($"{DayNames[i]} {date:MM/dd}: {string.Join(", ", events.Concat(visible).Distinct().Take(3))}");
+        }
+        lines.Add($"Best viewing days: {string.Join(", ", (context?.RecommendedNights.OrderByDescending(n => n.Score).Take(3).Select(n => n.Date.ToString("ddd MMM d", CultureInfo.InvariantCulture)) ?? []))}");
+        lines.Add($"Moon/planet visibility generated from {daily.Count} Skyfield daily forecasts.");
+        return ("weekly-overview-timeline.png", "WeeklyOverviewTimeline", "Weekly Overview Timeline", $"{input.WeekStartDate:MMM d}–{input.WeekEndDate:MMM d}", lines, Color.CornflowerBlue, ["Skyfield daily forecasts", "Event extraction", "Episode Architecture", "Visual Source Orchestration"]);
+    }
+
+    private static IEnumerable<(string FileName, string GraphicType, string Title, string Subtitle, IReadOnlyList<string> Lines, Color Accent, IReadOnlyList<string> DataSources)> BuildEducationalCards(WeeklyAssetRealizationInput input, SegmentVisualAssetPlan plan, WeeklySegmentAssignment? assignment)
+    {
+        var evt = TopEvents(input.SkyfieldContext, assignment).FirstOrDefault();
+        var type = ResolveEducationalType(evt?.EventType.ToString() ?? assignment?.AssignedEventType ?? string.Join(" ", plan.AssignedObjects));
+        var bestObject = BestObject(input.SkyfieldContext, assignment);
+        var bestDate = assignment?.AssignedDateLocal ?? evt?.BestDateLocal ?? input.SkyfieldContext?.BestPhotographyNight ?? input.WeekStartDate;
+        var daily = Daily(input.SkyfieldContext, bestDate);
+        var lines = type switch
+        {
+            "Moon Phase Explainer" => new[] { $"Moon phase: {daily?.MoonPhase ?? "from Skyfield forecast"}", $"Illumination: {(daily is null ? "Skyfield moon data unavailable" : daily.MoonIlluminationPercent.ToString("0", CultureInfo.InvariantCulture) + "%")}", $"Best Moon night: {input.SkyfieldContext?.BestMoonNight?.ToString("MMM d", CultureInfo.InvariantCulture) ?? bestDate.ToString("MMM d", CultureInfo.InvariantCulture)}", $"Viewing note: lower glare improves faint-sky contrast." },
+            "Planet Grouping Explainer" => new[] { $"Objects: {string.Join(", ", plan.AssignedObjects.DefaultIfEmpty(bestObject?.ObjectName ?? "visible planets"))}", $"Direction: {bestObject?.ViewingDirection ?? evt?.Direction ?? "verified horizon direction"}", $"Best time: {FormatUtc(bestObject?.BestViewingTimeUtc ?? (evt?.BestTimeLocal is null ? null : bestDate.ToDateTime(evt.BestTimeLocal.Value)))}", $"Why it matters: compare relative positions over the week." },
+            "Conjunction Explainer" => new[] { $"Closest-date event: {evt?.Title ?? assignment?.AssignedEventType ?? "conjunction"}", $"Date: {bestDate:MMM d}", $"Direction: {evt?.Direction ?? bestObject?.ViewingDirection ?? "verified horizon direction"}", $"Tip: use the brighter object as the anchor." },
+            _ => new[] { $"Target: {bestObject?.ObjectName ?? evt?.Title ?? "weekly sky target"}", $"Visibility score: {(bestObject?.VisibilityScore ?? evt?.VisibilityScore ?? plan.AssetPriority / 100d):0.00}", $"Direction: {bestObject?.ViewingDirection ?? evt?.Direction ?? "verified horizon direction"}", $"Recommendation: {bestObject?.Reason ?? assignment?.VisibilitySummary ?? "observe during the best forecast window."}" }
+        };
+        yield return (Slug(type) + ".png", type, type, $"{bestDate:MMM d} • Priority {plan.AssetPriority}/100", lines, Color.LimeGreen, DataSources(plan));
+    }
+
+    private static async Task RenderCardAsync(string path, string title, string subtitle, IReadOnlyList<string> lines, Color accent, CancellationToken cancellationToken)
+    {
+        using var image = new Image<Rgba32>(Width, Height, new Rgba32(3, 8, 22));
+        image.Mutate(ctx =>
+        {
+            ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(Width, Height), GradientRepetitionMode.None, [new ColorStop(0, new Rgba32(6, 18, 44)), new ColorStop(1, new Rgba32(1, 4, 14))]));
+            ctx.Fill(accent.WithAlpha(0.25f), new RectangleF(0, 0, Width, 18));
+            ctx.Fill(Color.White.WithAlpha(0.06f), new RectangleF(80, 130, Width - 160, Height - 240));
+            ctx.Draw(accent, 4, new RectangleF(80, 130, Width - 160, Height - 240));
+            var titleFont = SystemFonts.CreateFont("Arial", 68, FontStyle.Bold);
+            var subtitleFont = SystemFonts.CreateFont("Arial", 38, FontStyle.Regular);
+            var bodyFont = SystemFonts.CreateFont("Arial", 34, FontStyle.Regular);
+            ctx.DrawText(title, titleFont, Color.White, new PointF(110, 70));
+            ctx.DrawText(subtitle, subtitleFont, accent, new PointF(112, 160));
+            var y = 245f;
+            foreach (var line in lines.Take(10))
+            {
+                foreach (var chunk in Wrap(line, 78))
+                {
+                    ctx.DrawText("• " + chunk, bodyFont, Color.WhiteSmoke, new PointF(130, y));
+                    y += 56;
+                }
+                y += 8;
+            }
+            ctx.DrawText("Generated from weekly Skyfield data, segment plan, priority score, and source orchestration.", SystemFonts.CreateFont("Arial", 24), Color.LightGray, new PointF(110, 1010));
+        });
+        await image.SaveAsync(path, new PngEncoder(), cancellationToken);
+    }
+
+    private static IEnumerable<string> Wrap(string value, int max)
+    {
+        if (string.IsNullOrWhiteSpace(value)) yield break;
+        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var line = "";
+        foreach (var word in words)
+        {
+            if ((line.Length + word.Length + 1) > max && line.Length > 0) { yield return line; line = word; }
+            else line = string.IsNullOrEmpty(line) ? word : line + " " + word;
+        }
+        if (!string.IsNullOrWhiteSpace(line)) yield return line;
+    }
+
+    private static IEnumerable<WeeklyAstronomyEvent> TopEvents(WeeklySkyForecastContext? context, WeeklySegmentAssignment? assignment)
+    {
+        var events = context?.DailyForecasts.SelectMany(d => d.Events.Select(e => ToEvent(e, d))).ToList() ?? [];
+        if (assignment is not null)
+        {
+            events = events.Where(e => e.EventType.ToString().Equals(assignment.AssignedEventType, StringComparison.OrdinalIgnoreCase)
+                || assignment.AssignedObjects.Any(o => e.Objects.Any(obj => obj.ObjectCode.Equals(o, StringComparison.OrdinalIgnoreCase)) || string.Equals(e.PrimaryObject, o, StringComparison.OrdinalIgnoreCase))
+                || e.BestDateLocal == assignment.AssignedDateLocal).ToList();
+        }
+        return events.OrderByDescending(e => e.ImportanceScore + e.VisibilityScore + e.RarityScore).Take(8);
+    }
+
+    private static WeeklyAstronomyEvent ToEvent(WeeklySkyForecastEventItem item, DailySkyForecastContextItem day)
+    {
+        var matched = day.VisibleObjects.FirstOrDefault(o => !string.IsNullOrWhiteSpace(item.PrimaryObjectCode) && o.ObjectCode.Equals(item.PrimaryObjectCode, StringComparison.OrdinalIgnoreCase));
+        return new WeeklyAstronomyEvent($"daily-{day.Date:yyyyMMdd}-{item.EventType}", Enum.TryParse<WeeklyAstronomyEventType>(item.EventType, true, out var t) ? t : WeeklyAstronomyEventType.HeroObject, item.Title, item.Description, matched is null ? [] : [new WeeklyAstronomyEventObject(matched.ObjectCode, matched.ObjectName, matched.MaxAltitudeDegrees, matched.BestViewingAzimuthDegrees, null, matched.VisibilityScore)], item.PrimaryObjectCode, matched is null ? 0 : 1, day.Date, TimeOnly.FromDateTime(item.EventTimeUtc), item.ViewingDirection, matched?.MaxAltitudeDegrees, matched?.BestViewingAzimuthDegrees, null, null, matched?.VisibilityScore ?? item.ImportanceScore, item.ImportanceScore, item.ViralityScore, "MotionGraphics", item.EventType, item.ViewingTip, []);
+    }
+
+    private static DailySkyForecastContextItem? Daily(WeeklySkyForecastContext? context, DateOnly date) => context?.DailyForecasts.FirstOrDefault(d => d.Date == date);
+    private static WeeklySkyForecastVisibleObjectItem? BestObject(WeeklySkyForecastContext? context, WeeklySegmentAssignment? assignment) => context?.DailyForecasts.SelectMany(d => d.VisibleObjects).Where(o => o.Visible && (assignment is null || assignment.AssignedObjects.Count == 0 || assignment.AssignedObjects.Any(a => o.ObjectCode.Equals(a, StringComparison.OrdinalIgnoreCase) || o.ObjectName.Equals(a, StringComparison.OrdinalIgnoreCase)))).OrderByDescending(o => o.VisibilityScore).ThenByDescending(o => o.MaxAltitudeDegrees ?? 0).FirstOrDefault();
+    private static string FormatUtc(DateTime? value) => value.HasValue ? value.Value.ToString("HH:mm 'UTC'", CultureInfo.InvariantCulture) : "Best forecast window";
+    private static string FormatDegrees(double? value) => value.HasValue ? value.Value.ToString("0", CultureInfo.InvariantCulture) + "°" : "Skyfield value unavailable";
+    private static string Name(SegmentVisualAssetPlan plan, string fileName) => plan.SegmentType switch { "BestTime" => "best-time-card.png", "CallToAction" => "call-to-action-card.png", _ => fileName };
+    private static IReadOnlyList<string> DataSources(SegmentVisualAssetPlan plan) => ["Skyfield results", "Episode Architecture", $"Segment Classification:{plan.SegmentType}", $"Event Priority Engine:{plan.AssetPriority}", "Visual Source Orchestration"];
+    private static string ResolveEducationalType(string value) => value.Contains("moon", StringComparison.OrdinalIgnoreCase) ? "Moon Phase Explainer" : value.Contains("group", StringComparison.OrdinalIgnoreCase) ? "Planet Grouping Explainer" : value.Contains("conjunction", StringComparison.OrdinalIgnoreCase) ? "Conjunction Explainer" : value.Contains("opposition", StringComparison.OrdinalIgnoreCase) ? "Opposition Explainer" : "Planet Visibility Explainer";
+    private static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-");
+}
 
 public sealed class WeeklyAssetRealizationService(
     WeeklyAssetRealizationPersister persister,
@@ -167,6 +435,12 @@ public sealed class WeeklyAssetRealizationService(
     public async Task<WeeklyAssetRealizationResult> RealizeAndPersistAsync(WeeklyAssetRealizationInput input, CancellationToken cancellationToken)
     {
         logger.LogInformation("ASSET_REALIZATION_START pipelineRunId={PipelineRunId} root={Root}", input.PipelineRunId, input.RootPath);
+        var motionOverlayAssets = await new MotionGraphicsAndEducationalOverlayRealizer(logger).RealizeAsync(input, cancellationToken);
+        input = input with { AllProductionImageAssets = input.AllProductionImageAssets
+            .Concat(motionOverlayAssets.MotionGraphicPaths)
+            .Concat(motionOverlayAssets.EducationalOverlayPaths)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList() };
         var assets = RegisterAssets(input);
         var bundles = BuildSegmentBundles(input, assets);
         var manifest = BuildManifest(input, assets, bundles);
@@ -188,7 +462,7 @@ public sealed class WeeklyAssetRealizationService(
         }
 
         logger.LogInformation("ASSET_REALIZATION_COMPLETE pipelineRunId={PipelineRunId} testReady={TestReady} finalReady={FinalReady} segmentCount={SegmentCount} nasaGenerated={NasaGenerated} nasaProductionReady={NasaProductionReady}", input.PipelineRunId, readiness.TestVideoPipelineReady, readiness.FinalVideoPipelineReady, bundles.Count, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount);
-        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.FailedNASAAssetCount, nasaAssets.Report.NasaImagePaths, nasaAssets.Report.NasaImagePaths.Count, nasaAssets.JwstPlanPath, nasaAssets.JwstResultsPath, nasaAssets.JwstReportPath, nasaAssets.Report.PlannedJWSTAssetCount, nasaAssets.Report.GeneratedJWSTAssetCount, nasaAssets.Report.ProductionReadyJWSTAssetCount, nasaAssets.Report.FailedJWSTAssetCount, nasaAssets.Report.JwstImagePaths, nasaAssets.Report.JwstImagePaths.Count, nasaAssets.Report.NasaProviderConfigured);
+        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.FailedNASAAssetCount, nasaAssets.Report.NasaImagePaths, nasaAssets.Report.NasaImagePaths.Count, nasaAssets.JwstPlanPath, nasaAssets.JwstResultsPath, nasaAssets.JwstReportPath, nasaAssets.Report.PlannedJWSTAssetCount, nasaAssets.Report.GeneratedJWSTAssetCount, nasaAssets.Report.ProductionReadyJWSTAssetCount, nasaAssets.Report.FailedJWSTAssetCount, nasaAssets.Report.JwstImagePaths, nasaAssets.Report.JwstImagePaths.Count, nasaAssets.Report.NasaProviderConfigured, motionOverlayAssets.MotionGraphicsManifestPath, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionOverlayAssets.MotionGraphicPaths, motionOverlayAssets.EducationalOverlayManifestPath, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionOverlayAssets.EducationalOverlayPaths);
     }
 
     private static WeeklyProductionAssetManifest BuildManifest(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset> assets, IReadOnlyList<SegmentProductionAssetBundle> bundles) => new(
