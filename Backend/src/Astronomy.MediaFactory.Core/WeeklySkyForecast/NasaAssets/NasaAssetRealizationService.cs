@@ -82,59 +82,97 @@ public sealed class NasaAssetRealizationService(
             logger.LogInformation("{Provider}_ASSET_REQUIREMENT_CREATED assetCode={AssetCode} segmentId={SegmentId} segmentType={SegmentType} query={SearchQuery}", requirement.ProviderName, requirement.AssetCode, requirement.SegmentId, requirement.SegmentType, requirement.SearchQuery);
             try
             {
-                var candidates = await imagesClient.SearchAsync(requirement, requirement.SearchQuery, cancellationToken);
-                var best = selector.SelectBest(requirement, candidates);
+                const int minimumCandidatesToTry = 5;
                 var usedQuery = requirement.SearchQuery;
-                if (best is null && !requirement.FallbackSearchQuery.Equals(requirement.SearchQuery, StringComparison.OrdinalIgnoreCase))
+                var primaryCandidates = await imagesClient.SearchAsync(requirement, requirement.SearchQuery, cancellationToken);
+                var rankedCandidates = selector.SelectCandidates(requirement, primaryCandidates, minimumCandidatesToTry).ToList();
+                if (rankedCandidates.Count < minimumCandidatesToTry && !requirement.FallbackSearchQuery.Equals(requirement.SearchQuery, StringComparison.OrdinalIgnoreCase))
                 {
-                    candidates = await imagesClient.SearchAsync(requirement, requirement.FallbackSearchQuery, cancellationToken);
-                    best = selector.SelectBest(requirement, candidates);
-                    usedQuery = requirement.FallbackSearchQuery;
+                    var fallbackCandidates = await imagesClient.SearchAsync(requirement, requirement.FallbackSearchQuery, cancellationToken);
+                    rankedCandidates.AddRange(selector.SelectCandidates(requirement, fallbackCandidates, minimumCandidatesToTry)
+                        .Where(candidate => rankedCandidates.All(existing => !existing.NasaId.Equals(candidate.NasaId, StringComparison.OrdinalIgnoreCase))));
+                    if (rankedCandidates.Count == 0) usedQuery = requirement.FallbackSearchQuery;
                 }
 
-                if (best is null)
+                if (rankedCandidates.Count == 0)
                 {
                     results.Add(Failed(requirement, usedQuery, "NoCandidateFound", "NASA Images search returned no usable image candidates."));
                     continue;
                 }
 
-                var choices = await imagesClient.GetAssetDownloadChoicesAsync(best, cancellationToken);
-                if (choices.Count == 0)
+                var providerFolder = requirement.ProviderName.Equals("JWST", StringComparison.OrdinalIgnoreCase) ? "jwst" : "nasa";
+                var targetPath = Path.Combine(rootPath, "assets", providerFolder, NormalizePathSegment(requirement.EpisodeType), NormalizePathSegment(requirement.SegmentType), $"{requirement.AssetCode}.jpg");
+                NasaAssetResult? result = null;
+                var attemptWarnings = new List<string>();
+                foreach (var candidate in rankedCandidates.Take(Math.Max(minimumCandidatesToTry, rankedCandidates.Count)))
                 {
-                    results.Add(Failed(requirement, usedQuery, "NoCandidateFound", "NASA Images candidate did not expose downloadable JPG/PNG assets."));
+                    var choices = await imagesClient.GetAssetDownloadChoicesAsync(candidate, cancellationToken);
+                    if (choices.Count == 0)
+                    {
+                        attemptWarnings.Add($"NASA Images candidate {candidate.NasaId} did not expose downloadable JPG/PNG assets.");
+                        continue;
+                    }
+
+                    foreach (var choice in choices)
+                    {
+                        try
+                        {
+                            logger.LogInformation("{Provider}_IMAGE_DOWNLOAD_ATTEMPT assetCode={AssetCode} nasaId={NasaId} sourceUrl={SourceUrl} fromAssetEndpoint={FromAssetEndpoint}", requirement.ProviderName, requirement.AssetCode, candidate.NasaId, choice.Url, choice.FromAssetEndpoint);
+                            var download = await downloader.DownloadAsync(choice.Url, targetPath, requirement.ProviderName, cancellationToken);
+                            var validationWarnings = Validate(download.Path, download.FileSizeBytes, download.Width, download.Height).ToList();
+                            var productionReady = validationWarnings.Count == 0;
+                            if (productionReady)
+                                logger.LogInformation("{Provider}_IMAGE_VALIDATION_PASSED path={Path} assetCode={AssetCode} width={Width} height={Height} size={Size}", requirement.ProviderName, download.Path, requirement.AssetCode, download.Width, download.Height, download.FileSizeBytes);
+                            else
+                            {
+                                attemptWarnings.AddRange(validationWarnings.Select(warning => $"{candidate.NasaId}: {warning}"));
+                                logger.LogWarning("{Provider}_IMAGE_VALIDATION_FAILED path={Path} assetCode={AssetCode} width={Width} height={Height} size={Size} warnings={Warnings}", requirement.ProviderName, download.Path, requirement.AssetCode, download.Width, download.Height, download.FileSizeBytes, string.Join(" | ", validationWarnings));
+                            }
+
+                            result = new NasaAssetResult(
+                                requirement.ProviderName,
+                                requirement.AssetCode,
+                                requirement.SegmentId,
+                                requirement.SegmentType,
+                                usedQuery,
+                                candidate.NasaId,
+                                candidate.Title,
+                                candidate.Description,
+                                candidate.DateCreated,
+                                candidate.Center,
+                                download.SourceUrl,
+                                download.Path,
+                                download.Width,
+                                download.Height,
+                                download.FileSizeBytes,
+                                productionReady ? "Generated" : "GeneratedButInvalid",
+                                productionReady,
+                                validationWarnings,
+                                attemptWarnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+                            if (productionReady) break;
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            attemptWarnings.Add($"{candidate.NasaId}: download failed for {choice.Url}: {ex.Message}");
+                            logger.LogWarning(ex, "{Provider}_IMAGE_DOWNLOAD_ATTEMPT_FAILED assetCode={AssetCode} nasaId={NasaId} sourceUrl={SourceUrl}", requirement.ProviderName, requirement.AssetCode, candidate.NasaId, choice.Url);
+                        }
+                    }
+
+                    if (result?.ProductionReady == true) break;
+                }
+
+                if (result is null)
+                {
+                    results.Add(Failed(requirement, usedQuery, "NoCandidateDownloaded", string.Join(" | ", attemptWarnings.DefaultIfEmpty("NASA Images candidates did not produce a downloadable production-ready image."))));
                     continue;
                 }
 
-                var providerFolder = requirement.ProviderName.Equals("JWST", StringComparison.OrdinalIgnoreCase) ? "jwst" : "nasa";
-                var targetPath = Path.Combine(rootPath, "assets", providerFolder, NormalizePathSegment(requirement.EpisodeType), NormalizePathSegment(requirement.SegmentType), $"{requirement.AssetCode}.jpg");
-                var download = await downloader.DownloadAsync(choices[0].Url, targetPath, requirement.ProviderName, cancellationToken);
-                var validationWarnings = Validate(download.Path, download.FileSizeBytes, download.Width, download.Height).ToList();
-                var productionReady = validationWarnings.Count == 0;
-                if (productionReady)
-                    logger.LogInformation("{Provider}_IMAGE_VALIDATION_PASSED path={Path} assetCode={AssetCode} width={Width} height={Height} size={Size}", requirement.ProviderName, download.Path, requirement.AssetCode, download.Width, download.Height, download.FileSizeBytes);
-                else
-                    logger.LogWarning("{Provider}_IMAGE_VALIDATION_FAILED path={Path} assetCode={AssetCode} width={Width} height={Height} size={Size} warnings={Warnings}", requirement.ProviderName, download.Path, requirement.AssetCode, download.Width, download.Height, download.FileSizeBytes, string.Join(" | ", validationWarnings));
+                if (!result.ProductionReady && rankedCandidates.Count >= minimumCandidatesToTry)
+                {
+                    results.Add(Failed(requirement, usedQuery, "ValidationFailed", string.Join(" | ", attemptWarnings.DefaultIfEmpty("NASA Images candidates failed production image validation."))));
+                    continue;
+                }
 
-                var result = new NasaAssetResult(
-                    requirement.ProviderName,
-                    requirement.AssetCode,
-                    requirement.SegmentId,
-                    requirement.SegmentType,
-                    usedQuery,
-                    best.NasaId,
-                    best.Title,
-                    best.Description,
-                    best.DateCreated,
-                    best.Center,
-                    download.SourceUrl,
-                    download.Path,
-                    download.Width,
-                    download.Height,
-                    download.FileSizeBytes,
-                    productionReady ? "Generated" : "GeneratedButInvalid",
-                    productionReady,
-                    validationWarnings,
-                    []);
                 results.Add(result);
                 logger.LogInformation("{Provider}_ASSET_RESULT_WRITTEN assetCode={AssetCode} status={Status} productionReady={ProductionReady}", requirement.ProviderName, result.AssetCode, result.GenerationStatus, result.ProductionReady);
                 if (result.ProductionReady) logger.LogInformation("{Provider}_ASSET_REGISTERED_IN_PRODUCTION_MANIFEST path={Path}", requirement.ProviderName, result.DownloadedImagePath);

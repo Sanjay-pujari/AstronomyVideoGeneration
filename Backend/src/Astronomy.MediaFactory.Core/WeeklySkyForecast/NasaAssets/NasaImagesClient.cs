@@ -106,8 +106,9 @@ public sealed class NasaImagesClient(
         }
 
         return choices
-            .OrderByDescending(x => x.PixelHint)
+            .OrderByDescending(x => x.FromAssetEndpoint)
             .ThenByDescending(x => IsPreferredOriginal(x.Url))
+            .ThenByDescending(x => x.PixelHint)
             .ToList();
     }
 

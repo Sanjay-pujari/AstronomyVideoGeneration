@@ -957,7 +957,8 @@ public sealed class WeeklyAICinematicAssetGenerationService(
 
     private static bool IsGeneratedStatus(AICinematicAssetResult result) =>
         result.GenerationStatus.Equals("Generated", StringComparison.OrdinalIgnoreCase)
-        || result.GenerationStatus.Equals("GeneratedButInvalid", StringComparison.OrdinalIgnoreCase);
+        || result.GenerationStatus.Equals("GeneratedButInvalid", StringComparison.OrdinalIgnoreCase)
+        || result.GenerationStatus.Equals("SkippedExistingValid", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsSelectableGenerationStatus(string generationStatus) =>
         string.IsNullOrWhiteSpace(generationStatus)

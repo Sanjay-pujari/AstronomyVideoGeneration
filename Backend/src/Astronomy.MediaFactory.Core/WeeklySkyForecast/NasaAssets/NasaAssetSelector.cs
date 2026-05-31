@@ -5,13 +5,17 @@ namespace Astronomy.MediaFactory.Core.WeeklySkyForecast.NasaAssets;
 public interface INasaAssetSelector
 {
     NasaImageCandidate? SelectBest(NasaAssetRequirement requirement, IReadOnlyList<NasaImageCandidate> candidates);
+    IReadOnlyList<NasaImageCandidate> SelectCandidates(NasaAssetRequirement requirement, IReadOnlyList<NasaImageCandidate> candidates, int minimumCandidatesToTry);
 }
 
 public sealed class NasaAssetSelector(ILogger<NasaAssetSelector> logger) : INasaAssetSelector
 {
     private static readonly string[] UnrelatedTerms = ["logo", "patch", "portrait", "headshot", "insignia", "diagram", "chart", "graph", "poster", "artist concept", "illustration"];
 
-    public NasaImageCandidate? SelectBest(NasaAssetRequirement requirement, IReadOnlyList<NasaImageCandidate> candidates)
+    public NasaImageCandidate? SelectBest(NasaAssetRequirement requirement, IReadOnlyList<NasaImageCandidate> candidates) =>
+        SelectCandidates(requirement, candidates, 1).FirstOrDefault();
+
+    public IReadOnlyList<NasaImageCandidate> SelectCandidates(NasaAssetRequirement requirement, IReadOnlyList<NasaImageCandidate> candidates, int minimumCandidatesToTry)
     {
         var ranked = candidates
             .Select(candidate => candidate with { Score = Score(requirement, candidate) })
@@ -19,12 +23,12 @@ public sealed class NasaAssetSelector(ILogger<NasaAssetSelector> logger) : INasa
             .OrderByDescending(candidate => candidate.Score)
             .ThenByDescending(candidate => candidate.PixelHint)
             .ToList();
-        var best = ranked.FirstOrDefault();
-        if (best is not null)
+        var selected = ranked.Take(Math.Max(1, minimumCandidatesToTry)).ToList();
+        foreach (var candidate in selected)
         {
-            logger.LogInformation("NASA_IMAGE_CANDIDATE_SELECTED assetCode={AssetCode} nasaId={NasaId} score={Score} title={Title}", requirement.AssetCode, best.NasaId, best.Score, best.Title);
+            logger.LogInformation("NASA_IMAGE_CANDIDATE_SELECTED assetCode={AssetCode} nasaId={NasaId} score={Score} title={Title}", requirement.AssetCode, candidate.NasaId, candidate.Score, candidate.Title);
         }
-        return best;
+        return selected;
     }
 
     private static int Score(NasaAssetRequirement requirement, NasaImageCandidate candidate)
