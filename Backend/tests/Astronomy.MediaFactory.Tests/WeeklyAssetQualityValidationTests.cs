@@ -8,6 +8,7 @@ using SixLabors.ImageSharp.Drawing;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.Processing;
 using Xunit;
+using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Tests;
 
