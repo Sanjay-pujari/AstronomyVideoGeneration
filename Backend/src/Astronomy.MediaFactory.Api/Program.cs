@@ -2701,7 +2701,13 @@ var sscResult = splitProbeSsc;
             narrationEngine.NarrationAssetMappingReady,
             narrationEngine.NarrationTimelineReady,
             narrationEngine.TotalLongformNarrationSeconds,
-            narrationEngine.TotalShortformNarrationSeconds);
+            narrationEngine.TotalShortformNarrationSeconds,
+            narrationEngine.NarrationEditorialRefinementReady,
+            narrationEngine.DocumentaryNarrationReady,
+            narrationEngine.VisualVarietyPassed,
+            narrationEngine.RepeatedAssetSequenceCount,
+            narrationEngine.InternalMetadataLeakCount,
+            narrationEngine.EditorialReviewReportPath);
 
         return Results.Ok(output);
     }
