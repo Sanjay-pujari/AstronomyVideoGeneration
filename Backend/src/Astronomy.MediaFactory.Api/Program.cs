@@ -4006,7 +4006,8 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
             topLevelKeys,
             availableDates,
             selectedDateCollections,
-            selectedDateObjectNames);
+            selectedDateObjectNames,
+            temporal.MatchedTimeUtc);
     }
 
     logger.LogWarning(
@@ -4061,6 +4062,126 @@ static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     }
 
     return fallbackResolution;
+}
+
+
+static WeeklyObjectPositionResolution ResolveExpandedWeeklySkyObjectPosition(
+    string objectCodeOrName,
+    DateTime sceneObservationUtc,
+    DateTime sceneObservationLocal,
+    DateOnly sceneDateLocal,
+    string timezoneId,
+    dynamic composition,
+    WeeklyAstronomyEventObject? directObject,
+    WeeklySkyForecastV2IntelligenceResponse weeklyContext,
+    IReadOnlyCollection<string> requestedTargetObjects,
+    ISkyfieldTemporalResolver temporalResolver,
+    Microsoft.Extensions.Logging.ILogger logger,
+    string sceneCode)
+{
+    logger.LogInformation("EXPANDED_GEOMETRY_RESOLUTION_START sceneCode={SceneCode} object={Object} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, sceneObservationUtc, sceneObservationLocal);
+
+    var targetAliases = ResolveWeeklyObjectAliases(objectCodeOrName, directObject?.ObjectName);
+    var normalizedRequestedName = NormalizeWeeklyObjectName(directObject?.ObjectName ?? objectCodeOrName);
+    var extractedEvents = weeklyContext.EventExtractionResult?.ExtractedEvents ?? [];
+    var candidates = Astronomy.MediaFactory.Api.WeeklySkyfieldObjectHydration.BuildTemporalCandidates(
+        extractedEvents,
+        targetAliases,
+        e => ResolveEventUtc(e),
+        name => NormalizeWeeklyObjectName(name),
+        (code, name, aliases) => MatchesWeeklyObjectAliases(code, name, aliases),
+        logger,
+        sceneCode,
+        directObject?.ObjectName ?? objectCodeOrName).ToList();
+
+    var topLevelKeys = string.Join(",", typeof(WeeklyAstronomyEventExtractionResult).GetProperties().Select(p => p.Name));
+    var availableDates = string.Join(",", extractedEvents.Where(e => e.BestDateLocal.HasValue).Select(e => e.BestDateLocal!.Value.ToString("yyyy-MM-dd")).Distinct().OrderBy(x => x));
+    var selectedDateEvents = extractedEvents.Where(e => e.BestDateLocal.HasValue && e.BestDateLocal.Value == sceneDateLocal).ToList();
+    var selectedDateObjectNames = string.Join(",", selectedDateEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
+    var selectedDateTimestamps = string.Join(",", selectedDateEvents.Select(e => ResolveEventUtc(e)).Where(x => x.HasValue).Select(x => x!.Value.ToString("O")).Distinct().OrderBy(x => x));
+    var candidateNames = string.Join(",", extractedEvents.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x));
+    var candidateTimes = string.Join(",", extractedEvents.Select(e => ResolveEventUtc(e)).Where(x => x.HasValue).Select(x => x!.Value.ToString("O")).Distinct().OrderBy(x => x));
+
+    WeeklyObjectPositionResolution ToResolution(SkyfieldTemporalCandidate candidate, string source)
+    {
+        var delta = Math.Abs((candidate.SnapshotUtc - sceneObservationUtc).TotalMinutes);
+        return new WeeklyObjectPositionResolution(
+            candidate.AltitudeDegrees,
+            candidate.AzimuthDegrees,
+            candidate.Magnitude ?? directObject?.Magnitude ?? 5.5d,
+            $"source={source};requestedTimeUtc={sceneObservationUtc:O};matchedTimeUtc={candidate.SnapshotUtc:O};deltaMinutes={delta:0.###}",
+            directObject?.ObjectName ?? objectCodeOrName,
+            normalizedRequestedName,
+            sceneDateLocal.ToString("yyyy-MM-dd"),
+            sceneObservationUtc.ToString("HH:mm"),
+            "EventExtractionResult.ExtractedEvents[].Objects",
+            true,
+            candidateNames,
+            candidateTimes,
+            topLevelKeys,
+            availableDates,
+            "ExtractedEvents.Objects",
+            selectedDateObjectNames,
+            candidate.SnapshotUtc);
+    }
+
+    var exact = candidates.FirstOrDefault(candidate => candidate.SnapshotUtc == sceneObservationUtc);
+    if (exact is not null)
+    {
+        logger.LogInformation("EXPANDED_GEOMETRY_RESOLUTION_SUCCESS sceneCode={SceneCode} object={Object} source=skyfield.exact matchedTimeUtc={MatchedTimeUtc} altitude={Altitude} azimuth={Azimuth}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, exact.SnapshotUtc, exact.AltitudeDegrees, exact.AzimuthDegrees);
+        return ToResolution(exact, "skyfield.exact");
+    }
+
+    logger.LogInformation("EXPANDED_GEOMETRY_EXACT_MISS sceneCode={SceneCode} object={Object} selectedObservationUtc={SelectedObservationUtc} candidateCount={CandidateCount}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, sceneObservationUtc, candidates.Count);
+
+    var sameLocalDate = candidates
+        .Where(candidate => DateOnly.FromDateTime(ConvertUtcToLocal(DateTime.SpecifyKind(candidate.SnapshotUtc, DateTimeKind.Utc), timezoneId)) == sceneDateLocal)
+        .OrderBy(candidate => Math.Abs((candidate.SnapshotUtc - sceneObservationUtc).TotalMinutes))
+        .FirstOrDefault();
+    if (sameLocalDate is not null)
+    {
+        logger.LogInformation("EXPANDED_GEOMETRY_WEEKLY_FALLBACK_SELECTED sceneCode={SceneCode} object={Object} fallback=same-local-date-nearest matchedTimeUtc={MatchedTimeUtc} altitude={Altitude} azimuth={Azimuth}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, sameLocalDate.SnapshotUtc, sameLocalDate.AltitudeDegrees, sameLocalDate.AzimuthDegrees);
+        logger.LogInformation("EXPANDED_GEOMETRY_RESOLUTION_SUCCESS sceneCode={SceneCode} object={Object} source=skyfield.same-local-date-nearest", sceneCode, directObject?.ObjectName ?? objectCodeOrName);
+        return ToResolution(sameLocalDate, "skyfield.same-local-date-nearest");
+    }
+
+    var isMoon = targetAliases.Contains("moon") || objectCodeOrName.Equals("MOON", StringComparison.OrdinalIgnoreCase) || (directObject?.ObjectName?.Contains("moon", StringComparison.OrdinalIgnoreCase) ?? false);
+    if (isMoon)
+    {
+        var moonNight = candidates
+            .Where(candidate =>
+            {
+                var local = ConvertUtcToLocal(DateTime.SpecifyKind(candidate.SnapshotUtc, DateTimeKind.Utc), timezoneId);
+                return candidate.AltitudeDegrees > 0d && (local.Hour >= 18 || local.Hour <= 5);
+            })
+            .OrderByDescending(candidate => candidate.AltitudeDegrees)
+            .FirstOrDefault();
+        if (moonNight is not null)
+        {
+            logger.LogInformation("EXPANDED_GEOMETRY_WEEKLY_FALLBACK_SELECTED sceneCode={SceneCode} object={Object} fallback=moon-best-nighttime matchedTimeUtc={MatchedTimeUtc} altitude={Altitude} azimuth={Azimuth}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, moonNight.SnapshotUtc, moonNight.AltitudeDegrees, moonNight.AzimuthDegrees);
+            logger.LogInformation("EXPANDED_GEOMETRY_RESOLUTION_SUCCESS sceneCode={SceneCode} object={Object} source=skyfield.moon-best-nighttime", sceneCode, directObject?.ObjectName ?? objectCodeOrName);
+            return ToResolution(moonNight, "skyfield.moon-best-nighttime");
+        }
+    }
+
+    var bestAltitude = candidates.OrderByDescending(candidate => candidate.AltitudeDegrees).FirstOrDefault();
+    if (bestAltitude is not null && bestAltitude.AltitudeDegrees > 0d)
+    {
+        logger.LogInformation("EXPANDED_GEOMETRY_WEEKLY_FALLBACK_SELECTED sceneCode={SceneCode} object={Object} fallback=same-week-best-altitude matchedTimeUtc={MatchedTimeUtc} altitude={Altitude} azimuth={Azimuth}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, bestAltitude.SnapshotUtc, bestAltitude.AltitudeDegrees, bestAltitude.AzimuthDegrees);
+        logger.LogInformation("EXPANDED_GEOMETRY_RESOLUTION_SUCCESS sceneCode={SceneCode} object={Object} source=skyfield.same-week-best-altitude", sceneCode, directObject?.ObjectName ?? objectCodeOrName);
+        return ToResolution(bestAltitude, "skyfield.same-week-best-altitude");
+    }
+
+    var visible = candidates.Where(candidate => candidate.AltitudeDegrees > 15d).OrderByDescending(candidate => candidate.AltitudeDegrees).FirstOrDefault();
+    if (visible is not null)
+    {
+        logger.LogInformation("EXPANDED_GEOMETRY_WEEKLY_FALLBACK_SELECTED sceneCode={SceneCode} object={Object} fallback=weekly-visible-altitude-over-15 matchedTimeUtc={MatchedTimeUtc} altitude={Altitude} azimuth={Azimuth}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, visible.SnapshotUtc, visible.AltitudeDegrees, visible.AzimuthDegrees);
+        logger.LogInformation("EXPANDED_GEOMETRY_RESOLUTION_SUCCESS sceneCode={SceneCode} object={Object} source=skyfield.weekly-visible-altitude-over-15", sceneCode, directObject?.ObjectName ?? objectCodeOrName);
+        return ToResolution(visible, "skyfield.weekly-visible-altitude-over-15");
+    }
+
+    logger.LogWarning("EXPANDED_GEOMETRY_RESOLUTION_FAILED sceneCode={SceneCode} object={Object} selectedObservationUtc={SelectedObservationUtc} candidateCount={CandidateCount}", sceneCode, directObject?.ObjectName ?? objectCodeOrName, sceneObservationUtc, candidates.Count);
+    return ResolveWeeklySkyObjectPosition(objectCodeOrName, sceneObservationUtc, sceneObservationLocal, sceneDateLocal, composition, directObject, weeklyContext, requestedTargetObjects, temporalResolver, logger, sceneCode);
 }
 
 static HashSet<string> ResolveWeeklyObjectAliases(string objectCodeOrName, string? directName)
@@ -4635,11 +4756,16 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
                     IncludedObjects = adapted.TargetObjects
                 };
 
+                var resolvedObservationUtc = observationUtc;
                 var skyPositions = adapted.TargetObjects
                     .Select(code =>
                     {
                         skyObjectsByCode.TryGetValue(code, out var obj);
-                        var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, sceneDateLocal, compositionFallback, obj, weeklyContext, adapted.TargetObjects, temporalResolver, logger, adapted.RenderSceneCode);
+                        var resolution = ResolveExpandedWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, sceneDateLocal, timezone, compositionFallback, obj, weeklyContext, adapted.TargetObjects, temporalResolver, logger, adapted.RenderSceneCode);
+                        if (resolution.MatchFound && resolution.MatchedTimeUtc.HasValue)
+                        {
+                            resolvedObservationUtc = resolution.MatchedTimeUtc.Value;
+                        }
                         var objectName = obj?.ObjectName ?? code;
                         var objectType = ResolveObjectType(objectName);
                         var weight = ResolveObjectWeight(objectName, objectType, adapted.TargetObjects.FirstOrDefault()?.Equals(code, StringComparison.OrdinalIgnoreCase) == true);
@@ -4648,6 +4774,7 @@ static async Task<ExpandedStellariumExecutionSummary> ExecuteExpandedStellariumS
                             $"expandedRequirement|{resolution.Source}");
                     })
                     .ToList();
+                observationUtc = DateTime.SpecifyKind(resolvedObservationUtc, DateTimeKind.Utc);
 
                 var missingGeometryObjects = skyPositions
                     .Where(x => x.Source.Contains("source=fallback", StringComparison.OrdinalIgnoreCase))
@@ -4996,7 +5123,7 @@ public sealed record GenerateDailyPlanResponse(
     string Status);
 
 sealed record WeeklySceneObjectSelection(SkyObjectPosition Position, string Source);
-sealed record WeeklyObjectPositionResolution(double AltitudeDeg, double AzimuthDeg, double Magnitude, string Source, string RequestedName, string NormalizedName, string DateKey, string TimeKey, string CollectionSearched, bool MatchFound, string CandidateNames, string CandidateTimes, string TopLevelKeys, string AvailableDates, string SelectedDateCollections, string SelectedDateObjectNames);
+sealed record WeeklyObjectPositionResolution(double AltitudeDeg, double AzimuthDeg, double Magnitude, string Source, string RequestedName, string NormalizedName, string DateKey, string TimeKey, string CollectionSearched, bool MatchFound, string CandidateNames, string CandidateTimes, string TopLevelKeys, string AvailableDates, string SelectedDateCollections, string SelectedDateObjectNames, DateTime? MatchedTimeUtc = null);
 
 
 public sealed record FinalRenderSceneDescriptor(
