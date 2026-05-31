@@ -718,6 +718,30 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
         return Results.BadRequest(new { error = ex.Message });
     }
 });
+app.MapPost("/api/weekly-skyforecast-v2/runs/{pipelineRunId:guid}/render-video", async (Guid pipelineRunId, WeeklyExistingRunRenderRequest request, IWeeklyExistingRunVideoRenderer renderer, ILogger<Program> logger, CancellationToken ct) =>
+{
+    try
+    {
+        var response = await renderer.RenderAsync(pipelineRunId, request, ct);
+        return Results.Ok(response);
+    }
+    catch (FileNotFoundException ex)
+    {
+        logger.LogError(ex, "WEEKLY_RENDER_EXISTING_RUN_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        return Results.BadRequest(new { pipelineRunId, renderVideoReady = false, errors = new[] { ex.Message } });
+    }
+    catch (DirectoryNotFoundException ex)
+    {
+        logger.LogError(ex, "WEEKLY_RENDER_EXISTING_RUN_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        return Results.NotFound(new { pipelineRunId, renderVideoReady = false, errors = new[] { ex.Message } });
+    }
+    catch (InvalidOperationException ex)
+    {
+        logger.LogError(ex, "WEEKLY_RENDER_EXISTING_RUN_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        return Results.BadRequest(new { pipelineRunId, renderVideoReady = false, errors = new[] { ex.Message } });
+    }
+});
+
 app.MapPost("/api/content-planning/weekly-skyforecast-v2/render-scenes", async (WeeklySkyForecastV2RenderScenesRequest request, IWeeklySkyForecastSceneRenderingOrchestrator orchestrator, IContentPlanningService planning, CancellationToken ct) =>
 {
     var contentPlanId = request.ContentGenerationPlanId;
