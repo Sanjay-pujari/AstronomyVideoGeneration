@@ -1482,7 +1482,18 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     int HighestPriorityEventScore = 0,
     string? HeroEventClassification = null,
     IReadOnlyList<string>? TopThreeEventCodes = null,
-    bool EventPriorityScoringReady = false);
+    bool EventPriorityScoringReady = false,
+    string? LongformNarrationPath = null,
+    string? ShortformNarrationPath = null,
+    string? NarrationAssetMapPath = null,
+    string? NarrationTimelineMapPath = null,
+    string? WeeklyNarrationReportPath = null,
+    bool LongformNarrationReady = false,
+    bool ShortformNarrationReady = false,
+    bool NarrationAssetMappingReady = false,
+    bool NarrationTimelineReady = false,
+    int TotalLongformNarrationSeconds = 0,
+    int TotalShortformNarrationSeconds = 0);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
