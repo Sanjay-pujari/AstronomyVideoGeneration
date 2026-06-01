@@ -11,6 +11,8 @@ public sealed class AzureSpeechOptions
     public string? ManagedIdentityClientId { get; set; }
 
     public bool UseSsml { get; set; } = true;
+    public string? DefaultVoiceName { get; set; } = "hi-IN-MadhurNeural";
+    public string? DefaultAudioFormat { get; set; } = "audio-24khz-96kbitrate-mono-mp3";
     public string DefaultLanguage { get; set; } = "en";
     public Dictionary<string, string> Voices { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
