@@ -1699,11 +1699,87 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             scriptSourceSceneCodes[splitSceneCode] = splitSources;
                         }
                         splitSources.Add(shot.ShotCode);
+
+                        var splitFrameVariants = new[]
+                        {
+                            (FrameType: CinematicFrameType.HorizonContext, Name: "horizon_context", FovScale: 1.20d, MinFov: 20d, MaxFov: 60d, PreserveHorizon: true, Purpose: "Horizon/context frame for split planet coverage."),
+                            (FrameType: CinematicFrameType.BalancedStoryFrame, Name: "balanced_story_frame", FovScale: 1.00d, MinFov: 18d, MaxFov: 55d, PreserveHorizon: true, Purpose: "Narrative-balanced split planet frame."),
+                            (FrameType: CinematicFrameType.DetailFocus, Name: "detail_focus", FovScale: 0.75d, MinFov: 18d, MaxFov: 45d, PreserveHorizon: false, Purpose: "Closer labeled split planet frame.")
+                        };
+                        var splitFramePlans = new List<CinematicFramePlan>();
+                        var splitFrameScriptDir = Path.Combine(scriptsDirectory, splitSceneCode);
+                        var splitFrameSceneDir = Path.Combine(scenesDirectory, splitSceneCode);
+                        Directory.CreateDirectory(splitFrameScriptDir);
+                        Directory.CreateDirectory(splitFrameSceneDir);
+                        for (var frameIndex = 0; frameIndex < splitFrameVariants.Length; frameIndex++)
+                        {
+                            var variant = splitFrameVariants[frameIndex];
+                            var frameFov = Math.Clamp(splitResultSsc.FovDeg * variant.FovScale, variant.MinFov, variant.MaxFov);
+                            var frameOutputScriptName = $"{frameIndex + 1:00}_{variant.Name}.ssc";
+                            var frameOutputImageName = $"{frameIndex + 1:00}_{variant.Name}.png";
+                            var frameScriptPath = Path.Combine(splitFrameScriptDir, frameOutputScriptName);
+                            var frameImagePath = Path.Combine(splitFrameSceneDir, frameOutputImageName);
+                            var framePlan = new CinematicFramePlan(
+                                $"{splitSceneCode}_{frameIndex + 1:00}_{variant.Name}",
+                                shot.ShotCode,
+                                splitSceneCode,
+                                variant.FrameType,
+                                frameIndex + 1,
+                                splitObjectCodes,
+                                splitPrimaryObject,
+                                splitResultSsc.CameraAzimuthDeg,
+                                splitResultSsc.CameraAltitudeDeg,
+                                frameFov,
+                                variant.PreserveHorizon,
+                                true,
+                                true,
+                                0.50d,
+                                variant.PreserveHorizon ? 0.62d : 0.50d,
+                                variant.Purpose,
+                                "Split-scene visual support for an impossible single-frame planet grouping.",
+                                frameOutputScriptName,
+                                frameOutputImageName,
+                                frameScriptPath,
+                                frameImagePath,
+                                Path.Combine("stellarium", "scripts", splitSceneCode, frameOutputScriptName),
+                                Path.Combine("stellarium", "scenes", splitSceneCode, frameOutputImageName),
+                                []);
+                            splitFramePlans.Add(framePlan);
+
+                            var frameScreenshotDirectory = (Path.GetDirectoryName(frameImagePath) ?? scenesDirectory).Replace("\\", "/");
+                            var frameScreenshotFileName = Path.GetFileNameWithoutExtension(frameImagePath);
+                            var frameSsc = Regex.Replace(
+                                splitHeader + splitResultSsc.SscScript,
+                                @"core\.moveToAltAzi\([^\)]*\);",
+                                $"core.moveToAltAzi(\"{splitResultSsc.CameraAltitudeDeg.ToString("0.###", CultureInfo.InvariantCulture)}d\", \"{splitResultSsc.CameraAzimuthDeg.ToString("0.###", CultureInfo.InvariantCulture)}d\", 1);",
+                                RegexOptions.CultureInvariant);
+                            frameSsc = Regex.Replace(
+                                frameSsc,
+                                @"StelMovementMgr\.zoomTo\([^\)]*\);",
+                                $"StelMovementMgr.zoomTo({frameFov.ToString("0.###", CultureInfo.InvariantCulture)}, 2);",
+                                RegexOptions.CultureInvariant);
+                            frameSsc = Regex.Replace(
+                                frameSsc,
+                                @"core\.screenshot\([^\)]*\);",
+                                $"core.screenshot(\"{frameScreenshotFileName.Replace("\"", "\\\"")}\", false, \"{frameScreenshotDirectory.Replace("\"", "\\\"")}\", true, \"png\");",
+                                RegexOptions.CultureInvariant);
+                            generatedScripts.Add((frameScriptPath, frameSsc));
+                            finalRenderSceneDescriptors.Add(new FinalRenderSceneDescriptor(
+                                splitSceneCode,
+                                framePlan.FrameId,
+                                false,
+                                string.Empty,
+                                string.Join("|", splitSkyPositions.Select(x => x.Source)),
+                                framePlan.ScriptPath,
+                                framePlan.ImagePath,
+                                true));
+                        }
+                        allFramePlans.Add(new CinematicSceneFramePlan(splitSceneCode, shot.ShotCode, splitFramePlans));
                     }
                     continue;
                 }
 
-var sscResult = splitProbeSsc;
+                var sscResult = splitProbeSsc;
                 if (sscResult.RequiresSplit)
                 {
                     app.Logger.LogWarning("WeeklySkyForecast V2 scene {SceneId} requires split, fallback to single SSC with computed center/FOV. reason=requiresSplit", shot.ShotCode);
@@ -2129,6 +2205,11 @@ var sscResult = splitProbeSsc;
             weeklyStellariumSceneRequirementsPath,
             generatedAtUtc = DateTime.UtcNow,
             stellariumScenes = sscManifestEntries,
+            groupingSplitRequired = multiObjectSceneResolutionReports.Any(x => x.GroupingSplitRequired),
+            groupingSingleFrameAvailable = !multiObjectSceneResolutionReports.Any(x => x.GroupingSplitRequired),
+            groupingSplitScenes = multiObjectSceneResolutionReports.SelectMany(x => x.SplitScenes ?? Array.Empty<WeeklyMultiObjectSplitSceneManifestEntry>()).ToList(),
+            multiObjectResolutionPassed = multiObjectSceneResolutionReports.Count == 0 || multiObjectSceneResolutionReports.All(x => x.MultiObjectResolutionPassed),
+            visualCoveragePassed = multiObjectSceneResolutionReports.Count == 0 || multiObjectSceneResolutionReports.All(x => x.AllObjectsVisuallySupported),
             multiObjectSceneResolutionPassed = multiObjectSceneResolutionReports.Count == 0 || multiObjectSceneResolutionReports.All(x => x.MultiObjectResolutionPassed),
             multiObjectScenesRequested = multiObjectSceneResolutionReports.Count,
             multiObjectScenesResolved = multiObjectSceneResolutionReports.Count(x => x.MultiObjectResolutionPassed),
@@ -2147,6 +2228,16 @@ var sscResult = splitProbeSsc;
             sscManifestEntries.Select(x => x.sceneCode).ToList(),
             warnings,
             multiObjectSceneResolutionReports);
+        if (visualNarrationCoverage.GroupingSplitRequired && File.Exists(narrationTextPath))
+        {
+            var narrationText = await File.ReadAllTextAsync(narrationTextPath, ct);
+            narrationText = Regex.Replace(
+                narrationText,
+                @"Venus\s+and\s+Saturn[^\.]{0,120}\b(?:same|single)\s+(?:window|frame)[^\.]*\.",
+                "Venus and Saturn highlight opposite parts of the sky this week, so watch Venus toward one horizon while Saturn appears in another direction.",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            await File.WriteAllTextAsync(narrationTextPath, narrationText, ct);
+        }
         await File.WriteAllTextAsync(visualNarrationCoverageReportPath, JsonSerializer.Serialize(visualNarrationCoverage, new JsonSerializerOptions { WriteIndented = true }), ct);
         if (!visualNarrationCoverage.VisualNarrationAligned)
         {
@@ -4405,7 +4496,12 @@ static Task<WeeklyMultiObjectSceneResolutionResult> ResolveMultiObjectSceneAsync
     var selectedBucketObjectNames = sharedCandidate.BucketObjectNames.Count > 0
         ? sharedCandidate.BucketObjectNames.Select(ToWeeklyObjectDisplayName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList()
         : sharedCandidate.Objects.Select(x => x.DisplayName.ToUpperInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
-    var report = new WeeklyMultiObjectSceneResolutionReport(sceneCode, requestedObjects, resolvedCodes, [], selectedObservationUtc, selectedObservationLocal, true, candidateTimestampsInspected.ToList(), false, true, candidateTimestampsInspected.Count, selectedBucketObjectNames);
+    var angularSpread = EstimateMultiObjectAngularSpreadDeg(sharedCandidate.Objects);
+    var groupingSplitRequired = angularSpread > 80d;
+    IReadOnlyList<WeeklyMultiObjectSplitSceneManifestEntry> splitScenes = groupingSplitRequired
+        ? resolvedCodes.Select(code => new WeeklyMultiObjectSplitSceneManifestEntry(ResolveMultiObjectSplitSceneCode(sceneCode, code), new[] { code }, new[] { code })).ToList()
+        : Array.Empty<WeeklyMultiObjectSplitSceneManifestEntry>();
+    var report = new WeeklyMultiObjectSceneResolutionReport(sceneCode, requestedObjects, resolvedCodes, [], selectedObservationUtc, selectedObservationLocal, true, candidateTimestampsInspected.ToList(), groupingSplitRequired, true, candidateTimestampsInspected.Count, selectedBucketObjectNames, angularSpread, !groupingSplitRequired, splitScenes);
     logger.LogInformation("MULTI_OBJECT_RESOLUTION_SUCCESS sceneCode={SceneCode} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} matchMode={MatchMode}", sceneCode, string.Join(",", requestedObjects), string.Join(",", resolvedCodes), selectedObservationUtc, selectedObservationLocal, sharedCandidate.MatchMode);
     return Task.FromResult(new WeeklyMultiObjectSceneResolutionResult(sceneCode, requestedObjects, resolvedSelections, selectedObservationUtc, selectedObservationLocal, report));
 }
@@ -4621,7 +4717,17 @@ static void ReplaceMultiObjectSceneResolutionReport(List<WeeklyMultiObjectSceneR
 {
     var index = reports.FindIndex(x => x.SceneCode.Equals(sceneCode, StringComparison.OrdinalIgnoreCase));
     if (index < 0) return;
-    reports[index] = reports[index] with { GroupingSplitRequired = groupingSplitRequired, AllObjectsVisuallySupported = allObjectsVisuallySupported };
+    var existing = reports[index];
+    IReadOnlyList<WeeklyMultiObjectSplitSceneManifestEntry>? splitScenes = groupingSplitRequired && (existing.SplitScenes is null || existing.SplitScenes.Count == 0)
+        ? existing.ResolvedObjects.Select(code => new WeeklyMultiObjectSplitSceneManifestEntry(ResolveMultiObjectSplitSceneCode(existing.SceneCode, code), new[] { code }, new[] { code })).ToList()
+        : existing.SplitScenes;
+    reports[index] = existing with
+    {
+        GroupingSplitRequired = groupingSplitRequired,
+        AllObjectsVisuallySupported = allObjectsVisuallySupported,
+        GroupingSingleFrameAvailable = !groupingSplitRequired,
+        SplitScenes = splitScenes
+    };
 }
 
 static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
@@ -5320,20 +5426,23 @@ static WeeklyVisualNarrationCoverageReport BuildWeeklyVisualNarrationCoverageRep
     var venusSceneCount = CountScenesForObject(framePlans, "VENUS");
     var saturnSceneCount = CountScenesForObject(framePlans, "SATURN");
     var groupingSceneCount = framePlans.Count(scene => scene.FramePlans.Any(frame => frame.TargetObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).Count() >= 2));
-    var errors = new List<string>();
-    if (missingObjects.Count > 0) errors.Add($"Narration mentions unsupported objects: {string.Join(",", missingObjects)}");
-    if (mentioned.Contains("VENUS", StringComparer.OrdinalIgnoreCase) && venusSceneCount == 0) errors.Add("Venus is mentioned but no Venus scene was generated.");
-    if (mentioned.Contains("SATURN", StringComparer.OrdinalIgnoreCase) && saturnSceneCount == 0) errors.Add("Saturn is mentioned but no Saturn scene was generated.");
-    if (focusPlan.FocusGroupings.Count > 0 && groupingSceneCount == 0) errors.Add("Narration grouping mentioned but no grouping scene was generated.");
     var multiObjectScenesRequested = multiObjectSceneResolutionReports.Count;
     var multiObjectScenesResolved = multiObjectSceneResolutionReports.Count(x => x.MultiObjectResolutionPassed);
     var multiObjectScenesFailed = multiObjectSceneResolutionReports.Count(x => !x.MultiObjectResolutionPassed);
     var multiObjectSceneResolutionPassed = multiObjectScenesFailed == 0;
-    var allObjectsVisuallySupported = missingObjects.Count == 0 && multiObjectSceneResolutionPassed;
     var groupingSplitRequired = multiObjectSceneResolutionReports.Any(x => x.GroupingSplitRequired);
+    var groupingSingleFrameAvailable = !groupingSplitRequired && groupingSceneCount > 0;
+    var splitGroupingVisuallySupported = groupingSplitRequired
+        && multiObjectSceneResolutionReports.Where(x => x.GroupingSplitRequired).All(report => report.ResolvedObjects.All(obj => supported.Contains(obj, StringComparer.OrdinalIgnoreCase)));
+    var errors = new List<string>();
+    if (missingObjects.Count > 0) errors.Add($"Narration mentions unsupported objects: {string.Join(",", missingObjects)}");
+    if (mentioned.Contains("VENUS", StringComparer.OrdinalIgnoreCase) && venusSceneCount == 0) errors.Add("Venus is mentioned but no Venus scene was generated.");
+    if (mentioned.Contains("SATURN", StringComparer.OrdinalIgnoreCase) && saturnSceneCount == 0) errors.Add("Saturn is mentioned but no Saturn scene was generated.");
+    if (focusPlan.FocusGroupings.Count > 0 && groupingSceneCount == 0 && !splitGroupingVisuallySupported) errors.Add("Narration grouping mentioned but no grouping scene or split-scene support was generated.");
+    var allObjectsVisuallySupported = missingObjects.Count == 0 && multiObjectSceneResolutionPassed && (!groupingSplitRequired || splitGroupingVisuallySupported);
     if (!multiObjectSceneResolutionPassed) errors.Add($"Multi-object scene resolution failed for: {string.Join(",", multiObjectSceneResolutionReports.Where(x => !x.MultiObjectResolutionPassed).Select(x => x.SceneCode))}");
-    var aligned = errors.Count == 0 && missingObjects.Count == 0 && moonSceneCount > 0 && multiObjectSceneResolutionPassed;
-    return new WeeklyVisualNarrationCoverageReport(aligned, allObjectsVisuallySupported, groupingSplitRequired, mentioned, supported, missingObjects, requiredGenerated, missingScenes, moonSceneCount, venusSceneCount, saturnSceneCount, groupingSceneCount, scriptPaths.Count, screenshots.Count, multiObjectSceneResolutionPassed, multiObjectScenesRequested, multiObjectScenesResolved, multiObjectScenesFailed, multiObjectSceneResolutionReports, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors);
+    var aligned = errors.Count == 0 && missingObjects.Count == 0 && moonSceneCount > 0 && multiObjectSceneResolutionPassed && (!groupingSplitRequired || splitGroupingVisuallySupported);
+    return new WeeklyVisualNarrationCoverageReport(aligned, allObjectsVisuallySupported, groupingSplitRequired, mentioned, supported, missingObjects, requiredGenerated, missingScenes, moonSceneCount, venusSceneCount, saturnSceneCount, groupingSceneCount, scriptPaths.Count, screenshots.Count, multiObjectSceneResolutionPassed, multiObjectScenesRequested, multiObjectScenesResolved, multiObjectScenesFailed, multiObjectSceneResolutionReports, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors, groupingSingleFrameAvailable, groupingSplitRequired);
 }
 
 static int CountScenesForObject(IReadOnlyList<CinematicSceneFramePlan> framePlans, string objectCode)
@@ -6264,7 +6373,9 @@ sealed record WeeklyVisualNarrationCoverageReport(
     int MultiObjectScenesFailed,
     IReadOnlyList<WeeklyMultiObjectSceneResolutionReport> MultiObjectScenes,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    bool GroupingSingleFrameAvailable,
+    bool GroupingNarrationShouldUseSplitLanguage);
 
 sealed record WeeklyMultiObjectSceneResolutionReport(
     string SceneCode,
@@ -6278,7 +6389,15 @@ sealed record WeeklyMultiObjectSceneResolutionReport(
     bool GroupingSplitRequired,
     bool AllObjectsVisuallySupported,
     int CandidateTimestampCount,
-    IReadOnlyList<string> SelectedBucketObjectNames);
+    IReadOnlyList<string> SelectedBucketObjectNames,
+    double AngularSpreadDegrees = 0d,
+    bool GroupingSingleFrameAvailable = true,
+    IReadOnlyList<WeeklyMultiObjectSplitSceneManifestEntry>? SplitScenes = null);
+
+sealed record WeeklyMultiObjectSplitSceneManifestEntry(
+    string SceneCode,
+    IReadOnlyList<string> TargetObjects,
+    IReadOnlyList<string> ResolvedObjects);
 
 sealed record WeeklyMultiObjectSceneResolutionResult(
     string SceneCode,

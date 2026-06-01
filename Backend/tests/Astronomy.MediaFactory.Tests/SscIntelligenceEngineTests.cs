@@ -39,6 +39,26 @@ public sealed partial class SscIntelligenceEngineTests
         result.FovDeg.Should().BeApproximately(48, 1.0);
     }
 
+
+    [Fact]
+    public void CinematicCameraPlanner_TreatsSingleObjectSplitGrouping_AsObjectFocus()
+    {
+        var planner = new CinematicCameraPlanner();
+        var plan = planner.Plan(
+            "western_planet_grouping_scene_venus",
+            Astronomy.SscIntelligence.SceneIntent.SceneIntent.HeroShot,
+            [new SkyObjectPosition("Venus", 18, 265, -4.2)],
+            18,
+            265,
+            42,
+            "Udaipur",
+            DateTime.UtcNow);
+
+        plan.FramingMode.Should().Be("SplitObjectFocus");
+        plan.CameraAzimuth.Should().BeInRange(0, 360);
+        plan.FovDegrees.Should().BeLessThanOrEqualTo(55);
+    }
+
     [Fact]
     public void VisibilityFilter_RemovesObjectsBelowMinimumAltitude()
     {
