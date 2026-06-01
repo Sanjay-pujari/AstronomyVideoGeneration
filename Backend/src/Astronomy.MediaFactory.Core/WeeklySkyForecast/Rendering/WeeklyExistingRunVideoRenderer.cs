@@ -143,8 +143,6 @@ public sealed record WeeklyExistingRunRenderResponse(
     double ShortformAudioDurationSeconds,
     double LongformVideoDurationSeconds,
     double ShortformVideoDurationSeconds,
-    double LongformDurationDeltaSeconds,
-    double ShortformDurationDeltaSeconds,
     IReadOnlyList<string> AudioDrivenValidationErrors,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
@@ -815,8 +813,6 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 audioDrivenValidationReport?.ShortformAudioDurationSeconds ?? shortformMerge.AudioDurationSeconds,
                 audioDrivenValidationReport?.LongformVideoDurationSeconds ?? longformMerge.VideoDurationSeconds,
                 audioDrivenValidationReport?.ShortformVideoDurationSeconds ?? shortformMerge.VideoDurationSeconds,
-                audioDrivenValidationReport?.LongformDurationDeltaSeconds ?? longformMerge.DurationDeltaSeconds,
-                audioDrivenValidationReport?.ShortformDurationDeltaSeconds ?? shortformMerge.DurationDeltaSeconds,
                 audioDrivenValidationReport?.Errors ?? [],
                 warnings,
                 errors);
