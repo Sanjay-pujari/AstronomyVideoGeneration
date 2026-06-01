@@ -790,6 +790,8 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private static WeeklyFinalAudioVideoMergeEpisodeReport NotRequestedMergeReport(string videoOnlyPath, string audioPath, string finalVideoPath)
         => new(false, videoOnlyPath, audioPath, finalVideoPath, 0, 0, 0, false, false, false, false);
 
+    private static double Round(double value) => Math.Round(value, 3, MidpointRounding.AwayFromZero);
+
     private static IEnumerable<string> BuildFinalMergeArguments(string videoOnlyPath, string audioPath, string finalVideoPath)
     {
         yield return "-y";
