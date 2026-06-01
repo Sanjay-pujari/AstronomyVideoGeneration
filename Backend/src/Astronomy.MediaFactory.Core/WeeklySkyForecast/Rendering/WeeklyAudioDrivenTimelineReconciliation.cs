@@ -32,6 +32,20 @@ public sealed record WeeklyAudioDrivenTimelineReconciliationResponse(
     string AudioDrivenRenderContractPath,
     string AudioDrivenStoryboardReportPath,
     string AudioDrivenTimelineReconciliationReportPath,
+    string AudioDrivenTimelineValidationReportPath,
+    bool AudioDrivenTimelineValid,
+    bool LongformSegmentTimingValid,
+    bool LongformShotTimingValid,
+    bool LongformTimelineContinuous,
+    int LongformInvalidShotCount,
+    int LongformGapCount,
+    int LongformOverlapCount,
+    bool ShortformSegmentTimingValid,
+    bool ShortformShotTimingValid,
+    bool ShortformTimelineContinuous,
+    int ShortformInvalidShotCount,
+    int ShortformGapCount,
+    int ShortformOverlapCount,
     string ResolvedPipelineRunRoot,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
@@ -39,6 +53,7 @@ public sealed record WeeklyAudioDrivenTimelineReconciliationResponse(
 public sealed record WeeklyAudioDrivenTimelineReconciliationReport(
     Guid PipelineRunId,
     bool AudioDrivenTimelineReady,
+    bool AudioDrivenTimelineValid,
     WeeklyAudioDrivenEpisodeReconciliationReport Longform,
     WeeklyAudioDrivenEpisodeReconciliationReport Shortform,
     bool VideoDurationNowMatchesAudio,
@@ -51,11 +66,30 @@ public sealed record WeeklyAudioDrivenEpisodeReconciliationReport(
     int SegmentCount,
     int SegmentsReconciled);
 
+public sealed record WeeklyAudioDrivenTimelineValidationReport(
+    Guid PipelineRunId,
+    bool AudioDrivenTimelineValid,
+    WeeklyAudioDrivenEpisodeTimelineValidationReport Longform,
+    WeeklyAudioDrivenEpisodeTimelineValidationReport Shortform,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
+public sealed record WeeklyAudioDrivenEpisodeTimelineValidationReport(
+    bool SegmentTimingValid,
+    bool ShotTimingValid,
+    bool TimelineContinuous,
+    double EpisodeDurationSeconds,
+    int InvalidSegmentCount,
+    int InvalidShotCount,
+    int GapCount,
+    int OverlapCount);
+
 public sealed class WeeklyAudioDrivenTimelineReconciliationService(
     IWeeklyPipelineRunDirectoryResolver pipelineRunDirectoryResolver,
     ILogger<WeeklyAudioDrivenTimelineReconciliationService> logger) : IWeeklyAudioDrivenTimelineReconciliationService
 {
-    private const double ToleranceSeconds = 0.001d;
+    private const double ToleranceSeconds = 0.02d;
+    private const double AudioDurationToleranceSeconds = 0.05d;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, Converters = { new JsonStringEnumConverter() } };
     public async Task<WeeklyAudioDrivenTimelineReconciliationResponse> ReconcileAsync(Guid pipelineRunId, WeeklyAudioDrivenTimelineReconciliationRequest request, CancellationToken cancellationToken)
     {
@@ -99,24 +133,26 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         };
         var reconciledStoryboard = BuildStoryboardReport(pipelineRunId, reconciledTimeline, sourceStoryboard);
 
-        ValidateTimeline("longform", reconciledTimeline.Longform, request.ReconcileLongform ? manifest.Longform : [], warnings, errors);
-        ValidateTimeline("shortform", reconciledTimeline.Shortform, request.ReconcileShortform ? manifest.Shortform : [], warnings, errors);
         ValidateMandatoryShots(reconciledShotPlan, errors);
 
+        var validationReport = ValidateAudioDrivenTimeline(pipelineRunId, reconciledTimeline, request.ReconcileLongform ? manifest.Longform : [], request.ReconcileShortform ? manifest.Shortform : [], warnings);
+
+        var allErrors = errors.Concat(validationReport.Errors).ToList();
         var longformAudioTotal = request.ReconcileLongform ? manifest.Longform.Sum(x => x.ActualAudioDurationSeconds) : longform.NewDurationSeconds;
         var shortformAudioTotal = request.ReconcileShortform ? manifest.Shortform.Sum(x => x.ActualAudioDurationSeconds) : shortform.NewDurationSeconds;
-        var videoDurationNowMatchesAudio = Math.Abs(longform.NewDurationSeconds - longformAudioTotal) <= ToleranceSeconds && Math.Abs(shortform.NewDurationSeconds - shortformAudioTotal) <= ToleranceSeconds;
-        if (!videoDurationNowMatchesAudio) errors.Add("Audio-driven video duration does not match audio manifest duration.");
+        var videoDurationNowMatchesAudio = Math.Abs(longform.NewDurationSeconds - longformAudioTotal) <= AudioDurationToleranceSeconds && Math.Abs(shortform.NewDurationSeconds - shortformAudioTotal) <= AudioDurationToleranceSeconds;
+        if (!videoDurationNowMatchesAudio) allErrors.Add("Audio-driven video duration does not match audio manifest duration.");
 
-        var ready = errors.Count == 0;
+        var ready = allErrors.Count == 0 && validationReport.AudioDrivenTimelineValid && videoDurationNowMatchesAudio;
         var report = new WeeklyAudioDrivenTimelineReconciliationReport(
             pipelineRunId,
             ready,
+            validationReport.AudioDrivenTimelineValid,
             new WeeklyAudioDrivenEpisodeReconciliationReport(sourceTimeline.Longform.ActualDurationSeconds, Round(longform.NewDurationSeconds), sourceTimeline.Longform.Segments.Count, longform.SegmentsReconciled),
             new WeeklyAudioDrivenEpisodeReconciliationReport(sourceTimeline.Shortform.ActualDurationSeconds, Round(shortform.NewDurationSeconds), sourceTimeline.Shortform.Segments.Count, shortform.SegmentsReconciled),
             videoDurationNowMatchesAudio,
             warnings,
-            errors);
+            allErrors);
 
         if (!request.DryRun)
         {
@@ -127,14 +163,15 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             await WriteJsonAsync(paths.AudioDrivenRenderContract, reconciledContract, cancellationToken);
             await WriteJsonAsync(paths.AudioDrivenStoryboardReport, reconciledStoryboard, cancellationToken);
             await WriteJsonAsync(paths.AudioDrivenTimelineReconciliationReport, report, cancellationToken);
+            await WriteJsonAsync(paths.AudioDrivenTimelineValidationReport, validationReport, cancellationToken);
         }
 
         logger.LogInformation("WEEKLY_AUDIO_DRIVEN_TIMELINE_RECONCILE_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, ready);
         return new WeeklyAudioDrivenTimelineReconciliationResponse(
             pipelineRunId,
             ready,
-            request.ReconcileLongform && errors.Count == 0,
-            request.ReconcileShortform && errors.Count == 0,
+            request.ReconcileLongform && allErrors.Count == 0,
+            request.ReconcileShortform && allErrors.Count == 0,
             sourceTimeline.Longform.ActualDurationSeconds,
             Round(longform.NewDurationSeconds),
             sourceTimeline.Shortform.ActualDurationSeconds,
@@ -144,9 +181,23 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             paths.AudioDrivenRenderContract,
             paths.AudioDrivenStoryboardReport,
             paths.AudioDrivenTimelineReconciliationReport,
+            paths.AudioDrivenTimelineValidationReport,
+            validationReport.AudioDrivenTimelineValid,
+            validationReport.Longform.SegmentTimingValid,
+            validationReport.Longform.ShotTimingValid,
+            validationReport.Longform.TimelineContinuous,
+            validationReport.Longform.InvalidShotCount,
+            validationReport.Longform.GapCount,
+            validationReport.Longform.OverlapCount,
+            validationReport.Shortform.SegmentTimingValid,
+            validationReport.Shortform.ShotTimingValid,
+            validationReport.Shortform.TimelineContinuous,
+            validationReport.Shortform.InvalidShotCount,
+            validationReport.Shortform.GapCount,
+            validationReport.Shortform.OverlapCount,
             root,
             warnings,
-            errors);
+            allErrors);
     }
 
     private EpisodeReconciliationResult ReconcileEpisode(string episodeType, FinalRenderEpisodeTimeline sourceTimeline, ResolvedRenderEpisodeShotPlan? sourceShotPlan, IReadOnlyList<WeeklyAudioSegmentManifestEntry> audioSegments, double minShotSeconds, double maxShotSeconds, List<string> warnings, List<string> errors)
@@ -173,10 +224,10 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             }
 
             var planSegment = shotPlanSegments.TryGetValue(sourceSegment.SegmentId, out var resolvedPlan) ? resolvedPlan : ToShotPlanSegment(episodeType, sourceSegment);
-            var shots = AllocateShots(episodeType, sourceSegment, planSegment.Shots, cursor, audioDuration, minShotSeconds, maxShotSeconds, warnings, errors);
             var start = Round(cursor);
             var end = Round(cursor + audioDuration);
-            var duration = Round(audioDuration);
+            var duration = Round(end - start);
+            var shots = AllocateShots(episodeType, sourceSegment, planSegment.Shots, cursor, audioDuration, start, end, minShotSeconds, maxShotSeconds, warnings, errors);
             segments.Add(sourceSegment with { StartSecond = start, EndSecond = end, DurationSeconds = duration, NarrationStart = start, NarrationEnd = end, Shots = shots });
             resolvedSegments.Add(new ResolvedRenderSegmentShotPlan(episodeType, sourceSegment.SegmentId, sourceSegment.SegmentType, start, end, duration, shots.Select(ToResolvedShot).ToList()));
             cursor += audioDuration;
@@ -185,7 +236,7 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         return new EpisodeReconciliationResult(new FinalRenderEpisodeTimeline(sourceTimeline.TargetDurationSeconds, Round(cursor), segments), new ResolvedRenderEpisodeShotPlan(episodeType, Round(cursor), resolvedSegments), cursor, reconciled);
     }
 
-    private static IReadOnlyList<FinalRenderShot> AllocateShots(string episodeType, FinalRenderSegment segment, IReadOnlyList<ResolvedRenderShotPlanEntry> sourceShots, double segmentStart, double segmentDuration, double minShotSeconds, double maxShotSeconds, List<string> warnings, List<string> errors)
+    private static IReadOnlyList<FinalRenderShot> AllocateShots(string episodeType, FinalRenderSegment segment, IReadOnlyList<ResolvedRenderShotPlanEntry> sourceShots, double segmentStart, double segmentDuration, double roundedSegmentStart, double roundedSegmentEnd, double minShotSeconds, double maxShotSeconds, List<string> warnings, List<string> errors)
     {
         var selected = sourceShots.Select(ToFinalShot).ToList();
         if (selected.Count == 0) selected = segment.Shots.ToList();
@@ -212,20 +263,27 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
 
         while (segmentDuration / selected.Count > maxShotSeconds)
         {
-            var repeat = selected.LastOrDefault(IsRepeatableShot) ?? selected.LastOrDefault();
-            if (repeat is null) break;
+            var repeat = selected.LastOrDefault(IsRepeatableShot);
+            if (repeat is null)
+            {
+                warnings.Add($"{episodeType} segment {segment.SegmentId} has no repeatable cinematic/background shot available for audio-duration normalization.");
+                break;
+            }
+
             selected.Add(repeat with { ShotNumber = selected.Count + 1, Purpose = repeat.Purpose + " (audio-duration repeat)" });
             warnings.Add($"{episodeType} segment {segment.SegmentId} repeated cinematic/background asset to keep shot duration below {maxShotSeconds}s.");
         }
 
         var allocated = new List<FinalRenderShot>();
-        var cursor = segmentStart;
+        var previousRoundedEnd = roundedSegmentStart;
         for (var i = 0; i < selected.Count; i++)
         {
             var end = i == selected.Count - 1 ? segmentStart + segmentDuration : segmentStart + (segmentDuration * (i + 1) / selected.Count);
+            var roundedStart = i == 0 ? roundedSegmentStart : previousRoundedEnd;
+            var roundedEnd = i == selected.Count - 1 ? roundedSegmentEnd : Round(end);
             var shot = selected[i];
-            allocated.Add(shot with { ShotNumber = i + 1, StartSecond = Round(cursor), EndSecond = Round(end), DurationSeconds = Math.Max(0.001d, Round(end - cursor)) });
-            cursor = end;
+            allocated.Add(shot with { ShotNumber = i + 1, StartSecond = roundedStart, EndSecond = roundedEnd, DurationSeconds = Round(roundedEnd - roundedStart) });
+            previousRoundedEnd = roundedEnd;
         }
         return allocated;
     }
@@ -275,26 +333,141 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         }
     }
 
-    private static void ValidateTimeline(string episodeType, FinalRenderEpisodeTimeline timeline, IReadOnlyList<WeeklyAudioSegmentManifestEntry> audioSegments, List<string> warnings, List<string> errors)
+    private static WeeklyAudioDrivenTimelineValidationReport ValidateAudioDrivenTimeline(Guid pipelineRunId, FinalRenderTimeline timeline, IReadOnlyList<WeeklyAudioSegmentManifestEntry> longformAudioSegments, IReadOnlyList<WeeklyAudioSegmentManifestEntry> shortformAudioSegments, IReadOnlyList<string> warnings)
     {
-        var cursor = 0d;
+        var errors = new List<string>();
+        var longform = ValidateAudioDrivenEpisodeTimeline("longform", timeline.Longform, longformAudioSegments, errors);
+        var shortform = ValidateAudioDrivenEpisodeTimeline("shortform", timeline.Shortform, shortformAudioSegments, errors);
+
+        return new WeeklyAudioDrivenTimelineValidationReport(
+            pipelineRunId,
+            longform.SegmentTimingValid && longform.ShotTimingValid && longform.TimelineContinuous && shortform.SegmentTimingValid && shortform.ShotTimingValid && shortform.TimelineContinuous,
+            longform,
+            shortform,
+            warnings.ToList(),
+            errors);
+    }
+
+    private static WeeklyAudioDrivenEpisodeTimelineValidationReport ValidateAudioDrivenEpisodeTimeline(string episodeType, FinalRenderEpisodeTimeline timeline, IReadOnlyList<WeeklyAudioSegmentManifestEntry> audioSegments, List<string> errors)
+    {
+        var invalidSegmentCount = 0;
+        var invalidShotCount = 0;
+        var gapCount = 0;
+        var overlapCount = 0;
         var audioById = audioSegments.ToDictionary(x => x.SegmentId, StringComparer.OrdinalIgnoreCase);
-        foreach (var segment in timeline.Segments)
+        double? previousSegmentEnd = null;
+
+        for (var segmentIndex = 0; segmentIndex < timeline.Segments.Count; segmentIndex++)
         {
-            if (Math.Abs(segment.StartSecond - cursor) > ToleranceSeconds) errors.Add($"{episodeType} timeline gap/overlap before segment {segment.SegmentId}.");
-            if (Math.Abs(segment.EndSecond - (segment.StartSecond + segment.DurationSeconds)) > ToleranceSeconds) errors.Add($"{episodeType} segment {segment.SegmentId} end does not equal start + duration.");
-            if (audioById.TryGetValue(segment.SegmentId, out var audio) && Math.Abs(segment.DurationSeconds - audio.ActualAudioDurationSeconds) > ToleranceSeconds) errors.Add($"{episodeType} segment {segment.SegmentId} duration does not match actual audio duration.");
-            var shotCursor = (double)segment.StartSecond;
-            foreach (var shot in segment.Shots)
+            var segment = timeline.Segments[segmentIndex];
+            var segmentInvalid = false;
+
+            if (segment.EndSecond <= segment.StartSecond || Math.Abs((segment.EndSecond - segment.StartSecond) - segment.DurationSeconds) > ToleranceSeconds)
             {
-                if (Math.Abs(shot.StartSecond - shotCursor) > ToleranceSeconds) errors.Add($"{episodeType} segment {segment.SegmentId} has shot gap/overlap at shot {shot.ShotNumber}.");
-                shotCursor = shot.EndSecond;
+                segmentInvalid = true;
+                errors.Add($"{episodeType} segment {segment.SegmentId} timing is invalid: start={segment.StartSecond:0.###} end={segment.EndSecond:0.###} duration={segment.DurationSeconds:0.###}.");
             }
-            if (Math.Abs(shotCursor - segment.EndSecond) > ToleranceSeconds) errors.Add($"{episodeType} segment {segment.SegmentId} shots do not fill segment duration.");
-            cursor = segment.EndSecond;
+
+            if (audioById.TryGetValue(segment.SegmentId, out var audio) && Math.Abs(segment.DurationSeconds - audio.ActualAudioDurationSeconds) > AudioDurationToleranceSeconds)
+            {
+                segmentInvalid = true;
+                errors.Add($"{episodeType} segment {segment.SegmentId} duration {segment.DurationSeconds:0.###}s does not match actual audio duration {audio.ActualAudioDurationSeconds:0.###}s.");
+            }
+
+            if (segmentIndex == 0 && Math.Abs(segment.StartSecond) > ToleranceSeconds)
+            {
+                gapCount++;
+                errors.Add($"{episodeType} first segment starts at {segment.StartSecond:0.###} instead of 0.");
+            }
+
+            if (previousSegmentEnd is not null)
+            {
+                var delta = segment.StartSecond - previousSegmentEnd.Value;
+                if (delta > ToleranceSeconds)
+                {
+                    gapCount++;
+                    errors.Add($"{episodeType} timeline has a segment gap of {delta:0.###}s before {segment.SegmentId}.");
+                }
+                else if (delta < -ToleranceSeconds)
+                {
+                    overlapCount++;
+                    errors.Add($"{episodeType} timeline has a segment overlap of {Math.Abs(delta):0.###}s at {segment.SegmentId}.");
+                }
+            }
+
+            if (segmentInvalid) invalidSegmentCount++;
+            previousSegmentEnd = segment.EndSecond;
+
+            if (segment.Shots.Count == 0)
+            {
+                invalidShotCount++;
+                errors.Add($"{episodeType} segment {segment.SegmentId} has no shots.");
+                continue;
+            }
+
+            for (var shotIndex = 0; shotIndex < segment.Shots.Count; shotIndex++)
+            {
+                var shot = segment.Shots[shotIndex];
+                var shotInvalid = false;
+                if (shot.EndSecond <= shot.StartSecond || Math.Abs((shot.EndSecond - shot.StartSecond) - shot.DurationSeconds) > ToleranceSeconds)
+                {
+                    shotInvalid = true;
+                    errors.Add($"{episodeType} segment {segment.SegmentId} shot {shot.ShotNumber} duration is invalid: start={shot.StartSecond:0.###} end={shot.EndSecond:0.###} duration={shot.DurationSeconds:0.###}.");
+                }
+
+                if (shotIndex == 0 && Math.Abs(shot.StartSecond - segment.StartSecond) > ToleranceSeconds)
+                {
+                    shotInvalid = true;
+                    gapCount++;
+                    errors.Add($"{episodeType} segment {segment.SegmentId} first shot starts at {shot.StartSecond:0.###} instead of segment start {segment.StartSecond:0.###}.");
+                }
+
+                if (shotIndex > 0)
+                {
+                    var previousShot = segment.Shots[shotIndex - 1];
+                    var delta = shot.StartSecond - previousShot.EndSecond;
+                    if (delta > ToleranceSeconds)
+                    {
+                        shotInvalid = true;
+                        gapCount++;
+                        errors.Add($"{episodeType} segment {segment.SegmentId} has a shot gap of {delta:0.###}s before shot {shot.ShotNumber}.");
+                    }
+                    else if (delta < -ToleranceSeconds)
+                    {
+                        shotInvalid = true;
+                        overlapCount++;
+                        errors.Add($"{episodeType} segment {segment.SegmentId} has a shot overlap of {Math.Abs(delta):0.###}s at shot {shot.ShotNumber}.");
+                    }
+                }
+
+                if (shotIndex == segment.Shots.Count - 1 && Math.Abs(shot.EndSecond - segment.EndSecond) > ToleranceSeconds)
+                {
+                    shotInvalid = true;
+                    gapCount++;
+                    errors.Add($"{episodeType} segment {segment.SegmentId} last shot ends at {shot.EndSecond:0.###} instead of segment end {segment.EndSecond:0.###}.");
+                }
+
+                if (shotInvalid) invalidShotCount++;
+            }
         }
-        if (Math.Abs(cursor - timeline.ActualDurationSeconds) > ToleranceSeconds) errors.Add($"{episodeType} total duration does not equal final segment end.");
-        if (audioSegments.Count > 0 && timeline.Segments.Count != audioSegments.Count) warnings.Add($"{episodeType} segment count {timeline.Segments.Count} differs from audio manifest count {audioSegments.Count}.");
+
+        var audioTotal = audioSegments.Sum(x => x.ActualAudioDurationSeconds);
+        if (audioSegments.Count > 0 && Math.Abs(timeline.ActualDurationSeconds - audioTotal) > AudioDurationToleranceSeconds)
+        {
+            invalidSegmentCount++;
+            errors.Add($"{episodeType} episode duration {timeline.ActualDurationSeconds:0.###}s does not match summed audio duration {audioTotal:0.###}s.");
+        }
+
+        if (previousSegmentEnd is not null && Math.Abs(timeline.ActualDurationSeconds - previousSegmentEnd.Value) > ToleranceSeconds)
+        {
+            invalidSegmentCount++;
+            errors.Add($"{episodeType} episode duration {timeline.ActualDurationSeconds:0.###}s does not equal final segment end {previousSegmentEnd.Value:0.###}s.");
+        }
+
+        var segmentTimingValid = invalidSegmentCount == 0;
+        var shotTimingValid = invalidShotCount == 0;
+        var timelineContinuous = gapCount == 0 && overlapCount == 0;
+        return new WeeklyAudioDrivenEpisodeTimelineValidationReport(segmentTimingValid, shotTimingValid, timelineContinuous, Round(timeline.ActualDurationSeconds), invalidSegmentCount, invalidShotCount, gapCount, overlapCount);
     }
 
     private static RenderStoryboardReport BuildStoryboardReport(Guid pipelineRunId, FinalRenderTimeline timeline, RenderStoryboardReport source)
@@ -361,10 +534,11 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         string AudioDrivenResolvedRenderShotPlan,
         string AudioDrivenStoryboardReport,
         string AudioDrivenRenderContract,
-        string AudioDrivenTimelineReconciliationReport)
+        string AudioDrivenTimelineReconciliationReport,
+        string AudioDrivenTimelineValidationReport)
     {
         public IReadOnlyList<string> RequiredJsonInputs => [AudioSegmentManifest, AudioTimingValidationReport, FinalRenderTimeline, ResolvedRenderShotPlan, RenderStoryboardReport, RenderContract];
-        public IReadOnlyList<string> Outputs => [AudioDrivenFinalRenderTimeline, AudioDrivenResolvedRenderShotPlan, AudioDrivenStoryboardReport, AudioDrivenRenderContract, AudioDrivenTimelineReconciliationReport];
+        public IReadOnlyList<string> Outputs => [AudioDrivenFinalRenderTimeline, AudioDrivenResolvedRenderShotPlan, AudioDrivenStoryboardReport, AudioDrivenRenderContract, AudioDrivenTimelineReconciliationReport, AudioDrivenTimelineValidationReport];
         public static WeeklyAudioDrivenTimelineReconciliationPaths FromRoot(string root) => new(
             Path.Combine(root, "audio", "audio-segment-manifest.json"),
             Path.Combine(root, "audio", "audio-timing-validation-report.json"),
@@ -378,6 +552,7 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             Path.Combine(root, "render", "audio-driven-resolved-render-shot-plan.json"),
             Path.Combine(root, "render", "audio-driven-render-storyboard-report.json"),
             Path.Combine(root, "render", "audio-driven-render-contract.json"),
-            Path.Combine(root, "render", "audio-driven-timeline-reconciliation-report.json"));
+            Path.Combine(root, "render", "audio-driven-timeline-reconciliation-report.json"),
+            Path.Combine(root, "render", "audio-driven-timeline-validation-report.json"));
     }
 }

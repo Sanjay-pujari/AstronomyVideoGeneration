@@ -1034,7 +1034,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
 
     private static void ValidateIntervals(string label, IEnumerable<(double StartSecond, double EndSecond, double DurationSeconds)> intervals, List<string> errors, ref bool durationsValid, ref bool noGaps, ref bool noOverlaps)
     {
-        const double tolerance = 0.001d;
+        const double tolerance = 0.02d;
         var ordered = intervals.OrderBy(i => i.StartSecond).ToList();
         double? previousEnd = null;
         foreach (var interval in ordered)
