@@ -880,7 +880,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
     }
 
     private static RenderVisualSelectionReport EmptyVisualSelectionReport()
-        => new(0, 0, 0, 0, 0, false, 0, 0, false, 0, "skippedForAudioDrivenTimeline", 0, 0, 0, 0, 0, 0, 0, [], true, true, true, 0, 0, true, true, true, true, true, true, 0, 0, 0, 0, 0, [], [], [], []);
+        => new(0, 0, 0, 0, 0, false, 0, 0, false, 0, "skippedForAudioDrivenTimeline", 0, 0, 0, 0, 0, 0, 0, new Dictionary<string, double>(), true, true, true, 0, 0, true, true, true, true, true, true, 0, 0, 0, 0, 0, new Dictionary<string, int>(), new Dictionary<string, int>(), [], []);
 
     private static RenderDiversityValidationReport EmptyDiversityValidationReport()
         => new(true, true, true, true, true, true, "skippedForAudioDrivenTimeline", true, true, 0, 0, 0, true, true, true, true, [], []);
