@@ -37,6 +37,11 @@ public sealed class WeeklySkyForecastAudioGenerationTests
         File.Exists(response.AudioGenerationReportPath).Should().BeTrue();
         File.Exists(response.AudioSegmentManifestPath).Should().BeTrue();
         File.Exists(response.AudioTimingValidationReportPath).Should().BeTrue();
+        response.NarrationParsingReady.Should().BeTrue();
+        response.LongformNormalizedSegmentCount.Should().Be(2);
+        response.ShortformNormalizedSegmentCount.Should().Be(1);
+        File.Exists(response.NormalizedLongformNarrationPath).Should().BeTrue();
+        File.Exists(response.NormalizedShortformNarrationPath).Should().BeTrue();
     }
 
     [Fact]
@@ -71,7 +76,46 @@ public sealed class WeeklySkyForecastAudioGenerationTests
         var act = () => service.GenerateAsync(pipelineRunId, new WeeklySkyForecastAudioGenerationRequest(DryRun: true), CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Longform narration segments are missing.*");
+            .WithMessage("*Unable to read longform narration.*");
+    }
+
+    [Fact]
+    public async Task GenerateAudio_WhenPascalCaseNarrationIsMissingMetadata_NormalizesWithWarnings()
+    {
+        var pipelineRunId = Guid.NewGuid();
+        var workingRoot = Path.Combine(Path.GetTempPath(), "weekly-audio-tests", Guid.NewGuid().ToString("N"));
+        var runRoot = Path.Combine(workingRoot, pipelineRunId.ToString("N"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "episode"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "render"));
+        await WriteInputsAsync(runRoot, pipelineRunId);
+
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        await File.WriteAllTextAsync(Path.Combine(runRoot, "episode", "longform-narration.json"), JsonSerializer.Serialize(new
+        {
+            Segments = new[]
+            {
+                new { SegmentId = "hero", SegmentType = "HeroEvent", NarrationText = "आज रात आकाश देखें।", EstimatedDurationSeconds = 84 },
+                new { SegmentId = "summary", SegmentType = "WeeklySummary", NarrationText = "यह सप्ताह शांत है।", EstimatedDurationSeconds = 20 }
+            }
+        }, options));
+        await File.WriteAllTextAsync(Path.Combine(runRoot, "episode", "shortform-narration.json"), JsonSerializer.Serialize(new[]
+        {
+            new { segmentId = "short-hook", segmentType = "ShortHook", narrationText = "आज आसमान देखें।", estimatedDurationSeconds = 15 }
+        }, options));
+
+        var service = new WeeklySkyForecastAudioGenerationService(
+            Options.Create(new RenderingOptions { WorkingDirectory = workingRoot }),
+            Options.Create(new AzureSpeechOptions { DefaultVoiceName = "hi-IN-MadhurNeural" }),
+            new ThrowingTtsSynthesizer(),
+            NullLogger<WeeklySkyForecastAudioGenerationService>.Instance);
+
+        var response = await service.GenerateAsync(pipelineRunId, new WeeklySkyForecastAudioGenerationRequest(DryRun: true, Language: "hi"), CancellationToken.None);
+
+        response.NarrationParsingReady.Should().BeTrue();
+        response.LongformNormalizedSegmentCount.Should().Be(2);
+        response.ShortformNormalizedSegmentCount.Should().Be(1);
+        response.Warnings.Should().Contain(w => w.Contains("missing pipelineRunId", StringComparison.OrdinalIgnoreCase));
+        response.Warnings.Should().Contain(w => w.Contains("missing language", StringComparison.OrdinalIgnoreCase));
     }
 
     private static async Task WriteInputsAsync(string runRoot, Guid pipelineRunId)
