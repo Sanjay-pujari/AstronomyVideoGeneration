@@ -7,7 +7,6 @@ using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering;
-using NarrationEngineWeeklyNarrationPackage = Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine.WeeklyNarrationPackage;
 using NarrationEngineWeeklyNarrationSegment = Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine.WeeklyNarrationSegment;
 using RenderingWeeklyRenderContract = Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering.WeeklyRenderContract;
 using Microsoft.Extensions.Logging;
@@ -31,7 +30,8 @@ public sealed record WeeklySkyForecastAudioGenerationRequest(
     bool OverwriteExisting = false,
     bool DryRun = false,
     string? VoiceName = "hi-IN-MadhurNeural",
-    string? AudioFormat = "mp3");
+    string? AudioFormat = "mp3",
+    string? Language = null);
 
 public sealed record WeeklySkyForecastAudioGenerationResponse(
     Guid PipelineRunId,
@@ -48,7 +48,14 @@ public sealed record WeeklySkyForecastAudioGenerationResponse(
     double LongformActualAudioDurationSeconds,
     double ShortformActualAudioDurationSeconds,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    string NormalizedLongformNarrationPath,
+    string NormalizedShortformNarrationPath,
+    bool NarrationParsingReady,
+    string LongformNarrationSourceUsed,
+    string ShortformNarrationSourceUsed,
+    int LongformNormalizedSegmentCount,
+    int ShortformNormalizedSegmentCount);
 
 public sealed record WeeklyAudioGenerationReport(
     bool AudioGenerationReady,
@@ -91,6 +98,27 @@ public sealed record WeeklyAudioTimingValidationReport(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
+
+public sealed record WeeklyNormalizedNarrationPackage(
+    Guid PipelineRunId,
+    string Language,
+    string EpisodeType,
+    IReadOnlyList<WeeklyNormalizedNarrationSegment> Segments,
+    IReadOnlyList<string> Warnings);
+
+public sealed record WeeklyNormalizedNarrationSegment(
+    string SegmentId,
+    string SegmentType,
+    string NarrationText,
+    int ExpectedDurationSeconds,
+    int StartSecond,
+    int EndSecond);
+
+public sealed record WeeklyNarrationFileReaderResult(
+    WeeklyNormalizedNarrationPackage Package,
+    string SourceUsed,
+    string NormalizedPath);
+
 public sealed class WeeklySkyForecastAudioGenerationService(
     IOptions<RenderingOptions> renderingOptions,
     IOptions<AzureSpeechOptions> azureSpeechOptions,
@@ -112,14 +140,14 @@ public sealed class WeeklySkyForecastAudioGenerationService(
         {
             var root = ResolveWorkingDirectoryRoot(pipelineRunId);
             var paths = WeeklyAudioRequiredPaths.FromRoot(root);
-            var loaded = await LoadInputsAsync(paths, cancellationToken);
+            CreateAudioDirectories(root);
+            var loaded = await LoadInputsAsync(paths, pipelineRunId, request, warnings, cancellationToken);
             ValidateInputs(pipelineRunId, request, loaded, errors);
             if (errors.Count > 0) throw new InvalidOperationException(string.Join(" ", errors));
 
-            CreateAudioDirectories(root);
             logger.LogInformation("WEEKLY_AUDIO_INPUTS_LOADED pipelineRunId={PipelineRunId} root={Root}", pipelineRunId, root);
 
-            var voiceName = ResolveVoiceName(request.VoiceName, loaded.RenderContract.Language, loaded.Longform.Language, loaded.Shortform.Language);
+            var voiceName = ResolveVoiceName(request.VoiceName, loaded.RenderContract.Language, loaded.Longform.Package.Language, loaded.Shortform.Package.Language);
             var audioFormat = string.IsNullOrWhiteSpace(request.AudioFormat) ? ResolveAudioFormat(_azureSpeechOptions.DefaultAudioFormat) : ResolveAudioFormat(request.AudioFormat);
             if (!string.Equals(audioFormat, "mp3", StringComparison.OrdinalIgnoreCase))
             {
@@ -128,10 +156,10 @@ public sealed class WeeklySkyForecastAudioGenerationService(
             }
 
             var longformEntries = request.GenerateLongform
-                ? await GenerateSegmentsAsync(pipelineRunId, "longform", loaded.Longform.Segments, loaded.AudioPlan.Segments, root, voiceName, audioFormat, request, warnings, cancellationToken)
+                ? await GenerateSegmentsAsync(pipelineRunId, "longform", loaded.Longform.Package.Segments.Select(ToNarrationSegment).ToList(), loaded.AudioPlan.Segments, root, voiceName, audioFormat, request, warnings, cancellationToken)
                 : [];
             var shortformEntries = request.GenerateShortform
-                ? await GenerateSegmentsAsync(pipelineRunId, "shortform", loaded.Shortform.Segments, loaded.AudioPlan.Segments, root, voiceName, audioFormat, request, warnings, cancellationToken)
+                ? await GenerateSegmentsAsync(pipelineRunId, "shortform", loaded.Shortform.Package.Segments.Select(ToNarrationSegment).ToList(), loaded.AudioPlan.Segments, root, voiceName, audioFormat, request, warnings, cancellationToken)
                 : [];
 
             var longformCombinedPath = Path.Combine(root, "audio", "longform", "weekly-skyforecast-longform.mp3");
@@ -187,7 +215,7 @@ public sealed class WeeklySkyForecastAudioGenerationService(
             await File.WriteAllTextAsync(paths.GenerationReportOutput, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
 
             logger.LogInformation("WEEKLY_AUDIO_GENERATION_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, ready);
-            return new WeeklySkyForecastAudioGenerationResponse(pipelineRunId, ready, longformGenerated, shortformGenerated, longformCombinedPath, shortformCombinedPath, report.LongformSegmentAudioCount, report.ShortformSegmentAudioCount, paths.GenerationReportOutput, paths.ManifestOutput, paths.TimingReportOutput, longformActual, shortformActual, warnings, errors);
+            return new WeeklySkyForecastAudioGenerationResponse(pipelineRunId, ready, longformGenerated, shortformGenerated, longformCombinedPath, shortformCombinedPath, report.LongformSegmentAudioCount, report.ShortformSegmentAudioCount, paths.GenerationReportOutput, paths.ManifestOutput, paths.TimingReportOutput, longformActual, shortformActual, warnings, errors, loaded.Longform.NormalizedPath, loaded.Shortform.NormalizedPath, errors.Count == 0, loaded.Longform.SourceUsed, loaded.Shortform.SourceUsed, loaded.Longform.Package.Segments.Count, loaded.Shortform.Package.Segments.Count);
         }
         catch (Exception ex)
         {
@@ -308,19 +336,47 @@ public sealed class WeeklySkyForecastAudioGenerationService(
         return matches.Count switch { 0 => throw new DirectoryNotFoundException($"No WeeklySkyForecast workingDirectoryRoot was found for pipelineRunId {pipelineRunId} under {workingRoot}."), 1 => matches[0], _ => matches.OrderByDescending(Directory.GetLastWriteTimeUtc).First() };
     }
 
-    private static async Task<WeeklyAudioLoadedInputs> LoadInputsAsync(WeeklyAudioRequiredPaths paths, CancellationToken cancellationToken)
+    private static async Task<WeeklyAudioLoadedInputs> LoadInputsAsync(WeeklyAudioRequiredPaths paths, Guid pipelineRunId, WeeklySkyForecastAudioGenerationRequest request, List<string> warnings, CancellationToken cancellationToken)
     {
         foreach (var path in paths.RequiredInputs)
         {
             if (!File.Exists(path)) throw new FileNotFoundException($"Required audio input file is missing: {path}", path);
         }
+
+        var renderContract = await ReadJsonAsync<RenderingWeeklyRenderContract>(paths.RenderContract, cancellationToken);
+        var audioPlan = await ReadJsonAsync<WeeklyAudioAlignmentPlan>(paths.AudioAlignmentPlan, cancellationToken);
+        var productionManifestLanguage = await TryReadLanguageAsync(paths.ProductionAssetManifest, cancellationToken);
+
+        var reader = new WeeklyNarrationFileReader(paths, pipelineRunId, request.Language, renderContract.Language, productionManifestLanguage);
+        var longform = await reader.ReadAsync("longform", "LongFormWeeklyForecast", cancellationToken);
+        var shortform = await reader.ReadAsync("shortform", "ShortFormWeeklyForecast", cancellationToken);
+        warnings.AddRange(longform.Package.Warnings);
+        warnings.AddRange(shortform.Package.Warnings);
+
         return new WeeklyAudioLoadedInputs(
-            await ReadJsonAsync<NarrationEngineWeeklyNarrationPackage>(paths.LongformNarration, cancellationToken),
-            await ReadJsonAsync<NarrationEngineWeeklyNarrationPackage>(paths.ShortformNarration, cancellationToken),
+            longform,
+            shortform,
             await ReadJsonAsync<object>(paths.NarrationTimelineMap, cancellationToken),
-            await ReadJsonAsync<WeeklyAudioAlignmentPlan>(paths.AudioAlignmentPlan, cancellationToken),
-            await ReadJsonAsync<RenderingWeeklyRenderContract>(paths.RenderContract, cancellationToken));
+            audioPlan,
+            renderContract);
     }
+
+    private static async Task<string?> TryReadLanguageAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path, cancellationToken));
+            return WeeklyNarrationFileReader.TryGetString(document.RootElement, "language");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static NarrationEngineWeeklyNarrationSegment ToNarrationSegment(WeeklyNormalizedNarrationSegment segment)
+        => new(segment.SegmentId, segment.SegmentType, segment.NarrationText, segment.ExpectedDurationSeconds, 1, 1, false);
 
     private static async Task<T> ReadJsonAsync<T>(string path, CancellationToken cancellationToken)
         => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions) ?? throw new InvalidOperationException($"Unable to deserialize required audio input file: {path}");
@@ -330,13 +386,13 @@ public sealed class WeeklySkyForecastAudioGenerationService(
         if (pipelineRunId == Guid.Empty) errors.Add("pipelineRunId is required.");
         if (!request.GenerateLongform && !request.GenerateShortform) errors.Add("At least one of generateLongform or generateShortform must be true.");
 
-        ValidateNarrationPackage("Longform", loaded.Longform, pipelineRunId, request.GenerateLongform, errors);
-        ValidateNarrationPackage("Shortform", loaded.Shortform, pipelineRunId, request.GenerateShortform, errors);
+        ValidateNarrationPackage("Longform", loaded.Longform.Package, pipelineRunId, request.GenerateLongform, errors);
+        ValidateNarrationPackage("Shortform", loaded.Shortform.Package, pipelineRunId, request.GenerateShortform, errors);
         ValidateAudioPlan(loaded.AudioPlan, pipelineRunId, errors);
         ValidateRenderContract(loaded.RenderContract, pipelineRunId, errors);
     }
 
-    private static void ValidateNarrationPackage(string label, NarrationEngineWeeklyNarrationPackage package, Guid pipelineRunId, bool requested, List<string> errors)
+    private static void ValidateNarrationPackage(string label, WeeklyNormalizedNarrationPackage package, Guid pipelineRunId, bool requested, List<string> errors)
     {
         if (package.PipelineRunId != pipelineRunId) errors.Add($"{label} narration pipelineRunId {package.PipelineRunId} does not match requested pipelineRunId {pipelineRunId}.");
         if (string.IsNullOrWhiteSpace(package.Language)) errors.Add($"{label} narration language is missing.");
@@ -448,9 +504,157 @@ public sealed class WeeklySkyForecastAudioGenerationService(
     private static double Round(double value) => Math.Round(value, 3, MidpointRounding.AwayFromZero);
     private static string SanitizeFileName(string value) => string.Join("_", value.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
 
-    private sealed record WeeklyAudioLoadedInputs(NarrationEngineWeeklyNarrationPackage Longform, NarrationEngineWeeklyNarrationPackage Shortform, object _NarrationTimelineMap, WeeklyAudioAlignmentPlan AudioPlan, RenderingWeeklyRenderContract RenderContract);
+    private sealed class WeeklyNarrationFileReader(WeeklyAudioRequiredPaths paths, Guid requestedPipelineRunId, string? requestLanguage, string? renderContractLanguage, string? productionManifestLanguage)
+    {
+        public async Task<WeeklyNarrationFileReaderResult> ReadAsync(string episodeKey, string normalizedEpisodeType, CancellationToken cancellationToken)
+        {
+            var primaryPath = string.Equals(episodeKey, "shortform", StringComparison.OrdinalIgnoreCase) ? paths.ShortformNarration : paths.LongformNarration;
+            var normalizedPath = string.Equals(episodeKey, "shortform", StringComparison.OrdinalIgnoreCase) ? paths.NormalizedShortformNarration : paths.NormalizedLongformNarration;
+            var attempts = new[]
+            {
+                (Path: primaryPath, Source: Path.GetFileName(primaryPath), Kind: "narration"),
+                (Path: paths.NarrationTimelineMap, Source: Path.GetFileName(paths.NarrationTimelineMap), Kind: "timelineMap"),
+                (Path: paths.FinalRenderTimeline, Source: Path.GetFileName(paths.FinalRenderTimeline), Kind: "finalTimeline")
+            };
 
-    private sealed record WeeklyAudioRequiredPaths(string Root, string LongformNarration, string ShortformNarration, string NarrationTimelineMap, string AudioAlignmentPlan, string RenderContract, string GenerationReportOutput, string ManifestOutput, string TimingReportOutput)
+            var failureReasons = new List<string>();
+            foreach (var attempt in attempts)
+            {
+                if (!File.Exists(attempt.Path))
+                {
+                    failureReasons.Add($"{attempt.Source} is missing.");
+                    continue;
+                }
+
+                using var document = JsonDocument.Parse(await File.ReadAllTextAsync(attempt.Path, cancellationToken));
+                var warnings = new List<string>();
+                var pipelineRunId = ResolvePipelineRunId(document.RootElement, attempt.Source, warnings);
+                var language = ResolveLanguage(document.RootElement, attempt.Source, warnings);
+                var segments = ExtractSegments(document.RootElement, episodeKey, attempt.Kind);
+                if (segments.Count == 0)
+                {
+                    failureReasons.Add($"{attempt.Source} did not contain usable {episodeKey} narration segments with narrationText.");
+                    continue;
+                }
+
+                var package = new WeeklyNormalizedNarrationPackage(pipelineRunId, language, normalizedEpisodeType, segments, warnings);
+                await File.WriteAllTextAsync(normalizedPath, JsonSerializer.Serialize(package, JsonOptions), cancellationToken);
+                return new WeeklyNarrationFileReaderResult(package, attempt.Source, normalizedPath);
+            }
+
+            throw new InvalidOperationException($"Unable to read {episodeKey} narration. Tried {string.Join(" -> ", attempts.Select(x => x.Source))}. {string.Join(" ", failureReasons)}");
+        }
+
+        private Guid ResolvePipelineRunId(JsonElement root, string source, List<string> warnings)
+        {
+            var raw = TryGetString(root, "pipelineRunId");
+            if (Guid.TryParse(raw, out var parsed) && parsed != Guid.Empty) return parsed;
+            warnings.Add($"{source} is missing pipelineRunId; using requested pipelineRunId {requestedPipelineRunId}.");
+            return requestedPipelineRunId;
+        }
+
+        private string ResolveLanguage(JsonElement root, string source, List<string> warnings)
+        {
+            var language = FirstNonEmpty(TryGetString(root, "language"), requestLanguage, renderContractLanguage, productionManifestLanguage, "hi")!;
+            if (string.IsNullOrWhiteSpace(TryGetString(root, "language"))) warnings.Add($"{source} is missing language; using inferred language '{language}'.");
+            return language;
+        }
+
+        private static List<WeeklyNormalizedNarrationSegment> ExtractSegments(JsonElement root, string episodeKey, string kind)
+        {
+            var segmentsRoot = LocateSegmentsRoot(root, episodeKey, kind);
+            if (segmentsRoot is null || segmentsRoot.Value.ValueKind != JsonValueKind.Array) return [];
+
+            var result = new List<WeeklyNormalizedNarrationSegment>();
+            foreach (var item in segmentsRoot.Value.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+                var itemEpisode = TryGetString(item, "episodeType");
+                if (!string.IsNullOrWhiteSpace(itemEpisode) && !EpisodeMatches(itemEpisode, episodeKey)) continue;
+
+                var segmentId = FirstNonEmpty(TryGetString(item, "segmentId"), TryGetString(item, "id"), TryGetString(item, "segmentCode"));
+                var narrationText = FirstNonEmpty(TryGetString(item, "narrationText"), TryGetString(item, "text"), TryGetString(item, "script"));
+                if (string.IsNullOrWhiteSpace(segmentId) || string.IsNullOrWhiteSpace(narrationText)) continue;
+
+                var segmentType = FirstNonEmpty(TryGetString(item, "segmentType"), TryGetString(item, "type"), "NarrationSegment")!;
+                var expectedDuration = FirstPositive(TryGetInt(item, "expectedDurationSeconds"), TryGetInt(item, "estimatedDurationSeconds"), TryGetInt(item, "durationSeconds"), Difference(TryGetInt(item, "startSecond"), TryGetInt(item, "endSecond")), Difference(TryGetInt(item, "narrationStart"), TryGetInt(item, "narrationEnd")));
+                var startSecond = FirstNonNegative(TryGetInt(item, "startSecond"), TryGetInt(item, "narrationStart"));
+                var endSecond = FirstNonNegative(TryGetInt(item, "endSecond"), TryGetInt(item, "narrationEnd"));
+                if (endSecond <= 0 && expectedDuration > 0) endSecond = startSecond + expectedDuration;
+
+                result.Add(new WeeklyNormalizedNarrationSegment(segmentId.Trim(), segmentType.Trim(), narrationText.Trim(), expectedDuration, startSecond, endSecond));
+            }
+            return result;
+        }
+
+        private static JsonElement? LocateSegmentsRoot(JsonElement root, string episodeKey, string kind)
+        {
+            if (root.ValueKind == JsonValueKind.Array) return root;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+
+            if (string.Equals(kind, "finalTimeline", StringComparison.OrdinalIgnoreCase) || HasProperty(root, episodeKey))
+            {
+                if (TryGetProperty(root, episodeKey, out var episode) && TryGetProperty(episode, "segments", out var episodeSegments)) return episodeSegments;
+            }
+
+            if (TryGetProperty(root, "segments", out var segments)) return segments;
+            if (TryGetProperty(root, "narrationSegments", out var narrationSegments)) return narrationSegments;
+            return null;
+        }
+
+        private static bool EpisodeMatches(string value, string episodeKey)
+        {
+            if (string.Equals(value, episodeKey, StringComparison.OrdinalIgnoreCase)) return true;
+            return episodeKey.Equals("longform", StringComparison.OrdinalIgnoreCase)
+                ? value.Contains("long", StringComparison.OrdinalIgnoreCase)
+                : value.Contains("short", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string? TryGetString(JsonElement element, string propertyName)
+        {
+            if (!TryGetProperty(element, propertyName, out var property)) return null;
+            return property.ValueKind switch
+            {
+                JsonValueKind.String => property.GetString(),
+                JsonValueKind.Number => property.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => null
+            };
+        }
+
+        private static int? TryGetInt(JsonElement element, string propertyName)
+        {
+            if (!TryGetProperty(element, propertyName, out var property)) return null;
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var value)) return value;
+            return property.ValueKind == JsonValueKind.String && int.TryParse(property.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value) ? value : null;
+        }
+
+        private static bool TryGetProperty(JsonElement element, string propertyName, out JsonElement property)
+        {
+            property = default;
+            if (element.ValueKind != JsonValueKind.Object) return false;
+            foreach (var candidate in element.EnumerateObject())
+            {
+                if (string.Equals(candidate.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    property = candidate.Value;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool HasProperty(JsonElement element, string propertyName) => TryGetProperty(element, propertyName, out _);
+        private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
+        private static int FirstPositive(params int?[] values) => values.FirstOrDefault(value => value.GetValueOrDefault() > 0) ?? 0;
+        private static int FirstNonNegative(params int?[] values) => values.FirstOrDefault(value => value.HasValue && value.Value >= 0) ?? 0;
+        private static int? Difference(int? start, int? end) => start.HasValue && end.HasValue && end.Value > start.Value ? end.Value - start.Value : null;
+    }
+
+    private sealed record WeeklyAudioLoadedInputs(WeeklyNarrationFileReaderResult Longform, WeeklyNarrationFileReaderResult Shortform, object _NarrationTimelineMap, WeeklyAudioAlignmentPlan AudioPlan, RenderingWeeklyRenderContract RenderContract);
+
+    private sealed record WeeklyAudioRequiredPaths(string Root, string LongformNarration, string ShortformNarration, string NarrationTimelineMap, string AudioAlignmentPlan, string RenderContract, string FinalRenderTimeline, string ProductionAssetManifest, string NormalizedLongformNarration, string NormalizedShortformNarration, string GenerationReportOutput, string ManifestOutput, string TimingReportOutput)
     {
         public IReadOnlyList<string> RequiredInputs => [LongformNarration, ShortformNarration, NarrationTimelineMap, AudioAlignmentPlan, RenderContract];
         public static WeeklyAudioRequiredPaths FromRoot(string root) => new(
@@ -460,6 +664,10 @@ public sealed class WeeklySkyForecastAudioGenerationService(
             Path.Combine(root, "episode", "narration-timeline-map.json"),
             Path.Combine(root, "render", "audio-alignment-plan.json"),
             Path.Combine(root, "render", "weekly-render-contract.json"),
+            Path.Combine(root, "episode", "final-render-timeline.json"),
+            Path.Combine(root, "episode", "weekly-production-asset-manifest.json"),
+            Path.Combine(root, "audio", "normalized-longform-narration.json"),
+            Path.Combine(root, "audio", "normalized-shortform-narration.json"),
             Path.Combine(root, "audio", "audio-generation-report.json"),
             Path.Combine(root, "audio", "audio-segment-manifest.json"),
             Path.Combine(root, "audio", "audio-timing-validation-report.json"));
