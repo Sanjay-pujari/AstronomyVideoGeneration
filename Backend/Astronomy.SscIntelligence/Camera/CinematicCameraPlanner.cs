@@ -50,6 +50,15 @@ public sealed class CinematicCameraPlanner : ICinematicCameraPlanner
             fov = spread + 16d;
             reason = $"grouping center from circular azimuth mean; fov from spread ({spread:0.##}°) + cinematic padding";
         }
+        else if (framingMode == "SplitObjectFocus")
+        {
+            var target = cameraObjects.OrderBy(x => x.Magnitude).First();
+            centerAltitude = target.AltitudeDeg;
+            centerAzimuth = target.AzimuthDeg;
+            fov = Math.Min(fovRecommendationDeg, 42d);
+            verticalBias = target.AltitudeDeg < 15d ? 2d : 0.5d;
+            reason = $"split-scene target {target.Name} center from resolved object Alt/Az; original grouping is too wide for one frame";
+        }
         else if (framingMode == "OrientationWide")
         {
             fov = Math.Max(fovRecommendationDeg, spread + 22d);
@@ -103,6 +112,7 @@ public sealed class CinematicCameraPlanner : ICinematicCameraPlanner
     {
         "HeroObject" => 1.6d,
         "PlanetGrouping" => 1.8d,
+        "SplitObjectFocus" => 1.45d,
         "OrientationWide" => 2.2d,
         _ => sceneIntent == SceneIntentType.WideNight ? 2.5d : 1.8d
     };
@@ -111,6 +121,7 @@ public sealed class CinematicCameraPlanner : ICinematicCameraPlanner
     {
         "HeroObject" => Math.Clamp(fov, 18d, 55d),
         "PlanetGrouping" => Math.Clamp(Math.Max(fov, 35d), 35d, 68d),
+        "SplitObjectFocus" => Math.Clamp(fov, 18d, 55d),
         "OrientationWide" => Math.Clamp(fov, 45d, 95d),
         _ => Math.Clamp(fov, 25d, 75d)
     };
@@ -120,7 +131,7 @@ public sealed class CinematicCameraPlanner : ICinematicCameraPlanner
         if (!string.IsNullOrWhiteSpace(sceneCode))
         {
             if (sceneCode.Contains("moon_hero_scene", StringComparison.OrdinalIgnoreCase)) return "HeroObject";
-            if (sceneCode.Contains("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase)) return "PlanetGrouping";
+            if (sceneCode.Contains("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase)) return objectCount < 2 ? "SplitObjectFocus" : "PlanetGrouping";
             if (sceneCode.Contains("best_night_wide_scene", StringComparison.OrdinalIgnoreCase)) return "OrientationWide";
         }
 
