@@ -329,12 +329,65 @@ public sealed class WeeklySkyForecastAudioGenerationService(
     {
         if (pipelineRunId == Guid.Empty) errors.Add("pipelineRunId is required.");
         if (!request.GenerateLongform && !request.GenerateShortform) errors.Add("At least one of generateLongform or generateShortform must be true.");
-        if (loaded.Longform.PipelineRunId != pipelineRunId) errors.Add($"Longform narration pipelineRunId {loaded.Longform.PipelineRunId} does not match requested pipelineRunId {pipelineRunId}.");
-        if (loaded.Shortform.PipelineRunId != pipelineRunId) errors.Add($"Shortform narration pipelineRunId {loaded.Shortform.PipelineRunId} does not match requested pipelineRunId {pipelineRunId}.");
-        if (loaded.AudioPlan.PipelineRunId != pipelineRunId) errors.Add($"Audio alignment plan pipelineRunId {loaded.AudioPlan.PipelineRunId} does not match requested pipelineRunId {pipelineRunId}.");
-        if (loaded.RenderContract.PipelineRunId != pipelineRunId) errors.Add($"Render contract pipelineRunId {loaded.RenderContract.PipelineRunId} does not match requested pipelineRunId {pipelineRunId}.");
-        if (request.GenerateLongform && loaded.Longform.Segments.Count == 0) errors.Add("Longform narration has no segments.");
-        if (request.GenerateShortform && loaded.Shortform.Segments.Count == 0) errors.Add("Shortform narration has no segments.");
+
+        ValidateNarrationPackage("Longform", loaded.Longform, pipelineRunId, request.GenerateLongform, errors);
+        ValidateNarrationPackage("Shortform", loaded.Shortform, pipelineRunId, request.GenerateShortform, errors);
+        ValidateAudioPlan(loaded.AudioPlan, pipelineRunId, errors);
+        ValidateRenderContract(loaded.RenderContract, pipelineRunId, errors);
+    }
+
+    private static void ValidateNarrationPackage(string label, NarrationEngineWeeklyNarrationPackage package, Guid pipelineRunId, bool requested, List<string> errors)
+    {
+        if (package.PipelineRunId != pipelineRunId) errors.Add($"{label} narration pipelineRunId {package.PipelineRunId} does not match requested pipelineRunId {pipelineRunId}.");
+        if (string.IsNullOrWhiteSpace(package.Language)) errors.Add($"{label} narration language is missing.");
+
+        if (package.Segments is null)
+        {
+            errors.Add($"{label} narration segments are missing.");
+            return;
+        }
+
+        if (requested && package.Segments.Count == 0) errors.Add($"{label} narration has no segments.");
+        foreach (var (segment, index) in package.Segments.Select((segment, index) => (segment, index)))
+        {
+            if (segment is null)
+            {
+                errors.Add($"{label} narration segment at index {index} is missing.");
+                continue;
+            }
+            if (string.IsNullOrWhiteSpace(segment.SegmentId)) errors.Add($"{label} narration segment at index {index} is missing segmentId.");
+            if (string.IsNullOrWhiteSpace(segment.SegmentType)) errors.Add($"{label} narration segment {segment.SegmentId} is missing segmentType.");
+            if (string.IsNullOrWhiteSpace(segment.NarrationText)) errors.Add($"{label} narration segment {segment.SegmentId} is missing narrationText.");
+        }
+    }
+
+    private static void ValidateAudioPlan(WeeklyAudioAlignmentPlan audioPlan, Guid pipelineRunId, List<string> errors)
+    {
+        if (audioPlan.PipelineRunId != pipelineRunId) errors.Add($"Audio alignment plan pipelineRunId {audioPlan.PipelineRunId} does not match requested pipelineRunId {pipelineRunId}.");
+        if (audioPlan.Segments is null)
+        {
+            errors.Add("Audio alignment plan segments are missing.");
+            return;
+        }
+
+        foreach (var (segment, index) in audioPlan.Segments.Select((segment, index) => (segment, index)))
+        {
+            if (segment is null)
+            {
+                errors.Add($"Audio alignment plan segment at index {index} is missing.");
+                continue;
+            }
+            if (string.IsNullOrWhiteSpace(segment.EpisodeType)) errors.Add($"Audio alignment plan segment at index {index} is missing episodeType.");
+            if (string.IsNullOrWhiteSpace(segment.SegmentId)) errors.Add($"Audio alignment plan segment at index {index} is missing segmentId.");
+        }
+    }
+
+    private static void ValidateRenderContract(RenderingWeeklyRenderContract renderContract, Guid pipelineRunId, List<string> errors)
+    {
+        if (renderContract.PipelineRunId != pipelineRunId) errors.Add($"Render contract pipelineRunId {renderContract.PipelineRunId} does not match requested pipelineRunId {pipelineRunId}.");
+        if (string.IsNullOrWhiteSpace(renderContract.Language)) errors.Add("Render contract language is missing.");
+        if (renderContract.Longform is null) errors.Add("Render contract longform contract is missing.");
+        if (renderContract.Shortform is null) errors.Add("Render contract shortform contract is missing.");
     }
 
     private static void CreateAudioDirectories(string root)
@@ -345,10 +398,10 @@ public sealed class WeeklySkyForecastAudioGenerationService(
         }
     }
 
-    private string ResolveVoiceName(string? requestedVoice, params string[] languages)
+    private string ResolveVoiceName(string? requestedVoice, params string?[] languages)
     {
         if (!string.IsNullOrWhiteSpace(requestedVoice)) return requestedVoice.Trim();
-        var isHindi = languages.Any(language => language.StartsWith("hi", StringComparison.OrdinalIgnoreCase));
+        var isHindi = languages.Any(language => language?.StartsWith("hi", StringComparison.OrdinalIgnoreCase) == true);
         if (isHindi) return FirstConfigured(_azureSpeechOptions.DefaultVoiceName, _azureSpeechOptions.Voices.GetValueOrDefault("hi"), "hi-IN-MadhurNeural");
         return FirstConfigured(_azureSpeechOptions.Voices.GetValueOrDefault("en"), _azureSpeechOptions.PrimaryVoice, "en-IN-PrabhatNeural");
     }
