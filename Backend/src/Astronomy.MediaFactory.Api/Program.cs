@@ -1021,6 +1021,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var weeklyDynamicFramingPlanPath = Path.Combine(framingDirectory, "weekly-dynamic-framing-plan.json");
         var weeklyFramingValidationReportPath = Path.Combine(framingDirectory, "weekly-framing-validation-report.json");
         var sscPropagationValidationReportPath = Path.Combine(stellariumDirectory, "ssc-propagation-validation-report.json");
+        var sscCameraLockValidationReportPath = Path.Combine(stellariumDirectory, "ssc-camera-lock-validation-report.json");
         await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly focus object plan", stageCt =>
             File.WriteAllTextAsync(weeklyFocusObjectPlanPath, JsonSerializer.Serialize(weeklyFocusPlan, new JsonSerializerOptions { WriteIndented = true }), stageCt));
         await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly Stellarium scene requirements", stageCt =>
@@ -2210,8 +2211,9 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     "ConstellationMgr.setFlagLines(true);",
                     "ConstellationMgr.setFlagLabels(true);",
                     "SolarSystem.setFlagLabels(true);",
-                    "core.moveToAltAzi",
-                    "StelMovementMgr.zoomTo"
+                    "StelMovementMgr.setFlagTracking(true);",
+                    "StelMovementMgr.zoomTo",
+                    "core.moveToSelectedObject("
                 };
                 foreach (var snippet in requiredSnippets)
                 {
@@ -2386,6 +2388,8 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         }).ToList();
         var sscPropagationValidationReport = BuildWeeklySscPropagationValidationReport(finalScenes, dynamicFramingScenesByCode, weeklyDynamicFramingPlanPath);
         await File.WriteAllTextAsync(sscPropagationValidationReportPath, JsonSerializer.Serialize(sscPropagationValidationReport, new JsonSerializerOptions { WriteIndented = true }), ct);
+        var sscCameraLockValidationReport = BuildWeeklySscCameraLockValidationReport(finalScenes, dynamicFramingScenesByCode);
+        await File.WriteAllTextAsync(sscCameraLockValidationReportPath, JsonSerializer.Serialize(sscCameraLockValidationReport, new JsonSerializerOptions { WriteIndented = true }), ct);
         await File.WriteAllTextAsync(sscSceneManifestPath, JsonSerializer.Serialize(new
         {
             pipelineRunId,
@@ -2409,8 +2413,15 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             sscPropagationValidationReportPath,
             emptyObjectSceneCount = sscPropagationValidationReport.emptyObjectSceneCount,
             emptyRequiredLabelSceneCount = sscPropagationValidationReport.emptyRequiredLabelSceneCount,
-            cameraTargetMismatchCount = sscPropagationValidationReport.cameraTargetMismatchCount
+            cameraTargetMismatchCount = sscPropagationValidationReport.cameraTargetMismatchCount,
+            sscCameraLockReady = sscCameraLockValidationReport.sscCameraLockReady,
+            sscCameraLockValidationReportPath,
+            objectFirstCameraLockSceneCount = sscCameraLockValidationReport.objectFirstCameraLockSceneCount,
+            altAzOnlySceneCount = sscCameraLockValidationReport.altAzOnlySceneCount,
+            fallbackUsedSceneCount = sscCameraLockValidationReport.fallbackUsedSceneCount
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        if (!sscCameraLockValidationReport.sscCameraLockReady)
+            throw new InvalidOperationException($"SSC camera lock validation failed: object-first camera lock was not propagated. Report: {sscCameraLockValidationReportPath}");
         if (!sscPropagationValidationReport.sscPropagationReady)
             throw new InvalidOperationException($"SSC propagation failed: dynamic framing metadata was not propagated. Report: {sscPropagationValidationReportPath}");
 
@@ -3298,7 +3309,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             sscPropagationValidationReportPath,
             sscPropagationValidationReport.emptyObjectSceneCount,
             sscPropagationValidationReport.emptyRequiredLabelSceneCount,
-            sscPropagationValidationReport.cameraTargetMismatchCount);
+            sscPropagationValidationReport.cameraTargetMismatchCount,
+            sscCameraLockValidationReport.sscCameraLockReady,
+            sscCameraLockValidationReportPath,
+            sscCameraLockValidationReport.objectFirstCameraLockSceneCount,
+            sscCameraLockValidationReport.altAzOnlySceneCount,
+            sscCameraLockValidationReport.fallbackUsedSceneCount);
 
         return Results.Ok(output);
     }
@@ -5744,6 +5760,8 @@ static string? NormalizeWeeklyObjectCode(string? value)
         "VENUS" => "VENUS",
         "SATURN" => "SATURN",
         "JUPITER" => "JUPITER",
+        "MARS" => "MARS",
+        "MERCURY" => "MERCURY",
         _ => normalized.Contains("MOON", StringComparison.OrdinalIgnoreCase) ? "MOON" : normalized
     };
 }
@@ -5754,6 +5772,8 @@ static string ToWeeklyObjectDisplayName(string code) => (NormalizeWeeklyObjectCo
     "VENUS" => "Venus",
     "SATURN" => "Saturn",
     "JUPITER" => "Jupiter",
+    "MARS" => "Mars",
+    "MERCURY" => "Mercury",
     var other => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(other.ToLowerInvariant().Replace('_', ' '))
 };
 
@@ -6687,6 +6707,73 @@ static async Task EnrichWeeklyRenderInputManifestWithSscPropagationAsync(string 
     await File.WriteAllTextAsync(renderInputManifestPath, manifestNode.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 }
 
+static WeeklySscCameraLockValidationReport BuildWeeklySscCameraLockValidationReport(IReadOnlyList<WeeklySscSceneFinalizer.FinalSscScene> finalScenes, IReadOnlyDictionary<string, WeeklyDynamicSceneContract> dynamicFramingScenesByCode)
+{
+    var warnings = new List<string>();
+    var errors = new List<string>();
+    var objectFirstCameraLockSceneCount = 0;
+    var altAzOnlySceneCount = 0;
+    var trackingEnabledSceneCount = 0;
+    var objectCenteredSceneCount = 0;
+    var fallbackUsedSceneCount = 0;
+
+    foreach (var finalScene in finalScenes)
+    {
+        var renderSceneCode = ResolveWeeklyRenderSceneCodeFromFinalSceneCode(finalScene.SceneCode);
+        if (!dynamicFramingScenesByCode.TryGetValue(renderSceneCode, out var dynamicScene))
+        {
+            errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: dynamic framing scene metadata was not found.");
+            continue;
+        }
+
+        var displayName = ToWeeklyObjectDisplayName(dynamicScene.PrimaryObject);
+        var expectedSelect = $"core.selectObjectByName(\"{displayName.Replace("\"", "\\\"")}\", true)";
+        var scriptContent = File.Exists(finalScene.ScriptPath) ? File.ReadAllText(finalScene.ScriptPath) : string.Empty;
+        var hasScript = !string.IsNullOrWhiteSpace(scriptContent);
+        var hasSelection = scriptContent.Contains(expectedSelect, StringComparison.Ordinal);
+        var hasTracking = scriptContent.Contains("StelMovementMgr.setFlagTracking(true)", StringComparison.Ordinal);
+        var hasZoom = scriptContent.Contains("StelMovementMgr.zoomTo(", StringComparison.Ordinal);
+        var hasObjectCentering = scriptContent.Contains("core.moveToSelectedObject(", StringComparison.Ordinal)
+            || scriptContent.Contains("StelMovementMgr.moveToObject(", StringComparison.Ordinal);
+        var hasScreenshotPath = scriptContent.Contains("core.screenshot(", StringComparison.Ordinal)
+            && scriptContent.Contains(Path.GetFileNameWithoutExtension(finalScene.ScreenshotPath), StringComparison.Ordinal);
+        var hasRequiredObjectComment = scriptContent.Contains($"ObjectFirstCameraLockTarget: {displayName}", StringComparison.Ordinal)
+            || scriptContent.Contains($"TargetObjectDisplayName: {displayName}", StringComparison.Ordinal);
+        var fallbackUsed = scriptContent.Contains("FallbackUsed: true", StringComparison.OrdinalIgnoreCase)
+            || scriptContent.Contains("fallbackUsed=true", StringComparison.OrdinalIgnoreCase);
+        var usesAltAzExecutable = scriptContent.Contains("core.moveToAltAzi(", StringComparison.Ordinal);
+
+        if (fallbackUsed) fallbackUsedSceneCount++;
+        if (hasTracking) trackingEnabledSceneCount++;
+        if (hasObjectCentering) objectCenteredSceneCount++;
+        if (hasSelection && hasTracking && hasZoom && hasObjectCentering && hasRequiredObjectComment && hasScreenshotPath && !fallbackUsed)
+        {
+            objectFirstCameraLockSceneCount++;
+        }
+        if (usesAltAzExecutable && !(hasSelection && hasObjectCentering)) altAzOnlySceneCount++;
+
+        if (!hasScript) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: script is missing or empty at {finalScene.ScriptPath}.");
+        if (!hasSelection) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: missing {expectedSelect}.");
+        if (!hasTracking) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: missing StelMovementMgr.setFlagTracking(true).");
+        if (!hasZoom) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: missing StelMovementMgr.zoomTo(fov).");
+        if (!hasObjectCentering) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: missing selected-object centering command.");
+        if (!hasRequiredObjectComment) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: missing required object name comment for {displayName}.");
+        if (!hasScreenshotPath) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: missing screenshot path/name.");
+        if (fallbackUsed) warnings.Add($"SSC camera lock fallback used for {finalScene.SceneCode}.");
+        if (usesAltAzExecutable) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: script still uses executable moveToAltAzi instead of object-first lock.");
+    }
+
+    return new WeeklySscCameraLockValidationReport(
+        sscCameraLockReady: errors.Count == 0 && finalScenes.Count > 0,
+        objectFirstCameraLockSceneCount: objectFirstCameraLockSceneCount,
+        altAzOnlySceneCount: altAzOnlySceneCount,
+        trackingEnabledSceneCount: trackingEnabledSceneCount,
+        objectCenteredSceneCount: objectCenteredSceneCount,
+        fallbackUsedSceneCount: fallbackUsedSceneCount,
+        warnings: warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+        errors: errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+}
+
 static WeeklySscPropagationValidationReport BuildWeeklySscPropagationValidationReport(IReadOnlyList<WeeklySscSceneFinalizer.FinalSscScene> finalScenes, IReadOnlyDictionary<string, WeeklyDynamicSceneContract> dynamicFramingScenesByCode, string weeklyDynamicFramingPlanPath)
 {
     var warnings = new List<string>();
@@ -6771,21 +6858,32 @@ static string BuildWeeklyDynamicFramingSsc(WeeklyDynamicSceneContract scene, Dat
     var safeDirectory = screenshotDirectory.Replace("\\", "/").Replace("\"", "\\\"");
     var safeName = (screenshotFileName ?? scene.SceneCode).Replace("\"", "\\\"");
     var labels = scene.LabelObjects.Select(ToWeeklyObjectDisplayName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-    var targetsArray = string.Join(", ", labels.Select(x => $"\"{x.Replace("\"", "\\\"")}\""));
+    var targetDisplayName = ToWeeklyObjectDisplayName(scene.PrimaryObject);
+    var escapedTarget = targetDisplayName.Replace("\"", "\\\"");
+    var cameraAltitude = scene.CameraAltitude.ToString("0.###", CultureInfo.InvariantCulture);
+    var cameraAzimuth = scene.CameraAzimuth.ToString("0.###", CultureInfo.InvariantCulture);
+    var fov = scene.Fov.ToString("0.###", CultureInfo.InvariantCulture);
     return string.Join("\n", new[]
     {
         "// WeeklySkyForecast dynamic framing SSC",
+        "// CameraLockMode: object-first-selected-target",
         $"// SceneCode: {scene.SceneCode}",
         $"// ParentSceneCode: {scene.ParentSceneCode ?? string.Empty}",
         $"// SelectedObservationUtc: {DateTime.SpecifyKind(observationUtc, DateTimeKind.Utc):O}",
         $"// SelectedObservationLocal: {observationLocal:O}",
         $"// TargetObjects: {string.Join(',', scene.TargetObjects)}",
+        $"// TargetObjectDisplayName: {targetDisplayName}",
+        $"// ObjectFirstCameraLockTarget: {targetDisplayName}",
         $"// ResolvedObjects: {string.Join(',', scene.ResolvedObjects)}",
         $"// PrimaryObject: {scene.PrimaryObject}",
+        $"// PrimaryObjectDisplayName: {targetDisplayName}",
         $"// CameraTargetObjects: {string.Join(',', scene.CameraTargetObjects)}",
         $"// VisualAnchorObjects: {string.Join(',', scene.VisualAnchorObjects)}",
         $"// RequiredLabels: {string.Join(',', scene.LabelObjects)}",
+        $"// RequiredLabelDisplayNames: {string.Join(',', labels)}",
+        $"// CameraAltAzMetadataOnly: altitudeDeg={cameraAltitude}; azimuthDeg={cameraAzimuth}",
         $"// FramingMode: {scene.FramingMode}",
+        "// FallbackUsed: false",
         "core.clear(\"natural\");",
         "core.setGuiVisible(false);",
         $"core.setDate(\"{DateTime.SpecifyKind(observationUtc, DateTimeKind.Utc):yyyy-MM-ddTHH:mm:ss}\", \"utc\");",
@@ -6797,19 +6895,18 @@ static string BuildWeeklyDynamicFramingSsc(WeeklyDynamicSceneContract scene, Dat
         "ConstellationMgr.setFlagLines(true);",
         "ConstellationMgr.setFlagLabels(true);",
         "SolarSystem.setFlagLabels(true);",
-        "StelMovementMgr.setFlagTracking(false);",
-        $"StelMovementMgr.zoomTo({scene.Fov.ToString("0.###", CultureInfo.InvariantCulture)}, 0);",
-        $"core.moveToAltAzi(\"{scene.CameraAltitude.ToString("0.###", CultureInfo.InvariantCulture)}d\", \"{scene.CameraAzimuth.ToString("0.###", CultureInfo.InvariantCulture)}d\", 1);",
+        "SolarSystem.setFlagMarkers(true);",
+        $"var target = \"{escapedTarget}\";",
+        $"var selected = core.selectObjectByName(\"{escapedTarget}\", true);",
+        "core.wait(1);",
+        "StelMovementMgr.setFlagTracking(true);",
+        "core.wait(1);",
+        $"StelMovementMgr.zoomTo({fov}, 1);",
+        "core.wait(2);",
+        "core.moveToSelectedObject(1);",
         "core.wait(3);",
-        $"var targets = [{targetsArray}];",
-        "for (var i = 0; i < targets.length; i++) {",
-        "  var objectName = targets[i];",
-        "  core.selectObjectByName(objectName, true);",
-        "  core.wait(0.2);",
-        "}",
-        "core.wait(2);",
         $"core.screenshot(\"{safeName}\", false, \"{safeDirectory}\", true, \"png\");",
-        "core.wait(2);",
+        "core.wait(1);",
         "core.quitStellarium();"
     });
 }
@@ -7039,6 +7136,7 @@ sealed record WeeklyDynamicFramingPlan(
 sealed record WeeklyDynamicFramingPlanDocument(bool DynamicFramingReady, DateTime GeneratedUtc, IReadOnlyList<WeeklyDynamicSceneContract> Scenes);
 sealed record WeeklySscPropagationSceneReport(string sceneCode, IReadOnlyList<string> objects, string primaryObject, IReadOnlyList<string> requiredLabels, IReadOnlyList<string> cameraTargetObjects, double cameraAzimuth, double cameraAltitude, double fov, bool propagationValid);
 sealed record WeeklySscPropagationValidationReport(bool sscPropagationReady, int sceneCount, int metadataPropagatedSceneCount, int emptyObjectSceneCount, int emptyRequiredLabelSceneCount, int cameraTargetMismatchCount, string dynamicFramingPlanPath, IReadOnlyList<WeeklySscPropagationSceneReport> scenes, IReadOnlyList<string> warnings, IReadOnlyList<string> errors);
+sealed record WeeklySscCameraLockValidationReport(bool sscCameraLockReady, int objectFirstCameraLockSceneCount, int altAzOnlySceneCount, int trackingEnabledSceneCount, int objectCenteredSceneCount, int fallbackUsedSceneCount, IReadOnlyList<string> warnings, IReadOnlyList<string> errors);
 
 sealed record WeeklyDynamicCameraPlan(string PrimaryObject, IReadOnlyList<string> CameraTargetObjects, IReadOnlyList<string> VisualAnchorObjects, double CameraAzimuth, double CameraAltitude, double Fov, bool IncludeHorizon);
 sealed record WeeklyDynamicLabelPlan(IReadOnlyList<string> LabelObjects, bool SuppressPeripheralLabels, IReadOnlyList<string> LabelPriority);
