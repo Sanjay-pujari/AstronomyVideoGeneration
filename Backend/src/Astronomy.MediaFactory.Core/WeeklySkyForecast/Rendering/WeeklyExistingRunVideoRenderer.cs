@@ -89,6 +89,20 @@ public sealed record WeeklyExistingRunRenderResponse(
     int ShortformClipCount,
     int ShortformClipsRendered,
     string TransitionMode,
+    bool VideoOnlyRenderReady,
+    bool LongformVideoOnlyQualityReady,
+    bool ShortformVideoOnlyQualityReady,
+    bool LongformRepetitionPolishPassed,
+    bool ShortformVerticalLayoutPassed,
+    bool ShortformSafeAreaPassed,
+    string LongformRenderMode,
+    string ShortformRenderMode,
+    int ShortformContainLayoutCount,
+    int ShortformSmartCropLayoutCount,
+    int ShortformCroppedTextRiskCount,
+    int LongformBackToBackRepeatCount,
+    int LongformSameAssetSameSegmentRepeatCount,
+    int LongformSameFamilyConsecutiveMax,
     int? FfmpegExitCode,
     string FfmpegStderrPath,
     string FailedCommandPath,
@@ -117,6 +131,20 @@ public sealed record WeeklyExistingRunVideoRenderReport(
     string FfmpegStderrPath,
     string? FailedStage,
     int? FailedShotNumber,
+    string LongformRenderMode,
+    string ShortformRenderMode,
+    bool VideoOnlyRenderReady,
+    bool LongformVideoOnlyQualityReady,
+    bool ShortformVideoOnlyQualityReady,
+    bool LongformRepetitionPolishPassed,
+    bool ShortformVerticalLayoutPassed,
+    bool ShortformSafeAreaPassed,
+    int ShortformContainLayoutCount,
+    int ShortformSmartCropLayoutCount,
+    int ShortformCroppedTextRiskCount,
+    int LongformBackToBackRepeatCount,
+    int LongformSameAssetSameSegmentRepeatCount,
+    int LongformSameFamilyConsecutiveMax,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
@@ -180,7 +208,10 @@ public sealed record WeeklyExistingRunEpisodeQualityMetrics(
     int FallbackTransitionCount,
     int FallbackMotionCount,
     bool PacingPassed,
-    bool VisualDistributionPassed);
+    bool VisualDistributionPassed,
+    int ContainLayoutCount,
+    int SmartCropLayoutCount,
+    int CroppedTextRiskCount);
 
 public sealed record WeeklyRenderQualityReport(
     Guid PipelineRunId,
@@ -197,6 +228,20 @@ public sealed record WeeklyRenderQualityReport(
     bool ShortformPacingPassed,
     bool LongformPacingPassed,
     bool VisualDistributionPassed,
+    bool LongformVideoOnlyQualityReady,
+    bool ShortformVideoOnlyQualityReady,
+    bool VideoOnlyRenderReady,
+    bool LongformRepetitionPolishPassed,
+    bool ShortformVerticalLayoutPassed,
+    bool ShortformSafeAreaPassed,
+    int ShortformContainLayoutCount,
+    int ShortformSmartCropLayoutCount,
+    int ShortformCroppedTextRiskCount,
+    int LongformBackToBackRepeatCount,
+    int LongformSameAssetSameSegmentRepeatCount,
+    int LongformSameFamilyConsecutiveMax,
+    string LongformRenderMode,
+    string ShortformRenderMode,
     IReadOnlyList<WeeklyExistingRunEpisodeQualityMetrics> EpisodeMetrics,
     IReadOnlyList<string> Warnings);
 
@@ -230,7 +275,10 @@ public sealed record ResolvedRenderShotPlanEntry(
     string TransitionIn,
     string TransitionOut,
     string MotionEffect,
-    string Purpose);
+    string Purpose,
+    string LayoutMode,
+    bool VerticalVariantUsed,
+    bool VerticalFallbackContainUsed);
 
 public sealed record RenderVisualSelectionReport(
     int HeroEventWesternGroupingFrameCount,
@@ -318,6 +366,13 @@ public sealed class WeeklyExistingRunVideoRenderer(
     IOptions<RenderingOptions> renderingOptions,
     ILogger<WeeklyExistingRunVideoRenderer> logger) : IWeeklyExistingRunVideoRenderer
 {
+    private const int ShortformCanvasWidth = 1080;
+    private const int ShortformCanvasHeight = 1920;
+    private const int ShortformSafeMarginX = 80;
+    private const int ShortformSafeMarginTop = 220;
+    private const int ShortformSafeMarginBottom = 260;
+    private const int ShortformSafeContentWidth = ShortformCanvasWidth - (ShortformSafeMarginX * 2);
+    private const int ShortformSafeContentHeight = ShortformCanvasHeight - ShortformSafeMarginTop - ShortformSafeMarginBottom;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, Converters = { new JsonStringEnumConverter() } };
     private readonly RenderingOptions _renderingOptions = renderingOptions.Value;
 
@@ -428,11 +483,12 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var ffmpegStderrPath = failedReport is null ? string.Empty : (commandPlans.FirstOrDefault(p => p.EpisodeType.Equals(failedReport.EpisodeType, StringComparison.OrdinalIgnoreCase))?.StderrPath ?? string.Empty);
             var failedStage = BuildFailedStage(failedReport);
             var failedShotNumber = ExtractFailedShotNumber(failedReport);
-            var videoReport = new WeeklyExistingRunVideoRenderReport(pipelineRunId, started, completed, request.DryRun, longformResult, shortformResult, renderMode, useStagedRendering, request.DebugStoryboard, longformPlan?.SegmentFiles.Count ?? 0, shortformPlan?.SegmentFiles.Count ?? 0, CountRenderedClips(longformPlan), CountRenderedClips(shortformPlan), transitionMode, ffmpegCommandLength, ffmpegStderrPath, failedStage, failedShotNumber, warnings, errors);
+            var pendingQualityReport = BuildQualityReport(pipelineRunId, commandPlans, warnings);
+            var videoReport = new WeeklyExistingRunVideoRenderReport(pipelineRunId, started, completed, request.DryRun, longformResult, shortformResult, renderMode, useStagedRendering, request.DebugStoryboard, longformPlan?.SegmentFiles.Count ?? 0, shortformPlan?.SegmentFiles.Count ?? 0, CountRenderedClips(longformPlan), CountRenderedClips(shortformPlan), transitionMode, ffmpegCommandLength, ffmpegStderrPath, failedStage, failedShotNumber, longformPlan?.RenderMode ?? "notRequested", shortformPlan?.RenderMode ?? "notRequested", pendingQualityReport.VideoOnlyRenderReady, pendingQualityReport.LongformVideoOnlyQualityReady, pendingQualityReport.ShortformVideoOnlyQualityReady, pendingQualityReport.LongformRepetitionPolishPassed, pendingQualityReport.ShortformVerticalLayoutPassed, pendingQualityReport.ShortformSafeAreaPassed, pendingQualityReport.ShortformContainLayoutCount, pendingQualityReport.ShortformSmartCropLayoutCount, pendingQualityReport.ShortformCroppedTextRiskCount, pendingQualityReport.LongformBackToBackRepeatCount, pendingQualityReport.LongformSameAssetSameSegmentRepeatCount, pendingQualityReport.LongformSameFamilyConsecutiveMax, warnings, errors);
             var ffmpegReport = new WeeklyExistingRunFfmpegExecutionReport(pipelineRunId, started, completed, request.DryRun, commandReports, warnings, errors);
             await File.WriteAllTextAsync(videoReportPath, JsonSerializer.Serialize(videoReport, JsonOptions), cancellationToken);
             await File.WriteAllTextAsync(ffmpegReportPath, JsonSerializer.Serialize(ffmpegReport, JsonOptions), cancellationToken);
-            var qualityReport = BuildQualityReport(pipelineRunId, commandPlans, warnings);
+            var qualityReport = pendingQualityReport;
             await File.WriteAllTextAsync(qualityReportPath, JsonSerializer.Serialize(qualityReport, JsonOptions), cancellationToken);
 
             if (!request.DryRun && failFastErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", failFastErrors));
@@ -505,6 +561,20 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 shortformPlan?.SegmentFiles.Count ?? 0,
                 CountRenderedClips(shortformPlan),
                 transitionMode,
+                qualityReport.VideoOnlyRenderReady,
+                qualityReport.LongformVideoOnlyQualityReady,
+                qualityReport.ShortformVideoOnlyQualityReady,
+                qualityReport.LongformRepetitionPolishPassed,
+                qualityReport.ShortformVerticalLayoutPassed,
+                qualityReport.ShortformSafeAreaPassed,
+                qualityReport.LongformRenderMode,
+                qualityReport.ShortformRenderMode,
+                qualityReport.ShortformContainLayoutCount,
+                qualityReport.ShortformSmartCropLayoutCount,
+                qualityReport.ShortformCroppedTextRiskCount,
+                qualityReport.LongformBackToBackRepeatCount,
+                qualityReport.LongformSameAssetSameSegmentRepeatCount,
+                qualityReport.LongformSameFamilyConsecutiveMax,
                 failedReport?.ExitCode,
                 ffmpegStderrPath,
                 failedReport is null ? string.Empty : commandPlanPath,
@@ -565,7 +635,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
         }
         var singleGraphArguments = BuildFfmpegArguments(refinedTimeline, audioPath, audioPath is not null, contract, outputPath, request.DebugStoryboard, debugFontPath).ToList();
         var singleGraphCommand = BuildCommandString(_renderingOptions.FfmpegPath, singleGraphArguments);
-        var useStagedRendering = request.UseStagedRendering ?? episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase);
+        var useStagedRendering = request.UseStagedRendering ?? true;
         if (!useStagedRendering && singleGraphCommand.Length > 25000)
         {
             useStagedRendering = true;
@@ -588,7 +658,10 @@ public sealed class WeeklyExistingRunVideoRenderer(
     {
         var shortform = episodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase);
         var usage = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var lastStartByAsset = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var segments = new List<FinalRenderSegment>();
+        var previousLongformFamily = string.Empty;
+        var currentLongformFamilyRun = 0;
         foreach (var segment in timeline.Segments ?? [])
         {
             var segmentShots = segment.Shots ?? [];
@@ -621,17 +694,33 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var remainder = segment.DurationSeconds % shotCount;
             var cursor = segment.StartSecond;
             var shots = new List<FinalRenderShot>();
+            var segmentUsedAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < shotCount; i++)
             {
                 var duration = baseDuration + (i < remainder ? 1 : 0);
-                var asset = PickAsset(orderedPool, usage, shortform ? 1 : 2, i);
-                usage[asset.AssetPath] = usage.TryGetValue(asset.AssetPath, out var count) ? count + 1 : 1;
                 var start = cursor;
+                var rawAsset = shortform
+                    ? PickAsset(orderedPool, usage, 1, i)
+                    : PickLongformPolishedAsset(orderedPool, usage, segmentUsedAssets, lastStartByAsset, previousLongformFamily, currentLongformFamilyRun, start, i);
+                var asset = shortform ? ResolveShortformVerticalVariant(rawAsset) : rawAsset;
+                usage[asset.AssetPath] = usage.TryGetValue(asset.AssetPath, out var count) ? count + 1 : 1;
+                segmentUsedAssets.Add(asset.AssetPath);
+                lastStartByAsset[asset.AssetPath] = start;
                 var end = i == shotCount - 1 ? segment.EndSecond : cursor + duration;
                 var transitionIn = i == 0 ? (segment.StartSecond == 0 ? "FadeIn" : "CrossFade") : ResolveRenderTransition(shots[^1].AssetType, asset.AssetType, segment.SegmentType, shortform);
                 var next = orderedPool[(i + 1) % orderedPool.Count];
                 var transitionOut = i == shotCount - 1 ? "FadeOut" : ResolveRenderTransition(asset.AssetType, next.AssetType, segment.SegmentType, shortform);
                 shots.Add(new FinalRenderShot(i + 1, asset.AssetId, asset.AssetType, asset.AssetPath, start, end, Math.Max(1, end - start), transitionIn, transitionOut, ResolveRenderMotion(asset.AssetType, segment.SegmentType), i == 0 ? $"render-refined primary visual for {segment.SegmentType}" : $"render-refined supporting visual variety for {segment.SegmentType}"));
+                if (!shortform)
+                {
+                    var family = ResolveLayoutFamily(shots[^1]);
+                    if (family.Equals(previousLongformFamily, StringComparison.OrdinalIgnoreCase)) currentLongformFamilyRun++;
+                    else
+                    {
+                        previousLongformFamily = family;
+                        currentLongformFamilyRun = 1;
+                    }
+                }
                 cursor = end;
             }
             segments.Add(segment with { Shots = shots, StartSecond = segment.StartSecond, EndSecond = segment.EndSecond, DurationSeconds = segment.DurationSeconds });
@@ -729,6 +818,61 @@ public sealed class WeeklyExistingRunVideoRenderer(
         if (asset is not null && !target.Any(x => x.AssetPath.Equals(asset.AssetPath, StringComparison.OrdinalIgnoreCase))) target.Add(asset);
     }
 
+
+    private static RenderAssetCandidate ResolveShortformVerticalVariant(RenderAssetCandidate asset)
+    {
+        if (!IsMotionGraphicPath(asset.AssetPath + " " + asset.AssetId)) return asset;
+        var directory = Path.GetDirectoryName(asset.AssetPath);
+        if (string.IsNullOrWhiteSpace(directory)) return asset;
+        var fileName = Path.GetFileNameWithoutExtension(asset.AssetPath);
+        var extension = Path.GetExtension(asset.AssetPath);
+        if (fileName.EndsWith("-vertical", StringComparison.OrdinalIgnoreCase)) return asset;
+        var verticalPath = Path.Combine(directory, $"{fileName}-vertical{extension}");
+        return File.Exists(verticalPath) ? asset with { AssetPath = verticalPath, AssetId = asset.AssetId.EndsWith("-vertical", StringComparison.OrdinalIgnoreCase) ? asset.AssetId : $"{asset.AssetId}-vertical" } : asset;
+    }
+
+    private static string ResolveShortformLayoutMode(FinalRenderShot shot)
+    {
+        var haystack = shot.AssetPath + " " + shot.AssetId + " " + shot.AssetType;
+        if (IsTextSafeContainAsset(shot)) return "ContainWithBackground";
+        if (shot.AssetType.Equals("NASA", StringComparison.OrdinalIgnoreCase) || shot.AssetType.Equals("JWST", StringComparison.OrdinalIgnoreCase) || ContainsAny(haystack, "/nasa/", "/jwst/")) return "ContainWithBackground";
+        if (ContainsAny(haystack, "western_planet_grouping_scene", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide")) return "ContainBlurBackground";
+        if (shot.AssetType.Equals("Stellarium", StringComparison.OrdinalIgnoreCase) || shot.AssetType.Equals("ExpandedStellarium", StringComparison.OrdinalIgnoreCase) || shot.AssetPath.Contains("stellarium", StringComparison.OrdinalIgnoreCase)) return "SmartCropVertical";
+        return "VerticalCinematicCrop";
+    }
+
+    private static bool IsTextSafeContainAsset(FinalRenderShot shot)
+    {
+        var haystack = shot.AssetPath + " " + shot.AssetId + " " + shot.AssetType;
+        return shot.AssetType.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase)
+            || shot.AssetType.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase)
+            || ContainsAny(haystack, "motion-graphics", "educational-overlays", "hero-event-card", "best-time-card", "where-to-look-card", "call-to-action-card", "best-observation-window-card", "weekly-summary-card", "visibility-calendar");
+    }
+
+    private static bool UsesVerticalVariant(FinalRenderShot shot)
+        => IsMotionGraphicPath(shot.AssetPath + " " + shot.AssetId) && ContainsAny(Path.GetFileNameWithoutExtension(shot.AssetPath), "-vertical");
+
+    private static bool UsesVerticalFallbackContain(FinalRenderShot shot)
+        => IsTextSafeContainAsset(shot) && !UsesVerticalVariant(shot) && ResolveShortformLayoutMode(shot).Equals("ContainWithBackground", StringComparison.OrdinalIgnoreCase);
+
+    private static string ResolveLayoutFamily(FinalRenderShot shot)
+    {
+        var haystack = shot.AssetPath + " " + shot.AssetId + " " + shot.AssetType;
+        if (IsWesternGroupingPath(haystack)) return "western_planet_grouping_scene";
+        if (IsMoonHeroPath(haystack)) return "moon_hero_scene";
+        if (shot.AssetType.Equals("AICinematic", StringComparison.OrdinalIgnoreCase) || haystack.Contains("ai-cinematic", StringComparison.OrdinalIgnoreCase)) return "AICinematic";
+        if (shot.AssetType.Equals("NASA", StringComparison.OrdinalIgnoreCase) || haystack.Contains("/nasa/", StringComparison.OrdinalIgnoreCase)) return "NASA";
+        if (shot.AssetType.Equals("JWST", StringComparison.OrdinalIgnoreCase) || haystack.Contains("/jwst/", StringComparison.OrdinalIgnoreCase)) return "JWST";
+        if (IsMotionGraphicPath(haystack)) return "MotionGraphic";
+        if (shot.AssetType.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase) || haystack.Contains("educational-overlays", StringComparison.OrdinalIgnoreCase)) return "EducationalOverlay";
+        if (shot.AssetType.Equals("ExpandedStellarium", StringComparison.OrdinalIgnoreCase) || IsExpandedAstrophotographyPath(haystack)) return "ExpandedStellarium";
+        if (shot.AssetType.Equals("Stellarium", StringComparison.OrdinalIgnoreCase) || haystack.Contains("stellarium", StringComparison.OrdinalIgnoreCase)) return "Stellarium";
+        return shot.AssetType;
+    }
+
+    private static bool IsMotionGraphicPath(string value)
+        => ContainsAny(value, "motion-graphics", "hero-event-card", "best-time-card", "where-to-look-card", "call-to-action-card", "best-observation-window-card", "weekly-summary-card", "visibility-calendar");
+
     private static bool IsWesternGroupingAsset(RenderAssetCandidate asset) => IsWesternGroupingPath(asset.AssetPath) || IsWesternGroupingPath(asset.AssetId);
     private static bool IsExpandedAstrophotographyAsset(RenderAssetCandidate asset) => IsExpandedAstrophotographyPath(asset.AssetPath) || IsExpandedAstrophotographyPath(asset.AssetId) || asset.AssetType.Equals("ExpandedStellarium", StringComparison.OrdinalIgnoreCase);
     private static bool IsFastCinematicSkyHookAsset(RenderAssetCandidate asset) => ContainsAny(asset.AssetPath + " " + asset.AssetId, "fast_cinematic_sky_hook");
@@ -736,6 +880,38 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private static bool IsWesternGroupingPath(string value) => ContainsAny(value, "western_planet_grouping_scene", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide");
     private static bool IsMoonHeroPath(string value) => value.Contains("moon_hero_scene", StringComparison.OrdinalIgnoreCase);
     private static bool IsExpandedAstrophotographyPath(string value) => ContainsAny(value, "astrophotography_target_scene", "ExpandedStellarium");
+
+
+    private static RenderAssetCandidate PickLongformPolishedAsset(
+        IReadOnlyList<RenderAssetCandidate> pool,
+        Dictionary<string, int> usage,
+        HashSet<string> segmentUsedAssets,
+        Dictionary<string, int> lastStartByAsset,
+        string previousFamily,
+        int currentFamilyRun,
+        int startSecond,
+        int index)
+    {
+        var ordered = Enumerable.Range(0, pool.Count).Select(offset => pool[(index + offset) % pool.Count]).ToList();
+        var strict = ordered.FirstOrDefault(candidate =>
+            !segmentUsedAssets.Contains(candidate.AssetPath) &&
+            (!usage.TryGetValue(candidate.AssetPath, out var count) || count < 2) &&
+            (!lastStartByAsset.TryGetValue(candidate.AssetPath, out var lastStart) || startSecond - lastStart >= 60) &&
+            (currentFamilyRun < 3 || !ResolveLayoutFamily(candidate).Equals(previousFamily, StringComparison.OrdinalIgnoreCase)));
+        if (strict is not null) return strict;
+
+        var noSegmentRepeat = ordered.FirstOrDefault(candidate => !segmentUsedAssets.Contains(candidate.AssetPath));
+        if (noSegmentRepeat is not null) return noSegmentRepeat;
+
+        var noFamilyOverflow = ordered.FirstOrDefault(candidate => currentFamilyRun < 3 || !ResolveLayoutFamily(candidate).Equals(previousFamily, StringComparison.OrdinalIgnoreCase));
+        return noFamilyOverflow ?? ordered[0];
+    }
+
+    private static string ResolveLayoutFamily(RenderAssetCandidate asset)
+    {
+        var synthetic = new FinalRenderShot(0, asset.AssetId, asset.AssetType, asset.AssetPath, 0, 1, 1, "", "", "", "");
+        return ResolveLayoutFamily(synthetic);
+    }
 
     private static RenderAssetCandidate PickAsset(IReadOnlyList<RenderAssetCandidate> pool, Dictionary<string, int> usage, int preferredLimit, int index)
     {
@@ -979,7 +1155,10 @@ public sealed class WeeklyExistingRunVideoRenderer(
                             shot.TransitionIn,
                             shot.TransitionOut,
                             shot.MotionEffect,
-                            shot.Purpose)).ToList())).ToList());
+                            shot.Purpose,
+                            plan.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase) ? ResolveShortformLayoutMode(shot) : "LandscapeFill",
+                            plan.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase) && UsesVerticalVariant(shot),
+                            plan.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase) && UsesVerticalFallbackContain(shot))).ToList())).ToList());
             }).ToList());
 
     private static RenderVisualSelectionReport BuildVisualSelectionReport(IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans, IReadOnlyList<string> renderWarnings, IReadOnlyList<string> renderErrors)
@@ -1299,6 +1478,61 @@ public sealed class WeeklyExistingRunVideoRenderer(
         }
     }
 
+
+    private sealed record LongformRepetitionPolishMetrics(bool Passed, int BackToBackRepeatCount, int SameAssetSameSegmentRepeatCount, int SameFamilyConsecutiveMax);
+    private sealed record ShortformLayoutMetrics(bool VerticalLayoutPassed, bool SafeAreaPassed, int ContainLayoutCount, int SmartCropLayoutCount, int CroppedTextRiskCount);
+
+    private static LongformRepetitionPolishMetrics CalculateLongformRepetitionPolish(IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans)
+    {
+        var rows = LoadResolvedShotRows(plans).Where(x => x.EpisodeType.Equals("longform", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (rows.Count == 0) return new LongformRepetitionPolishMetrics(true, 0, 0, 0);
+
+        var backToBack = 0;
+        var currentFamily = string.Empty;
+        var currentFamilyCount = 0;
+        var maxFamily = 0;
+        string? previousAsset = null;
+        foreach (var row in rows)
+        {
+            if (previousAsset is not null && row.Shot.AssetPath.Equals(previousAsset, StringComparison.OrdinalIgnoreCase)) backToBack++;
+            previousAsset = row.Shot.AssetPath;
+
+            var family = ResolveLayoutFamily(row.Shot);
+            if (family.Equals(currentFamily, StringComparison.OrdinalIgnoreCase)) currentFamilyCount++;
+            else
+            {
+                currentFamily = family;
+                currentFamilyCount = 1;
+            }
+            maxFamily = Math.Max(maxFamily, currentFamilyCount);
+        }
+
+        var sameSegment = rows
+            .GroupBy(x => new { x.Segment.SegmentId, x.Segment.SegmentType })
+            .Sum(group => group.GroupBy(x => x.Shot.AssetPath, StringComparer.OrdinalIgnoreCase).Sum(assetGroup => Math.Max(0, assetGroup.Count() - 1)));
+
+        var spreadViolations = rows
+            .GroupBy(x => x.Shot.AssetPath, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() >= 3)
+            .Sum(group => group.OrderBy(x => x.Shot.StartSecond).Zip(group.OrderBy(x => x.Shot.StartSecond).Skip(1), (a, b) => b.Shot.StartSecond - a.Shot.StartSecond < 60 ? 1 : 0).Sum());
+
+        var passed = backToBack == 0 && sameSegment == 0 && maxFamily <= 3 && spreadViolations == 0;
+        return new LongformRepetitionPolishMetrics(passed, backToBack, sameSegment, maxFamily);
+    }
+
+    private static ShortformLayoutMetrics CalculateShortformLayoutMetrics(IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans)
+    {
+        var rows = LoadResolvedShotRows(plans).Where(x => x.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (rows.Count == 0) return new ShortformLayoutMetrics(true, true, 0, 0, 0);
+
+        var contain = rows.Count(x => ResolveShortformLayoutMode(x.Shot) is "ContainWithBackground" or "ContainBlurBackground");
+        var smartCrop = rows.Count(x => ResolveShortformLayoutMode(x.Shot) is "SmartCropVertical" or "VerticalCinematicCrop");
+        var textRisk = rows.Count(x => IsTextSafeContainAsset(x.Shot) && ResolveShortformLayoutMode(x.Shot) != "ContainWithBackground");
+        var unsafeCardFallback = rows.Count(x => IsTextSafeContainAsset(x.Shot) && !UsesVerticalVariant(x.Shot) && !UsesVerticalFallbackContain(x.Shot));
+        textRisk += unsafeCardFallback;
+        return new ShortformLayoutMetrics(true, textRisk == 0, contain, smartCrop, textRisk);
+    }
+
     private static string ResolveAiCinematicKey(FinalRenderShot shot)
     {
         var haystack = shot.AssetPath + " " + shot.AssetId;
@@ -1311,9 +1545,16 @@ public sealed class WeeklyExistingRunVideoRenderer(
 
     private static WeeklyRenderQualityReport BuildQualityReport(Guid pipelineRunId, IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans, IReadOnlyList<string> warnings)
     {
-        var longform = plans.FirstOrDefault(p => p.EpisodeType.Equals("longform", StringComparison.OrdinalIgnoreCase))?.QualityMetrics;
-        var shortform = plans.FirstOrDefault(p => p.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase))?.QualityMetrics;
+        var longformPlan = plans.FirstOrDefault(p => p.EpisodeType.Equals("longform", StringComparison.OrdinalIgnoreCase));
+        var shortformPlan = plans.FirstOrDefault(p => p.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase));
+        var longform = longformPlan?.QualityMetrics;
+        var shortform = shortformPlan?.QualityMetrics;
         var metrics = plans.Select(p => p.QualityMetrics).ToList();
+        var longformPolish = CalculateLongformRepetitionPolish(plans);
+        var shortformLayout = CalculateShortformLayoutMetrics(plans);
+        var longformReady = longform is null || (longform.PacingPassed && longform.VisualDistributionPassed && longformPolish.Passed);
+        var shortformReady = shortform is null || (shortform.PacingPassed && shortform.VisualDistributionPassed && shortformLayout.VerticalLayoutPassed && shortformLayout.SafeAreaPassed);
+        var videoOnlyReady = plans.Count > 0 && plans.All(p => p.UseStagedRendering) && longformReady && shortformReady;
         return new WeeklyRenderQualityReport(
             pipelineRunId,
             DateTime.UtcNow,
@@ -1329,6 +1570,20 @@ public sealed class WeeklyExistingRunVideoRenderer(
             shortform?.PacingPassed ?? true,
             longform?.PacingPassed ?? true,
             metrics.All(m => m.VisualDistributionPassed) && metrics.Sum(m => m.PlanetGroupingFramesUsed) >= 3 && !metrics.Any(m => m.MoonOnlyStellariumDetected),
+            longformReady,
+            shortformReady,
+            videoOnlyReady,
+            longformPolish.Passed,
+            shortformLayout.VerticalLayoutPassed,
+            shortformLayout.SafeAreaPassed,
+            shortformLayout.ContainLayoutCount,
+            shortformLayout.SmartCropLayoutCount,
+            shortformLayout.CroppedTextRiskCount,
+            longformPolish.BackToBackRepeatCount,
+            longformPolish.SameAssetSameSegmentRepeatCount,
+            longformPolish.SameFamilyConsecutiveMax,
+            longformPlan?.RenderMode ?? "notRequested",
+            shortformPlan?.RenderMode ?? "notRequested",
             metrics,
             warnings);
     }
@@ -1350,7 +1605,10 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var pacing = shots.All(x => x.Shot.DurationSeconds <= GetMaxShotDurationSeconds(x.Segment.SegmentType, shortform));
         var groupingThreshold = shortform ? 1 : Math.Min(3, shots.Count);
         var distribution = !moonOnly && (!timeline.Segments.Any(s => s.SegmentType is "HeroEvent" or "StrongestEvent" or "PlanetHighlights") || grouping >= groupingThreshold);
-        return new WeeklyExistingRunEpisodeQualityMetrics(episodeType, maxShot, repeated, moonOnly, grouping, motionApplied, transitions, fallbackTransitions, fallbackMotion, pacing, distribution);
+        var containLayout = shortform ? shots.Count(x => ResolveShortformLayoutMode(x.Shot) is "ContainWithBackground" or "ContainBlurBackground") : 0;
+        var smartCropLayout = shortform ? shots.Count(x => ResolveShortformLayoutMode(x.Shot) is "SmartCropVertical" or "VerticalCinematicCrop") : 0;
+        var croppedTextRisk = shortform ? shots.Count(x => IsTextSafeContainAsset(x.Shot) && ResolveShortformLayoutMode(x.Shot) != "ContainWithBackground") : 0;
+        return new WeeklyExistingRunEpisodeQualityMetrics(episodeType, maxShot, repeated, moonOnly, grouping, motionApplied, transitions, fallbackTransitions, fallbackMotion, pacing, distribution, containLayout, smartCropLayout, croppedTextRisk);
     }
 
     private static bool ContainsAny(string value, params string[] needles) => needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
@@ -1627,12 +1885,36 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private static string BuildStagedClipFilter(FinalRenderShot shot, int width, int height, int fps, bool debugStoryboard, string? debugFontPath)
     {
         var frames = Math.Max(1, shot.DurationSeconds * fps);
+        var fade = BuildShotFadeFilters(shot, fps);
+        var overlay = debugStoryboard && !string.IsNullOrWhiteSpace(debugFontPath) ? BuildDebugStoryboardOverlay(shot, shot.ShotNumber - 1, debugFontPath, width, height) : string.Empty;
+        if (width == ShortformCanvasWidth && height == ShortformCanvasHeight)
+        {
+            return $"{BuildShortformVerticalFilter(shot, frames, fps)}trim=duration={Math.Max(1, shot.DurationSeconds)},setpts=PTS-STARTPTS{fade}{overlay},format=yuv420p";
+        }
+
         var zoom = BuildZoomExpression(shot.MotionEffect);
         var pan = BuildPanExpression(shot.MotionEffect);
-        var fade = BuildShotFadeFilters(shot, fps);
-        var overlay = debugStoryboard && !string.IsNullOrWhiteSpace(debugFontPath) ? BuildDebugStoryboardOverlay(shot, shot.ShotNumber - 1, debugFontPath) : string.Empty;
         return $"scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,crop={width * 2}:{height * 2},zoompan=z='{zoom}':x='{pan.X}':y='{pan.Y}':d={frames}:s={width}x{height}:fps={fps},trim=duration={Math.Max(1, shot.DurationSeconds)},setpts=PTS-STARTPTS{fade}{overlay},format=yuv420p";
     }
+
+    private static string BuildShortformVerticalFilter(FinalRenderShot shot, int frames, int fps)
+    {
+        return ResolveShortformLayoutMode(shot) switch
+        {
+            "ContainWithBackground" or "ContainBlurBackground" => BuildShortformContainFilter(fps),
+            _ => BuildShortformCropFilter(shot, frames, fps)
+        };
+    }
+
+    private static string BuildShortformCropFilter(FinalRenderShot shot, int frames, int fps)
+    {
+        var zoom = BuildZoomExpression(shot.MotionEffect);
+        var pan = BuildPanExpression(shot.MotionEffect);
+        return $"scale={ShortformCanvasWidth * 2}:{ShortformCanvasHeight * 2}:force_original_aspect_ratio=increase,crop={ShortformCanvasWidth * 2}:{ShortformCanvasHeight * 2},zoompan=z='{zoom}':x='{pan.X}':y='{pan.Y}':d={frames}:s={ShortformCanvasWidth}x{ShortformCanvasHeight}:fps={fps},";
+    }
+
+    private static string BuildShortformContainFilter(int fps)
+        => $"split=2[bgsrc][fgsrc];[bgsrc]scale={ShortformCanvasWidth}:{ShortformCanvasHeight}:force_original_aspect_ratio=increase,crop={ShortformCanvasWidth}:{ShortformCanvasHeight},boxblur=24:2,eq=brightness=-0.10:saturation=0.75[bg];[fgsrc]scale={ShortformSafeContentWidth}:{ShortformSafeContentHeight}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=({ShortformCanvasWidth}-w)/2:{ShortformSafeMarginTop}+({ShortformSafeContentHeight}-h)/2,fps={fps},";
 
     private static int ResolveWidth(FinalRenderEpisodeTimeline timeline, WeeklyExistingRunFfmpegCommandPlan plan)
         => plan.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase) ? 1080 : 1920;
@@ -1682,12 +1964,17 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private static FinalRenderEpisodeTimeline? LoadTimelineFromPlan(WeeklyExistingRunFfmpegCommandPlan plan)
         => File.Exists(plan.ConcatFilePath) ? JsonSerializer.Deserialize<FinalRenderEpisodeTimeline>(File.ReadAllText(plan.ConcatFilePath), JsonOptions) : null;
 
-    private static string BuildDebugStoryboardOverlay(FinalRenderShot shot, int index, string fontPath)
+    private static string BuildDebugStoryboardOverlay(FinalRenderShot shot, int index, string fontPath, int width = 1920, int height = 1080)
     {
+        var maxCharacters = width == ShortformCanvasWidth && height == ShortformCanvasHeight ? 84 : 140;
+        var fontSize = width == ShortformCanvasWidth && height == ShortformCanvasHeight ? 22 : 28;
+        var stripHeight = width == ShortformCanvasWidth && height == ShortformCanvasHeight ? Math.Min(ShortformSafeMarginTop - 48, 144) : 96;
+        var y = width == ShortformCanvasWidth && height == ShortformCanvasHeight ? 32 : 28;
         var text = $"{shot.Purpose.Replace("render-refined primary visual for ", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("render-refined supporting visual variety for ", string.Empty, StringComparison.OrdinalIgnoreCase)} | Shot {shot.ShotNumber} | {shot.AssetType} | {ResolveSceneFamily(shot.AssetPath, shot.AssetId)}/{ResolveAssetCode(shot.AssetPath, shot.AssetId)}";
+        text = Truncate(text.ReplaceLineEndings(" "), maxCharacters);
         text = text.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("'", "\\'", StringComparison.Ordinal).Replace(":", "\\:", StringComparison.Ordinal);
         var escapedFontPath = fontPath.Replace("\\", "/", StringComparison.Ordinal).Replace(":", "\\:", StringComparison.Ordinal).Replace("'", "\\'", StringComparison.Ordinal);
-        return $",drawbox=x=0:y=0:w=iw:h=96:color=black@0.65:t=fill,drawtext=fontfile='{escapedFontPath}':text='{text}':x=28:y=28:fontcolor=white:fontsize=28:box=0";
+        return $",drawbox=x=0:y=0:w=iw:h={stripHeight}:color=black@0.78:t=fill,drawtext=fontfile='{escapedFontPath}':text='{text}':x=28:y={y}:fontcolor=white:fontsize={fontSize}:box=0";
     }
 
     private static string ResolveAssetCode(string path, string assetId)
