@@ -39,6 +39,41 @@ public sealed class WeeklySkyForecastAudioGenerationTests
         File.Exists(response.AudioTimingValidationReportPath).Should().BeTrue();
     }
 
+    [Fact]
+    public async Task GenerateAudio_WhenNarrationSegmentsAreMissing_ThrowsValidationError()
+    {
+        var pipelineRunId = Guid.NewGuid();
+        var workingRoot = Path.Combine(Path.GetTempPath(), "weekly-audio-tests", Guid.NewGuid().ToString("N"));
+        var runRoot = Path.Combine(workingRoot, pipelineRunId.ToString("N"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "episode"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "render"));
+        await WriteInputsAsync(runRoot, pipelineRunId);
+
+        var options = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        var longformWithMissingSegments = new
+        {
+            PipelineRunId = pipelineRunId,
+            GeneratedAtUtc = DateTime.UtcNow,
+            Language = "hi",
+            Style = "documentary",
+            TargetDurationSeconds = 380,
+            TotalEstimatedDurationSeconds = 84,
+            Segments = (object?)null
+        };
+        await File.WriteAllTextAsync(Path.Combine(runRoot, "episode", "longform-narration.json"), JsonSerializer.Serialize(longformWithMissingSegments, options));
+
+        var service = new WeeklySkyForecastAudioGenerationService(
+            Options.Create(new RenderingOptions { WorkingDirectory = workingRoot }),
+            Options.Create(new AzureSpeechOptions { DefaultVoiceName = "hi-IN-MadhurNeural" }),
+            new ThrowingTtsSynthesizer(),
+            NullLogger<WeeklySkyForecastAudioGenerationService>.Instance);
+
+        var act = () => service.GenerateAsync(pipelineRunId, new WeeklySkyForecastAudioGenerationRequest(DryRun: true), CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Longform narration segments are missing.*");
+    }
+
     private static async Task WriteInputsAsync(string runRoot, Guid pipelineRunId)
     {
         var options = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
