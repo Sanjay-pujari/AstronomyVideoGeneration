@@ -744,6 +744,31 @@ app.MapPost("/api/weekly-skyforecast-v2/runs/{pipelineRunId:guid}/generate-audio
     }
 });
 
+
+app.MapPost("/api/weekly-skyforecast-v2/runs/{pipelineRunId:guid}/reconcile-timeline-from-audio", async (Guid pipelineRunId, WeeklyAudioDrivenTimelineReconciliationRequest request, IWeeklyAudioDrivenTimelineReconciliationService service, ILogger<Program> logger, CancellationToken ct) =>
+{
+    try
+    {
+        var response = await service.ReconcileAsync(pipelineRunId, request, ct);
+        return Results.Ok(response);
+    }
+    catch (FileNotFoundException ex)
+    {
+        logger.LogError(ex, "WEEKLY_AUDIO_DRIVEN_TIMELINE_RECONCILIATION_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        return Results.BadRequest(new { pipelineRunId, audioDrivenTimelineReady = false, errors = new[] { ex.Message } });
+    }
+    catch (DirectoryNotFoundException ex)
+    {
+        logger.LogError(ex, "WEEKLY_AUDIO_DRIVEN_TIMELINE_RECONCILIATION_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        return Results.NotFound(new { pipelineRunId, audioDrivenTimelineReady = false, errors = new[] { ex.Message } });
+    }
+    catch (InvalidOperationException ex)
+    {
+        logger.LogError(ex, "WEEKLY_AUDIO_DRIVEN_TIMELINE_RECONCILIATION_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        return Results.BadRequest(new { pipelineRunId, audioDrivenTimelineReady = false, errors = new[] { ex.Message } });
+    }
+});
+
 app.MapPost("/api/weekly-skyforecast-v2/runs/{pipelineRunId:guid}/render-video", async (Guid pipelineRunId, WeeklyExistingRunRenderRequest request, IWeeklyExistingRunVideoRenderer renderer, ILogger<Program> logger, CancellationToken ct) =>
 {
     try

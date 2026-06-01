@@ -82,7 +82,7 @@ public sealed record WeeklyRenderInputAsset(
     bool Exists,
     int Width,
     int Height,
-    int DurationSecondsUsed,
+    double DurationSecondsUsed,
     bool UsedInLongform,
     bool UsedInShortform,
     bool Readable,
@@ -111,9 +111,9 @@ public sealed record WeeklyShotFilterGraphStep(
     int ShotNumber,
     string AssetId,
     string AssetPath,
-    int StartSecond,
-    int EndSecond,
-    int DurationSeconds,
+    double StartSecond,
+    double EndSecond,
+    double DurationSeconds,
     string ScalePlan,
     string AspectPlan,
     string FpsPlan,
@@ -139,7 +139,7 @@ public sealed record WeeklyMotionEffectExecution(
     double ZoomStart,
     double ZoomEnd,
     string PanPlan,
-    int DurationSeconds);
+    double DurationSeconds);
 
 public sealed record WeeklyTransitionExecutionPlan(
     Guid PipelineRunId,
@@ -159,9 +159,9 @@ public sealed record WeeklyTransitionExecution(
     double RequestedDurationSeconds,
     double AppliedDurationSeconds,
     bool DurationCapped,
-    int StartSecond,
-    int EndSecond,
-    int ShotDurationSeconds);
+    double StartSecond,
+    double EndSecond,
+    double ShotDurationSeconds);
 
 public sealed record WeeklyAudioAlignmentPlan(
     Guid PipelineRunId,
@@ -177,9 +177,9 @@ public sealed record WeeklyAudioSegmentAlignment(
     string SegmentType,
     string NarrationText,
     string ExpectedAudioPath,
-    int StartSecond,
-    int EndSecond,
-    int DurationSeconds);
+    double StartSecond,
+    double EndSecond,
+    double DurationSeconds);
 
 public sealed record WeeklyRendererValidationReport(
     bool RendererPreparationReady,

@@ -51,23 +51,23 @@ public sealed record WeeklyTimelineCompositionResult(
     bool TimelineCompositionReady,
     bool LongformFinalTimelineReady,
     bool ShortformFinalTimelineReady,
-    int LongformActualDurationSeconds,
-    int ShortformActualDurationSeconds,
+    double LongformActualDurationSeconds,
+    double ShortformActualDurationSeconds,
     int LongformFinalShotCount,
     int ShortformFinalShotCount,
     int TotalFinalShotCount);
 
 public sealed record FinalRenderTimeline(Guid PipelineRunId, DateTime GeneratedAtUtc, FinalRenderEpisodeTimeline Longform, FinalRenderEpisodeTimeline Shortform);
-public sealed record FinalRenderEpisodeTimeline(int TargetDurationSeconds, int ActualDurationSeconds, IReadOnlyList<FinalRenderSegment> Segments);
-public sealed record FinalRenderSegment(string SegmentId, string SegmentType, string EpisodeType, int StartSecond, int EndSecond, int DurationSeconds, string NarrationText, int NarrationStart, int NarrationEnd, IReadOnlyList<FinalRenderShot> Shots);
+public sealed record FinalRenderEpisodeTimeline(int TargetDurationSeconds, double ActualDurationSeconds, IReadOnlyList<FinalRenderSegment> Segments);
+public sealed record FinalRenderSegment(string SegmentId, string SegmentType, string EpisodeType, double StartSecond, double EndSecond, double DurationSeconds, string NarrationText, double NarrationStart, double NarrationEnd, IReadOnlyList<FinalRenderShot> Shots);
 public sealed record FinalRenderShot(
     int ShotNumber,
     string AssetId,
     string AssetType,
     string AssetPath,
-    int StartSecond,
-    int EndSecond,
-    int DurationSeconds,
+    double StartSecond,
+    double EndSecond,
+    double DurationSeconds,
     string TransitionIn,
     string TransitionOut,
     string MotionEffect,
@@ -85,27 +85,27 @@ public sealed record FinalRenderShotListEntry(
     string AssetId,
     string AssetType,
     string AssetPath,
-    int StartSecond,
-    int EndSecond,
-    int DurationSeconds,
+    double StartSecond,
+    double EndSecond,
+    double DurationSeconds,
     string TransitionIn,
     string TransitionOut,
     string MotionEffect,
     string NarrationText,
-    int NarrationStart,
-    int NarrationEnd);
+    double NarrationStart,
+    double NarrationEnd);
 
 public sealed record TimelineTransitionPlan(Guid PipelineRunId, DateTime GeneratedAtUtc, IReadOnlyList<TimelineTransitionPlanEntry> Transitions, IReadOnlyList<string> AllowedTransitionNames, IReadOnlyList<string> RulesApplied);
-public sealed record TimelineTransitionPlanEntry(string EpisodeType, string SegmentId, string SegmentType, int ShotNumber, string FromAssetType, string ToAssetType, int AtSecond, string TransitionName, string Reason);
-public sealed record SegmentTimelineReportEntry(string EpisodeType, string SegmentId, string SegmentType, int StartSecond, int EndSecond, int DurationSeconds, int ShotCount, IReadOnlyList<string> AssetTypes, int NarrationCharacterCount, bool HasNarration, bool HasAssets);
+public sealed record TimelineTransitionPlanEntry(string EpisodeType, string SegmentId, string SegmentType, int ShotNumber, string FromAssetType, string ToAssetType, double AtSecond, string TransitionName, string Reason);
+public sealed record SegmentTimelineReportEntry(string EpisodeType, string SegmentId, string SegmentType, double StartSecond, double EndSecond, double DurationSeconds, int ShotCount, IReadOnlyList<string> AssetTypes, int NarrationCharacterCount, bool HasNarration, bool HasAssets);
 public sealed record RetentionMarkerTimeline(Guid PipelineRunId, DateTime GeneratedAtUtc, IReadOnlyList<RetentionMarkerTimelineEntry> Markers, string OverlapStrategy);
-public sealed record RetentionMarkerTimelineEntry(int ResetSecond, string EpisodeType, int AssignedShotNumber, string AssetId, string AssetType, string AssetPath, string Reason, bool IsOverlay, int OverlayStartSecond, int OverlayEndSecond, string Strategy);
+public sealed record RetentionMarkerTimelineEntry(double ResetSecond, string EpisodeType, int AssignedShotNumber, string AssetId, string AssetType, string AssetPath, string Reason, bool IsOverlay, double OverlayStartSecond, double OverlayEndSecond, string Strategy);
 public sealed record TimelineValidationReport(
     bool TimelineCompositionReady,
     bool LongformTimelineReady,
     bool ShortformTimelineReady,
-    int LongformActualDurationSeconds,
-    int ShortformActualDurationSeconds,
+    double LongformActualDurationSeconds,
+    double ShortformActualDurationSeconds,
     int LongformShotCount,
     int ShortformShotCount,
     int TotalShotCount,

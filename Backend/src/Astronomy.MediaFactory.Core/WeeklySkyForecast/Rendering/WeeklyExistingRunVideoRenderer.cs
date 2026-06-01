@@ -23,7 +23,8 @@ public sealed record WeeklyExistingRunRenderRequest(
     bool DryRun = false,
     bool DebugStoryboard = false,
     bool AllowSilent = true,
-    bool? UseStagedRendering = null);
+    bool? UseStagedRendering = null,
+    bool UseAudioDrivenTimeline = false);
 
 public sealed record WeeklyExistingRunRenderResponse(
     Guid PipelineRunId,
@@ -153,7 +154,7 @@ public sealed record WeeklyExistingRunEpisodeRenderReport(
     bool Rendered,
     bool Skipped,
     string OutputPath,
-    int DurationSeconds,
+    double DurationSeconds,
     long FileSizeBytes,
     bool AudioAttached);
 
@@ -252,16 +253,16 @@ public sealed record ResolvedRenderShotPlan(
 
 public sealed record ResolvedRenderEpisodeShotPlan(
     string EpisodeType,
-    int ActualDurationSeconds,
+    double ActualDurationSeconds,
     IReadOnlyList<ResolvedRenderSegmentShotPlan> Segments);
 
 public sealed record ResolvedRenderSegmentShotPlan(
     string EpisodeType,
     string SegmentId,
     string SegmentType,
-    int StartSecond,
-    int EndSecond,
-    int DurationSeconds,
+    double StartSecond,
+    double EndSecond,
+    double DurationSeconds,
     IReadOnlyList<ResolvedRenderShotPlanEntry> Shots);
 
 public sealed record ResolvedRenderShotPlanEntry(
@@ -269,9 +270,9 @@ public sealed record ResolvedRenderShotPlanEntry(
     string AssetId,
     string AssetType,
     string AssetPath,
-    int StartSecond,
-    int EndSecond,
-    int DurationSeconds,
+    double StartSecond,
+    double EndSecond,
+    double DurationSeconds,
     string TransitionIn,
     string TransitionOut,
     string MotionEffect,
@@ -349,8 +350,8 @@ public sealed record RenderStoryboardReport(
 public sealed record RenderStoryboardSegmentReport(
     string EpisodeType,
     string SegmentType,
-    int StartSecond,
-    int EndSecond,
+    double StartSecond,
+    double EndSecond,
     string NarrationExcerpt,
     IReadOnlyList<RenderStoryboardShotReport> Shots);
 
@@ -359,7 +360,7 @@ public sealed record RenderStoryboardShotReport(
     string AssetType,
     string AssetCode,
     string SceneFamily,
-    int DurationSeconds,
+    double DurationSeconds,
     string ReasonSelected);
 
 public sealed class WeeklyExistingRunVideoRenderer(
@@ -390,7 +391,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
         {
             var root = ResolveWorkingDirectoryRoot(pipelineRunId);
             var renderDirectory = Path.Combine(root, "render");
-            var paths = WeeklyExistingRunRequiredPaths.FromRoot(root);
+            var paths = WeeklyExistingRunRequiredPaths.FromRoot(root, request.UseAudioDrivenTimeline);
             var loaded = await LoadInputsAsync(paths, cancellationToken);
             var hydration = await HydrateRenderInputManifestAsync(pipelineRunId, root, loaded.Manifest, loaded.ProductionAssetManifest, loaded.Timeline, cancellationToken);
             loaded = loaded with { Manifest = hydration.Manifest };
@@ -417,10 +418,14 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var videoReportPath = Path.Combine(renderDirectory, "video-render-report.json");
             var ffmpegReportPath = Path.Combine(renderDirectory, "ffmpeg-execution-report.json");
             var qualityReportPath = Path.Combine(renderDirectory, "render-quality-report.json");
-            var resolvedShotPlanPath = Path.Combine(renderDirectory, "resolved-render-shot-plan.json");
+            var resolvedShotPlanPath = request.UseAudioDrivenTimeline
+                ? Path.Combine(renderDirectory, "audio-driven-resolved-render-shot-plan.json")
+                : Path.Combine(renderDirectory, "resolved-render-shot-plan.json");
             var visualSelectionReportPath = Path.Combine(renderDirectory, "render-visual-selection-report.json");
             var diversityValidationReportPath = Path.Combine(renderDirectory, "render-diversity-validation-report.json");
-            var storyboardReportPath = Path.Combine(renderDirectory, "render-storyboard-report.json");
+            var storyboardReportPath = request.UseAudioDrivenTimeline
+                ? Path.Combine(renderDirectory, "audio-driven-render-storyboard-report.json")
+                : Path.Combine(renderDirectory, "render-storyboard-report.json");
             var commandPlanPath = Path.Combine(renderDirectory, "logs", "ffmpeg-command-plan.json");
 
             var longformResult = WeeklyExistingRunEpisodeRenderReportFactory.NotRequested(longformOutput);
@@ -658,7 +663,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
     {
         var shortform = episodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase);
         var usage = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        var lastStartByAsset = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var lastStartByAsset = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         var segments = new List<FinalRenderSegment>();
         var previousLongformFamily = string.Empty;
         var currentLongformFamilyRun = 0;
@@ -678,26 +683,29 @@ public sealed class WeeklyExistingRunVideoRenderer(
             }
 
             var maxShotDuration = GetMaxShotDurationSeconds(segment.SegmentType, shortform);
-            var shotCount = Math.Max(1, (int)Math.Ceiling(segment.DurationSeconds / (double)maxShotDuration));
-            var preferred = shortform ? Math.Max(1, Math.Min(pool.Count, segment.DurationSeconds / Math.Max(1, maxShotDuration))) : Math.Min(pool.Count, Math.Max(1, segment.DurationSeconds / 7));
+            var segmentDuration = Math.Max(0.001d, segment.DurationSeconds);
+            var segmentDurationFloor = Math.Max(1, (int)Math.Floor(segmentDuration));
+            var shotCount = Math.Max(1, (int)Math.Ceiling(segmentDuration / maxShotDuration));
+            var preferred = shortform
+                ? Math.Max(1, Math.Min(pool.Count, (int)Math.Ceiling(segmentDuration / Math.Max(1, maxShotDuration))))
+                : Math.Min(pool.Count, Math.Max(1, (int)Math.Ceiling(segmentDuration / 7d)));
             shotCount = Math.Max(shotCount, preferred);
-            if (!shortform && (segment.SegmentType is "HeroEvent" or "StrongestEvent") && pool.Any(IsWesternGroupingAsset)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(3, Math.Min(pool.Count, 6)), segment.DurationSeconds));
-            if (!shortform && segment.SegmentType.Equals("MoonHighlights", StringComparison.OrdinalIgnoreCase) && pool.Any(asset => IsMoonHeroPath(asset.AssetPath + " " + asset.AssetId))) shotCount = Math.Max(shotCount, Math.Min(3, segment.DurationSeconds));
-            if (!shortform && segment.SegmentType.Equals("PlanetHighlights", StringComparison.OrdinalIgnoreCase) && pool.Any(IsWesternGroupingAsset)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(2, Math.Min(pool.Count, 5)), segment.DurationSeconds));
-            if (!shortform && segment.SegmentType.Equals("WeeklySkyOverview", StringComparison.OrdinalIgnoreCase)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(4, Math.Min(pool.Count, 5)), segment.DurationSeconds));
-            if (!shortform && segment.SegmentType.Equals("BestObservationWindow", StringComparison.OrdinalIgnoreCase)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(3, Math.Min(pool.Count, 4)), segment.DurationSeconds));
-            if (!shortform && segment.SegmentType.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase) && pool.Any(IsExpandedAstrophotographyAsset)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(1, Math.Min(pool.Count, 3)), segment.DurationSeconds));
-            if (shortform && pool.Any(IsWesternGroupingAsset)) shotCount = Math.Max(shotCount, Math.Min(2, segment.DurationSeconds));
+            if (!shortform && (segment.SegmentType is "HeroEvent" or "StrongestEvent") && pool.Any(IsWesternGroupingAsset)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(3, Math.Min(pool.Count, 6)), segmentDurationFloor));
+            if (!shortform && segment.SegmentType.Equals("MoonHighlights", StringComparison.OrdinalIgnoreCase) && pool.Any(asset => IsMoonHeroPath(asset.AssetPath + " " + asset.AssetId))) shotCount = Math.Max(shotCount, Math.Min(3, segmentDurationFloor));
+            if (!shortform && segment.SegmentType.Equals("PlanetHighlights", StringComparison.OrdinalIgnoreCase) && pool.Any(IsWesternGroupingAsset)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(2, Math.Min(pool.Count, 5)), segmentDurationFloor));
+            if (!shortform && segment.SegmentType.Equals("WeeklySkyOverview", StringComparison.OrdinalIgnoreCase)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(4, Math.Min(pool.Count, 5)), segmentDurationFloor));
+            if (!shortform && segment.SegmentType.Equals("BestObservationWindow", StringComparison.OrdinalIgnoreCase)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(3, Math.Min(pool.Count, 4)), segmentDurationFloor));
+            if (!shortform && segment.SegmentType.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase) && pool.Any(IsExpandedAstrophotographyAsset)) shotCount = Math.Max(shotCount, Math.Min(Math.Max(1, Math.Min(pool.Count, 3)), segmentDurationFloor));
+            if (shortform && pool.Any(IsWesternGroupingAsset)) shotCount = Math.Max(shotCount, Math.Min(2, segmentDurationFloor));
 
             var orderedPool = shortform ? BuildShortformAssetSequence(pool, shotCount) : pool;
-            var baseDuration = segment.DurationSeconds / shotCount;
-            var remainder = segment.DurationSeconds % shotCount;
+            var baseDuration = segmentDuration / shotCount;
             var cursor = segment.StartSecond;
             var shots = new List<FinalRenderShot>();
             var segmentUsedAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < shotCount; i++)
             {
-                var duration = baseDuration + (i < remainder ? 1 : 0);
+                var duration = baseDuration;
                 var start = cursor;
                 var rawAsset = shortform
                     ? PickAsset(orderedPool, usage, 1, i)
@@ -886,10 +894,10 @@ public sealed class WeeklyExistingRunVideoRenderer(
         IReadOnlyList<RenderAssetCandidate> pool,
         Dictionary<string, int> usage,
         HashSet<string> segmentUsedAssets,
-        Dictionary<string, int> lastStartByAsset,
+        Dictionary<string, double> lastStartByAsset,
         string previousFamily,
         int currentFamilyRun,
-        int startSecond,
+        double startSecond,
         int index)
     {
         var ordered = Enumerable.Range(0, pool.Count).Select(offset => pool[(index + offset) % pool.Count]).ToList();
@@ -1015,7 +1023,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
         for (var i = 0; i < shots.Count; i++)
         {
             var shot = shots[i];
-            var frames = Math.Max(1, shot.DurationSeconds * fps);
+            var frames = Math.Max(1, (int)Math.Ceiling(shot.DurationSeconds * fps));
             var zoom = BuildZoomExpression(shot.MotionEffect);
             var pan = BuildPanExpression(shot.MotionEffect);
             var fade = BuildShotFadeFilters(shot, fps);
@@ -1064,7 +1072,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
         return filters.Count == 0 ? string.Empty : "," + string.Join(',', filters);
     }
 
-    private static double GetTransitionDurationSeconds(string transitionOut, string transitionIn, int previousDuration, int currentDuration)
+    private static double GetTransitionDurationSeconds(string transitionOut, string transitionIn, double previousDuration, double currentDuration)
     {
         var name = transitionOut.Equals("FadeOut", StringComparison.OrdinalIgnoreCase) ? transitionIn : transitionOut;
         var requested = name.Equals("SlowDissolve", StringComparison.OrdinalIgnoreCase) ? 1.5 : 0.6;
@@ -1592,7 +1600,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
     {
         var shortform = episodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase);
         var shots = timeline.Segments.SelectMany(s => s.Shots.Select(shot => (Segment: s, Shot: shot))).ToList();
-        var maxShot = shots.Count == 0 ? 0 : shots.Max(x => x.Shot.DurationSeconds);
+        var maxShot = shots.Count == 0 ? 0 : (int)Math.Ceiling(shots.Max(x => x.Shot.DurationSeconds));
         var allowedRepeat = shortform ? 1 : 2;
         var repeated = shots.GroupBy(x => x.Shot.AssetPath, StringComparer.OrdinalIgnoreCase).Sum(g => Math.Max(0, g.Count() - allowedRepeat));
         var stellarium = shots.Where(x => x.Shot.AssetType.Equals("Stellarium", StringComparison.OrdinalIgnoreCase) || x.Shot.AssetPath.Contains("stellarium", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -1884,7 +1892,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
 
     private static string BuildStagedClipFilter(FinalRenderShot shot, int width, int height, int fps, bool debugStoryboard, string? debugFontPath)
     {
-        var frames = Math.Max(1, shot.DurationSeconds * fps);
+        var frames = Math.Max(1, (int)Math.Ceiling(shot.DurationSeconds * fps));
         var fade = BuildShotFadeFilters(shot, fps);
         var overlay = debugStoryboard && !string.IsNullOrWhiteSpace(debugFontPath) ? BuildDebugStoryboardOverlay(shot, shot.ShotNumber - 1, debugFontPath, width, height) : string.Empty;
         if (width == ShortformCanvasWidth && height == ShortformCanvasHeight)
@@ -2153,15 +2161,15 @@ internal sealed record WeeklyExistingRunRequiredPaths(
 {
     public IReadOnlyList<string> All => [RenderContract, InputManifest, FilterGraphPlan, TransitionPlan, MotionPlan, AudioPlan, FinalTimeline, FinalShotList];
 
-    public static WeeklyExistingRunRequiredPaths FromRoot(string root)
+    public static WeeklyExistingRunRequiredPaths FromRoot(string root, bool useAudioDrivenTimeline = false)
         => new(
-            Path.Combine(root, "render", "weekly-render-contract.json"),
+            Path.Combine(root, "render", useAudioDrivenTimeline ? "audio-driven-render-contract.json" : "weekly-render-contract.json"),
             Path.Combine(root, "render", "render-input-manifest.json"),
             Path.Combine(root, "render", "ffmpeg-filtergraph-plan.json"),
             Path.Combine(root, "render", "transition-execution-plan.json"),
             Path.Combine(root, "render", "motion-effect-execution-plan.json"),
             Path.Combine(root, "render", "audio-alignment-plan.json"),
-            Path.Combine(root, "episode", "final-render-timeline.json"),
+            useAudioDrivenTimeline ? Path.Combine(root, "render", "audio-driven-final-render-timeline.json") : Path.Combine(root, "episode", "final-render-timeline.json"),
             Path.Combine(root, "episode", "final-render-shot-list.json"),
             Path.Combine(root, "episode", "weekly-production-asset-manifest.json"));
 }
