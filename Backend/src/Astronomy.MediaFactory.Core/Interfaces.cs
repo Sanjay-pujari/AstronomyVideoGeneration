@@ -1558,7 +1558,12 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     string? SscPropagationValidationReportPath = null,
     int EmptyObjectSceneCount = 0,
     int EmptyRequiredLabelSceneCount = 0,
-    int CameraTargetMismatchCount = 0);
+    int CameraTargetMismatchCount = 0,
+    bool SscCameraLockReady = false,
+    string? SscCameraLockValidationReportPath = null,
+    int ObjectFirstCameraLockSceneCount = 0,
+    int AltAzOnlySceneCount = 0,
+    int FallbackUsedSceneCount = 0);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
