@@ -151,7 +151,7 @@ public sealed class SscIntelligenceService : ISscIntelligenceService
             "skyfield-nearest-time-resolver",
             false);
 
-        var script = _renderer.Render(new SscRenderRequest(nightWindow.BestObservationUtc, request.Longitude, request.Latitude, request.ElevationMeters, request.LocationName, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, screenshotDirectory ?? ".", screenshotFileNameWithoutExtension ?? "scene"));
+        var script = _renderer.Render(new SscRenderRequest(nightWindow.BestObservationUtc, request.Longitude, request.Latitude, request.ElevationMeters, request.LocationName, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, screenshotDirectory ?? ".", screenshotFileNameWithoutExtension ?? "scene", visible));
         var qualityReport = new CinematicQualitySceneReport(request.SceneCode ?? "unknown", shotType, cameraPlan with { CameraAltitude = horizonRefinement.RefinedCameraAltitude, FovDegrees = horizonRefinement.RefinedFov }, horizonRefinement, overlayPolicy, emphasis, significance, horizonRefinement.Warnings);
         return new SscIntelligenceResult(visible, removed, camera.AltitudeDeg, camera.AzimuthDeg, camera.FovDeg, camera.RequiresSplit, cameraAltitudeRaw, composition.Reason, targets.PrimaryTargets.Select(x => x.Name).ToList(), targets.SecondaryTargets.Select(x => x.Name).ToList(), targets.ContextTargets.Select(x => x.Name).ToList(), script.Script, nightWindow, qualityReport);
     }

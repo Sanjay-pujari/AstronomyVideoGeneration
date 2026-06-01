@@ -10,4 +10,5 @@ public sealed record SscRenderRequest(
     double CameraAzimuthDeg,
     double FovDeg,
     string ScreenshotDirectory,
-    string ScreenshotFileNameWithoutExtension);
+    string ScreenshotFileNameWithoutExtension,
+    IReadOnlyList<SkyObjectPosition>? VisibleObjects = null);

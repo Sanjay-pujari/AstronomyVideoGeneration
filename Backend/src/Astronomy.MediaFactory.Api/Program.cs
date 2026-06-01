@@ -4837,53 +4837,6 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
 }
 
 
-sealed record WeeklyFocusObjectPlan(
-    string WeekStartDate,
-    string RegionId,
-    string Language,
-    string HeroEvent,
-    IReadOnlyList<string> FocusObjects,
-    IReadOnlyList<WeeklyFocusGrouping> FocusGroupings,
-    IReadOnlyList<WeeklyRequiredVisualScene> RequiredVisualScenes);
-
-sealed record WeeklyFocusGrouping(string GroupingCode, IReadOnlyList<string> Objects, string Source, string Purpose);
-
-sealed record WeeklyRequiredVisualScene(
-    string SceneCode,
-    string SceneName,
-    IReadOnlyList<string> Objects,
-    string Purpose,
-    int ScreenshotMin,
-    int ScreenshotMax,
-    bool IncludeHorizon,
-    bool IncludeLabels,
-    bool IncludeConstellationLines,
-    string Notes);
-
-sealed record WeeklyStellariumSceneRequirementsDocument(
-    string WeekStartDate,
-    string RegionId,
-    string Language,
-    IReadOnlyList<WeeklyRequiredVisualScene> RequiredScenes,
-    IReadOnlyList<string> SscScriptRequirements,
-    IReadOnlyList<string> RequiredLabels);
-
-sealed record WeeklyVisualNarrationCoverageReport(
-    bool VisualNarrationAligned,
-    IReadOnlyList<string> ObjectsMentionedInNarration,
-    IReadOnlyList<string> ObjectsVisuallySupported,
-    IReadOnlyList<string> ObjectsMentionedButNotVisible,
-    IReadOnlyList<string> RequiredScenesGenerated,
-    IReadOnlyList<string> MissingScenes,
-    int MoonSceneCount,
-    int VenusSceneCount,
-    int SaturnSceneCount,
-    int GroupingSceneCount,
-    int SscScriptsGenerated,
-    int ScreenshotsGenerated,
-    IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
-
 static WeeklyFocusObjectPlan BuildWeeklyFocusObjectPlan(DateOnly weekStartDate, string regionId, string language, WeeklySkyForecastV2IntelligenceResponse context, string narrationText)
 {
     var focusObjects = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -5897,6 +5850,54 @@ static async Task WriteExpandedStellariumExecutionReportAsync(
         warnings
     }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 }
+
+sealed record WeeklyFocusObjectPlan(
+    string WeekStartDate,
+    string RegionId,
+    string Language,
+    string HeroEvent,
+    IReadOnlyList<string> FocusObjects,
+    IReadOnlyList<WeeklyFocusGrouping> FocusGroupings,
+    IReadOnlyList<WeeklyRequiredVisualScene> RequiredVisualScenes);
+
+sealed record WeeklyFocusGrouping(string GroupingCode, IReadOnlyList<string> Objects, string Source, string Purpose);
+
+sealed record WeeklyRequiredVisualScene(
+    string SceneCode,
+    string SceneName,
+    IReadOnlyList<string> Objects,
+    string Purpose,
+    int ScreenshotMin,
+    int ScreenshotMax,
+    bool IncludeHorizon,
+    bool IncludeLabels,
+    bool IncludeConstellationLines,
+    string Notes);
+
+sealed record WeeklyStellariumSceneRequirementsDocument(
+    string WeekStartDate,
+    string RegionId,
+    string Language,
+    IReadOnlyList<WeeklyRequiredVisualScene> RequiredScenes,
+    IReadOnlyList<string> SscScriptRequirements,
+    IReadOnlyList<string> RequiredLabels);
+
+sealed record WeeklyVisualNarrationCoverageReport(
+    bool VisualNarrationAligned,
+    IReadOnlyList<string> ObjectsMentionedInNarration,
+    IReadOnlyList<string> ObjectsVisuallySupported,
+    IReadOnlyList<string> ObjectsMentionedButNotVisible,
+    IReadOnlyList<string> RequiredScenesGenerated,
+    IReadOnlyList<string> MissingScenes,
+    int MoonSceneCount,
+    int VenusSceneCount,
+    int SaturnSceneCount,
+    int GroupingSceneCount,
+    int SscScriptsGenerated,
+    int ScreenshotsGenerated,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
 
 sealed record ExpandedNightGeometrySelection(bool Ready, DateTime? SelectedObservationUtc, DateTime? SelectedObservationLocal, double? SelectedSunAltitudeDeg, string? SelectedTargetObject, string ValidationStatus);
 sealed record ExpandedNightGeometryCandidate(string TargetObject, DateTime ObservationUtc, DateTime ObservationLocal, double ObjectAltitudeDeg, double ObjectAzimuthDeg, double SunAltitudeDeg);

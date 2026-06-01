@@ -22,7 +22,7 @@ public sealed class StellariumSscRenderer : IStellariumSscRenderer
         sb.AppendLine("ConstellationMgr.setFlagLabels(true);");
         sb.AppendLine("SolarSystem.setFlagLabels(true);");
         sb.AppendLine("StarMgr.setFlagLabels(true);");
-        foreach (var target in request.VisibleObjects.Select(o => o.Name).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var target in (request.VisibleObjects ?? []).Select(o => o.Name).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             sb.AppendLine($"// Required object label: {Escape(target)}");
         }
