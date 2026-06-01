@@ -1127,12 +1127,31 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private async Task<(WeeklyRenderInputManifest Manifest, int TotalProductionAssetsDiscovered, int TotalRenderInputAssets, bool RenderInputHydrationPassed)> HydrateRenderInputManifestAsync(Guid pipelineRunId, string root, WeeklyRenderInputManifest existing, WeeklyProductionAssetManifest? productionManifest, FinalRenderTimeline timeline, CancellationToken cancellationToken)
     {
         var candidates = new List<RenderAssetCandidate>();
-        candidates.AddRange(existing.Assets.Select(a => new RenderAssetCandidate(a.AssetId, NormalizeRenderAssetType(a.AssetType), a.AssetPath)));
+        var longformShots = (timeline.Longform?.Segments ?? [])
+            .Where(segment => segment is not null)
+            .SelectMany(segment => segment.Shots ?? [])
+            .Where(shot => shot is not null)
+            .ToList();
+        var shortformShots = (timeline.Shortform?.Segments ?? [])
+            .Where(segment => segment is not null)
+            .SelectMany(segment => segment.Shots ?? [])
+            .Where(shot => shot is not null)
+            .ToList();
+        var timelineShots = longformShots.Concat(shortformShots).ToList();
+
+        candidates.AddRange((existing.Assets ?? [])
+            .Where(asset => asset is not null)
+            .Select(asset => new RenderAssetCandidate(asset.AssetId, NormalizeRenderAssetType(asset.AssetType), asset.AssetPath)));
         if (productionManifest is not null)
         {
-            candidates.AddRange(productionManifest.SegmentBundles.SelectMany(b => b.AssignedVisualAssets).Where(a => a.Exists && a.ProductionReady).Select(a => new RenderAssetCandidate(NormalizeAssetId(a.SourceType.ToString(), a.FilePath, a.AssetCode), NormalizeRenderAssetType(a.SourceType.ToString()), a.FilePath)));
+            candidates.AddRange((productionManifest.SegmentBundles ?? [])
+                .Where(bundle => bundle is not null)
+                .SelectMany(bundle => bundle.AssignedVisualAssets ?? [])
+                .Where(asset => asset is not null && asset.Exists && asset.ProductionReady)
+                .Select(asset => new RenderAssetCandidate(NormalizeAssetId(asset.SourceType.ToString(), asset.FilePath, asset.AssetCode), NormalizeRenderAssetType(asset.SourceType.ToString()), asset.FilePath)));
         }
-        candidates.AddRange(timeline.Longform.Segments.SelectMany(sg => sg.Shots).Concat(timeline.Shortform.Segments.SelectMany(sg => sg.Shots)).Select(s => new RenderAssetCandidate(s.AssetId, NormalizeRenderAssetType(s.AssetType), s.AssetPath)));
+        candidates.AddRange(timelineShots
+            .Select(shot => new RenderAssetCandidate(shot.AssetId, NormalizeRenderAssetType(shot.AssetType), shot.AssetPath)));
         foreach (var pattern in new[]
         {
             Path.Combine(root, "stellarium", "scenes"),
@@ -1177,12 +1196,12 @@ public sealed class WeeklyExistingRunVideoRenderer(
             {
                 validationErrors.Add($"Image decode failed: {ex.Message}");
             }
-            var usages = timeline.Longform.Segments.SelectMany(sg => sg.Shots).Concat(timeline.Shortform.Segments.SelectMany(sg => sg.Shots)).Where(s => s.AssetPath.Equals(asset.AssetPath, StringComparison.OrdinalIgnoreCase)).ToList();
-            assets.Add(new WeeklyRenderInputAsset(asset.AssetId, asset.AssetType, asset.AssetPath, true, width, height, usages.Sum(s => s.DurationSeconds), timeline.Longform.Segments.SelectMany(sg => sg.Shots).Any(s => s.AssetPath.Equals(asset.AssetPath, StringComparison.OrdinalIgnoreCase)), timeline.Shortform.Segments.SelectMany(sg => sg.Shots).Any(s => s.AssetPath.Equals(asset.AssetPath, StringComparison.OrdinalIgnoreCase)), readable, fileInfo.Length, validationErrors));
+            var usages = timelineShots.Where(shot => string.Equals(shot.AssetPath, asset.AssetPath, StringComparison.OrdinalIgnoreCase)).ToList();
+            assets.Add(new WeeklyRenderInputAsset(asset.AssetId, asset.AssetType, asset.AssetPath, true, width, height, usages.Sum(s => s.DurationSeconds), longformShots.Any(shot => string.Equals(shot.AssetPath, asset.AssetPath, StringComparison.OrdinalIgnoreCase)), shortformShots.Any(shot => string.Equals(shot.AssetPath, asset.AssetPath, StringComparison.OrdinalIgnoreCase)), readable, fileInfo.Length, validationErrors));
         }
         var totalProduction = Math.Max(productionManifest?.TotalProductionImageAssetCount ?? 0, distinct.Count);
         var hydrationPassed = totalProduction == 0 || assets.Count >= Math.Ceiling(totalProduction * 0.8);
-        var warnings = existing.Warnings.Concat(hydrationPassed ? [] : [$"Render input hydration discovered {assets.Count} assets; expected at least 80% of {totalProduction} production assets."]).ToList();
+        var warnings = (existing.Warnings ?? []).Concat(hydrationPassed ? [] : [$"Render input hydration discovered {assets.Count} assets; expected at least 80% of {totalProduction} production assets."]).ToList();
         var errors = assets.SelectMany(a => a.ValidationErrors.Select(e => $"{a.AssetId}: {e}")).ToList();
         return (new WeeklyRenderInputManifest(pipelineRunId, DateTime.UtcNow, assets, assets.All(a => a.Exists), assets.All(a => a.Readable), warnings, errors, totalProduction, assets.Count, hydrationPassed), totalProduction, assets.Count, hydrationPassed);
     }
