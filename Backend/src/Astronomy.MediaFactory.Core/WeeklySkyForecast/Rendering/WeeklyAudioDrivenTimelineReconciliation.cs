@@ -4,7 +4,6 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AudioGeneration;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering;
 
@@ -33,6 +32,7 @@ public sealed record WeeklyAudioDrivenTimelineReconciliationResponse(
     string AudioDrivenRenderContractPath,
     string AudioDrivenStoryboardReportPath,
     string AudioDrivenTimelineReconciliationReportPath,
+    string ResolvedPipelineRunRoot,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
@@ -52,20 +52,18 @@ public sealed record WeeklyAudioDrivenEpisodeReconciliationReport(
     int SegmentsReconciled);
 
 public sealed class WeeklyAudioDrivenTimelineReconciliationService(
-    IOptions<RenderingOptions> renderingOptions,
+    IWeeklyPipelineRunDirectoryResolver pipelineRunDirectoryResolver,
     ILogger<WeeklyAudioDrivenTimelineReconciliationService> logger) : IWeeklyAudioDrivenTimelineReconciliationService
 {
     private const double ToleranceSeconds = 0.001d;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, Converters = { new JsonStringEnumConverter() } };
-    private readonly RenderingOptions _renderingOptions = renderingOptions.Value;
-
     public async Task<WeeklyAudioDrivenTimelineReconciliationResponse> ReconcileAsync(Guid pipelineRunId, WeeklyAudioDrivenTimelineReconciliationRequest request, CancellationToken cancellationToken)
     {
         logger.LogInformation("WEEKLY_AUDIO_DRIVEN_TIMELINE_RECONCILE_START pipelineRunId={PipelineRunId} dryRun={DryRun} longform={Longform} shortform={Shortform}", pipelineRunId, request.DryRun, request.ReconcileLongform, request.ReconcileShortform);
 
         var warnings = new List<string>();
         var errors = new List<string>();
-        var root = ResolveWorkingDirectoryRoot(pipelineRunId);
+        var root = await pipelineRunDirectoryResolver.ResolveRunDirectoryAsync(pipelineRunId);
         var paths = WeeklyAudioDrivenTimelineReconciliationPaths.FromRoot(root);
         ValidateRequiredInputs(paths, errors);
         if (errors.Count > 0) throw new FileNotFoundException(string.Join(" ", errors));
@@ -146,6 +144,7 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             paths.AudioDrivenRenderContract,
             paths.AudioDrivenStoryboardReport,
             paths.AudioDrivenTimelineReconciliationReport,
+            root,
             warnings,
             errors);
     }
@@ -305,18 +304,6 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             new RenderStoryboardSegmentReport(segment.EpisodeType, segment.SegmentType, segment.StartSecond, segment.EndSecond, excerpts.TryGetValue((segment.EpisodeType, segment.SegmentType), out var excerpt) ? excerpt : Truncate(segment.NarrationText, 160), segment.Shots.Select(shot => new RenderStoryboardShotReport(shot.ShotNumber, shot.AssetType, ResolveAssetCode(shot.AssetPath, shot.AssetId), ResolveSceneFamily(shot.AssetPath, shot.AssetId), shot.DurationSeconds, shot.Purpose)).ToList())).ToList());
     }
 
-    private string ResolveWorkingDirectoryRoot(Guid pipelineRunId)
-    {
-        var workingRoot = string.IsNullOrWhiteSpace(_renderingOptions.WorkingDirectory) ? "./media-output" : _renderingOptions.WorkingDirectory;
-        var direct = Path.Combine(workingRoot, pipelineRunId.ToString("N"));
-        if (Directory.Exists(direct)) return direct;
-        var matches = Directory.Exists(workingRoot)
-            ? Directory.EnumerateDirectories(workingRoot, "*", SearchOption.TopDirectoryOnly).Where(path => Path.GetFileName(path).Contains(pipelineRunId.ToString("N"), StringComparison.OrdinalIgnoreCase)).ToList()
-            : [];
-        return matches.FirstOrDefault(IsWeeklyRunDirectory) ?? direct;
-    }
-
-    private static bool IsWeeklyRunDirectory(string path) => File.Exists(Path.Combine(path, "render", "weekly-render-contract.json")) || File.Exists(Path.Combine(path, "episode", "final-render-timeline.json"));
     private static async Task<T> ReadJsonAsync<T>(string path, CancellationToken cancellationToken) => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions) ?? throw new InvalidOperationException($"Unable to deserialize required audio-driven reconciliation input: {path}");
     private static Task WriteJsonAsync<T>(string path, T value, CancellationToken cancellationToken) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, JsonOptions), cancellationToken);
 

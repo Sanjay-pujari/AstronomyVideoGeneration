@@ -56,6 +56,7 @@ public sealed record WeeklySkyForecastAudioGenerationResponse(
     IReadOnlyList<string> Errors,
     string NormalizedLongformNarrationPath,
     string NormalizedShortformNarrationPath,
+    string ResolvedPipelineRunRoot,
     bool NarrationParsingReady,
     string LongformNarrationSourceUsed,
     string ShortformNarrationSourceUsed,
@@ -139,6 +140,7 @@ public sealed record WeeklyNarrationFileReaderResult(
 public sealed class WeeklySkyForecastAudioGenerationService(
     IOptions<RenderingOptions> renderingOptions,
     IOptions<AzureSpeechOptions> azureSpeechOptions,
+    IWeeklyPipelineRunDirectoryResolver pipelineRunDirectoryResolver,
     IWeeklySkyForecastTtsSynthesizer ttsSynthesizer,
     ILogger<WeeklySkyForecastAudioGenerationService> logger) : IWeeklySkyForecastAudioGenerationService
 {
@@ -155,7 +157,7 @@ public sealed class WeeklySkyForecastAudioGenerationService(
         var errors = new List<string>();
         try
         {
-            var root = ResolveWorkingDirectoryRoot(pipelineRunId);
+            var root = await pipelineRunDirectoryResolver.ResolveRunDirectoryAsync(pipelineRunId);
             var paths = WeeklyAudioRequiredPaths.FromRoot(root);
             CreateAudioDirectories(root);
             var loaded = await LoadInputsAsync(paths, pipelineRunId, request, warnings, cancellationToken);
@@ -259,6 +261,7 @@ public sealed class WeeklySkyForecastAudioGenerationService(
                     Errors: errors,
                     NormalizedLongformNarrationPath: loaded.Longform.NormalizedPath,
                     NormalizedShortformNarrationPath: loaded.Shortform.NormalizedPath,
+                    ResolvedPipelineRunRoot: root,
                     NarrationParsingReady: errors.Count == 0,
                     LongformNarrationSourceUsed: loaded.Longform.SourceUsed,
                     ShortformNarrationSourceUsed: loaded.Shortform.SourceUsed,
@@ -359,6 +362,7 @@ public sealed class WeeklySkyForecastAudioGenerationService(
                 Errors: errors,
                 NormalizedLongformNarrationPath: loaded.Longform.NormalizedPath,
                 NormalizedShortformNarrationPath: loaded.Shortform.NormalizedPath,
+                ResolvedPipelineRunRoot: root,
                 NarrationParsingReady: errors.Count == 0,
                 LongformNarrationSourceUsed: loaded.Longform.SourceUsed,
                 ShortformNarrationSourceUsed: loaded.Shortform.SourceUsed,
@@ -475,18 +479,6 @@ public sealed class WeeklySkyForecastAudioGenerationService(
         if (string.IsNullOrWhiteSpace(requestedFormat)) return "mp3";
         var normalized = requestedFormat.Trim().TrimStart('.').ToLowerInvariant();
         return normalized.Contains("mp3", StringComparison.OrdinalIgnoreCase) ? "mp3" : normalized;
-    }
-
-    private string ResolveWorkingDirectoryRoot(Guid pipelineRunId)
-    {
-        var workingRoot = string.IsNullOrWhiteSpace(_renderingOptions.WorkingDirectory) ? "./media-output" : _renderingOptions.WorkingDirectory;
-        if (!Directory.Exists(workingRoot)) throw new DirectoryNotFoundException($"Pipeline working directory root does not exist: {workingRoot}");
-        var matches = Directory.EnumerateDirectories(workingRoot, pipelineRunId.ToString("N"), SearchOption.AllDirectories)
-            .Concat(Directory.EnumerateDirectories(workingRoot, pipelineRunId.ToString("D"), SearchOption.AllDirectories))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(path => File.Exists(Path.Combine(path, "render", "weekly-render-contract.json")) && File.Exists(Path.Combine(path, "render", "audio-alignment-plan.json")))
-            .ToList();
-        return matches.Count switch { 0 => throw new DirectoryNotFoundException($"No WeeklySkyForecast workingDirectoryRoot was found for pipelineRunId {pipelineRunId} under {workingRoot}."), 1 => matches[0], _ => matches.OrderByDescending(Directory.GetLastWriteTimeUtc).First() };
     }
 
     private static async Task<WeeklyAudioLoadedInputs> LoadInputsAsync(WeeklyAudioRequiredPaths paths, Guid pipelineRunId, WeeklySkyForecastAudioGenerationRequest request, List<string> warnings, CancellationToken cancellationToken)

@@ -136,6 +136,7 @@ public sealed class WeeklyExistingRunVideoRendererTests
     {
         var renderer = new WeeklyExistingRunVideoRenderer(
             Options.Create(new RenderingOptions()),
+            new StaticWeeklyPipelineRunDirectoryResolver(Path.GetTempPath()),
             NullLogger<WeeklyExistingRunVideoRenderer>.Instance);
         var pipelineRunId = Guid.NewGuid();
         var root = Path.Combine(Path.GetTempPath(), "weekly-render-hydration", pipelineRunId.ToString("N"));
@@ -222,5 +223,10 @@ public sealed class WeeklyExistingRunVideoRendererTests
         var property = instance.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
         Assert.NotNull(property);
         return Assert.IsType<T>(property.GetValue(instance));
+    }
+
+    private sealed class StaticWeeklyPipelineRunDirectoryResolver(string root) : IWeeklyPipelineRunDirectoryResolver
+    {
+        public Task<string> ResolveRunDirectoryAsync(Guid pipelineRunId) => Task.FromResult(root);
     }
 }

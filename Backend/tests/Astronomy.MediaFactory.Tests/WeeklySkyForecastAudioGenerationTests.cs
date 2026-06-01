@@ -28,6 +28,7 @@ public sealed class WeeklySkyForecastAudioGenerationTests
         var service = new WeeklySkyForecastAudioGenerationService(
             Options.Create(new RenderingOptions { WorkingDirectory = workingRoot }),
             Options.Create(new AzureSpeechOptions { DefaultVoiceName = "hi-IN-MadhurNeural" }),
+            new StaticWeeklyPipelineRunDirectoryResolver(runRoot),
             new ThrowingTtsSynthesizer(),
             NullLogger<WeeklySkyForecastAudioGenerationService>.Instance);
 
@@ -97,6 +98,7 @@ public sealed class WeeklySkyForecastAudioGenerationTests
         var service = new WeeklySkyForecastAudioGenerationService(
             Options.Create(new RenderingOptions { WorkingDirectory = workingRoot }),
             Options.Create(new AzureSpeechOptions { DefaultVoiceName = "hi-IN-MadhurNeural" }),
+            new StaticWeeklyPipelineRunDirectoryResolver(runRoot),
             new ThrowingTtsSynthesizer(),
             NullLogger<WeeklySkyForecastAudioGenerationService>.Instance);
 
@@ -133,6 +135,7 @@ public sealed class WeeklySkyForecastAudioGenerationTests
         var service = new WeeklySkyForecastAudioGenerationService(
             Options.Create(new RenderingOptions { WorkingDirectory = workingRoot }),
             Options.Create(new AzureSpeechOptions { DefaultVoiceName = "hi-IN-MadhurNeural" }),
+            new StaticWeeklyPipelineRunDirectoryResolver(runRoot),
             new ThrowingTtsSynthesizer(),
             NullLogger<WeeklySkyForecastAudioGenerationService>.Instance);
 
@@ -164,5 +167,10 @@ public sealed class WeeklySkyForecastAudioGenerationTests
     {
         public Task SynthesizeSsmlToFileAsync(string ssml, string outputPath, string voiceName, string audioFormat, CancellationToken cancellationToken)
             => throw new InvalidOperationException("TTS should not run during dryRun.");
+    }
+
+    private sealed class StaticWeeklyPipelineRunDirectoryResolver(string root) : IWeeklyPipelineRunDirectoryResolver
+    {
+        public Task<string> ResolveRunDirectoryAsync(Guid pipelineRunId) => Task.FromResult(root);
     }
 }

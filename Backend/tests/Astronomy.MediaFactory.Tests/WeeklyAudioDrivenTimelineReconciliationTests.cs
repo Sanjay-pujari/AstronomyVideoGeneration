@@ -3,7 +3,6 @@ using Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using System.Text.Json;
 using Xunit;
 
@@ -24,7 +23,7 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
         await WriteInputsAsync(runRoot, pipelineRunId);
 
         var service = new WeeklyAudioDrivenTimelineReconciliationService(
-            Options.Create(new RenderingOptions { WorkingDirectory = workingRoot }),
+            new StaticWeeklyPipelineRunDirectoryResolver(runRoot),
             NullLogger<WeeklyAudioDrivenTimelineReconciliationService>.Instance);
 
         var response = await service.ReconcileAsync(pipelineRunId, new WeeklyAudioDrivenTimelineReconciliationRequest(OverwriteExisting: true), CancellationToken.None);
@@ -95,4 +94,9 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
 
     private static async Task<T> ReadJsonAsync<T>(string path)
         => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+
+    private sealed class StaticWeeklyPipelineRunDirectoryResolver(string root) : IWeeklyPipelineRunDirectoryResolver
+    {
+        public Task<string> ResolveRunDirectoryAsync(Guid pipelineRunId) => Task.FromResult(root);
+    }
 }

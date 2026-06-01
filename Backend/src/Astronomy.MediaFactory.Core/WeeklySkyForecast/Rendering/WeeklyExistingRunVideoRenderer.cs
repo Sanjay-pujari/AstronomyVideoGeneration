@@ -50,6 +50,7 @@ public sealed record WeeklyExistingRunRenderResponse(
     int TotalProductionAssetsDiscovered,
     int TotalRenderInputAssets,
     string RenderStoryboardReportPath,
+    string ResolvedPipelineRunRoot,
     int HeroEventWesternGroupingFrameCount,
     int PlanetHighlightsWesternGroupingFrameCount,
     int ShortformWesternGroupingFrameCount,
@@ -365,6 +366,7 @@ public sealed record RenderStoryboardShotReport(
 
 public sealed class WeeklyExistingRunVideoRenderer(
     IOptions<RenderingOptions> renderingOptions,
+    IWeeklyPipelineRunDirectoryResolver pipelineRunDirectoryResolver,
     ILogger<WeeklyExistingRunVideoRenderer> logger) : IWeeklyExistingRunVideoRenderer
 {
     private const int ShortformCanvasWidth = 1080;
@@ -389,7 +391,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
 
         try
         {
-            var root = ResolveWorkingDirectoryRoot(pipelineRunId);
+            var root = await pipelineRunDirectoryResolver.ResolveRunDirectoryAsync(pipelineRunId);
             var renderDirectory = Path.Combine(root, "render");
             var paths = WeeklyExistingRunRequiredPaths.FromRoot(root, request.UseAudioDrivenTimeline);
             var loaded = await LoadInputsAsync(paths, cancellationToken);
@@ -526,6 +528,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 hydration.TotalProductionAssetsDiscovered,
                 hydration.TotalRenderInputAssets,
                 storyboardReportPath,
+                root,
                 visualSelectionReport.HeroEventWesternGroupingFrameCount,
                 visualSelectionReport.PlanetHighlightsWesternGroupingFrameCount,
                 visualSelectionReport.ShortformWesternGroupingFrameCount,
@@ -2022,30 +2025,6 @@ public sealed class WeeklyExistingRunVideoRenderer(
 
     private static bool IsSupportedImagePath(string path) => path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase);
     private static string NormalizeAssetId(string sourceType, string path, string assetCode) => $"{NormalizeRenderAssetType(sourceType)}:{ResolveSceneFamily(path, assetCode)}:{ResolveAssetCode(path, assetCode)}";
-
-    private string ResolveWorkingDirectoryRoot(Guid pipelineRunId)
-    {
-        var workingRoot = string.IsNullOrWhiteSpace(_renderingOptions.WorkingDirectory) ? "./media-output" : _renderingOptions.WorkingDirectory;
-        if (!Directory.Exists(workingRoot))
-        {
-            throw new DirectoryNotFoundException($"Pipeline working directory root does not exist: {workingRoot}");
-        }
-
-        var matches = Directory.EnumerateDirectories(workingRoot, pipelineRunId.ToString("N"), SearchOption.AllDirectories)
-            .Concat(Directory.EnumerateDirectories(workingRoot, pipelineRunId.ToString("D"), SearchOption.AllDirectories))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(IsWeeklyRenderRunDirectory)
-            .ToList();
-        return matches.Count switch
-        {
-            0 => throw new DirectoryNotFoundException($"No WeeklySkyForecast workingDirectoryRoot was found for pipelineRunId {pipelineRunId} under {workingRoot}."),
-            1 => matches[0],
-            _ => matches.OrderByDescending(Directory.GetLastWriteTimeUtc).First()
-        };
-    }
-
-    private static bool IsWeeklyRenderRunDirectory(string path)
-        => File.Exists(Path.Combine(path, "render", "weekly-render-contract.json")) || File.Exists(Path.Combine(path, "episode", "final-render-timeline.json"));
 
     private static async Task<WeeklyExistingRunLoadedInputs> LoadInputsAsync(WeeklyExistingRunRequiredPaths paths, CancellationToken cancellationToken)
     {
