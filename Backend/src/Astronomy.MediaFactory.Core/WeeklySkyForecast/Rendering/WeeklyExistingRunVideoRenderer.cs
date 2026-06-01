@@ -1836,7 +1836,6 @@ public sealed class WeeklyExistingRunVideoRenderer(
             || motion.Equals("subtle-ken-burns", StringComparison.OrdinalIgnoreCase);
 
     private static string Quote(string value) => $"\"{value.Replace("\"", "\\\"")}\"";
-    private static string EscapeConcatPath(string path) => path.Replace("'", "'\\''", StringComparison.Ordinal);
     private static string SanitizeFileName(string value) => string.Join("_", value.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim('_');
     private static string Truncate(string value, int maxLength) => value.Length <= maxLength ? value : value[..maxLength];
 }
