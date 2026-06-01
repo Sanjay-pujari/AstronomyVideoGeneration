@@ -54,6 +54,14 @@ public sealed record WeeklyExistingRunRenderResponse(
     int MaxLongformShotDurationSeconds,
     int MaxShortformShotDurationSeconds,
     int RepeatedAssetPathCount,
+    string AssetRepeatValidationMode,
+    bool AssetRepeatWeightedValidationPassed,
+    bool AssetFamilyDistributionPassed,
+    int SameAssetPathHardFailureCount,
+    int SameAssetPathWarningCount,
+    int SameAssetPathMaxUsageCount,
+    double SameAssetPathMaxDurationPercent,
+    int MaxConsecutiveSameAssetPathCount,
     bool AiCinematicDiversityPassed,
     bool MotionGraphicDiversityPassed,
     bool StellariumSceneBalancePassed,
@@ -203,6 +211,18 @@ public sealed record RenderVisualSelectionReport(
     int MaxShortformShotDurationSeconds,
     bool SameAssetRepeatedTooMuch,
     int RepeatedAssetPathCount,
+    string AssetRepeatValidationMode,
+    int MaxAllowedSameAssetPathUsesLongform,
+    int MaxAllowedSameAssetPathUsesShortform,
+    int SameAssetPathHardFailureCount,
+    int SameAssetPathWarningCount,
+    int SameAssetPathMaxUsageCount,
+    double SameAssetPathMaxDurationPercent,
+    int MaxConsecutiveSameAssetPathCount,
+    IReadOnlyDictionary<string, double> FamilyDurationPercentages,
+    bool AssetRepeatLimitPassed,
+    bool AssetFamilyDistributionPassed,
+    bool RenderVisualDiversityReady,
     int WeeklyOverviewTimelineUsageCount,
     int FastCinematicSkyHookUsageCount,
     bool AiCinematicDiversityPassed,
@@ -228,6 +248,12 @@ public sealed record RenderDiversityValidationReport(
     bool PlanetHighlightsGroupingFramesPassed,
     bool MoonOnlyDetectionPassed,
     bool AssetRepeatLimitPassed,
+    string AssetRepeatValidationMode,
+    bool AssetRepeatWeightedValidationPassed,
+    bool AssetFamilyDistributionPassed,
+    int SameAssetPathHardFailureCount,
+    int SameAssetPathWarningCount,
+    int MaxConsecutiveSameAssetPathCount,
     bool AiAssetDiversityPassed,
     bool MotionGraphicDiversityPassed,
     bool ShotDurationLimitPassed,
@@ -398,6 +424,14 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 visualSelectionReport.MaxLongformShotDurationSeconds,
                 visualSelectionReport.MaxShortformShotDurationSeconds,
                 visualSelectionReport.RepeatedAssetPathCount,
+                visualSelectionReport.AssetRepeatValidationMode,
+                diversityValidationReport.AssetRepeatWeightedValidationPassed,
+                diversityValidationReport.AssetFamilyDistributionPassed,
+                visualSelectionReport.SameAssetPathHardFailureCount,
+                visualSelectionReport.SameAssetPathWarningCount,
+                visualSelectionReport.SameAssetPathMaxUsageCount,
+                visualSelectionReport.SameAssetPathMaxDurationPercent,
+                visualSelectionReport.MaxConsecutiveSameAssetPathCount,
                 visualSelectionReport.AiCinematicDiversityPassed,
                 visualSelectionReport.MotionGraphicDiversityPassed,
                 visualSelectionReport.StellariumSceneBalancePassed,
@@ -953,9 +987,10 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var moonOnly = stellariumRows.Count > 0 && !stellariumRows.Any(x => IsWesternGroupingPath(x.Shot.AssetPath + " " + x.Shot.AssetId));
         var maxLong = longformRows.Count == 0 ? 0 : longformRows.Max(x => x.Shot.DurationSeconds);
         var maxShort = shortformRows.Count == 0 ? 0 : shortformRows.Max(x => x.Shot.DurationSeconds);
-        var repeated = longformRows.GroupBy(x => x.Shot.AssetPath, StringComparer.OrdinalIgnoreCase).Sum(g => Math.Max(0, g.Count() - 2))
-            + shortformRows.GroupBy(x => x.Shot.AssetPath, StringComparer.OrdinalIgnoreCase).Sum(g => Math.Max(0, g.Count() - 1));
-        var sameAssetRepeatedTooMuch = repeated > 0;
+        var repeatValidation = BuildAssetRepeatValidation(longformRows, shortformRows);
+        var familyValidation = BuildAssetFamilyDistributionValidation(shotRows);
+        var sameAssetRepeatedTooMuch = repeatValidation.HardFailureCount > 0;
+        var repeated = repeatValidation.WarningCount + repeatValidation.HardFailureCount;
         var weeklyOverviewUsage = allShots.Count(x => ContainsAny(x.AssetPath + " " + x.AssetId, "weekly-overview-timeline"));
         var fastHookUsage = allShots.Count(x => ContainsAny(x.AssetPath + " " + x.AssetId, "fast_cinematic_sky_hook"));
         var longPacing = longformRows.All(x => x.Shot.DurationSeconds <= GetMaxShotDurationSeconds(x.Segment.SegmentType, false));
@@ -975,6 +1010,10 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var moonHeroPercent = Math.Round(moonHeroDuration * 100.0 / longformDuration, 2);
         var visualPassed = (!longformRequested || (heroGrouping >= 3 && planetGrouping >= 2 && expanded >= 1 && nasaUsage >= 2 && jwstUsage >= 1 && moonHeroPercent <= 30)) && (!shortformRequested || shortGrouping >= 2) && !moonOnly;
 
+        if (visualPassed) repeatValidation = DowngradeAssetAvailabilityRepeatFailures(repeatValidation, longformRows, shortformRows);
+        sameAssetRepeatedTooMuch = repeatValidation.HardFailureCount > 0;
+        repeated = repeatValidation.WarningCount + repeatValidation.HardFailureCount;
+
         if (longformRequested && heroGrouping < 3) errors.Add("HeroEvent must include at least 3 western_planet_grouping_scene frames when those files exist.");
         if (longformRequested && planetGrouping < 2) errors.Add("PlanetHighlights must include at least 2 western_planet_grouping_scene frames when those files exist.");
         if (shortformRequested && shortGrouping < 2) errors.Add("Shortform must include at least 2 western_planet_grouping_scene frames when those files exist.");
@@ -983,7 +1022,11 @@ public sealed class WeeklyExistingRunVideoRenderer(
         if (longformRequested && nasaUsage < 2) errors.Add("Longform must include at least 2 NASA assets when available.");
         if (longformRequested && jwstUsage < 1) errors.Add("Longform must include at least 1 JWST asset when available.");
         if (longformRequested && moonHeroPercent > 30) errors.Add("moon_hero_scene visual duration must not exceed 30% of longform visual duration.");
-        if (repeated > 0) warnings.Add("One or more asset paths exceeded render diversity repeat limits because the resolved shot count exceeded available alternatives for those segment constraints.");
+        warnings.AddRange(repeatValidation.Warnings);
+        warnings.AddRange(familyValidation.Warnings);
+
+        var assetRepeatLimitPassed = repeatValidation.Passed;
+        var renderVisualDiversityReady = assetRepeatLimitPassed && familyValidation.Passed && aiPassed && motionPassed && stellariumPassed && shortPacing && longPacing && visualPassed && errors.Count == 0;
 
         return new RenderVisualSelectionReport(
             heroGrouping,
@@ -996,6 +1039,18 @@ public sealed class WeeklyExistingRunVideoRenderer(
             maxShort,
             sameAssetRepeatedTooMuch,
             repeated,
+            "weighted",
+            4,
+            2,
+            repeatValidation.HardFailureCount,
+            repeatValidation.WarningCount,
+            repeatValidation.MaxUsageCount,
+            repeatValidation.MaxDurationPercent,
+            repeatValidation.MaxConsecutiveCount,
+            familyValidation.DurationPercentages,
+            assetRepeatLimitPassed,
+            familyValidation.Passed,
+            renderVisualDiversityReady,
             weeklyOverviewUsage,
             fastHookUsage,
             aiPassed,
@@ -1015,6 +1070,171 @@ public sealed class WeeklyExistingRunVideoRenderer(
             errors);
     }
 
+    private sealed record AssetRepeatValidationResult(
+        bool Passed,
+        int HardFailureCount,
+        int WarningCount,
+        int AvailabilityDowngradableFailureCount,
+        int MaxUsageCount,
+        double MaxDurationPercent,
+        int MaxConsecutiveCount,
+        IReadOnlyList<string> Warnings);
+
+    private sealed record AssetFamilyDistributionValidationResult(
+        bool Passed,
+        IReadOnlyDictionary<string, double> DurationPercentages,
+        IReadOnlyList<string> Warnings);
+
+    private static AssetRepeatValidationResult BuildAssetRepeatValidation(
+        IReadOnlyList<(string EpisodeType, FinalRenderSegment Segment, FinalRenderShot Shot)> longformRows,
+        IReadOnlyList<(string EpisodeType, FinalRenderSegment Segment, FinalRenderShot Shot)> shortformRows)
+    {
+        var warnings = new List<string>();
+        var hardFailures = 0;
+        var warningCount = 0;
+        var availabilityDowngradableFailures = 0;
+        var maxUsage = 0;
+        var maxDurationPercent = 0.0;
+        var maxConsecutive = 0;
+
+        EvaluateEpisodeAssetRepeats(longformRows, "longform", 4, 5, 2, true, warnings, ref hardFailures, ref warningCount, ref availabilityDowngradableFailures, ref maxUsage, ref maxDurationPercent, ref maxConsecutive);
+        EvaluateEpisodeAssetRepeats(shortformRows, "shortform", 2, 2, 1, false, warnings, ref hardFailures, ref warningCount, ref availabilityDowngradableFailures, ref maxUsage, ref maxDurationPercent, ref maxConsecutive);
+
+        return new AssetRepeatValidationResult(hardFailures == 0, hardFailures, warningCount, availabilityDowngradableFailures, maxUsage, Math.Round(maxDurationPercent, 2), maxConsecutive, warnings);
+    }
+
+    private static void EvaluateEpisodeAssetRepeats(
+        IReadOnlyList<(string EpisodeType, FinalRenderSegment Segment, FinalRenderShot Shot)> rows,
+        string episodeType,
+        int allowedUses,
+        int hardFailureUses,
+        int allowedConsecutiveUses,
+        bool longform,
+        List<string> warnings,
+        ref int hardFailures,
+        ref int warningCount,
+        ref int availabilityDowngradableFailures,
+        ref int maxUsage,
+        ref double maxDurationPercent,
+        ref int maxConsecutive)
+    {
+        if (rows.Count == 0) return;
+
+        var episodeDuration = Math.Max(1, rows.Sum(x => x.Shot.DurationSeconds));
+        foreach (var group in rows.GroupBy(x => x.Shot.AssetPath, StringComparer.OrdinalIgnoreCase))
+        {
+            var usage = group.Count();
+            var durationPercent = group.Sum(x => x.Shot.DurationSeconds) * 100.0 / episodeDuration;
+            maxUsage = Math.Max(maxUsage, usage);
+            maxDurationPercent = Math.Max(maxDurationPercent, durationPercent);
+
+            var reusableBackground = group.Any(x => IsReusableGlobalBackground(x.Shot));
+            var countFailure = longform ? usage > hardFailureUses && !reusableBackground : usage > allowedUses;
+            var durationFailure = durationPercent > 18.0;
+
+            if (countFailure || durationFailure)
+            {
+                hardFailures++;
+                if (countFailure && !durationFailure) availabilityDowngradableFailures++;
+                warnings.Add($"{episodeType} asset repeat hard failure for '{group.Key}': uses={usage}, durationPercent={Math.Round(durationPercent, 2)}.");
+            }
+            else if (usage > allowedUses)
+            {
+                warningCount++;
+                warnings.Add($"{episodeType} controlled asset reuse warning for '{group.Key}': uses={usage}, durationPercent={Math.Round(durationPercent, 2)}.");
+            }
+        }
+
+        var currentAsset = string.Empty;
+        var currentCount = 0;
+        foreach (var row in rows)
+        {
+            if (row.Shot.AssetPath.Equals(currentAsset, StringComparison.OrdinalIgnoreCase)) currentCount++;
+            else
+            {
+                currentAsset = row.Shot.AssetPath;
+                currentCount = 1;
+            }
+
+            maxConsecutive = Math.Max(maxConsecutive, currentCount);
+            if (currentCount == allowedConsecutiveUses + 1)
+            {
+                hardFailures++;
+                warnings.Add($"{episodeType} asset repeat hard failure: '{row.Shot.AssetPath}' appears in more than {allowedConsecutiveUses} consecutive shots.");
+            }
+        }
+    }
+
+    private static AssetRepeatValidationResult DowngradeAssetAvailabilityRepeatFailures(
+        AssetRepeatValidationResult result,
+        IReadOnlyList<(string EpisodeType, FinalRenderSegment Segment, FinalRenderShot Shot)> longformRows,
+        IReadOnlyList<(string EpisodeType, FinalRenderSegment Segment, FinalRenderShot Shot)> shortformRows)
+    {
+        if (result.HardFailureCount == 0) return result;
+        if (result.AvailabilityDowngradableFailureCount != result.HardFailureCount) return result;
+
+        var longformAssetLimited = longformRows.Count > 0 && longformRows.Select(x => x.Shot.AssetPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() <= 4;
+        var shortformAssetLimited = shortformRows.Count > 0 && shortformRows.Select(x => x.Shot.AssetPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() <= 2;
+        if (!longformAssetLimited && !shortformAssetLimited) return result;
+
+        var warnings = result.Warnings.Concat(["Asset repeat hard failures were downgraded to warnings because the episode has fewer available unique visual assets than the calibrated repeat threshold and visualDistributionPassed=true."]).ToList();
+        return result with { Passed = true, WarningCount = result.WarningCount + result.HardFailureCount, HardFailureCount = 0, AvailabilityDowngradableFailureCount = 0, Warnings = warnings };
+    }
+
+    private static AssetFamilyDistributionValidationResult BuildAssetFamilyDistributionValidation(IReadOnlyList<(string EpisodeType, FinalRenderSegment Segment, FinalRenderShot Shot)> rows)
+    {
+        var totalDuration = Math.Max(1, rows.Sum(x => x.Shot.DurationSeconds));
+        var families = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["moon_hero_scene"] = 0,
+            ["western_planet_grouping_scene"] = 0,
+            ["AICinematic"] = 0,
+            ["NASA"] = 0,
+            ["JWST"] = 0,
+            ["MotionGraphic"] = 0,
+            ["EducationalOverlay"] = 0,
+            ["ExpandedStellarium"] = 0
+        };
+
+        foreach (var row in rows)
+        {
+            var shot = row.Shot;
+            var haystack = shot.AssetPath + " " + shot.AssetId + " " + shot.AssetType + " " + shot.Purpose;
+            if (IsMoonHeroPath(haystack)) families["moon_hero_scene"] += shot.DurationSeconds;
+            if (IsWesternGroupingPath(haystack)) families["western_planet_grouping_scene"] += shot.DurationSeconds;
+            if (shot.AssetType.Equals("AICinematic", StringComparison.OrdinalIgnoreCase) || shot.AssetPath.Contains("ai-cinematic", StringComparison.OrdinalIgnoreCase)) families["AICinematic"] += shot.DurationSeconds;
+            if (shot.AssetType.Equals("NASA", StringComparison.OrdinalIgnoreCase) || shot.AssetPath.Contains("/nasa/", StringComparison.OrdinalIgnoreCase)) families["NASA"] += shot.DurationSeconds;
+            if (shot.AssetType.Equals("JWST", StringComparison.OrdinalIgnoreCase) || shot.AssetPath.Contains("/jwst/", StringComparison.OrdinalIgnoreCase)) families["JWST"] += shot.DurationSeconds;
+            if (shot.AssetType.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase) || shot.AssetPath.Contains("motion-graphics", StringComparison.OrdinalIgnoreCase)) families["MotionGraphic"] += shot.DurationSeconds;
+            if (shot.AssetType.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase) || ContainsAny(haystack, "educational-overlay", "educational_overlay")) families["EducationalOverlay"] += shot.DurationSeconds;
+            if (shot.AssetType.Equals("ExpandedStellarium", StringComparison.OrdinalIgnoreCase) || IsExpandedAstrophotographyPath(haystack)) families["ExpandedStellarium"] += shot.DurationSeconds;
+        }
+
+        var percentages = families.ToDictionary(x => x.Key, x => Math.Round(x.Value * 100.0 / totalDuration, 2), StringComparer.OrdinalIgnoreCase);
+        var warnings = new List<string>();
+        CheckFamilyLimit(percentages, "moon_hero_scene", 30, warnings);
+        CheckFamilyLimit(percentages, "western_planet_grouping_scene", 35, warnings);
+        CheckFamilyLimit(percentages, "AICinematic", 30, warnings);
+        CheckFamilyLimit(percentages, "MotionGraphic", 35, warnings);
+        CheckFamilyLimit(percentages, "EducationalOverlay", 18, warnings);
+        CheckFamilyLimit(percentages, "ExpandedStellarium", 18, warnings);
+        var nasaJwstPercent = percentages["NASA"] + percentages["JWST"];
+        if (nasaJwstPercent > 30) warnings.Add($"NASA/JWST combined visual duration is {Math.Round(nasaJwstPercent, 2)}%, above the 30% calibrated family limit.");
+
+        return new AssetFamilyDistributionValidationResult(warnings.Count == 0, percentages, warnings);
+    }
+
+    private static void CheckFamilyLimit(IReadOnlyDictionary<string, double> percentages, string family, double limit, List<string> warnings)
+    {
+        if (percentages.TryGetValue(family, out var percentage) && percentage > limit)
+        {
+            warnings.Add($"{family} visual duration is {percentage}%, above the {limit}% calibrated family limit.");
+        }
+    }
+
+    private static bool IsReusableGlobalBackground(FinalRenderShot shot)
+        => ContainsAny(shot.AssetPath + " " + shot.AssetId + " " + shot.Purpose, "reusable_global_background");
+
     private static RenderDiversityValidationReport BuildDiversityValidationReport(RenderVisualSelectionReport report)
     {
         var warnings = report.Warnings.ToList();
@@ -1024,10 +1244,28 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var hero = !longformEvaluated || report.HeroEventWesternGroupingFrameCount >= 3;
         var planet = !longformEvaluated || report.PlanetHighlightsWesternGroupingFrameCount >= 2;
         var moonDetection = !report.MoonOnlyStellariumDetected;
-        var repeat = !report.SameAssetRepeatedTooMuch || report.RepeatedAssetPathCount <= 2;
+        var repeat = report.AssetRepeatLimitPassed;
         var shotDuration = report.MaxLongformShotDurationSeconds <= 14 && report.MaxShortformShotDurationSeconds <= 8;
-        var ready = segmentAware && hero && planet && moonDetection && repeat && report.AiCinematicDiversityPassed && report.MotionGraphicDiversityPassed && report.VisualDistributionPassed && shotDuration && report.ShortformPacingPassed && errors.Count == 0;
-        return new RenderDiversityValidationReport(ready, segmentAware, hero, planet, moonDetection, repeat, report.AiCinematicDiversityPassed, report.MotionGraphicDiversityPassed, shotDuration, report.ShortformPacingPassed, warnings, errors);
+        var ready = segmentAware && hero && planet && moonDetection && repeat && report.AssetFamilyDistributionPassed && report.AiCinematicDiversityPassed && report.MotionGraphicDiversityPassed && report.StellariumSceneBalancePassed && report.VisualDistributionPassed && shotDuration && report.ShortformPacingPassed && report.LongformPacingPassed && errors.Count == 0;
+        return new RenderDiversityValidationReport(
+            ready,
+            segmentAware,
+            hero,
+            planet,
+            moonDetection,
+            repeat,
+            report.AssetRepeatValidationMode,
+            repeat,
+            report.AssetFamilyDistributionPassed,
+            report.SameAssetPathHardFailureCount,
+            report.SameAssetPathWarningCount,
+            report.MaxConsecutiveSameAssetPathCount,
+            report.AiCinematicDiversityPassed,
+            report.MotionGraphicDiversityPassed,
+            shotDuration,
+            report.ShortformPacingPassed,
+            warnings,
+            errors);
     }
 
     private static IEnumerable<(string EpisodeType, FinalRenderSegment Segment, FinalRenderShot Shot)> LoadResolvedShotRows(IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans)
