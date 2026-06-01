@@ -1016,6 +1016,10 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var weeklyStellariumSceneRequirementsPath = Path.Combine(episodeDirectory, "weekly-stellarium-scene-requirements.json");
         var visualNarrationCoverageReportPath = Path.Combine(episodeDirectory, "weekly-visual-narration-coverage-report.json");
         var sscSceneManifestPath = Path.Combine(stellariumDirectory, "ssc-scene-manifest.json");
+        var framingDirectory = Path.Combine(stellariumDirectory, "framing");
+        Directory.CreateDirectory(framingDirectory);
+        var weeklyDynamicFramingPlanPath = Path.Combine(framingDirectory, "weekly-dynamic-framing-plan.json");
+        var weeklyFramingValidationReportPath = Path.Combine(framingDirectory, "weekly-framing-validation-report.json");
         await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly focus object plan", stageCt =>
             File.WriteAllTextAsync(weeklyFocusObjectPlanPath, JsonSerializer.Serialize(weeklyFocusPlan, new JsonSerializerOptions { WriteIndented = true }), stageCt));
         await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly Stellarium scene requirements", stageCt =>
@@ -1093,6 +1097,8 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var multiObjectSceneResolutionReports = new List<WeeklyMultiObjectSceneResolutionReport>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
+        var dynamicFramingEngine = new WeeklyDynamicMultiObjectFramingEngine();
+        var dynamicFramingPlans = new List<WeeklyDynamicFramingPlan>();
         static string ResolveCinematicCompositionMode(string? sceneCode, string? framingMode)
         {
             if (!string.IsNullOrWhiteSpace(sceneCode))
@@ -1528,6 +1534,132 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     app.Logger.LogError("SSC_SKIPPED_NO_REAL_GEOMETRY sceneCode={SceneCode} requestedObjects={RequestedObjects}", shot.ShotCode, string.Join(",", sceneSpecificCodes));
                     continue;
                 }
+
+                var sceneRequirement = new WeeklySceneRequirement(
+                    shot.ShotCode,
+                    stellariumNeed.SourceSceneCode,
+                    ResolveDynamicEventType(scenePlan?.SceneType ?? shot.ShotType, shot.ShotCode, sceneSpecificCodes),
+                    sceneSpecificCodes,
+                    observationUtc,
+                    selectedObservationLocal,
+                    scenePlan?.SceneType ?? shot.ShotType,
+                    shot.ShotPurpose);
+                var dynamicPlan = await dynamicFramingEngine.BuildFramingPlanAsync(
+                    sceneRequirement,
+                    weeklySkyfieldContext,
+                    weeklyFocusPlan,
+                    skyPositions,
+                    stageCt);
+                dynamicFramingPlans.Add(dynamicPlan);
+                app.Logger.LogInformation("DYNAMIC_FRAMING_PLAN_CREATED sceneCode={SceneCode} eventType={EventType} framingMode={FramingMode} splitRequired={SplitRequired} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects}",
+                    dynamicPlan.SceneCode,
+                    dynamicPlan.EventType,
+                    dynamicPlan.FramingMode,
+                    dynamicPlan.SplitRequired,
+                    string.Join(",", dynamicPlan.RequestedObjects),
+                    string.Join(",", dynamicPlan.ResolvedObjects));
+                if (dynamicPlan.SplitRequired)
+                    app.Logger.LogInformation("DYNAMIC_FRAMING_SPLIT_REQUIRED sceneCode={SceneCode} clusterCount={ClusterCount}", dynamicPlan.SceneCode, dynamicPlan.Clusters.Count);
+                ValidateWeeklyDynamicFramingPlan(dynamicPlan);
+
+                IReadOnlyList<WeeklyDynamicSceneContract> dynamicScenes = dynamicPlan.SplitRequired ? dynamicPlan.Clusters : new[] { dynamicPlan.ToSceneContract() };
+                foreach (var dynamicScene in dynamicScenes)
+                {
+                    ValidateWeeklyDynamicSceneContract(dynamicScene);
+                    app.Logger.LogInformation("DYNAMIC_FRAMING_TARGET_LOCK_PASSED sceneCode={SceneCode} targetObjects={TargetObjects} cameraTargets={CameraTargets}", dynamicScene.SceneCode, string.Join(",", dynamicScene.TargetObjects), string.Join(",", dynamicScene.CameraTargetObjects));
+                    app.Logger.LogInformation("SSC_GENERATOR_USING_DYNAMIC_FRAMING_PLAN sceneCode={SceneCode}", dynamicScene.SceneCode);
+
+                    var dynamicScriptPath = Path.Combine(scriptsDirectory, $"{dynamicScene.SceneCode}.ssc");
+                    var dynamicImagePath = Path.Combine(scenesDirectory, $"{dynamicScene.SceneCode}.png");
+                    var dynamicSsc = BuildWeeklyDynamicFramingSsc(dynamicScene, observationUtc, longitude, latitude, elevationMeters, locationName, scenesDirectory);
+                    generatedScripts.Add((dynamicScriptPath, dynamicSsc));
+                    generatedSplitMetadataBySceneCode[dynamicScene.SceneCode] = new GeneratedSplitSceneMetadata(
+                        dynamicScene.SceneCode,
+                        dynamicScene.ParentSceneCode ?? shot.ShotCode,
+                        dynamicScene.TargetObjects,
+                        dynamicScene.PrimaryObject,
+                        dynamicScene.FramingMode,
+                        ResolveDynamicEventType(scenePlan?.SceneType ?? shot.ShotType, dynamicScene.SceneCode, dynamicScene.TargetObjects),
+                        shot.DurationSeconds,
+                        stellariumNeed.TargetDate,
+                        observationUtc,
+                        dynamicScriptPath,
+                        dynamicImagePath);
+                    if (!scriptSourceSceneCodes.TryGetValue(dynamicScene.SceneCode, out var dynamicSources))
+                    {
+                        dynamicSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        scriptSourceSceneCodes[dynamicScene.SceneCode] = dynamicSources;
+                    }
+                    dynamicSources.Add(shot.ShotCode);
+                    app.Logger.LogInformation("DYNAMIC_FRAMING_SCENE_CREATED sceneCode={SceneCode} parentSceneCode={ParentSceneCode} targetObjects={TargetObjects} cameraAz={CameraAz} cameraAlt={CameraAlt} fov={Fov} inheritedFromParent={InheritedFromParent}",
+                        dynamicScene.SceneCode,
+                        dynamicScene.ParentSceneCode ?? string.Empty,
+                        string.Join(",", dynamicScene.TargetObjects),
+                        dynamicScene.CameraAzimuth,
+                        dynamicScene.CameraAltitude,
+                        dynamicScene.Fov,
+                        dynamicScene.InheritedFromParent);
+
+                    var dynamicFrameVariants = new[]
+                    {
+                        (FrameType: CinematicFrameType.HorizonContext, Name: "horizon_context", FovScale: 1.15d, MinFov: 18d, MaxFov: Math.Min(WeeklyFramingOptions.Default.AbsoluteMaxSingleFrameFov, Math.Max(dynamicScene.Fov, 60d)), PreserveHorizon: dynamicScene.IncludeHorizon, Purpose: "Dynamic geometry-driven horizon/context frame."),
+                        (FrameType: CinematicFrameType.BalancedStoryFrame, Name: "balanced_story_frame", FovScale: 1.00d, MinFov: 18d, MaxFov: WeeklyFramingOptions.Default.AbsoluteMaxSingleFrameFov, PreserveHorizon: dynamicScene.IncludeHorizon, Purpose: "Dynamic geometry-driven balanced target frame."),
+                        (FrameType: CinematicFrameType.DetailFocus, Name: "detail_focus", FovScale: 0.78d, MinFov: 18d, MaxFov: Math.Min(dynamicScene.Fov, 75d), PreserveHorizon: false, Purpose: "Dynamic geometry-driven detail frame.")
+                    };
+                    var dynamicFramePlans = new List<CinematicFramePlan>();
+                    var dynamicFrameScriptDir = Path.Combine(scriptsDirectory, dynamicScene.SceneCode);
+                    var dynamicFrameSceneDir = Path.Combine(scenesDirectory, dynamicScene.SceneCode);
+                    Directory.CreateDirectory(dynamicFrameScriptDir);
+                    Directory.CreateDirectory(dynamicFrameSceneDir);
+                    for (var frameIndex = 0; frameIndex < dynamicFrameVariants.Length; frameIndex++)
+                    {
+                        var variant = dynamicFrameVariants[frameIndex];
+                        var frameFov = Math.Clamp(dynamicScene.Fov * variant.FovScale, variant.MinFov, variant.MaxFov);
+                        var frameOutputScriptName = $"{frameIndex + 1:00}_{variant.Name}.ssc";
+                        var frameOutputImageName = $"{frameIndex + 1:00}_{variant.Name}.png";
+                        var frameScriptPath = Path.Combine(dynamicFrameScriptDir, frameOutputScriptName);
+                        var frameImagePath = Path.Combine(dynamicFrameSceneDir, frameOutputImageName);
+                        var framePlan = new CinematicFramePlan(
+                            $"{dynamicScene.SceneCode}_{frameIndex + 1:00}_{variant.Name}",
+                            dynamicScene.ParentSceneCode ?? shot.ShotCode,
+                            dynamicScene.SceneCode,
+                            variant.FrameType,
+                            frameIndex + 1,
+                            dynamicScene.TargetObjects,
+                            dynamicScene.PrimaryObject,
+                            dynamicScene.CameraAzimuth,
+                            dynamicScene.CameraAltitude,
+                            frameFov,
+                            variant.PreserveHorizon,
+                            true,
+                            true,
+                            0.50d,
+                            variant.PreserveHorizon ? 0.62d : 0.50d,
+                            variant.Purpose,
+                            dynamicScene.SplitRequired ? "Dynamic split scene with target-locked camera." : "Dynamic single-frame scene with target-locked camera.",
+                            frameOutputScriptName,
+                            frameOutputImageName,
+                            frameScriptPath,
+                            frameImagePath,
+                            Path.Combine("stellarium", "scripts", dynamicScene.SceneCode, frameOutputScriptName),
+                            Path.Combine("stellarium", "scenes", dynamicScene.SceneCode, frameOutputImageName),
+                            []);
+                        dynamicFramePlans.Add(framePlan);
+                        var frameSsc = BuildWeeklyDynamicFramingSsc(dynamicScene with { Fov = frameFov }, observationUtc, longitude, latitude, elevationMeters, locationName, Path.GetDirectoryName(frameImagePath) ?? scenesDirectory, Path.GetFileNameWithoutExtension(frameImagePath));
+                        generatedScripts.Add((frameScriptPath, frameSsc));
+                        finalRenderSceneDescriptors.Add(new FinalRenderSceneDescriptor(
+                            dynamicScene.SceneCode,
+                            framePlan.FrameId,
+                            false,
+                            string.Empty,
+                            "source=weekly-dynamic-framing-plan",
+                            framePlan.ScriptPath,
+                            framePlan.ImagePath,
+                            true));
+                    }
+                    allFramePlans.Add(new CinematicSceneFramePlan(dynamicScene.SceneCode, dynamicScene.ParentSceneCode ?? shot.ShotCode, dynamicFramePlans));
+                }
+                continue;
 
                 var compositionObjectsForSplit = skyPositions.Select(x => x.Position).ToList();
                 var spatialComposition = spatialCompositionEngine.Analyze(compositionObjectsForSplit);
@@ -1992,6 +2124,16 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             }
             return true;
         });
+        var dynamicFramingValidationReport = BuildWeeklyDynamicFramingValidationReport(dynamicFramingPlans);
+        await File.WriteAllTextAsync(weeklyDynamicFramingPlanPath, JsonSerializer.Serialize(new
+        {
+            dynamicFramingReady = dynamicFramingValidationReport.DynamicFramingReady,
+            generatedUtc = DateTime.UtcNow,
+            scenes = dynamicFramingPlans.SelectMany(plan => plan.SplitRequired ? plan.Clusters : (IReadOnlyList<WeeklyDynamicSceneContract>)new[] { plan.ToSceneContract() })
+        }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await File.WriteAllTextAsync(weeklyFramingValidationReportPath, JsonSerializer.Serialize(dynamicFramingValidationReport, new JsonSerializerOptions { WriteIndented = true }), ct);
+        app.Logger.LogInformation("DYNAMIC_FRAMING_REPORTS_WRITTEN planPath={PlanPath} validationPath={ValidationPath} dynamicFramingReady={DynamicFramingReady} allCameraTargetsLocked={AllCameraTargetsLocked} allTargetLabelsEnabled={AllTargetLabelsEnabled}", weeklyDynamicFramingPlanPath, weeklyFramingValidationReportPath, dynamicFramingValidationReport.DynamicFramingReady, dynamicFramingValidationReport.AllCameraTargetsLocked, dynamicFramingValidationReport.AllTargetLabelsEnabled);
+
         var qualityDirectory = Path.Combine(root, "cinematic");
         Directory.CreateDirectory(qualityDirectory);
         var framePlanPath = Path.Combine(qualityDirectory, "cinematic-frame-plan.json");
@@ -5095,7 +5237,7 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
         .SelectMany(scene => scene.FramePlans)
         .ToDictionary(frame => frame.FrameId, StringComparer.OrdinalIgnoreCase);
 
-    var deterministicOrder = new (string RenderSceneCode, CinematicFrameType FrameType)[]
+    var preferredOrder = new (string RenderSceneCode, CinematicFrameType FrameType)[]
     {
         ("moon_hero_scene", CinematicFrameType.EstablishingWide),
         ("moon_hero_scene", CinematicFrameType.BalancedStoryFrame),
@@ -5104,6 +5246,18 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
         ("western_planet_grouping_scene", CinematicFrameType.BalancedStoryFrame),
         ("western_planet_grouping_scene", CinematicFrameType.AlignmentWide)
     };
+    var deterministicOrder = preferredOrder
+        .Where(x => framePlanLookup.ContainsKey($"{x.RenderSceneCode}|{x.FrameType}"))
+        .Concat(sceneFramePlans
+            .SelectMany(scene => scene.FramePlans)
+            .OrderBy(frame => frame.FrameType == CinematicFrameType.BalancedStoryFrame ? 0 : frame.FrameType == CinematicFrameType.HorizonContext ? 1 : 2)
+            .ThenBy(frame => frame.RenderSceneCode, StringComparer.OrdinalIgnoreCase)
+            .Select(frame => (frame.RenderSceneCode, frame.FrameType)))
+        .Distinct()
+        .Take(expectedImageCount)
+        .ToArray();
+    if (deterministicOrder.Length < expectedImageCount)
+        logger.LogWarning("IMAGE_SEQUENCE_DYNAMIC_SELECTION_PARTIAL selected={SelectedCount} expected={ExpectedCount}", deterministicOrder.Length, expectedImageCount);
 
     var sequenceItems = new List<ImageSequenceItem>();
     var planValidationWarnings = new List<string>();
@@ -5292,28 +5446,52 @@ static WeeklyFocusObjectPlan BuildWeeklyFocusObjectPlan(DateOnly weekStartDate, 
     var events = context.EventExtractionResult?.ExtractedEvents ?? [];
     foreach (var ev in events)
     {
+        var isRequiredVisualEvent = context.EventExtractionResult?.SelectedPrimaryEvent?.EventId.Equals(ev.EventId, StringComparison.OrdinalIgnoreCase) == true
+            || ev.EventType is WeeklyAstronomyEventType.HeroObject or WeeklyAstronomyEventType.Conjunction or WeeklyAstronomyEventType.Grouping or WeeklyAstronomyEventType.BestViewingWindow
+            || ev.ImportanceScore >= 70d;
         foreach (var obj in ev.Objects ?? [])
         {
             var code = NormalizeWeeklyObjectCode(obj.ObjectCode) ?? NormalizeWeeklyObjectCode(obj.ObjectName);
             if (code is not null)
             {
-                focusObjects.Add(code);
                 skyfieldObjects.Add(code);
+                if (isRequiredVisualEvent) focusObjects.Add(code);
             }
         }
         var primary = NormalizeWeeklyObjectCode(ev.PrimaryObject);
         if (primary is not null)
         {
-            focusObjects.Add(primary);
             skyfieldObjects.Add(primary);
+            if (isRequiredVisualEvent) focusObjects.Add(primary);
         }
     }
 
-    foreach (var code in ExtractWeeklyObjectsFromText(narrationText))
-        focusObjects.Add(code);
+    foreach (var intelligence in context.EventIntelligence ?? [])
+    {
+        var purpose = $"{intelligence.EventType} {intelligence.RecommendedVisualStrategy} {intelligence.RecommendedScenePurpose}";
+        var visuallyRequired = purpose.Contains("hero", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("planet", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("moon", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("best", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("astro", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("short", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
+        if (!visuallyRequired) continue;
+        foreach (var code in intelligence.ObjectCodes.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!))
+            focusObjects.Add(code);
+    }
 
-    if (!skyfieldObjects.Contains("JUPITER"))
-        focusObjects.Remove("JUPITER");
+    foreach (var code in ExtractWeeklyObjectsFromText(narrationText))
+    {
+        if (skyfieldObjects.Contains(code) && IsRequiredNarrationObject(code, context))
+            focusObjects.Add(code);
+    }
+
+    foreach (var contextOnly in new[] { "JUPITER", "MARS", "MERCURY" })
+    {
+        if (!IsRequiredNarrationObject(contextOnly, context))
+            focusObjects.Remove(contextOnly);
+    }
 
     var objects = focusObjects.ToList();
     var groupings = new List<WeeklyFocusGrouping>();
@@ -5441,7 +5619,8 @@ static WeeklyVisualNarrationCoverageReport BuildWeeklyVisualNarrationCoverageRep
     if (focusPlan.FocusGroupings.Count > 0 && groupingSceneCount == 0 && !splitGroupingVisuallySupported) errors.Add("Narration grouping mentioned but no grouping scene or split-scene support was generated.");
     var allObjectsVisuallySupported = missingObjects.Count == 0 && multiObjectSceneResolutionPassed && (!groupingSplitRequired || splitGroupingVisuallySupported);
     if (!multiObjectSceneResolutionPassed) errors.Add($"Multi-object scene resolution failed for: {string.Join(",", multiObjectSceneResolutionReports.Where(x => !x.MultiObjectResolutionPassed).Select(x => x.SceneCode))}");
-    var aligned = errors.Count == 0 && missingObjects.Count == 0 && moonSceneCount > 0 && multiObjectSceneResolutionPassed && (!groupingSplitRequired || splitGroupingVisuallySupported);
+    var moonRequirementSatisfied = !mentioned.Contains("MOON", StringComparer.OrdinalIgnoreCase) || moonSceneCount > 0;
+    var aligned = errors.Count == 0 && missingObjects.Count == 0 && moonRequirementSatisfied && multiObjectSceneResolutionPassed && (!groupingSplitRequired || splitGroupingVisuallySupported);
     return new WeeklyVisualNarrationCoverageReport(aligned, allObjectsVisuallySupported, groupingSplitRequired, mentioned, supported, missingObjects, requiredGenerated, missingScenes, moonSceneCount, venusSceneCount, saturnSceneCount, groupingSceneCount, scriptPaths.Count, screenshots.Count, multiObjectSceneResolutionPassed, multiObjectScenesRequested, multiObjectScenesResolved, multiObjectScenesFailed, multiObjectSceneResolutionReports, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors, groupingSingleFrameAvailable, groupingSplitRequired);
 }
 
@@ -5451,12 +5630,37 @@ static int CountScenesForObject(IReadOnlyList<CinematicSceneFramePlan> framePlan
 static IReadOnlyList<string> ExtractWeeklyObjectsFromText(string text)
 {
     var found = new List<string>();
-    foreach (var candidate in new[] { "MOON", "VENUS", "SATURN", "JUPITER" })
+    foreach (var candidate in new[] { "MOON", "VENUS", "SATURN", "JUPITER", "MARS", "MERCURY" })
     {
         if (Regex.IsMatch(text ?? string.Empty, $@"\b{candidate}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             found.Add(candidate);
     }
     return found;
+}
+
+static bool IsRequiredNarrationObject(string objectCode, WeeklySkyForecastV2IntelligenceResponse context)
+{
+    var normalized = NormalizeWeeklyObjectCode(objectCode);
+    if (normalized is null) return false;
+    var selected = context.EventExtractionResult?.SelectedPrimaryEvent;
+    if (selected is not null)
+    {
+        if (selected.Objects.Any(o => string.Equals(NormalizeWeeklyObjectCode(o.ObjectCode) ?? NormalizeWeeklyObjectCode(o.ObjectName), normalized, StringComparison.OrdinalIgnoreCase))) return true;
+        if (string.Equals(NormalizeWeeklyObjectCode(selected.PrimaryObject), normalized, StringComparison.OrdinalIgnoreCase)) return true;
+    }
+
+    return (context.EventIntelligence ?? []).Any(item =>
+    {
+        if (!item.ObjectCodes.Select(NormalizeWeeklyObjectCode).Any(code => string.Equals(code, normalized, StringComparison.OrdinalIgnoreCase))) return false;
+        var purpose = $"{item.EventType} {item.RecommendedVisualStrategy} {item.RecommendedScenePurpose}";
+        return purpose.Contains("hero", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("planet", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("moon", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("best", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("astro", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("short", StringComparison.OrdinalIgnoreCase)
+            || purpose.Contains("conjunction", StringComparison.OrdinalIgnoreCase);
+    });
 }
 
 static string? NormalizeWeeklyObjectCode(string? value)
@@ -6321,6 +6525,118 @@ static async Task WriteExpandedStellariumExecutionReportAsync(
     }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
 }
 
+static string ResolveDynamicEventType(string? sceneType, string sceneCode, IReadOnlyList<string> targetObjects)
+{
+    var haystack = $"{sceneType} {sceneCode}";
+    if (haystack.Contains("meteor", StringComparison.OrdinalIgnoreCase)) return "MeteorShower";
+    if (haystack.Contains("parade", StringComparison.OrdinalIgnoreCase)) return "PlanetParade";
+    if (haystack.Contains("conjunction", StringComparison.OrdinalIgnoreCase)) return "Conjunction";
+    if (targetObjects.Any(x => string.Equals(x, "MOON", StringComparison.OrdinalIgnoreCase)) && targetObjects.Count == 1) return "MoonEvent";
+    if (targetObjects.Count >= 3) return "MultiObjectGrouping";
+    if (targetObjects.Count == 2) return "Conjunction";
+    return "SingleObject";
+}
+
+static void ValidateWeeklyDynamicFramingPlan(WeeklyDynamicFramingPlan plan)
+{
+    if (plan.RequestedObjects.Count == 0) throw new InvalidOperationException($"Dynamic framing failed: {plan.SceneCode} has no targetObjects.");
+    if (!plan.RequestedObjects.All(x => plan.ResolvedObjects.Contains(x, StringComparer.OrdinalIgnoreCase)))
+        throw new InvalidOperationException($"Dynamic framing failed: {plan.SceneCode} did not resolve all target objects. requested=[{string.Join(',', plan.RequestedObjects)}] resolved=[{string.Join(',', plan.ResolvedObjects)}]");
+    foreach (var scene in plan.SplitRequired ? plan.Clusters : (IReadOnlyList<WeeklyDynamicSceneContract>)new[] { plan.ToSceneContract() })
+        ValidateWeeklyDynamicSceneContract(scene);
+}
+
+static void ValidateWeeklyDynamicSceneContract(WeeklyDynamicSceneContract scene)
+{
+    if (scene.TargetObjects.Count == 0) throw new InvalidOperationException($"Dynamic scene target lock failed: {scene.SceneCode} has no target objects.");
+    if (!scene.TargetObjects.All(x => scene.ResolvedObjects.Contains(x, StringComparer.OrdinalIgnoreCase)))
+        throw new InvalidOperationException($"Dynamic scene target lock failed: {scene.SceneCode} resolvedObjects does not include all targetObjects.");
+    if (string.IsNullOrWhiteSpace(scene.PrimaryObject) || !scene.TargetObjects.Contains(scene.PrimaryObject, StringComparer.OrdinalIgnoreCase))
+        throw new InvalidOperationException($"Dynamic scene target lock failed: {scene.SceneCode} primaryObject '{scene.PrimaryObject}' is not in targetObjects [{string.Join(',', scene.TargetObjects)}].");
+    if (!scene.TargetObjects.All(x => scene.CameraTargetObjects.Contains(x, StringComparer.OrdinalIgnoreCase)))
+        throw new InvalidOperationException($"Dynamic scene target lock failed: {scene.SceneCode} cameraTargetObjects does not contain targetObjects.");
+    if (!scene.TargetObjects.All(x => scene.LabelObjects.Contains(x, StringComparer.OrdinalIgnoreCase)))
+        throw new InvalidOperationException($"Dynamic scene label lock failed: {scene.SceneCode} labelObjects does not contain targetObjects.");
+    if (double.IsNaN(scene.CameraAzimuth) || double.IsNaN(scene.CameraAltitude) || double.IsNaN(scene.Fov))
+        throw new InvalidOperationException($"Dynamic scene camera lock failed: {scene.SceneCode} camera values are invalid.");
+    if (!string.IsNullOrWhiteSpace(scene.ParentSceneCode) && scene.TargetObjects.Count == 1)
+    {
+        var suffix = NormalizeWeeklyObjectCode(scene.TargetObjects[0])?.ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(suffix) && !scene.SceneCode.EndsWith("_" + suffix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Split scene target lock failed: {scene.SceneCode} expected suffix '{suffix}'.");
+    }
+}
+
+static WeeklyDynamicFramingValidationReport BuildWeeklyDynamicFramingValidationReport(IReadOnlyList<WeeklyDynamicFramingPlan> plans)
+{
+    var warnings = plans.SelectMany(x => x.Warnings).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var errors = plans.SelectMany(x => x.Errors).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    foreach (var plan in plans)
+    {
+        try { ValidateWeeklyDynamicFramingPlan(plan); }
+        catch (Exception ex) { errors.Add(ex.Message); }
+    }
+    var scenes = plans.SelectMany(plan => plan.SplitRequired ? plan.Clusters : (IReadOnlyList<WeeklyDynamicSceneContract>)new[] { plan.ToSceneContract() }).ToList();
+    var allResolved = plans.All(x => x.RequestedObjects.All(o => x.ResolvedObjects.Contains(o, StringComparer.OrdinalIgnoreCase)));
+    var allCameraLocked = scenes.All(x => x.TargetObjects.Count > 0 && x.TargetObjects.All(o => x.CameraTargetObjects.Contains(o, StringComparer.OrdinalIgnoreCase)) && !x.InheritedFromParent);
+    var allLabels = scenes.All(x => x.TargetObjects.All(o => x.LabelObjects.Contains(o, StringComparer.OrdinalIgnoreCase)));
+    return new WeeklyDynamicFramingValidationReport(
+        DynamicFramingReady: errors.Count == 0 && scenes.Count > 0,
+        SingleFrameSceneCount: plans.Count(x => !x.SplitRequired),
+        SplitSceneCount: plans.Count(x => x.SplitRequired),
+        ClusterSceneCount: scenes.Count(x => !string.IsNullOrWhiteSpace(x.ParentSceneCode)),
+        AllTargetObjectsResolved: allResolved,
+        AllCameraTargetsLocked: allCameraLocked,
+        AllTargetLabelsEnabled: allLabels,
+        CoverageValidationPassed: errors.Count == 0,
+        Warnings: warnings,
+        Errors: errors);
+}
+
+static string BuildWeeklyDynamicFramingSsc(WeeklyDynamicSceneContract scene, DateTime observationUtc, double longitude, double latitude, double elevationMeters, string locationName, string screenshotDirectory, string? screenshotFileName = null)
+{
+    ValidateWeeklyDynamicSceneContract(scene);
+    var safeDirectory = screenshotDirectory.Replace("\\", "/").Replace("\"", "\\\"");
+    var safeName = (screenshotFileName ?? scene.SceneCode).Replace("\"", "\\\"");
+    var labels = scene.LabelObjects.Select(ToWeeklyObjectDisplayName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var targetsArray = string.Join(", ", labels.Select(x => $"\"{x.Replace("\"", "\\\"")}\""));
+    return string.Join("\n", new[]
+    {
+        "// WeeklySkyForecast dynamic framing SSC",
+        $"// SceneCode: {scene.SceneCode}",
+        $"// ParentSceneCode: {scene.ParentSceneCode ?? string.Empty}",
+        $"// TargetObjects: {string.Join(',', scene.TargetObjects)}",
+        $"// PrimaryObject: {scene.PrimaryObject}",
+        $"// FramingMode: {scene.FramingMode}",
+        "core.clear(\"natural\");",
+        "core.setGuiVisible(false);",
+        $"core.setDate(\"{DateTime.SpecifyKind(observationUtc, DateTimeKind.Utc):yyyy-MM-ddTHH:mm:ss}\", \"utc\");",
+        "core.wait(2);",
+        $"core.setObserverLocation({longitude.ToString(CultureInfo.InvariantCulture)}, {latitude.ToString(CultureInfo.InvariantCulture)}, {elevationMeters.ToString(CultureInfo.InvariantCulture)}, 0, \"{locationName.Replace("\"", "\\\"")}\", \"Earth\");",
+        "core.wait(2);",
+        $"LandscapeMgr.setFlagLandscape({scene.IncludeHorizon.ToString().ToLowerInvariant()});",
+        "LandscapeMgr.setFlagAtmosphere(false);",
+        "ConstellationMgr.setFlagLines(true);",
+        "ConstellationMgr.setFlagLabels(true);",
+        "SolarSystem.setFlagLabels(true);",
+        "StelMovementMgr.setFlagTracking(false);",
+        $"StelMovementMgr.zoomTo({scene.Fov.ToString("0.###", CultureInfo.InvariantCulture)}, 0);",
+        $"core.moveToAltAzi(\"{scene.CameraAltitude.ToString("0.###", CultureInfo.InvariantCulture)}d\", \"{scene.CameraAzimuth.ToString("0.###", CultureInfo.InvariantCulture)}d\", 1);",
+        "core.wait(3);",
+        $"var targets = [{targetsArray}];",
+        "for (var i = 0; i < targets.length; i++) {",
+        "  var objectName = targets[i];",
+        "  core.selectObjectByName(objectName, true);",
+        "  core.wait(0.2);",
+        "}",
+        "core.wait(2);",
+        $"core.screenshot(\"{safeName}\", false, \"{safeDirectory}\", true, \"png\");",
+        "core.wait(2);",
+        "core.quitStellarium();"
+    });
+}
+
+
 sealed record WeeklyFocusObjectPlan(
     string WeekStartDate,
     string RegionId,
@@ -6481,3 +6797,285 @@ public sealed record FinalRenderSceneDescriptor(
     string ScriptPath,
     string ImagePath,
     bool ProducedSscScript);
+
+sealed record WeeklySceneRequirement(
+    string SceneCode,
+    string? ParentSceneCode,
+    string EventType,
+    IReadOnlyList<string> RequestedObjects,
+    DateTime PreferredObservationUtc,
+    DateTime PreferredObservationLocal,
+    string SegmentClassification,
+    string VisualRequirement);
+
+sealed record WeeklyFramingOptions(
+    double SingleObjectFovMin = 18d,
+    double SingleObjectFovMax = 45d,
+    double TightGroupingFovMin = 25d,
+    double TightGroupingFovMax = 55d,
+    double WideGroupingFovMin = 55d,
+    double WideGroupingFovMax = 85d,
+    double PlanetParadeFovMin = 80d,
+    double PlanetParadeFovMax = 115d,
+    double AbsoluteMaxSingleFrameFov = 120d,
+    double SplitThresholdDegrees = 85d,
+    double HardSplitThresholdDegrees = 120d)
+{
+    public static WeeklyFramingOptions Default { get; } = new();
+}
+
+sealed record WeeklyDynamicFramingPlan(
+    string SceneCode,
+    string EventType,
+    IReadOnlyList<string> RequestedObjects,
+    IReadOnlyList<string> ResolvedObjects,
+    string FramingMode,
+    bool SingleFramePossible,
+    bool SplitRequired,
+    IReadOnlyList<WeeklyDynamicSceneContract> Clusters,
+    DateTime SelectedObservationUtc,
+    DateTime SelectedObservationLocal,
+    WeeklyDynamicCameraPlan CameraPlan,
+    WeeklyDynamicLabelPlan LabelPlan,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors)
+{
+    public WeeklyDynamicSceneContract ToSceneContract() => new(
+        SceneCode,
+        null,
+        RequestedObjects,
+        ResolvedObjects,
+        CameraPlan.PrimaryObject,
+        CameraPlan.CameraTargetObjects,
+        CameraPlan.VisualAnchorObjects,
+        LabelPlan.LabelObjects,
+        CameraPlan.CameraAzimuth,
+        CameraPlan.CameraAltitude,
+        CameraPlan.Fov,
+        FramingMode,
+        false,
+        SplitRequired,
+        CameraPlan.IncludeHorizon);
+}
+
+sealed record WeeklyDynamicCameraPlan(string PrimaryObject, IReadOnlyList<string> CameraTargetObjects, IReadOnlyList<string> VisualAnchorObjects, double CameraAzimuth, double CameraAltitude, double Fov, bool IncludeHorizon);
+sealed record WeeklyDynamicLabelPlan(IReadOnlyList<string> LabelObjects, bool SuppressPeripheralLabels, IReadOnlyList<string> LabelPriority);
+sealed record WeeklyDynamicSceneContract(
+    string SceneCode,
+    string? ParentSceneCode,
+    IReadOnlyList<string> TargetObjects,
+    IReadOnlyList<string> ResolvedObjects,
+    string PrimaryObject,
+    IReadOnlyList<string> CameraTargetObjects,
+    IReadOnlyList<string> VisualAnchorObjects,
+    IReadOnlyList<string> LabelObjects,
+    double CameraAzimuth,
+    double CameraAltitude,
+    double Fov,
+    string FramingMode,
+    bool InheritedFromParent,
+    bool SplitRequired,
+    bool IncludeHorizon);
+sealed record WeeklyDynamicFramingValidationReport(bool DynamicFramingReady, int SingleFrameSceneCount, int SplitSceneCount, int ClusterSceneCount, bool AllTargetObjectsResolved, bool AllCameraTargetsLocked, bool AllTargetLabelsEnabled, bool CoverageValidationPassed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+
+sealed class WeeklyDynamicMultiObjectFramingEngine
+{
+    private readonly WeeklyFramingOptions _options;
+    public WeeklyDynamicMultiObjectFramingEngine(WeeklyFramingOptions? options = null) => _options = options ?? WeeklyFramingOptions.Default;
+
+    public Task<WeeklyDynamicFramingPlan> BuildFramingPlanAsync(WeeklySceneRequirement sceneRequirement, WeeklySkyForecastV2IntelligenceResponse skyfieldContext, WeeklyFocusObjectPlan focusObjectPlan, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var selections = ResolveSelectionsFromContext(sceneRequirement, skyfieldContext);
+        return BuildFramingPlanAsync(sceneRequirement, skyfieldContext, focusObjectPlan, selections, cancellationToken);
+    }
+
+    public Task<WeeklyDynamicFramingPlan> BuildFramingPlanAsync(WeeklySceneRequirement sceneRequirement, WeeklySkyForecastV2IntelligenceResponse skyfieldContext, WeeklyFocusObjectPlan focusObjectPlan, IReadOnlyList<WeeklySceneObjectSelection> resolvedSelections, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var requested = sceneRequirement.RequestedObjects.Select(NormalizeObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var resolved = resolvedSelections
+            .Select(x => NormalizeObjectCode(x.Position.Name) ?? x.Position.Name.ToUpperInvariant())
+            .Where(x => requested.Contains(x, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var errors = new List<string>();
+        var warnings = new List<string>();
+        if (requested.Count == 0) errors.Add("No requested objects supplied for dynamic framing.");
+        var missing = requested.Where(x => !resolved.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (missing.Count > 0) errors.Add($"Requested objects were not resolved from Skyfield geometry: {string.Join(',', missing)}");
+        var targets = requested
+            .Select(code => resolvedSelections.FirstOrDefault(x => string.Equals(NormalizeObjectCode(x.Position.Name), code, StringComparison.OrdinalIgnoreCase)))
+            .Where(x => x is not null)
+            .Select(x => x!)
+            .ToList();
+        if (targets.Count == 0 && resolvedSelections.Count > 0)
+        {
+            targets = resolvedSelections.ToList();
+            warnings.Add("Dynamic framing used resolved selections because requested/resolved object code matching was incomplete.");
+        }
+        var geometry = AnalyzeGeometry(targets.Select(x => x.Position).ToList());
+        var eventType = NormalizeEventType(sceneRequirement.EventType, requested);
+        var framingMode = ClassifyFramingMode(eventType, targets.Count, geometry.MaxAngularSeparation, geometry.RequiredFov, geometry.LabelCollisionRisk);
+        var splitRequired = framingMode == "ClusterSplit" || geometry.RequiredFov > _options.AbsoluteMaxSingleFrameFov || geometry.MaxAngularSeparation > _options.SplitThresholdDegrees;
+        if (eventType == "PlanetParade" && geometry.RequiredFov <= _options.PlanetParadeFovMax) splitRequired = false;
+        if (eventType == "MeteorShower") splitRequired = false;
+        var singleFramePossible = !splitRequired && geometry.RequiredFov <= _options.AbsoluteMaxSingleFrameFov && !geometry.LabelCollisionRisk;
+        var fov = ComputeFov(framingMode, geometry.RequiredFov, eventType);
+        var primary = SelectPrimaryObject(targets, requested, focusObjectPlan.FocusObjects);
+        var camera = new WeeklyDynamicCameraPlan(primary, resolved, resolved, geometry.CenterAzimuth, geometry.CenterAltitude, fov, geometry.IncludeHorizon || eventType == "PlanetParade");
+        var label = new WeeklyDynamicLabelPlan(resolved, false, resolved);
+        IReadOnlyList<WeeklyDynamicSceneContract> clusters = splitRequired ? BuildClusters(sceneRequirement.SceneCode, targets, sceneRequirement.PreferredObservationUtc, sceneRequirement.PreferredObservationLocal, focusObjectPlan.FocusObjects) : Array.Empty<WeeklyDynamicSceneContract>();
+        return Task.FromResult(new WeeklyDynamicFramingPlan(sceneRequirement.SceneCode, eventType, requested, resolved, splitRequired ? "ClusterSplit" : framingMode, singleFramePossible, splitRequired, clusters, sceneRequirement.PreferredObservationUtc, sceneRequirement.PreferredObservationLocal, camera, label, warnings, errors));
+    }
+
+    private IReadOnlyList<WeeklySceneObjectSelection> ResolveSelectionsFromContext(WeeklySceneRequirement req, WeeklySkyForecastV2IntelligenceResponse context)
+    {
+        var requested = req.RequestedObjects.Select(NormalizeObjectCode).Where(x => x is not null).Select(x => x!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return (context.EventExtractionResult?.ExtractedEvents ?? [])
+            .SelectMany(e => e.Objects)
+            .Where(o => requested.Contains(NormalizeObjectCode(o.ObjectCode) ?? o.ObjectCode))
+            .Where(o => (o.AltitudeDegrees ?? -90d) > 5d && o.AzimuthDegrees.HasValue)
+            .GroupBy(o => NormalizeObjectCode(o.ObjectCode) ?? o.ObjectCode, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(o => o.VisibilityScore).First())
+            .Select(o => new WeeklySceneObjectSelection(new SkyObjectPosition(o.ObjectName, o.AltitudeDegrees ?? 0d, o.AzimuthDegrees ?? 0d, o.Magnitude ?? 99d, "Planet", o.VisibilityScore), "source=weekly-dynamic-framing-context"))
+            .ToList();
+    }
+
+    private IReadOnlyList<WeeklyDynamicSceneContract> BuildClusters(string parentSceneCode, IReadOnlyList<WeeklySceneObjectSelection> targets, DateTime selectedUtc, DateTime selectedLocal, IReadOnlyList<string> focusObjects)
+    {
+        var remaining = targets.ToList();
+        var clusters = new List<List<WeeklySceneObjectSelection>>();
+        while (remaining.Count > 0)
+        {
+            var seed = remaining.OrderBy(x => NormalizeAzimuth(x.Position.AzimuthDeg)).First();
+            var cluster = remaining.Where(x => AngularDistance(seed.Position, x.Position) <= 55d).ToList();
+            if (cluster.Count == 0) cluster.Add(seed);
+            clusters.Add(cluster);
+            foreach (var item in cluster) remaining.Remove(item);
+        }
+        return clusters.Select(cluster =>
+        {
+            var codes = cluster.Select(x => NormalizeObjectCode(x.Position.Name) ?? x.Position.Name.ToUpperInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var geo = AnalyzeGeometry(cluster.Select(x => x.Position).ToList());
+            var mode = codes.Count == 1 ? "SingleObject" : geo.MaxAngularSeparation <= 15d ? "TightGrouping" : "WideGrouping";
+            var fov = ComputeFov(mode, geo.RequiredFov, "MultiObjectGrouping");
+            var primary = SelectPrimaryObject(cluster, codes, focusObjects);
+            var sceneCode = ResolveClusterSceneCode(parentSceneCode, codes, geo.CenterAzimuth);
+            return new WeeklyDynamicSceneContract(sceneCode, parentSceneCode, codes, codes, primary, codes, codes, codes, geo.CenterAzimuth, geo.CenterAltitude, fov, mode, false, true, geo.IncludeHorizon);
+        }).ToList();
+    }
+
+    private string ResolveClusterSceneCode(string parent, IReadOnlyList<string> codes, double azimuth)
+    {
+        if (codes.Count == 1) return $"{parent}_{codes[0].ToLowerInvariant()}";
+        var direction = azimuth switch { >= 45 and < 135 => "east", >= 135 and < 225 => "south", >= 225 and < 315 => "west", _ => "north" };
+        return $"{parent}_{direction}_cluster";
+    }
+
+    private string ClassifyFramingMode(string eventType, int count, double maxSep, double requiredFov, bool labelCollisionRisk)
+    {
+        if (eventType == "MeteorShower") return "RadiantFocus";
+        if (count <= 1) return "SingleObject";
+        if (labelCollisionRisk || maxSep > _options.SplitThresholdDegrees || requiredFov > _options.AbsoluteMaxSingleFrameFov) return "ClusterSplit";
+        if (maxSep <= 15d) return "TightGrouping";
+        if (maxSep <= 55d) return "WideGrouping";
+        if (maxSep <= 100d && (eventType == "PlanetParade" || eventType == "MultiObjectGrouping")) return "UltraWideHorizon";
+        return "ClusterSplit";
+    }
+
+    private double ComputeFov(string mode, double requiredFov, string eventType)
+    {
+        var padded = requiredFov + 10d;
+        return mode switch
+        {
+            "SingleObject" => Math.Clamp(padded, _options.SingleObjectFovMin, _options.SingleObjectFovMax),
+            "TightGrouping" => Math.Clamp(padded, _options.TightGroupingFovMin, _options.TightGroupingFovMax),
+            "WideGrouping" => Math.Clamp(padded, _options.WideGroupingFovMin, _options.WideGroupingFovMax),
+            "UltraWideHorizon" => Math.Clamp(padded, eventType == "PlanetParade" ? _options.PlanetParadeFovMin : _options.WideGroupingFovMin, eventType == "PlanetParade" ? _options.PlanetParadeFovMax : _options.AbsoluteMaxSingleFrameFov),
+            "RadiantFocus" => Math.Clamp(padded, _options.TightGroupingFovMin, _options.WideGroupingFovMax),
+            _ => Math.Clamp(padded, _options.SingleObjectFovMin, _options.AbsoluteMaxSingleFrameFov)
+        };
+    }
+
+    private static string SelectPrimaryObject(IReadOnlyList<WeeklySceneObjectSelection> targets, IReadOnlyList<string> requested, IReadOnlyList<string> focusObjects)
+    {
+        var ranked = targets.Select(x => new { Code = NormalizeObjectCode(x.Position.Name) ?? x.Position.Name.ToUpperInvariant(), x.Position.Magnitude, x.Position.AltitudeDeg }).ToList();
+        return ranked.OrderByDescending(x => focusObjects.Contains(x.Code, StringComparer.OrdinalIgnoreCase)).ThenBy(x => x.Magnitude).ThenByDescending(x => x.AltitudeDeg).FirstOrDefault()?.Code
+            ?? requested.FirstOrDefault()
+            ?? string.Empty;
+    }
+
+    private static string NormalizeEventType(string eventType, IReadOnlyList<string> requested)
+    {
+        if (eventType.Contains("Meteor", StringComparison.OrdinalIgnoreCase)) return "MeteorShower";
+        if (eventType.Contains("Parade", StringComparison.OrdinalIgnoreCase)) return "PlanetParade";
+        if (eventType.Contains("Moon", StringComparison.OrdinalIgnoreCase)) return "MoonEvent";
+        if (eventType.Contains("Conjunction", StringComparison.OrdinalIgnoreCase)) return "Conjunction";
+        if (requested.Count > 2) return "MultiObjectGrouping";
+        return requested.Count == 1 ? "SingleObject" : "Conjunction";
+    }
+
+    private static WeeklyGeometryAnalysis AnalyzeGeometry(IReadOnlyList<SkyObjectPosition> objects)
+    {
+        if (objects.Count == 0) return new(270d, 35d, 0d, 0d, 0d, 18d, false, false);
+        var az = objects.Select(x => NormalizeAzimuth(x.AzimuthDeg)).ToList();
+        var alt = objects.Select(x => x.AltitudeDeg).ToList();
+        var maxPair = 0d;
+        for (var i = 0; i < objects.Count; i++)
+        for (var j = i + 1; j < objects.Count; j++)
+            maxPair = Math.Max(maxPair, AngularDistance(objects[i], objects[j]));
+        var azSpread = ComputeAzSpread(az);
+        var altSpread = alt.Count > 1 ? alt.Max() - alt.Min() : 0d;
+        var requiredFov = Math.Max(maxPair, Math.Sqrt(azSpread * azSpread + altSpread * altSpread));
+        var labelRisk = objects.Count > 4 && maxPair < 12d || objects.Count > 6;
+        var includeHorizon = alt.Min() < 18d;
+        return new(ComputeCircularMeanAzimuth(az), Math.Clamp((alt.Min() + alt.Max()) / 2d + (includeHorizon ? 2d : 0d), 5d, 85d), azSpread, altSpread, maxPair, Math.Max(18d, requiredFov), includeHorizon, labelRisk);
+    }
+
+    private static double AngularDistance(SkyObjectPosition a, SkyObjectPosition b)
+    {
+        var alt1 = ToRad(a.AltitudeDeg); var alt2 = ToRad(b.AltitudeDeg);
+        var az1 = ToRad(a.AzimuthDeg); var az2 = ToRad(b.AzimuthDeg);
+        var cos = Math.Sin(alt1) * Math.Sin(alt2) + Math.Cos(alt1) * Math.Cos(alt2) * Math.Cos(az1 - az2);
+        return Math.Acos(Math.Clamp(cos, -1d, 1d)) * 180d / Math.PI;
+    }
+
+    private static double ToRad(double deg) => deg * Math.PI / 180d;
+    private static double NormalizeAzimuth(double value) { var result = value % 360d; return result < 0 ? result + 360d : result; }
+    private static double ComputeCircularMeanAzimuth(IReadOnlyList<double> azimuths)
+    {
+        var sin = azimuths.Sum(a => Math.Sin(ToRad(a)));
+        var cos = azimuths.Sum(a => Math.Cos(ToRad(a)));
+        if (Math.Abs(sin) < 0.000001d && Math.Abs(cos) < 0.000001d) return azimuths[0];
+        return NormalizeAzimuth(Math.Atan2(sin / azimuths.Count, cos / azimuths.Count) * 180d / Math.PI);
+    }
+    private static double ComputeAzSpread(IReadOnlyList<double> azimuths)
+    {
+        if (azimuths.Count <= 1) return 0d;
+        var sorted = azimuths.OrderBy(x => x).ToList();
+        var maxGap = -1d;
+        var idx = 0;
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            var a = sorted[i];
+            var b = sorted[(i + 1) % sorted.Count] + (i + 1 == sorted.Count ? 360d : 0d);
+            if (b - a > maxGap) { maxGap = b - a; idx = i; }
+        }
+        var start = sorted[(idx + 1) % sorted.Count];
+        var end = sorted[idx] + (idx < sorted.Count - 1 ? 0d : 360d);
+        return Math.Max(0d, end - start);
+    }
+    private static string? NormalizeObjectCode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var normalized = value.Trim().Replace(" ", "_").Replace("-", "_").ToUpperInvariant();
+        return normalized switch
+        {
+            "LUNA" or "THE_MOON" or "MOON" => "MOON",
+            _ => normalized.Contains("MOON", StringComparison.OrdinalIgnoreCase) ? "MOON" : normalized
+        };
+    }
+
+    private sealed record WeeklyGeometryAnalysis(double CenterAzimuth, double CenterAltitude, double AzimuthSpread, double AltitudeSpread, double MaxAngularSeparation, double RequiredFov, bool IncludeHorizon, bool LabelCollisionRisk);
+}
