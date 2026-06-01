@@ -559,6 +559,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition.IWeeklyTimelineCompositionEngine, Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition.WeeklyTimelineCompositionEngine>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering.IWeeklyFfmpegRenderPreparationEngine, Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering.WeeklyFfmpegRenderPreparationEngine>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering.IWeeklyExistingRunVideoRenderer, Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering.WeeklyExistingRunVideoRenderer>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AudioGeneration.IWeeklySkyForecastAudioGenerationService, Astronomy.MediaFactory.Core.WeeklySkyForecast.AudioGeneration.WeeklySkyForecastAudioGenerationService>();
+        services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AudioGeneration.IWeeklySkyForecastTtsSynthesizer, WeeklySkyForecastAzureTtsSynthesizer>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicStylePolicy>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicPromptBuilder>();
         services.AddScoped<Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.IAICinematicAssetQueueBuilder, Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets.AICinematicAssetQueueBuilder>();

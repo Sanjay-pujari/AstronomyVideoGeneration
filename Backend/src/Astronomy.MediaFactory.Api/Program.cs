@@ -19,6 +19,7 @@ using Astronomy.MediaFactory.Core.WeeklySkyForecast.EventScoring;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.AudioGeneration;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -718,6 +719,31 @@ app.MapPost("/api/content-planning/weekly-skyforecast-v2/phase-diagnostics", asy
         return Results.BadRequest(new { error = ex.Message });
     }
 });
+
+app.MapPost("/api/weekly-skyforecast-v2/runs/{pipelineRunId:guid}/generate-audio", async (Guid pipelineRunId, WeeklySkyForecastAudioGenerationRequest request, IWeeklySkyForecastAudioGenerationService service, ILogger<Program> logger, CancellationToken ct) =>
+{
+    try
+    {
+        var response = await service.GenerateAsync(pipelineRunId, request, ct);
+        return Results.Ok(response);
+    }
+    catch (FileNotFoundException ex)
+    {
+        logger.LogError(ex, "WEEKLY_AUDIO_GENERATION_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        return Results.BadRequest(new { pipelineRunId, audioGenerationReady = false, errors = new[] { ex.Message } });
+    }
+    catch (DirectoryNotFoundException ex)
+    {
+        logger.LogError(ex, "WEEKLY_AUDIO_GENERATION_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        return Results.NotFound(new { pipelineRunId, audioGenerationReady = false, errors = new[] { ex.Message } });
+    }
+    catch (InvalidOperationException ex)
+    {
+        logger.LogError(ex, "WEEKLY_AUDIO_GENERATION_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        return Results.BadRequest(new { pipelineRunId, audioGenerationReady = false, errors = new[] { ex.Message } });
+    }
+});
+
 app.MapPost("/api/weekly-skyforecast-v2/runs/{pipelineRunId:guid}/render-video", async (Guid pipelineRunId, WeeklyExistingRunRenderRequest request, IWeeklyExistingRunVideoRenderer renderer, ILogger<Program> logger, CancellationToken ct) =>
 {
     try
