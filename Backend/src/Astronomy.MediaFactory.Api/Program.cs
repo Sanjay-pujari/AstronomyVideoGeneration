@@ -1090,6 +1090,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var cinematicAttentionGuidanceReports = new List<object>();
         var allFramePlans = new List<CinematicSceneFramePlan>();
         var finalRenderSceneDescriptors = new List<FinalRenderSceneDescriptor>();
+        var multiObjectSceneResolutionReports = new List<WeeklyMultiObjectSceneResolutionReport>();
         var scriptSourceSceneCodes = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var generatedSplitMetadataBySceneCode = new Dictionary<string, GeneratedSplitSceneMetadata>(StringComparer.OrdinalIgnoreCase);
         static string ResolveCinematicCompositionMode(string? sceneCode, string? framingMode)
@@ -1370,7 +1371,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
 
         app.Logger.LogInformation("Generating SSC scripts for {SceneCount} Stellarium scenes", stellariumShots.Count);
 
-        await ExecuteOrchestrationStageAsync("Generating SSC scripts", ct =>
+        await ExecuteOrchestrationStageAsync("Generating SSC scripts", async stageCt =>
         {
             var skyObjectsByCode = (weeklySkyfieldContext.EventExtractionResult?.ExtractedEvents ?? [])
                 .SelectMany(e => e.Objects)
@@ -1444,15 +1445,39 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     selectedObservationLocal,
                     string.Join(",", sceneSpecificCodes));
 
-                var skyPositions = sceneSpecificCodes
+                var distinctSceneSpecificCodes = sceneSpecificCodes
                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var multiObjectResolution = distinctSceneSpecificCodes.Count > 1
+                    ? await ResolveMultiObjectSceneAsync(
+                        shot.ShotCode,
+                        distinctSceneSpecificCodes,
+                        observationUtc,
+                        shot.DateLocal,
+                        timezone,
+                        skyObjectsByCode,
+                        weeklySkyfieldContext,
+                        composition,
+                        scenePlan,
+                        shot,
+                        app.Logger,
+                        stageCt)
+                    : null;
+                if (multiObjectResolution is not null)
+                {
+                    observationUtc = multiObjectResolution.SelectedObservationUtc;
+                    selectedObservationLocal = multiObjectResolution.SelectedObservationLocal;
+                    multiObjectSceneResolutionReports.Add(multiObjectResolution.Report);
+                }
+
+                var skyPositions = multiObjectResolution?.ResolvedObjects ?? distinctSceneSpecificCodes
                     .Select(code =>
                     {
                         skyObjectsByCode.TryGetValue(code, out var obj);
-                        var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, shot.DateLocal, composition, obj, weeklySkyfieldContext, sceneSpecificCodes, temporalResolver, app.Logger, shot.ShotCode);
+                        var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, shot.DateLocal, composition, obj, weeklySkyfieldContext, distinctSceneSpecificCodes, temporalResolver, app.Logger, shot.ShotCode);
                         var objectName = obj?.ObjectName ?? code;
                         var objectType = ResolveObjectType(obj?.ObjectName ?? code);
-                        var isPrimaryTarget = sceneSpecificCodes.Contains(code, StringComparer.OrdinalIgnoreCase)
+                        var isPrimaryTarget = distinctSceneSpecificCodes.Contains(code, StringComparer.OrdinalIgnoreCase)
                             || composition.TargetObjects.Contains(code, StringComparer.OrdinalIgnoreCase)
                             || (scenePlan?.ObjectCodes?.Contains(code, StringComparer.OrdinalIgnoreCase) ?? false);
                         var source = $"{ResolveObjectSource(code, composition, scenePlan, shot, weeklySkyfieldContext)}|{resolution.Source}";
@@ -1526,6 +1551,10 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     scenesDirectory,
                     shot.ShotCode);
                 var splitResult = narrativeSceneSplitter.Split(shot.ShotCode, shot.ShotPurpose, request.Language, weeklySkyfieldContext.Region, observationUtc, selectedObservationLocal, null, compositionObjectsForSplit, spatialComposition, splitProbeSsc.NightWindow, splitProbeSsc.RequiresSplit);
+                if (multiObjectResolution is not null && splitProbeSsc.RequiresSplit)
+                {
+                    ReplaceMultiObjectSceneResolutionReport(multiObjectSceneResolutionReports, shot.ShotCode, true, true);
+                }
                 app.Logger.LogInformation("NARRATIVE_SCENE_SPLIT originalSceneCode={OriginalSceneCode} splitApplied={SplitApplied} reason={Reason} originalObjects={OriginalObjects} generatedScenes={GeneratedScenes} totalSceneCount={TotalSceneCount}", shot.ShotCode, splitResult.SplitApplied, splitResult.Reason, string.Join(',', compositionObjectsForSplit.Select(x=>x.Name)), string.Join('|', splitResult.Scenes.Select(scn=>$"{scn.SceneCode}:{scn.SceneRole}:{scn.SceneIntent}:[{string.Join(',', scn.TargetObjects.Select(o=>o.Name))}]")), splitResult.Scenes.Count);
                 var screenshotPrefix = shot.ShotCode;
                 var expectedScreenshotPath = Path.Combine(scenesDirectory, $"{screenshotPrefix}.png");
@@ -1587,12 +1616,15 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                                 .ToList();
                         }
                         var splitPrimaryObject = splitObjectCodes.FirstOrDefault() ?? splitScene.TargetObjects.FirstOrDefault()?.Name;
-                        var splitPrefix = splitScene.SceneCode;
+                        var splitSceneCode = multiObjectResolution is not null && splitObjectCodes.Count == 1 && !splitScene.SceneCode.Equals(shot.ShotCode, StringComparison.OrdinalIgnoreCase)
+                            ? ResolveMultiObjectSplitSceneCode(shot.ShotCode, splitPrimaryObject ?? splitObjectCodes[0])
+                            : splitScene.SceneCode;
+                        var splitPrefix = splitSceneCode;
                         var splitSkyPositions = splitObjectCodes
                             .Select(code =>
                             {
                                 skyObjectsByCode.TryGetValue(code, out var obj);
-                                var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, shot.DateLocal, composition, obj, weeklySkyfieldContext, splitObjectCodes, temporalResolver, app.Logger, splitScene.SceneCode);
+                                var resolution = ResolveWeeklySkyObjectPosition(code, observationUtc, selectedObservationLocal, shot.DateLocal, composition, obj, weeklySkyfieldContext, splitObjectCodes, temporalResolver, app.Logger, splitSceneCode);
                                 var objectName = obj?.ObjectName ?? code;
                                 var objectType = ResolveObjectType(obj?.ObjectName ?? code);
                                 var source = $"{ResolveObjectSource(code, composition, scenePlan, shot, weeklySkyfieldContext)}|{resolution.Source}";
@@ -1608,11 +1640,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                                     source);
                             })
                             .ToList();
-                        app.Logger.LogInformation("SSC_INPUT_TARGET_OBJECTS sceneCode={SceneCode} targetObjects={TargetObjects}", splitScene.SceneCode, string.Join(",", splitObjectCodes));
+                        app.Logger.LogInformation("SSC_INPUT_TARGET_OBJECTS sceneCode={SceneCode} targetObjects={TargetObjects}", splitSceneCode, string.Join(",", splitObjectCodes));
                         var splitFallbackCount = splitSkyPositions.Count(x => x.Source.Contains("source=fallback", StringComparison.OrdinalIgnoreCase));
                         if (splitSkyPositions.Count > 0 && splitFallbackCount == splitSkyPositions.Count)
                         {
-                            throw new InvalidOperationException($"DeferredHydrationFailure: split scene '{splitScene.SceneCode}' could not resolve real geometry for target objects [{string.Join(",", splitObjectCodes)}].");
+                            throw new InvalidOperationException($"DeferredHydrationFailure: split scene '{splitSceneCode}' could not resolve real geometry for target objects [{string.Join(",", splitObjectCodes)}].");
                         }
                         var splitDistinctAltAzCount = splitSkyPositions
                             .Select(x => $"{Math.Round(x.Position.AltitudeDeg, 3)}|{Math.Round(x.Position.AzimuthDeg, 3)}")
@@ -1620,25 +1652,25 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             .Count();
                         if (splitDistinctAltAzCount == 1 && splitObjectCodes.Count > 1)
                         {
-                            throw new InvalidOperationException($"Identical fallback geometry detected for split scene '{splitScene.SceneCode}'.");
+                            throw new InvalidOperationException($"Identical fallback geometry detected for split scene '{splitSceneCode}'.");
                         }
                         var splitResultSsc = sscIntelligenceService.Generate(new SscIntelligenceRequest(
-                            observationUtc,longitude,latitude,elevationMeters,locationName,splitSkyPositions.Select(x => x.Position).ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitScene.SceneCode,shot.ShotPurpose,splitObjectCodes),
+                            observationUtc,longitude,latitude,elevationMeters,locationName,splitSkyPositions.Select(x => x.Position).ToList(),defaultRules,null,"Asia/Kolkata",null,null,splitScene.SceneIntent,splitSceneCode,shot.ShotPurpose,splitObjectCodes),
                             scenesDirectory,splitPrefix);
                         if (splitFallbackCount > 0)
                         {
-                            throw new InvalidOperationException($"FallbackGeometryForbidden: split scene '{splitScene.SceneCode}' contains fallback geometry.");
+                            throw new InvalidOperationException($"FallbackGeometryForbidden: split scene '{splitSceneCode}' contains fallback geometry.");
                         }
                         if (Math.Abs(splitResultSsc.CameraAltitudeDeg - 30d) < 0.0001d && Math.Abs(splitResultSsc.CameraAzimuthDeg - 270d) < 0.0001d)
                         {
-                            throw new InvalidOperationException($"FallbackCameraForbidden: split scene '{splitScene.SceneCode}' produced fallback camera alt/az.");
+                            throw new InvalidOperationException($"FallbackCameraForbidden: split scene '{splitSceneCode}' produced fallback camera alt/az.");
                         }
-                        var splitScriptPath = Path.Combine(scriptsDirectory, $"{splitScene.SceneCode}.ssc");
+                        var splitScriptPath = Path.Combine(scriptsDirectory, $"{splitSceneCode}.ssc");
                         var splitHeader = string.Join(Environment.NewLine, new[] {"// Source: NarrativeSceneSplitter",$"// SourceSceneCode: {shot.ShotCode}",$"// Region: {weeklySkyfieldContext.Region}",$"// TargetDate: {stellariumNeed.TargetDate:yyyy-MM-dd}",$"// SelectedObservationUtc: {observationUtc:O}",$"// ScreenshotDirectory: {scenesDirectory.Replace('\\', '/')}",string.Empty});
                         generatedScripts.Add((splitScriptPath, splitHeader + splitResultSsc.SscScript));
-                        var splitExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{splitScene.SceneCode}.png");
-                        generatedSplitMetadataBySceneCode[splitScene.SceneCode] = new GeneratedSplitSceneMetadata(
-                            splitScene.SceneCode,
+                        var splitExpectedOutputImagePath = Path.Combine(scenesDirectory, $"{splitSceneCode}.png");
+                        generatedSplitMetadataBySceneCode[splitSceneCode] = new GeneratedSplitSceneMetadata(
+                            splitSceneCode,
                             splitScene.SourceSceneCode,
                             splitObjectCodes,
                             splitPrimaryObject,
@@ -1651,7 +1683,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             splitExpectedOutputImagePath);
                         app.Logger.LogInformation(
                             "FINAL_RENDER_SCENE_DESCRIPTOR sceneCode={SceneCode} sourceSceneCode={SourceSceneCode} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects} fallbackUsed={FallbackUsed} cameraAlt={CameraAlt} cameraAz={CameraAz} fov={Fov} primaryObject={PrimaryObject} isDynamicSplitScene={IsDynamicSplitScene}",
-                            splitScene.SceneCode,
+                            splitSceneCode,
                             splitScene.SourceSceneCode,
                             string.Join(",", splitObjectCodes),
                             string.Join(",", splitSkyPositions.Select(x => x.Position.Name)),
@@ -1661,10 +1693,10 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             splitResultSsc.FovDeg,
                             splitPrimaryObject,
                             true);
-                        if (!scriptSourceSceneCodes.TryGetValue(splitScene.SceneCode, out var splitSources))
+                        if (!scriptSourceSceneCodes.TryGetValue(splitSceneCode, out var splitSources))
                         {
                             splitSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                            scriptSourceSceneCodes[splitScene.SceneCode] = splitSources;
+                            scriptSourceSceneCodes[splitSceneCode] = splitSources;
                         }
                         splitSources.Add(shot.ShotCode);
                     }
@@ -1882,7 +1914,7 @@ var sscResult = splitProbeSsc;
                 }
                 originalSources.Add(shot.ShotCode);
             }
-            return Task.FromResult(true);
+            return true;
         });
         var qualityDirectory = Path.Combine(root, "cinematic");
         Directory.CreateDirectory(qualityDirectory);
@@ -2097,6 +2129,11 @@ var sscResult = splitProbeSsc;
             weeklyStellariumSceneRequirementsPath,
             generatedAtUtc = DateTime.UtcNow,
             stellariumScenes = sscManifestEntries,
+            multiObjectSceneResolutionPassed = multiObjectSceneResolutionReports.Count == 0 || multiObjectSceneResolutionReports.All(x => x.MultiObjectResolutionPassed),
+            multiObjectScenesRequested = multiObjectSceneResolutionReports.Count,
+            multiObjectScenesResolved = multiObjectSceneResolutionReports.Count(x => x.MultiObjectResolutionPassed),
+            multiObjectScenesFailed = multiObjectSceneResolutionReports.Count(x => !x.MultiObjectResolutionPassed),
+            multiObjectSceneResolutions = multiObjectSceneResolutionReports,
             scriptsGenerated = scriptPaths.Count,
             screenshotsGenerated = screenshots.Count
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
@@ -2108,7 +2145,8 @@ var sscResult = splitProbeSsc;
             screenshots,
             scriptPaths,
             sscManifestEntries.Select(x => x.sceneCode).ToList(),
-            warnings);
+            warnings,
+            multiObjectSceneResolutionReports);
         await File.WriteAllTextAsync(visualNarrationCoverageReportPath, JsonSerializer.Serialize(visualNarrationCoverage, new JsonSerializerOptions { WriteIndented = true }), ct);
         if (!visualNarrationCoverage.VisualNarrationAligned)
         {
@@ -4282,6 +4320,140 @@ static string ResolveObjectSource(string code, dynamic composition, WeeklySceneP
     return "skyfield.scene-date-match";
 }
 
+static Task<WeeklyMultiObjectSceneResolutionResult> ResolveMultiObjectSceneAsync(
+    string sceneCode,
+    IReadOnlyList<string> targetObjects,
+    DateTime preferredObservationUtc,
+    DateOnly sceneDateLocal,
+    string timezoneId,
+    IReadOnlyDictionary<string, WeeklyAstronomyEventObject> skyObjectsByCode,
+    WeeklySkyForecastV2IntelligenceResponse weeklyContext,
+    dynamic composition,
+    WeeklyScenePlan? scenePlan,
+    dynamic shot,
+    Microsoft.Extensions.Logging.ILogger logger,
+    CancellationToken cancellationToken)
+{
+    cancellationToken.ThrowIfCancellationRequested();
+    var requestedObjects = targetObjects.Select(NormalizeWeeklyObjectCode).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    logger.LogInformation("MULTI_OBJECT_RESOLUTION_START sceneCode={SceneCode} targetObjects={TargetObjects} preferredObservationUtc={PreferredObservationUtc} sceneDateLocal={SceneDateLocal}", sceneCode, string.Join(",", requestedObjects), preferredObservationUtc, sceneDateLocal);
+
+    var extractedEvents = weeklyContext.EventExtractionResult?.ExtractedEvents ?? [];
+    var candidatesByObject = new Dictionary<string, List<SkyfieldTemporalCandidate>>(StringComparer.OrdinalIgnoreCase);
+    var candidateTimestampsInspected = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var requestedObject in requestedObjects)
+    {
+        skyObjectsByCode.TryGetValue(requestedObject, out var directObject);
+        var aliases = ResolveWeeklyObjectAliases(requestedObject, directObject?.ObjectName ?? ToWeeklyObjectDisplayName(requestedObject));
+        var candidates = Astronomy.MediaFactory.Api.WeeklySkyfieldObjectHydration.BuildTemporalCandidates(
+                extractedEvents, aliases, e => ResolveEventUtc(e), name => NormalizeWeeklyObjectName(name),
+                (code, name, candidateAliases) => MatchesWeeklyObjectAliases(code, name, candidateAliases), logger, sceneCode, requestedObject)
+            .Where(candidate => candidate.AltitudeDegrees > 5d)
+            .OrderBy(candidate => candidate.SnapshotUtc)
+            .ToList();
+        candidatesByObject[requestedObject] = candidates;
+        foreach (var candidate in candidates)
+        {
+            candidateTimestampsInspected.Add(candidate.SnapshotUtc.ToString("O"));
+            logger.LogInformation("MULTI_OBJECT_RESOLUTION_CANDIDATE_TIMESTAMP sceneCode={SceneCode} object={Object} candidateUtc={CandidateUtc} candidateLocal={CandidateLocal} altitude={Altitude} azimuth={Azimuth}", sceneCode, requestedObject, candidate.SnapshotUtc, ConvertUtcToLocal(DateTime.SpecifyKind(candidate.SnapshotUtc, DateTimeKind.Utc), timezoneId), candidate.AltitudeDegrees, candidate.AzimuthDegrees);
+        }
+    }
+
+    var preferredLocal = ConvertUtcToLocal(DateTime.SpecifyKind(preferredObservationUtc, DateTimeKind.Utc), timezoneId);
+    var sharedCandidate = FindBestSharedMultiObjectCandidate(candidatesByObject, requestedObjects, preferredObservationUtc, preferredLocal, sceneDateLocal, timezoneId, 0d, "skyfield.shared-exact", logger, sceneCode)
+        ?? FindBestSharedMultiObjectCandidate(candidatesByObject, requestedObjects, preferredObservationUtc, preferredLocal, sceneDateLocal, timezoneId, 15d, "skyfield.shared-nearest-15m", logger, sceneCode)
+        ?? FindBestSharedMultiObjectCandidate(candidatesByObject, requestedObjects, preferredObservationUtc, preferredLocal, sceneDateLocal, timezoneId, 30d, "skyfield.shared-nearest-30m", logger, sceneCode)
+        ?? FindBestSharedMultiObjectCandidate(candidatesByObject, requestedObjects, preferredObservationUtc, preferredLocal, sceneDateLocal, timezoneId, 60d, "skyfield.shared-nearest-60m", logger, sceneCode);
+
+    if (sharedCandidate is null)
+    {
+        var resolvedObjects = candidatesByObject.Where(kvp => kvp.Value.Count > 0).Select(kvp => kvp.Key).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var missingObjects = requestedObjects.Where(x => !resolvedObjects.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
+        logger.LogError("MULTI_OBJECT_RESOLUTION_FAILED sceneCode={SceneCode} requestedObjects={RequestedObjects} resolvedObjects={ResolvedObjects} missingObjects={MissingObjects} candidateTimestampsInspected={CandidateTimestampsInspected}", sceneCode, string.Join(",", requestedObjects), string.Join(",", resolvedObjects), string.Join(",", missingObjects), string.Join(",", candidateTimestampsInspected));
+        throw new InvalidOperationException($"Multi-object scene resolution failed for '{sceneCode}'. requestedObjects=[{string.Join(",", requestedObjects)}]; resolvedObjects=[{string.Join(",", resolvedObjects)}]; missingObjects=[{string.Join(",", missingObjects)}]; candidateTimestampsInspected=[{string.Join(",", candidateTimestampsInspected)}]");
+    }
+
+    var selectedObservationUtc = DateTime.SpecifyKind(sharedCandidate.AnchorUtc, DateTimeKind.Utc);
+    var selectedObservationLocal = ConvertUtcToLocal(selectedObservationUtc, timezoneId);
+    var resolvedSelections = sharedCandidate.Objects.Select(resolved =>
+    {
+        skyObjectsByCode.TryGetValue(resolved.RequestedCode, out var directObject);
+        var objectName = directObject?.ObjectName ?? ToWeeklyObjectDisplayName(resolved.RequestedCode);
+        var objectType = ResolveObjectType(objectName);
+        var isPrimaryTarget = requestedObjects.Contains(resolved.RequestedCode, StringComparer.OrdinalIgnoreCase)
+            || composition.TargetObjects.Contains(resolved.RequestedCode, StringComparer.OrdinalIgnoreCase)
+            || (scenePlan?.ObjectCodes?.Contains(resolved.RequestedCode, StringComparer.OrdinalIgnoreCase) ?? false);
+        var source = $"{ResolveObjectSource(resolved.RequestedCode, composition, scenePlan, shot, weeklyContext)}|source={sharedCandidate.MatchMode};selectedObservationUtc={selectedObservationUtc:O};matchedTimeUtc={resolved.Candidate.SnapshotUtc:O};deltaMinutes={Math.Abs((resolved.Candidate.SnapshotUtc - selectedObservationUtc).TotalMinutes):0.###}";
+        logger.LogInformation("MULTI_OBJECT_RESOLUTION_OBJECT_MATCH sceneCode={SceneCode} requestedObject={RequestedObject} resolvedObject={ResolvedObject} selectedObservationUtc={SelectedObservationUtc} matchedTimeUtc={MatchedTimeUtc} altitude={Altitude} azimuth={Azimuth}", sceneCode, resolved.RequestedCode, objectName, selectedObservationUtc, resolved.Candidate.SnapshotUtc, resolved.Candidate.AltitudeDegrees, resolved.Candidate.AzimuthDegrees);
+        return new WeeklySceneObjectSelection(new SkyObjectPosition(objectName, resolved.Candidate.AltitudeDegrees, resolved.Candidate.AzimuthDegrees, resolved.Candidate.Magnitude ?? directObject?.Magnitude ?? 5.5d, objectType, ResolveObjectWeight(objectName, objectType, isPrimaryTarget)), source);
+    }).ToList();
+
+    var resolvedCodes = sharedCandidate.Objects.Select(x => x.RequestedCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var missingRequiredObjects = requestedObjects.Where(x => !resolvedCodes.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
+    if (resolvedCodes.Count < requestedObjects.Count || missingRequiredObjects.Count > 0)
+    {
+        logger.LogError("MULTI_OBJECT_RESOLUTION_FAILED sceneCode={SceneCode} requestedObjects={RequestedObjects} resolvedObjects={ResolvedObjects} missingObjects={MissingObjects} candidateTimestampsInspected={CandidateTimestampsInspected}", sceneCode, string.Join(",", requestedObjects), string.Join(",", resolvedCodes), string.Join(",", missingRequiredObjects), string.Join(",", candidateTimestampsInspected));
+        throw new InvalidOperationException($"Multi-object scene resolution failed for '{sceneCode}'. requestedObjects=[{string.Join(",", requestedObjects)}]; resolvedObjects=[{string.Join(",", resolvedCodes)}]; missingObjects=[{string.Join(",", missingRequiredObjects)}]; candidateTimestampsInspected=[{string.Join(",", candidateTimestampsInspected)}]");
+    }
+
+    var report = new WeeklyMultiObjectSceneResolutionReport(sceneCode, requestedObjects, resolvedCodes, [], selectedObservationUtc, selectedObservationLocal, true, candidateTimestampsInspected.ToList(), false, true);
+    logger.LogInformation("MULTI_OBJECT_RESOLUTION_SUCCESS sceneCode={SceneCode} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} matchMode={MatchMode}", sceneCode, string.Join(",", requestedObjects), string.Join(",", resolvedCodes), selectedObservationUtc, selectedObservationLocal, sharedCandidate.MatchMode);
+    return Task.FromResult(new WeeklyMultiObjectSceneResolutionResult(sceneCode, requestedObjects, resolvedSelections, selectedObservationUtc, selectedObservationLocal, report));
+}
+
+static WeeklyMultiObjectResolutionCandidate? FindBestSharedMultiObjectCandidate(
+    IReadOnlyDictionary<string, List<SkyfieldTemporalCandidate>> candidatesByObject,
+    IReadOnlyList<string> requestedObjects,
+    DateTime preferredObservationUtc,
+    DateTime preferredObservationLocal,
+    DateOnly sceneDateLocal,
+    string timezoneId,
+    double toleranceMinutes,
+    string matchMode,
+    Microsoft.Extensions.Logging.ILogger logger,
+    string sceneCode)
+{
+    var anchors = candidatesByObject.Values.SelectMany(x => x).Select(x => DateTime.SpecifyKind(x.SnapshotUtc, DateTimeKind.Utc)).Distinct().OrderBy(x => Math.Abs((x - preferredObservationUtc).TotalMinutes)).ToList();
+    var matches = new List<WeeklyMultiObjectResolutionCandidate>();
+    foreach (var anchor in anchors)
+    {
+        var selectedObjects = new List<WeeklyResolvedTemporalObject>();
+        var validAnchor = true;
+        foreach (var requestedObject in requestedObjects)
+        {
+            if (!candidatesByObject.TryGetValue(requestedObject, out var candidates) || candidates.Count == 0) { validAnchor = false; break; }
+            var candidate = candidates.Select(x => new { Candidate = x, Delta = Math.Abs((DateTime.SpecifyKind(x.SnapshotUtc, DateTimeKind.Utc) - anchor).TotalMinutes) })
+                .Where(x => toleranceMinutes <= 0d ? x.Delta == 0d : x.Delta <= toleranceMinutes)
+                .OrderBy(x => x.Delta).ThenByDescending(x => x.Candidate.AltitudeDegrees).FirstOrDefault();
+            if (candidate is null) { validAnchor = false; break; }
+            var candidateLocal = ConvertUtcToLocal(DateTime.SpecifyKind(candidate.Candidate.SnapshotUtc, DateTimeKind.Utc), timezoneId);
+            if (!IsCompatibleMultiObjectLocalWindow(candidateLocal, preferredObservationLocal, sceneDateLocal)) { validAnchor = false; break; }
+            selectedObjects.Add(new WeeklyResolvedTemporalObject(requestedObject, NormalizeWeeklyObjectName(requestedObject), ToWeeklyObjectDisplayName(requestedObject), candidate.Candidate));
+        }
+        if (!validAnchor || selectedObjects.Count != requestedObjects.Count) continue;
+        var maxDelta = selectedObjects.Max(x => Math.Abs((DateTime.SpecifyKind(x.Candidate.SnapshotUtc, DateTimeKind.Utc) - anchor).TotalMinutes));
+        var preferredDelta = Math.Abs((anchor - preferredObservationUtc).TotalMinutes);
+        logger.LogInformation("MULTI_OBJECT_RESOLUTION_CANDIDATE_TIMESTAMP sceneCode={SceneCode} anchorUtc={AnchorUtc} toleranceMinutes={ToleranceMinutes} objectCount={ObjectCount} maxDeltaMinutes={MaxDeltaMinutes} preferredDeltaMinutes={PreferredDeltaMinutes} matchMode={MatchMode}", sceneCode, anchor, toleranceMinutes, selectedObjects.Count, maxDelta, preferredDelta, matchMode);
+        matches.Add(new WeeklyMultiObjectResolutionCandidate(anchor, selectedObjects, maxDelta, preferredDelta, matchMode));
+    }
+    return matches.OrderBy(x => x.MaxDeltaMinutes).ThenBy(x => x.PreferredDeltaMinutes).ThenByDescending(x => x.Objects.Min(o => o.Candidate.AltitudeDegrees)).FirstOrDefault();
+}
+
+static bool IsCompatibleMultiObjectLocalWindow(DateTime candidateLocal, DateTime preferredObservationLocal, DateOnly sceneDateLocal)
+{
+    if (DateOnly.FromDateTime(candidateLocal) == sceneDateLocal) return true;
+    if (DateOnly.FromDateTime(candidateLocal) == DateOnly.FromDateTime(preferredObservationLocal) && IsEveningNightLocal(candidateLocal)) return true;
+    if (IsEveningNightLocal(candidateLocal) && IsEveningNightLocal(preferredObservationLocal)) return Math.Abs((candidateLocal - preferredObservationLocal).TotalHours) <= 12d;
+    return false;
+}
+
+static void ReplaceMultiObjectSceneResolutionReport(List<WeeklyMultiObjectSceneResolutionReport> reports, string sceneCode, bool groupingSplitRequired, bool allObjectsVisuallySupported)
+{
+    var index = reports.FindIndex(x => x.SceneCode.Equals(sceneCode, StringComparison.OrdinalIgnoreCase));
+    if (index < 0) return;
+    reports[index] = reports[index] with { GroupingSplitRequired = groupingSplitRequired, AllObjectsVisuallySupported = allObjectsVisuallySupported };
+}
+
 static WeeklyObjectPositionResolution ResolveWeeklySkyObjectPosition(
     string objectCodeOrName,
     DateTime sceneObservationUtc,
@@ -4930,6 +5102,17 @@ static WeeklyHybridScenePlanPackage AlignWeeklyScenePlanWithFocusObjects(WeeklyH
     return plan with { ScenePlans = scenes, SegmentSceneMappings = mappings, StellariumNeeds = stellariumNeeds, SceneWarnings = plan.SceneWarnings.Concat(["Weekly focus object alignment applied before SSC generation."]).Distinct(StringComparer.OrdinalIgnoreCase).ToList() };
 }
 
+static string ResolveMultiObjectSplitSceneCode(string sourceSceneCode, string objectCodeOrName)
+{
+    var normalizedObject = NormalizeWeeklyObjectCode(objectCodeOrName) ?? objectCodeOrName;
+    var objectSlug = new string(normalizedObject.Trim().ToLowerInvariant().Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray()).Trim('_');
+    if (string.IsNullOrWhiteSpace(objectSlug)) objectSlug = "object";
+    var normalizedScene = sourceSceneCode.Trim().ToLowerInvariant();
+    return normalizedScene.EndsWith($"_{objectSlug}", StringComparison.OrdinalIgnoreCase)
+        ? normalizedScene
+        : $"{normalizedScene}_{objectSlug}";
+}
+
 static WeeklyStellariumSceneRequirementsDocument BuildWeeklyStellariumSceneRequirements(WeeklyFocusObjectPlan focusPlan, WeeklyHybridScenePlanPackage scenePlan)
 {
     var labels = focusPlan.FocusObjects.Select(ToWeeklyObjectDisplayName).Select(x => $"{x} label").ToList();
@@ -4955,7 +5138,8 @@ static WeeklyVisualNarrationCoverageReport BuildWeeklyVisualNarrationCoverageRep
     IReadOnlyList<string> screenshots,
     IReadOnlyList<string> scriptPaths,
     IReadOnlyList<string> generatedSceneCodes,
-    IReadOnlyList<string> warnings)
+    IReadOnlyList<string> warnings,
+    IReadOnlyList<WeeklyMultiObjectSceneResolutionReport> multiObjectSceneResolutionReports)
 {
     var supported = framePlans.SelectMany(x => x.FramePlans).SelectMany(x => x.TargetObjects).Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     var mentioned = focusPlan.FocusObjects.ToList();
@@ -4971,8 +5155,15 @@ static WeeklyVisualNarrationCoverageReport BuildWeeklyVisualNarrationCoverageRep
     if (mentioned.Contains("VENUS", StringComparer.OrdinalIgnoreCase) && venusSceneCount == 0) errors.Add("Venus is mentioned but no Venus scene was generated.");
     if (mentioned.Contains("SATURN", StringComparer.OrdinalIgnoreCase) && saturnSceneCount == 0) errors.Add("Saturn is mentioned but no Saturn scene was generated.");
     if (focusPlan.FocusGroupings.Count > 0 && groupingSceneCount == 0) errors.Add("Narration grouping mentioned but no grouping scene was generated.");
-    var aligned = errors.Count == 0 && missingObjects.Count == 0 && moonSceneCount > 0;
-    return new WeeklyVisualNarrationCoverageReport(aligned, mentioned, supported, missingObjects, requiredGenerated, missingScenes, moonSceneCount, venusSceneCount, saturnSceneCount, groupingSceneCount, scriptPaths.Count, screenshots.Count, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors);
+    var multiObjectScenesRequested = multiObjectSceneResolutionReports.Count;
+    var multiObjectScenesResolved = multiObjectSceneResolutionReports.Count(x => x.MultiObjectResolutionPassed);
+    var multiObjectScenesFailed = multiObjectSceneResolutionReports.Count(x => !x.MultiObjectResolutionPassed);
+    var multiObjectSceneResolutionPassed = multiObjectScenesFailed == 0;
+    var allObjectsVisuallySupported = missingObjects.Count == 0 && multiObjectSceneResolutionPassed;
+    var groupingSplitRequired = multiObjectSceneResolutionReports.Any(x => x.GroupingSplitRequired);
+    if (!multiObjectSceneResolutionPassed) errors.Add($"Multi-object scene resolution failed for: {string.Join(",", multiObjectSceneResolutionReports.Where(x => !x.MultiObjectResolutionPassed).Select(x => x.SceneCode))}");
+    var aligned = errors.Count == 0 && missingObjects.Count == 0 && moonSceneCount > 0 && multiObjectSceneResolutionPassed;
+    return new WeeklyVisualNarrationCoverageReport(aligned, allObjectsVisuallySupported, groupingSplitRequired, mentioned, supported, missingObjects, requiredGenerated, missingScenes, moonSceneCount, venusSceneCount, saturnSceneCount, groupingSceneCount, scriptPaths.Count, screenshots.Count, multiObjectSceneResolutionPassed, multiObjectScenesRequested, multiObjectScenesResolved, multiObjectScenesFailed, multiObjectSceneResolutionReports, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors);
 }
 
 static int CountScenesForObject(IReadOnlyList<CinematicSceneFramePlan> framePlans, string objectCode)
@@ -5884,6 +6075,8 @@ sealed record WeeklyStellariumSceneRequirementsDocument(
 
 sealed record WeeklyVisualNarrationCoverageReport(
     bool VisualNarrationAligned,
+    bool AllObjectsVisuallySupported,
+    bool GroupingSplitRequired,
     IReadOnlyList<string> ObjectsMentionedInNarration,
     IReadOnlyList<string> ObjectsVisuallySupported,
     IReadOnlyList<string> ObjectsMentionedButNotVisible,
@@ -5895,8 +6088,37 @@ sealed record WeeklyVisualNarrationCoverageReport(
     int GroupingSceneCount,
     int SscScriptsGenerated,
     int ScreenshotsGenerated,
+    bool MultiObjectSceneResolutionPassed,
+    int MultiObjectScenesRequested,
+    int MultiObjectScenesResolved,
+    int MultiObjectScenesFailed,
+    IReadOnlyList<WeeklyMultiObjectSceneResolutionReport> MultiObjectScenes,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
+
+sealed record WeeklyMultiObjectSceneResolutionReport(
+    string SceneCode,
+    IReadOnlyList<string> TargetObjects,
+    IReadOnlyList<string> ResolvedObjects,
+    IReadOnlyList<string> MissingObjects,
+    DateTime SelectedObservationUtc,
+    DateTime SelectedObservationLocal,
+    bool MultiObjectResolutionPassed,
+    IReadOnlyList<string> CandidateTimestampsInspected,
+    bool GroupingSplitRequired,
+    bool AllObjectsVisuallySupported);
+
+sealed record WeeklyMultiObjectSceneResolutionResult(
+    string SceneCode,
+    IReadOnlyList<string> TargetObjects,
+    IReadOnlyList<WeeklySceneObjectSelection> ResolvedObjects,
+    DateTime SelectedObservationUtc,
+    DateTime SelectedObservationLocal,
+    WeeklyMultiObjectSceneResolutionReport Report);
+
+sealed record WeeklyResolvedTemporalObject(string RequestedCode, string NormalizedName, string DisplayName, SkyfieldTemporalCandidate Candidate);
+
+sealed record WeeklyMultiObjectResolutionCandidate(DateTime AnchorUtc, IReadOnlyList<WeeklyResolvedTemporalObject> Objects, double MaxDeltaMinutes, double PreferredDeltaMinutes, string MatchMode);
 
 
 sealed record ExpandedNightGeometrySelection(bool Ready, DateTime? SelectedObservationUtc, DateTime? SelectedObservationLocal, double? SelectedSunAltitudeDeg, string? SelectedTargetObject, string ValidationStatus);
