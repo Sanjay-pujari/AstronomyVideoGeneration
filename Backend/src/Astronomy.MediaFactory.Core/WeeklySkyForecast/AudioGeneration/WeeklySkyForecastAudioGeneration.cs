@@ -381,7 +381,7 @@ public sealed class WeeklySkyForecastAudioGenerationService(
         foreach (var segment in narrationSegments)
         {
             var outputPath = Path.Combine(segmentDirectory, $"{SanitizeFileName(segment.SegmentId)}.mp3");
-            var expected = alignmentById.TryGetValue(segment.SegmentId, out var alignment) ? alignment.DurationSeconds : segment.EstimatedDurationSeconds;
+            var expected = alignmentById.TryGetValue(segment.SegmentId, out var alignment) ? ToExpectedDurationSeconds(alignment.DurationSeconds) : segment.EstimatedDurationSeconds;
             var ssml = BuildSegmentSsml(segment.NarrationText, voiceName);
             var ssmlDirectory = Path.Combine(root, "audio", "temp", episodeType);
             Directory.CreateDirectory(ssmlDirectory);
@@ -409,6 +409,9 @@ public sealed class WeeklySkyForecastAudioGenerationService(
         }
         return entries;
     }
+
+    private static int ToExpectedDurationSeconds(double durationSeconds)
+        => Math.Max(0, (int)Math.Round(durationSeconds, MidpointRounding.AwayFromZero));
 
     private async Task<string> SynthesizeSegmentWithFallbackAsync(string ssml, string outputPath, string voiceName, string audioFormat, CancellationToken cancellationToken)
     {
