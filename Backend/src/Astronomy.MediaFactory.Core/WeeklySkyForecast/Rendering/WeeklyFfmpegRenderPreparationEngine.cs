@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.AssetRealization;
 using Microsoft.Extensions.Logging;
 using SixLabors.ImageSharp;
 
@@ -69,7 +70,10 @@ public sealed record WeeklyRenderInputManifest(
     bool AllTimelineAssetsFound,
     bool AllTimelineAssetsReadable,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    int TotalProductionAssetsDiscovered = 0,
+    int TotalRenderInputAssets = 0,
+    bool RenderInputHydrationPassed = true);
 
 public sealed record WeeklyRenderInputAsset(
     string AssetId,
@@ -206,7 +210,7 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
         _ = await ReadJsonAsync<TimelineTransitionPlan>(input.TimelineTransitionPlanPath, cancellationToken);
         _ = await ReadJsonAsync<IReadOnlyList<SegmentTimelineReportEntry>>(input.SegmentTimelineReportPath, cancellationToken);
         _ = await ReadJsonAsync<RetentionMarkerTimeline>(input.RetentionMarkerTimelinePath, cancellationToken);
-        _ = await ReadJsonAsync<object>(input.WeeklyProductionAssetManifestPath, cancellationToken);
+        var productionManifest = await ReadJsonAsync<WeeklyProductionAssetManifest>(input.WeeklyProductionAssetManifestPath, cancellationToken);
         _ = await ReadJsonAsync<object>(input.WeeklyAssetQualityReportPath, cancellationToken);
         _ = await ReadJsonAsync<object>(input.LongformNarrationPath, cancellationToken);
         _ = await ReadJsonAsync<object>(input.ShortformNarrationPath, cancellationToken);
@@ -230,7 +234,7 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
             new WeeklyEpisodeRenderContract(true, 1920, 1080, 30, timeline.Longform.TargetDurationSeconds, input.FinalRenderTimelinePath, timeline.Longform.Segments.Sum(x => x.Shots.Count), Path.Combine(renderDirectory, "longform", "weekly-skyforecast-longform.mp4")),
             new WeeklyEpisodeRenderContract(true, 1080, 1920, 30, timeline.Shortform.TargetDurationSeconds, input.FinalRenderTimelinePath, timeline.Shortform.Segments.Sum(x => x.Shots.Count), Path.Combine(renderDirectory, "shortform", "weekly-skyforecast-shortform.mp4")));
 
-        var manifest = await BuildInputManifestAsync(input.PipelineRunId, allShots, cancellationToken);
+        var manifest = await BuildInputManifestAsync(input.PipelineRunId, input.WorkingDirectoryRoot, allShots, productionManifest, cancellationToken);
         var motionPlan = BuildMotionPlan(input.PipelineRunId, allShots);
         var transitionPlan = BuildTransitionPlan(input.PipelineRunId, allShots);
         var filterGraphPlan = BuildFilterGraphPlan(input.PipelineRunId, timeline, motionPlan, transitionPlan);
@@ -263,12 +267,20 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
         return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken) ?? throw new InvalidOperationException($"Unable to deserialize required renderer preparation input: {path}");
     }
 
-    private static async Task<WeeklyRenderInputManifest> BuildInputManifestAsync(Guid pipelineRunId, IReadOnlyList<(string Episode, FinalRenderSegment Segment, FinalRenderShot Shot)> allShots, CancellationToken cancellationToken)
+    private static async Task<WeeklyRenderInputManifest> BuildInputManifestAsync(Guid pipelineRunId, string root, IReadOnlyList<(string Episode, FinalRenderSegment Segment, FinalRenderShot Shot)> allShots, WeeklyProductionAssetManifest productionManifest, CancellationToken cancellationToken)
     {
+        var candidateAssets = allShots.Select(x => (AssetId: x.Shot.AssetId, AssetType: x.Shot.AssetType, AssetPath: x.Shot.AssetPath))
+            .Concat(productionManifest.SegmentBundles.SelectMany(b => b.AssignedVisualAssets).Where(a => a.Exists && a.ProductionReady).Select(a => (AssetId: $"{a.SourceType}:{a.AssetCode}", AssetType: a.SourceType.ToString(), AssetPath: a.FilePath)))
+            .Concat(DiscoverRenderInputFiles(root))
+            .Where(x => !string.IsNullOrWhiteSpace(x.AssetPath))
+            .DistinctBy(x => Path.GetFullPath(x.AssetPath), StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var assets = new List<WeeklyRenderInputAsset>();
-        foreach (var group in allShots.GroupBy(x => x.Shot.AssetId, StringComparer.OrdinalIgnoreCase))
+        foreach (var group in candidateAssets.GroupBy(x => x.AssetPath, StringComparer.OrdinalIgnoreCase))
         {
-            var first = group.First().Shot;
+            var firstCandidate = group.First();
+            var shotMatches = allShots.Where(x => x.Shot.AssetPath.Equals(firstCandidate.AssetPath, StringComparison.OrdinalIgnoreCase)).ToList();
+            var first = shotMatches.FirstOrDefault().Shot ?? new FinalRenderShot(1, firstCandidate.AssetId, NormalizeRenderAssetType(firstCandidate.AssetType), firstCandidate.AssetPath, 0, 0, 0, "Cut", "Cut", "StaticHold", "production asset pool hydration");
             var errors = new List<string>();
             var exists = File.Exists(first.AssetPath);
             long fileSize = 0;
@@ -297,12 +309,51 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
                     errors.Add($"Image decode failed: {ex.Message}");
                 }
             }
-            assets.Add(new WeeklyRenderInputAsset(first.AssetId, first.AssetType, first.AssetPath, exists, width, height, group.Sum(x => x.Shot.DurationSeconds), group.Any(x => x.Episode == "longform"), group.Any(x => x.Episode == "shortform"), readable, fileSize, errors));
+            assets.Add(new WeeklyRenderInputAsset(first.AssetId, NormalizeRenderAssetType(first.AssetType), first.AssetPath, exists, width, height, shotMatches.Sum(x => x.Shot.DurationSeconds), shotMatches.Any(x => x.Episode == "longform"), shotMatches.Any(x => x.Episode == "shortform"), readable, fileSize, errors));
         }
         var allFound = assets.All(x => x.Exists && x.FileSizeBytes > 0);
         var allReadable = assets.All(x => x.Readable && x.Width > 0 && x.Height > 0);
-        return new WeeklyRenderInputManifest(pipelineRunId, DateTime.UtcNow, assets.OrderBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase).ToList(), allFound, allReadable, [], assets.SelectMany(x => x.ValidationErrors.Select(e => $"{x.AssetId}: {e}")).ToList());
+        var ordered = assets.OrderBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase).ToList();
+        var totalProduction = Math.Max(productionManifest.TotalProductionImageAssetCount, ordered.Count);
+        var hydrationPassed = totalProduction == 0 || ordered.Count >= Math.Ceiling(totalProduction * 0.8);
+        return new WeeklyRenderInputManifest(pipelineRunId, DateTime.UtcNow, ordered, allFound, allReadable, hydrationPassed ? [] : [$"Render input hydration discovered {ordered.Count} assets; expected at least 80% of {totalProduction} production assets."], assets.SelectMany(x => x.ValidationErrors.Select(e => $"{x.AssetId}: {e}")).ToList(), totalProduction, ordered.Count, hydrationPassed);
     }
+
+
+    private static IEnumerable<(string AssetId, string AssetType, string AssetPath)> DiscoverRenderInputFiles(string root)
+    {
+        foreach (var directory in new[] { Path.Combine(root, "stellarium", "scenes"), Path.Combine(root, "ai-cinematic"), Path.Combine(root, "assets", "nasa"), Path.Combine(root, "assets", "jwst"), Path.Combine(root, "assets", "motion-graphics"), Path.Combine(root, "assets", "educational-overlays") })
+        {
+            if (!Directory.Exists(directory)) continue;
+            foreach (var path in Directory.EnumerateFiles(directory, "*.*", SearchOption.AllDirectories).Where(p => p.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)))
+            {
+                var type = ClassifyRenderAssetType(root, path);
+                yield return (AssetId: $"{type}:{Path.GetFileNameWithoutExtension(path)}", AssetType: type, AssetPath: path);
+            }
+        }
+    }
+
+    private static string ClassifyRenderAssetType(string root, string path)
+    {
+        var rel = Path.GetRelativePath(root, path).Replace('\\', '/');
+        if (rel.Contains("ai-cinematic/", StringComparison.OrdinalIgnoreCase)) return "AICinematic";
+        if (rel.Contains("assets/nasa/", StringComparison.OrdinalIgnoreCase)) return "NASA";
+        if (rel.Contains("assets/jwst/", StringComparison.OrdinalIgnoreCase)) return "JWST";
+        if (rel.Contains("assets/motion-graphics/", StringComparison.OrdinalIgnoreCase)) return "MotionGraphic";
+        if (rel.Contains("assets/educational-overlays/", StringComparison.OrdinalIgnoreCase)) return "EducationalOverlay";
+        if (rel.Contains("astrophotography_target_scene", StringComparison.OrdinalIgnoreCase)) return "ExpandedStellarium";
+        if (rel.Contains("stellarium/scenes/", StringComparison.OrdinalIgnoreCase)) return "Stellarium";
+        return "Image";
+    }
+
+    private static string NormalizeRenderAssetType(string value) => value switch
+    {
+        "StellariumBase" => "Stellarium",
+        "StellariumExpanded" => "ExpandedStellarium",
+        "MotionGraphics" => "MotionGraphic",
+        "EducationalOverlay" => "EducationalOverlay",
+        _ => value
+    };
 
     private static WeeklyMotionEffectPlan BuildMotionPlan(Guid pipelineRunId, IReadOnlyList<(string Episode, FinalRenderSegment Segment, FinalRenderShot Shot)> allShots)
     {
