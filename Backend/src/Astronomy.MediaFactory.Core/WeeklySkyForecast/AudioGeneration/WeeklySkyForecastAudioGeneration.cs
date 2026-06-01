@@ -7,6 +7,9 @@ using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering;
+using NarrationEngineWeeklyNarrationPackage = Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine.WeeklyNarrationPackage;
+using NarrationEngineWeeklyNarrationSegment = Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine.WeeklyNarrationSegment;
+using RenderingWeeklyRenderContract = Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering.WeeklyRenderContract;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -193,7 +196,7 @@ public sealed class WeeklySkyForecastAudioGenerationService(
         }
     }
 
-    private async Task<List<WeeklyAudioSegmentManifestEntry>> GenerateSegmentsAsync(Guid pipelineRunId, string episodeType, IReadOnlyList<WeeklyNarrationSegment> narrationSegments, IReadOnlyList<WeeklyAudioSegmentAlignment> alignments, string root, string voiceName, string audioFormat, WeeklySkyForecastAudioGenerationRequest request, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<List<WeeklyAudioSegmentManifestEntry>> GenerateSegmentsAsync(Guid pipelineRunId, string episodeType, IReadOnlyList<NarrationEngineWeeklyNarrationSegment> narrationSegments, IReadOnlyList<WeeklyAudioSegmentAlignment> alignments, string root, string voiceName, string audioFormat, WeeklySkyForecastAudioGenerationRequest request, List<string> warnings, CancellationToken cancellationToken)
     {
         var entries = new List<WeeklyAudioSegmentManifestEntry>();
         var alignmentById = alignments.Where(x => x.EpisodeType.Equals(episodeType, StringComparison.OrdinalIgnoreCase)).ToDictionary(x => x.SegmentId, StringComparer.OrdinalIgnoreCase);
@@ -312,11 +315,11 @@ public sealed class WeeklySkyForecastAudioGenerationService(
             if (!File.Exists(path)) throw new FileNotFoundException($"Required audio input file is missing: {path}", path);
         }
         return new WeeklyAudioLoadedInputs(
-            await ReadJsonAsync<WeeklyNarrationPackage>(paths.LongformNarration, cancellationToken),
-            await ReadJsonAsync<WeeklyNarrationPackage>(paths.ShortformNarration, cancellationToken),
+            await ReadJsonAsync<NarrationEngineWeeklyNarrationPackage>(paths.LongformNarration, cancellationToken),
+            await ReadJsonAsync<NarrationEngineWeeklyNarrationPackage>(paths.ShortformNarration, cancellationToken),
             await ReadJsonAsync<object>(paths.NarrationTimelineMap, cancellationToken),
             await ReadJsonAsync<WeeklyAudioAlignmentPlan>(paths.AudioAlignmentPlan, cancellationToken),
-            await ReadJsonAsync<WeeklyRenderContract>(paths.RenderContract, cancellationToken));
+            await ReadJsonAsync<RenderingWeeklyRenderContract>(paths.RenderContract, cancellationToken));
     }
 
     private static async Task<T> ReadJsonAsync<T>(string path, CancellationToken cancellationToken)
@@ -392,7 +395,7 @@ public sealed class WeeklySkyForecastAudioGenerationService(
     private static double Round(double value) => Math.Round(value, 3, MidpointRounding.AwayFromZero);
     private static string SanitizeFileName(string value) => string.Join("_", value.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
 
-    private sealed record WeeklyAudioLoadedInputs(WeeklyNarrationPackage Longform, WeeklyNarrationPackage Shortform, object _NarrationTimelineMap, WeeklyAudioAlignmentPlan AudioPlan, WeeklyRenderContract RenderContract);
+    private sealed record WeeklyAudioLoadedInputs(NarrationEngineWeeklyNarrationPackage Longform, NarrationEngineWeeklyNarrationPackage Shortform, object _NarrationTimelineMap, WeeklyAudioAlignmentPlan AudioPlan, RenderingWeeklyRenderContract RenderContract);
 
     private sealed record WeeklyAudioRequiredPaths(string Root, string LongformNarration, string ShortformNarration, string NarrationTimelineMap, string AudioAlignmentPlan, string RenderContract, string GenerationReportOutput, string ManifestOutput, string TimingReportOutput)
     {
