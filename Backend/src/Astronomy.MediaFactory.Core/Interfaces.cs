@@ -1553,7 +1553,12 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     string? WeeklyFocusObjectPlanPath = null,
     string? WeeklyStellariumSceneRequirementsPath = null,
     string? VisualNarrationCoverageReportPath = null,
-    string? SscSceneManifestPath = null);
+    string? SscSceneManifestPath = null,
+    bool SscPropagationReady = false,
+    string? SscPropagationValidationReportPath = null,
+    int EmptyObjectSceneCount = 0,
+    int EmptyRequiredLabelSceneCount = 0,
+    int CameraTargetMismatchCount = 0);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {

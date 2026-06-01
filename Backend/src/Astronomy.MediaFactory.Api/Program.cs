@@ -1020,6 +1020,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         Directory.CreateDirectory(framingDirectory);
         var weeklyDynamicFramingPlanPath = Path.Combine(framingDirectory, "weekly-dynamic-framing-plan.json");
         var weeklyFramingValidationReportPath = Path.Combine(framingDirectory, "weekly-framing-validation-report.json");
+        var sscPropagationValidationReportPath = Path.Combine(stellariumDirectory, "ssc-propagation-validation-report.json");
         await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly focus object plan", stageCt =>
             File.WriteAllTextAsync(weeklyFocusObjectPlanPath, JsonSerializer.Serialize(weeklyFocusPlan, new JsonSerializerOptions { WriteIndented = true }), stageCt));
         await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly Stellarium scene requirements", stageCt =>
@@ -1571,7 +1572,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
 
                     var dynamicScriptPath = Path.Combine(scriptsDirectory, $"{dynamicScene.SceneCode}.ssc");
                     var dynamicImagePath = Path.Combine(scenesDirectory, $"{dynamicScene.SceneCode}.png");
-                    var dynamicSsc = BuildWeeklyDynamicFramingSsc(dynamicScene, observationUtc, longitude, latitude, elevationMeters, locationName, scenesDirectory);
+                    var dynamicSsc = BuildWeeklyDynamicFramingSsc(dynamicScene, observationUtc, selectedObservationLocal, longitude, latitude, elevationMeters, locationName, scenesDirectory);
                     generatedScripts.Add((dynamicScriptPath, dynamicSsc));
                     generatedSplitMetadataBySceneCode[dynamicScene.SceneCode] = new GeneratedSplitSceneMetadata(
                         dynamicScene.SceneCode,
@@ -1645,7 +1646,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             Path.Combine("stellarium", "scenes", dynamicScene.SceneCode, frameOutputImageName),
                             []);
                         dynamicFramePlans.Add(framePlan);
-                        var frameSsc = BuildWeeklyDynamicFramingSsc(dynamicScene with { Fov = frameFov }, observationUtc, longitude, latitude, elevationMeters, locationName, Path.GetDirectoryName(frameImagePath) ?? scenesDirectory, Path.GetFileNameWithoutExtension(frameImagePath));
+                        var frameSsc = BuildWeeklyDynamicFramingSsc(dynamicScene with { Fov = frameFov }, observationUtc, selectedObservationLocal, longitude, latitude, elevationMeters, locationName, Path.GetDirectoryName(frameImagePath) ?? scenesDirectory, Path.GetFileNameWithoutExtension(frameImagePath));
                         generatedScripts.Add((frameScriptPath, frameSsc));
                         finalRenderSceneDescriptors.Add(new FinalRenderSceneDescriptor(
                             dynamicScene.SceneCode,
@@ -2134,6 +2135,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         await File.WriteAllTextAsync(weeklyFramingValidationReportPath, JsonSerializer.Serialize(dynamicFramingValidationReport, new JsonSerializerOptions { WriteIndented = true }), ct);
         app.Logger.LogInformation("DYNAMIC_FRAMING_REPORTS_WRITTEN planPath={PlanPath} validationPath={ValidationPath} dynamicFramingReady={DynamicFramingReady} allCameraTargetsLocked={AllCameraTargetsLocked} allTargetLabelsEnabled={AllTargetLabelsEnabled}", weeklyDynamicFramingPlanPath, weeklyFramingValidationReportPath, dynamicFramingValidationReport.DynamicFramingReady, dynamicFramingValidationReport.AllCameraTargetsLocked, dynamicFramingValidationReport.AllTargetLabelsEnabled);
 
+        var dynamicFramingScenesFromPlan = await ReadWeeklyDynamicScenesFromPlanFileAsync(weeklyDynamicFramingPlanPath, ct);
+        var dynamicFramingScenesByCode = dynamicFramingScenesFromPlan
+            .GroupBy(x => x.SceneCode, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+
         var qualityDirectory = Path.Combine(root, "cinematic");
         Directory.CreateDirectory(qualityDirectory);
         var framePlanPath = Path.Combine(qualityDirectory, "cinematic-frame-plan.json");
@@ -2177,6 +2183,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 string.Join(",", finalScenes.Select(x => x.SceneCode)));
             foreach (var finalScene in finalScenes)
             {
+                var renderSceneCode = ResolveWeeklyRenderSceneCodeFromFinalSceneCode(finalScene.SceneCode);
+                if (!dynamicFramingScenesByCode.TryGetValue(renderSceneCode, out var propagatedScene))
+                    throw new InvalidOperationException($"SSC propagation failed for {finalScene.SceneCode}: dynamic framing metadata was not propagated.");
+                ValidateWeeklySscPropagationScene(finalScene.SceneCode, propagatedScene);
+
                 var scriptContent = finalScriptsByPath[finalScene.ScriptPath];
                 await File.WriteAllTextAsync(finalScene.ScriptPath, scriptContent, stageCt);
                 scriptPaths.Add(finalScene.ScriptPath);
@@ -2214,12 +2225,27 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var screenshots = new List<string>();
         var primaryScreenshots = new List<string>();
         var executionCandidates = finalScenes
-            .Select(scene => new
+            .Select(scene =>
             {
-                SceneCode = scene.SceneCode,
-                ScriptPath = scene.ScriptPath,
-                ScreenshotDirectory = scenesDirectory,
-                ScreenshotPath = scene.ScreenshotPath
+                var renderSceneCode = ResolveWeeklyRenderSceneCodeFromFinalSceneCode(scene.SceneCode);
+                if (!dynamicFramingScenesByCode.TryGetValue(renderSceneCode, out var propagatedScene))
+                    throw new InvalidOperationException($"SSC propagation failed for {scene.SceneCode}: dynamic framing metadata was not propagated.");
+                ValidateWeeklySscPropagationScene(scene.SceneCode, propagatedScene);
+                return new
+                {
+                    SceneCode = scene.SceneCode,
+                    ScriptPath = scene.ScriptPath,
+                    ScreenshotDirectory = scenesDirectory,
+                    ScreenshotPath = scene.ScreenshotPath,
+                    Objects = propagatedScene.TargetObjects,
+                    ResolvedObjects = propagatedScene.ResolvedObjects,
+                    PrimaryObject = propagatedScene.PrimaryObject,
+                    CameraTargetObjects = propagatedScene.CameraTargetObjects,
+                    RequiredLabels = propagatedScene.LabelObjects,
+                    CameraAzimuth = propagatedScene.CameraAzimuth,
+                    CameraAltitude = propagatedScene.CameraAltitude,
+                    Fov = propagatedScene.Fov
+                };
             })
             .ToList();
 
@@ -2257,6 +2283,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
 
             app.Logger.LogInformation("USING_SHARED_STELLARIUM_EXECUTOR_FOR_WEEKLY_SKYFORECAST");
             app.Logger.LogInformation("sceneCode={SceneCode}", item.SceneCode);
+            app.Logger.LogInformation("SSC_CAPTURE_QUEUE_DYNAMIC_METADATA sceneCode={SceneCode} objects={Objects} primaryObject={PrimaryObject} requiredLabels={RequiredLabels} cameraAzimuth={CameraAzimuth} cameraAltitude={CameraAltitude} fov={Fov}", item.SceneCode, string.Join(",", item.Objects), item.PrimaryObject, string.Join(",", item.RequiredLabels), item.CameraAzimuth, item.CameraAltitude, item.Fov);
             app.Logger.LogInformation("scriptPath={ScriptPath}", item.ScriptPath);
             app.Logger.LogInformation("screenshotPath={ScreenshotPath}", item.ScreenshotPath);
             app.Logger.LogInformation("exePath={ExePath}", executablePath);
@@ -2324,22 +2351,41 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var sscManifestEntries = finalScenes.Select(scene =>
         {
             var screenshotPath = scene.ScreenshotPath;
-            var targetObjects = framePlansBySceneCode.TryGetValue(scene.SceneCode, out var sceneFramePlans)
-                ? sceneFramePlans.SelectMany(x => x.TargetObjects).Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray()
-                : Array.Empty<string>();
+            var renderSceneCode = ResolveWeeklyRenderSceneCodeFromFinalSceneCode(scene.SceneCode);
+            if (!dynamicFramingScenesByCode.TryGetValue(renderSceneCode, out var propagatedScene))
+                throw new InvalidOperationException($"SSC propagation failed for {scene.SceneCode}: dynamic framing metadata was not propagated.");
+            ValidateWeeklySscPropagationScene(scene.SceneCode, propagatedScene);
+            var objects = propagatedScene.TargetObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+            var resolvedObjects = propagatedScene.ResolvedObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+            var cameraTargetObjects = propagatedScene.CameraTargetObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+            var visualAnchorObjects = propagatedScene.VisualAnchorObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+            var requiredLabels = propagatedScene.LabelObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
             return new
             {
                 sceneCode = scene.SceneCode,
-                sceneType = "FinalSplitScene",
-                objects = targetObjects,
-                primaryObject = targetObjects.FirstOrDefault() ?? string.Empty,
+                sceneType = "FinalStellariumScene",
+                objects,
+                targetObjects = objects,
+                resolvedObjects,
+                primaryObject = NormalizeWeeklyObjectCode(propagatedScene.PrimaryObject) ?? propagatedScene.PrimaryObject,
+                cameraTargetObjects,
+                visualAnchorObjects,
+                requiredLabels,
+                cameraAzimuth = propagatedScene.CameraAzimuth,
+                cameraAltitude = propagatedScene.CameraAltitude,
+                fov = propagatedScene.Fov,
+                framingMode = propagatedScene.FramingMode,
+                includeHorizon = propagatedScene.IncludeHorizon,
                 sourceSceneCodes = scene.SourceSceneCodes.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray(),
                 sscPath = scene.ScriptPath,
                 screenshotPath,
                 screenshotExists = File.Exists(screenshotPath) && new FileInfo(screenshotPath).Length > 10 * 1024,
-                requiredLabels = targetObjects.Select(x => ToWeeklyObjectDisplayName(x)).ToArray()
+                expectedObjectLabels = requiredLabels.Select(ToWeeklyObjectDisplayName).ToArray(),
+                dynamicFramingPlanPath = weeklyDynamicFramingPlanPath
             };
         }).ToList();
+        var sscPropagationValidationReport = BuildWeeklySscPropagationValidationReport(finalScenes, dynamicFramingScenesByCode, weeklyDynamicFramingPlanPath);
+        await File.WriteAllTextAsync(sscPropagationValidationReportPath, JsonSerializer.Serialize(sscPropagationValidationReport, new JsonSerializerOptions { WriteIndented = true }), ct);
         await File.WriteAllTextAsync(sscSceneManifestPath, JsonSerializer.Serialize(new
         {
             pipelineRunId,
@@ -2358,8 +2404,15 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             multiObjectScenesFailed = multiObjectSceneResolutionReports.Count(x => !x.MultiObjectResolutionPassed),
             multiObjectSceneResolutions = multiObjectSceneResolutionReports,
             scriptsGenerated = scriptPaths.Count,
-            screenshotsGenerated = screenshots.Count
+            screenshotsGenerated = screenshots.Count,
+            sscPropagationReady = sscPropagationValidationReport.sscPropagationReady,
+            sscPropagationValidationReportPath,
+            emptyObjectSceneCount = sscPropagationValidationReport.emptyObjectSceneCount,
+            emptyRequiredLabelSceneCount = sscPropagationValidationReport.emptyRequiredLabelSceneCount,
+            cameraTargetMismatchCount = sscPropagationValidationReport.cameraTargetMismatchCount
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        if (!sscPropagationValidationReport.sscPropagationReady)
+            throw new InvalidOperationException($"SSC propagation failed: dynamic framing metadata was not propagated. Report: {sscPropagationValidationReportPath}");
 
         var visualNarrationCoverage = BuildWeeklyVisualNarrationCoverageReport(
             weeklyFocusPlan,
@@ -2888,7 +2941,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             primaryScreenshotsDeprecated = imageSequencePlan.PrimaryScreenshotsDeprecated,
             productionImageSource = imageSequencePlan.ProductionImageSource,
             warnings,
-            executionSummary
+            executionSummary,
+            sscPropagationReady = sscPropagationValidationReport.sscPropagationReady,
+            sscPropagationValidationReportPath,
+            emptyObjectSceneCount = sscPropagationValidationReport.emptyObjectSceneCount,
+            emptyRequiredLabelSceneCount = sscPropagationValidationReport.emptyRequiredLabelSceneCount,
+            cameraTargetMismatchCount = sscPropagationValidationReport.cameraTargetMismatchCount
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
 
         var eventPriorityScoring = await ExecuteOrchestrationStageAsync("Scoring weekly event priorities", stageCt =>
@@ -2976,6 +3034,14 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     narrationEngine.LongformNarrationPath,
                     narrationEngine.ShortformNarrationPath),
                 stageCt));
+        await EnrichWeeklyRenderInputManifestWithSscPropagationAsync(
+            ffmpegRendererPreparation.RenderInputManifestPath,
+            weeklyDynamicFramingPlanPath,
+            sscSceneManifestPath,
+            sscPropagationValidationReportPath,
+            sscManifestEntries,
+            sscPropagationValidationReport,
+            ct);
 
         var output = new WeeklySkyForecastV2GenerateWeeklyScenesResponse(
             pipelineRunId,
@@ -3227,7 +3293,12 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             weeklyFocusObjectPlanPath,
             weeklyStellariumSceneRequirementsPath,
             visualNarrationCoverageReportPath,
-            sscSceneManifestPath);
+            sscSceneManifestPath,
+            sscPropagationValidationReport.sscPropagationReady,
+            sscPropagationValidationReportPath,
+            sscPropagationValidationReport.emptyObjectSceneCount,
+            sscPropagationValidationReport.emptyRequiredLabelSceneCount,
+            sscPropagationValidationReport.cameraTargetMismatchCount);
 
         return Results.Ok(output);
     }
@@ -6567,6 +6638,107 @@ static void ValidateWeeklyDynamicSceneContract(WeeklyDynamicSceneContract scene)
     }
 }
 
+static string ResolveWeeklyRenderSceneCodeFromFinalSceneCode(string sceneCode)
+{
+    var slashIndex = sceneCode.IndexOf('/');
+    return slashIndex > 0 ? sceneCode[..slashIndex] : sceneCode;
+}
+
+static void ValidateWeeklySscPropagationScene(string sceneCode, WeeklyDynamicSceneContract scene)
+{
+    var objectTargeted = scene.TargetObjects.Count > 0;
+    if (!objectTargeted) return;
+    var failed = scene.TargetObjects.Count == 0
+        || !scene.TargetObjects.All(x => scene.ResolvedObjects.Contains(x, StringComparer.OrdinalIgnoreCase))
+        || string.IsNullOrWhiteSpace(scene.PrimaryObject)
+        || scene.CameraTargetObjects.Count == 0
+        || scene.LabelObjects.Count == 0
+        || double.IsNaN(scene.CameraAzimuth)
+        || double.IsNaN(scene.CameraAltitude)
+        || double.IsNaN(scene.Fov)
+        || scene.Fov <= 0;
+    if (failed)
+        throw new InvalidOperationException($"SSC propagation failed for {sceneCode}: dynamic framing metadata was not propagated.");
+}
+
+static async Task<IReadOnlyList<WeeklyDynamicSceneContract>> ReadWeeklyDynamicScenesFromPlanFileAsync(string weeklyDynamicFramingPlanPath, CancellationToken cancellationToken)
+{
+    await using var stream = File.OpenRead(weeklyDynamicFramingPlanPath);
+    var document = await JsonSerializer.DeserializeAsync<WeeklyDynamicFramingPlanDocument>(stream, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, cancellationToken);
+    return document?.Scenes ?? Array.Empty<WeeklyDynamicSceneContract>();
+}
+
+static async Task EnrichWeeklyRenderInputManifestWithSscPropagationAsync(string renderInputManifestPath, string weeklyDynamicFramingPlanPath, string sscSceneManifestPath, string sscPropagationValidationReportPath, object sscScenes, WeeklySscPropagationValidationReport propagationReport, CancellationToken cancellationToken)
+{
+    if (string.IsNullOrWhiteSpace(renderInputManifestPath) || !File.Exists(renderInputManifestPath)) return;
+    var manifestText = await File.ReadAllTextAsync(renderInputManifestPath, cancellationToken);
+    var manifestNode = JsonNode.Parse(manifestText) as JsonObject ?? new JsonObject();
+    manifestNode["sscPropagation"] = new JsonObject
+    {
+        ["sourceOfTruth"] = weeklyDynamicFramingPlanPath,
+        ["sscSceneManifestPath"] = sscSceneManifestPath,
+        ["sscPropagationValidationReportPath"] = sscPropagationValidationReportPath,
+        ["sscPropagationReady"] = propagationReport.sscPropagationReady,
+        ["emptyObjectSceneCount"] = propagationReport.emptyObjectSceneCount,
+        ["emptyRequiredLabelSceneCount"] = propagationReport.emptyRequiredLabelSceneCount,
+        ["cameraTargetMismatchCount"] = propagationReport.cameraTargetMismatchCount,
+        ["scenes"] = JsonSerializer.SerializeToNode(sscScenes)
+    };
+    await File.WriteAllTextAsync(renderInputManifestPath, manifestNode.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+}
+
+static WeeklySscPropagationValidationReport BuildWeeklySscPropagationValidationReport(IReadOnlyList<WeeklySscSceneFinalizer.FinalSscScene> finalScenes, IReadOnlyDictionary<string, WeeklyDynamicSceneContract> dynamicFramingScenesByCode, string weeklyDynamicFramingPlanPath)
+{
+    var warnings = new List<string>();
+    var errors = new List<string>();
+    var scenes = new List<WeeklySscPropagationSceneReport>();
+    foreach (var finalScene in finalScenes)
+    {
+        var renderSceneCode = ResolveWeeklyRenderSceneCodeFromFinalSceneCode(finalScene.SceneCode);
+        if (!dynamicFramingScenesByCode.TryGetValue(renderSceneCode, out var dynamicScene))
+        {
+            errors.Add($"SSC propagation failed for {finalScene.SceneCode}: dynamic framing metadata was not propagated.");
+            scenes.Add(new WeeklySscPropagationSceneReport(finalScene.SceneCode, [], string.Empty, [], [], double.NaN, double.NaN, 0, false));
+            continue;
+        }
+
+        var objects = dynamicScene.TargetObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        var requiredLabels = dynamicScene.LabelObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        var cameraTargets = dynamicScene.CameraTargetObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        var primaryObject = NormalizeWeeklyObjectCode(dynamicScene.PrimaryObject) ?? dynamicScene.PrimaryObject;
+        var screenshotExists = File.Exists(finalScene.ScreenshotPath) && new FileInfo(finalScene.ScreenshotPath).Length > 10 * 1024;
+        var objectMetadataMatches = objects.Length > 0
+            && dynamicScene.TargetObjects.All(x => dynamicScene.ResolvedObjects.Contains(x, StringComparer.OrdinalIgnoreCase))
+            && cameraTargets.Length > 0
+            && requiredLabels.Length > 0
+            && !string.IsNullOrWhiteSpace(primaryObject)
+            && !double.IsNaN(dynamicScene.CameraAzimuth)
+            && !double.IsNaN(dynamicScene.CameraAltitude)
+            && dynamicScene.Fov > 0;
+        if (!screenshotExists) warnings.Add($"Screenshot missing or too small for {finalScene.SceneCode}.");
+        if (!objectMetadataMatches) errors.Add($"SSC propagation failed for {finalScene.SceneCode}: dynamic framing metadata was not propagated.");
+        scenes.Add(new WeeklySscPropagationSceneReport(finalScene.SceneCode, objects, primaryObject, requiredLabels, cameraTargets, dynamicScene.CameraAzimuth, dynamicScene.CameraAltitude, dynamicScene.Fov, screenshotExists && objectMetadataMatches));
+    }
+
+    var emptyObjectSceneCount = scenes.Count(x => x.objects.Count == 0);
+    var emptyRequiredLabelSceneCount = scenes.Count(x => x.requiredLabels.Count == 0);
+    var cameraTargetMismatchCount = scenes.Count(x => x.objects.Any() && !x.objects.All(o => x.cameraTargetObjects.Contains(o, StringComparer.OrdinalIgnoreCase)));
+    if (emptyObjectSceneCount > 0 || emptyRequiredLabelSceneCount > 0 || cameraTargetMismatchCount > 0)
+        errors.Add($"SSC propagation metadata counts failed: emptyObjectSceneCount={emptyObjectSceneCount}, emptyRequiredLabelSceneCount={emptyRequiredLabelSceneCount}, cameraTargetMismatchCount={cameraTargetMismatchCount}.");
+
+    return new WeeklySscPropagationValidationReport(
+        sscPropagationReady: errors.Count == 0 && scenes.Count > 0,
+        sceneCount: scenes.Count,
+        metadataPropagatedSceneCount: scenes.Count(x => x.propagationValid),
+        emptyObjectSceneCount: emptyObjectSceneCount,
+        emptyRequiredLabelSceneCount: emptyRequiredLabelSceneCount,
+        cameraTargetMismatchCount: cameraTargetMismatchCount,
+        dynamicFramingPlanPath: weeklyDynamicFramingPlanPath,
+        scenes: scenes,
+        warnings: warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+        errors: errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+}
+
 static WeeklyDynamicFramingValidationReport BuildWeeklyDynamicFramingValidationReport(IReadOnlyList<WeeklyDynamicFramingPlan> plans)
 {
     var warnings = plans.SelectMany(x => x.Warnings).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -6593,7 +6765,7 @@ static WeeklyDynamicFramingValidationReport BuildWeeklyDynamicFramingValidationR
         Errors: errors);
 }
 
-static string BuildWeeklyDynamicFramingSsc(WeeklyDynamicSceneContract scene, DateTime observationUtc, double longitude, double latitude, double elevationMeters, string locationName, string screenshotDirectory, string? screenshotFileName = null)
+static string BuildWeeklyDynamicFramingSsc(WeeklyDynamicSceneContract scene, DateTime observationUtc, DateTime observationLocal, double longitude, double latitude, double elevationMeters, string locationName, string screenshotDirectory, string? screenshotFileName = null)
 {
     ValidateWeeklyDynamicSceneContract(scene);
     var safeDirectory = screenshotDirectory.Replace("\\", "/").Replace("\"", "\\\"");
@@ -6605,8 +6777,14 @@ static string BuildWeeklyDynamicFramingSsc(WeeklyDynamicSceneContract scene, Dat
         "// WeeklySkyForecast dynamic framing SSC",
         $"// SceneCode: {scene.SceneCode}",
         $"// ParentSceneCode: {scene.ParentSceneCode ?? string.Empty}",
+        $"// SelectedObservationUtc: {DateTime.SpecifyKind(observationUtc, DateTimeKind.Utc):O}",
+        $"// SelectedObservationLocal: {observationLocal:O}",
         $"// TargetObjects: {string.Join(',', scene.TargetObjects)}",
+        $"// ResolvedObjects: {string.Join(',', scene.ResolvedObjects)}",
         $"// PrimaryObject: {scene.PrimaryObject}",
+        $"// CameraTargetObjects: {string.Join(',', scene.CameraTargetObjects)}",
+        $"// VisualAnchorObjects: {string.Join(',', scene.VisualAnchorObjects)}",
+        $"// RequiredLabels: {string.Join(',', scene.LabelObjects)}",
         $"// FramingMode: {scene.FramingMode}",
         "core.clear(\"natural\");",
         "core.setGuiVisible(false);",
@@ -6857,6 +7035,10 @@ sealed record WeeklyDynamicFramingPlan(
         SplitRequired,
         CameraPlan.IncludeHorizon);
 }
+
+sealed record WeeklyDynamicFramingPlanDocument(bool DynamicFramingReady, DateTime GeneratedUtc, IReadOnlyList<WeeklyDynamicSceneContract> Scenes);
+sealed record WeeklySscPropagationSceneReport(string sceneCode, IReadOnlyList<string> objects, string primaryObject, IReadOnlyList<string> requiredLabels, IReadOnlyList<string> cameraTargetObjects, double cameraAzimuth, double cameraAltitude, double fov, bool propagationValid);
+sealed record WeeklySscPropagationValidationReport(bool sscPropagationReady, int sceneCount, int metadataPropagatedSceneCount, int emptyObjectSceneCount, int emptyRequiredLabelSceneCount, int cameraTargetMismatchCount, string dynamicFramingPlanPath, IReadOnlyList<WeeklySscPropagationSceneReport> scenes, IReadOnlyList<string> warnings, IReadOnlyList<string> errors);
 
 sealed record WeeklyDynamicCameraPlan(string PrimaryObject, IReadOnlyList<string> CameraTargetObjects, IReadOnlyList<string> VisualAnchorObjects, double CameraAzimuth, double CameraAltitude, double Fov, bool IncludeHorizon);
 sealed record WeeklyDynamicLabelPlan(IReadOnlyList<string> LabelObjects, bool SuppressPeripheralLabels, IReadOnlyList<string> LabelPriority);
