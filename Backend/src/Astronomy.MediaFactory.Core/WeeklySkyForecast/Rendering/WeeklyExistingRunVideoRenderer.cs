@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
@@ -21,7 +22,8 @@ public sealed record WeeklyExistingRunRenderRequest(
     bool OverwriteExisting = false,
     bool DryRun = false,
     bool DebugStoryboard = false,
-    bool AllowSilent = true);
+    bool AllowSilent = true,
+    bool? UseStagedRendering = null);
 
 public sealed record WeeklyExistingRunRenderResponse(
     Guid PipelineRunId,
@@ -80,6 +82,18 @@ public sealed record WeeklyExistingRunRenderResponse(
     bool DebugStoryboardRendered,
     string LongformDebugVideoPath,
     string ShortformDebugVideoPath,
+    bool UseStagedRendering,
+    string RenderMode,
+    int LongformClipCount,
+    int LongformClipsRendered,
+    int ShortformClipCount,
+    int ShortformClipsRendered,
+    string TransitionMode,
+    int? FfmpegExitCode,
+    string FfmpegStderrPath,
+    string FailedCommandPath,
+    string FailedStage,
+    int? FailedShotNumber,
     IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> PlannedCommands,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
@@ -91,6 +105,18 @@ public sealed record WeeklyExistingRunVideoRenderReport(
     bool DryRun,
     WeeklyExistingRunEpisodeRenderReport Longform,
     WeeklyExistingRunEpisodeRenderReport Shortform,
+    string RenderMode,
+    bool UseStagedRendering,
+    bool DebugStoryboard,
+    int LongformClipCount,
+    int ShortformClipCount,
+    int LongformClipsRendered,
+    int ShortformClipsRendered,
+    string TransitionMode,
+    int FfmpegCommandLength,
+    string FfmpegStderrPath,
+    string? FailedStage,
+    int? FailedShotNumber,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
@@ -135,6 +161,12 @@ public sealed record WeeklyExistingRunFfmpegCommandPlan(
     string Command,
     IReadOnlyList<string> SegmentFiles,
     IReadOnlyList<string> Arguments,
+    bool UseStagedRendering,
+    string RenderMode,
+    string TempDirectory,
+    string ClipsDirectory,
+    string StderrPath,
+    int CommandLength,
     WeeklyExistingRunEpisodeQualityMetrics QualityMetrics);
 
 public sealed record WeeklyExistingRunEpisodeQualityMetrics(
@@ -334,6 +366,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var visualSelectionReportPath = Path.Combine(renderDirectory, "render-visual-selection-report.json");
             var diversityValidationReportPath = Path.Combine(renderDirectory, "render-diversity-validation-report.json");
             var storyboardReportPath = Path.Combine(renderDirectory, "render-storyboard-report.json");
+            var commandPlanPath = Path.Combine(renderDirectory, "logs", "ffmpeg-command-plan.json");
 
             var longformResult = WeeklyExistingRunEpisodeRenderReportFactory.NotRequested(longformOutput);
             var shortformResult = WeeklyExistingRunEpisodeRenderReportFactory.NotRequested(shortformOutput);
@@ -346,6 +379,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
             {
                 commandPlans.Add(await BuildCommandPlanAsync("shortform", loaded.Contract.Shortform, loaded.Timeline.Shortform, loaded.Manifest, loaded.ProductionAssetManifest, loaded.AudioPlan.ShortformExpectedAudioPath, shortformOutput, request, warnings, cancellationToken));
             }
+            await File.WriteAllTextAsync(commandPlanPath, JsonSerializer.Serialize(commandPlans, JsonOptions), cancellationToken);
 
             var resolvedShotPlan = BuildResolvedShotPlan(pipelineRunId, commandPlans);
             await File.WriteAllTextAsync(resolvedShotPlanPath, JsonSerializer.Serialize(resolvedShotPlan, JsonOptions), cancellationToken);
@@ -371,6 +405,10 @@ public sealed class WeeklyExistingRunVideoRenderer(
                     commandReports.Add(report.Report);
                     if (report.Result.EpisodeType.Equals("longform", StringComparison.OrdinalIgnoreCase)) longformResult = report.Result.RenderReport;
                     else shortformResult = report.Result.RenderReport;
+                    if (report.Report.Errors.Count > 0)
+                    {
+                        errors.AddRange(report.Report.Errors.Select(e => $"{plan.EpisodeType}: {e}"));
+                    }
                 }
             }
             else if (request.DryRun)
@@ -380,7 +418,17 @@ public sealed class WeeklyExistingRunVideoRenderer(
             }
 
             var completed = DateTime.UtcNow;
-            var videoReport = new WeeklyExistingRunVideoRenderReport(pipelineRunId, started, completed, request.DryRun, longformResult, shortformResult, warnings, errors);
+            var failedReport = commandReports.FirstOrDefault(r => r.Errors.Count > 0);
+            var longformPlan = commandPlans.FirstOrDefault(p => p.EpisodeType.Equals("longform", StringComparison.OrdinalIgnoreCase));
+            var shortformPlan = commandPlans.FirstOrDefault(p => p.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase));
+            var useStagedRendering = commandPlans.Any(p => p.UseStagedRendering);
+            var renderMode = useStagedRendering ? "staged" : "singleGraph";
+            var transitionMode = useStagedRendering ? "simplified" : "full";
+            var ffmpegCommandLength = commandPlans.Select(p => p.CommandLength).DefaultIfEmpty(0).Max();
+            var ffmpegStderrPath = failedReport is null ? string.Empty : (commandPlans.FirstOrDefault(p => p.EpisodeType.Equals(failedReport.EpisodeType, StringComparison.OrdinalIgnoreCase))?.StderrPath ?? string.Empty);
+            var failedStage = BuildFailedStage(failedReport);
+            var failedShotNumber = ExtractFailedShotNumber(failedReport);
+            var videoReport = new WeeklyExistingRunVideoRenderReport(pipelineRunId, started, completed, request.DryRun, longformResult, shortformResult, renderMode, useStagedRendering, request.DebugStoryboard, longformPlan?.SegmentFiles.Count ?? 0, shortformPlan?.SegmentFiles.Count ?? 0, CountRenderedClips(longformPlan), CountRenderedClips(shortformPlan), transitionMode, ffmpegCommandLength, ffmpegStderrPath, failedStage, failedShotNumber, warnings, errors);
             var ffmpegReport = new WeeklyExistingRunFfmpegExecutionReport(pipelineRunId, started, completed, request.DryRun, commandReports, warnings, errors);
             await File.WriteAllTextAsync(videoReportPath, JsonSerializer.Serialize(videoReport, JsonOptions), cancellationToken);
             await File.WriteAllTextAsync(ffmpegReportPath, JsonSerializer.Serialize(ffmpegReport, JsonOptions), cancellationToken);
@@ -450,6 +498,18 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 request.DebugStoryboard && !request.DryRun && (longformResult.Rendered || shortformResult.Rendered),
                 Path.Combine(renderDirectory, "longform", "weekly-skyforecast-longform-debug.mp4"),
                 Path.Combine(renderDirectory, "shortform", "weekly-skyforecast-shortform-debug.mp4"),
+                useStagedRendering,
+                renderMode,
+                longformPlan?.SegmentFiles.Count ?? 0,
+                CountRenderedClips(longformPlan),
+                shortformPlan?.SegmentFiles.Count ?? 0,
+                CountRenderedClips(shortformPlan),
+                transitionMode,
+                failedReport?.ExitCode,
+                ffmpegStderrPath,
+                failedReport is null ? string.Empty : commandPlanPath,
+                failedStage ?? string.Empty,
+                failedShotNumber,
                 commandPlans,
                 warnings,
                 errors);
@@ -462,78 +522,12 @@ public sealed class WeeklyExistingRunVideoRenderer(
         }
     }
 
-    private async Task<WeeklyExistingRunEpisodeRenderReport> RenderEpisodeAsync(string episodeType, WeeklyEpisodeRenderContract contract, FinalRenderEpisodeTimeline timeline, WeeklyRenderInputManifest manifest, WeeklyProductionAssetManifest? productionManifest, string expectedAudioPath, string outputPath, WeeklyExistingRunRenderRequest request, List<string> warnings, List<WeeklyExistingRunFfmpegCommandPlan> commandPlans, List<WeeklyExistingRunFfmpegCommandReport> commandReports, CancellationToken cancellationToken)
-    {
-        var durationSeconds = contract.DurationSeconds > 0 ? contract.DurationSeconds : timeline.ActualDurationSeconds;
-        logger.LogInformation(episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase) ? "WEEKLY_RENDER_LONGFORM_START outputPath={OutputPath}" : "WEEKLY_RENDER_SHORTFORM_START outputPath={OutputPath}", outputPath);
-        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
-
-        var plan = await BuildCommandPlanAsync(episodeType, contract, timeline, manifest, productionManifest, expectedAudioPath, outputPath, request, warnings, cancellationToken);
-        commandPlans.Add(plan);
-
-        if (!request.DryRun && File.Exists(outputPath) && !request.OverwriteExisting)
-        {
-            var skippedInfo = new FileInfo(outputPath);
-            commandReports.Add(new WeeklyExistingRunFfmpegCommandReport(episodeType, outputPath, true, false, true, null, 0, plan.Command, null, ["Output already exists and overwriteExisting is false."], []));
-            logger.LogInformation(episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase) ? "WEEKLY_RENDER_LONGFORM_COMPLETE outputPath={OutputPath} skipped={Skipped}" : "WEEKLY_RENDER_SHORTFORM_COMPLETE outputPath={OutputPath} skipped={Skipped}", outputPath, true);
-            return new WeeklyExistingRunEpisodeRenderReport(true, false, true, outputPath, durationSeconds, skippedInfo.Length, plan.AudioAttached);
-        }
-
-        if (request.DryRun)
-        {
-            commandReports.Add(new WeeklyExistingRunFfmpegCommandReport(episodeType, outputPath, true, false, false, null, 0, plan.Command, null, [], []));
-            logger.LogInformation(episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase) ? "WEEKLY_RENDER_LONGFORM_COMPLETE outputPath={OutputPath} dryRun={DryRun}" : "WEEKLY_RENDER_SHORTFORM_COMPLETE outputPath={OutputPath} dryRun={DryRun}", outputPath, true);
-            return new WeeklyExistingRunEpisodeRenderReport(true, false, false, outputPath, durationSeconds, 0, plan.AudioAttached);
-        }
-
-        var stopwatch = Stopwatch.StartNew();
-        var processStart = new ProcessStartInfo
-        {
-            FileName = _renderingOptions.FfmpegPath,
-            UseShellExecute = false,
-            RedirectStandardError = true,
-            RedirectStandardOutput = true
-        };
-        foreach (var argument in plan.Arguments)
-        {
-            processStart.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(processStart) ?? throw new InvalidOperationException("Failed to start FFmpeg process.");
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _renderingOptions.FfmpegTimeoutSeconds)));
-        await process.WaitForExitAsync(timeoutCts.Token);
-        await stdoutTask;
-        var stderr = await stderrTask;
-        stopwatch.Stop();
-
-        var commandErrors = new List<string>();
-        if (process.ExitCode != 0)
-        {
-            commandErrors.Add($"FFmpeg exited with code {process.ExitCode}.");
-        }
-        if (!File.Exists(outputPath))
-        {
-            commandErrors.Add($"Expected output was not created: {outputPath}");
-        }
-
-        commandReports.Add(new WeeklyExistingRunFfmpegCommandReport(episodeType, outputPath, true, true, false, process.ExitCode, stopwatch.ElapsedMilliseconds, plan.Command, Truncate(stderr, 12000), [], commandErrors));
-        if (commandErrors.Count > 0)
-        {
-            throw new InvalidOperationException(string.Join(" ", commandErrors));
-        }
-
-        var output = new FileInfo(outputPath);
-        logger.LogInformation(episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase) ? "WEEKLY_RENDER_LONGFORM_COMPLETE outputPath={OutputPath} bytes={Bytes}" : "WEEKLY_RENDER_SHORTFORM_COMPLETE outputPath={OutputPath} bytes={Bytes}", outputPath, output.Length);
-        return new WeeklyExistingRunEpisodeRenderReport(true, true, false, outputPath, durationSeconds, output.Length, plan.AudioAttached);
-    }
-
     private async Task<WeeklyExistingRunFfmpegCommandPlan> BuildCommandPlanAsync(string episodeType, WeeklyEpisodeRenderContract contract, FinalRenderEpisodeTimeline timeline, WeeklyRenderInputManifest manifest, WeeklyProductionAssetManifest? productionManifest, string expectedAudioPath, string outputPath, WeeklyExistingRunRenderRequest request, List<string> warnings, CancellationToken cancellationToken)
     {
         var tempDirectory = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(outputPath)!)!, "temp", episodeType);
+        var clipsDirectory = Path.Combine(tempDirectory, "clips");
         Directory.CreateDirectory(tempDirectory);
+        Directory.CreateDirectory(clipsDirectory);
 
         var refinedTimeline = RefineTimelineForRender(episodeType, timeline, manifest, productionManifest, warnings);
         var shots = refinedTimeline.Segments.SelectMany(segment => segment.Shots.Select(shot => (Segment: segment, Shot: shot))).ToList();
@@ -542,7 +536,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
         foreach (var (_, shot) in shots)
         {
             index++;
-            segmentFiles.Add(Path.Combine(tempDirectory, $"{index:0000}-{SanitizeFileName(shot.AssetId)}.mp4"));
+            segmentFiles.Add(Path.Combine(clipsDirectory, $"{index:0000}.mp4"));
         }
 
         var concatPath = Path.Combine(tempDirectory, "shot-plan.json");
@@ -564,9 +558,30 @@ public sealed class WeeklyExistingRunVideoRenderer(
             warnings.Add($"{episodeType} visual distribution still appears moon-only for Stellarium shots.");
         }
 
-        var arguments = BuildFfmpegArguments(refinedTimeline, audioPath, audioPath is not null, contract, outputPath, request.DebugStoryboard).ToList();
+        var debugFontPath = ResolveDebugFontPath();
+        if (request.DebugStoryboard && string.IsNullOrWhiteSpace(debugFontPath))
+        {
+            warnings.Add($"{episodeType} debug storyboard drawtext overlay skipped because no usable font path was found; render-storyboard-report.json was still generated.");
+        }
+        var singleGraphArguments = BuildFfmpegArguments(refinedTimeline, audioPath, audioPath is not null, contract, outputPath, request.DebugStoryboard, debugFontPath).ToList();
+        var singleGraphCommand = BuildCommandString(_renderingOptions.FfmpegPath, singleGraphArguments);
+        var useStagedRendering = request.UseStagedRendering ?? episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase);
+        if (!useStagedRendering && singleGraphCommand.Length > 25000)
+        {
+            useStagedRendering = true;
+            warnings.Add("Switched to staged rendering because FFmpeg command was too long.");
+        }
+
+        if (useStagedRendering)
+        {
+            warnings.Add($"{episodeType} staged rendering enabled; transitionMode=simplified uses normalized per-shot clips and concat demuxer for stability.");
+        }
+        var arguments = useStagedRendering
+            ? BuildFfmpegArguments(GetConcatInputPath(tempDirectory), audioPath, audioPath is not null, contract, outputPath).ToList()
+            : singleGraphArguments;
         var command = BuildCommandString(_renderingOptions.FfmpegPath, arguments);
-        return new WeeklyExistingRunFfmpegCommandPlan(episodeType, outputPath, concatPath, audioPath, audioPath is not null, request.DebugStoryboard, command, segmentFiles, arguments, qualityMetrics);
+        var stderrPath = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(outputPath)!)!, "logs", episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase) ? "ffmpeg-longform-stderr.txt" : "ffmpeg-shortform-stderr.txt");
+        return new WeeklyExistingRunFfmpegCommandPlan(episodeType, outputPath, concatPath, audioPath, audioPath is not null, request.DebugStoryboard, command, segmentFiles, arguments, useStagedRendering, useStagedRendering ? "staged" : "singleGraph", tempDirectory, clipsDirectory, stderrPath, Math.Max(singleGraphCommand.Length, command.Length), qualityMetrics);
     }
 
     private static FinalRenderEpisodeTimeline RefineTimelineForRender(string episodeType, FinalRenderEpisodeTimeline timeline, WeeklyRenderInputManifest manifest, WeeklyProductionAssetManifest? productionManifest, List<string> warnings)
@@ -761,11 +776,12 @@ public sealed class WeeklyExistingRunVideoRenderer(
             }
         };
 
-    private static IEnumerable<string> BuildFfmpegArguments(FinalRenderEpisodeTimeline timeline, string? audioPath, bool audioAttached, WeeklyEpisodeRenderContract contract, string outputPath, bool debugStoryboard)
+    private static IEnumerable<string> BuildFfmpegArguments(FinalRenderEpisodeTimeline timeline, string? audioPath, bool audioAttached, WeeklyEpisodeRenderContract contract, string outputPath, bool debugStoryboard, string? debugFontPath)
     {
-        var width = contract.TargetWidth > 0 ? contract.TargetWidth : 1920;
-        var height = contract.TargetHeight > 0 ? contract.TargetHeight : 1080;
-        var fps = contract.Fps > 0 ? contract.Fps : 30;
+        var portrait = outputPath.Contains("shortform", StringComparison.OrdinalIgnoreCase);
+        var width = portrait ? 1080 : 1920;
+        var height = portrait ? 1920 : 1080;
+        var fps = 30;
         var shots = timeline.Segments.SelectMany(segment => segment.Shots).ToList();
         yield return "-y";
         foreach (var shot in shots)
@@ -783,7 +799,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
             yield return audioPath;
         }
         yield return "-filter_complex";
-        yield return BuildFilterComplex(shots, width, height, fps, debugStoryboard);
+        yield return BuildFilterComplex(shots, width, height, fps, debugStoryboard, debugFontPath);
         yield return "-map";
         yield return shots.Count == 0 ? "0:v" : "[vout]";
         if (audioAttached)
@@ -816,7 +832,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
         yield return outputPath;
     }
 
-    private static string BuildFilterComplex(IReadOnlyList<FinalRenderShot> shots, int width, int height, int fps, bool debugStoryboard)
+    private static string BuildFilterComplex(IReadOnlyList<FinalRenderShot> shots, int width, int height, int fps, bool debugStoryboard, string? debugFontPath)
     {
         if (shots.Count == 0) return string.Empty;
         var parts = new List<string>();
@@ -827,7 +843,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var zoom = BuildZoomExpression(shot.MotionEffect);
             var pan = BuildPanExpression(shot.MotionEffect);
             var fade = BuildShotFadeFilters(shot, fps);
-            var overlay = debugStoryboard ? BuildDebugStoryboardOverlay(shot, i) : string.Empty;
+            var overlay = debugStoryboard && !string.IsNullOrWhiteSpace(debugFontPath) ? BuildDebugStoryboardOverlay(shot, i, debugFontPath) : string.Empty;
             parts.Add($"[{i}:v]scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,crop={width * 2}:{height * 2},zoompan=z='{zoom}':x='{pan.X}':y='{pan.Y}':d={frames}:s={width}x{height}:fps={fps},trim=duration={shot.DurationSeconds},setpts=PTS-STARTPTS{fade}{overlay},format=yuv420p[v{i}]");
         }
         if (shots.Count == 1)
@@ -881,14 +897,15 @@ public sealed class WeeklyExistingRunVideoRenderer(
 
     private static IEnumerable<string> BuildFfmpegArguments(string concatPath, string? audioPath, bool audioAttached, WeeklyEpisodeRenderContract contract, string outputPath)
     {
-        var width = contract.TargetWidth > 0 ? contract.TargetWidth : 1920;
-        var height = contract.TargetHeight > 0 ? contract.TargetHeight : 1080;
-        var fps = contract.Fps > 0 ? contract.Fps : 30;
+        var portrait = outputPath.Contains("shortform", StringComparison.OrdinalIgnoreCase);
+        var width = portrait ? 1080 : 1920;
+        var height = portrait ? 1920 : 1080;
+        var fps = 30;
         yield return "-y";
-        yield return "-safe";
-        yield return "0";
         yield return "-f";
         yield return "concat";
+        yield return "-safe";
+        yield return "0";
         yield return "-i";
         yield return concatPath;
         if (audioAttached && audioPath is not null)
@@ -1451,9 +1468,122 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var skippedInfo = new FileInfo(plan.OutputPath);
             return (new WeeklyExistingRunFfmpegCommandReport(plan.EpisodeType, plan.OutputPath, true, false, true, null, 0, plan.Command, null, ["Output already exists and overwriteExisting is false."], []), (plan.EpisodeType, new WeeklyExistingRunEpisodeRenderReport(true, false, true, plan.OutputPath, plan.QualityMetrics.MaxShotDurationSeconds, skippedInfo.Length, plan.AudioAttached)));
         }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(plan.StderrPath) ?? ".");
+        await File.WriteAllTextAsync(plan.StderrPath, string.Empty, cancellationToken);
+
+        if (plan.UseStagedRendering)
+        {
+            return await ExecuteStagedPlanAsync(plan, cancellationToken);
+        }
+
+        var execution = await RunFfmpegAsync(plan.Arguments, plan.StderrPath, cancellationToken);
+        var commandErrors = new List<string>();
+        if (execution.ExitCode != 0) commandErrors.Add($"FFmpeg exited with code {execution.ExitCode}.");
+        if (!File.Exists(plan.OutputPath)) commandErrors.Add($"Expected output was not created: {plan.OutputPath}");
+        else if (new FileInfo(plan.OutputPath).Length <= 0) commandErrors.Add($"Expected output was empty: {plan.OutputPath}");
+        var report = new WeeklyExistingRunFfmpegCommandReport(plan.EpisodeType, plan.OutputPath, true, true, false, execution.ExitCode, execution.ElapsedMilliseconds, plan.Command, Truncate(execution.StandardError, 12000), [], commandErrors);
+        var output = File.Exists(plan.OutputPath) ? new FileInfo(plan.OutputPath) : null;
+        var duration = LoadTimelineFromPlan(plan)?.ActualDurationSeconds ?? 0;
+        return (report, (plan.EpisodeType, new WeeklyExistingRunEpisodeRenderReport(true, commandErrors.Count == 0, false, plan.OutputPath, duration, output?.Length ?? 0, plan.AudioAttached)));
+    }
+
+    private async Task<(WeeklyExistingRunFfmpegCommandReport Report, (string EpisodeType, WeeklyExistingRunEpisodeRenderReport RenderReport) Result)> ExecuteStagedPlanAsync(WeeklyExistingRunFfmpegCommandPlan plan, CancellationToken cancellationToken)
+    {
+        var timeline = LoadTimelineFromPlan(plan) ?? throw new InvalidOperationException($"Staged render timeline was not found for {plan.EpisodeType}.");
+        Directory.CreateDirectory(plan.ClipsDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(plan.OutputPath) ?? ".");
+        var concatInputPath = GetConcatInputPath(plan.TempDirectory);
+        var stderr = new StringBuilder();
+        var errors = new List<string>();
+        var stopwatch = Stopwatch.StartNew();
+        var clipIndex = 0;
+        int? lastExitCode = null;
+        var debugFontPath = ResolveDebugFontPath();
+
+        await File.WriteAllTextAsync(plan.StderrPath, string.Empty, cancellationToken);
+        foreach (var shot in timeline.Segments.SelectMany(segment => segment.Shots))
+        {
+            clipIndex++;
+            var clipPath = clipIndex <= plan.SegmentFiles.Count ? plan.SegmentFiles[clipIndex - 1] : Path.Combine(plan.ClipsDirectory, $"{clipIndex:0000}.mp4");
+            var clipArgs = BuildStagedClipArguments(shot, clipPath, ResolveWidth(timeline, plan), ResolveHeight(timeline, plan), ResolveFps(timeline, plan), plan.DebugStoryboard, debugFontPath).ToList();
+            var clipCommand = BuildCommandString(_renderingOptions.FfmpegPath, clipArgs);
+            await AppendAllTextAsync(plan.StderrPath, $"\n\n===== {plan.EpisodeType} clip {clipIndex:0000} =====\n{clipCommand}\n", cancellationToken);
+            var execution = await RunFfmpegAsync(clipArgs, plan.StderrPath, cancellationToken);
+            lastExitCode = execution.ExitCode;
+            stderr.AppendLine(execution.StandardError);
+            if ((execution.ExitCode != 0 || !File.Exists(clipPath) || new FileInfo(clipPath).Length <= 0) && plan.DebugStoryboard && !string.IsNullOrWhiteSpace(debugFontPath))
+            {
+                await AppendAllTextAsync(plan.StderrPath, $"\nRetrying {plan.EpisodeType} clip {clipIndex:0000} without debug drawtext overlay.\n", cancellationToken);
+                var fallbackArgs = BuildStagedClipArguments(shot, clipPath, ResolveWidth(timeline, plan), ResolveHeight(timeline, plan), ResolveFps(timeline, plan), false, null).ToList();
+                execution = await RunFfmpegAsync(fallbackArgs, plan.StderrPath, cancellationToken);
+                lastExitCode = execution.ExitCode;
+                stderr.AppendLine(execution.StandardError);
+            }
+            if (execution.ExitCode != 0)
+            {
+                errors.Add($"FFmpeg exited with code {execution.ExitCode} while rendering clip {clipIndex}.");
+                break;
+            }
+            if (!File.Exists(clipPath) || new FileInfo(clipPath).Length <= 0)
+            {
+                errors.Add($"Staged clip {clipIndex} was not created or was empty: {clipPath}");
+                break;
+            }
+        }
+
+        if (errors.Count == 0)
+        {
+            var concatLines = plan.SegmentFiles.Select(path => $"file '{EscapeConcatPath(path)}'");
+            await File.WriteAllLinesAsync(concatInputPath, concatLines, cancellationToken);
+            if (!File.Exists(concatInputPath)) errors.Add($"Concat input was not created: {concatInputPath}");
+        }
+
+        int? finalExitCode = null;
+        if (errors.Count == 0)
+        {
+            await AppendAllTextAsync(plan.StderrPath, $"\n\n===== {plan.EpisodeType} concat =====\n{plan.Command}\n", cancellationToken);
+            var finalExecution = await RunFfmpegAsync(plan.Arguments, plan.StderrPath, cancellationToken);
+            finalExitCode = finalExecution.ExitCode;
+            lastExitCode = finalExecution.ExitCode;
+            stderr.AppendLine(finalExecution.StandardError);
+            if (finalExecution.ExitCode != 0) errors.Add($"FFmpeg exited with code {finalExecution.ExitCode} while concatenating staged clips.");
+            if (!File.Exists(plan.OutputPath) || new FileInfo(plan.OutputPath).Length <= 0) errors.Add($"Expected staged output was not created or was empty: {plan.OutputPath}");
+        }
+
+        stopwatch.Stop();
+        var exitCode = errors.Count == 0 ? finalExitCode ?? 0 : lastExitCode;
+        var report = new WeeklyExistingRunFfmpegCommandReport(plan.EpisodeType, plan.OutputPath, true, true, false, exitCode, stopwatch.ElapsedMilliseconds, plan.Command, Truncate(stderr.ToString(), 12000), ["Staged rendering used simplified fade/cut transitions."], errors);
+        var output = File.Exists(plan.OutputPath) ? new FileInfo(plan.OutputPath) : null;
+        return (report, (plan.EpisodeType, new WeeklyExistingRunEpisodeRenderReport(true, errors.Count == 0, false, plan.OutputPath, timeline.ActualDurationSeconds, output?.Length ?? 0, plan.AudioAttached)));
+    }
+
+    private static string? BuildFailedStage(WeeklyExistingRunFfmpegCommandReport? report)
+    {
+        if (report is null || report.Errors.Count == 0) return null;
+        var first = report.Errors.First();
+        if (first.Contains("clip", StringComparison.OrdinalIgnoreCase)) return $"{report.EpisodeType}:clip";
+        if (first.Contains("concat", StringComparison.OrdinalIgnoreCase)) return $"{report.EpisodeType}:concat";
+        return report.EpisodeType;
+    }
+
+    private static int? ExtractFailedShotNumber(WeeklyExistingRunFfmpegCommandReport? report)
+    {
+        var text = report?.Errors.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var marker = "clip ";
+        var index = text.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return null;
+        var start = index + marker.Length;
+        var digits = new string(text.Skip(start).TakeWhile(char.IsDigit).ToArray());
+        return int.TryParse(digits, out var number) ? number : null;
+    }
+
+    private async Task<(int ExitCode, long ElapsedMilliseconds, string StandardError)> RunFfmpegAsync(IReadOnlyList<string> arguments, string stderrPath, CancellationToken cancellationToken)
+    {
         var stopwatch = Stopwatch.StartNew();
         var processStart = new ProcessStartInfo { FileName = _renderingOptions.FfmpegPath, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
-        foreach (var argument in plan.Arguments) processStart.ArgumentList.Add(argument);
+        foreach (var argument in arguments) processStart.ArgumentList.Add(argument);
         using var process = Process.Start(processStart) ?? throw new InvalidOperationException("Failed to start FFmpeg process.");
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -1463,14 +1593,81 @@ public sealed class WeeklyExistingRunVideoRenderer(
         await stdoutTask;
         var stderr = await stderrTask;
         stopwatch.Stop();
-        var commandErrors = new List<string>();
-        if (process.ExitCode != 0) commandErrors.Add($"FFmpeg exited with code {process.ExitCode}.");
-        if (!File.Exists(plan.OutputPath)) commandErrors.Add($"Expected output was not created: {plan.OutputPath}");
-        var report = new WeeklyExistingRunFfmpegCommandReport(plan.EpisodeType, plan.OutputPath, true, true, false, process.ExitCode, stopwatch.ElapsedMilliseconds, plan.Command, Truncate(stderr, 12000), [], commandErrors);
-        if (commandErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", commandErrors));
-        var output = new FileInfo(plan.OutputPath);
-        var duration = LoadTimelineFromPlan(plan)?.ActualDurationSeconds ?? 0;
-        return (report, (plan.EpisodeType, new WeeklyExistingRunEpisodeRenderReport(true, true, false, plan.OutputPath, duration, output.Length, plan.AudioAttached)));
+        await AppendAllTextAsync(stderrPath, stderr, cancellationToken);
+        return (process.ExitCode, stopwatch.ElapsedMilliseconds, stderr);
+    }
+
+    private static IEnumerable<string> BuildStagedClipArguments(FinalRenderShot shot, string clipPath, int width, int height, int fps, bool debugStoryboard, string? debugFontPath)
+    {
+        yield return "-y";
+        yield return "-loop";
+        yield return "1";
+        yield return "-t";
+        yield return Math.Max(1, shot.DurationSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        yield return "-i";
+        yield return shot.AssetPath;
+        yield return "-vf";
+        yield return BuildStagedClipFilter(shot, width, height, fps, debugStoryboard, debugFontPath);
+        yield return "-r";
+        yield return fps.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        yield return "-an";
+        yield return "-c:v";
+        yield return "libx264";
+        yield return "-preset";
+        yield return "veryfast";
+        yield return "-crf";
+        yield return "20";
+        yield return "-pix_fmt";
+        yield return "yuv420p";
+        yield return "-movflags";
+        yield return "+faststart";
+        yield return clipPath;
+    }
+
+    private static string BuildStagedClipFilter(FinalRenderShot shot, int width, int height, int fps, bool debugStoryboard, string? debugFontPath)
+    {
+        var frames = Math.Max(1, shot.DurationSeconds * fps);
+        var zoom = BuildZoomExpression(shot.MotionEffect);
+        var pan = BuildPanExpression(shot.MotionEffect);
+        var fade = BuildShotFadeFilters(shot, fps);
+        var overlay = debugStoryboard && !string.IsNullOrWhiteSpace(debugFontPath) ? BuildDebugStoryboardOverlay(shot, shot.ShotNumber - 1, debugFontPath) : string.Empty;
+        return $"scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,crop={width * 2}:{height * 2},zoompan=z='{zoom}':x='{pan.X}':y='{pan.Y}':d={frames}:s={width}x{height}:fps={fps},trim=duration={Math.Max(1, shot.DurationSeconds)},setpts=PTS-STARTPTS{fade}{overlay},format=yuv420p";
+    }
+
+    private static int ResolveWidth(FinalRenderEpisodeTimeline timeline, WeeklyExistingRunFfmpegCommandPlan plan)
+        => plan.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase) ? 1080 : 1920;
+
+    private static int ResolveHeight(FinalRenderEpisodeTimeline timeline, WeeklyExistingRunFfmpegCommandPlan plan)
+        => plan.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase) ? 1920 : 1080;
+
+    private static int ResolveFps(FinalRenderEpisodeTimeline timeline, WeeklyExistingRunFfmpegCommandPlan plan) => 30;
+
+    private static string GetConcatInputPath(string tempDirectory) => Path.Combine(tempDirectory, "concat-input.txt");
+
+    private static string EscapeConcatPath(string path) => path.Replace("'", "'\\''", StringComparison.Ordinal);
+
+    private static int CountRenderedClips(WeeklyExistingRunFfmpegCommandPlan? plan)
+        => plan is null ? 0 : plan.SegmentFiles.Count(path => File.Exists(path) && new FileInfo(path).Length > 0);
+
+    private static async Task AppendAllTextAsync(string path, string contents, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        await File.AppendAllTextAsync(path, contents, cancellationToken);
+    }
+
+    private static string? ResolveDebugFontPath()
+    {
+        foreach (var candidate in new[]
+        {
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            "/Library/Fonts/Arial.ttf",
+            "C:/Windows/Fonts/arial.ttf"
+        })
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+        return null;
     }
 
     private static RenderStoryboardReport BuildStoryboardReport(Guid pipelineRunId, IReadOnlyList<WeeklyExistingRunFfmpegCommandPlan> plans, WeeklyAudioAlignmentPlan audioPlan)
@@ -1485,11 +1682,12 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private static FinalRenderEpisodeTimeline? LoadTimelineFromPlan(WeeklyExistingRunFfmpegCommandPlan plan)
         => File.Exists(plan.ConcatFilePath) ? JsonSerializer.Deserialize<FinalRenderEpisodeTimeline>(File.ReadAllText(plan.ConcatFilePath), JsonOptions) : null;
 
-    private static string BuildDebugStoryboardOverlay(FinalRenderShot shot, int index)
+    private static string BuildDebugStoryboardOverlay(FinalRenderShot shot, int index, string fontPath)
     {
         var text = $"{shot.Purpose.Replace("render-refined primary visual for ", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("render-refined supporting visual variety for ", string.Empty, StringComparison.OrdinalIgnoreCase)} | Shot {shot.ShotNumber} | {shot.AssetType} | {ResolveSceneFamily(shot.AssetPath, shot.AssetId)}/{ResolveAssetCode(shot.AssetPath, shot.AssetId)}";
-        text = text.Replace("'", "\\'", StringComparison.Ordinal).Replace(":", "\\:", StringComparison.Ordinal);
-        return $",drawbox=x=0:y=0:w=iw:h=96:color=black@0.65:t=fill,drawtext=text='{text}':x=28:y=28:fontcolor=white:fontsize=28:box=0";
+        text = text.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("'", "\\'", StringComparison.Ordinal).Replace(":", "\\:", StringComparison.Ordinal);
+        var escapedFontPath = fontPath.Replace("\\", "/", StringComparison.Ordinal).Replace(":", "\\:", StringComparison.Ordinal).Replace("'", "\\'", StringComparison.Ordinal);
+        return $",drawbox=x=0:y=0:w=iw:h=96:color=black@0.65:t=fill,drawtext=fontfile='{escapedFontPath}':text='{text}':x=28:y=28:fontcolor=white:fontsize=28:box=0";
     }
 
     private static string ResolveAssetCode(string path, string assetId)
