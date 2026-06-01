@@ -192,11 +192,11 @@ public sealed class WeeklySkyForecastAudioGenerationService(
                 logger.LogInformation("WEEKLY_AUDIO_DRY_RUN_SSML_CREATED pipelineRunId={PipelineRunId} longformSsmlCount={LongformSsmlCount} shortformSsmlCount={ShortformSsmlCount}", pipelineRunId, longformEntries.Count, shortformEntries.Count);
                 warnings.Add("Dry run completed. TTS was not called and MP3 files were not generated.");
 
-                var ready = errors.Count == 0;
+                var dryRunReady = errors.Count == 0;
                 var existingLongformCombinedPath = File.Exists(longformCombinedPath) ? longformCombinedPath : null;
                 var existingShortformCombinedPath = File.Exists(shortformCombinedPath) ? shortformCombinedPath : null;
-                var manifest = new WeeklyAudioSegmentManifest(pipelineRunId, DateTime.UtcNow, longformEntries, shortformEntries);
-                var timingReport = new WeeklyAudioTimingValidationReport(
+                var dryRunManifest = new WeeklyAudioSegmentManifest(pipelineRunId, DateTime.UtcNow, longformEntries, shortformEntries);
+                var dryRunTimingReport = new WeeklyAudioTimingValidationReport(
                     loaded.RenderContract.Longform.DurationSeconds,
                     0,
                     0,
@@ -208,12 +208,12 @@ public sealed class WeeklySkyForecastAudioGenerationService(
                     [],
                     warnings,
                     errors);
-                var report = new WeeklyAudioGenerationReport(
+                var dryRunReport = new WeeklyAudioGenerationReport(
                     DryRun: true,
                     TtsCalled: false,
                     Mp3Generated: false,
                     AudioConcatExecuted: false,
-                    AudioGenerationReady: ready,
+                    AudioGenerationReady: dryRunReady,
                     PlannedLongformSegmentAudioCount: longformEntries.Count,
                     PlannedShortformSegmentAudioCount: shortformEntries.Count,
                     LongformAudioGenerated: false,
@@ -230,16 +230,16 @@ public sealed class WeeklySkyForecastAudioGenerationService(
                     ExistingLongformCombinedAudioPath: existingLongformCombinedPath,
                     ExistingShortformCombinedAudioPath: existingShortformCombinedPath);
 
-                await File.WriteAllTextAsync(paths.ManifestOutput, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
-                await File.WriteAllTextAsync(paths.TimingReportOutput, JsonSerializer.Serialize(timingReport, JsonOptions), cancellationToken);
-                await File.WriteAllTextAsync(paths.GenerationReportOutput, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
+                await File.WriteAllTextAsync(paths.ManifestOutput, JsonSerializer.Serialize(dryRunManifest, JsonOptions), cancellationToken);
+                await File.WriteAllTextAsync(paths.TimingReportOutput, JsonSerializer.Serialize(dryRunTimingReport, JsonOptions), cancellationToken);
+                await File.WriteAllTextAsync(paths.GenerationReportOutput, JsonSerializer.Serialize(dryRunReport, JsonOptions), cancellationToken);
 
-                logger.LogInformation("WEEKLY_AUDIO_DRY_RUN_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, ready);
-                logger.LogInformation("WEEKLY_AUDIO_GENERATION_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, ready);
+                logger.LogInformation("WEEKLY_AUDIO_DRY_RUN_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, dryRunReady);
+                logger.LogInformation("WEEKLY_AUDIO_GENERATION_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, dryRunReady);
                 return new WeeklySkyForecastAudioGenerationResponse(
                     PipelineRunId: pipelineRunId,
                     DryRun: true,
-                    AudioGenerationReady: ready,
+                    AudioGenerationReady: dryRunReady,
                     LongformAudioGenerated: false,
                     ShortformAudioGenerated: false,
                     LongformCombinedAudioPath: null,
