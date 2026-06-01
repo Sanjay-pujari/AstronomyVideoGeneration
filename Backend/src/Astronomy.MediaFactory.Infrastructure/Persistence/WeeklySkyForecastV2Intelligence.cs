@@ -143,7 +143,7 @@ public sealed class WeeklySkyForecastV2IntelligenceService(
             "Best windows, moon/planet moments, and visual priorities",
             "One beautiful evening anchors the week",
             "Start with one beautiful evening that anchors the week, then enjoy nearby evenings with ease.",
-            ["Hook the week with a cinematic sky promise", "Cover the hero evening grouping", "Recommend the best night", "Show Jupiter adding scale and presence", "Show the Moon bringing calm visual beauty", "Close with simple viewing guidance"],
+            ["Hook the week with a cinematic sky promise", "Cover the hero evening grouping", "Recommend the best night", "Show visible planets adding scale and presence", "Show the Moon bringing calm visual beauty", "Close with simple viewing guidance"],
             "Step outside shortly after sunset for simple viewing guidance.",
             primaryObjects,
             events.Select(e => e.PrimaryDate.ToString("yyyy-MM-dd")).Distinct().Take(6).ToList(),
@@ -388,7 +388,7 @@ public sealed class WeeklySkyForecastV2NarrationTextGenerator : IWeeklySkyForeca
             "HeroSkyStory" => $"Night after night, {objects} {diversifier.Next("return_evening_after_evening")}, and they {diversifier.Next("share_western_sky")} in a way that feels surprisingly cinematic. Even a brief glance can reset your mood after a long day, because the pattern stays easy to follow across the evening view.",
             "WhyThisWeekMatters" => $"This matters because these targets {diversifier.Next("create_easy_target")}: you can find them quickly, track them confidently, and enjoy a reliable west-facing view. It turns skywatching from a one-night gamble into a calm routine you can return to as evening fades.",
             "BestObservationNight" => $"Circle {s.TargetDate:MMMM d}. Once the sky darkens, this timing gives you the most practical chance to spot the full grouping with confidence. If clouds interrupt your first attempt, stay patient for a second look shortly after twilight before the objects sink near the horizon.",
-            "MoonPlanetHighlight" => $"The Moon adds a calm silver glow, while Jupiter gives the scene a warmer point of contrast. Venus can sparkle lower in the western dusk, creating quiet beauty that lingers long after twilight and makes the whole view feel layered rather than flat.",
+            "MoonPlanetHighlight" => $"The Moon adds a calm silver glow, while {objects} keep the western dusk layered and easy to follow. Venus and Saturn can anchor the planet highlight when Skyfield marks them visible, creating quiet beauty that lingers long after twilight rather than forcing an unsupported planet into the story.",
             "ViewingPhotographyTip" => $"Use a steady phone tripod, keep the horizon low in frame, and let the brighter objects guide focus—simple choices that make your shot feel intentional.",
             "ClosingCTA" => $"Before the week slips by, take ten peaceful minutes outside and look west—you might find this becomes your favorite sky memory of the week. Share the moment with someone nearby, because the best sky stories are the ones remembered together.",
             _ => $"{objects} {diversifier.Next("visible_west_after_sunset")}."

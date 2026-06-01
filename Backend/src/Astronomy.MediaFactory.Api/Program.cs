@@ -992,6 +992,35 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return Task.FromResult(scenePlan);
         });
 
+        var weeklyFocusPlan = BuildWeeklyFocusObjectPlan(
+            weekStartDate,
+            request.RegionId,
+            request.Language,
+            weeklySkyfieldContext,
+            weeklySkyfieldContext.GeneratedNarrationPackage?.LongFormNarration.FullNarration ?? string.Empty);
+        if (!weeklyFocusPlan.FocusObjects.Contains("JUPITER", StringComparer.OrdinalIgnoreCase)
+            && weeklyFocusPlan.FocusObjects.Contains("SATURN", StringComparer.OrdinalIgnoreCase)
+            && File.Exists(narrationTextPath))
+        {
+            var sanitizedNarration = Regex.Replace(await File.ReadAllTextAsync(narrationTextPath, ct), @"\bJupiter\b", "Saturn", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            sanitizedNarration = Regex.Replace(sanitizedNarration, @"\bJUPITER\b", "SATURN", RegexOptions.CultureInvariant);
+            await File.WriteAllTextAsync(narrationTextPath, sanitizedNarration, ct);
+        }
+        weeklyScenePlan = AlignWeeklyScenePlanWithFocusObjects(weeklyScenePlan, weeklyFocusPlan);
+        var weeklyStellariumSceneRequirements = BuildWeeklyStellariumSceneRequirements(weeklyFocusPlan, weeklyScenePlan);
+        var episodeDirectory = Path.Combine(root, "episode");
+        var stellariumDirectory = Path.Combine(root, "stellarium");
+        Directory.CreateDirectory(episodeDirectory);
+        Directory.CreateDirectory(stellariumDirectory);
+        var weeklyFocusObjectPlanPath = Path.Combine(episodeDirectory, "weekly-focus-object-plan.json");
+        var weeklyStellariumSceneRequirementsPath = Path.Combine(episodeDirectory, "weekly-stellarium-scene-requirements.json");
+        var visualNarrationCoverageReportPath = Path.Combine(episodeDirectory, "weekly-visual-narration-coverage-report.json");
+        var sscSceneManifestPath = Path.Combine(stellariumDirectory, "ssc-scene-manifest.json");
+        await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly focus object plan", stageCt =>
+            File.WriteAllTextAsync(weeklyFocusObjectPlanPath, JsonSerializer.Serialize(weeklyFocusPlan, new JsonSerializerOptions { WriteIndented = true }), stageCt));
+        await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly Stellarium scene requirements", stageCt =>
+            File.WriteAllTextAsync(weeklyStellariumSceneRequirementsPath, JsonSerializer.Serialize(weeklyStellariumSceneRequirements, new JsonSerializerOptions { WriteIndented = true }), stageCt));
+
         var scenePlanPath = Path.Combine(scenePlansDirectory, "weekly-scene-plan.json");
         await ExecuteOrchestrationStageAsyncNonGeneric("Persisting weekly scene plan", stageCt =>
             File.WriteAllTextAsync(scenePlanPath, JsonSerializer.Serialize(weeklyScenePlan, new JsonSerializerOptions { WriteIndented = true }), stageCt));
@@ -1197,21 +1226,33 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             return true;
         });
 
-        static (List<string> TargetObjects, string PrimaryObject) ResolveManifestTargets(string sceneCode, IReadOnlyList<string> defaultTargets)
+        (List<string> TargetObjects, string PrimaryObject) ResolveManifestTargets(string sceneCode, IReadOnlyList<string> defaultTargets)
         {
+            var focusObjects = new HashSet<string>(weeklyFocusPlan.FocusObjects, StringComparer.OrdinalIgnoreCase);
             if (sceneCode.Equals("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase))
             {
-                return (new List<string> { "JUPITER", "VENUS" }, "JUPITER");
+                var planetTargets = new[] { "VENUS", "SATURN" }
+                    .Where(focusObjects.Contains)
+                    .ToList();
+                if (planetTargets.Count > 0)
+                    return (planetTargets, planetTargets.First());
             }
 
             if (sceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase))
             {
-                return (new List<string> { "MOON" }, "MOON");
+                var moonTargets = new[] { "MOON" }
+                    .Where(focusObjects.Contains)
+                    .ToList();
+                if (moonTargets.Count > 0)
+                    return (moonTargets, "MOON");
             }
 
             var deduped = defaultTargets
                 .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => x.Trim())
+                .Select(NormalizeWeeklyObjectCode)
+                .Where(x => x is not null)
+                .Select(x => x!)
+                .Where(code => !code.Equals("JUPITER", StringComparison.OrdinalIgnoreCase) || focusObjects.Contains("JUPITER"))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             return (deduped, deduped.FirstOrDefault() ?? string.Empty);
@@ -1907,6 +1948,7 @@ var sscResult = splitProbeSsc;
                     "core.quitStellarium();",
                     "ConstellationMgr.setFlagLines(true);",
                     "ConstellationMgr.setFlagLabels(true);",
+                    "SolarSystem.setFlagLabels(true);",
                     "core.moveToAltAzi",
                     "StelMovementMgr.zoomTo"
                 };
@@ -2027,20 +2069,51 @@ var sscResult = splitProbeSsc;
         }
 
         var narrationManifestPath = Path.Combine(manifestsDirectory, "weekly-scenes-manifest.json");
+        var framePlansBySceneCode = allFramePlans
+            .ToDictionary(x => x.RenderSceneCode, x => x.FramePlans, StringComparer.OrdinalIgnoreCase);
         var sscManifestEntries = finalScenes.Select(scene =>
         {
             var screenshotPath = scene.ScreenshotPath;
+            var targetObjects = framePlansBySceneCode.TryGetValue(scene.SceneCode, out var sceneFramePlans)
+                ? sceneFramePlans.SelectMany(x => x.TargetObjects).Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray()
+                : Array.Empty<string>();
             return new
             {
                 sceneCode = scene.SceneCode,
                 sceneType = "FinalSplitScene",
-                objects = Array.Empty<string>(),
+                objects = targetObjects,
+                primaryObject = targetObjects.FirstOrDefault() ?? string.Empty,
                 sourceSceneCodes = scene.SourceSceneCodes.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray(),
                 sscPath = scene.ScriptPath,
                 screenshotPath,
-                screenshotExists = File.Exists(screenshotPath) && new FileInfo(screenshotPath).Length > 10 * 1024
+                screenshotExists = File.Exists(screenshotPath) && new FileInfo(screenshotPath).Length > 10 * 1024,
+                requiredLabels = targetObjects.Select(x => ToWeeklyObjectDisplayName(x)).ToArray()
             };
         }).ToList();
+        await File.WriteAllTextAsync(sscSceneManifestPath, JsonSerializer.Serialize(new
+        {
+            pipelineRunId,
+            weeklyFocusObjectPlanPath,
+            weeklyStellariumSceneRequirementsPath,
+            generatedAtUtc = DateTime.UtcNow,
+            stellariumScenes = sscManifestEntries,
+            scriptsGenerated = scriptPaths.Count,
+            screenshotsGenerated = screenshots.Count
+        }, new JsonSerializerOptions { WriteIndented = true }), ct);
+
+        var visualNarrationCoverage = BuildWeeklyVisualNarrationCoverageReport(
+            weeklyFocusPlan,
+            weeklyStellariumSceneRequirements,
+            allFramePlans,
+            screenshots,
+            scriptPaths,
+            sscManifestEntries.Select(x => x.sceneCode).ToList(),
+            warnings);
+        await File.WriteAllTextAsync(visualNarrationCoverageReportPath, JsonSerializer.Serialize(visualNarrationCoverage, new JsonSerializerOptions { WriteIndented = true }), ct);
+        if (!visualNarrationCoverage.VisualNarrationAligned)
+        {
+            throw new InvalidOperationException($"Weekly visual/narration coverage is not aligned. Missing: {string.Join(",", visualNarrationCoverage.ObjectsMentionedButNotVisible.Concat(visualNarrationCoverage.MissingScenes))}");
+        }
 
         app.Logger.LogInformation("temporal match summary: resolvedCandidates={Count}", generatedScripts.Count);
         app.Logger.LogInformation("spatial composition summary: compositionScenes={Count}", compositionPackage.Entries.Count);
@@ -2869,7 +2942,21 @@ var sscResult = splitProbeSsc;
             ffmpegRendererPreparation.ValidationReport.DurationConsistencyPassed,
             ffmpegRendererPreparation.ValidationReport.ResolutionPlanPassed,
             ffmpegRendererPreparation.ValidationReport.TransitionPlanPassed,
-            ffmpegRendererPreparation.ValidationReport.AudioAlignmentPlanReady);
+            ffmpegRendererPreparation.ValidationReport.AudioAlignmentPlanReady,
+            File.Exists(weeklyFocusObjectPlanPath),
+            File.Exists(weeklyStellariumSceneRequirementsPath),
+            File.Exists(visualNarrationCoverageReportPath),
+            visualNarrationCoverage.VisualNarrationAligned,
+            weeklyFocusPlan.FocusObjects,
+            weeklyFocusPlan.FocusGroupings.Select(x => x.GroupingCode).ToList(),
+            visualNarrationCoverage.MoonSceneCount,
+            visualNarrationCoverage.VenusSceneCount,
+            visualNarrationCoverage.SaturnSceneCount,
+            visualNarrationCoverage.GroupingSceneCount,
+            weeklyFocusObjectPlanPath,
+            weeklyStellariumSceneRequirementsPath,
+            visualNarrationCoverageReportPath,
+            sscSceneManifestPath);
 
         return Results.Ok(output);
     }
@@ -4749,6 +4836,229 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
         ValidationWarnings: planValidationWarnings);
 }
 
+
+sealed record WeeklyFocusObjectPlan(
+    string WeekStartDate,
+    string RegionId,
+    string Language,
+    string HeroEvent,
+    IReadOnlyList<string> FocusObjects,
+    IReadOnlyList<WeeklyFocusGrouping> FocusGroupings,
+    IReadOnlyList<WeeklyRequiredVisualScene> RequiredVisualScenes);
+
+sealed record WeeklyFocusGrouping(string GroupingCode, IReadOnlyList<string> Objects, string Source, string Purpose);
+
+sealed record WeeklyRequiredVisualScene(
+    string SceneCode,
+    string SceneName,
+    IReadOnlyList<string> Objects,
+    string Purpose,
+    int ScreenshotMin,
+    int ScreenshotMax,
+    bool IncludeHorizon,
+    bool IncludeLabels,
+    bool IncludeConstellationLines,
+    string Notes);
+
+sealed record WeeklyStellariumSceneRequirementsDocument(
+    string WeekStartDate,
+    string RegionId,
+    string Language,
+    IReadOnlyList<WeeklyRequiredVisualScene> RequiredScenes,
+    IReadOnlyList<string> SscScriptRequirements,
+    IReadOnlyList<string> RequiredLabels);
+
+sealed record WeeklyVisualNarrationCoverageReport(
+    bool VisualNarrationAligned,
+    IReadOnlyList<string> ObjectsMentionedInNarration,
+    IReadOnlyList<string> ObjectsVisuallySupported,
+    IReadOnlyList<string> ObjectsMentionedButNotVisible,
+    IReadOnlyList<string> RequiredScenesGenerated,
+    IReadOnlyList<string> MissingScenes,
+    int MoonSceneCount,
+    int VenusSceneCount,
+    int SaturnSceneCount,
+    int GroupingSceneCount,
+    int SscScriptsGenerated,
+    int ScreenshotsGenerated,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
+static WeeklyFocusObjectPlan BuildWeeklyFocusObjectPlan(DateOnly weekStartDate, string regionId, string language, WeeklySkyForecastV2IntelligenceResponse context, string narrationText)
+{
+    var focusObjects = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+    var skyfieldObjects = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+    var events = context.EventExtractionResult?.ExtractedEvents ?? [];
+    foreach (var ev in events)
+    {
+        foreach (var obj in ev.Objects ?? [])
+        {
+            var code = NormalizeWeeklyObjectCode(obj.ObjectCode) ?? NormalizeWeeklyObjectCode(obj.ObjectName);
+            if (code is not null)
+            {
+                focusObjects.Add(code);
+                skyfieldObjects.Add(code);
+            }
+        }
+        var primary = NormalizeWeeklyObjectCode(ev.PrimaryObject);
+        if (primary is not null)
+        {
+            focusObjects.Add(primary);
+            skyfieldObjects.Add(primary);
+        }
+    }
+
+    foreach (var code in ExtractWeeklyObjectsFromText(narrationText))
+        focusObjects.Add(code);
+
+    if (!skyfieldObjects.Contains("JUPITER"))
+        focusObjects.Remove("JUPITER");
+
+    var objects = focusObjects.ToList();
+    var groupings = new List<WeeklyFocusGrouping>();
+    if (objects.Contains("VENUS", StringComparer.OrdinalIgnoreCase) && objects.Contains("SATURN", StringComparer.OrdinalIgnoreCase))
+        groupings.Add(new WeeklyFocusGrouping("venus_saturn_planet_grouping", ["VENUS", "SATURN"], "narration+skyfield", "PlanetHighlights"));
+    if (objects.Contains("MOON", StringComparer.OrdinalIgnoreCase) && objects.Contains("VENUS", StringComparer.OrdinalIgnoreCase) && objects.Contains("SATURN", StringComparer.OrdinalIgnoreCase))
+        groupings.Add(new WeeklyFocusGrouping("moon_venus_saturn_hero_grouping", ["MOON", "VENUS", "SATURN"], "narration+skyfield", "HeroEvent"));
+
+    var hero = context.EventExtractionResult?.SelectedPrimaryEvent?.Title
+        ?? context.NarrativeAbstractionPackage?.HeroNarrative.Title
+        ?? string.Join(" + ", objects.Select(ToWeeklyObjectDisplayName));
+
+    var requiredScenes = new List<WeeklyRequiredVisualScene>();
+    if (objects.Contains("MOON", StringComparer.OrdinalIgnoreCase))
+        requiredScenes.Add(new WeeklyRequiredVisualScene("moon_hero_scene", "Moon Context Scene", ["MOON"], "MoonHighlights", 2, 3, false, true, true, "Moon label required; use night observation time."));
+    if (objects.Contains("VENUS", StringComparer.OrdinalIgnoreCase) && objects.Contains("SATURN", StringComparer.OrdinalIgnoreCase))
+        requiredScenes.Add(new WeeklyRequiredVisualScene("western_planet_grouping_scene", "Planet Grouping Scene", ["VENUS", "SATURN"], "PlanetHighlights", 2, 3, true, true, true, "Venus and Saturn labels required; do not include Jupiter unless sourced."));
+    var heroObjects = new[] { "MOON", "VENUS", "SATURN" }.Where(objects.Contains).ToList();
+    if (heroObjects.Count >= 2)
+        requiredScenes.Add(new WeeklyRequiredVisualScene("hero_grouping_scene", "Hero Grouping Scene", heroObjects, "HeroEvent", 3, 3, true, true, true, "Must show all visible hero objects if possible; missing objects go to coverage report."));
+    if (heroObjects.Count > 0)
+        requiredScenes.Add(new WeeklyRequiredVisualScene("best_observation_direction_scene", "Best Observation Direction Scene", heroObjects, "WhereToLookDirection", 1, 2, true, true, true, "Include horizon and azimuth reference."));
+    var astroObjects = heroObjects.Count >= 2 ? heroObjects : new[] { "MOON" }.Where(objects.Contains).ToList();
+    if (astroObjects.Count > 0)
+        requiredScenes.Add(new WeeklyRequiredVisualScene("astrophotography_target_scene", "Astrophotography Target Scene", astroObjects, "AstrophotographyTip", 1, 2, true, true, true, "Use hero grouping or Moon plus nearby planet."));
+
+    return new WeeklyFocusObjectPlan(weekStartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), regionId, language, hero, objects, groupings, requiredScenes);
+}
+
+static WeeklyHybridScenePlanPackage AlignWeeklyScenePlanWithFocusObjects(WeeklyHybridScenePlanPackage plan, WeeklyFocusObjectPlan focusPlan)
+{
+    var focus = new HashSet<string>(focusPlan.FocusObjects, StringComparer.OrdinalIgnoreCase);
+    var planetTargets = new[] { "VENUS", "SATURN" }.Where(focus.Contains).ToArray();
+    var heroTargets = new[] { "MOON", "VENUS", "SATURN" }.Where(focus.Contains).ToArray();
+    IReadOnlyList<string> CleanTargets(IReadOnlyList<string> source)
+        => source.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Where(x => !x.Equals("JUPITER", StringComparison.OrdinalIgnoreCase) || focus.Contains("JUPITER")).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+    var scenes = plan.ScenePlans.Select(scene =>
+    {
+        if (scene.SceneCode.Equals("hero_western_grouping_scene", StringComparison.OrdinalIgnoreCase) && heroTargets.Length > 0)
+            return scene with { ObjectCodes = heroTargets, RequiredAssets = heroTargets, SceneType = "HeroEvent" };
+        if (scene.SceneCode.Equals("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) && heroTargets.Length > 0)
+            return scene with { ObjectCodes = heroTargets, RequiredAssets = heroTargets, SceneType = "WhereToLookDirection" };
+        if (scene.SceneCode.Equals("moon_jupiter_hero_scene", StringComparison.OrdinalIgnoreCase))
+            return scene with { SceneCode = "moon_hero_scene", VisualCode = "moon_hero", ObjectCodes = ["MOON"], RequiredAssets = ["MOON"], SceneType = "MoonHighlights", VisualSourceType = "Stellarium", RequiresStellarium = true };
+        return scene with { ObjectCodes = CleanTargets(scene.ObjectCodes), RequiredAssets = CleanTargets(scene.RequiredAssets) };
+    }).ToList();
+
+    var mappings = plan.SegmentSceneMappings.Select(m =>
+        m.SceneCode.Equals("moon_jupiter_hero_scene", StringComparison.OrdinalIgnoreCase)
+            ? m with { SceneCode = "moon_hero_scene" }
+            : m).ToList();
+
+    var stellariumNeeds = new List<WeeklyStellariumNeed>();
+    var moonSource = scenes.FirstOrDefault(x => x.SceneCode.Equals("moon_hero_scene", StringComparison.OrdinalIgnoreCase));
+    if (moonSource is not null && focus.Contains("MOON"))
+        stellariumNeeds.Add(new WeeklyStellariumNeed("moon_hero_scene", moonSource.TargetDate, moonSource.BestTimeUtc, plan.StellariumNeeds.FirstOrDefault()?.LocationRegionId ?? string.Empty, ["MOON"], "MoonHighlights", 55, "StillFrameOrSlowPanReference", "MoonHighlights", moonSource.SceneCode, true));
+    var groupingSource = scenes.FirstOrDefault(x => x.SceneCode.Equals("hero_western_grouping_scene", StringComparison.OrdinalIgnoreCase)) ?? scenes.FirstOrDefault();
+    if (groupingSource is not null && planetTargets.Length >= 2)
+        stellariumNeeds.Add(new WeeklyStellariumNeed("western_planet_grouping_scene", groupingSource.TargetDate, groupingSource.BestTimeUtc, plan.StellariumNeeds.FirstOrDefault()?.LocationRegionId ?? string.Empty, planetTargets, "PlanetHighlights", 65, "StillFrameOrSlowPanReference", "PlanetHighlights", groupingSource.SceneCode, true));
+
+    return plan with { ScenePlans = scenes, SegmentSceneMappings = mappings, StellariumNeeds = stellariumNeeds, SceneWarnings = plan.SceneWarnings.Concat(["Weekly focus object alignment applied before SSC generation."]).Distinct(StringComparer.OrdinalIgnoreCase).ToList() };
+}
+
+static WeeklyStellariumSceneRequirementsDocument BuildWeeklyStellariumSceneRequirements(WeeklyFocusObjectPlan focusPlan, WeeklyHybridScenePlanPackage scenePlan)
+{
+    var labels = focusPlan.FocusObjects.Select(ToWeeklyObjectDisplayName).Select(x => $"{x} label").ToList();
+    var requirements = new[]
+    {
+        "use night time only",
+        "use correct observation local time",
+        "set observer location correctly",
+        "enable object labels",
+        "enable constellation lines",
+        "enable horizon/azimuth reference where useful",
+        "set camera direction based on object azimuth",
+        "set zoom/FOV so target objects are visible",
+        "capture output PNG with meaningful name"
+    };
+    return new WeeklyStellariumSceneRequirementsDocument(focusPlan.WeekStartDate, focusPlan.RegionId, focusPlan.Language, focusPlan.RequiredVisualScenes, requirements, labels);
+}
+
+static WeeklyVisualNarrationCoverageReport BuildWeeklyVisualNarrationCoverageReport(
+    WeeklyFocusObjectPlan focusPlan,
+    WeeklyStellariumSceneRequirementsDocument requirements,
+    IReadOnlyList<CinematicSceneFramePlan> framePlans,
+    IReadOnlyList<string> screenshots,
+    IReadOnlyList<string> scriptPaths,
+    IReadOnlyList<string> generatedSceneCodes,
+    IReadOnlyList<string> warnings)
+{
+    var supported = framePlans.SelectMany(x => x.FramePlans).SelectMany(x => x.TargetObjects).Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var mentioned = focusPlan.FocusObjects.ToList();
+    var missingObjects = mentioned.Where(x => !supported.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
+    var requiredGenerated = requirements.RequiredScenes.Where(r => r.Objects.All(o => supported.Contains(o, StringComparer.OrdinalIgnoreCase))).Select(r => r.SceneCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var missingScenes = requirements.RequiredScenes.Where(r => !requiredGenerated.Contains(r.SceneCode, StringComparer.OrdinalIgnoreCase) && r.Objects.Any(o => mentioned.Contains(o, StringComparer.OrdinalIgnoreCase))).Select(r => r.SceneCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var moonSceneCount = CountScenesForObject(framePlans, "MOON");
+    var venusSceneCount = CountScenesForObject(framePlans, "VENUS");
+    var saturnSceneCount = CountScenesForObject(framePlans, "SATURN");
+    var groupingSceneCount = framePlans.Count(scene => scene.FramePlans.Any(frame => frame.TargetObjects.Select(NormalizeWeeklyObjectCode).Where(x => x is not null).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).Count() >= 2));
+    var errors = new List<string>();
+    if (missingObjects.Count > 0) errors.Add($"Narration mentions unsupported objects: {string.Join(",", missingObjects)}");
+    if (mentioned.Contains("VENUS", StringComparer.OrdinalIgnoreCase) && venusSceneCount == 0) errors.Add("Venus is mentioned but no Venus scene was generated.");
+    if (mentioned.Contains("SATURN", StringComparer.OrdinalIgnoreCase) && saturnSceneCount == 0) errors.Add("Saturn is mentioned but no Saturn scene was generated.");
+    if (focusPlan.FocusGroupings.Count > 0 && groupingSceneCount == 0) errors.Add("Narration grouping mentioned but no grouping scene was generated.");
+    var aligned = errors.Count == 0 && missingObjects.Count == 0 && moonSceneCount > 0;
+    return new WeeklyVisualNarrationCoverageReport(aligned, mentioned, supported, missingObjects, requiredGenerated, missingScenes, moonSceneCount, venusSceneCount, saturnSceneCount, groupingSceneCount, scriptPaths.Count, screenshots.Count, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors);
+}
+
+static int CountScenesForObject(IReadOnlyList<CinematicSceneFramePlan> framePlans, string objectCode)
+    => framePlans.Count(scene => scene.FramePlans.Any(frame => frame.TargetObjects.Select(NormalizeWeeklyObjectCode).Any(code => code?.Equals(objectCode, StringComparison.OrdinalIgnoreCase) == true)));
+
+static IReadOnlyList<string> ExtractWeeklyObjectsFromText(string text)
+{
+    var found = new List<string>();
+    foreach (var candidate in new[] { "MOON", "VENUS", "SATURN", "JUPITER" })
+    {
+        if (Regex.IsMatch(text ?? string.Empty, $@"\b{candidate}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            found.Add(candidate);
+    }
+    return found;
+}
+
+static string? NormalizeWeeklyObjectCode(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value)) return null;
+    var normalized = value.Trim().Replace(" ", "_").Replace("-", "_").ToUpperInvariant();
+    return normalized switch
+    {
+        "LUNA" or "THE_MOON" or "MOON" => "MOON",
+        "VENUS" => "VENUS",
+        "SATURN" => "SATURN",
+        "JUPITER" => "JUPITER",
+        _ => normalized.Contains("MOON", StringComparison.OrdinalIgnoreCase) ? "MOON" : normalized
+    };
+}
+
+static string ToWeeklyObjectDisplayName(string code) => (NormalizeWeeklyObjectCode(code) ?? code).ToUpperInvariant() switch
+{
+    "MOON" => "Moon",
+    "VENUS" => "Venus",
+    "SATURN" => "Saturn",
+    "JUPITER" => "Jupiter",
+    var other => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(other.ToLowerInvariant().Replace('_', ' '))
+};
+
 static IReadOnlyList<string> DetectImageSequenceStructuralDuplicates(IReadOnlyList<ImageSequenceItem> sequenceItems)
 {
     var duplicateWarnings = new List<string>();
@@ -5550,6 +5860,7 @@ static void ValidateExpandedSscScript(string scriptContent, string scriptPath)
         "core.quitStellarium();",
         "ConstellationMgr.setFlagLines(true);",
         "ConstellationMgr.setFlagLabels(true);",
+        "SolarSystem.setFlagLabels(true);",
         "core.moveToAltAzi",
         "StelMovementMgr.zoomTo"
     };

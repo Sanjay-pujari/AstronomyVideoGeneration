@@ -20,6 +20,12 @@ public sealed class StellariumSscRenderer : IStellariumSscRenderer
         sb.AppendLine();
         sb.AppendLine("ConstellationMgr.setFlagLines(true);");
         sb.AppendLine("ConstellationMgr.setFlagLabels(true);");
+        sb.AppendLine("SolarSystem.setFlagLabels(true);");
+        sb.AppendLine("StarMgr.setFlagLabels(true);");
+        foreach (var target in request.VisibleObjects.Select(o => o.Name).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"// Required object label: {Escape(target)}");
+        }
         sb.AppendLine();
         sb.AppendLine($"core.moveToAltAzi(\"{Fmt(request.CameraAltitudeDeg)}d\", \"{Fmt(request.CameraAzimuthDeg)}d\", 1);");
         sb.AppendLine("core.wait(2);");
