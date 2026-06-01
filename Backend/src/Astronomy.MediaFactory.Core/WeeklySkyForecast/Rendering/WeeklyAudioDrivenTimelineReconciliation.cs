@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AudioGeneration;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition;
 using Microsoft.Extensions.Logging;
