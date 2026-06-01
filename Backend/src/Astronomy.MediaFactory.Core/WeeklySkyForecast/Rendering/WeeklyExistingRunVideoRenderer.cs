@@ -135,8 +135,17 @@ public sealed record WeeklyExistingRunRenderResponse(
     bool AudioDrivenRenderContractLoaded,
     bool LongformAudioFound,
     bool ShortformAudioFound,
+    bool LongformVideoOnlyExists,
+    bool ShortformVideoOnlyExists,
     bool LongformVideoOnlyRendered,
     bool ShortformVideoOnlyRendered,
+    double LongformAudioDurationSeconds,
+    double ShortformAudioDurationSeconds,
+    double LongformVideoDurationSeconds,
+    double ShortformVideoDurationSeconds,
+    double LongformDurationDeltaSeconds,
+    double ShortformDurationDeltaSeconds,
+    IReadOnlyList<string> AudioDrivenValidationErrors,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
@@ -149,11 +158,22 @@ public sealed record WeeklyAudioDrivenRenderValidationReport(
     bool AudioDrivenRenderContractLoaded,
     bool LongformAudioFound,
     bool ShortformAudioFound,
+    bool LongformVideoOnlyExists,
+    bool ShortformVideoOnlyExists,
+    bool LongformVideoOnlyRendered,
+    bool ShortformVideoOnlyRendered,
+    double LongformAudioDurationSeconds,
+    double ShortformAudioDurationSeconds,
+    double LongformVideoDurationSeconds,
+    double ShortformVideoDurationSeconds,
+    double LongformDurationDeltaSeconds,
+    double ShortformDurationDeltaSeconds,
     bool AudioDrivenShotDurationsValid,
     bool AudioDrivenNoGaps,
     bool AudioDrivenNoOverlaps,
     double LongformExpectedDurationSeconds,
     double ShortformExpectedDurationSeconds,
+    IReadOnlyList<string> AudioDrivenValidationErrors,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
@@ -525,14 +545,38 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var longformAudioFound = File.Exists(longformAudioPath);
             var shortformAudioFound = File.Exists(shortformAudioPath);
 
+            var skipLongformFinal = false;
+            var skipShortformFinal = false;
+            if (request.MergeAudio && !request.DryRun)
+            {
+                (skipLongformFinal, skipShortformFinal) = await PrepareFinalRenderOutputsAsync(
+                    pipelineRunId,
+                    request,
+                    videoOnlyLongformOutput,
+                    videoOnlyShortformOutput,
+                    finalLongformOutput,
+                    finalShortformOutput,
+                    cancellationToken);
+            }
+
             var longformResult = WeeklyExistingRunEpisodeRenderReportFactory.NotRequested(longformOutput);
             var shortformResult = WeeklyExistingRunEpisodeRenderReportFactory.NotRequested(shortformOutput);
+            if (skipLongformFinal)
+            {
+                var info = new FileInfo(finalLongformOutput);
+                longformResult = new WeeklyExistingRunEpisodeRenderReport(true, false, true, finalLongformOutput, 0, info.Length, true);
+            }
+            if (skipShortformFinal)
+            {
+                var info = new FileInfo(finalShortformOutput);
+                shortformResult = new WeeklyExistingRunEpisodeRenderReport(true, false, true, finalShortformOutput, 0, info.Length, true);
+            }
 
-            if (request.RenderLongform)
+            if (request.RenderLongform && !skipLongformFinal)
             {
                 commandPlans.Add(await BuildCommandPlanAsync("longform", loaded.Contract.Longform, loaded.Timeline.Longform, loaded.Manifest, loaded.ProductionAssetManifest, loaded.AudioPlan.LongformExpectedAudioPath, longformOutput, request, warnings, cancellationToken));
             }
-            if (request.RenderShortform)
+            if (request.RenderShortform && !skipShortformFinal)
             {
                 commandPlans.Add(await BuildCommandPlanAsync("shortform", loaded.Contract.Shortform, loaded.Timeline.Shortform, loaded.Manifest, loaded.ProductionAssetManifest, loaded.AudioPlan.ShortformExpectedAudioPath, shortformOutput, request, warnings, cancellationToken));
             }
@@ -545,13 +589,15 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var failFastErrors = new List<string>();
             if (request.UseAudioDrivenTimeline)
             {
+                if (request.MergeAudio) logger.LogInformation("WEEKLY_FINAL_AUDIO_DRIVEN_INPUT_VALIDATION_START pipelineRunId={PipelineRunId}", pipelineRunId);
                 audioDrivenValidationReport = BuildAudioDrivenRenderValidationReport(pipelineRunId, paths, loaded, request, longformAudioFound, shortformAudioFound, warnings);
                 await File.WriteAllTextAsync(audioDrivenRenderValidationReportPath, JsonSerializer.Serialize(audioDrivenValidationReport, JsonOptions), cancellationToken);
+                if (request.MergeAudio) logger.LogInformation("WEEKLY_FINAL_AUDIO_DRIVEN_INPUT_VALIDATION_COMPLETE pipelineRunId={PipelineRunId} audioDrivenInputReady={AudioDrivenInputReady} errorCount={ErrorCount}", pipelineRunId, audioDrivenValidationReport.Errors.Count == 0, audioDrivenValidationReport.Errors.Count);
                 visualSelectionReport = EmptyVisualSelectionReport();
                 diversityValidationReport = EmptyDiversityValidationReport();
                 renderVisualSelectionReady = true;
                 if (!hydration.RenderInputHydrationPassed) failFastErrors.Add("renderInputHydrationPassed is false; render input manifest does not include enough production assets.");
-                if (!audioDrivenValidationReport.AudioDrivenRenderReady) failFastErrors.Add("audioDrivenRenderReady is false; audio-driven render validation failed.");
+                failFastErrors.AddRange(audioDrivenValidationReport.Errors);
             }
             else
             {
@@ -600,13 +646,17 @@ public sealed class WeeklyExistingRunVideoRenderer(
             {
                 if (request.RenderLongform)
                 {
-                    longformMerge = await MergeFinalAudioVideoAsync(pipelineRunId, "longform", videoOnlyLongformOutput, longformAudioPath, finalLongformOutput, request, warnings, errors, cancellationToken);
-                    longformResult = longformResult with { OutputPath = finalLongformOutput, Rendered = longformMerge.Merged, AudioAttached = longformMerge.AudioAttached, DurationSeconds = longformMerge.VideoDurationSeconds };
+                    longformMerge = skipLongformFinal
+                        ? await ExistingFinalAudioVideoMergeReportAsync("longform", videoOnlyLongformOutput, longformAudioPath, finalLongformOutput, errors, cancellationToken)
+                        : await MergeFinalAudioVideoAsync(pipelineRunId, "longform", videoOnlyLongformOutput, longformAudioPath, finalLongformOutput, request, warnings, errors, cancellationToken);
+                    longformResult = longformResult with { OutputPath = finalLongformOutput, Rendered = !skipLongformFinal && longformMerge.Merged, Skipped = skipLongformFinal, AudioAttached = longformMerge.AudioAttached, DurationSeconds = longformMerge.VideoDurationSeconds };
                 }
                 if (request.RenderShortform)
                 {
-                    shortformMerge = await MergeFinalAudioVideoAsync(pipelineRunId, "shortform", videoOnlyShortformOutput, shortformAudioPath, finalShortformOutput, request, warnings, errors, cancellationToken);
-                    shortformResult = shortformResult with { OutputPath = finalShortformOutput, Rendered = shortformMerge.Merged, AudioAttached = shortformMerge.AudioAttached, DurationSeconds = shortformMerge.VideoDurationSeconds };
+                    shortformMerge = skipShortformFinal
+                        ? await ExistingFinalAudioVideoMergeReportAsync("shortform", videoOnlyShortformOutput, shortformAudioPath, finalShortformOutput, errors, cancellationToken)
+                        : await MergeFinalAudioVideoAsync(pipelineRunId, "shortform", videoOnlyShortformOutput, shortformAudioPath, finalShortformOutput, request, warnings, errors, cancellationToken);
+                    shortformResult = shortformResult with { OutputPath = finalShortformOutput, Rendered = !skipShortformFinal && shortformMerge.Merged, Skipped = skipShortformFinal, AudioAttached = shortformMerge.AudioAttached, DurationSeconds = shortformMerge.VideoDurationSeconds };
                 }
             }
 
@@ -628,6 +678,11 @@ public sealed class WeeklyExistingRunVideoRenderer(
             await File.WriteAllTextAsync(ffmpegReportPath, JsonSerializer.Serialize(ffmpegReport, JsonOptions), cancellationToken);
             var qualityReport = pendingQualityReport;
             await File.WriteAllTextAsync(qualityReportPath, JsonSerializer.Serialize(qualityReport, JsonOptions), cancellationToken);
+            if (request.UseAudioDrivenTimeline && request.MergeAudio && audioDrivenValidationReport is not null)
+            {
+                audioDrivenValidationReport = CompleteAudioDrivenRenderValidationReport(request, audioDrivenValidationReport, videoOnlyLongformOutput, videoOnlyShortformOutput, longformMerge, shortformMerge, warnings);
+                await File.WriteAllTextAsync(audioDrivenRenderValidationReportPath, JsonSerializer.Serialize(audioDrivenValidationReport, JsonOptions), cancellationToken);
+            }
             var audioVideoMergeReady = request.MergeAudio && errors.Count == 0 && (!request.RenderLongform || longformMerge.Merged || request.DryRun) && (!request.RenderShortform || shortformMerge.Merged || request.DryRun);
             var finalVideoRenderReady = request.MergeAudio ? audioVideoMergeReady : false;
             if (request.MergeAudio)
@@ -752,8 +807,17 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 audioDrivenValidationReport?.AudioDrivenRenderContractLoaded ?? false,
                 longformAudioFound,
                 shortformAudioFound,
+                request.RenderLongform && File.Exists(videoOnlyLongformOutput),
+                request.RenderShortform && File.Exists(videoOnlyShortformOutput),
                 request.RenderLongform && (request.DryRun || File.Exists(videoOnlyLongformOutput)),
                 request.RenderShortform && (request.DryRun || File.Exists(videoOnlyShortformOutput)),
+                audioDrivenValidationReport?.LongformAudioDurationSeconds ?? longformMerge.AudioDurationSeconds,
+                audioDrivenValidationReport?.ShortformAudioDurationSeconds ?? shortformMerge.AudioDurationSeconds,
+                audioDrivenValidationReport?.LongformVideoDurationSeconds ?? longformMerge.VideoDurationSeconds,
+                audioDrivenValidationReport?.ShortformVideoDurationSeconds ?? shortformMerge.VideoDurationSeconds,
+                audioDrivenValidationReport?.LongformDurationDeltaSeconds ?? longformMerge.DurationDeltaSeconds,
+                audioDrivenValidationReport?.ShortformDurationDeltaSeconds ?? shortformMerge.DurationDeltaSeconds,
+                audioDrivenValidationReport?.Errors ?? [],
                 warnings,
                 errors);
         }
@@ -761,11 +825,71 @@ public sealed class WeeklyExistingRunVideoRenderer(
         {
             errors.Add(ex.Message);
             logger.LogError(ex, "WEEKLY_RENDER_EXISTING_RUN_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
-            if (request.MergeAudio) logger.LogError(ex, "WEEKLY_FINAL_RENDER_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+            if (request.MergeAudio)
+            {
+                logger.LogError(ex, "WEEKLY_FINAL_RENDER_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+                await TryWriteFailedFinalRenderReportsAsync(pipelineRunId, request, started, warnings, errors, cancellationToken);
+            }
             throw;
         }
     }
 
+
+
+    private async Task TryWriteFailedFinalRenderReportsAsync(Guid pipelineRunId, WeeklyExistingRunRenderRequest request, DateTime started, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var root = await pipelineRunDirectoryResolver.ResolveRunDirectoryAsync(pipelineRunId);
+            var renderDirectory = Path.Combine(root, "render");
+            Directory.CreateDirectory(renderDirectory);
+            var longformAudioPath = Path.Combine(root, "audio", "longform", "weekly-skyforecast-longform.mp3");
+            var shortformAudioPath = Path.Combine(root, "audio", "shortform", "weekly-skyforecast-shortform.mp3");
+            var videoOnlyLongformOutput = Path.Combine(renderDirectory, "temp", "final", "longform", request.DebugStoryboard ? "weekly-skyforecast-longform-video-only-debug.mp4" : "weekly-skyforecast-longform-video-only.mp4");
+            var videoOnlyShortformOutput = Path.Combine(renderDirectory, "temp", "final", "shortform", request.DebugStoryboard ? "weekly-skyforecast-shortform-video-only-debug.mp4" : "weekly-skyforecast-shortform-video-only.mp4");
+            var finalLongformOutput = Path.Combine(renderDirectory, "longform", request.DebugStoryboard ? "weekly-skyforecast-longform-final-debug.mp4" : "weekly-skyforecast-longform-final.mp4");
+            var finalShortformOutput = Path.Combine(renderDirectory, "shortform", request.DebugStoryboard ? "weekly-skyforecast-shortform-final-debug.mp4" : "weekly-skyforecast-shortform-final.mp4");
+            Directory.CreateDirectory(Path.GetDirectoryName(videoOnlyLongformOutput) ?? renderDirectory);
+            Directory.CreateDirectory(Path.GetDirectoryName(videoOnlyShortformOutput) ?? renderDirectory);
+
+            if (request.UseAudioDrivenTimeline)
+            {
+                var report = new WeeklyAudioDrivenRenderValidationReport(
+                    pipelineRunId,
+                    false,
+                    File.Exists(Path.Combine(renderDirectory, "audio-driven-final-render-timeline.json")),
+                    File.Exists(Path.Combine(renderDirectory, "audio-driven-resolved-render-shot-plan.json")),
+                    File.Exists(Path.Combine(renderDirectory, "audio-driven-render-contract.json")),
+                    File.Exists(longformAudioPath),
+                    File.Exists(shortformAudioPath),
+                    File.Exists(videoOnlyLongformOutput),
+                    File.Exists(videoOnlyShortformOutput),
+                    request.RenderLongform && File.Exists(videoOnlyLongformOutput),
+                    request.RenderShortform && File.Exists(videoOnlyShortformOutput),
+                    0, 0, 0, 0, 0, 0,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                    errors.ToList(),
+                    warnings.ToList(),
+                    errors.ToList());
+                await File.WriteAllTextAsync(Path.Combine(renderDirectory, "audio-driven-render-validation-report.json"), JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
+            }
+
+            var longformMerge = NotRequestedMergeReport(videoOnlyLongformOutput, longformAudioPath, finalLongformOutput);
+            var shortformMerge = NotRequestedMergeReport(videoOnlyShortformOutput, shortformAudioPath, finalShortformOutput);
+            var mergeReport = new WeeklyFinalAudioVideoMergeReport(pipelineRunId, false, longformMerge, shortformMerge, warnings, errors);
+            await File.WriteAllTextAsync(Path.Combine(renderDirectory, "final-audio-video-merge-report.json"), JsonSerializer.Serialize(mergeReport, JsonOptions), cancellationToken);
+            var finalReport = new WeeklyFinalRenderReport(pipelineRunId, started, DateTime.UtcNow, false, false, longformMerge, shortformMerge, warnings, errors);
+            await File.WriteAllTextAsync(Path.Combine(renderDirectory, "final-render-report.json"), JsonSerializer.Serialize(finalReport, JsonOptions), cancellationToken);
+        }
+        catch (Exception reportEx)
+        {
+            logger.LogWarning(reportEx, "WEEKLY_FINAL_RENDER_FAILURE_REPORT_WRITE_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        }
+    }
 
     private static WeeklyAudioDrivenRenderValidationReport BuildAudioDrivenRenderValidationReport(Guid pipelineRunId, WeeklyExistingRunRequiredPaths paths, WeeklyExistingRunLoadedInputs loaded, WeeklyExistingRunRenderRequest request, bool longformAudioFound, bool shortformAudioFound, IReadOnlyList<string> warnings)
     {
@@ -799,13 +923,76 @@ public sealed class WeeklyExistingRunVideoRenderer(
             audioDrivenRenderContractLoaded,
             longformAudioFound,
             shortformAudioFound,
+            false,
+            false,
+            false,
+            false,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
             shotDurationsValid,
             noGaps,
             noOverlaps,
             Round(loaded.Timeline.Longform.ActualDurationSeconds),
             Round(loaded.Timeline.Shortform.ActualDurationSeconds),
+            errors.ToList(),
             warnings.ToList(),
             errors);
+    }
+
+    private static WeeklyAudioDrivenRenderValidationReport CompleteAudioDrivenRenderValidationReport(WeeklyExistingRunRenderRequest request, WeeklyAudioDrivenRenderValidationReport inputReport, string longformVideoOnlyPath, string shortformVideoOnlyPath, WeeklyFinalAudioVideoMergeEpisodeReport longformMerge, WeeklyFinalAudioVideoMergeEpisodeReport shortformMerge, IReadOnlyList<string> warnings)
+    {
+        var validationErrors = inputReport.Errors.ToList();
+        var longformVideoOnlyExists = File.Exists(longformVideoOnlyPath);
+        var shortformVideoOnlyExists = File.Exists(shortformVideoOnlyPath);
+        var longformVideoOnlyRendered = request.RenderLongform && (request.DryRun || longformVideoOnlyExists);
+        var shortformVideoOnlyRendered = request.RenderShortform && (request.DryRun || shortformVideoOnlyExists);
+
+        ValidateAudioDrivenEpisodeDurations("longform", request.RenderLongform, request.DryRun, longformVideoOnlyExists, longformMerge, validationErrors);
+        ValidateAudioDrivenEpisodeDurations("shortform", request.RenderShortform, request.DryRun, shortformVideoOnlyExists, shortformMerge, validationErrors);
+
+        var ready = inputReport.AudioDrivenTimelineLoaded
+            && inputReport.AudioDrivenShotPlanLoaded
+            && inputReport.AudioDrivenRenderContractLoaded
+            && (!request.RenderLongform || inputReport.LongformAudioFound)
+            && (!request.RenderShortform || inputReport.ShortformAudioFound)
+            && inputReport.AudioDrivenShotDurationsValid
+            && inputReport.AudioDrivenNoGaps
+            && inputReport.AudioDrivenNoOverlaps
+            && (!request.RenderLongform || request.DryRun || longformMerge.Merged)
+            && (!request.RenderShortform || request.DryRun || shortformMerge.Merged)
+            && validationErrors.Count == 0;
+
+        return inputReport with
+        {
+            AudioDrivenRenderReady = ready,
+            LongformVideoOnlyExists = longformVideoOnlyExists,
+            ShortformVideoOnlyExists = shortformVideoOnlyExists,
+            LongformVideoOnlyRendered = longformVideoOnlyRendered,
+            ShortformVideoOnlyRendered = shortformVideoOnlyRendered,
+            LongformAudioDurationSeconds = longformMerge.AudioDurationSeconds,
+            ShortformAudioDurationSeconds = shortformMerge.AudioDurationSeconds,
+            LongformVideoDurationSeconds = longformMerge.VideoDurationSeconds,
+            ShortformVideoDurationSeconds = shortformMerge.VideoDurationSeconds,
+            LongformDurationDeltaSeconds = longformMerge.DurationDeltaSeconds,
+            ShortformDurationDeltaSeconds = shortformMerge.DurationDeltaSeconds,
+            AudioDrivenValidationErrors = validationErrors,
+            Warnings = warnings.ToList(),
+            Errors = validationErrors
+        };
+    }
+
+    private static void ValidateAudioDrivenEpisodeDurations(string episodeType, bool requested, bool dryRun, bool videoOnlyExists, WeeklyFinalAudioVideoMergeEpisodeReport merge, List<string> validationErrors)
+    {
+        if (!requested || dryRun) return;
+        if (!videoOnlyExists && !merge.Merged) validationErrors.Add($"{episodeType} video-only output does not exist after render: {merge.VideoOnlyPath}");
+        if (merge.AudioDurationSeconds <= 0) validationErrors.Add($"{episodeType} audio duration could not be probed: {merge.AudioPath}");
+        if (merge.VideoDurationSeconds <= 0) validationErrors.Add($"{episodeType} video-only duration could not be probed: {merge.VideoOnlyPath}");
+        if (merge.DurationDeltaSeconds > FinalAudioVideoDurationToleranceSeconds) validationErrors.Add($"{episodeType} video/audio duration delta is {merge.DurationDeltaSeconds:0.###}s, exceeding allowed tolerance of {FinalAudioVideoDurationToleranceSeconds:0.###}s.");
+        if (!merge.Merged) validationErrors.Add($"{episodeType} final audio/video merge did not complete successfully: {merge.FinalVideoPath}");
     }
 
     private static (bool ShotDurationsValid, bool NoGaps, bool NoOverlaps, IReadOnlyList<string> Errors) ValidateAudioDrivenTimelineShape(FinalRenderTimeline timeline)
@@ -885,6 +1072,48 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private static RenderDiversityValidationReport EmptyDiversityValidationReport()
         => new(true, true, true, true, true, true, "skippedForAudioDrivenTimeline", true, true, 0, 0, 0, true, true, true, true, [], []);
 
+    private async Task<(bool SkipLongformFinal, bool SkipShortformFinal)> PrepareFinalRenderOutputsAsync(Guid pipelineRunId, WeeklyExistingRunRenderRequest request, string videoOnlyLongformOutput, string videoOnlyShortformOutput, string finalLongformOutput, string finalShortformOutput, CancellationToken cancellationToken)
+    {
+        var skipLongform = request.RenderLongform && !request.OverwriteExisting && await IsExistingFinalOutputValidAsync(finalLongformOutput, cancellationToken);
+        var skipShortform = request.RenderShortform && !request.OverwriteExisting && await IsExistingFinalOutputValidAsync(finalShortformOutput, cancellationToken);
+
+        if (request.RenderLongform && !skipLongform)
+        {
+            DeleteIfExists(videoOnlyLongformOutput);
+            if (request.OverwriteExisting) DeleteIfExists(finalLongformOutput);
+        }
+        if (request.RenderShortform && !skipShortform)
+        {
+            DeleteIfExists(videoOnlyShortformOutput);
+            if (request.OverwriteExisting) DeleteIfExists(finalShortformOutput);
+        }
+
+        logger.LogInformation("WEEKLY_FINAL_STALE_FILE_PROTECTION_COMPLETE pipelineRunId={PipelineRunId} overwriteExisting={OverwriteExisting} skipLongformFinal={SkipLongformFinal} skipShortformFinal={SkipShortformFinal}", pipelineRunId, request.OverwriteExisting, skipLongform, skipShortform);
+        return (skipLongform, skipShortform);
+    }
+
+    private async Task<bool> IsExistingFinalOutputValidAsync(string finalVideoPath, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(finalVideoPath) || new FileInfo(finalVideoPath).Length <= 0) return false;
+        var info = await ProbeMediaAsync(finalVideoPath, cancellationToken);
+        return info.HasVideo && info.HasAudio && info.DurationSeconds > 0;
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (File.Exists(path)) File.Delete(path);
+    }
+
+    private async Task<WeeklyFinalAudioVideoMergeEpisodeReport> ExistingFinalAudioVideoMergeReportAsync(string episodeType, string videoOnlyPath, string audioPath, string finalVideoPath, List<string> errors, CancellationToken cancellationToken)
+    {
+        var finalInfo = await ProbeMediaAsync(finalVideoPath, cancellationToken);
+        var audioInfo = await ProbeMediaAsync(audioPath, cancellationToken);
+        var delta = audioInfo.DurationSeconds > 0 ? Math.Round(Math.Abs(finalInfo.DurationSeconds - audioInfo.DurationSeconds), 3) : 0;
+        if (!finalInfo.HasVideo) errors.Add($"{episodeType} existing final output has no video stream: {finalVideoPath}");
+        if (!finalInfo.HasAudio) errors.Add($"{episodeType} existing final output has no audio stream: {finalVideoPath}");
+        return new WeeklyFinalAudioVideoMergeEpisodeReport(true, videoOnlyPath, audioPath, finalVideoPath, Round(finalInfo.DurationSeconds), Round(audioInfo.DurationSeconds), delta, finalInfo.HasAudio, finalInfo.HasAudio, finalInfo.HasVideo, finalInfo.HasVideo && finalInfo.HasAudio);
+    }
+
     private async Task<WeeklyFinalAudioVideoMergeEpisodeReport> MergeFinalAudioVideoAsync(Guid pipelineRunId, string episodeType, string videoOnlyPath, string audioPath, string finalVideoPath, WeeklyExistingRunRenderRequest request, List<string> warnings, List<string> errors, CancellationToken cancellationToken)
     {
         var requested = episodeType.Equals("longform", StringComparison.OrdinalIgnoreCase) ? request.RenderLongform : request.RenderShortform;
@@ -896,24 +1125,26 @@ public sealed class WeeklyExistingRunVideoRenderer(
             return new WeeklyFinalAudioVideoMergeEpisodeReport(true, videoOnlyPath, audioPath, finalVideoPath, 0, 0, 0, false, false, false, false);
         }
 
-        logger.LogInformation("WEEKLY_FINAL_AUDIO_PROBE_START pipelineRunId={PipelineRunId} episodeType={EpisodeType} videoOnlyPath={VideoOnlyPath} audioPath={AudioPath}", pipelineRunId, episodeType, videoOnlyPath, audioPath);
+        logger.LogInformation("WEEKLY_FINAL_DURATION_COMPARE_START pipelineRunId={PipelineRunId} episodeType={EpisodeType} videoOnlyPath={VideoOnlyPath} audioPath={AudioPath}", pipelineRunId, episodeType, videoOnlyPath, audioPath);
         if (!File.Exists(videoOnlyPath))
         {
             var message = $"{episodeType} video-only render is missing: {videoOnlyPath}";
             errors.Add(message);
+            logger.LogInformation("WEEKLY_FINAL_DURATION_COMPARE_COMPLETE pipelineRunId={PipelineRunId} episodeType={EpisodeType} videoDurationSeconds={VideoDurationSeconds} audioDurationSeconds={AudioDurationSeconds} durationDeltaSeconds={DurationDeltaSeconds}", pipelineRunId, episodeType, 0, 0, 0);
             return new WeeklyFinalAudioVideoMergeEpisodeReport(true, videoOnlyPath, audioPath, finalVideoPath, 0, 0, 0, false, false, false, false);
         }
         if (!File.Exists(audioPath))
         {
             var message = $"{episodeType} narration audio is missing: {audioPath}";
             errors.Add(message);
+            logger.LogInformation("WEEKLY_FINAL_DURATION_COMPARE_COMPLETE pipelineRunId={PipelineRunId} episodeType={EpisodeType} videoDurationSeconds={VideoDurationSeconds} audioDurationSeconds={AudioDurationSeconds} durationDeltaSeconds={DurationDeltaSeconds}", pipelineRunId, episodeType, 0, 0, 0);
             return new WeeklyFinalAudioVideoMergeEpisodeReport(true, videoOnlyPath, audioPath, finalVideoPath, 0, 0, 0, false, false, false, false);
         }
 
         var videoInfo = await ProbeMediaAsync(videoOnlyPath, cancellationToken);
         var audioInfo = await ProbeMediaAsync(audioPath, cancellationToken);
         var durationDelta = Math.Round(Math.Abs(videoInfo.DurationSeconds - audioInfo.DurationSeconds), 3);
-        logger.LogInformation("WEEKLY_FINAL_AUDIO_PROBE_COMPLETE pipelineRunId={PipelineRunId} episodeType={EpisodeType} videoDurationSeconds={VideoDurationSeconds} audioDurationSeconds={AudioDurationSeconds} durationDeltaSeconds={DurationDeltaSeconds}", pipelineRunId, episodeType, videoInfo.DurationSeconds, audioInfo.DurationSeconds, durationDelta);
+        logger.LogInformation("WEEKLY_FINAL_DURATION_COMPARE_COMPLETE pipelineRunId={PipelineRunId} episodeType={EpisodeType} videoDurationSeconds={VideoDurationSeconds} audioDurationSeconds={AudioDurationSeconds} durationDeltaSeconds={DurationDeltaSeconds}", pipelineRunId, episodeType, videoInfo.DurationSeconds, audioInfo.DurationSeconds, durationDelta);
 
         if (!videoInfo.HasVideo)
         {
