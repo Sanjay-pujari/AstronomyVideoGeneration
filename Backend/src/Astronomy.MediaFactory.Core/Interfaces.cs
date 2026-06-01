@@ -1539,7 +1539,21 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     bool RendererDurationValidationPassed = false,
     bool RendererResolutionPlanPassed = false,
     bool RendererTransitionPlanPassed = false,
-    bool RendererAudioAlignmentPlanReady = false);
+    bool RendererAudioAlignmentPlanReady = false,
+    bool WeeklyFocusObjectPlanReady = false,
+    bool StellariumSceneRequirementsReady = false,
+    bool VisualNarrationCoverageReady = false,
+    bool VisualNarrationAligned = false,
+    IReadOnlyList<string>? FocusObjects = null,
+    IReadOnlyList<string>? FocusGroupings = null,
+    int MoonSceneCount = 0,
+    int VenusSceneCount = 0,
+    int SaturnSceneCount = 0,
+    int GroupingSceneCount = 0,
+    string? WeeklyFocusObjectPlanPath = null,
+    string? WeeklyStellariumSceneRequirementsPath = null,
+    string? VisualNarrationCoverageReportPath = null,
+    string? SscSceneManifestPath = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
