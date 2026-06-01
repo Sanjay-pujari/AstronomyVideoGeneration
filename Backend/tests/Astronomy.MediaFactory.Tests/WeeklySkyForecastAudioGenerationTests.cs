@@ -21,6 +21,9 @@ public sealed class WeeklySkyForecastAudioGenerationTests
         Directory.CreateDirectory(Path.Combine(runRoot, "episode"));
         Directory.CreateDirectory(Path.Combine(runRoot, "render"));
         await WriteInputsAsync(runRoot, pipelineRunId);
+        var existingLongformPath = Path.Combine(runRoot, "audio", "longform", "weekly-skyforecast-longform.mp3");
+        Directory.CreateDirectory(Path.GetDirectoryName(existingLongformPath)!);
+        await File.WriteAllTextAsync(existingLongformPath, "previous real-run audio");
 
         var service = new WeeklySkyForecastAudioGenerationService(
             Options.Create(new RenderingOptions { WorkingDirectory = workingRoot }),
@@ -30,10 +33,23 @@ public sealed class WeeklySkyForecastAudioGenerationTests
 
         var response = await service.GenerateAsync(pipelineRunId, new WeeklySkyForecastAudioGenerationRequest(DryRun: true), CancellationToken.None);
 
+        response.DryRun.Should().BeTrue();
         response.AudioGenerationReady.Should().BeTrue();
-        response.LongformSegmentAudioCount.Should().Be(2);
-        response.ShortformSegmentAudioCount.Should().Be(1);
-        File.Exists(Path.Combine(runRoot, "audio", "temp", "longform-hero.ssml")).Should().BeTrue();
+        response.LongformAudioGenerated.Should().BeFalse();
+        response.ShortformAudioGenerated.Should().BeFalse();
+        response.LongformSegmentAudioCount.Should().Be(0);
+        response.ShortformSegmentAudioCount.Should().Be(0);
+        response.PlannedLongformSegmentAudioCount.Should().Be(2);
+        response.PlannedShortformSegmentAudioCount.Should().Be(1);
+        response.LongformCombinedAudioPath.Should().BeNull();
+        response.ShortformCombinedAudioPath.Should().BeNull();
+        response.PlannedLongformCombinedAudioPath.Should().Be(existingLongformPath);
+        response.PlannedShortformCombinedAudioPath.Should().Be(Path.Combine(runRoot, "audio", "shortform", "weekly-skyforecast-shortform.mp3"));
+        response.ExistingLongformCombinedAudioPath.Should().Be(existingLongformPath);
+        response.ExistingShortformCombinedAudioPath.Should().BeNull();
+        response.Warnings.Should().Contain("Dry run completed. TTS was not called and MP3 files were not generated.");
+        File.Exists(Path.Combine(runRoot, "audio", "temp", "longform", "hero.ssml")).Should().BeTrue();
+        File.Exists(Path.Combine(runRoot, "audio", "segments", "longform", "hero.mp3")).Should().BeFalse();
         File.Exists(response.AudioGenerationReportPath).Should().BeTrue();
         File.Exists(response.AudioSegmentManifestPath).Should().BeTrue();
         File.Exists(response.AudioTimingValidationReportPath).Should().BeTrue();
@@ -42,6 +58,17 @@ public sealed class WeeklySkyForecastAudioGenerationTests
         response.ShortformNormalizedSegmentCount.Should().Be(1);
         File.Exists(response.NormalizedLongformNarrationPath).Should().BeTrue();
         File.Exists(response.NormalizedShortformNarrationPath).Should().BeTrue();
+
+        using var reportDocument = JsonDocument.Parse(await File.ReadAllTextAsync(response.AudioGenerationReportPath));
+        reportDocument.RootElement.GetProperty("dryRun").GetBoolean().Should().BeTrue();
+        reportDocument.RootElement.GetProperty("ttsCalled").GetBoolean().Should().BeFalse();
+        reportDocument.RootElement.GetProperty("mp3Generated").GetBoolean().Should().BeFalse();
+        reportDocument.RootElement.GetProperty("audioConcatExecuted").GetBoolean().Should().BeFalse();
+        reportDocument.RootElement.GetProperty("longformAudioGenerated").GetBoolean().Should().BeFalse();
+        reportDocument.RootElement.GetProperty("shortformAudioGenerated").GetBoolean().Should().BeFalse();
+
+        using var manifestDocument = JsonDocument.Parse(await File.ReadAllTextAsync(response.AudioSegmentManifestPath));
+        manifestDocument.RootElement.GetProperty("longform")[0].GetProperty("status").GetString().Should().Be("Planned");
     }
 
     [Fact]

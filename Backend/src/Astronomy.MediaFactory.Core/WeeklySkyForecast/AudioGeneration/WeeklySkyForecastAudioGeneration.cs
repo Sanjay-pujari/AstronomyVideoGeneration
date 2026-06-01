@@ -35,13 +35,18 @@ public sealed record WeeklySkyForecastAudioGenerationRequest(
 
 public sealed record WeeklySkyForecastAudioGenerationResponse(
     Guid PipelineRunId,
+    bool DryRun,
     bool AudioGenerationReady,
     bool LongformAudioGenerated,
     bool ShortformAudioGenerated,
-    string LongformCombinedAudioPath,
-    string ShortformCombinedAudioPath,
+    string? LongformCombinedAudioPath,
+    string? ShortformCombinedAudioPath,
     int LongformSegmentAudioCount,
     int ShortformSegmentAudioCount,
+    int PlannedLongformSegmentAudioCount,
+    int PlannedShortformSegmentAudioCount,
+    string? PlannedLongformCombinedAudioPath,
+    string? PlannedShortformCombinedAudioPath,
     string AudioGenerationReportPath,
     string AudioSegmentManifestPath,
     string AudioTimingValidationReportPath,
@@ -55,19 +60,31 @@ public sealed record WeeklySkyForecastAudioGenerationResponse(
     string LongformNarrationSourceUsed,
     string ShortformNarrationSourceUsed,
     int LongformNormalizedSegmentCount,
-    int ShortformNormalizedSegmentCount);
+    int ShortformNormalizedSegmentCount,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExistingLongformCombinedAudioPath = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExistingShortformCombinedAudioPath = null);
 
 public sealed record WeeklyAudioGenerationReport(
+    bool DryRun,
+    bool TtsCalled,
+    bool Mp3Generated,
+    bool AudioConcatExecuted,
     bool AudioGenerationReady,
+    int PlannedLongformSegmentAudioCount,
+    int PlannedShortformSegmentAudioCount,
     bool LongformAudioGenerated,
     bool ShortformAudioGenerated,
     int LongformSegmentAudioCount,
     int ShortformSegmentAudioCount,
-    string LongformCombinedAudioPath,
-    string ShortformCombinedAudioPath,
+    string? LongformCombinedAudioPath,
+    string? ShortformCombinedAudioPath,
+    string? PlannedLongformCombinedAudioPath,
+    string? PlannedShortformCombinedAudioPath,
     string VoiceName,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExistingLongformCombinedAudioPath = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExistingShortformCombinedAudioPath = null);
 
 public sealed record WeeklyAudioSegmentManifest(
     Guid PipelineRunId,
@@ -155,6 +172,11 @@ public sealed class WeeklySkyForecastAudioGenerationService(
                 audioFormat = "mp3";
             }
 
+            if (request.DryRun)
+            {
+                logger.LogInformation("WEEKLY_AUDIO_DRY_RUN_START pipelineRunId={PipelineRunId}", pipelineRunId);
+            }
+
             var longformEntries = request.GenerateLongform
                 ? await GenerateSegmentsAsync(pipelineRunId, "longform", loaded.Longform.Package.Segments.Select(ToNarrationSegment).ToList(), loaded.AudioPlan.Segments, root, voiceName, audioFormat, request, warnings, cancellationToken)
                 : [];
@@ -164,30 +186,109 @@ public sealed class WeeklySkyForecastAudioGenerationService(
 
             var longformCombinedPath = Path.Combine(root, "audio", "longform", "weekly-skyforecast-longform.mp3");
             var shortformCombinedPath = Path.Combine(root, "audio", "shortform", "weekly-skyforecast-shortform.mp3");
-            var longformGenerated = request.DryRun && request.GenerateLongform && longformEntries.Count > 0;
-            var shortformGenerated = request.DryRun && request.GenerateShortform && shortformEntries.Count > 0;
 
-            if (!request.DryRun)
+            if (request.DryRun)
             {
-                if (request.GenerateLongform && longformEntries.Count > 0)
-                {
-                    logger.LogInformation("WEEKLY_AUDIO_COMBINE_START pipelineRunId={PipelineRunId} episodeType=longform", pipelineRunId);
-                    await CombineSegmentsAsync(longformEntries, longformCombinedPath, request.OverwriteExisting, cancellationToken);
-                    longformGenerated = File.Exists(longformCombinedPath);
-                    logger.LogInformation("WEEKLY_AUDIO_COMBINE_COMPLETE pipelineRunId={PipelineRunId} episodeType=longform outputPath={OutputPath}", pipelineRunId, longformCombinedPath);
-                }
-                if (request.GenerateShortform && shortformEntries.Count > 0)
-                {
-                    logger.LogInformation("WEEKLY_AUDIO_COMBINE_START pipelineRunId={PipelineRunId} episodeType=shortform", pipelineRunId);
-                    await CombineSegmentsAsync(shortformEntries, shortformCombinedPath, request.OverwriteExisting, cancellationToken);
-                    shortformGenerated = File.Exists(shortformCombinedPath);
-                    logger.LogInformation("WEEKLY_AUDIO_COMBINE_COMPLETE pipelineRunId={PipelineRunId} episodeType=shortform outputPath={OutputPath}", pipelineRunId, shortformCombinedPath);
-                }
+                logger.LogInformation("WEEKLY_AUDIO_DRY_RUN_SSML_CREATED pipelineRunId={PipelineRunId} longformSsmlCount={LongformSsmlCount} shortformSsmlCount={ShortformSsmlCount}", pipelineRunId, longformEntries.Count, shortformEntries.Count);
+                warnings.Add("Dry run completed. TTS was not called and MP3 files were not generated.");
+
+                var ready = errors.Count == 0;
+                var existingLongformCombinedPath = File.Exists(longformCombinedPath) ? longformCombinedPath : null;
+                var existingShortformCombinedPath = File.Exists(shortformCombinedPath) ? shortformCombinedPath : null;
+                var manifest = new WeeklyAudioSegmentManifest(pipelineRunId, DateTime.UtcNow, longformEntries, shortformEntries);
+                var timingReport = new WeeklyAudioTimingValidationReport(
+                    loaded.RenderContract.Longform.DurationSeconds,
+                    0,
+                    0,
+                    true,
+                    loaded.RenderContract.Shortform.DurationSeconds,
+                    0,
+                    0,
+                    true,
+                    [],
+                    warnings,
+                    errors);
+                var report = new WeeklyAudioGenerationReport(
+                    DryRun: true,
+                    TtsCalled: false,
+                    Mp3Generated: false,
+                    AudioConcatExecuted: false,
+                    AudioGenerationReady: ready,
+                    PlannedLongformSegmentAudioCount: longformEntries.Count,
+                    PlannedShortformSegmentAudioCount: shortformEntries.Count,
+                    LongformAudioGenerated: false,
+                    ShortformAudioGenerated: false,
+                    LongformSegmentAudioCount: 0,
+                    ShortformSegmentAudioCount: 0,
+                    LongformCombinedAudioPath: null,
+                    ShortformCombinedAudioPath: null,
+                    PlannedLongformCombinedAudioPath: request.GenerateLongform ? longformCombinedPath : null,
+                    PlannedShortformCombinedAudioPath: request.GenerateShortform ? shortformCombinedPath : null,
+                    VoiceName: voiceName,
+                    Warnings: warnings,
+                    Errors: errors,
+                    ExistingLongformCombinedAudioPath: existingLongformCombinedPath,
+                    ExistingShortformCombinedAudioPath: existingShortformCombinedPath);
+
+                await File.WriteAllTextAsync(paths.ManifestOutput, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
+                await File.WriteAllTextAsync(paths.TimingReportOutput, JsonSerializer.Serialize(timingReport, JsonOptions), cancellationToken);
+                await File.WriteAllTextAsync(paths.GenerationReportOutput, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
+
+                logger.LogInformation("WEEKLY_AUDIO_DRY_RUN_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, ready);
+                logger.LogInformation("WEEKLY_AUDIO_GENERATION_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, ready);
+                return new WeeklySkyForecastAudioGenerationResponse(
+                    PipelineRunId: pipelineRunId,
+                    DryRun: true,
+                    AudioGenerationReady: ready,
+                    LongformAudioGenerated: false,
+                    ShortformAudioGenerated: false,
+                    LongformCombinedAudioPath: null,
+                    ShortformCombinedAudioPath: null,
+                    LongformSegmentAudioCount: 0,
+                    ShortformSegmentAudioCount: 0,
+                    PlannedLongformSegmentAudioCount: longformEntries.Count,
+                    PlannedShortformSegmentAudioCount: shortformEntries.Count,
+                    PlannedLongformCombinedAudioPath: request.GenerateLongform ? longformCombinedPath : null,
+                    PlannedShortformCombinedAudioPath: request.GenerateShortform ? shortformCombinedPath : null,
+                    AudioGenerationReportPath: paths.GenerationReportOutput,
+                    AudioSegmentManifestPath: paths.ManifestOutput,
+                    AudioTimingValidationReportPath: paths.TimingReportOutput,
+                    LongformActualAudioDurationSeconds: 0,
+                    ShortformActualAudioDurationSeconds: 0,
+                    Warnings: warnings,
+                    Errors: errors,
+                    NormalizedLongformNarrationPath: loaded.Longform.NormalizedPath,
+                    NormalizedShortformNarrationPath: loaded.Shortform.NormalizedPath,
+                    NarrationParsingReady: errors.Count == 0,
+                    LongformNarrationSourceUsed: loaded.Longform.SourceUsed,
+                    ShortformNarrationSourceUsed: loaded.Shortform.SourceUsed,
+                    LongformNormalizedSegmentCount: loaded.Longform.Package.Segments.Count,
+                    ShortformNormalizedSegmentCount: loaded.Shortform.Package.Segments.Count,
+                    ExistingLongformCombinedAudioPath: existingLongformCombinedPath,
+                    ExistingShortformCombinedAudioPath: existingShortformCombinedPath);
+            }
+
+            var longformGenerated = false;
+            var shortformGenerated = false;
+
+            if (request.GenerateLongform && longformEntries.Count > 0)
+            {
+                logger.LogInformation("WEEKLY_AUDIO_COMBINE_START pipelineRunId={PipelineRunId} episodeType=longform", pipelineRunId);
+                await CombineSegmentsAsync(longformEntries, longformCombinedPath, request.OverwriteExisting, cancellationToken);
+                longformGenerated = File.Exists(longformCombinedPath);
+                logger.LogInformation("WEEKLY_AUDIO_COMBINE_COMPLETE pipelineRunId={PipelineRunId} episodeType=longform outputPath={OutputPath}", pipelineRunId, longformCombinedPath);
+            }
+            if (request.GenerateShortform && shortformEntries.Count > 0)
+            {
+                logger.LogInformation("WEEKLY_AUDIO_COMBINE_START pipelineRunId={PipelineRunId} episodeType=shortform", pipelineRunId);
+                await CombineSegmentsAsync(shortformEntries, shortformCombinedPath, request.OverwriteExisting, cancellationToken);
+                shortformGenerated = File.Exists(shortformCombinedPath);
+                logger.LogInformation("WEEKLY_AUDIO_COMBINE_COMPLETE pipelineRunId={PipelineRunId} episodeType=shortform outputPath={OutputPath}", pipelineRunId, shortformCombinedPath);
             }
 
             logger.LogInformation("WEEKLY_AUDIO_TIMING_VALIDATION_START pipelineRunId={PipelineRunId}", pipelineRunId);
-            var longformActual = request.DryRun ? 0 : await ProbeDurationAsync(longformCombinedPath, cancellationToken);
-            var shortformActual = request.DryRun ? 0 : await ProbeDurationAsync(shortformCombinedPath, cancellationToken);
+            var longformActual = await ProbeDurationAsync(longformCombinedPath, cancellationToken);
+            var shortformActual = await ProbeDurationAsync(shortformCombinedPath, cancellationToken);
             var outsideTolerance = longformEntries.Where(x => IsOutsideTolerance(x, LongformSegmentTolerance))
                 .Concat(shortformEntries.Where(x => IsOutsideTolerance(x, ShortformSegmentTolerance)))
                 .ToList();
@@ -196,26 +297,73 @@ public sealed class WeeklySkyForecastAudioGenerationService(
                 loaded.RenderContract.Longform.DurationSeconds,
                 longformActual,
                 Round(longformActual - loaded.RenderContract.Longform.DurationSeconds),
-                !request.GenerateLongform || request.DryRun || IsWithinEpisodeTolerance(longformActual, loaded.RenderContract.Longform.DurationSeconds, LongformSegmentTolerance),
+                !request.GenerateLongform || IsWithinEpisodeTolerance(longformActual, loaded.RenderContract.Longform.DurationSeconds, LongformSegmentTolerance),
                 loaded.RenderContract.Shortform.DurationSeconds,
                 shortformActual,
                 Round(shortformActual - loaded.RenderContract.Shortform.DurationSeconds),
-                !request.GenerateShortform || request.DryRun || IsWithinEpisodeTolerance(shortformActual, loaded.RenderContract.Shortform.DurationSeconds, ShortformSegmentTolerance),
+                !request.GenerateShortform || IsWithinEpisodeTolerance(shortformActual, loaded.RenderContract.Shortform.DurationSeconds, ShortformSegmentTolerance),
                 outsideTolerance,
                 warnings,
                 errors);
             logger.LogInformation("WEEKLY_AUDIO_TIMING_VALIDATION_COMPLETE pipelineRunId={PipelineRunId} outsideTolerance={OutsideTolerance}", pipelineRunId, outsideTolerance.Count);
 
             var manifest = new WeeklyAudioSegmentManifest(pipelineRunId, DateTime.UtcNow, longformEntries, shortformEntries);
-            var ready = errors.Count == 0 && (request.DryRun || ((!request.GenerateLongform || longformGenerated) && (!request.GenerateShortform || shortformGenerated)));
-            var report = new WeeklyAudioGenerationReport(ready, longformGenerated, shortformGenerated, longformEntries.Count(x => x.Status is "Generated" or "Existing" or "Planned"), shortformEntries.Count(x => x.Status is "Generated" or "Existing" or "Planned"), longformCombinedPath, shortformCombinedPath, voiceName, warnings, errors);
+            var ready = errors.Count == 0 && (!request.GenerateLongform || longformGenerated) && (!request.GenerateShortform || shortformGenerated);
+            var longformSegmentAudioCount = longformEntries.Count(x => x.Status is "Generated" or "Existing");
+            var shortformSegmentAudioCount = shortformEntries.Count(x => x.Status is "Generated" or "Existing");
+            var report = new WeeklyAudioGenerationReport(
+                DryRun: false,
+                TtsCalled: true,
+                Mp3Generated: true,
+                AudioConcatExecuted: true,
+                AudioGenerationReady: ready,
+                PlannedLongformSegmentAudioCount: longformEntries.Count,
+                PlannedShortformSegmentAudioCount: shortformEntries.Count,
+                LongformAudioGenerated: longformGenerated,
+                ShortformAudioGenerated: shortformGenerated,
+                LongformSegmentAudioCount: longformSegmentAudioCount,
+                ShortformSegmentAudioCount: shortformSegmentAudioCount,
+                LongformCombinedAudioPath: longformCombinedPath,
+                ShortformCombinedAudioPath: shortformCombinedPath,
+                PlannedLongformCombinedAudioPath: request.GenerateLongform ? longformCombinedPath : null,
+                PlannedShortformCombinedAudioPath: request.GenerateShortform ? shortformCombinedPath : null,
+                VoiceName: voiceName,
+                Warnings: warnings,
+                Errors: errors);
 
             await File.WriteAllTextAsync(paths.ManifestOutput, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
             await File.WriteAllTextAsync(paths.TimingReportOutput, JsonSerializer.Serialize(timingReport, JsonOptions), cancellationToken);
             await File.WriteAllTextAsync(paths.GenerationReportOutput, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
 
             logger.LogInformation("WEEKLY_AUDIO_GENERATION_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, ready);
-            return new WeeklySkyForecastAudioGenerationResponse(pipelineRunId, ready, longformGenerated, shortformGenerated, longformCombinedPath, shortformCombinedPath, report.LongformSegmentAudioCount, report.ShortformSegmentAudioCount, paths.GenerationReportOutput, paths.ManifestOutput, paths.TimingReportOutput, longformActual, shortformActual, warnings, errors, loaded.Longform.NormalizedPath, loaded.Shortform.NormalizedPath, errors.Count == 0, loaded.Longform.SourceUsed, loaded.Shortform.SourceUsed, loaded.Longform.Package.Segments.Count, loaded.Shortform.Package.Segments.Count);
+            return new WeeklySkyForecastAudioGenerationResponse(
+                PipelineRunId: pipelineRunId,
+                DryRun: false,
+                AudioGenerationReady: ready,
+                LongformAudioGenerated: longformGenerated,
+                ShortformAudioGenerated: shortformGenerated,
+                LongformCombinedAudioPath: longformCombinedPath,
+                ShortformCombinedAudioPath: shortformCombinedPath,
+                LongformSegmentAudioCount: longformSegmentAudioCount,
+                ShortformSegmentAudioCount: shortformSegmentAudioCount,
+                PlannedLongformSegmentAudioCount: longformEntries.Count,
+                PlannedShortformSegmentAudioCount: shortformEntries.Count,
+                PlannedLongformCombinedAudioPath: request.GenerateLongform ? longformCombinedPath : null,
+                PlannedShortformCombinedAudioPath: request.GenerateShortform ? shortformCombinedPath : null,
+                AudioGenerationReportPath: paths.GenerationReportOutput,
+                AudioSegmentManifestPath: paths.ManifestOutput,
+                AudioTimingValidationReportPath: paths.TimingReportOutput,
+                LongformActualAudioDurationSeconds: longformActual,
+                ShortformActualAudioDurationSeconds: shortformActual,
+                Warnings: warnings,
+                Errors: errors,
+                NormalizedLongformNarrationPath: loaded.Longform.NormalizedPath,
+                NormalizedShortformNarrationPath: loaded.Shortform.NormalizedPath,
+                NarrationParsingReady: errors.Count == 0,
+                LongformNarrationSourceUsed: loaded.Longform.SourceUsed,
+                ShortformNarrationSourceUsed: loaded.Shortform.SourceUsed,
+                LongformNormalizedSegmentCount: loaded.Longform.Package.Segments.Count,
+                ShortformNormalizedSegmentCount: loaded.Shortform.Package.Segments.Count);
         }
         catch (Exception ex)
         {
@@ -235,7 +383,9 @@ public sealed class WeeklySkyForecastAudioGenerationService(
             var outputPath = Path.Combine(segmentDirectory, $"{SanitizeFileName(segment.SegmentId)}.mp3");
             var expected = alignmentById.TryGetValue(segment.SegmentId, out var alignment) ? alignment.DurationSeconds : segment.EstimatedDurationSeconds;
             var ssml = BuildSegmentSsml(segment.NarrationText, voiceName);
-            var ssmlPath = Path.Combine(root, "audio", "temp", $"{episodeType}-{SanitizeFileName(segment.SegmentId)}.ssml");
+            var ssmlDirectory = Path.Combine(root, "audio", "temp", episodeType);
+            Directory.CreateDirectory(ssmlDirectory);
+            var ssmlPath = Path.Combine(ssmlDirectory, $"{SanitizeFileName(segment.SegmentId)}.ssml");
             await File.WriteAllTextAsync(ssmlPath, ssml, cancellationToken);
 
             if (request.DryRun)
@@ -448,7 +598,7 @@ public sealed class WeeklySkyForecastAudioGenerationService(
 
     private static void CreateAudioDirectories(string root)
     {
-        foreach (var relative in new[] { "audio", "audio/longform", "audio/shortform", "audio/segments", "audio/segments/longform", "audio/segments/shortform", "audio/logs", "audio/temp" })
+        foreach (var relative in new[] { "audio", "audio/longform", "audio/shortform", "audio/segments", "audio/segments/longform", "audio/segments/shortform", "audio/logs", "audio/temp", "audio/temp/longform", "audio/temp/shortform" })
         {
             Directory.CreateDirectory(Path.Combine(root, relative));
         }
