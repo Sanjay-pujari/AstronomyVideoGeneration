@@ -127,9 +127,35 @@ public sealed record WeeklyExistingRunRenderResponse(
     double ShortformDurationDeltaSeconds,
     string FinalAudioVideoMergeReportPath,
     string FinalRenderReportPath,
+    bool UseAudioDrivenTimeline,
+    bool AudioDrivenRenderReady,
+    string AudioDrivenRenderValidationReportPath,
+    bool AudioDrivenTimelineLoaded,
+    bool AudioDrivenShotPlanLoaded,
+    bool AudioDrivenRenderContractLoaded,
+    bool LongformAudioFound,
+    bool ShortformAudioFound,
+    bool LongformVideoOnlyRendered,
+    bool ShortformVideoOnlyRendered,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
+
+public sealed record WeeklyAudioDrivenRenderValidationReport(
+    Guid PipelineRunId,
+    bool AudioDrivenRenderReady,
+    bool AudioDrivenTimelineLoaded,
+    bool AudioDrivenShotPlanLoaded,
+    bool AudioDrivenRenderContractLoaded,
+    bool LongformAudioFound,
+    bool ShortformAudioFound,
+    bool AudioDrivenShotDurationsValid,
+    bool AudioDrivenNoGaps,
+    bool AudioDrivenNoOverlaps,
+    double LongformExpectedDurationSeconds,
+    double ShortformExpectedDurationSeconds,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
 
 public sealed record WeeklyFinalAudioVideoMergeReport(
     Guid PipelineRunId,
@@ -489,10 +515,15 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 : Path.Combine(renderDirectory, "resolved-render-shot-plan.json");
             var visualSelectionReportPath = Path.Combine(renderDirectory, "render-visual-selection-report.json");
             var diversityValidationReportPath = Path.Combine(renderDirectory, "render-diversity-validation-report.json");
+            var audioDrivenRenderValidationReportPath = Path.Combine(renderDirectory, "audio-driven-render-validation-report.json");
             var storyboardReportPath = request.UseAudioDrivenTimeline
                 ? Path.Combine(renderDirectory, "audio-driven-render-storyboard-report.json")
                 : Path.Combine(renderDirectory, "render-storyboard-report.json");
             var commandPlanPath = Path.Combine(renderDirectory, "logs", "ffmpeg-command-plan.json");
+            var longformAudioPath = Path.Combine(root, "audio", "longform", "weekly-skyforecast-longform.mp3");
+            var shortformAudioPath = Path.Combine(root, "audio", "shortform", "weekly-skyforecast-shortform.mp3");
+            var longformAudioFound = File.Exists(longformAudioPath);
+            var shortformAudioFound = File.Exists(shortformAudioPath);
 
             var longformResult = WeeklyExistingRunEpisodeRenderReportFactory.NotRequested(longformOutput);
             var shortformResult = WeeklyExistingRunEpisodeRenderReportFactory.NotRequested(shortformOutput);
@@ -507,20 +538,36 @@ public sealed class WeeklyExistingRunVideoRenderer(
             }
             await File.WriteAllTextAsync(commandPlanPath, JsonSerializer.Serialize(commandPlans, JsonOptions), cancellationToken);
 
-            var resolvedShotPlan = BuildResolvedShotPlan(pipelineRunId, commandPlans);
-            await File.WriteAllTextAsync(resolvedShotPlanPath, JsonSerializer.Serialize(resolvedShotPlan, JsonOptions), cancellationToken);
-            var visualSelectionReport = BuildVisualSelectionReport(commandPlans, warnings, errors);
-            await File.WriteAllTextAsync(visualSelectionReportPath, JsonSerializer.Serialize(visualSelectionReport, JsonOptions), cancellationToken);
-            var diversityValidationReport = BuildDiversityValidationReport(visualSelectionReport);
-            await File.WriteAllTextAsync(diversityValidationReportPath, JsonSerializer.Serialize(diversityValidationReport, JsonOptions), cancellationToken);
-            await File.WriteAllTextAsync(storyboardReportPath, JsonSerializer.Serialize(BuildStoryboardReport(pipelineRunId, commandPlans, loaded.AudioPlan), JsonOptions), cancellationToken);
-
-            var renderVisualSelectionReady = visualSelectionReport.Errors.Count == 0;
+            RenderVisualSelectionReport visualSelectionReport;
+            RenderDiversityValidationReport diversityValidationReport;
+            WeeklyAudioDrivenRenderValidationReport? audioDrivenValidationReport = null;
+            bool renderVisualSelectionReady;
             var failFastErrors = new List<string>();
-            if (!hydration.RenderInputHydrationPassed) failFastErrors.Add("renderInputHydrationPassed is false; render input manifest does not include enough production assets.");
-            if (!renderVisualSelectionReady) failFastErrors.Add("renderVisualSelectionReady is false; resolved shot plan failed segment visual rules.");
-            if (!diversityValidationReport.RenderVisualDiversityReady) failFastErrors.Add("renderVisualDiversityReady is false; diversity validation failed.");
-            if (!visualSelectionReport.VisualDistributionPassed) failFastErrors.Add("visualDistributionPassed is false; NASA/JWST or scene distribution requirements failed.");
+            if (request.UseAudioDrivenTimeline)
+            {
+                audioDrivenValidationReport = BuildAudioDrivenRenderValidationReport(pipelineRunId, paths, loaded, request, longformAudioFound, shortformAudioFound, warnings);
+                await File.WriteAllTextAsync(audioDrivenRenderValidationReportPath, JsonSerializer.Serialize(audioDrivenValidationReport, JsonOptions), cancellationToken);
+                visualSelectionReport = EmptyVisualSelectionReport();
+                diversityValidationReport = EmptyDiversityValidationReport();
+                renderVisualSelectionReady = true;
+                if (!hydration.RenderInputHydrationPassed) failFastErrors.Add("renderInputHydrationPassed is false; render input manifest does not include enough production assets.");
+                if (!audioDrivenValidationReport.AudioDrivenRenderReady) failFastErrors.Add("audioDrivenRenderReady is false; audio-driven render validation failed.");
+            }
+            else
+            {
+                var resolvedShotPlan = BuildResolvedShotPlan(pipelineRunId, commandPlans);
+                await File.WriteAllTextAsync(resolvedShotPlanPath, JsonSerializer.Serialize(resolvedShotPlan, JsonOptions), cancellationToken);
+                visualSelectionReport = BuildVisualSelectionReport(commandPlans, warnings, errors);
+                await File.WriteAllTextAsync(visualSelectionReportPath, JsonSerializer.Serialize(visualSelectionReport, JsonOptions), cancellationToken);
+                diversityValidationReport = BuildDiversityValidationReport(visualSelectionReport);
+                await File.WriteAllTextAsync(diversityValidationReportPath, JsonSerializer.Serialize(diversityValidationReport, JsonOptions), cancellationToken);
+                renderVisualSelectionReady = visualSelectionReport.Errors.Count == 0;
+                if (!hydration.RenderInputHydrationPassed) failFastErrors.Add("renderInputHydrationPassed is false; render input manifest does not include enough production assets.");
+                if (!renderVisualSelectionReady) failFastErrors.Add("renderVisualSelectionReady is false; resolved shot plan failed segment visual rules.");
+                if (!diversityValidationReport.RenderVisualDiversityReady) failFastErrors.Add("renderVisualDiversityReady is false; diversity validation failed.");
+                if (!visualSelectionReport.VisualDistributionPassed) failFastErrors.Add("visualDistributionPassed is false; NASA/JWST or scene distribution requirements failed.");
+            }
+            await File.WriteAllTextAsync(storyboardReportPath, JsonSerializer.Serialize(BuildStoryboardReport(pipelineRunId, commandPlans, loaded.AudioPlan), JsonOptions), cancellationToken);
             errors.AddRange(failFastErrors);
 
             if (!request.DryRun && failFastErrors.Count == 0)
@@ -545,20 +592,20 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 logger.LogInformation("WEEKLY_RENDER_DRY_RUN_COMMANDS_CREATED pipelineRunId={PipelineRunId} commandCount={CommandCount}", pipelineRunId, commandPlans.Count);
             }
 
-            WeeklyFinalAudioVideoMergeEpisodeReport longformMerge = NotRequestedMergeReport(videoOnlyLongformOutput, Path.Combine(root, "audio", "longform", "weekly-skyforecast-longform.mp3"), finalLongformOutput);
-            WeeklyFinalAudioVideoMergeEpisodeReport shortformMerge = NotRequestedMergeReport(videoOnlyShortformOutput, Path.Combine(root, "audio", "shortform", "weekly-skyforecast-shortform.mp3"), finalShortformOutput);
+            WeeklyFinalAudioVideoMergeEpisodeReport longformMerge = NotRequestedMergeReport(videoOnlyLongformOutput, longformAudioPath, finalLongformOutput);
+            WeeklyFinalAudioVideoMergeEpisodeReport shortformMerge = NotRequestedMergeReport(videoOnlyShortformOutput, shortformAudioPath, finalShortformOutput);
             var finalAudioVideoMergeReportPath = Path.Combine(renderDirectory, "final-audio-video-merge-report.json");
             var finalRenderReportPath = Path.Combine(renderDirectory, "final-render-report.json");
             if (request.MergeAudio)
             {
                 if (request.RenderLongform)
                 {
-                    longformMerge = await MergeFinalAudioVideoAsync(pipelineRunId, "longform", videoOnlyLongformOutput, Path.Combine(root, "audio", "longform", "weekly-skyforecast-longform.mp3"), finalLongformOutput, request, warnings, errors, cancellationToken);
+                    longformMerge = await MergeFinalAudioVideoAsync(pipelineRunId, "longform", videoOnlyLongformOutput, longformAudioPath, finalLongformOutput, request, warnings, errors, cancellationToken);
                     longformResult = longformResult with { OutputPath = finalLongformOutput, Rendered = longformMerge.Merged, AudioAttached = longformMerge.AudioAttached, DurationSeconds = longformMerge.VideoDurationSeconds };
                 }
                 if (request.RenderShortform)
                 {
-                    shortformMerge = await MergeFinalAudioVideoAsync(pipelineRunId, "shortform", videoOnlyShortformOutput, Path.Combine(root, "audio", "shortform", "weekly-skyforecast-shortform.mp3"), finalShortformOutput, request, warnings, errors, cancellationToken);
+                    shortformMerge = await MergeFinalAudioVideoAsync(pipelineRunId, "shortform", videoOnlyShortformOutput, shortformAudioPath, finalShortformOutput, request, warnings, errors, cancellationToken);
                     shortformResult = shortformResult with { OutputPath = finalShortformOutput, Rendered = shortformMerge.Merged, AudioAttached = shortformMerge.AudioAttached, DurationSeconds = shortformMerge.VideoDurationSeconds };
                 }
             }
@@ -697,6 +744,16 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 shortformMerge.DurationDeltaSeconds,
                 finalAudioVideoMergeReportPath,
                 finalRenderReportPath,
+                request.UseAudioDrivenTimeline,
+                audioDrivenValidationReport?.AudioDrivenRenderReady ?? false,
+                request.UseAudioDrivenTimeline ? audioDrivenRenderValidationReportPath : string.Empty,
+                audioDrivenValidationReport?.AudioDrivenTimelineLoaded ?? false,
+                audioDrivenValidationReport?.AudioDrivenShotPlanLoaded ?? false,
+                audioDrivenValidationReport?.AudioDrivenRenderContractLoaded ?? false,
+                longformAudioFound,
+                shortformAudioFound,
+                request.RenderLongform && (request.DryRun || File.Exists(videoOnlyLongformOutput)),
+                request.RenderShortform && (request.DryRun || File.Exists(videoOnlyShortformOutput)),
                 warnings,
                 errors);
         }
@@ -708,6 +765,125 @@ public sealed class WeeklyExistingRunVideoRenderer(
             throw;
         }
     }
+
+
+    private static WeeklyAudioDrivenRenderValidationReport BuildAudioDrivenRenderValidationReport(Guid pipelineRunId, WeeklyExistingRunRequiredPaths paths, WeeklyExistingRunLoadedInputs loaded, WeeklyExistingRunRenderRequest request, bool longformAudioFound, bool shortformAudioFound, IReadOnlyList<string> warnings)
+    {
+        var errors = new List<string>();
+        var audioDrivenTimelineLoaded = File.Exists(paths.FinalTimeline) && loaded.Timeline.PipelineRunId == pipelineRunId;
+        var audioDrivenShotPlanLoaded = File.Exists(paths.ResolvedRenderShotPlan) && loaded.ResolvedShotPlan is not null && loaded.ResolvedShotPlan.PipelineRunId == pipelineRunId;
+        var audioDrivenRenderContractLoaded = File.Exists(paths.RenderContract) && loaded.Contract.PipelineRunId == pipelineRunId;
+        if (!audioDrivenTimelineLoaded) errors.Add($"Audio-driven final render timeline is missing or invalid: {paths.FinalTimeline}");
+        if (!audioDrivenShotPlanLoaded) errors.Add($"Audio-driven resolved render shot plan is missing or invalid: {paths.ResolvedRenderShotPlan}");
+        if (!audioDrivenRenderContractLoaded) errors.Add($"Audio-driven render contract is missing or invalid: {paths.RenderContract}");
+        if (request.RenderLongform && !longformAudioFound) errors.Add("Longform audio file was not found for audio-driven final render.");
+        if (request.RenderShortform && !shortformAudioFound) errors.Add("Shortform audio file was not found for audio-driven final render.");
+
+        var timelineIssues = ValidateAudioDrivenTimelineShape(loaded.Timeline);
+        var shotPlanIssues = loaded.ResolvedShotPlan is null
+            ? (ShotDurationsValid: false, NoGaps: false, NoOverlaps: false, Errors: (IReadOnlyList<string>)new[] { "Audio-driven shot plan could not be loaded." })
+            : ValidateAudioDrivenShotPlanShape(loaded.ResolvedShotPlan);
+        errors.AddRange(timelineIssues.Errors);
+        errors.AddRange(shotPlanIssues.Errors);
+        var shotDurationsValid = timelineIssues.ShotDurationsValid && shotPlanIssues.ShotDurationsValid;
+        var noGaps = timelineIssues.NoGaps && shotPlanIssues.NoGaps;
+        var noOverlaps = timelineIssues.NoOverlaps && shotPlanIssues.NoOverlaps;
+        var audioFilesFound = (!request.RenderLongform || longformAudioFound) && (!request.RenderShortform || shortformAudioFound);
+        var ready = audioDrivenTimelineLoaded && audioDrivenShotPlanLoaded && audioDrivenRenderContractLoaded && audioFilesFound && shotDurationsValid && noGaps && noOverlaps && errors.Count == 0;
+
+        return new WeeklyAudioDrivenRenderValidationReport(
+            pipelineRunId,
+            ready,
+            audioDrivenTimelineLoaded,
+            audioDrivenShotPlanLoaded,
+            audioDrivenRenderContractLoaded,
+            longformAudioFound,
+            shortformAudioFound,
+            shotDurationsValid,
+            noGaps,
+            noOverlaps,
+            Round(loaded.Timeline.Longform.ActualDurationSeconds),
+            Round(loaded.Timeline.Shortform.ActualDurationSeconds),
+            warnings.ToList(),
+            errors);
+    }
+
+    private static (bool ShotDurationsValid, bool NoGaps, bool NoOverlaps, IReadOnlyList<string> Errors) ValidateAudioDrivenTimelineShape(FinalRenderTimeline timeline)
+    {
+        var errors = new List<string>();
+        var longform = ValidateTimelineEpisodeShape("longform", timeline.Longform);
+        var shortform = ValidateTimelineEpisodeShape("shortform", timeline.Shortform);
+        errors.AddRange(longform.Errors);
+        errors.AddRange(shortform.Errors);
+        return (longform.ShotDurationsValid && shortform.ShotDurationsValid, longform.NoGaps && shortform.NoGaps, longform.NoOverlaps && shortform.NoOverlaps, errors);
+    }
+
+    private static (bool ShotDurationsValid, bool NoGaps, bool NoOverlaps, IReadOnlyList<string> Errors) ValidateTimelineEpisodeShape(string episodeType, FinalRenderEpisodeTimeline episode)
+    {
+        var errors = new List<string>();
+        var shotDurationsValid = true;
+        var noGaps = true;
+        var noOverlaps = true;
+        ValidateIntervals($"{episodeType} segment", episode.Segments.Select(s => (s.StartSecond, s.EndSecond, s.DurationSeconds)), errors, ref shotDurationsValid, ref noGaps, ref noOverlaps);
+        foreach (var segment in episode.Segments)
+        {
+            ValidateIntervals($"{episodeType} segment {segment.SegmentId} shot", segment.Shots.Select(s => (s.StartSecond, s.EndSecond, s.DurationSeconds)), errors, ref shotDurationsValid, ref noGaps, ref noOverlaps);
+        }
+        return (shotDurationsValid, noGaps, noOverlaps, errors);
+    }
+
+    private static (bool ShotDurationsValid, bool NoGaps, bool NoOverlaps, IReadOnlyList<string> Errors) ValidateAudioDrivenShotPlanShape(ResolvedRenderShotPlan shotPlan)
+    {
+        var errors = new List<string>();
+        var shotDurationsValid = true;
+        var noGaps = true;
+        var noOverlaps = true;
+        foreach (var episode in shotPlan.Episodes)
+        {
+            ValidateIntervals($"{episode.EpisodeType} resolved segment", episode.Segments.Select(s => (s.StartSecond, s.EndSecond, s.DurationSeconds)), errors, ref shotDurationsValid, ref noGaps, ref noOverlaps);
+            foreach (var segment in episode.Segments)
+            {
+                ValidateIntervals($"{episode.EpisodeType} resolved segment {segment.SegmentId} shot", segment.Shots.Select(s => (s.StartSecond, s.EndSecond, s.DurationSeconds)), errors, ref shotDurationsValid, ref noGaps, ref noOverlaps);
+            }
+        }
+        return (shotDurationsValid, noGaps, noOverlaps, errors);
+    }
+
+    private static void ValidateIntervals(string label, IEnumerable<(double StartSecond, double EndSecond, double DurationSeconds)> intervals, List<string> errors, ref bool durationsValid, ref bool noGaps, ref bool noOverlaps)
+    {
+        const double tolerance = 0.001d;
+        var ordered = intervals.OrderBy(i => i.StartSecond).ToList();
+        double? previousEnd = null;
+        foreach (var interval in ordered)
+        {
+            if (interval.DurationSeconds <= 0 || interval.EndSecond <= interval.StartSecond || Math.Abs((interval.EndSecond - interval.StartSecond) - interval.DurationSeconds) > tolerance)
+            {
+                durationsValid = false;
+                errors.Add($"{label} duration is invalid: start={interval.StartSecond:0.###} end={interval.EndSecond:0.###} duration={interval.DurationSeconds:0.###}.");
+            }
+            if (previousEnd is not null)
+            {
+                var delta = interval.StartSecond - previousEnd.Value;
+                if (delta > tolerance)
+                {
+                    noGaps = false;
+                    errors.Add($"{label} has a gap of {delta:0.###}s before start={interval.StartSecond:0.###}.");
+                }
+                if (delta < -tolerance)
+                {
+                    noOverlaps = false;
+                    errors.Add($"{label} overlaps by {Math.Abs(delta):0.###}s at start={interval.StartSecond:0.###}.");
+                }
+            }
+            previousEnd = interval.EndSecond;
+        }
+    }
+
+    private static RenderVisualSelectionReport EmptyVisualSelectionReport()
+        => new(0, 0, 0, 0, 0, false, 0, 0, false, 0, "skippedForAudioDrivenTimeline", 0, 0, 0, 0, 0, 0, 0, [], true, true, true, 0, 0, true, true, true, true, true, true, 0, 0, 0, 0, 0, [], [], [], []);
+
+    private static RenderDiversityValidationReport EmptyDiversityValidationReport()
+        => new(true, true, true, true, true, true, "skippedForAudioDrivenTimeline", true, true, 0, 0, 0, true, true, true, true, [], []);
 
     private async Task<WeeklyFinalAudioVideoMergeEpisodeReport> MergeFinalAudioVideoAsync(Guid pipelineRunId, string episodeType, string videoOnlyPath, string audioPath, string finalVideoPath, WeeklyExistingRunRenderRequest request, List<string> warnings, List<string> errors, CancellationToken cancellationToken)
     {
@@ -754,6 +930,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
         if (durationDelta > FinalAudioVideoDurationToleranceSeconds)
         {
             errors.Add($"{episodeType} audio/video duration mismatch is {durationDelta:0.###}s, exceeding allowed tolerance of {FinalAudioVideoDurationToleranceSeconds:0.###}s. Video={videoInfo.DurationSeconds:0.###}s Audio={audioInfo.DurationSeconds:0.###}s.");
+            if (request.OverwriteExisting && File.Exists(finalVideoPath)) File.Delete(finalVideoPath);
             return new WeeklyFinalAudioVideoMergeEpisodeReport(true, videoOnlyPath, audioPath, finalVideoPath, Round(videoInfo.DurationSeconds), Round(audioInfo.DurationSeconds), durationDelta, false, false, videoInfo.HasVideo, false);
         }
 
@@ -2306,7 +2483,8 @@ public sealed class WeeklyExistingRunVideoRenderer(
             await ReadJsonAsync<WeeklyMotionEffectPlan>(paths.MotionPlan, cancellationToken),
             await ReadJsonAsync<WeeklyAudioAlignmentPlan>(paths.AudioPlan, cancellationToken),
             await ReadJsonAsync<FinalRenderTimeline>(paths.FinalTimeline, cancellationToken),
-            await ReadJsonAsync<IReadOnlyList<FinalRenderShotListEntry>>(paths.FinalShotList, cancellationToken),
+            File.Exists(paths.FinalShotList) ? await ReadJsonAsync<IReadOnlyList<FinalRenderShotListEntry>>(paths.FinalShotList, cancellationToken) : [],
+            File.Exists(paths.ResolvedRenderShotPlan) ? await ReadJsonAsync<ResolvedRenderShotPlan>(paths.ResolvedRenderShotPlan, cancellationToken) : null,
             productionManifest);
     }
 
@@ -2398,6 +2576,7 @@ internal sealed record WeeklyExistingRunLoadedInputs(
     WeeklyAudioAlignmentPlan AudioPlan,
     FinalRenderTimeline Timeline,
     IReadOnlyList<FinalRenderShotListEntry> ShotList,
+    ResolvedRenderShotPlan? ResolvedShotPlan,
     WeeklyProductionAssetManifest? ProductionAssetManifest);
 
 internal sealed record WeeklyExistingRunRequiredPaths(
@@ -2409,9 +2588,13 @@ internal sealed record WeeklyExistingRunRequiredPaths(
     string AudioPlan,
     string FinalTimeline,
     string FinalShotList,
-    string ProductionAssetManifest)
+    string ResolvedRenderShotPlan,
+    string ProductionAssetManifest,
+    bool UseAudioDrivenTimeline)
 {
-    public IReadOnlyList<string> All => [RenderContract, InputManifest, FilterGraphPlan, TransitionPlan, MotionPlan, AudioPlan, FinalTimeline, FinalShotList];
+    public IReadOnlyList<string> All => UseAudioDrivenTimeline
+        ? [RenderContract, InputManifest, FilterGraphPlan, TransitionPlan, MotionPlan, AudioPlan, FinalTimeline, ResolvedRenderShotPlan]
+        : [RenderContract, InputManifest, FilterGraphPlan, TransitionPlan, MotionPlan, AudioPlan, FinalTimeline, FinalShotList];
 
     public static WeeklyExistingRunRequiredPaths FromRoot(string root, bool useAudioDrivenTimeline = false)
         => new(
@@ -2423,7 +2606,9 @@ internal sealed record WeeklyExistingRunRequiredPaths(
             Path.Combine(root, "render", "audio-alignment-plan.json"),
             useAudioDrivenTimeline ? Path.Combine(root, "render", "audio-driven-final-render-timeline.json") : Path.Combine(root, "episode", "final-render-timeline.json"),
             Path.Combine(root, "episode", "final-render-shot-list.json"),
-            Path.Combine(root, "episode", "weekly-production-asset-manifest.json"));
+            useAudioDrivenTimeline ? Path.Combine(root, "render", "audio-driven-resolved-render-shot-plan.json") : Path.Combine(root, "render", "resolved-render-shot-plan.json"),
+            Path.Combine(root, "episode", "weekly-production-asset-manifest.json"),
+            useAudioDrivenTimeline);
 }
 
 internal static class WeeklyExistingRunEpisodeRenderReportFactory
