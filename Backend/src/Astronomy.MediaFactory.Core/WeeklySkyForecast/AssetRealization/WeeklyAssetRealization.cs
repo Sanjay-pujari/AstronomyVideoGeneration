@@ -1035,102 +1035,139 @@ public sealed class WeeklyAssetRealizationService(
         var assigned = new List<RealizedVisualAsset>();
         var baseStellarium = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.StellariumBase).ToList();
         var expanded = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.StellariumExpanded).ToList();
-        var stellarium = baseStellarium.Concat(expanded).ToList();
         var ai = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.AICinematic).ToList();
+        var nasa = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.NASA).ToList();
+        var jwst = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.JWST).ToList();
         var motion = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.MotionGraphics).ToList();
         var educational = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.EducationalOverlay).ToList();
         var finalReady = true;
 
-        void Use(IEnumerable<RealizedVisualAsset> candidates, string role)
+        void AddAsset(RealizedVisualAsset? asset, string role)
         {
-            var asset = SelectBest(candidates, segmentType);
-            if (asset is not null && assigned.All(x => !x.AssetId.Equals(asset.AssetId, StringComparison.OrdinalIgnoreCase)))
+            if (asset is not null && assigned.All(x => !x.FilePath.Equals(asset.FilePath, StringComparison.OrdinalIgnoreCase)))
             {
                 assigned.Add(asset with { SegmentUsageRole = role, Reusable = true });
             }
         }
 
-        void Fallback(IEnumerable<RealizedVisualAsset> candidates, string ideal, string reason)
+        void AddMatching(IEnumerable<RealizedVisualAsset> candidates, string role, params string[] needles)
         {
-            finalReady = false;
-            missing.Add(ideal);
-            Use(candidates, "fallback");
-            warnings.Add(reason);
+            foreach (var asset in candidates
+                .Where(a => a.Exists && a.ProductionReady && needles.Any(n => (a.AssetCode + " " + a.FilePath + " " + a.AssetId).Contains(n, StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(a => a.FilePath, StringComparer.OrdinalIgnoreCase))
+            {
+                AddAsset(asset, role);
+            }
         }
+
+        void AddFirst(IEnumerable<RealizedVisualAsset> candidates, string role)
+            => AddAsset(candidates.Where(a => a.Exists && a.ProductionReady).OrderByDescending(a => a.Width * a.Height).ThenBy(a => a.FilePath, StringComparer.OrdinalIgnoreCase).FirstOrDefault(), role);
+
+        void RequireAssigned(string ideal, Func<RealizedVisualAsset, bool> predicate, string warning)
+        {
+            if (!assigned.Any(predicate))
+            {
+                finalReady = false;
+                missing.Add(ideal);
+                warnings.Add(warning);
+            }
+        }
+
+        var western = baseStellarium.Where(a => (a.AssetCode + " " + a.FilePath).Contains("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase)).ToList();
+        var moon = baseStellarium.Where(a => (a.AssetCode + " " + a.FilePath).Contains("moon_hero_scene", StringComparison.OrdinalIgnoreCase)).ToList();
+        var astro = expanded.Where(a => (a.AssetCode + " " + a.FilePath).Contains("astrophotography_target_scene", StringComparison.OrdinalIgnoreCase)).ToList();
+        var contextStellarium = western.Count > 0 ? western : baseStellarium.Where(a => !(a.AssetCode + " " + a.FilePath).Contains("03_hero_closeup", StringComparison.OrdinalIgnoreCase)).ToList();
+        var nasaJwst = nasa.Concat(jwst).ToList();
 
         switch (segmentType)
         {
             case "OpeningHook":
-                if (ai.Count > 0) Use(ai, "preferred_cinematic_hook");
-                else if (stellarium.Count > 0) Fallback(stellarium, "AICinematic", "AICinematic opening hook missing; assigned Stellarium fallback for test readiness.");
-                else missing.Add("AICinematicOrStellarium");
+                AddMatching(ai, "primary_cinematic_reveal", "cinematic_weekly_sky_reveal");
+                AddMatching(ai, "fast_hook_support", "fast_cinematic_sky_hook");
+                AddFirst(contextStellarium, "wide_stellarium_context");
+                AddMatching(motion, "overview_motion_card", "weekly-overview-timeline", "visibility-calendar");
+                if (!assigned.Any(a => (a.AssetCode + a.FilePath).Contains("cinematic_weekly_sky_reveal", StringComparison.OrdinalIgnoreCase))) AddMatching(ai, "fallback_fast_hook", "fast_cinematic_sky_hook");
+                RequireAssigned("AICinematic:fast_cinematic_sky_hook", a => a.SourceType == RealizedVisualAssetSourceType.AICinematic, "OpeningHook requires an AI cinematic hook or reveal asset.");
                 break;
             case "WeeklySkyOverview":
-                if (motion.Count > 0) Use(motion, "preferred_motion_overview");
-                else Fallback(stellarium.Concat(ai), "MotionGraphics", "WeeklySkyOverview missing MotionGraphics; assigned widest Stellarium/AI fallback for test readiness.");
+                AddMatching(motion, "timeline_motion_graphic", "weekly-overview-timeline");
+                AddMatching(motion, "visibility_calendar_motion_graphic", "visibility-calendar");
+                AddFirst(western, "western_planet_context");
+                AddFirst(nasaJwst, "space_context_image");
+                AddMatching(ai, "retention_reset_cinematic", "cosmic_retention_reset");
+                RequireAssigned("MotionGraphics:weekly-overview-timeline", a => a.SourceType == RealizedVisualAssetSourceType.MotionGraphics, "WeeklySkyOverview requires overview motion graphics.");
                 break;
             case "HeroEvent":
+                AddMatching(western, "required_western_grouping", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide");
+                AddMatching(motion, "hero_event_card", "hero-event-card");
+                AddMatching(ai, "hero_cinematic_reveal", "cinematic_weekly_sky_reveal");
+                AddFirst(nasaJwst, "supporting_astronomy_image");
+                AddFirst(moon, "supporting_moon_visual");
+                RequireAssigned("western_planet_grouping_scene", a => (a.AssetCode + a.FilePath).Contains("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase), "HeroEvent must not be assigned only moon_hero_scene; western grouping frames are required when available.");
+                break;
             case "MoonHighlights":
+                AddMatching(moon, "moon_scene_sequence", "01_establishing_wide", "02_balanced_story_frame", "03_hero_closeup");
+                AddFirst(nasa.Where(a => (a.AssetCode + a.FilePath).Contains("moon", StringComparison.OrdinalIgnoreCase)), "nasa_moon_support");
+                AddMatching(motion, "moon_where_to_look_card", "where-to-look-card", "moon-highlight-card");
+                AddMatching(ai, "retention_reset_cinematic", "cosmic_retention_reset");
+                RequireAssigned("moon_hero_scene", a => (a.AssetCode + a.FilePath).Contains("moon_hero_scene", StringComparison.OrdinalIgnoreCase), "MoonHighlights requires moon_hero_scene frames.");
+                break;
             case "PlanetHighlights":
-            case "StrongestEvent":
-                Use(stellarium, "required_stellarium_visual");
-                if (assigned.Count == 0) missing.Add("StellariumBaseOrStellariumExpanded");
+                AddMatching(western, "required_western_grouping", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide");
+                AddFirst(nasaJwst, "planet_or_context_support");
+                AddMatching(motion, "planet_direction_cards", "where-to-look-card", "planet-highlights-card");
+                if (western.Count == 0) AddFirst(moon, "fallback_moon_visual_only_when_no_western_grouping");
+                RequireAssigned("western_planet_grouping_scene", a => (a.AssetCode + a.FilePath).Contains("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase), "PlanetHighlights must use western_planet_grouping_scene unless those files are unavailable.");
                 break;
             case "BestObservationWindow":
-                if (motion.Count > 0) Use(motion, "preferred_motion_window");
-                else Fallback(expanded.Concat(stellarium).Concat(ai), "MotionGraphics", "BestObservationWindow missing motion graphic; assigned expanded/Stellarium fallback for test readiness.");
+                AddMatching(motion, "best_observation_cards", "best-observation-window-card", "best-time-card", "where-to-look-card");
+                AddFirst(contextStellarium, "horizon_context_frame");
+                AddFirst(educational, "educational_overlay");
+                RequireAssigned("MotionGraphics:best-observation-window-card-or-best-time-card", a => a.SourceType == RealizedVisualAssetSourceType.MotionGraphics && (a.AssetCode + a.FilePath).Contains("best", StringComparison.OrdinalIgnoreCase), "BestObservationWindow requires best observation or best time motion cards.");
                 break;
             case "AstrophotographyTip":
-                Use(expanded.Concat(educational).Concat(ai), "astrophotography_visual");
-                if (assigned.Count == 0) missing.Add("StellariumExpandedOrEducationalOverlayOrAICinematic");
-                if (educational.Count == 0)
-                {
-                    finalReady = false;
-                    missing.Add("EducationalOverlay");
-                    warnings.Add("EducationalOverlay is not realized; expanded/AI asset can satisfy test coverage only.");
-                }
+                AddMatching(astro, "required_expanded_astrophotography_scene", "01_balanced_story_frame", "astrophotography_target_scene");
+                AddFirst(educational, "educational_overlay");
+                AddMatching(ai, "retention_reset_cinematic", "cosmic_retention_reset");
+                AddMatching(motion, "where_to_look_card", "where-to-look-card");
+                RequireAssigned("ExpandedStellarium:astrophotography_target_scene", a => a.SourceType == RealizedVisualAssetSourceType.StellariumExpanded, "AstrophotographyTip requires ExpandedStellarium astrophotography target frame.");
                 break;
             case "WeeklySummary":
-                if (ai.Count > 0) Use(ai, "closing_cinematic_or_montage");
-                else Fallback(stellarium, "AICinematicOrMontage", "WeeklySummary missing recap montage/AI; assigned Stellarium fallback for test readiness.");
-                if (motion.Count == 0)
-                {
-                    finalReady = false;
-                    missing.Add("MotionGraphics");
-                    warnings.Add("WeeklySummary recap motion graphics are not realized for final video readiness.");
-                }
+                AddMatching(ai, "closing_cinematic", "cosmic_closing_background");
+                AddMatching(motion, "weekly_summary_card", "weekly-summary-card");
+                AddMatching(ai, "cta_background_support", "shortform_call_to_action_background");
+                AddFirst(contextStellarium, "wide_stellarium_recap");
+                if (!assigned.Any(a => a.SourceType == RealizedVisualAssetSourceType.AICinematic)) AddMatching(ai, "fallback_fast_hook", "fast_cinematic_sky_hook");
+                RequireAssigned("AICinematic:cosmic_closing_background-or-MotionGraphics:weekly-summary-card", a => (a.AssetCode + a.FilePath).Contains("cosmic_closing_background", StringComparison.OrdinalIgnoreCase) || (a.AssetCode + a.FilePath).Contains("weekly-summary-card", StringComparison.OrdinalIgnoreCase), "WeeklySummary requires closing cinematic or summary card; fast hook is fallback only.");
                 break;
             case "ShortHook":
-                if (ai.Count > 0) Use(ai, "short_hook_cinematic");
-                else if (stellarium.Count > 0) Use(stellarium, "short_hook_stellarium");
-                else missing.Add("AICinematicOrStellarium");
+                AddMatching(ai, "required_fast_hook", "fast_cinematic_sky_hook");
+                AddFirst(western, "western_grouping_support");
+                RequireAssigned("AICinematic:fast_cinematic_sky_hook", a => (a.AssetCode + a.FilePath).Contains("fast_cinematic_sky_hook", StringComparison.OrdinalIgnoreCase), "ShortHook requires fast_cinematic_sky_hook.");
+                break;
+            case "StrongestEvent":
+                AddMatching(western, "required_western_grouping", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide");
+                AddMatching(motion, "hero_event_card", "hero-event-card");
+                AddMatching(ai, "hero_cinematic_reveal", "cinematic_weekly_sky_reveal");
+                RequireAssigned("western_planet_grouping_scene", a => (a.AssetCode + a.FilePath).Contains("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase), "StrongestEvent requires western grouping frames.");
                 break;
             case "WhereToLook":
-                if (stellarium.Count > 0) Use(stellarium, "where_to_look_visual");
-                else if (motion.Count > 0) Use(motion, "where_to_look_motion_graphic");
-                else missing.Add("StellariumOrMotionGraphics");
-                if (motion.Count == 0)
-                {
-                    finalReady = false;
-                    missing.Add("MotionGraphics");
-                    warnings.Add("WhereToLook direction motion graphic is not realized for final video readiness.");
-                }
+                AddMatching(western, "balanced_where_to_look_frame", "02_balanced_story_frame");
+                AddMatching(motion, "where_to_look_card", "where-to-look-card");
+                RequireAssigned("western_planet_grouping_scene/02_balanced_story_frame", a => (a.AssetCode + a.FilePath).Contains("western_planet_grouping_scene", StringComparison.OrdinalIgnoreCase), "WhereToLook requires western grouping direction frame.");
                 break;
             case "BestTime":
-                if (motion.Count > 0) Use(motion, "best_time_card");
-                else Fallback(stellarium.Concat(ai), "MotionGraphics", "BestTime missing time-card motion graphic; assigned available visual fallback for test readiness.");
+                AddMatching(motion, "best_time_cards", "best-observation-window-card", "best-time-card");
+                AddFirst(educational, "educational_overlay");
+                RequireAssigned("MotionGraphics:best-observation-window-card-or-best-time-card", a => a.SourceType == RealizedVisualAssetSourceType.MotionGraphics && (a.AssetCode + a.FilePath).Contains("best", StringComparison.OrdinalIgnoreCase), "BestTime requires best observation or best time card.");
                 break;
             case "CallToAction":
-                if (ai.Count > 0) Use(ai, "cta_cinematic_background");
-                else Fallback(stellarium, "AICinematicOrGenericClosingVisual", "CallToAction missing AI/generic closing visual; assigned Stellarium fallback for test readiness.");
-                if (motion.Count == 0)
-                {
-                    finalReady = false;
-                    missing.Add("MotionGraphics");
-                }
+                AddMatching(ai, "cta_background", "shortform_call_to_action_background");
+                AddMatching(motion, "cta_card", "call-to-action-card");
+                RequireAssigned("AICinematic:shortform_call_to_action_background-or-MotionGraphics:call-to-action-card", a => (a.AssetCode + a.FilePath).Contains("shortform_call_to_action_background", StringComparison.OrdinalIgnoreCase) || (a.AssetCode + a.FilePath).Contains("call-to-action-card", StringComparison.OrdinalIgnoreCase), "CallToAction requires CTA background or CTA card.");
                 break;
             default:
-                Use(assets, "generic_visual");
+                AddFirst(assets, "generic_visual");
                 break;
         }
 
