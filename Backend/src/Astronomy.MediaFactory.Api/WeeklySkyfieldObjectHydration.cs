@@ -9,6 +9,55 @@ namespace Astronomy.MediaFactory.Api;
 public static class WeeklySkyfieldObjectHydration
 {
     internal sealed record HydratedTemporalObject(string NormalizedName, DateTime SnapshotUtc, double AltitudeDegrees, double AzimuthDegrees, double? Magnitude, string DtoTypeName);
+    public sealed record SkyfieldFlattenedTemporalObject(string NormalizedName, string DisplayName, DateTime SnapshotUtc, double AltitudeDegrees, double AzimuthDegrees, double? Magnitude, string Source);
+
+
+    public static IReadOnlyList<SkyfieldFlattenedTemporalObject> BuildFlattenedTemporalObjects(
+        IEnumerable<WeeklyAstronomyEvent> extractedEvents,
+        Func<WeeklyAstronomyEvent, DateTime?> resolveEventUtc,
+        Func<string?, string> normalizeName,
+        Microsoft.Extensions.Logging.ILogger logger,
+        string sceneCode)
+    {
+        var events = extractedEvents?.ToList() ?? [];
+        LogStage(logger, sceneCode, "SET", "ExtractedEvents", events.Count, events.SelectMany(e => e.Objects ?? []).Select(o => o.ObjectCode ?? o.ObjectName), events.Select(resolveEventUtc), nameof(WeeklyAstronomyEvent));
+
+        var flattened = new List<SkyfieldFlattenedTemporalObject>();
+        foreach (var item in events.SelectMany(ev => (ev.Objects ?? []).Select(o => new { Event = ev, Object = o })))
+        {
+            var sourceName = ResolveRawString(item.Object, ["objectCode", "objectName", "name", "body", "target"]) ?? item.Object.ObjectCode ?? item.Object.ObjectName;
+            var normalizedName = normalizeName(sourceName);
+            var timestamp = ResolveRawTimestamp(item.Object, item.Event, resolveEventUtc);
+            var altitude = ResolveRawDouble(item.Object, ["altitudeDegrees", "altitudeDeg", "altitude", "alt"]) ?? item.Object.AltitudeDegrees;
+            var azimuth = ResolveRawDouble(item.Object, ["azimuthDegrees", "azimuthDeg", "azimuth", "az"]) ?? item.Object.AzimuthDegrees;
+            var magnitude = ResolveRawDouble(item.Object, ["magnitude", "apparentMagnitude"]) ?? item.Object.Magnitude;
+
+            if (string.IsNullOrWhiteSpace(normalizedName) || !timestamp.HasValue || !altitude.HasValue || !azimuth.HasValue || double.IsNaN(altitude.Value) || double.IsNaN(azimuth.Value) || (magnitude.HasValue && double.IsNaN(magnitude.Value)))
+            {
+                logger.LogInformation(
+                    "SKYFIELD_SET_OBJECT_REJECTED sceneCode={SceneCode} rawName={RawName} timestamp={Timestamp} altitude={Altitude} azimuth={Azimuth} magnitude={Magnitude}",
+                    sceneCode,
+                    sourceName,
+                    timestamp,
+                    altitude,
+                    azimuth,
+                    magnitude);
+                continue;
+            }
+
+            flattened.Add(new SkyfieldFlattenedTemporalObject(normalizedName, sourceName ?? normalizedName, timestamp.Value, altitude.Value, azimuth.Value, magnitude, item.Object.GetType().Name));
+        }
+
+        TryHydrateFlattenedFromPersistedJson(flattened, normalizeName, logger, sceneCode);
+
+        flattened = flattened
+            .GroupBy(h => new { Name = h.NormalizedName.ToUpperInvariant(), Time = h.SnapshotUtc, Alt = Math.Round(h.AltitudeDegrees, 6), Az = Math.Round(h.AzimuthDegrees, 6) })
+            .Select(g => g.First())
+            .ToList();
+
+        LogStage(logger, sceneCode, "SET", "OBJECT_SET_HYDRATION_STAGE", flattened.Count, flattened.Select(h => h.DisplayName), flattened.Select(h => (DateTime?)h.SnapshotUtc), nameof(SkyfieldFlattenedTemporalObject));
+        return flattened;
+    }
 
     public static IReadOnlyList<SkyfieldTemporalCandidate> BuildTemporalCandidates(
         IEnumerable<WeeklyAstronomyEvent> extractedEvents,
@@ -177,6 +226,50 @@ public static class WeeklySkyfieldObjectHydration
             foreach (var child in node.EnumerateArray())
             {
                 TraverseNode(child, $"{path}[{idx++}]", nodeTimestamp, logger, sceneCode, requestedObject, targetAliases, normalizeName, matchesAliases, hydrated, jsonFilePath);
+            }
+        }
+    }
+
+
+    private static void TryHydrateFlattenedFromPersistedJson(
+        List<SkyfieldFlattenedTemporalObject> flattened,
+        Func<string?, string> normalizeName,
+        Microsoft.Extensions.Logging.ILogger logger,
+        string sceneCode)
+    {
+        var jsonPath = SkyfieldJsonProbePaths.FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(jsonPath)) return;
+
+        using var document = JsonDocument.Parse(File.ReadAllText(jsonPath));
+        TraverseFlattenedNode(document.RootElement, "$", null, logger, sceneCode, normalizeName, flattened, jsonPath);
+    }
+
+    private static void TraverseFlattenedNode(JsonElement node, string path, DateTime? inheritedTimeUtc, Microsoft.Extensions.Logging.ILogger logger, string sceneCode, Func<string?, string> normalizeName, List<SkyfieldFlattenedTemporalObject> flattened, string jsonFilePath)
+    {
+        var nodeTimestamp = ResolveTimestampFromJsonNode(node) ?? inheritedTimeUtc;
+        if (node.ValueKind == JsonValueKind.Object)
+        {
+            var rawName = TryGetString(node, ["objectCode", "objectName", "name", "body", "target"]);
+            var rawAlt = TryGetDouble(node, ["altitudeDegrees", "altitudeDeg", "altitude", "alt"]);
+            var rawAz = TryGetDouble(node, ["azimuthDegrees", "azimuthDeg", "azimuth", "az"]);
+            var rawMagnitude = TryGetDouble(node, ["magnitude", "apparentMagnitude"]);
+            if (!string.IsNullOrWhiteSpace(rawName) && rawAlt.HasValue && rawAz.HasValue && nodeTimestamp.HasValue)
+            {
+                logger.LogInformation("SKYFIELD_SET_JSON_PATH_USED object={Object} jsonPath={JsonPath} time={Time} alt={Alt} az={Az} magnitude={Magnitude}", rawName, path, nodeTimestamp.Value.ToString("O"), rawAlt.Value, rawAz.Value, rawMagnitude);
+                flattened.Add(new SkyfieldFlattenedTemporalObject(normalizeName(rawName), rawName, nodeTimestamp.Value, rawAlt.Value, rawAz.Value, rawMagnitude, "SkyfieldJsonElement"));
+            }
+
+            foreach (var p in node.EnumerateObject())
+            {
+                TraverseFlattenedNode(p.Value, $"{path}.{p.Name}", nodeTimestamp, logger, sceneCode, normalizeName, flattened, jsonFilePath);
+            }
+        }
+        else if (node.ValueKind == JsonValueKind.Array)
+        {
+            var idx = 0;
+            foreach (var child in node.EnumerateArray())
+            {
+                TraverseFlattenedNode(child, $"{path}[{idx++}]", nodeTimestamp, logger, sceneCode, normalizeName, flattened, jsonFilePath);
             }
         }
     }

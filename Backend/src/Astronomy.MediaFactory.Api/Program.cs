@@ -4336,41 +4336,46 @@ static Task<WeeklyMultiObjectSceneResolutionResult> ResolveMultiObjectSceneAsync
 {
     cancellationToken.ThrowIfCancellationRequested();
     var requestedObjects = targetObjects.Select(NormalizeWeeklyObjectCode).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var requiredSet = requestedObjects.Select(NormalizeWeeklyObjectName).Where(x => !string.IsNullOrWhiteSpace(x)).ToHashSet(StringComparer.OrdinalIgnoreCase);
     logger.LogInformation("MULTI_OBJECT_RESOLUTION_START sceneCode={SceneCode} targetObjects={TargetObjects} preferredObservationUtc={PreferredObservationUtc} sceneDateLocal={SceneDateLocal}", sceneCode, string.Join(",", requestedObjects), preferredObservationUtc, sceneDateLocal);
 
     var extractedEvents = weeklyContext.EventExtractionResult?.ExtractedEvents ?? [];
-    var candidatesByObject = new Dictionary<string, List<SkyfieldTemporalCandidate>>(StringComparer.OrdinalIgnoreCase);
+    var flattenedObjects = Astronomy.MediaFactory.Api.WeeklySkyfieldObjectHydration.BuildFlattenedTemporalObjects(
+            extractedEvents,
+            e => ResolveEventUtc(e),
+            name => NormalizeWeeklyObjectName(name),
+            logger,
+            sceneCode)
+        .Where(candidate => candidate.AltitudeDegrees > 5d)
+        .ToList();
+
     var candidateTimestampsInspected = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-    foreach (var requestedObject in requestedObjects)
+    foreach (var candidate in flattenedObjects)
     {
-        skyObjectsByCode.TryGetValue(requestedObject, out var directObject);
-        var aliases = ResolveWeeklyObjectAliases(requestedObject, directObject?.ObjectName ?? ToWeeklyObjectDisplayName(requestedObject));
-        var candidates = Astronomy.MediaFactory.Api.WeeklySkyfieldObjectHydration.BuildTemporalCandidates(
-                extractedEvents, aliases, e => ResolveEventUtc(e), name => NormalizeWeeklyObjectName(name),
-                (code, name, candidateAliases) => MatchesWeeklyObjectAliases(code, name, candidateAliases), logger, sceneCode, requestedObject)
-            .Where(candidate => candidate.AltitudeDegrees > 5d)
-            .OrderBy(candidate => candidate.SnapshotUtc)
-            .ToList();
-        candidatesByObject[requestedObject] = candidates;
-        foreach (var candidate in candidates)
-        {
-            candidateTimestampsInspected.Add(candidate.SnapshotUtc.ToString("O"));
-            logger.LogInformation("MULTI_OBJECT_RESOLUTION_CANDIDATE_TIMESTAMP sceneCode={SceneCode} object={Object} candidateUtc={CandidateUtc} candidateLocal={CandidateLocal} altitude={Altitude} azimuth={Azimuth}", sceneCode, requestedObject, candidate.SnapshotUtc, ConvertUtcToLocal(DateTime.SpecifyKind(candidate.SnapshotUtc, DateTimeKind.Utc), timezoneId), candidate.AltitudeDegrees, candidate.AzimuthDegrees);
-        }
+        candidateTimestampsInspected.Add(DateTime.SpecifyKind(candidate.SnapshotUtc, DateTimeKind.Utc).ToString("O"));
     }
 
     var preferredLocal = ConvertUtcToLocal(DateTime.SpecifyKind(preferredObservationUtc, DateTimeKind.Utc), timezoneId);
-    var sharedCandidate = FindBestSharedMultiObjectCandidate(candidatesByObject, requestedObjects, preferredObservationUtc, preferredLocal, sceneDateLocal, timezoneId, 0d, "skyfield.shared-exact", logger, sceneCode)
-        ?? FindBestSharedMultiObjectCandidate(candidatesByObject, requestedObjects, preferredObservationUtc, preferredLocal, sceneDateLocal, timezoneId, 15d, "skyfield.shared-nearest-15m", logger, sceneCode)
-        ?? FindBestSharedMultiObjectCandidate(candidatesByObject, requestedObjects, preferredObservationUtc, preferredLocal, sceneDateLocal, timezoneId, 30d, "skyfield.shared-nearest-30m", logger, sceneCode)
-        ?? FindBestSharedMultiObjectCandidate(candidatesByObject, requestedObjects, preferredObservationUtc, preferredLocal, sceneDateLocal, timezoneId, 60d, "skyfield.shared-nearest-60m", logger, sceneCode);
+    var sharedCandidate = FindBestSetBasedMultiObjectCandidate(flattenedObjects, requestedObjects, requiredSet, preferredObservationUtc, preferredLocal, sceneDateLocal, timezoneId, logger, sceneCode);
 
     if (sharedCandidate is null)
     {
-        var resolvedObjects = candidatesByObject.Where(kvp => kvp.Value.Count > 0).Select(kvp => kvp.Key).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var resolvedObjects = flattenedObjects
+            .Where(x => requiredSet.Contains(x.NormalizedName))
+            .Select(x => NormalizeWeeklyObjectCode(x.DisplayName) ?? x.NormalizedName.ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var missingObjects = requestedObjects.Where(x => !resolvedObjects.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
-        logger.LogError("MULTI_OBJECT_RESOLUTION_FAILED sceneCode={SceneCode} requestedObjects={RequestedObjects} resolvedObjects={ResolvedObjects} missingObjects={MissingObjects} candidateTimestampsInspected={CandidateTimestampsInspected}", sceneCode, string.Join(",", requestedObjects), string.Join(",", resolvedObjects), string.Join(",", missingObjects), string.Join(",", candidateTimestampsInspected));
-        throw new InvalidOperationException($"Multi-object scene resolution failed for '{sceneCode}'. requestedObjects=[{string.Join(",", requestedObjects)}]; resolvedObjects=[{string.Join(",", resolvedObjects)}]; missingObjects=[{string.Join(",", missingObjects)}]; candidateTimestampsInspected=[{string.Join(",", candidateTimestampsInspected)}]");
+        var topCandidateBuckets = BuildTopMultiObjectBucketFailureSummary(flattenedObjects, requiredSet, preferredObservationUtc, timezoneId, sceneDateLocal);
+        logger.LogError(
+            "MULTI_OBJECT_RESOLUTION_FAILED sceneCode={SceneCode} requestedObjects={RequestedObjects} resolvedObjects={ResolvedObjects} missingObjects={MissingObjects} candidateTimestampCount={CandidateTimestampCount} topCandidateBuckets={TopCandidateBuckets}",
+            sceneCode,
+            string.Join(",", requestedObjects),
+            string.Join(",", resolvedObjects),
+            string.Join(",", missingObjects),
+            candidateTimestampsInspected.Count,
+            string.Join(" | ", topCandidateBuckets));
+        throw new InvalidOperationException($"Multi-object scene resolution failed for '{sceneCode}'. requestedObjects=[{string.Join(",", requestedObjects)}]; resolvedObjects=[{string.Join(",", resolvedObjects)}]; missingObjects=[{string.Join(",", missingObjects)}]; candidateTimestampCount={candidateTimestampsInspected.Count}; topCandidateBuckets=[{string.Join(" | ", topCandidateBuckets)}]");
     }
 
     var selectedObservationUtc = DateTime.SpecifyKind(sharedCandidate.AnchorUtc, DateTimeKind.Utc);
@@ -4392,13 +4397,178 @@ static Task<WeeklyMultiObjectSceneResolutionResult> ResolveMultiObjectSceneAsync
     var missingRequiredObjects = requestedObjects.Where(x => !resolvedCodes.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
     if (resolvedCodes.Count < requestedObjects.Count || missingRequiredObjects.Count > 0)
     {
-        logger.LogError("MULTI_OBJECT_RESOLUTION_FAILED sceneCode={SceneCode} requestedObjects={RequestedObjects} resolvedObjects={ResolvedObjects} missingObjects={MissingObjects} candidateTimestampsInspected={CandidateTimestampsInspected}", sceneCode, string.Join(",", requestedObjects), string.Join(",", resolvedCodes), string.Join(",", missingRequiredObjects), string.Join(",", candidateTimestampsInspected));
-        throw new InvalidOperationException($"Multi-object scene resolution failed for '{sceneCode}'. requestedObjects=[{string.Join(",", requestedObjects)}]; resolvedObjects=[{string.Join(",", resolvedCodes)}]; missingObjects=[{string.Join(",", missingRequiredObjects)}]; candidateTimestampsInspected=[{string.Join(",", candidateTimestampsInspected)}]");
+        var topCandidateBuckets = BuildTopMultiObjectBucketFailureSummary(flattenedObjects, requiredSet, preferredObservationUtc, timezoneId, sceneDateLocal);
+        logger.LogError("MULTI_OBJECT_RESOLUTION_FAILED sceneCode={SceneCode} requestedObjects={RequestedObjects} resolvedObjects={ResolvedObjects} missingObjects={MissingObjects} candidateTimestampCount={CandidateTimestampCount} topCandidateBuckets={TopCandidateBuckets}", sceneCode, string.Join(",", requestedObjects), string.Join(",", resolvedCodes), string.Join(",", missingRequiredObjects), candidateTimestampsInspected.Count, string.Join(" | ", topCandidateBuckets));
+        throw new InvalidOperationException($"Multi-object scene resolution failed for '{sceneCode}'. requestedObjects=[{string.Join(",", requestedObjects)}]; resolvedObjects=[{string.Join(",", resolvedCodes)}]; missingObjects=[{string.Join(",", missingRequiredObjects)}]; candidateTimestampCount={candidateTimestampsInspected.Count}; topCandidateBuckets=[{string.Join(" | ", topCandidateBuckets)}]");
     }
 
-    var report = new WeeklyMultiObjectSceneResolutionReport(sceneCode, requestedObjects, resolvedCodes, [], selectedObservationUtc, selectedObservationLocal, true, candidateTimestampsInspected.ToList(), false, true);
+    var selectedBucketObjectNames = sharedCandidate.BucketObjectNames.Count > 0
+        ? sharedCandidate.BucketObjectNames.Select(ToWeeklyObjectDisplayName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList()
+        : sharedCandidate.Objects.Select(x => x.DisplayName.ToUpperInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+    var report = new WeeklyMultiObjectSceneResolutionReport(sceneCode, requestedObjects, resolvedCodes, [], selectedObservationUtc, selectedObservationLocal, true, candidateTimestampsInspected.ToList(), false, true, candidateTimestampsInspected.Count, selectedBucketObjectNames);
     logger.LogInformation("MULTI_OBJECT_RESOLUTION_SUCCESS sceneCode={SceneCode} targetObjects={TargetObjects} resolvedObjects={ResolvedObjects} selectedObservationUtc={SelectedObservationUtc} selectedObservationLocal={SelectedObservationLocal} matchMode={MatchMode}", sceneCode, string.Join(",", requestedObjects), string.Join(",", resolvedCodes), selectedObservationUtc, selectedObservationLocal, sharedCandidate.MatchMode);
     return Task.FromResult(new WeeklyMultiObjectSceneResolutionResult(sceneCode, requestedObjects, resolvedSelections, selectedObservationUtc, selectedObservationLocal, report));
+}
+
+static WeeklyMultiObjectResolutionCandidate? FindBestSetBasedMultiObjectCandidate(
+    IReadOnlyList<WeeklySkyfieldObjectHydration.SkyfieldFlattenedTemporalObject> flattenedObjects,
+    IReadOnlyList<string> requestedObjects,
+    HashSet<string> requiredSet,
+    DateTime preferredObservationUtc,
+    DateTime preferredObservationLocal,
+    DateOnly sceneDateLocal,
+    string timezoneId,
+    Microsoft.Extensions.Logging.ILogger logger,
+    string sceneCode)
+{
+    if (flattenedObjects.Count == 0 || requiredSet.Count == 0) return null;
+
+    var exact = FindBestSetBasedMultiObjectCandidateForTolerance(flattenedObjects, requestedObjects, requiredSet, preferredObservationUtc, preferredObservationLocal, sceneDateLocal, timezoneId, TimeSpan.Zero, "skyfield.set-exact", logger, sceneCode, roundAnchorToMinute: false);
+    if (exact is not null) return exact;
+
+    var roundedMinute = FindBestSetBasedMultiObjectCandidateForTolerance(flattenedObjects, requestedObjects, requiredSet, preferredObservationUtc, preferredObservationLocal, sceneDateLocal, timezoneId, TimeSpan.Zero, "skyfield.set-rounded-minute", logger, sceneCode, roundAnchorToMinute: true);
+    if (roundedMinute is not null) return roundedMinute;
+
+    foreach (var minutes in new[] { 5d, 15d, 30d, 60d })
+    {
+        var candidate = FindBestSetBasedMultiObjectCandidateForTolerance(flattenedObjects, requestedObjects, requiredSet, preferredObservationUtc, preferredObservationLocal, sceneDateLocal, timezoneId, TimeSpan.FromMinutes(minutes), $"skyfield.set-nearest-{minutes:0}m", logger, sceneCode, roundAnchorToMinute: false);
+        if (candidate is not null) return candidate;
+    }
+
+    return null;
+}
+
+static WeeklyMultiObjectResolutionCandidate? FindBestSetBasedMultiObjectCandidateForTolerance(
+    IReadOnlyList<WeeklySkyfieldObjectHydration.SkyfieldFlattenedTemporalObject> flattenedObjects,
+    IReadOnlyList<string> requestedObjects,
+    HashSet<string> requiredSet,
+    DateTime preferredObservationUtc,
+    DateTime preferredObservationLocal,
+    DateOnly sceneDateLocal,
+    string timezoneId,
+    TimeSpan tolerance,
+    string matchMode,
+    Microsoft.Extensions.Logging.ILogger logger,
+    string sceneCode,
+    bool roundAnchorToMinute)
+{
+    var anchors = flattenedObjects
+        .Select(x => DateTime.SpecifyKind(x.SnapshotUtc, DateTimeKind.Utc))
+        .Select(x => roundAnchorToMinute ? new DateTime(x.Year, x.Month, x.Day, x.Hour, x.Minute, 0, DateTimeKind.Utc) : x)
+        .Distinct()
+        .OrderBy(x => Math.Abs((x - preferredObservationUtc).TotalMinutes))
+        .ToList();
+
+    var matches = new List<(WeeklyMultiObjectResolutionCandidate Candidate, double Score, IReadOnlyList<string> BucketObjects)>();
+    foreach (var anchor in anchors)
+    {
+        var bucket = flattenedObjects
+            .Select(x => new
+            {
+                Object = x,
+                Utc = DateTime.SpecifyKind(x.SnapshotUtc, DateTimeKind.Utc),
+                BucketUtc = roundAnchorToMinute ? new DateTime(x.SnapshotUtc.Year, x.SnapshotUtc.Month, x.SnapshotUtc.Day, x.SnapshotUtc.Hour, x.SnapshotUtc.Minute, 0, DateTimeKind.Utc) : DateTime.SpecifyKind(x.SnapshotUtc, DateTimeKind.Utc)
+            })
+            .Where(x => roundAnchorToMinute ? x.BucketUtc == anchor : Math.Abs((x.Utc - anchor).TotalMinutes) <= tolerance.TotalMinutes)
+            .Select(x => x.Object)
+            .ToList();
+
+        var bucketObjectNames = bucket.Select(x => x.NormalizedName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        var containsAllRequired = requiredSet.All(required => bucketObjectNames.Contains(required, StringComparer.OrdinalIgnoreCase));
+        logger.LogInformation(
+            "MULTI_OBJECT_BUCKET_CANDIDATE sceneCode={SceneCode} bucketUtc={BucketUtc} bucketObjects={BucketObjects} requiredObjects={RequiredObjects} containsAllRequired={ContainsAllRequired}",
+            sceneCode,
+            anchor,
+            string.Join(",", bucketObjectNames.Select(ToWeeklyObjectDisplayName)),
+            string.Join(",", requestedObjects),
+            containsAllRequired);
+
+        if (!containsAllRequired) continue;
+        var candidateLocal = ConvertUtcToLocal(anchor, timezoneId);
+        if (!IsCompatibleMultiObjectLocalWindow(candidateLocal, preferredObservationLocal, sceneDateLocal) || !IsEveningNightLocal(candidateLocal)) continue;
+
+        var selectedObjects = new List<WeeklyResolvedTemporalObject>();
+        foreach (var requestedObject in requestedObjects)
+        {
+            var requiredName = NormalizeWeeklyObjectName(requestedObject);
+            var selected = bucket
+                .Where(x => x.NormalizedName.Equals(requiredName, StringComparison.OrdinalIgnoreCase) && x.AltitudeDegrees > 5d)
+                .OrderBy(x => Math.Abs((DateTime.SpecifyKind(x.SnapshotUtc, DateTimeKind.Utc) - anchor).TotalMinutes))
+                .ThenByDescending(x => x.AltitudeDegrees)
+                .FirstOrDefault();
+            if (selected is null) break;
+            selectedObjects.Add(new WeeklyResolvedTemporalObject(
+                requestedObject,
+                selected.NormalizedName,
+                ToWeeklyObjectDisplayName(requestedObject),
+                new SkyfieldTemporalCandidate(selected.NormalizedName.ToUpperInvariant(), DateTime.SpecifyKind(selected.SnapshotUtc, DateTimeKind.Utc), selected.AltitudeDegrees, selected.AzimuthDegrees, selected.Magnitude)));
+        }
+
+        if (selectedObjects.Count != requestedObjects.Count) continue;
+        var maxDelta = selectedObjects.Max(x => Math.Abs((DateTime.SpecifyKind(x.Candidate.SnapshotUtc, DateTimeKind.Utc) - anchor).TotalMinutes));
+        var preferredDelta = Math.Abs((anchor - preferredObservationUtc).TotalMinutes);
+        var avgAltitude = selectedObjects.Average(x => x.Candidate.AltitudeDegrees);
+        var angularSpread = EstimateMultiObjectAngularSpreadDeg(selectedObjects);
+        var localNightBonus = IsEveningNightLocal(candidateLocal) ? 100d : 0d;
+        var score = localNightBonus + avgAltitude - angularSpread - preferredDelta / 10d - maxDelta;
+        logger.LogInformation(
+            "MULTI_OBJECT_RESOLUTION_CANDIDATE_TIMESTAMP sceneCode={SceneCode} anchorUtc={AnchorUtc} toleranceMinutes={ToleranceMinutes} objectCount={ObjectCount} maxDeltaMinutes={MaxDeltaMinutes} preferredDeltaMinutes={PreferredDeltaMinutes} averageAltitude={AverageAltitude} angularSpread={AngularSpread} matchMode={MatchMode}",
+            sceneCode,
+            anchor,
+            tolerance.TotalMinutes,
+            selectedObjects.Count,
+            maxDelta,
+            preferredDelta,
+            avgAltitude,
+            angularSpread,
+            matchMode);
+        matches.Add((new WeeklyMultiObjectResolutionCandidate(anchor, selectedObjects, maxDelta, preferredDelta, matchMode, bucketObjectNames), score, bucketObjectNames));
+    }
+
+    return matches.OrderByDescending(x => x.Score).ThenBy(x => x.Candidate.PreferredDeltaMinutes).FirstOrDefault().Candidate;
+}
+
+static double EstimateMultiObjectAngularSpreadDeg(IReadOnlyList<WeeklyResolvedTemporalObject> objects)
+{
+    if (objects.Count < 2) return 0d;
+    var max = 0d;
+    for (var i = 0; i < objects.Count; i++)
+    {
+        for (var j = i + 1; j < objects.Count; j++)
+        {
+            var a = objects[i].Candidate;
+            var b = objects[j].Candidate;
+            var altDelta = a.AltitudeDegrees - b.AltitudeDegrees;
+            var azDelta = Math.Abs(a.AzimuthDegrees - b.AzimuthDegrees);
+            if (azDelta > 180d) azDelta = 360d - azDelta;
+            var spread = Math.Sqrt(altDelta * altDelta + azDelta * azDelta);
+            if (spread > max) max = spread;
+        }
+    }
+    return max;
+}
+
+static IReadOnlyList<string> BuildTopMultiObjectBucketFailureSummary(
+    IReadOnlyList<WeeklySkyfieldObjectHydration.SkyfieldFlattenedTemporalObject> flattenedObjects,
+    HashSet<string> requiredSet,
+    DateTime preferredObservationUtc,
+    string timezoneId,
+    DateOnly sceneDateLocal)
+{
+    return flattenedObjects
+        .GroupBy(x => DateTime.SpecifyKind(x.SnapshotUtc, DateTimeKind.Utc))
+        .Select(g => new
+        {
+            BucketUtc = g.Key,
+            Names = g.Select(x => x.NormalizedName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
+            RequiredMatches = g.Select(x => x.NormalizedName).Distinct(StringComparer.OrdinalIgnoreCase).Count(x => requiredSet.Contains(x)),
+            Night = IsEveningNightLocal(ConvertUtcToLocal(g.Key, timezoneId)) && DateOnly.FromDateTime(ConvertUtcToLocal(g.Key, timezoneId)) == sceneDateLocal
+        })
+        .OrderByDescending(x => x.RequiredMatches)
+        .ThenBy(x => Math.Abs((x.BucketUtc - preferredObservationUtc).TotalMinutes))
+        .Take(5)
+        .Select(x => $"{x.BucketUtc:O}:objects={string.Join(',', x.Names.Select(ToWeeklyObjectDisplayName))};requiredMatches={x.RequiredMatches};night={x.Night}")
+        .ToList();
 }
 
 static WeeklyMultiObjectResolutionCandidate? FindBestSharedMultiObjectCandidate(
@@ -4434,7 +4604,7 @@ static WeeklyMultiObjectResolutionCandidate? FindBestSharedMultiObjectCandidate(
         var maxDelta = selectedObjects.Max(x => Math.Abs((DateTime.SpecifyKind(x.Candidate.SnapshotUtc, DateTimeKind.Utc) - anchor).TotalMinutes));
         var preferredDelta = Math.Abs((anchor - preferredObservationUtc).TotalMinutes);
         logger.LogInformation("MULTI_OBJECT_RESOLUTION_CANDIDATE_TIMESTAMP sceneCode={SceneCode} anchorUtc={AnchorUtc} toleranceMinutes={ToleranceMinutes} objectCount={ObjectCount} maxDeltaMinutes={MaxDeltaMinutes} preferredDeltaMinutes={PreferredDeltaMinutes} matchMode={MatchMode}", sceneCode, anchor, toleranceMinutes, selectedObjects.Count, maxDelta, preferredDelta, matchMode);
-        matches.Add(new WeeklyMultiObjectResolutionCandidate(anchor, selectedObjects, maxDelta, preferredDelta, matchMode));
+        matches.Add(new WeeklyMultiObjectResolutionCandidate(anchor, selectedObjects, maxDelta, preferredDelta, matchMode, selectedObjects.Select(x => x.NormalizedName).Distinct(StringComparer.OrdinalIgnoreCase).ToList()));
     }
     return matches.OrderBy(x => x.MaxDeltaMinutes).ThenBy(x => x.PreferredDeltaMinutes).ThenByDescending(x => x.Objects.Min(o => o.Candidate.AltitudeDegrees)).FirstOrDefault();
 }
@@ -6106,7 +6276,9 @@ sealed record WeeklyMultiObjectSceneResolutionReport(
     bool MultiObjectResolutionPassed,
     IReadOnlyList<string> CandidateTimestampsInspected,
     bool GroupingSplitRequired,
-    bool AllObjectsVisuallySupported);
+    bool AllObjectsVisuallySupported,
+    int CandidateTimestampCount,
+    IReadOnlyList<string> SelectedBucketObjectNames);
 
 sealed record WeeklyMultiObjectSceneResolutionResult(
     string SceneCode,
@@ -6118,7 +6290,7 @@ sealed record WeeklyMultiObjectSceneResolutionResult(
 
 sealed record WeeklyResolvedTemporalObject(string RequestedCode, string NormalizedName, string DisplayName, SkyfieldTemporalCandidate Candidate);
 
-sealed record WeeklyMultiObjectResolutionCandidate(DateTime AnchorUtc, IReadOnlyList<WeeklyResolvedTemporalObject> Objects, double MaxDeltaMinutes, double PreferredDeltaMinutes, string MatchMode);
+sealed record WeeklyMultiObjectResolutionCandidate(DateTime AnchorUtc, IReadOnlyList<WeeklyResolvedTemporalObject> Objects, double MaxDeltaMinutes, double PreferredDeltaMinutes, string MatchMode, IReadOnlyList<string> BucketObjectNames);
 
 
 sealed record ExpandedNightGeometrySelection(bool Ready, DateTime? SelectedObservationUtc, DateTime? SelectedObservationLocal, double? SelectedSunAltitudeDeg, string? SelectedTargetObject, string ValidationStatus);
