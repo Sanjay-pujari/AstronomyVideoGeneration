@@ -1304,12 +1304,14 @@ public sealed record ImageSequenceItem(
     string? PerceptualHash = null);
 
 public sealed record WeeklySkyForecastAssetProviderSummary(
-    int FrameScreenshots,
+    int StellariumFrameScreenshots,
+    int ExpandedStellariumScreenshots,
     int NasaAssets,
     int JwstAssets,
     int MotionGraphicsAssets,
+    int EducationalOverlayAssets,
     int AICinematicAssets,
-    int NullCollectionsDetected);
+    bool NullAssetCollectionsNormalized);
 
 public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     Guid PipelineRunId,
@@ -1572,6 +1574,9 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     int ObjectFirstCameraLockSceneCount = 0,
     int AltAzOnlySceneCount = 0,
     int FallbackUsedSceneCount = 0,
+    string? SelectedImageSequenceReportPath = null,
+    bool ImageSequenceValidationReady = false,
+    string? AICinematicGenerationReportPath = null,
     WeeklySkyForecastAssetProviderSummary? AssetProviderSummary = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase

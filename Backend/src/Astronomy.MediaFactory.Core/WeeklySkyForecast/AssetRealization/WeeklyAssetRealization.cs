@@ -269,8 +269,8 @@ internal sealed record GeneratedMotionEducationalAssets(
     string MotionGraphicsManifestPath,
     string EducationalOverlayManifestPath)
 {
-    public IReadOnlyList<string> MotionGraphicPaths => MotionGraphics.Select(x => x.AssetPath).ToList();
-    public IReadOnlyList<string> EducationalOverlayPaths => EducationalOverlays.Select(x => x.AssetPath).ToList();
+    public IReadOnlyList<string> MotionGraphicPaths => (MotionGraphics ?? []).Select(x => x.AssetPath).ToList();
+    public IReadOnlyList<string> EducationalOverlayPaths => (EducationalOverlays ?? []).Select(x => x.AssetPath).ToList();
 }
 
 internal sealed class MotionGraphicsAndEducationalOverlayRealizer(ILogger logger)
