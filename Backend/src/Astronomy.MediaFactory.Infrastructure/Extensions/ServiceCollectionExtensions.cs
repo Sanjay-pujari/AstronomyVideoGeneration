@@ -358,6 +358,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITopicSelectionService, TopicSelectionService>();
         services.AddScoped<IObservationTimeService, ObservationTimeService>();
         services.AddScoped<IVisualAssetProvider, StellariumVisualGenerationService>();
+        services.AddScoped<IWeeklyVisualIntentEngine, WeeklyVisualIntentEngine>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
         services.AddScoped<IMetadataOptimizationService, MetadataOptimizationService>();
         services.AddScoped<IContentMonetizationService, ContentMonetizationService>();
