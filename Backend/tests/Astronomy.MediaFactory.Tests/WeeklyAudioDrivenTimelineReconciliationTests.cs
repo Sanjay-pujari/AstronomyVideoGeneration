@@ -78,30 +78,76 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
         resolution.LegacyFilesFound.Should().BeFalse();
     }
 
-    private static async Task WriteInputsAsync(string runRoot, Guid pipelineRunId, bool writeLegacyInputs = true)
+    [Fact]
+    public async Task ReconcileAsync_TreatsDynamicGroupingChildrenAsPreservedHeroAndShortformSupport()
+    {
+        var pipelineRunId = Guid.NewGuid();
+        var workingRoot = Path.Combine(Path.GetTempPath(), "weekly-audio-reconcile-tests", Guid.NewGuid().ToString("N"));
+        var runRoot = Path.Combine(workingRoot, pipelineRunId.ToString("N"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "audio", "longform"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "audio", "shortform"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "episode"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "render"));
+        await WriteInputsAsync(runRoot, pipelineRunId, dynamicSplitGrouping: true);
+
+        var service = new WeeklyAudioDrivenTimelineReconciliationService(
+            new StaticWeeklyPipelineRunDirectoryResolver(runRoot),
+            NullLogger<WeeklyAudioDrivenTimelineReconciliationService>.Instance);
+
+        var response = await service.ReconcileAsync(pipelineRunId, new WeeklyAudioDrivenTimelineReconciliationRequest(OverwriteExisting: true), CancellationToken.None);
+
+        response.AudioDrivenTimelineReady.Should().BeTrue(response.Errors.FirstOrDefault());
+        response.Errors.Should().BeEmpty();
+
+        var validation = await ReadJsonAsync<WeeklyAudioDrivenTimelineValidationReport>(response.AudioDrivenTimelineValidationReportPath);
+        validation.DynamicGroupingPreservationReady.Should().BeTrue();
+        validation.HeroGroupingParentSceneCode.Should().Be("western_planet_grouping_scene");
+        validation.HeroGroupingChildSceneCodes.Should().Contain(new[] { "western_planet_grouping_scene_saturn", "western_planet_grouping_scene_venus" });
+        validation.HeroGroupingPreservedFrameCount.Should().Be(2);
+        validation.ShortformGroupingPreservedShotCount.Should().Be(2);
+        validation.ShortformCtaVisualPreserved.Should().BeTrue();
+        validation.PreservationValidationErrors.Should().BeEmpty();
+    }
+
+    private static async Task WriteInputsAsync(string runRoot, Guid pipelineRunId, bool writeLegacyInputs = true, bool dynamicSplitGrouping = false)
     {
         var options = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        var longformHeroShots = new[]
-        {
-            Shot(1, "western_planet_grouping_scene_01", "Stellarium", "western_planet_grouping_scene/01_horizon_context.png", 0, 5),
-            Shot(2, "western_planet_grouping_scene_02", "Stellarium", "western_planet_grouping_scene/02_balanced_story_frame.png", 5, 10),
-            Shot(3, "western_planet_grouping_scene_03", "Stellarium", "western_planet_grouping_scene/03_alignment_wide.png", 10, 15)
-        };
+        var longformHeroShots = dynamicSplitGrouping
+            ? new[]
+            {
+                Shot(1, "western_planet_grouping_scene_venus", "Stellarium", "dynamic/western_planet_grouping_scene_venus.png", 0, 5),
+                Shot(2, "western_planet_grouping_scene_saturn", "Stellarium", "dynamic/western_planet_grouping_scene_saturn.png", 5, 10),
+                Shot(3, "moon_hero_scene", "Stellarium", "dynamic/moon_hero_scene.png", 10, 15)
+            }
+            : new[]
+            {
+                Shot(1, "western_planet_grouping_scene_01", "Stellarium", "western_planet_grouping_scene/01_horizon_context.png", 0, 5),
+                Shot(2, "western_planet_grouping_scene_02", "Stellarium", "western_planet_grouping_scene/02_balanced_story_frame.png", 5, 10),
+                Shot(3, "western_planet_grouping_scene_03", "Stellarium", "western_planet_grouping_scene/03_alignment_wide.png", 10, 15)
+            };
         var longformSummaryShots = new[] { Shot(1, "weekly-summary-card", "MotionGraphic", "motion-graphics/weekly-summary-card.png", 15, 20) };
-        var shortShots = new[]
-        {
-            Shot(1, "fast_cinematic_sky_hook", "AICinematic", "ai-cinematic/fast_cinematic_sky_hook.png", 0, 4),
-            Shot(2, "western_planet_grouping_scene_01", "Stellarium", "western_planet_grouping_scene/01_horizon_context.png", 4, 8),
-            Shot(3, "western_planet_grouping_scene_02", "Stellarium", "western_planet_grouping_scene/02_balanced_story_frame.png", 8, 12),
-            Shot(4, "shortform_call_to_action_background", "AICinematic", "ai-cinematic/shortform_call_to_action_background.png", 12, 15)
-        };
+        var shortShots = dynamicSplitGrouping
+            ? new[]
+            {
+                Shot(1, "fast_cinematic_sky_hook", "AICinematic", "ai-cinematic/fast_cinematic_sky_hook.png", 0, 4),
+                Shot(2, "western_planet_grouping_scene_venus", "Stellarium", "dynamic/western_planet_grouping_scene_venus.png", 4, 8),
+                Shot(3, "moon_hero_scene", "Stellarium", "dynamic/moon_hero_scene.png", 8, 12),
+                Shot(4, "closing_background", "AICinematic", "ai-cinematic/closing-background.png", 12, 15)
+            }
+            : new[]
+            {
+                Shot(1, "fast_cinematic_sky_hook", "AICinematic", "ai-cinematic/fast_cinematic_sky_hook.png", 0, 4),
+                Shot(2, "western_planet_grouping_scene_01", "Stellarium", "western_planet_grouping_scene/01_horizon_context.png", 4, 8),
+                Shot(3, "western_planet_grouping_scene_02", "Stellarium", "western_planet_grouping_scene/02_balanced_story_frame.png", 8, 12),
+                Shot(4, "shortform_call_to_action_background", "AICinematic", "ai-cinematic/shortform_call_to_action_background.png", 12, 15)
+            };
 
         var longformSegments = new[]
         {
             new FinalRenderSegment("hero", "HeroEvent", "longform", 0, 15, 15, "hero narration", 0, 15, longformHeroShots),
             new FinalRenderSegment("summary", "WeeklySummary", "longform", 15, 20, 5, "summary narration", 15, 20, longformSummaryShots)
         };
-        var shortSegments = new[] { new FinalRenderSegment("short", "ShortHook", "shortform", 0, 15, 15, "short narration", 0, 15, shortShots) };
+        var shortSegments = new[] { new FinalRenderSegment("short", dynamicSplitGrouping ? "CallToAction" : "ShortHook", "shortform", 0, 15, 15, "short narration", 0, 15, shortShots) };
         var timeline = new FinalRenderTimeline(pipelineRunId, DateTime.UtcNow, new FinalRenderEpisodeTimeline(20, 20, longformSegments), new FinalRenderEpisodeTimeline(15, 15, shortSegments));
         var shotPlan = new ResolvedRenderShotPlan(pipelineRunId, DateTime.UtcNow, [ToEpisodePlan("longform", timeline.Longform), ToEpisodePlan("shortform", timeline.Shortform)]);
         var shotList = ToShotList(timeline);
