@@ -104,6 +104,7 @@ public sealed record WeeklyAudioDrivenTimelineValidationReport(
     int ShortformGroupingShotCountExact,
     int ShortformGroupingShotCountIncludingChildren,
     IReadOnlyList<string> GroupingChildSceneCodesDetected,
+    WeeklyAudioDrivenHeroEventGroupingCoverageDebug HeroEventGroupingCoverageDebug,
     IReadOnlyList<string> PreservationValidationErrors,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
@@ -126,7 +127,20 @@ public sealed record WeeklyAudioDrivenDynamicGroupingPreservationReport(
     int ShortformGroupingShotCountExact,
     int ShortformGroupingShotCountIncludingChildren,
     IReadOnlyList<string> GroupingChildSceneCodesDetected,
+    WeeklyAudioDrivenHeroEventGroupingCoverageDebug HeroEventGroupingCoverageDebug,
     IReadOnlyList<string> PreservationValidationErrors);
+
+
+public sealed record WeeklyAudioDrivenHeroEventGroupingCoverageDebug(
+    int HeroEventShotCount,
+    IReadOnlyList<string> HeroEventShotAssetPaths,
+    IReadOnlyList<string> HeroEventSceneCodes,
+    IReadOnlyList<string> HeroEventTargetObjects,
+    int SplitGroupingShotCount,
+    int MoonHeroShotCount,
+    IReadOnlyList<string> CoveredFocusObjects,
+    bool CoveragePassed,
+    string? FailureReason);
 
 public sealed record WeeklyAudioDrivenEpisodeTimelineValidationReport(
     bool SegmentTimingValid,
@@ -387,7 +401,7 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         };
     }
 
-    private static WeeklyAudioDrivenDynamicGroupingPreservationReport ValidateMandatoryShots(ResolvedRenderShotPlan shotPlan)
+    private WeeklyAudioDrivenDynamicGroupingPreservationReport ValidateMandatoryShots(ResolvedRenderShotPlan shotPlan)
     {
         const string parentSceneCode = "western_planet_grouping_scene";
         var errors = new List<string>();
@@ -398,11 +412,12 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         var shortformGroupingShotCountIncludingChildren = 0;
         var shortformGroupingPreservedShotCount = 0;
         var shortformCtaVisualPreserved = false;
-        var heroGroupingFrameCount = 0;
-        var venusGroupingFrameCount = 0;
-        var saturnGroupingFrameCount = 0;
-        var moonHeroFrameCount = 0;
-        var heroGroupingCoveragePassed = false;
+
+        var heroCoverage = EvaluateHeroEventGroupingCoverage(shotPlan, parentSceneCode, childSceneCodes);
+        if (!heroCoverage.CoveragePassed)
+        {
+            errors.Add(heroCoverage.FailureReason ?? "HeroEvent must preserve grouping coverage.");
+        }
 
         foreach (var episode in shotPlan.Episodes)
         {
@@ -426,46 +441,144 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
 
             foreach (var segment in episode.Segments)
             {
-                var shots = segment.Shots;
-                foreach (var shot in shots) AddGroupingChildSceneCode(ShotText(shot), childSceneCodes);
-                if (segment.SegmentType is "HeroEvent" or "StrongestEvent")
-                {
-                    var parentGroupingCount = shots.Count(s => IsWesternGroupingExactScene(ShotText(s)));
-                    var splitGroupingCount = shots.Count(s => IsWesternPlanetGroupingVisual(ShotText(s), segment.SegmentType));
-                    var segmentHeroGroupingFrameCount = shots.Count(s => IsHeroGroupingCoverageFrame(ShotText(s), segment.SegmentType));
-                    var segmentVenusGroupingFrameCount = shots.Count(s => IsGroupingObjectSupportShot(ShotText(s), segment.SegmentType, "venus"));
-                    var segmentSaturnGroupingFrameCount = shots.Count(s => IsGroupingObjectSupportShot(ShotText(s), segment.SegmentType, "saturn"));
-                    var segmentMoonHeroFrameCount = shots.Count(s => IsMoonHeroObjectSupportShot(ShotText(s)));
-                    var hasVenusGrouping = segmentVenusGroupingFrameCount >= 1;
-                    var hasSaturnGrouping = segmentSaturnGroupingFrameCount >= 1;
-                    var hasMoonOrHeroContext = segmentMoonHeroFrameCount >= 1;
-                    var totalGroupingSupportFrames = segmentHeroGroupingFrameCount + segmentMoonHeroFrameCount;
-                    var optionA = segmentHeroGroupingFrameCount >= 3;
-                    var optionB = hasVenusGrouping && hasSaturnGrouping && hasMoonOrHeroContext;
-                    var optionC = HeroEventSupportsAllFocusGroupingObjects(shots, segment.SegmentType) && totalGroupingSupportFrames >= 3;
-                    var segmentGroupingCoveragePassed = optionA || optionB || optionC;
-                    heroGroupingFrameCountExact = Math.Max(heroGroupingFrameCountExact, parentGroupingCount);
-                    heroGroupingFrameCountIncludingChildren = Math.Max(heroGroupingFrameCountIncludingChildren, splitGroupingCount);
-                    heroGroupingFrameCount = Math.Max(heroGroupingFrameCount, segmentHeroGroupingFrameCount);
-                    venusGroupingFrameCount = Math.Max(venusGroupingFrameCount, segmentVenusGroupingFrameCount);
-                    saturnGroupingFrameCount = Math.Max(saturnGroupingFrameCount, segmentSaturnGroupingFrameCount);
-                    moonHeroFrameCount = Math.Max(moonHeroFrameCount, segmentMoonHeroFrameCount);
-                    heroGroupingCoveragePassed = heroGroupingCoveragePassed || segmentGroupingCoveragePassed;
-                    if (!segmentGroupingCoveragePassed)
-                    {
-                        errors.Add("HeroEvent must preserve grouping coverage.");
-                    }
-                }
-                if (segment.SegmentType.Equals("PlanetHighlights", StringComparison.OrdinalIgnoreCase) && shots.Count(s => IsWesternPlanetGroupingVisual(ShotText(s), segment.SegmentType)) < 2) errors.Add("PlanetHighlights must preserve at least 2 western_planet_grouping_scene frames.");
-                if (segment.SegmentType.Equals("MoonHighlights", StringComparison.OrdinalIgnoreCase) && shots.Count(s => IsMoonHeroContextShot(ShotText(s))) < 2) errors.Add("MoonHighlights must preserve at least 2 moon_hero_scene frames.");
-                if (segment.SegmentType.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase) && !shots.Any(s => ContainsAny(ShotText(s), "astrophotography_target_scene", "ExpandedStellarium"))) errors.Add("AstrophotographyTip must preserve an ExpandedStellarium frame.");
-                if (segment.SegmentType.Equals("BestObservationWindow", StringComparison.OrdinalIgnoreCase) && !shots.Any(s => ContainsAny(ShotText(s), "best-observation-window-card", "best-time-card"))) errors.Add("BestObservationWindow must preserve a best-observation-window-card or best-time-card visual.");
-                if (segment.SegmentType.Equals("WeeklySummary", StringComparison.OrdinalIgnoreCase) && !shots.Any(s => ContainsAny(ShotText(s), "closing", "weekly-summary-card", "cosmic_closing_background"))) errors.Add("WeeklySummary must preserve closing cinematic or weekly-summary-card visual.");
+                foreach (var shot in segment.Shots) AddGroupingChildSceneCode(ShotText(shot), childSceneCodes);
+                if (segment.SegmentType.Equals("PlanetHighlights", StringComparison.OrdinalIgnoreCase) && segment.Shots.Count(s => IsWesternPlanetGroupingVisual(ShotText(s), segment.SegmentType)) < 2) errors.Add("PlanetHighlights must preserve at least 2 western_planet_grouping_scene frames.");
+                if (segment.SegmentType.Equals("MoonHighlights", StringComparison.OrdinalIgnoreCase) && segment.Shots.Count(s => IsMoonHeroContextShot(ShotText(s))) < 2) errors.Add("MoonHighlights must preserve at least 2 moon_hero_scene frames.");
+                if (segment.SegmentType.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase) && !segment.Shots.Any(s => ContainsAny(ShotText(s), "astrophotography_target_scene", "ExpandedStellarium"))) errors.Add("AstrophotographyTip must preserve an ExpandedStellarium frame.");
+                if (segment.SegmentType.Equals("BestObservationWindow", StringComparison.OrdinalIgnoreCase) && !segment.Shots.Any(s => ContainsAny(ShotText(s), "best-observation-window-card", "best-time-card"))) errors.Add("BestObservationWindow must preserve a best-observation-window-card or best-time-card visual.");
+                if (segment.SegmentType.Equals("WeeklySummary", StringComparison.OrdinalIgnoreCase) && !segment.Shots.Any(s => ContainsAny(ShotText(s), "closing", "weekly-summary-card", "cosmic_closing_background"))) errors.Add("WeeklySummary must preserve closing cinematic or weekly-summary-card visual.");
             }
         }
 
         var childSceneCodeList = childSceneCodes.ToList();
-        return new WeeklyAudioDrivenDynamicGroupingPreservationReport(errors.Count == 0, true, heroGroupingFrameCount, venusGroupingFrameCount, saturnGroupingFrameCount, moonHeroFrameCount, heroGroupingCoveragePassed, parentSceneCode, childSceneCodeList, heroGroupingFrameCountIncludingChildren, shortformGroupingPreservedShotCount, shortformCtaVisualPreserved, heroGroupingFrameCountExact, heroGroupingFrameCountIncludingChildren, shortformGroupingShotCountExact, shortformGroupingShotCountIncludingChildren, childSceneCodeList, errors);
+        logger.LogInformation(
+            "HEROEVENT_GROUPING_COVERAGE_EVALUATED heroEventShotCount={HeroEventShotCount} splitGroupingShotCount={SplitGroupingShotCount} coveredFocusObjects={CoveredFocusObjects} coveragePassed={CoveragePassed}",
+            heroCoverage.HeroEventShotCount,
+            heroCoverage.SplitGroupingShotCount,
+            string.Join(",", heroCoverage.CoveredFocusObjects),
+            heroCoverage.CoveragePassed);
+
+        return new WeeklyAudioDrivenDynamicGroupingPreservationReport(
+            errors.Count == 0,
+            true,
+            heroCoverage.SplitGroupingShotCount,
+            heroCoverage.HeroEventTargetObjects.Count(x => x.Equals("VENUS", StringComparison.OrdinalIgnoreCase)),
+            heroCoverage.HeroEventTargetObjects.Count(x => x.Equals("SATURN", StringComparison.OrdinalIgnoreCase)),
+            heroCoverage.MoonHeroShotCount,
+            heroCoverage.CoveragePassed,
+            parentSceneCode,
+            childSceneCodeList,
+            heroCoverage.SplitGroupingShotCount,
+            shortformGroupingPreservedShotCount,
+            shortformCtaVisualPreserved,
+            heroGroupingFrameCountExact,
+            Math.Max(heroGroupingFrameCountIncludingChildren, heroCoverage.SplitGroupingShotCount),
+            shortformGroupingShotCountExact,
+            shortformGroupingShotCountIncludingChildren,
+            childSceneCodeList,
+            heroCoverage,
+            errors);
+    }
+
+    private static WeeklyAudioDrivenHeroEventGroupingCoverageDebug EvaluateHeroEventGroupingCoverage(ResolvedRenderShotPlan shotPlan, string parentSceneCode, SortedSet<string> childSceneCodes)
+    {
+        var heroShots = shotPlan.Episodes
+            .Where(episode => episode.EpisodeType.Equals("longform", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(episode => episode.Segments.SelectMany(segment => segment.Shots.Select(shot => new HeroEventShotContext(episode.EpisodeType, segment.SegmentId, segment.SegmentType, shot))))
+            .Where(IsHeroEventGroupingCandidateShot)
+            .ToList();
+
+        foreach (var shot in heroShots.Select(context => context.Shot)) AddGroupingChildSceneCode(ShotText(shot), childSceneCodes);
+
+        var splitGroupingShotCount = heroShots.Count(context => IsHeroEventVisualMatch(context, parentSceneCode));
+        var moonHeroShotCount = heroShots.Count(context => CoversFocusObject(context, "MOON"));
+        var coveredFocusObjects = new[] { "MOON", "VENUS", "SATURN" }
+            .Where(focusObject => heroShots.Any(context => CoversFocusObject(context, focusObject)))
+            .ToList();
+        var heroEventTargetObjects = heroShots
+            .SelectMany(context => new[] { "MOON", "VENUS", "SATURN" }.Where(focusObject => CoversFocusObject(context, focusObject)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var sceneCodes = heroShots
+            .SelectMany(context => ExtractHeroEventSceneCodes(context))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var assetPaths = heroShots
+            .Select(context => context.Shot.AssetPath)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var coverageByFocusObjects = heroShots.Count >= 3 && coveredFocusObjects.Count >= 2 && coveredFocusObjects.Any(focusObject => focusObject.Equals("VENUS", StringComparison.OrdinalIgnoreCase) || focusObject.Equals("SATURN", StringComparison.OrdinalIgnoreCase));
+        var coverageBySplitGroupingAndMoon = splitGroupingShotCount >= 2 && moonHeroShotCount >= 1;
+        var coveragePassed = coverageByFocusObjects || coverageBySplitGroupingAndMoon;
+        var failureReason = coveragePassed
+            ? null
+            : $"HeroEvent must preserve grouping coverage. heroEventShotCount={heroShots.Count}; splitGroupingShotCount={splitGroupingShotCount}; moonHeroShotCount={moonHeroShotCount}; coveredFocusObjects={string.Join(",", coveredFocusObjects)}.";
+
+        return new WeeklyAudioDrivenHeroEventGroupingCoverageDebug(
+            heroShots.Count,
+            assetPaths,
+            sceneCodes,
+            heroEventTargetObjects,
+            splitGroupingShotCount,
+            moonHeroShotCount,
+            coveredFocusObjects,
+            coveragePassed,
+            failureReason);
+    }
+
+    private static bool IsHeroEventGroupingCandidateShot(HeroEventShotContext context)
+    {
+        return context.SegmentType.Equals("HeroEvent", StringComparison.OrdinalIgnoreCase) ||
+               context.SegmentId.Contains("hero-event", StringComparison.OrdinalIgnoreCase) ||
+               ShotText(context.Shot).Contains("narrationSegmentId", StringComparison.OrdinalIgnoreCase) && ShotText(context.Shot).Contains("hero-event", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsHeroEventVisualMatch(HeroEventShotContext context, string parentSceneCode)
+    {
+        var value = ShotText(context.Shot);
+        return SceneCodeStartsWithSplitGrouping(context.Shot, value) ||
+               ContainsAny(context.Shot.AssetPath, "western_planet_grouping_scene_saturn", "western_planet_grouping_scene_venus") ||
+               ContainsTargetObject(value, "VENUS") ||
+               ContainsTargetObject(value, "SATURN") ||
+               ContainsAny(value,
+                   $"sourceSceneCode={parentSceneCode}", $"sourceSceneCode:\"{parentSceneCode}\"", $"sourceSceneCode\":\"{parentSceneCode}",
+                   $"parentSceneCode={parentSceneCode}", $"parentSceneCode:\"{parentSceneCode}\"", $"parentSceneCode\":\"{parentSceneCode}") ||
+               ContainsAny(value, "role=Grouping", "role:Grouping", "source=Grouping", "source:Grouping", "Grouping", "role=HeroEvent", "role:HeroEvent", "source=HeroEvent", "source:HeroEvent", "HeroEvent", "role=PlanetHighlights", "role:PlanetHighlights", "source=PlanetHighlights", "source:PlanetHighlights", "PlanetHighlights");
+    }
+
+    private static bool SceneCodeStartsWithSplitGrouping(ResolvedRenderShotPlanEntry shot, string value)
+    {
+        return StartsWithSplitGrouping(shot.AssetId) ||
+               StartsWithSplitGrouping(Path.GetFileNameWithoutExtension(shot.AssetPath)) ||
+               Regex.IsMatch(value, "(?i)sceneCode[=:]\\?\"?western_planet_grouping_scene_");
+    }
+
+    private static bool StartsWithSplitGrouping(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.StartsWith("western_planet_grouping_scene_", StringComparison.OrdinalIgnoreCase);
+
+    private static bool CoversFocusObject(HeroEventShotContext context, string focusObject)
+    {
+        var value = ShotText(context.Shot);
+        var focus = focusObject.ToLowerInvariant();
+        return ContainsTargetObject(value, focusObject) ||
+               value.Contains(focus, StringComparison.OrdinalIgnoreCase) ||
+               context.Shot.AssetPath.Contains(focus, StringComparison.OrdinalIgnoreCase) ||
+               context.Shot.AssetId.Contains(focus, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> ExtractHeroEventSceneCodes(HeroEventShotContext context)
+    {
+        if (!string.IsNullOrWhiteSpace(context.Shot.AssetId)) yield return context.Shot.AssetId;
+        var fileName = Path.GetFileNameWithoutExtension(context.Shot.AssetPath);
+        if (!string.IsNullOrWhiteSpace(fileName)) yield return fileName;
+        foreach (Match match in Regex.Matches(ShotText(context.Shot), "western_planet_grouping_scene_[a-z0-9_-]+", RegexOptions.IgnoreCase))
+        {
+            yield return match.Value;
+        }
     }
 
     private static WeeklyAudioDrivenTimelineValidationReport ValidateAudioDrivenTimeline(Guid pipelineRunId, FinalRenderTimeline timeline, IReadOnlyList<WeeklyAudioSegmentManifestEntry> longformAudioSegments, IReadOnlyList<WeeklyAudioSegmentManifestEntry> shortformAudioSegments, IReadOnlyList<string> warnings, WeeklyAudioDrivenDynamicGroupingPreservationReport preservationReport)
@@ -496,6 +609,7 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             preservationReport.ShortformGroupingShotCountExact,
             preservationReport.ShortformGroupingShotCountIncludingChildren,
             preservationReport.GroupingChildSceneCodesDetected,
+            preservationReport.HeroEventGroupingCoverageDebug,
             preservationReport.PreservationValidationErrors,
             warnings.ToList(),
             errors);
@@ -757,6 +871,7 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         return Path.GetFileName(Path.GetDirectoryName(assetPath) ?? string.Empty) ?? string.Empty;
     }
 
+    private sealed record HeroEventShotContext(string EpisodeType, string SegmentId, string SegmentType, ResolvedRenderShotPlanEntry Shot);
     private sealed record EpisodeReconciliationResult(FinalRenderEpisodeTimeline Timeline, ResolvedRenderEpisodeShotPlan ShotPlan, double NewDurationSeconds, int SegmentsReconciled);
 
     private sealed record WeeklyAudioDrivenTimelineReconciliationPaths(

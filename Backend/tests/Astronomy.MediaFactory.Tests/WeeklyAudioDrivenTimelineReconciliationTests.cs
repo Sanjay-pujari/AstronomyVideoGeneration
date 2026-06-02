@@ -107,6 +107,12 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
         validation.SaturnGroupingFrameCount.Should().Be(1);
         validation.MoonHeroFrameCount.Should().Be(1);
         validation.HeroGroupingCoveragePassed.Should().BeTrue();
+        validation.HeroEventGroupingCoverageDebug.HeroEventShotCount.Should().Be(3);
+        validation.HeroEventGroupingCoverageDebug.SplitGroupingShotCount.Should().Be(2);
+        validation.HeroEventGroupingCoverageDebug.MoonHeroShotCount.Should().Be(1);
+        validation.HeroEventGroupingCoverageDebug.CoveredFocusObjects.Should().Contain(new[] { "MOON", "VENUS", "SATURN" });
+        validation.HeroEventGroupingCoverageDebug.CoveragePassed.Should().BeTrue();
+        validation.HeroEventGroupingCoverageDebug.FailureReason.Should().BeNull();
         validation.HeroGroupingParentSceneCode.Should().Be("western_planet_grouping_scene");
         validation.HeroGroupingChildSceneCodes.Should().Contain(new[] { "western_planet_grouping_scene_saturn", "western_planet_grouping_scene_venus" });
         validation.HeroGroupingPreservedFrameCount.Should().Be(2);
