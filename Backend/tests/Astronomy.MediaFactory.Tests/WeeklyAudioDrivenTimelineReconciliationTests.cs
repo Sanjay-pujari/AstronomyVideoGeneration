@@ -29,12 +29,14 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
         var response = await service.ReconcileAsync(pipelineRunId, new WeeklyAudioDrivenTimelineReconciliationRequest(OverwriteExisting: true), CancellationToken.None);
 
         response.AudioDrivenTimelineReady.Should().BeTrue(response.Errors.FirstOrDefault());
+        response.InputMode.Should().Be("NewRendererContract");
         response.NewLongformDurationSeconds.Should().BeApproximately(18.5, 0.001);
         response.NewShortformDurationSeconds.Should().BeApproximately(10.25, 0.001);
         File.Exists(response.AudioDrivenFinalRenderTimelinePath).Should().BeTrue();
         File.Exists(response.AudioDrivenResolvedRenderShotPlanPath).Should().BeTrue();
         File.Exists(response.AudioDrivenRenderContractPath).Should().BeTrue();
         File.Exists(response.AudioDrivenTimelineReconciliationReportPath).Should().BeTrue();
+        File.Exists(response.AudioDrivenReconciliationInputResolutionReportPath).Should().BeTrue();
 
         var timeline = await ReadJsonAsync<FinalRenderTimeline>(response.AudioDrivenFinalRenderTimelinePath);
         timeline.Longform.Segments[0].DurationSeconds.Should().BeApproximately(10.5, 0.001);
@@ -43,7 +45,40 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
         timeline.Shortform.ActualDurationSeconds.Should().BeApproximately(10.25, 0.001);
     }
 
-    private static async Task WriteInputsAsync(string runRoot, Guid pipelineRunId)
+    [Fact]
+    public async Task ReconcileAsync_UsesNewRendererContract_WhenLegacyInputsAreMissing()
+    {
+        var pipelineRunId = Guid.NewGuid();
+        var workingRoot = Path.Combine(Path.GetTempPath(), "weekly-audio-reconcile-tests", Guid.NewGuid().ToString("N"));
+        var runRoot = Path.Combine(workingRoot, pipelineRunId.ToString("N"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "audio", "longform"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "audio", "shortform"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "episode"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "render"));
+        await WriteInputsAsync(runRoot, pipelineRunId, writeLegacyInputs: false);
+
+        var service = new WeeklyAudioDrivenTimelineReconciliationService(
+            new StaticWeeklyPipelineRunDirectoryResolver(runRoot),
+            NullLogger<WeeklyAudioDrivenTimelineReconciliationService>.Instance);
+
+        var response = await service.ReconcileAsync(pipelineRunId, new WeeklyAudioDrivenTimelineReconciliationRequest(OverwriteExisting: true), CancellationToken.None);
+
+        response.AudioDrivenTimelineReady.Should().BeTrue(response.Errors.FirstOrDefault());
+        response.InputMode.Should().Be("NewRendererContract");
+        response.NewLongformDurationSeconds.Should().BeApproximately(18.5, 0.001);
+        response.NewShortformDurationSeconds.Should().BeApproximately(10.25, 0.001);
+        response.Warnings.Should().Contain("Legacy resolved-render-shot-plan.json not found; using new renderer contract.");
+        response.Errors.Should().NotContain(error => error.Contains("resolved-render-shot-plan.json", StringComparison.OrdinalIgnoreCase));
+        response.Errors.Should().NotContain(error => error.Contains("render-storyboard-report.json", StringComparison.OrdinalIgnoreCase));
+
+        var resolution = await ReadJsonAsync<WeeklyAudioDrivenReconciliationInputResolutionReport>(response.AudioDrivenReconciliationInputResolutionReportPath);
+        resolution.InputResolutionReady.Should().BeTrue();
+        resolution.InputMode.Should().Be("NewRendererContract");
+        resolution.NewContractFilesFound.Should().BeTrue();
+        resolution.LegacyFilesFound.Should().BeFalse();
+    }
+
+    private static async Task WriteInputsAsync(string runRoot, Guid pipelineRunId, bool writeLegacyInputs = true)
     {
         var options = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         var longformHeroShots = new[]
@@ -69,17 +104,24 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
         var shortSegments = new[] { new FinalRenderSegment("short", "ShortHook", "shortform", 0, 15, 15, "short narration", 0, 15, shortShots) };
         var timeline = new FinalRenderTimeline(pipelineRunId, DateTime.UtcNow, new FinalRenderEpisodeTimeline(20, 20, longformSegments), new FinalRenderEpisodeTimeline(15, 15, shortSegments));
         var shotPlan = new ResolvedRenderShotPlan(pipelineRunId, DateTime.UtcNow, [ToEpisodePlan("longform", timeline.Longform), ToEpisodePlan("shortform", timeline.Shortform)]);
+        var shotList = ToShotList(timeline);
         var storyboard = new RenderStoryboardReport(pipelineRunId, DateTime.UtcNow, []);
         var contract = new WeeklyRenderContract(pipelineRunId, "WeeklySkyForecast", new DateOnly(2026, 6, 1), "us", "en", new WeeklyEpisodeRenderContract(true, 1920, 1080, 30, 20, "timeline", 4, "long.mp4"), new WeeklyEpisodeRenderContract(true, 1080, 1920, 30, 15, "timeline", 4, "short.mp4"));
+        var renderInputManifest = new WeeklyRenderInputManifest(pipelineRunId, DateTime.UtcNow, [], true, true, [], []);
         var manifest = new WeeklyAudioSegmentManifest(pipelineRunId, DateTime.UtcNow,
             [new WeeklyAudioSegmentManifestEntry("hero", "HeroEvent", 15, 10.5, "hero.mp3", "voice", -4.5, "generated"), new WeeklyAudioSegmentManifestEntry("summary", "WeeklySummary", 5, 8.0, "summary.mp3", "voice", 3, "generated")],
             [new WeeklyAudioSegmentManifestEntry("short", "ShortHook", 15, 10.25, "short.mp3", "voice", -4.75, "generated")]);
         var timing = new WeeklyAudioTimingValidationReport(20, 18.5, -1.5, false, 15, 10.25, -4.75, false, [], [], []);
 
         await File.WriteAllTextAsync(Path.Combine(runRoot, "episode", "final-render-timeline.json"), JsonSerializer.Serialize(timeline, options));
-        await File.WriteAllTextAsync(Path.Combine(runRoot, "render", "resolved-render-shot-plan.json"), JsonSerializer.Serialize(shotPlan, options));
-        await File.WriteAllTextAsync(Path.Combine(runRoot, "render", "render-storyboard-report.json"), JsonSerializer.Serialize(storyboard, options));
+        await File.WriteAllTextAsync(Path.Combine(runRoot, "episode", "final-render-shot-list.json"), JsonSerializer.Serialize(shotList, options));
+        if (writeLegacyInputs)
+        {
+            await File.WriteAllTextAsync(Path.Combine(runRoot, "render", "resolved-render-shot-plan.json"), JsonSerializer.Serialize(shotPlan, options));
+            await File.WriteAllTextAsync(Path.Combine(runRoot, "render", "render-storyboard-report.json"), JsonSerializer.Serialize(storyboard, options));
+        }
         await File.WriteAllTextAsync(Path.Combine(runRoot, "render", "weekly-render-contract.json"), JsonSerializer.Serialize(contract, options));
+        await File.WriteAllTextAsync(Path.Combine(runRoot, "render", "render-input-manifest.json"), JsonSerializer.Serialize(renderInputManifest, options));
         await File.WriteAllTextAsync(Path.Combine(runRoot, "audio", "audio-segment-manifest.json"), JsonSerializer.Serialize(manifest, options));
         await File.WriteAllTextAsync(Path.Combine(runRoot, "audio", "audio-timing-validation-report.json"), JsonSerializer.Serialize(timing, options));
         await File.WriteAllTextAsync(Path.Combine(runRoot, "audio", "longform", "weekly-skyforecast-longform.mp3"), "existing audio");
@@ -91,6 +133,14 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
 
     private static ResolvedRenderEpisodeShotPlan ToEpisodePlan(string episodeType, FinalRenderEpisodeTimeline timeline)
         => new(episodeType, timeline.ActualDurationSeconds, timeline.Segments.Select(segment => new ResolvedRenderSegmentShotPlan(episodeType, segment.SegmentId, segment.SegmentType, segment.StartSecond, segment.EndSecond, segment.DurationSeconds, segment.Shots.Select(shot => new ResolvedRenderShotPlanEntry(shot.ShotNumber, shot.AssetId, shot.AssetType, shot.AssetPath, shot.StartSecond, shot.EndSecond, shot.DurationSeconds, shot.TransitionIn, shot.TransitionOut, shot.MotionEffect, shot.Purpose, "test", false, false)).ToList())).ToList());
+
+    private static IReadOnlyList<FinalRenderShotListEntry> ToShotList(FinalRenderTimeline timeline)
+    {
+        var global = 1;
+        return timeline.Longform.Segments.Concat(timeline.Shortform.Segments)
+            .SelectMany(segment => segment.Shots.Select(shot => new FinalRenderShotListEntry(segment.EpisodeType, segment.SegmentId, segment.SegmentType, shot.ShotNumber, global++, shot.AssetId, shot.AssetType, shot.AssetPath, shot.StartSecond, shot.EndSecond, shot.DurationSeconds, shot.TransitionIn, shot.TransitionOut, shot.MotionEffect, segment.NarrationText, segment.NarrationStart, segment.NarrationEnd)))
+            .ToList();
+    }
 
     private static async Task<T> ReadJsonAsync<T>(string path)
         => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;

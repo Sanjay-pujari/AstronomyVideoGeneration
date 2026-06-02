@@ -33,6 +33,8 @@ public sealed record WeeklyAudioDrivenTimelineReconciliationResponse(
     string AudioDrivenStoryboardReportPath,
     string AudioDrivenTimelineReconciliationReportPath,
     string AudioDrivenTimelineValidationReportPath,
+    string AudioDrivenReconciliationInputResolutionReportPath,
+    string InputMode,
     bool AudioDrivenTimelineValid,
     bool LongformSegmentTimingValid,
     bool LongformShotTimingValid,
@@ -53,6 +55,7 @@ public sealed record WeeklyAudioDrivenTimelineReconciliationResponse(
 public sealed record WeeklyAudioDrivenTimelineReconciliationReport(
     Guid PipelineRunId,
     bool AudioDrivenTimelineReady,
+    string InputMode,
     bool AudioDrivenTimelineValid,
     WeeklyAudioDrivenEpisodeReconciliationReport Longform,
     WeeklyAudioDrivenEpisodeReconciliationReport Shortform,
@@ -65,6 +68,18 @@ public sealed record WeeklyAudioDrivenEpisodeReconciliationReport(
     double NewDurationSeconds,
     int SegmentCount,
     int SegmentsReconciled);
+
+public sealed record WeeklyAudioDrivenReconciliationInputResolutionReport(
+    bool InputResolutionReady,
+    string InputMode,
+    bool NewContractFilesFound,
+    bool LegacyFilesFound,
+    bool FinalRenderTimelineFound,
+    bool FinalRenderShotListFound,
+    bool WeeklyRenderContractFound,
+    bool RenderInputManifestFound,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
 
 public sealed record WeeklyAudioDrivenTimelineValidationReport(
     Guid PipelineRunId,
@@ -99,14 +114,35 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         var errors = new List<string>();
         var root = await pipelineRunDirectoryResolver.ResolveRunDirectoryAsync(pipelineRunId);
         var paths = WeeklyAudioDrivenTimelineReconciliationPaths.FromRoot(root);
-        ValidateRequiredInputs(paths, errors);
-        if (errors.Count > 0) throw new FileNotFoundException(string.Join(" ", errors));
+        var inputResolution = ResolveInputContract(paths);
+        warnings.AddRange(inputResolution.Warnings);
+        errors.AddRange(inputResolution.Errors);
+        if (errors.Count > 0)
+        {
+            if (!request.DryRun)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(paths.AudioDrivenReconciliationInputResolutionReport)!);
+                await WriteJsonAsync(paths.AudioDrivenReconciliationInputResolutionReport, inputResolution, cancellationToken);
+            }
+
+            throw new FileNotFoundException(string.Join(" ", errors));
+        }
 
         var manifest = await ReadJsonAsync<WeeklyAudioSegmentManifest>(paths.AudioSegmentManifest, cancellationToken);
         _ = await ReadJsonAsync<WeeklyAudioTimingValidationReport>(paths.AudioTimingValidationReport, cancellationToken);
         var sourceTimeline = await ReadJsonAsync<FinalRenderTimeline>(paths.FinalRenderTimeline, cancellationToken);
-        var sourceShotPlan = await ReadJsonAsync<ResolvedRenderShotPlan>(paths.ResolvedRenderShotPlan, cancellationToken);
-        var sourceStoryboard = await ReadJsonAsync<RenderStoryboardReport>(paths.RenderStoryboardReport, cancellationToken);
+        if (inputResolution.InputMode.Equals("NewRendererContract", StringComparison.OrdinalIgnoreCase))
+        {
+            _ = await ReadJsonAsync<IReadOnlyList<FinalRenderShotListEntry>>(paths.FinalRenderShotList, cancellationToken);
+            _ = await ReadJsonAsync<WeeklyRenderInputManifest>(paths.RenderInputManifest, cancellationToken);
+        }
+
+        var sourceShotPlan = inputResolution.InputMode.Equals("LegacyResolvedShotPlan", StringComparison.OrdinalIgnoreCase)
+            ? await ReadJsonAsync<ResolvedRenderShotPlan>(paths.ResolvedRenderShotPlan, cancellationToken)
+            : new ResolvedRenderShotPlan(pipelineRunId, DateTime.UtcNow, [ToShotPlan("longform", sourceTimeline.Longform), ToShotPlan("shortform", sourceTimeline.Shortform)]);
+        var sourceStoryboard = inputResolution.InputMode.Equals("LegacyResolvedShotPlan", StringComparison.OrdinalIgnoreCase)
+            ? await ReadJsonAsync<RenderStoryboardReport>(paths.RenderStoryboardReport, cancellationToken)
+            : null;
         var sourceContract = await ReadJsonAsync<WeeklyRenderContract>(paths.RenderContract, cancellationToken);
 
         if (manifest.PipelineRunId != pipelineRunId) errors.Add($"Audio segment manifest pipelineRunId {manifest.PipelineRunId} does not match requested pipelineRunId {pipelineRunId}.");
@@ -147,6 +183,7 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         var report = new WeeklyAudioDrivenTimelineReconciliationReport(
             pipelineRunId,
             ready,
+            inputResolution.InputMode,
             validationReport.AudioDrivenTimelineValid,
             new WeeklyAudioDrivenEpisodeReconciliationReport(sourceTimeline.Longform.ActualDurationSeconds, Round(longform.NewDurationSeconds), sourceTimeline.Longform.Segments.Count, longform.SegmentsReconciled),
             new WeeklyAudioDrivenEpisodeReconciliationReport(sourceTimeline.Shortform.ActualDurationSeconds, Round(shortform.NewDurationSeconds), sourceTimeline.Shortform.Segments.Count, shortform.SegmentsReconciled),
@@ -164,6 +201,7 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             await WriteJsonAsync(paths.AudioDrivenStoryboardReport, reconciledStoryboard, cancellationToken);
             await WriteJsonAsync(paths.AudioDrivenTimelineReconciliationReport, report, cancellationToken);
             await WriteJsonAsync(paths.AudioDrivenTimelineValidationReport, validationReport, cancellationToken);
+            await WriteJsonAsync(paths.AudioDrivenReconciliationInputResolutionReport, inputResolution, cancellationToken);
         }
 
         logger.LogInformation("WEEKLY_AUDIO_DRIVEN_TIMELINE_RECONCILE_COMPLETE pipelineRunId={PipelineRunId} ready={Ready}", pipelineRunId, ready);
@@ -182,6 +220,8 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             paths.AudioDrivenStoryboardReport,
             paths.AudioDrivenTimelineReconciliationReport,
             paths.AudioDrivenTimelineValidationReport,
+            paths.AudioDrivenReconciliationInputResolutionReport,
+            inputResolution.InputMode,
             validationReport.AudioDrivenTimelineValid,
             validationReport.Longform.SegmentTimingValid,
             validationReport.Longform.ShotTimingValid,
@@ -470,9 +510,9 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         return new WeeklyAudioDrivenEpisodeTimelineValidationReport(segmentTimingValid, shotTimingValid, timelineContinuous, Round(timeline.ActualDurationSeconds), invalidSegmentCount, invalidShotCount, gapCount, overlapCount);
     }
 
-    private static RenderStoryboardReport BuildStoryboardReport(Guid pipelineRunId, FinalRenderTimeline timeline, RenderStoryboardReport source)
+    private static RenderStoryboardReport BuildStoryboardReport(Guid pipelineRunId, FinalRenderTimeline timeline, RenderStoryboardReport? source)
     {
-        var excerpts = source.Segments.GroupBy(s => (s.EpisodeType, s.SegmentType)).ToDictionary(g => g.Key, g => g.First().NarrationExcerpt);
+        var excerpts = (source?.Segments ?? []).GroupBy(s => (s.EpisodeType, s.SegmentType)).ToDictionary(g => g.Key, g => g.First().NarrationExcerpt);
         return new RenderStoryboardReport(pipelineRunId, DateTime.UtcNow, timeline.Longform.Segments.Concat(timeline.Shortform.Segments).Select(segment =>
             new RenderStoryboardSegmentReport(segment.EpisodeType, segment.SegmentType, segment.StartSecond, segment.EndSecond, excerpts.TryGetValue((segment.EpisodeType, segment.SegmentType), out var excerpt) ? excerpt : Truncate(segment.NarrationText, 160), segment.Shots.Select(shot => new RenderStoryboardShotReport(shot.ShotNumber, shot.AssetType, ResolveAssetCode(shot.AssetPath, shot.AssetId), ResolveSceneFamily(shot.AssetPath, shot.AssetId), shot.DurationSeconds, shot.Purpose)).ToList())).ToList());
     }
@@ -480,12 +520,46 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
     private static async Task<T> ReadJsonAsync<T>(string path, CancellationToken cancellationToken) => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions) ?? throw new InvalidOperationException($"Unable to deserialize required audio-driven reconciliation input: {path}");
     private static Task WriteJsonAsync<T>(string path, T value, CancellationToken cancellationToken) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, JsonOptions), cancellationToken);
 
-    private static void ValidateRequiredInputs(WeeklyAudioDrivenTimelineReconciliationPaths paths, List<string> errors)
+    private static WeeklyAudioDrivenReconciliationInputResolutionReport ResolveInputContract(WeeklyAudioDrivenTimelineReconciliationPaths paths)
     {
-        foreach (var path in paths.RequiredJsonInputs)
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        var audioManifestFound = File.Exists(paths.AudioSegmentManifest);
+        var audioTimingValidationFound = File.Exists(paths.AudioTimingValidationReport);
+        var finalRenderTimelineFound = File.Exists(paths.FinalRenderTimeline);
+        var finalRenderShotListFound = File.Exists(paths.FinalRenderShotList);
+        var weeklyRenderContractFound = File.Exists(paths.RenderContract);
+        var renderInputManifestFound = File.Exists(paths.RenderInputManifest);
+        var resolvedRenderShotPlanFound = File.Exists(paths.ResolvedRenderShotPlan);
+        var renderStoryboardReportFound = File.Exists(paths.RenderStoryboardReport);
+        var newContractFilesFound = finalRenderTimelineFound && finalRenderShotListFound && weeklyRenderContractFound && renderInputManifestFound;
+        var legacyFilesFound = finalRenderTimelineFound && weeklyRenderContractFound && resolvedRenderShotPlanFound && renderStoryboardReportFound;
+
+        if (!audioManifestFound) errors.Add($"Required audio-driven reconciliation input file is missing: {paths.AudioSegmentManifest}");
+        if (!audioTimingValidationFound) errors.Add($"Required audio-driven reconciliation input file is missing: {paths.AudioTimingValidationReport}");
+
+        if (newContractFilesFound)
         {
-            if (!File.Exists(path)) errors.Add($"Required audio-driven reconciliation input file is missing: {path}");
+            if (!resolvedRenderShotPlanFound) warnings.Add("Legacy resolved-render-shot-plan.json not found; using new renderer contract.");
+            if (!renderStoryboardReportFound) warnings.Add("Legacy render-storyboard-report.json not found; using new renderer contract.");
+            return new WeeklyAudioDrivenReconciliationInputResolutionReport(errors.Count == 0, "NewRendererContract", true, resolvedRenderShotPlanFound && renderStoryboardReportFound, finalRenderTimelineFound, finalRenderShotListFound, weeklyRenderContractFound, renderInputManifestFound, warnings, errors);
         }
+
+        if (legacyFilesFound)
+        {
+            return new WeeklyAudioDrivenReconciliationInputResolutionReport(errors.Count == 0, "LegacyResolvedShotPlan", false, true, finalRenderTimelineFound, finalRenderShotListFound, weeklyRenderContractFound, renderInputManifestFound, warnings, errors);
+        }
+
+        AddMissingSetErrors("new renderer contract", [paths.FinalRenderTimeline, paths.FinalRenderShotList, paths.RenderContract, paths.RenderInputManifest], errors);
+        AddMissingSetErrors("legacy resolved shot plan", [paths.FinalRenderTimeline, paths.RenderContract, paths.ResolvedRenderShotPlan, paths.RenderStoryboardReport], errors);
+        return new WeeklyAudioDrivenReconciliationInputResolutionReport(false, "MissingRequiredInputs", false, false, finalRenderTimelineFound, finalRenderShotListFound, weeklyRenderContractFound, renderInputManifestFound, warnings, errors);
+    }
+
+    private static void AddMissingSetErrors(string inputMode, IReadOnlyList<string> paths, List<string> errors)
+    {
+        var missing = paths.Where(path => !File.Exists(path)).ToList();
+        if (missing.Count == 0) return;
+        errors.Add($"Required audio-driven reconciliation {inputMode} input set is incomplete; missing: {string.Join(", ", missing)}");
     }
 
     private static void EnsureOutputWritable(WeeklyAudioDrivenTimelineReconciliationPaths paths, bool overwriteExisting)
@@ -527,32 +601,37 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         string LongformCombinedAudio,
         string ShortformCombinedAudio,
         string FinalRenderTimeline,
+        string FinalRenderShotList,
         string ResolvedRenderShotPlan,
         string RenderStoryboardReport,
         string RenderContract,
+        string RenderInputManifest,
         string AudioDrivenFinalRenderTimeline,
         string AudioDrivenResolvedRenderShotPlan,
         string AudioDrivenStoryboardReport,
         string AudioDrivenRenderContract,
         string AudioDrivenTimelineReconciliationReport,
-        string AudioDrivenTimelineValidationReport)
+        string AudioDrivenTimelineValidationReport,
+        string AudioDrivenReconciliationInputResolutionReport)
     {
-        public IReadOnlyList<string> RequiredJsonInputs => [AudioSegmentManifest, AudioTimingValidationReport, FinalRenderTimeline, ResolvedRenderShotPlan, RenderStoryboardReport, RenderContract];
-        public IReadOnlyList<string> Outputs => [AudioDrivenFinalRenderTimeline, AudioDrivenResolvedRenderShotPlan, AudioDrivenStoryboardReport, AudioDrivenRenderContract, AudioDrivenTimelineReconciliationReport, AudioDrivenTimelineValidationReport];
+        public IReadOnlyList<string> Outputs => [AudioDrivenFinalRenderTimeline, AudioDrivenResolvedRenderShotPlan, AudioDrivenStoryboardReport, AudioDrivenRenderContract, AudioDrivenTimelineReconciliationReport, AudioDrivenTimelineValidationReport, AudioDrivenReconciliationInputResolutionReport];
         public static WeeklyAudioDrivenTimelineReconciliationPaths FromRoot(string root) => new(
             Path.Combine(root, "audio", "audio-segment-manifest.json"),
             Path.Combine(root, "audio", "audio-timing-validation-report.json"),
             Path.Combine(root, "audio", "longform", "weekly-skyforecast-longform.mp3"),
             Path.Combine(root, "audio", "shortform", "weekly-skyforecast-shortform.mp3"),
             Path.Combine(root, "episode", "final-render-timeline.json"),
+            Path.Combine(root, "episode", "final-render-shot-list.json"),
             Path.Combine(root, "render", "resolved-render-shot-plan.json"),
             Path.Combine(root, "render", "render-storyboard-report.json"),
             Path.Combine(root, "render", "weekly-render-contract.json"),
+            Path.Combine(root, "render", "render-input-manifest.json"),
             Path.Combine(root, "render", "audio-driven-final-render-timeline.json"),
             Path.Combine(root, "render", "audio-driven-resolved-render-shot-plan.json"),
             Path.Combine(root, "render", "audio-driven-render-storyboard-report.json"),
             Path.Combine(root, "render", "audio-driven-render-contract.json"),
             Path.Combine(root, "render", "audio-driven-timeline-reconciliation-report.json"),
-            Path.Combine(root, "render", "audio-driven-timeline-validation-report.json"));
+            Path.Combine(root, "render", "audio-driven-timeline-validation-report.json"),
+            Path.Combine(root, "render", "audio-driven-reconciliation-input-resolution-report.json"));
     }
 }
