@@ -86,8 +86,24 @@ public sealed record WeeklyAudioDrivenTimelineValidationReport(
     bool AudioDrivenTimelineValid,
     WeeklyAudioDrivenEpisodeTimelineValidationReport Longform,
     WeeklyAudioDrivenEpisodeTimelineValidationReport Shortform,
+    bool DynamicGroupingPreservationReady,
+    string HeroGroupingParentSceneCode,
+    IReadOnlyList<string> HeroGroupingChildSceneCodes,
+    int HeroGroupingPreservedFrameCount,
+    int ShortformGroupingPreservedShotCount,
+    bool ShortformCtaVisualPreserved,
+    IReadOnlyList<string> PreservationValidationErrors,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
+
+public sealed record WeeklyAudioDrivenDynamicGroupingPreservationReport(
+    bool DynamicGroupingPreservationReady,
+    string HeroGroupingParentSceneCode,
+    IReadOnlyList<string> HeroGroupingChildSceneCodes,
+    int HeroGroupingPreservedFrameCount,
+    int ShortformGroupingPreservedShotCount,
+    bool ShortformCtaVisualPreserved,
+    IReadOnlyList<string> PreservationValidationErrors);
 
 public sealed record WeeklyAudioDrivenEpisodeTimelineValidationReport(
     bool SegmentTimingValid,
@@ -169,9 +185,10 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         };
         var reconciledStoryboard = BuildStoryboardReport(pipelineRunId, reconciledTimeline, sourceStoryboard);
 
-        ValidateMandatoryShots(reconciledShotPlan, errors);
+        var preservationReport = ValidateMandatoryShots(reconciledShotPlan);
+        errors.AddRange(preservationReport.PreservationValidationErrors);
 
-        var validationReport = ValidateAudioDrivenTimeline(pipelineRunId, reconciledTimeline, request.ReconcileLongform ? manifest.Longform : [], request.ReconcileShortform ? manifest.Shortform : [], warnings);
+        var validationReport = ValidateAudioDrivenTimeline(pipelineRunId, reconciledTimeline, request.ReconcileLongform ? manifest.Longform : [], request.ReconcileShortform ? manifest.Shortform : [], warnings, preservationReport);
 
         var allErrors = errors.Concat(validationReport.Errors).ToList();
         var longformAudioTotal = request.ReconcileLongform ? manifest.Longform.Sum(x => x.ActualAudioDurationSeconds) : longform.NewDurationSeconds;
@@ -333,13 +350,13 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         var haystack = shot.AssetPath + " " + shot.AssetId + " " + shot.AssetType + " " + shot.Purpose;
         if (episodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase))
         {
-            return ContainsAny(haystack, "hook", "fast_cinematic_sky_hook") || IsWesternGroupingPath(haystack) || ContainsAny(haystack, "cta", "call_to_action", "call-to-action", "shortform_call_to_action_background");
+            return ContainsAny(haystack, "hook", "fast_cinematic_sky_hook") || IsDynamicGroupingShot(haystack) || IsMoonHeroContextShot(haystack) || IsCtaVisual(haystack, segmentType);
         }
         return segmentType switch
         {
-            "HeroEvent" or "StrongestEvent" => IsWesternGroupingPath(haystack),
-            "PlanetHighlights" => IsWesternGroupingPath(haystack),
-            "MoonHighlights" => haystack.Contains("moon_hero_scene", StringComparison.OrdinalIgnoreCase),
+            "HeroEvent" or "StrongestEvent" => IsDynamicGroupingShot(haystack) || IsMoonHeroContextShot(haystack),
+            "PlanetHighlights" => IsDynamicGroupingShot(haystack),
+            "MoonHighlights" => IsMoonHeroContextShot(haystack),
             "AstrophotographyTip" => ContainsAny(haystack, "astrophotography_target_scene", "ExpandedStellarium"),
             "BestObservationWindow" => ContainsAny(haystack, "best-observation-window-card", "best-time-card"),
             "WeeklySummary" => ContainsAny(haystack, "closing", "weekly-summary-card", "cosmic_closing_background"),
@@ -347,33 +364,58 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
         };
     }
 
-    private static void ValidateMandatoryShots(ResolvedRenderShotPlan shotPlan, List<string> errors)
+    private static WeeklyAudioDrivenDynamicGroupingPreservationReport ValidateMandatoryShots(ResolvedRenderShotPlan shotPlan)
     {
+        const string parentSceneCode = "western_planet_grouping_scene";
+        var errors = new List<string>();
+        var childSceneCodes = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        var heroGroupingPreservedFrameCount = 0;
+        var shortformGroupingPreservedShotCount = 0;
+        var shortformCtaVisualPreserved = false;
+
         foreach (var episode in shotPlan.Episodes)
         {
             if (episode.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase))
             {
-                var shots = episode.Segments.SelectMany(s => s.Shots).ToList();
-                if (!shots.Any(s => ContainsAny(ShotText(s), "hook", "fast_cinematic_sky_hook"))) errors.Add("Shortform hook visual was not preserved.");
-                if (shots.Count(s => IsWesternGroupingPath(ShotText(s))) < 2) errors.Add("Shortform must preserve at least 2 grouping shots.");
-                if (!shots.Any(s => ContainsAny(ShotText(s), "cta", "call_to_action", "call-to-action", "shortform_call_to_action_background"))) errors.Add("Shortform CTA visual was not preserved.");
+                var shots = episode.Segments.SelectMany(s => s.Shots.Select(shot => (SegmentType: s.SegmentType, Shot: shot))).ToList();
+                if (!shots.Any(s => ContainsAny(ShotText(s.Shot), "hook", "fast_cinematic_sky_hook"))) errors.Add("Shortform hook visual was not preserved.");
+                shortformGroupingPreservedShotCount = shots.Count(s => IsShortformGroupingPreservationShot(ShotText(s.Shot), s.SegmentType));
+                if (shortformGroupingPreservedShotCount < 2) errors.Add("Shortform must preserve at least 2 grouping shots.");
+                shortformCtaVisualPreserved = shots.Any(s => IsCtaVisual(ShotText(s.Shot), s.SegmentType));
+                if (!shortformCtaVisualPreserved) errors.Add("Shortform CTA visual was not preserved.");
+                foreach (var shot in shots.Select(s => s.Shot)) AddGroupingChildSceneCode(ShotText(shot), childSceneCodes);
                 continue;
             }
 
             foreach (var segment in episode.Segments)
             {
                 var shots = segment.Shots;
-                if ((segment.SegmentType is "HeroEvent" or "StrongestEvent") && shots.Count(s => IsWesternGroupingPath(ShotText(s))) < 3) errors.Add("HeroEvent must preserve at least 3 western_planet_grouping_scene frames.");
-                if (segment.SegmentType.Equals("PlanetHighlights", StringComparison.OrdinalIgnoreCase) && shots.Count(s => IsWesternGroupingPath(ShotText(s))) < 2) errors.Add("PlanetHighlights must preserve at least 2 western_planet_grouping_scene frames.");
-                if (segment.SegmentType.Equals("MoonHighlights", StringComparison.OrdinalIgnoreCase) && shots.Count(s => ShotText(s).Contains("moon_hero_scene", StringComparison.OrdinalIgnoreCase)) < 2) errors.Add("MoonHighlights must preserve at least 2 moon_hero_scene frames.");
+                foreach (var shot in shots) AddGroupingChildSceneCode(ShotText(shot), childSceneCodes);
+                if (segment.SegmentType is "HeroEvent" or "StrongestEvent")
+                {
+                    var parentGroupingCount = shots.Count(s => IsWesternGroupingParentShot(ShotText(s)));
+                    var splitGroupingCount = shots.Count(s => IsDynamicGroupingShot(ShotText(s)));
+                    var hasVenusGrouping = shots.Any(s => IsGroupingFocusShot(ShotText(s), "venus"));
+                    var hasSaturnGrouping = shots.Any(s => IsGroupingFocusShot(ShotText(s), "saturn"));
+                    var hasMoonOrHeroContext = shots.Any(s => IsMoonHeroContextShot(ShotText(s)) || ContainsAny(ShotText(s), "hero-event-card", "hero_event_card", "HeroEvent"));
+                    heroGroupingPreservedFrameCount = Math.Max(heroGroupingPreservedFrameCount, splitGroupingCount);
+                    if (parentGroupingCount < 3 && splitGroupingCount < 3 && !(hasVenusGrouping && hasSaturnGrouping && hasMoonOrHeroContext))
+                    {
+                        errors.Add("HeroEvent must preserve at least 3 western_planet_grouping_scene frames.");
+                    }
+                }
+                if (segment.SegmentType.Equals("PlanetHighlights", StringComparison.OrdinalIgnoreCase) && shots.Count(s => IsDynamicGroupingShot(ShotText(s))) < 2) errors.Add("PlanetHighlights must preserve at least 2 western_planet_grouping_scene frames.");
+                if (segment.SegmentType.Equals("MoonHighlights", StringComparison.OrdinalIgnoreCase) && shots.Count(s => IsMoonHeroContextShot(ShotText(s))) < 2) errors.Add("MoonHighlights must preserve at least 2 moon_hero_scene frames.");
                 if (segment.SegmentType.Equals("AstrophotographyTip", StringComparison.OrdinalIgnoreCase) && !shots.Any(s => ContainsAny(ShotText(s), "astrophotography_target_scene", "ExpandedStellarium"))) errors.Add("AstrophotographyTip must preserve an ExpandedStellarium frame.");
                 if (segment.SegmentType.Equals("BestObservationWindow", StringComparison.OrdinalIgnoreCase) && !shots.Any(s => ContainsAny(ShotText(s), "best-observation-window-card", "best-time-card"))) errors.Add("BestObservationWindow must preserve a best-observation-window-card or best-time-card visual.");
                 if (segment.SegmentType.Equals("WeeklySummary", StringComparison.OrdinalIgnoreCase) && !shots.Any(s => ContainsAny(ShotText(s), "closing", "weekly-summary-card", "cosmic_closing_background"))) errors.Add("WeeklySummary must preserve closing cinematic or weekly-summary-card visual.");
             }
         }
+
+        return new WeeklyAudioDrivenDynamicGroupingPreservationReport(errors.Count == 0, parentSceneCode, childSceneCodes.ToList(), heroGroupingPreservedFrameCount, shortformGroupingPreservedShotCount, shortformCtaVisualPreserved, errors);
     }
 
-    private static WeeklyAudioDrivenTimelineValidationReport ValidateAudioDrivenTimeline(Guid pipelineRunId, FinalRenderTimeline timeline, IReadOnlyList<WeeklyAudioSegmentManifestEntry> longformAudioSegments, IReadOnlyList<WeeklyAudioSegmentManifestEntry> shortformAudioSegments, IReadOnlyList<string> warnings)
+    private static WeeklyAudioDrivenTimelineValidationReport ValidateAudioDrivenTimeline(Guid pipelineRunId, FinalRenderTimeline timeline, IReadOnlyList<WeeklyAudioSegmentManifestEntry> longformAudioSegments, IReadOnlyList<WeeklyAudioSegmentManifestEntry> shortformAudioSegments, IReadOnlyList<string> warnings, WeeklyAudioDrivenDynamicGroupingPreservationReport preservationReport)
     {
         var errors = new List<string>();
         var longform = ValidateAudioDrivenEpisodeTimeline("longform", timeline.Longform, longformAudioSegments, errors);
@@ -384,6 +426,13 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
             longform.SegmentTimingValid && longform.ShotTimingValid && longform.TimelineContinuous && shortform.SegmentTimingValid && shortform.ShotTimingValid && shortform.TimelineContinuous,
             longform,
             shortform,
+            preservationReport.DynamicGroupingPreservationReady,
+            preservationReport.HeroGroupingParentSceneCode,
+            preservationReport.HeroGroupingChildSceneCodes,
+            preservationReport.HeroGroupingPreservedFrameCount,
+            preservationReport.ShortformGroupingPreservedShotCount,
+            preservationReport.ShortformCtaVisualPreserved,
+            preservationReport.PreservationValidationErrors,
             warnings.ToList(),
             errors);
     }
@@ -578,7 +627,29 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationService(
     private static ResolvedRenderShotPlanEntry ToResolvedShot(FinalRenderShot shot) => new(shot.ShotNumber, shot.AssetId, shot.AssetType, shot.AssetPath, shot.StartSecond, shot.EndSecond, shot.DurationSeconds, shot.TransitionIn, shot.TransitionOut, shot.MotionEffect, shot.Purpose, "AudioDriven", false, false);
     private static bool SameShot(FinalRenderShot left, FinalRenderShot right) => left.ShotNumber == right.ShotNumber && string.Equals(left.AssetPath, right.AssetPath, StringComparison.OrdinalIgnoreCase) && string.Equals(left.AssetId, right.AssetId, StringComparison.OrdinalIgnoreCase);
     private static bool IsRepeatableShot(FinalRenderShot shot) => ContainsAny(shot.AssetPath + " " + shot.AssetId + " " + shot.AssetType, "cinematic", "background", "ai-cinematic", "motion-graphics") || shot.AssetType.Equals("AICinematic", StringComparison.OrdinalIgnoreCase) || shot.AssetType.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase);
-    private static bool IsWesternGroupingPath(string value) => ContainsAny(value, "western_planet_grouping_scene", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide");
+    private static bool IsWesternGroupingPath(string value) => IsDynamicGroupingShot(value);
+    private static bool IsWesternGroupingParentShot(string value) => ContainsAny(value, "western_planet_grouping_scene", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide");
+    private static bool IsDynamicGroupingShot(string value)
+    {
+        if (IsWesternGroupingParentShot(value)) return true;
+        if (ContainsAny(value, "parentSceneCode=western_planet_grouping_scene", "sourceSceneCode=western_planet_grouping_scene", "sourceSceneCode\":\"western_planet_grouping_scene", "parentSceneCode\":\"western_planet_grouping_scene")) return true;
+        if (ContainsAny(value, "focusGroupings", "focus_groupings") && ContainsAny(value, "venus", "saturn", "moon")) return true;
+        return false;
+    }
+    private static bool IsGroupingFocusShot(string value, string focusObject) => IsDynamicGroupingShot(value) && value.Contains(focusObject, StringComparison.OrdinalIgnoreCase);
+    private static bool IsMoonHeroContextShot(string value) => ContainsAny(value, "moon_hero_scene", "moon hero", "moon-hero");
+    private static bool IsShortformGroupingPreservationShot(string value, string segmentType) => IsDynamicGroupingShot(value) || IsMoonHeroContextShot(value) || (ContainsAny(value, "hero-event-card", "hero_event_card") && IsDynamicGroupingShot(value + " " + segmentType));
+    private static bool IsCtaVisual(string value, string segmentType) =>
+        ContainsAny(value, "cta", "call_to_action", "call-to-action", "shortform_call_to_action_background") ||
+        (segmentType.Equals("CallToAction", StringComparison.OrdinalIgnoreCase) && ContainsAny(value, "AICinematic", "ai-cinematic")) ||
+        (segmentType.Equals("CallToAction", StringComparison.OrdinalIgnoreCase) && ContainsAny(value, "background")) ||
+        segmentType.Equals("Closing", StringComparison.OrdinalIgnoreCase) ||
+        ContainsAny(value, "role=CTA", "role:CTA", "scene role CTA", "sceneRole=CTA", "Closing");
+    private static void AddGroupingChildSceneCode(string value, SortedSet<string> childSceneCodes)
+    {
+        if (value.Contains("western_planet_grouping_scene_saturn", StringComparison.OrdinalIgnoreCase)) childSceneCodes.Add("western_planet_grouping_scene_saturn");
+        if (value.Contains("western_planet_grouping_scene_venus", StringComparison.OrdinalIgnoreCase)) childSceneCodes.Add("western_planet_grouping_scene_venus");
+    }
     private static bool ContainsAny(string value, params string[] needles) => needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
     private static string ShotText(ResolvedRenderShotPlanEntry shot) => shot.AssetPath + " " + shot.AssetId + " " + shot.AssetType + " " + shot.Purpose;
     private static double Round(double value) => Math.Round(value, 3, MidpointRounding.AwayFromZero);
