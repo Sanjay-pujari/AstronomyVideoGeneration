@@ -1563,7 +1563,15 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     string? SscCameraLockValidationReportPath = null,
     int ObjectFirstCameraLockSceneCount = 0,
     int AltAzOnlySceneCount = 0,
-    int FallbackUsedSceneCount = 0);
+    int FallbackUsedSceneCount = 0,
+    bool WeeklyScenesReady = false,
+    int ScreenshotsGenerated = 0,
+    bool ImageSequenceValidationReady = false,
+    string ValidationStatus = "NotValidated",
+    string? SelectedImageSequenceReportPath = null,
+    string? ImageSequenceProductionValidationReportPath = null,
+    string? PostCaptureNullSourceDiagnosticReportPath = null,
+    IReadOnlyList<string>? Errors = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {
