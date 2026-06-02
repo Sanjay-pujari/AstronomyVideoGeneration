@@ -240,7 +240,10 @@ public sealed record WeeklyAssetRealizationResult(
     int ProductionWarningAssetCount = 0,
     int ProductionFailedAssetCount = 0,
     bool QualityGatePassed = false,
-    IReadOnlyList<string>? FailedAssetPaths = null);
+    IReadOnlyList<string>? FailedAssetPaths = null,
+    string PostAssetDynamicSceneNormalizationReportPath = "",
+    bool DynamicSceneNormalizationReady = false,
+    int NullSourceAssetsAfterNormalization = 0);
 
 public sealed record WeeklyAssetRealizationInput(
     Guid PipelineRunId,
@@ -910,8 +913,9 @@ public sealed class WeeklyAssetRealizationService(
         }
 
         logger.LogInformation("ASSET_AGGREGATION_COMPLETE");
+        var dynamicSceneNormalization = await WeeklyPostAssetDynamicSceneNormalizer.NormalizeAndPersistAsync(input.PipelineRunId, input.RootPath, assets, logger, cancellationToken);
         logger.LogInformation("ASSET_REALIZATION_COMPLETE pipelineRunId={PipelineRunId} testReady={TestReady} finalReady={FinalReady} segmentCount={SegmentCount} nasaGenerated={NasaGenerated} nasaProductionReady={NasaProductionReady}", input.PipelineRunId, readiness.TestVideoPipelineReady, readiness.FinalVideoPipelineReady, bundles.Count, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount);
-        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.FailedNASAAssetCount, nasaImagePaths, nasaImagePaths.Count, nasaAssets.JwstPlanPath, nasaAssets.JwstResultsPath, nasaAssets.JwstReportPath, nasaAssets.Report.PlannedJWSTAssetCount, nasaAssets.Report.GeneratedJWSTAssetCount, nasaAssets.Report.ProductionReadyJWSTAssetCount, nasaAssets.Report.FailedJWSTAssetCount, jwstImagePaths, jwstImagePaths.Count, nasaAssets.Report.NasaProviderConfigured, motionOverlayAssets.MotionGraphicsManifestPath, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionGraphicPaths, motionOverlayAssets.EducationalOverlayManifestPath, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), educationalOverlayPaths, assetQuality.ReportPath, assetQuality.DetailsPath, assetQuality.Report.TotalAssets, assetQuality.Report.ProductionReadyCount, assetQuality.Report.ProductionWarningCount, assetQuality.Report.ProductionFailedCount, assetQuality.Report.QualityGatePassed, assetQuality.FailedAssetPaths ?? []);
+        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.FailedNASAAssetCount, nasaImagePaths, nasaImagePaths.Count, nasaAssets.JwstPlanPath, nasaAssets.JwstResultsPath, nasaAssets.JwstReportPath, nasaAssets.Report.PlannedJWSTAssetCount, nasaAssets.Report.GeneratedJWSTAssetCount, nasaAssets.Report.ProductionReadyJWSTAssetCount, nasaAssets.Report.FailedJWSTAssetCount, jwstImagePaths, jwstImagePaths.Count, nasaAssets.Report.NasaProviderConfigured, motionOverlayAssets.MotionGraphicsManifestPath, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionGraphicPaths, motionOverlayAssets.EducationalOverlayManifestPath, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), educationalOverlayPaths, assetQuality.ReportPath, assetQuality.DetailsPath, assetQuality.Report.TotalAssets, assetQuality.Report.ProductionReadyCount, assetQuality.Report.ProductionWarningCount, assetQuality.Report.ProductionFailedCount, assetQuality.Report.QualityGatePassed, assetQuality.FailedAssetPaths ?? [], dynamicSceneNormalization.ReportPath, dynamicSceneNormalization.Report.DynamicSceneNormalizationReady, dynamicSceneNormalization.Report.NullSourceAssetsAfterNormalization);
     }
 
     private WeeklyAssetRealizationInput NormalizeAssetRealizationInput(WeeklyAssetRealizationInput input)
@@ -1030,18 +1034,22 @@ public sealed class WeeklyAssetRealizationService(
         return fileSizeBytes > 0 && width > 0 && height > 0;
     }
 
-    private List<SegmentProductionAssetBundle> BuildSegmentBundles(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset> assets)
+    private List<SegmentProductionAssetBundle> BuildSegmentBundles(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset>? assets)
     {
+        logger.LogInformation("SEGMENT_ASSET_MAPPING_START pipelineRunId={PipelineRunId}", input.PipelineRunId);
         var bundles = new List<SegmentProductionAssetBundle>();
-        var allSegments = input.LongformPlan.Segments.Select(s => (EpisodeType: WeeklyEpisodeType.LongFormWeeklyForecast.ToString(), Segment: s))
-            .Concat(input.ShortformPlan.Segments.Select(s => (EpisodeType: WeeklyEpisodeType.ShortFormWeeklyHighlight.ToString(), Segment: s)));
+        var safeAssets = assets?.ToList() ?? [];
+        var longformSegments = input.LongformPlan.Segments ?? [];
+        var shortformSegments = input.ShortformPlan.Segments ?? [];
+        var allSegments = longformSegments.Select(s => (EpisodeType: WeeklyEpisodeType.LongFormWeeklyForecast.ToString(), Segment: s))
+            .Concat(shortformSegments.Select(s => (EpisodeType: WeeklyEpisodeType.ShortFormWeeklyHighlight.ToString(), Segment: s)));
         var narrationExists = File.Exists(input.StoryBeatsPath);
         var narrationTextExists = File.Exists(input.NarrationTextPath);
         var narrationWordCount = narrationTextExists ? CountWords(File.ReadAllText(input.NarrationTextPath)) : 0;
 
         foreach (var item in allSegments)
         {
-            var (assigned, missing, finalReady, warnings) = AssignAssets(item.EpisodeType, item.Segment.SegmentType, assets);
+            var (assigned, missing, finalReady, warnings) = AssignAssets(item.EpisodeType, item.Segment.SegmentType, safeAssets);
             var filesReady = assigned.Count > 0 && assigned.All(x => x.Exists && x.ProductionReady);
             var testReady = filesReady && narrationExists;
             var finalSegmentReady = testReady && finalReady;
@@ -1071,21 +1079,23 @@ public sealed class WeeklyAssetRealizationService(
             bundles.Add(bundle);
         }
 
+        logger.LogInformation("SEGMENT_ASSET_MAPPING_COMPLETE pipelineRunId={PipelineRunId} segmentCount={SegmentCount}", input.PipelineRunId, bundles.Count);
         return bundles;
     }
 
-    private (IReadOnlyList<RealizedVisualAsset> Assigned, IReadOnlyList<string> Missing, bool FinalReady, IReadOnlyList<string> Warnings) AssignAssets(string episodeType, string segmentType, IReadOnlyList<RealizedVisualAsset> assets)
+    private (IReadOnlyList<RealizedVisualAsset> Assigned, IReadOnlyList<string> Missing, bool FinalReady, IReadOnlyList<string> Warnings) AssignAssets(string episodeType, string segmentType, IReadOnlyList<RealizedVisualAsset>? assets)
     {
         var warnings = new List<string>();
         var missing = new List<string>();
         var assigned = new List<RealizedVisualAsset>();
-        var baseStellarium = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.StellariumBase).ToList();
-        var expanded = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.StellariumExpanded).ToList();
-        var ai = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.AICinematic).ToList();
-        var nasa = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.NASA).ToList();
-        var jwst = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.JWST).ToList();
-        var motion = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.MotionGraphics).ToList();
-        var educational = assets.Where(a => a.SourceType == RealizedVisualAssetSourceType.EducationalOverlay).ToList();
+        var safeAssets = assets?.ToList() ?? [];
+        var baseStellarium = safeAssets.Where(a => a.SourceType == RealizedVisualAssetSourceType.StellariumBase).ToList();
+        var expanded = safeAssets.Where(a => a.SourceType == RealizedVisualAssetSourceType.StellariumExpanded).ToList();
+        var ai = safeAssets.Where(a => a.SourceType == RealizedVisualAssetSourceType.AICinematic).ToList();
+        var nasa = safeAssets.Where(a => a.SourceType == RealizedVisualAssetSourceType.NASA).ToList();
+        var jwst = safeAssets.Where(a => a.SourceType == RealizedVisualAssetSourceType.JWST).ToList();
+        var motion = safeAssets.Where(a => a.SourceType == RealizedVisualAssetSourceType.MotionGraphics).ToList();
+        var educational = safeAssets.Where(a => a.SourceType == RealizedVisualAssetSourceType.EducationalOverlay).ToList();
         var finalReady = true;
 
         void AddAsset(RealizedVisualAsset? asset, string role)
@@ -1213,7 +1223,7 @@ public sealed class WeeklyAssetRealizationService(
                 RequireAssigned("AICinematic:shortform_call_to_action_background-or-MotionGraphics:call-to-action-card", a => (a.AssetCode + a.FilePath).Contains("shortform_call_to_action_background", StringComparison.OrdinalIgnoreCase) || (a.AssetCode + a.FilePath).Contains("call-to-action-card", StringComparison.OrdinalIgnoreCase), "CallToAction requires CTA background or CTA card.");
                 break;
             default:
-                AddFirst(assets, "generic_visual");
+                AddFirst(safeAssets, "generic_visual");
                 break;
         }
 
@@ -1222,8 +1232,10 @@ public sealed class WeeklyAssetRealizationService(
         return (assigned, missing.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), finalReady && missing.Count == 0, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
     }
 
-    private WeeklyAssetCoverageAuditReport BuildCoverageReport(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset> assets, IReadOnlyList<SegmentProductionAssetBundle> bundles)
+    private WeeklyAssetCoverageAuditReport BuildCoverageReport(WeeklyAssetRealizationInput input, IReadOnlyList<RealizedVisualAsset>? assets, IReadOnlyList<SegmentProductionAssetBundle>? bundles)
     {
+        var safeAssets = assets?.ToList() ?? [];
+        var safeBundles = bundles?.ToList() ?? [];
         var plannedBySource = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
             ["MotionGraphics"] = input.VisualAssetPlan.PlannedMotionGraphicsCount,
@@ -1233,24 +1245,24 @@ public sealed class WeeklyAssetRealizationService(
             ["JWST"] = input.VisualAssetPlan.PlannedJWSTAssetCount
         };
         var realizedBySource = Enum.GetValues<RealizedVisualAssetSourceType>()
-            .ToDictionary(x => x.ToString(), x => Count(assets, x), StringComparer.OrdinalIgnoreCase);
-        realizedBySource["Stellarium"] = Count(assets, RealizedVisualAssetSourceType.StellariumBase) + Count(assets, RealizedVisualAssetSourceType.StellariumExpanded);
+            .ToDictionary(x => x.ToString(), x => Count(safeAssets, x), StringComparer.OrdinalIgnoreCase);
+        realizedBySource["Stellarium"] = Count(safeAssets, RealizedVisualAssetSourceType.StellariumBase) + Count(safeAssets, RealizedVisualAssetSourceType.StellariumExpanded);
         var missingBySource = plannedBySource.ToDictionary(x => x.Key, x => Math.Max(0, x.Value - realizedBySource.GetValueOrDefault(x.Key)), StringComparer.OrdinalIgnoreCase);
-        var planned = Math.Max(input.VisualAssetPlan.PlannedVisualAssetCount, assets.Count + missingBySource.Values.Sum());
-        var readyAssets = assets.Count(x => x.ProductionReady);
-        var segmentCoverage = bundles.Select(bundle => new SegmentAssetCoverageResult(
+        var planned = Math.Max(input.VisualAssetPlan.PlannedVisualAssetCount, safeAssets.Count + missingBySource.Values.Sum());
+        var readyAssets = safeAssets.Count(x => x.ProductionReady);
+        var segmentCoverage = safeBundles.Select(bundle => new SegmentAssetCoverageResult(
             bundle.SegmentId,
             bundle.EpisodeType,
             bundle.SegmentType,
-            bundle.AssignedVisualAssets.Count,
-            bundle.AssignedVisualAssets.Select(x => x.SourceType.ToString()).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
-            bundle.MissingVisualAssetTypes,
-            bundle.Warnings.Any(w => w.Contains("fallback", StringComparison.OrdinalIgnoreCase)),
+            (bundle.AssignedVisualAssets ?? []).Count,
+            (bundle.AssignedVisualAssets ?? []).Select(x => x.SourceType.ToString()).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            bundle.MissingVisualAssetTypes ?? [],
+            (bundle.Warnings ?? []).Any(w => w.Contains("fallback", StringComparison.OrdinalIgnoreCase)),
             bundle.ProductionReadyForTest,
             bundle.ProductionReadyForFinalVideo,
-            bundle.Warnings)).ToList();
-        var blockers = bundles.Where(x => !x.ProductionReadyForTest).Select(x => $"{x.SegmentId} has no test-ready visual/narration coverage.").ToList();
-        var warnings = bundles.SelectMany(x => x.Warnings)
+            bundle.Warnings ?? [])).ToList();
+        var blockers = safeBundles.Where(x => !x.ProductionReadyForTest).Select(x => $"{x.SegmentId} has no test-ready visual/narration coverage.").ToList();
+        var warnings = safeBundles.SelectMany(x => x.Warnings ?? [])
             .Concat(missingBySource.Where(x => x.Value > 0).Select(x =>
                 x.Key.Equals("AICinematic", StringComparison.OrdinalIgnoreCase)
                     ? $"AICinematic has {x.Value} required assets not realized."
@@ -1261,13 +1273,13 @@ public sealed class WeeklyAssetRealizationService(
             input.PipelineRunId,
             DateTime.UtcNow,
             planned,
-            assets.Count,
+            safeAssets.Count,
             readyAssets,
-            Math.Max(0, planned - assets.Count),
+            Math.Max(0, planned - safeAssets.Count),
             realizedBySource,
             missingBySource,
             segmentCoverage,
-            planned <= 0 ? 100 : Math.Round((double)assets.Count / planned * 100, 2),
+            planned <= 0 ? 100 : Math.Round((double)safeAssets.Count / planned * 100, 2),
             blockers,
             warnings);
     }
@@ -1336,24 +1348,27 @@ public sealed class WeeklyAssetRealizationValidator
 {
     public WeeklyVideoReadinessReport BuildVideoReadinessReport(WeeklyAssetRealizationInput input, WeeklyProductionAssetManifest manifest, WeeklyAssetCoverageAuditReport report)
     {
-        var longform = manifest.SegmentBundles.Where(x => x.EpisodeType == WeeklyEpisodeType.LongFormWeeklyForecast.ToString()).ToList();
-        var shortform = manifest.SegmentBundles.Where(x => x.EpisodeType == WeeklyEpisodeType.ShortFormWeeklyHighlight.ToString()).ToList();
-        var expectedSegmentCount = input.LongformPlan.Segments.Count + input.ShortformPlan.Segments.Count;
+        var safeBundles = manifest.SegmentBundles?.ToList() ?? [];
+        var longformPlanSegments = input.LongformPlan.Segments ?? [];
+        var shortformPlanSegments = input.ShortformPlan.Segments ?? [];
+        var longform = safeBundles.Where(x => x.EpisodeType == WeeklyEpisodeType.LongFormWeeklyForecast.ToString()).ToList();
+        var shortform = safeBundles.Where(x => x.EpisodeType == WeeklyEpisodeType.ShortFormWeeklyHighlight.ToString()).ToList();
+        var expectedSegmentCount = longformPlanSegments.Count + shortformPlanSegments.Count;
         var storyBeatsExist = File.Exists(input.StoryBeatsPath);
-        var allAssignedFilesExist = manifest.SegmentBundles.SelectMany(x => x.AssignedVisualAssets).All(x => x.Exists && x.ProductionReady);
-        var allSegmentsHaveVisuals = manifest.SegmentBundles.Count == expectedSegmentCount && manifest.SegmentBundles.All(x => x.AssignedVisualAssets.Count > 0);
+        var allAssignedFilesExist = safeBundles.SelectMany(x => x.AssignedVisualAssets ?? []).All(x => x.Exists && x.ProductionReady);
+        var allSegmentsHaveVisuals = safeBundles.Count == expectedSegmentCount && safeBundles.All(x => (x.AssignedVisualAssets ?? []).Count > 0);
         var testReady = allSegmentsHaveVisuals && storyBeatsExist && allAssignedFilesExist;
-        var longformTestReady = longform.Count == input.LongformPlan.Segments.Count && longform.All(x => x.ProductionReadyForTest);
-        var shortformTestReady = shortform.Count == input.ShortformPlan.Segments.Count && shortform.All(x => x.ProductionReadyForTest);
+        var longformTestReady = longform.Count == longformPlanSegments.Count && longform.All(x => x.ProductionReadyForTest);
+        var shortformTestReady = shortform.Count == shortformPlanSegments.Count && shortform.All(x => x.ProductionReadyForTest);
         var longformFinalReady = longform.Count > 0 && longform.All(x => x.ProductionReadyForFinalVideo);
         var shortformFinalReady = shortform.Count > 0 && shortform.All(x => x.ProductionReadyForFinalVideo);
-        var missingAssets = report.MissingBySource.Where(x => x.Value > 0).Select(x => x.Key).Concat(manifest.SegmentBundles.SelectMany(x => x.MissingVisualAssetTypes)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var missingAssets = (report.MissingBySource ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)).Where(x => x.Value > 0).Select(x => x.Key).Concat(safeBundles.SelectMany(x => x.MissingVisualAssetTypes ?? [])).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var missingNarration = new List<string>();
         if (!storyBeatsExist) missingNarration.Add("weekly-story-beats");
         if (!File.Exists(input.NarrationTextPath)) missingNarration.Add("weekly-narration-text");
-        var notReady = manifest.SegmentBundles
+        var notReady = safeBundles
             .Where(x => !x.ProductionReadyForTest || !x.ProductionReadyForFinalVideo)
-            .Select(x => $"{x.SegmentId}:{x.SegmentType}:test={x.ProductionReadyForTest}:final={x.ProductionReadyForFinalVideo}:missing={string.Join('|', x.MissingVisualAssetTypes)}")
+            .Select(x => $"{x.SegmentId}:{x.SegmentType}:test={x.ProductionReadyForTest}:final={x.ProductionReadyForFinalVideo}:missing={string.Join('|', x.MissingVisualAssetTypes ?? [])}")
             .ToList();
         var finalReady = longformFinalReady && shortformFinalReady && missingAssets.Count == 0 && missingNarration.Count == 0;
         var next = new List<string>();
@@ -1371,8 +1386,8 @@ public sealed class WeeklyAssetRealizationValidator
             shortformTestReady,
             longformFinalReady,
             shortformFinalReady,
-            manifest.SegmentBundles.Count(x => x.ProductionReadyForTest),
-            manifest.SegmentBundles.Count(x => x.ProductionReadyForFinalVideo),
+            safeBundles.Count(x => x.ProductionReadyForTest),
+            safeBundles.Count(x => x.ProductionReadyForFinalVideo),
             notReady,
             missingAssets,
             missingNarration,

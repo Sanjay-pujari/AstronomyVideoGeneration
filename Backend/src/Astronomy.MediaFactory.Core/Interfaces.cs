@@ -1577,6 +1577,10 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     string? SelectedImageSequenceReportPath = null,
     bool ImageSequenceValidationReady = false,
     string? AICinematicGenerationReportPath = null,
+    string? PostAssetDynamicSceneNormalizationReportPath = null,
+    bool DynamicSceneNormalizationReady = false,
+    int NullSourceAssetsAfterNormalization = 0,
+    bool WeeklyScenesReady = false,
     WeeklySkyForecastAssetProviderSummary? AssetProviderSummary = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase

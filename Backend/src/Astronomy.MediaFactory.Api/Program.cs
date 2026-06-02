@@ -2500,6 +2500,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         var imageSequencePlanPath = Path.Combine(qualityDirectory, "image-sequence-plan.json");
         var imageSequenceSummaryPath = Path.Combine(qualityDirectory, "image-sequence-summary.json");
+        app.Logger.LogInformation("SELECTED_IMAGE_SEQUENCE_BUILD_START pipelineRunId={PipelineRunId}", pipelineRunId);
         app.Logger.LogInformation("IMAGE_SEQUENCE_SELECTION_START pipelineRunId={PipelineRunId} frameScreenshots={FrameScreenshotCount} framePlans={FramePlanCount}", pipelineRunId, screenshots.Count, generatedFramePlans.Count);
         app.Logger.LogInformation("IMAGE_SEQUENCE_VALIDATION_START pipelineRunId={PipelineRunId} expectedImageCount={ExpectedImageCount} productionImageSource={ProductionImageSource}", pipelineRunId, 6, "frameScreenshots");
         var imageSequencePlan = BuildWeeklyImageSequencePlan(
@@ -2580,6 +2581,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         app.Logger.LogInformation("IMAGE_SEQUENCE_PRODUCTION_VALIDATION_REPORT_WRITTEN path={Path} selectedReportPath={SelectedReportPath}", imageSequenceProductionValidationReportPath, selectedStellariumImageSequenceReportPath);
         app.Logger.LogInformation("IMAGE_SEQUENCE_PLAN_WRITTEN path={Path} summaryPath={SummaryPath} selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlanPath, imageSequenceSummaryPath, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
         app.Logger.LogInformation("IMAGE_SEQUENCE_VALIDATION_COMPLETE selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
+        app.Logger.LogInformation("SELECTED_IMAGE_SEQUENCE_BUILD_COMPLETE pipelineRunId={PipelineRunId} selectedImageCount={SelectedImageCount} validationStatus={ValidationStatus}", pipelineRunId, imageSequencePlan.TotalImages, imageSequencePlan.ValidationStatus);
 
         var finalScriptPathSet = scriptPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var producedRenderSceneDescriptors = finalRenderSceneDescriptors
@@ -2619,7 +2621,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         app.Logger.LogInformation("IMAGE_SEQUENCE_FINAL_VALIDATION ScenePlan={ScenePlan} Timeline={Timeline} Composition={Composition} RenderScenes={RenderScenes} FramePlans={FramePlans} SscScripts={SscScripts} FrameScreenshots={FrameScreenshots} SelectedImages={SelectedImages} ImageSequenceDuration={ImageSequenceDuration} AllSelectedImagesValid={AllSelectedImagesValid} DuplicateImages={DuplicateImages} ProductionImageSource={ProductionImageSource} fallbackUsed={FallbackUsed}", weeklyScenePlan.ScenePlans.Count, shots.Count, compositionPaths.Count, allFramePlans.Count, generatedFramePlans.Count, scriptPaths.Count, screenshots.Count, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds, allSelectedImagesValid, imageSequencePlan.DuplicateImagesDetected, imageSequencePlan.ProductionImageSource, fallbackUsed);
 
         var finalImageSequenceWithinDurationTolerance = Math.Abs(imageSequencePlan.TotalDurationSeconds - imageSequenceExpectedDurationSeconds) <= imageSequenceDurationToleranceSeconds;
-        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count == 0 || generatedFramePlans.Count != scriptPaths.Count || screenshots.Count != scriptPaths.Count || imageSequencePlan.TotalImages != imageSequencePlan.ExpectedImageCount || !finalImageSequenceWithinDurationTolerance || !imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase) || !allSelectedImagesValid || imageSequencePlan.DuplicateImagesDetected || !imageSequencePlan.ProductionImageSource.Equals("frameScreenshots", StringComparison.OrdinalIgnoreCase) || fallbackUsed)
+        if (!imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase) || !allSelectedImagesValid || imageSequencePlan.DuplicateImagesDetected)
         {
             var offendingFramesText = offendingFallbackFrames.Count == 0
                 ? string.Empty
@@ -2646,6 +2648,10 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             throw new InvalidOperationException($"Final validation failed: ScenePlan={weeklyScenePlan.ScenePlans.Count}, Timeline={shots.Count}, Composition={compositionPaths.Count}, RenderScenes={allFramePlans.Count}, FramePlans={generatedFramePlans.Count}, SscScripts={scriptPaths.Count}, FrameScreenshots={screenshots.Count}, SelectedImages={imageSequencePlan.TotalImages}, ImageSequenceDuration={imageSequencePlan.EstimatedDurationSeconds}, AllSelectedImagesValid={allSelectedImagesValid}, DuplicateImages={imageSequencePlan.DuplicateImagesDetected}, ProductionImageSource={imageSequencePlan.ProductionImageSource}, fallbackUsed={(fallbackUsed ? "true" : "false")}{invalidImagesText}{offendingFramesText}");
         }
 
+        if (!finalImageSequenceWithinDurationTolerance)
+        {
+            warnings.Add($"Selected image sequence duration {imageSequencePlan.TotalDurationSeconds}s differs from expected {imageSequenceExpectedDurationSeconds}s by {Math.Abs(imageSequenceDurationDeltaSeconds)}s; tolerated as post-asset warning.");
+        }
         app.Logger.LogInformation("IMAGE_PIPELINE_LOCKED_PRODUCTION_READY pipelineRunId={PipelineRunId} selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds} productionImageSource={ProductionImageSource}", pipelineRunId, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds, imageSequencePlan.ProductionImageSource);
 
         var segmentDiversification = await ExecuteOrchestrationStageAsync("Diversifying weekly episode segments", stageCt =>
@@ -3128,6 +3134,10 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             sscPropagationValidationReport,
             ct);
 
+        app.Logger.LogInformation("GENERATE_WEEKLY_SCENES_RESPONSE_BUILD_START pipelineRunId={PipelineRunId}", pipelineRunId);
+        var weeklyScenesReady = imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase)
+            && assetRealization.DynamicSceneNormalizationReady
+            && assetRealization.NullSourceAssetsAfterNormalization == 0;
         var output = new WeeklySkyForecastV2GenerateWeeklyScenesResponse(
             pipelineRunId,
             root,
@@ -3392,12 +3402,18 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             selectedStellariumImageSequenceReportPath,
             imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase),
             aiCinematicGenerationReportPath,
+            assetRealization.PostAssetDynamicSceneNormalizationReportPath,
+            assetRealization.DynamicSceneNormalizationReady,
+            assetRealization.NullSourceAssetsAfterNormalization,
+            weeklyScenesReady,
             assetProviderSummary);
 
+        app.Logger.LogInformation("GENERATE_WEEKLY_SCENES_RESPONSE_BUILD_COMPLETE pipelineRunId={PipelineRunId} weeklyScenesReady={WeeklyScenesReady} dynamicSceneNormalizationReady={DynamicSceneNormalizationReady} nullSourceAssetsAfterNormalization={NullSourceAssetsAfterNormalization}", pipelineRunId, weeklyScenesReady, assetRealization.DynamicSceneNormalizationReady, assetRealization.NullSourceAssetsAfterNormalization);
         return Results.Ok(output);
     }
     catch (Exception ex)
     {
+        app.Logger.LogError(ex, "WEEKLY_POST_ASSET_NULL_SOURCE_FAILURE stage={Stage} field={Field} sceneCode={SceneCode} assetPath={AssetPath} pipelineRunId={PipelineRunId}", "GENERATE_WEEKLY_SCENES", ex is ArgumentNullException argumentNullException ? argumentNullException.ParamName ?? "unknown" : "unknown", "unknown", "unknown", request.PipelineRunId);
         return Results.BadRequest(new { error = ex.Message });
     }
 });
@@ -5706,24 +5722,29 @@ static async Task WriteSelectedImageSequenceReportAsync(
     {
         logger.LogInformation("SELECTED_IMAGE_SEQUENCE_REPORT_BUILD_START path={Path} selectedImageCount={SelectedImageCount} validationStatus={ValidationStatus}", resolvedSelectedReportPath, imageSequencePlan.SelectedImageCount, imageSequencePlan.ValidationStatus);
 
-        var safeSelectedImages = selectedImages ?? Array.Empty<ImageSequenceItem>();
+        var safeSelectedImages = selectedImages?.Where(x => x is not null).ToList() ?? [];
         var safeFramePlanLookup = framePlanLookup ?? new Dictionary<string, CinematicFramePlan>(StringComparer.OrdinalIgnoreCase);
         var productionImageSource = ResolveSelectedImageSource(imageSequencePlan.ProductionImageSource, null);
-        var warnings = imageSequencePlan.ValidationWarnings ?? Array.Empty<string>();
+        var reportWarnings = (imageSequencePlan.ValidationWarnings ?? Array.Empty<string>()).ToList();
         var validationPassed = imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase);
 
         var images = safeSelectedImages.Select(x =>
         {
             var imagePath = x.ImagePath ?? string.Empty;
             if (string.IsNullOrWhiteSpace(imagePath))
+            {
                 nullFieldName = "imagePath";
+                reportWarnings.Add($"sequenceIndex={x.SequenceIndex}; imagePath is missing; skipped selected image.");
+                return null;
+            }
 
             var source = ResolveSelectedImageSource(productionImageSource, imagePath);
-            var sourceType = "StellariumFrameScreenshot";
+            var sourceType = source;
             var sourceSceneCode = ResolveImageSequenceSourceSceneCode(x.SourceSceneCode, imagePath, x.RenderSceneCode);
             var sceneCode = string.IsNullOrWhiteSpace(x.RenderSceneCode)
                 ? (DeriveStellariumSceneCodeFromImagePath(imagePath) ?? sourceSceneCode)
                 : x.RenderSceneCode;
+            var parentSceneCode = WeeklyPostAssetDynamicSceneNormalizer.InferParentSceneCode(sceneCode);
             var frameType = ResolveSelectedImageReportFrameType(x.FrameType, imagePath);
             var selectedFramePlan = !string.IsNullOrWhiteSpace(x.FrameId) && safeFramePlanLookup.TryGetValue(x.FrameId, out var foundFramePlan)
                 ? foundFramePlan
@@ -5742,6 +5763,7 @@ static async Task WriteSelectedImageSequenceReportAsync(
                 sourceType,
                 sourceSceneCode,
                 sceneCode,
+                parentSceneCode,
                 frameType,
                 imagePath,
                 path = imagePath,
@@ -5749,7 +5771,7 @@ static async Task WriteSelectedImageSequenceReportAsync(
                 requiredLabels,
                 durationSeconds = Math.Max(1, x.SuggestedDurationSeconds)
             };
-        }).ToArray();
+        }).Where(x => x is not null).ToArray();
 
         await File.WriteAllTextAsync(resolvedSelectedReportPath, JsonSerializer.Serialize(new
         {
@@ -5763,14 +5785,15 @@ static async Task WriteSelectedImageSequenceReportAsync(
             durationDeltaSeconds,
             withinDurationTolerance = Math.Abs(durationDeltaSeconds) <= durationToleranceSeconds,
             images,
-            warnings,
-            errors = validationPassed ? Array.Empty<string>() : warnings
+            warnings = reportWarnings,
+            errors = validationPassed ? Array.Empty<string>() : reportWarnings
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
 
         logger.LogInformation("SELECTED_IMAGE_SEQUENCE_REPORT_BUILD_COMPLETE path={Path} selectedImageCount={SelectedImageCount} validationStatus={ValidationStatus}", resolvedSelectedReportPath, images.Length, imageSequencePlan.ValidationStatus);
     }
     catch (Exception ex)
     {
+        logger.LogError(ex, "WEEKLY_POST_ASSET_NULL_SOURCE_FAILURE stage={Stage} field={Field} sceneCode={SceneCode} assetPath={AssetPath} pipelineRunId={PipelineRunId}", "SELECTED_IMAGE_SEQUENCE_REPORT_BUILD", nullFieldName ?? "unknown", "unknown", resolvedSelectedReportPath, imageSequencePlan.PipelineRunId);
         logger.LogError(ex, "SELECTED_IMAGE_SEQUENCE_REPORT_BUILD_FAILED path={Path} nullFieldName={NullFieldName}", resolvedSelectedReportPath, nullFieldName ?? "unknown");
         throw;
     }

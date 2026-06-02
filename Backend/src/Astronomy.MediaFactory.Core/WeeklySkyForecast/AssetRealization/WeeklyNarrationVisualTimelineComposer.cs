@@ -103,16 +103,23 @@ public sealed class WeeklyNarrationVisualTimelineComposer(ILogger<WeeklyNarratio
 
         var segments = new List<WeeklyNarrationVisualTimelineSegment>();
         var currentSecond = 0;
-        var bundlesBySegmentId = input.ProductionAssetManifest.SegmentBundles.ToDictionary(x => x.SegmentId, StringComparer.OrdinalIgnoreCase);
+        var safeBundles = input.ProductionAssetManifest.SegmentBundles?.ToList() ?? [];
+        var safeLongformSegments = input.LongformPlan.Segments ?? [];
+        var safeShortformSegments = input.ShortformPlan.Segments ?? [];
+        var bundlesBySegmentId = safeBundles
+            .Where(x => !string.IsNullOrWhiteSpace(x.SegmentId))
+            .GroupBy(x => x.SegmentId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
 
-        foreach (var planSegment in input.LongformPlan.Segments.Concat(input.ShortformPlan.Segments))
+        foreach (var planSegment in safeLongformSegments.Concat(safeShortformSegments))
         {
-            var episodeType = input.LongformPlan.Segments.Any(x => x.SegmentId.Equals(planSegment.SegmentId, StringComparison.OrdinalIgnoreCase))
+            var episodeType = safeLongformSegments.Any(x => x.SegmentId.Equals(planSegment.SegmentId, StringComparison.OrdinalIgnoreCase))
                 ? input.LongformPlan.EpisodeType.ToString()
                 : input.ShortformPlan.EpisodeType.ToString();
             if (!bundlesBySegmentId.TryGetValue(planSegment.SegmentId, out var bundle))
             {
-                bundle = input.ProductionAssetManifest.SegmentBundles.First(x => x.SegmentType.Equals(planSegment.SegmentType, StringComparison.OrdinalIgnoreCase) && x.EpisodeType.Equals(episodeType, StringComparison.OrdinalIgnoreCase));
+                bundle = safeBundles.FirstOrDefault(x => x.SegmentType.Equals(planSegment.SegmentType, StringComparison.OrdinalIgnoreCase) && x.EpisodeType.Equals(episodeType, StringComparison.OrdinalIgnoreCase))
+                    ?? new SegmentProductionAssetBundle(planSegment.SegmentId, episodeType, planSegment.SegmentType, planSegment.TargetDurationSeconds, "StoryBeatsMissing", input.WeeklyStoryBeatsPath, 0, [], ["dynamic-scene-visual-support"], false, "No post-asset bundle matched this dynamic segment.", ["No matching segment asset bundle was found after dynamic scene normalization."], false, false);
             }
 
             var narrationText = ResolveNarrationText(input.GeneratedNarrationPackage, planSegment, episodeType);
@@ -122,7 +129,7 @@ public sealed class WeeklyNarrationVisualTimelineComposer(ILogger<WeeklyNarratio
             var segmentStart = currentSecond;
             var segmentEnd = segmentStart + planSegment.TargetDurationSeconds;
             var shots = BuildShots(bundle, planSegment, segmentStart, segmentEnd, episodeType);
-            var warnings = bundle.Warnings.ToList();
+            var warnings = (bundle.Warnings ?? []).ToList();
             if (string.IsNullOrWhiteSpace(narrationText)) warnings.Add("Narration text missing for timeline segment.");
             if (shots.Count == 0) warnings.Add("No visual shot could be bound to timeline segment.");
 
@@ -219,14 +226,17 @@ public sealed class WeeklyNarrationVisualTimelineComposer(ILogger<WeeklyNarratio
 
     private WeeklyTimelineValidationReport Validate(WeeklyNarrationVisualTimelineInput input, WeeklyNarrationVisualTimeline timeline)
     {
-        var expectedSegmentCount = input.LongformPlan.Segments.Count + input.ShortformPlan.Segments.Count;
-        var missingNarration = timeline.Segments.Where(x => string.IsNullOrWhiteSpace(x.NarrationText)).Select(x => x.SegmentId).ToList();
-        var missingVisuals = timeline.Segments.Where(x => x.AssignedVisualShots.Count == 0 || x.AssignedVisualShots.Any(s => !File.Exists(s.ImagePath))).Select(x => x.SegmentId).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var invalidDuration = timeline.Segments.Where(x => x.DurationSeconds <= 0 || x.EndSecond <= x.StartSecond || x.AssignedVisualShots.Any(s => s.DurationSeconds <= 0 || s.EndSecond <= s.StartSecond)).Select(x => x.SegmentId).ToList();
-        var hasGapOrOverlap = HasGapOrOverlap(timeline.Segments);
-        var fallbackSegments = timeline.Segments.Where(x => x.Warnings.Any(w => w.Contains("fallback", StringComparison.OrdinalIgnoreCase)) || x.AssignedVisualShots.All(s => s.NarrationBindingRole.Contains("fallback", StringComparison.OrdinalIgnoreCase))).Select(x => x.SegmentId).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var safeLongformSegments = input.LongformPlan.Segments ?? [];
+        var safeShortformSegments = input.ShortformPlan.Segments ?? [];
+        var safeTimelineSegments = timeline.Segments?.ToList() ?? [];
+        var expectedSegmentCount = safeLongformSegments.Count + safeShortformSegments.Count;
+        var missingNarration = safeTimelineSegments.Where(x => string.IsNullOrWhiteSpace(x.NarrationText)).Select(x => x.SegmentId).ToList();
+        var missingVisuals = safeTimelineSegments.Where(x => (x.AssignedVisualShots ?? []).Count == 0 || (x.AssignedVisualShots ?? []).Any(s => !File.Exists(s.ImagePath))).Select(x => x.SegmentId).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var invalidDuration = safeTimelineSegments.Where(x => x.DurationSeconds <= 0 || x.EndSecond <= x.StartSecond || (x.AssignedVisualShots ?? []).Any(s => s.DurationSeconds <= 0 || s.EndSecond <= s.StartSecond)).Select(x => x.SegmentId).ToList();
+        var hasGapOrOverlap = HasGapOrOverlap(safeTimelineSegments);
+        var fallbackSegments = safeTimelineSegments.Where(x => (x.Warnings ?? []).Any(w => w.Contains("fallback", StringComparison.OrdinalIgnoreCase)) || (x.AssignedVisualShots ?? []).All(s => s.NarrationBindingRole.Contains("fallback", StringComparison.OrdinalIgnoreCase))).Select(x => x.SegmentId).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
-        var testTimelineReady = timeline.Segments.Count == expectedSegmentCount
+        var testTimelineReady = safeTimelineSegments.Count == expectedSegmentCount
             && expectedSegmentCount == 13
             && missingNarration.Count == 0
             && missingVisuals.Count == 0
@@ -234,21 +244,21 @@ public sealed class WeeklyNarrationVisualTimelineComposer(ILogger<WeeklyNarratio
             && !hasGapOrOverlap;
 
         var blockers = new List<string>();
-        if (timeline.Segments.Count != expectedSegmentCount || expectedSegmentCount != 13) blockers.Add($"Expected 13 timeline segments but found {timeline.Segments.Count} of {expectedSegmentCount} planned segments.");
+        if (safeTimelineSegments.Count != expectedSegmentCount || expectedSegmentCount != 13) blockers.Add($"Expected 13 timeline segments but found {safeTimelineSegments.Count} of {expectedSegmentCount} planned segments.");
         if (missingNarration.Count > 0) blockers.Add($"Missing narration: {string.Join(",", missingNarration)}.");
         if (missingVisuals.Count > 0) blockers.Add($"Missing visuals or image files: {string.Join(",", missingVisuals)}.");
         if (invalidDuration.Count > 0) blockers.Add($"Invalid timeline durations: {string.Join(",", invalidDuration)}.");
         if (hasGapOrOverlap) blockers.Add("Timeline has gaps or overlaps.");
         if (fallbackSegments.Count > 0) blockers.Add($"Fallback visual segments remain: {string.Join(",", fallbackSegments)}.");
-        if (input.VideoReadinessReport.MissingAssetCategories.Contains("MotionGraphics", StringComparer.OrdinalIgnoreCase)) blockers.Add("MotionGraphics requirements are not satisfied.");
-        if (input.VideoReadinessReport.MissingAssetCategories.Contains("EducationalOverlay", StringComparer.OrdinalIgnoreCase)) blockers.Add("EducationalOverlay requirements are not satisfied.");
-        if (input.VideoReadinessReport.MissingAssetCategories.Contains("NASA", StringComparer.OrdinalIgnoreCase) || input.VideoReadinessReport.MissingAssetCategories.Contains("JWST", StringComparer.OrdinalIgnoreCase)) blockers.Add("NASA/JWST requirements are not satisfied.");
+        if ((input.VideoReadinessReport.MissingAssetCategories ?? []).Contains("MotionGraphics", StringComparer.OrdinalIgnoreCase)) blockers.Add("MotionGraphics requirements are not satisfied.");
+        if ((input.VideoReadinessReport.MissingAssetCategories ?? []).Contains("EducationalOverlay", StringComparer.OrdinalIgnoreCase)) blockers.Add("EducationalOverlay requirements are not satisfied.");
+        if ((input.VideoReadinessReport.MissingAssetCategories ?? []).Contains("NASA", StringComparer.OrdinalIgnoreCase) || (input.VideoReadinessReport.MissingAssetCategories ?? []).Contains("JWST", StringComparer.OrdinalIgnoreCase)) blockers.Add("NASA/JWST requirements are not satisfied.");
         if (input.GeneratedNarrationPackage is null) blockers.Add("Narration is not final production-grade generated narration.");
 
-        var longformSegments = timeline.Segments.Where(x => x.EpisodeType == WeeklyEpisodeType.LongFormWeeklyForecast.ToString()).ToList();
-        var shortformSegments = timeline.Segments.Where(x => x.EpisodeType == WeeklyEpisodeType.ShortFormWeeklyHighlight.ToString()).ToList();
-        var longformTest = testTimelineReady && longformSegments.Count == input.LongformPlan.Segments.Count && longformSegments.All(x => x.ProductionReadyForTest);
-        var shortformTest = testTimelineReady && shortformSegments.Count == input.ShortformPlan.Segments.Count && shortformSegments.All(x => x.ProductionReadyForTest);
+        var longformSegments = safeTimelineSegments.Where(x => x.EpisodeType == WeeklyEpisodeType.LongFormWeeklyForecast.ToString()).ToList();
+        var shortformSegments = safeTimelineSegments.Where(x => x.EpisodeType == WeeklyEpisodeType.ShortFormWeeklyHighlight.ToString()).ToList();
+        var longformTest = testTimelineReady && longformSegments.Count == safeLongformSegments.Count && longformSegments.All(x => x.ProductionReadyForTest);
+        var shortformTest = testTimelineReady && shortformSegments.Count == safeShortformSegments.Count && shortformSegments.All(x => x.ProductionReadyForTest);
         var longformFinal = longformTest && input.VideoReadinessReport.LongformFinalReady && fallbackSegments.Count == 0 && !blockers.Any(x => x.Contains("requirements are not satisfied", StringComparison.OrdinalIgnoreCase) || x.Contains("Narration is not final", StringComparison.OrdinalIgnoreCase));
         var shortformFinal = shortformTest && input.VideoReadinessReport.ShortformFinalReady && fallbackSegments.Count == 0 && !blockers.Any(x => x.Contains("requirements are not satisfied", StringComparison.OrdinalIgnoreCase) || x.Contains("Narration is not final", StringComparison.OrdinalIgnoreCase));
 
@@ -257,10 +267,10 @@ public sealed class WeeklyNarrationVisualTimelineComposer(ILogger<WeeklyNarratio
             shortformTest,
             longformFinal,
             shortformFinal,
-            timeline.Segments.Sum(x => x.DurationSeconds),
-            timeline.Segments.Sum(x => x.AssignedVisualShots.Count),
-            timeline.Segments.Count(x => !string.IsNullOrWhiteSpace(x.NarrationText)),
-            timeline.Segments.Count(x => x.AssignedVisualShots.Count > 0),
+            safeTimelineSegments.Sum(x => x.DurationSeconds),
+            safeTimelineSegments.Sum(x => (x.AssignedVisualShots ?? []).Count),
+            safeTimelineSegments.Count(x => !string.IsNullOrWhiteSpace(x.NarrationText)),
+            safeTimelineSegments.Count(x => (x.AssignedVisualShots ?? []).Count > 0),
             missingNarration,
             missingVisuals,
             fallbackSegments,
@@ -270,13 +280,13 @@ public sealed class WeeklyNarrationVisualTimelineComposer(ILogger<WeeklyNarratio
 
     private static bool HasGapOrOverlap(IReadOnlyList<WeeklyNarrationVisualTimelineSegment> segments)
     {
-        var ordered = segments.OrderBy(x => x.StartSecond).ToList();
+        var ordered = (segments ?? []).OrderBy(x => x.StartSecond).ToList();
         if (ordered.Count == 0 || ordered[0].StartSecond != 0) return true;
         for (var i = 0; i < ordered.Count; i++)
         {
             if (ordered[i].EndSecond != ordered[i].StartSecond + ordered[i].DurationSeconds) return true;
             if (i > 0 && ordered[i].StartSecond != ordered[i - 1].EndSecond) return true;
-            var shots = ordered[i].AssignedVisualShots.OrderBy(x => x.StartSecond).ToList();
+            var shots = (ordered[i].AssignedVisualShots ?? []).OrderBy(x => x.StartSecond).ToList();
             if (shots.Count == 0) continue;
             if (shots[0].StartSecond != ordered[i].StartSecond) return true;
             if (shots[^1].EndSecond != ordered[i].EndSecond) return true;
@@ -292,8 +302,8 @@ public sealed class WeeklyNarrationVisualTimelineComposer(ILogger<WeeklyNarratio
     {
         if (package is not null && episodeType == WeeklyEpisodeType.LongFormWeeklyForecast.ToString())
         {
-            var exact = package.LongFormNarration.Segments.FirstOrDefault(s => s.SegmentCode.Equals(segment.SegmentType, StringComparison.OrdinalIgnoreCase))?.NarrationText
-                ?? package.LongFormNarration.Segments.FirstOrDefault(s => s.SegmentTitle.Contains(segment.Title, StringComparison.OrdinalIgnoreCase) || segment.Title.Contains(s.SegmentTitle, StringComparison.OrdinalIgnoreCase))?.NarrationText;
+            var exact = (package.LongFormNarration.Segments ?? []).FirstOrDefault(s => s.SegmentCode.Equals(segment.SegmentType, StringComparison.OrdinalIgnoreCase))?.NarrationText
+                ?? (package.LongFormNarration.Segments ?? []).FirstOrDefault(s => s.SegmentTitle.Contains(segment.Title, StringComparison.OrdinalIgnoreCase) || segment.Title.Contains(s.SegmentTitle, StringComparison.OrdinalIgnoreCase))?.NarrationText;
             if (!string.IsNullOrWhiteSpace(exact)) return exact;
 
             var mappedCode = segment.SegmentType switch
@@ -307,14 +317,14 @@ public sealed class WeeklyNarrationVisualTimelineComposer(ILogger<WeeklyNarratio
                 "WeeklySummary" => "ClosingCTA",
                 _ => segment.SegmentType
             };
-            var mapped = package.LongFormNarration.Segments.FirstOrDefault(s => s.SegmentCode.Equals(mappedCode, StringComparison.OrdinalIgnoreCase))?.NarrationText;
+            var mapped = (package.LongFormNarration.Segments ?? []).FirstOrDefault(s => s.SegmentCode.Equals(mappedCode, StringComparison.OrdinalIgnoreCase))?.NarrationText;
             if (!string.IsNullOrWhiteSpace(mapped)) return mapped;
         }
 
         if (package is not null)
         {
-            var exact = package.ShortNarrations.FirstOrDefault(s => s.ShortCode.Equals(segment.SegmentType, StringComparison.OrdinalIgnoreCase))?.NarrationText
-                ?? package.ShortNarrations.FirstOrDefault(s => s.Title.Contains(segment.Title, StringComparison.OrdinalIgnoreCase) || segment.Title.Contains(s.Title, StringComparison.OrdinalIgnoreCase))?.NarrationText;
+            var exact = (package.ShortNarrations ?? []).FirstOrDefault(s => s.ShortCode.Equals(segment.SegmentType, StringComparison.OrdinalIgnoreCase))?.NarrationText
+                ?? (package.ShortNarrations ?? []).FirstOrDefault(s => s.Title.Contains(segment.Title, StringComparison.OrdinalIgnoreCase) || segment.Title.Contains(s.Title, StringComparison.OrdinalIgnoreCase))?.NarrationText;
             if (!string.IsNullOrWhiteSpace(exact)) return exact;
 
             var shortIndex = segment.SegmentType switch
@@ -326,7 +336,8 @@ public sealed class WeeklyNarrationVisualTimelineComposer(ILogger<WeeklyNarratio
                 "CallToAction" => 2,
                 _ => 0
             };
-            if (package.ShortNarrations.Count > 0) return package.ShortNarrations[Math.Min(shortIndex, package.ShortNarrations.Count - 1)].NarrationText;
+            var safeShortNarrations = package.ShortNarrations ?? [];
+            if (safeShortNarrations.Count > 0) return safeShortNarrations[Math.Min(shortIndex, safeShortNarrations.Count - 1)].NarrationText;
         }
 
         return $"{segment.Title}. {segment.Purpose}";
