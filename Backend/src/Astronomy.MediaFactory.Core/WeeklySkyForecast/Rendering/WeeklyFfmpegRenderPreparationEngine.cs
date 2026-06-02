@@ -75,6 +75,15 @@ public sealed record WeeklyRenderInputManifest(
     int TotalRenderInputAssets = 0,
     bool RenderInputHydrationPassed = true);
 
+public sealed record WeeklyFfmpegInputManifestValidationReport(
+    bool InputManifestReady,
+    int ShotCount,
+    int NullVisualAssetCollections,
+    int NullTimelineItemCollections,
+    int NullRenderInputCollections,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
 public sealed record WeeklyRenderInputAsset(
     string AssetId,
     string AssetType,
@@ -222,8 +231,11 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
         Directory.CreateDirectory(Path.Combine(input.WorkingDirectoryRoot, "audio", "longform"));
         Directory.CreateDirectory(Path.Combine(input.WorkingDirectoryRoot, "audio", "shortform"));
 
-        var allShots = timeline.Longform.Segments.SelectMany(s => s.Shots.Select(shot => (Episode: "longform", Segment: s, Shot: shot)))
-            .Concat(timeline.Shortform.Segments.SelectMany(s => s.Shots.Select(shot => (Episode: "shortform", Segment: s, Shot: shot))))
+        var longformSegments = timeline.Longform?.Segments ?? [];
+        var shortformSegments = timeline.Shortform?.Segments ?? [];
+        var nullTimelineItemCollections = longformSegments.Count(s => s.Shots is null) + shortformSegments.Count(s => s.Shots is null);
+        var allShots = longformSegments.SelectMany(s => (s.Shots ?? Enumerable.Empty<FinalRenderShot>()).Select(shot => (Episode: "longform", Segment: s, Shot: shot)))
+            .Concat(shortformSegments.SelectMany(s => (s.Shots ?? Enumerable.Empty<FinalRenderShot>()).Select(shot => (Episode: "shortform", Segment: s, Shot: shot))))
             .ToList();
         var contract = new WeeklyRenderContract(
             input.PipelineRunId,
@@ -231,10 +243,10 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
             input.WeekStartDate,
             input.RegionId,
             input.Language,
-            new WeeklyEpisodeRenderContract(true, 1920, 1080, 30, timeline.Longform.TargetDurationSeconds, input.FinalRenderTimelinePath, timeline.Longform.Segments.Sum(x => x.Shots.Count), Path.Combine(renderDirectory, "longform", "weekly-skyforecast-longform.mp4")),
-            new WeeklyEpisodeRenderContract(true, 1080, 1920, 30, timeline.Shortform.TargetDurationSeconds, input.FinalRenderTimelinePath, timeline.Shortform.Segments.Sum(x => x.Shots.Count), Path.Combine(renderDirectory, "shortform", "weekly-skyforecast-shortform.mp4")));
+            new WeeklyEpisodeRenderContract(true, 1920, 1080, 30, timeline.Longform.TargetDurationSeconds, input.FinalRenderTimelinePath, longformSegments.Sum(x => (x.Shots ?? []).Count), Path.Combine(renderDirectory, "longform", "weekly-skyforecast-longform.mp4")),
+            new WeeklyEpisodeRenderContract(true, 1080, 1920, 30, timeline.Shortform.TargetDurationSeconds, input.FinalRenderTimelinePath, shortformSegments.Sum(x => (x.Shots ?? []).Count), Path.Combine(renderDirectory, "shortform", "weekly-skyforecast-shortform.mp4")));
 
-        var manifest = await BuildInputManifestAsync(input.PipelineRunId, input.WorkingDirectoryRoot, allShots, productionManifest, cancellationToken);
+        var manifest = await BuildInputManifestAsync(input.PipelineRunId, input.WorkingDirectoryRoot, renderDirectory, allShots, productionManifest, nullTimelineItemCollections, logger, cancellationToken);
         var motionPlan = BuildMotionPlan(input.PipelineRunId, allShots);
         var transitionPlan = BuildTransitionPlan(input.PipelineRunId, allShots);
         var filterGraphPlan = BuildFilterGraphPlan(input.PipelineRunId, timeline, motionPlan, transitionPlan);
@@ -267,10 +279,22 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
         return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken) ?? throw new InvalidOperationException($"Unable to deserialize required renderer preparation input: {path}");
     }
 
-    private static async Task<WeeklyRenderInputManifest> BuildInputManifestAsync(Guid pipelineRunId, string root, IReadOnlyList<(string Episode, FinalRenderSegment Segment, FinalRenderShot Shot)> allShots, WeeklyProductionAssetManifest productionManifest, CancellationToken cancellationToken)
+    private static async Task<WeeklyRenderInputManifest> BuildInputManifestAsync(Guid pipelineRunId, string root, string renderDirectory, IReadOnlyList<(string Episode, FinalRenderSegment Segment, FinalRenderShot Shot)> allShots, WeeklyProductionAssetManifest productionManifest, int nullTimelineItemCollections, ILogger logger, CancellationToken cancellationToken)
     {
-        var candidateAssets = allShots.Select(x => (AssetId: x.Shot.AssetId, AssetType: x.Shot.AssetType, AssetPath: x.Shot.AssetPath))
-            .Concat(productionManifest.SegmentBundles.SelectMany(b => b.AssignedVisualAssets).Where(a => a.Exists && a.ProductionReady).Select(a => (AssetId: $"{a.SourceType}:{a.AssetCode}", AssetType: a.SourceType.ToString(), AssetPath: a.FilePath)))
+        var normalizedShots = allShots ?? [];
+        var segmentBundles = productionManifest?.SegmentBundles ?? [];
+        var nullVisualAssetCollections = segmentBundles.Count(bundle => bundle.AssignedVisualAssets is null);
+        var nullRenderInputCollections = productionManifest?.SegmentBundles is null ? 1 : 0;
+
+        logger.LogInformation(
+            "FFMPEG_INPUT_MANIFEST_SOURCE_COUNTS shotCount={ShotCount} nullVisualAssetCollections={NullVisualAssetCollections} nullTimelineItemCollections={NullTimelineItemCollections} nullRenderInputCollections={NullRenderInputCollections}",
+            normalizedShots.Count,
+            nullVisualAssetCollections,
+            nullTimelineItemCollections,
+            nullRenderInputCollections);
+
+        var candidateAssets = normalizedShots.Select(x => (AssetId: x.Shot.AssetId, AssetType: x.Shot.AssetType, AssetPath: x.Shot.AssetPath))
+            .Concat(segmentBundles.SelectMany(b => b.AssignedVisualAssets ?? []).Where(a => a.Exists && a.ProductionReady).Select(a => (AssetId: $"{a.SourceType}:{a.AssetCode}", AssetType: a.SourceType.ToString(), AssetPath: a.FilePath)))
             .Concat(DiscoverRenderInputFiles(root))
             .Where(x => !string.IsNullOrWhiteSpace(x.AssetPath))
             .DistinctBy(x => Path.GetFullPath(x.AssetPath), StringComparer.OrdinalIgnoreCase)
@@ -279,7 +303,7 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
         foreach (var group in candidateAssets.GroupBy(x => x.AssetPath, StringComparer.OrdinalIgnoreCase))
         {
             var firstCandidate = group.First();
-            var shotMatches = allShots.Where(x => x.Shot.AssetPath.Equals(firstCandidate.AssetPath, StringComparison.OrdinalIgnoreCase)).ToList();
+            var shotMatches = normalizedShots.Where(x => x.Shot.AssetPath.Equals(firstCandidate.AssetPath, StringComparison.OrdinalIgnoreCase)).ToList();
             var first = shotMatches.FirstOrDefault().Shot ?? new FinalRenderShot(1, firstCandidate.AssetId, NormalizeRenderAssetType(firstCandidate.AssetType), firstCandidate.AssetPath, 0, 0, 0, "Cut", "Cut", "StaticHold", "production asset pool hydration");
             var errors = new List<string>();
             var exists = File.Exists(first.AssetPath);
@@ -314,9 +338,13 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
         var allFound = assets.All(x => x.Exists && x.FileSizeBytes > 0);
         var allReadable = assets.All(x => x.Readable && x.Width > 0 && x.Height > 0);
         var ordered = assets.OrderBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase).ToList();
-        var totalProduction = Math.Max(productionManifest.TotalProductionImageAssetCount, ordered.Count);
+        var totalProduction = Math.Max(productionManifest?.TotalProductionImageAssetCount ?? 0, ordered.Count);
         var hydrationPassed = totalProduction == 0 || ordered.Count >= Math.Ceiling(totalProduction * 0.8);
-        return new WeeklyRenderInputManifest(pipelineRunId, DateTime.UtcNow, ordered, allFound, allReadable, hydrationPassed ? [] : [$"Render input hydration discovered {ordered.Count} assets; expected at least 80% of {totalProduction} production assets."], assets.SelectMany(x => x.ValidationErrors.Select(e => $"{x.AssetId}: {e}")).ToList(), totalProduction, ordered.Count, hydrationPassed);
+        var warnings = hydrationPassed ? [] : [$"Render input hydration discovered {ordered.Count} assets; expected at least 80% of {totalProduction} production assets."];
+        var manifest = new WeeklyRenderInputManifest(pipelineRunId, DateTime.UtcNow, ordered, allFound, allReadable, warnings, assets.SelectMany(x => (x.ValidationErrors ?? []).Select(e => $"{x.AssetId}: {e}")).ToList(), totalProduction, ordered.Count, hydrationPassed);
+        var validationReport = new WeeklyFfmpegInputManifestValidationReport(true, normalizedShots.Count, nullVisualAssetCollections, nullTimelineItemCollections, nullRenderInputCollections, warnings, manifest.Errors);
+        await File.WriteAllTextAsync(Path.Combine(renderDirectory, "ffmpeg-input-manifest-validation-report.json"), JsonSerializer.Serialize(validationReport, JsonOptions), cancellationToken);
+        return manifest;
     }
 
 
@@ -435,7 +463,7 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
 
     private static WeeklyEpisodeFilterGraphPlan BuildEpisodeFilterPlan(string episodeType, FinalRenderEpisodeTimeline timeline, int width, int height, WeeklyMotionEffectPlan motionPlan, WeeklyTransitionExecutionPlan transitionPlan)
     {
-        var steps = timeline.Segments.SelectMany(segment => segment.Shots.Select(shot => new WeeklyShotFilterGraphStep(
+        var steps = (timeline.Segments ?? []).SelectMany(segment => (segment.Shots ?? []).Select(shot => new WeeklyShotFilterGraphStep(
             segment.SegmentId,
             shot.ShotNumber,
             shot.AssetId,
@@ -471,8 +499,8 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
         var warnings = new List<string>();
         var errors = new List<string>();
         errors.AddRange(manifest.Errors);
-        var longformReady = contract.Longform.Enabled && contract.Longform.TargetWidth == 1920 && contract.Longform.TargetHeight == 1080 && contract.Longform.Fps == 30 && contract.Longform.DurationSeconds == 380 && contract.Longform.ShotCount == timeline.Longform.Segments.Sum(x => x.Shots.Count);
-        var shortformReady = contract.Shortform.Enabled && contract.Shortform.TargetWidth == 1080 && contract.Shortform.TargetHeight == 1920 && contract.Shortform.Fps == 30 && contract.Shortform.DurationSeconds == 50 && contract.Shortform.ShotCount == timeline.Shortform.Segments.Sum(x => x.Shots.Count);
+        var longformReady = contract.Longform.Enabled && contract.Longform.TargetWidth == 1920 && contract.Longform.TargetHeight == 1080 && contract.Longform.Fps == 30 && contract.Longform.DurationSeconds == 380 && contract.Longform.ShotCount == (timeline.Longform.Segments ?? []).Sum(x => (x.Shots ?? []).Count);
+        var shortformReady = contract.Shortform.Enabled && contract.Shortform.TargetWidth == 1080 && contract.Shortform.TargetHeight == 1920 && contract.Shortform.Fps == 30 && contract.Shortform.DurationSeconds == 50 && contract.Shortform.ShotCount == (timeline.Shortform.Segments ?? []).Sum(x => (x.Shots ?? []).Count);
         var durationPassed = timeline.Longform.ActualDurationSeconds == contract.Longform.DurationSeconds && timeline.Shortform.ActualDurationSeconds == contract.Shortform.DurationSeconds;
         var resolutionPassed = filterGraphPlan.Outputs.Any(x => x.EpisodeType == "longform" && x.TargetWidth == 1920 && x.TargetHeight == 1080 && x.Fps == 30 && x.PixelFormat == "yuv420p" && x.Container == "mp4")
             && filterGraphPlan.Outputs.Any(x => x.EpisodeType == "shortform" && x.TargetWidth == 1080 && x.TargetHeight == 1920 && x.Fps == 30 && x.PixelFormat == "yuv420p" && x.Container == "mp4");
