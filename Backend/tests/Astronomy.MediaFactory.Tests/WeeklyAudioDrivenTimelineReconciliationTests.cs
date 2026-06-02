@@ -104,7 +104,12 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
         validation.HeroGroupingParentSceneCode.Should().Be("western_planet_grouping_scene");
         validation.HeroGroupingChildSceneCodes.Should().Contain(new[] { "western_planet_grouping_scene_saturn", "western_planet_grouping_scene_venus" });
         validation.HeroGroupingPreservedFrameCount.Should().Be(2);
+        validation.HeroGroupingFrameCountExact.Should().Be(0);
+        validation.HeroGroupingFrameCountIncludingChildren.Should().Be(2);
         validation.ShortformGroupingPreservedShotCount.Should().Be(2);
+        validation.ShortformGroupingShotCountExact.Should().Be(0);
+        validation.ShortformGroupingShotCountIncludingChildren.Should().Be(1);
+        validation.GroupingChildSceneCodesDetected.Should().Contain(new[] { "western_planet_grouping_scene_saturn", "western_planet_grouping_scene_venus" });
         validation.ShortformCtaVisualPreserved.Should().BeTrue();
         validation.PreservationValidationErrors.Should().BeEmpty();
     }
