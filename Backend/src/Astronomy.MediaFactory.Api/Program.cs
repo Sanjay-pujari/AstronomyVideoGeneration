@@ -5431,10 +5431,10 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
     var planValidationWarnings = new List<string>();
     for (var i = 0; i < deterministicOrder.Length; i++)
     {
-        var (renderSceneCode, frameType) = deterministicOrder[i];
-        var key = $"{renderSceneCode}|{frameType}";
+        var (orderedRenderSceneCode, frameType) = deterministicOrder[i];
+        var key = $"{orderedRenderSceneCode}|{frameType}";
         if (!framePlanLookup.TryGetValue(key, out var framePlan))
-            throw new InvalidOperationException($"IMAGE_SEQUENCE_FRAME_PLAN_MISSING renderSceneCode='{renderSceneCode}' frameType='{frameType}'.");
+            throw new InvalidOperationException($"IMAGE_SEQUENCE_FRAME_PLAN_MISSING renderSceneCode='{orderedRenderSceneCode}' frameType='{frameType}'.");
 
         logger.LogInformation(
             "IMAGE_SEQUENCE_ITEM_SELECTED sequenceIndex={SequenceIndex} sourceSceneCode={SourceSceneCode} renderSceneCode={RenderSceneCode} frameId={FrameId} frameType={FrameType} imagePath={ImagePath}",
