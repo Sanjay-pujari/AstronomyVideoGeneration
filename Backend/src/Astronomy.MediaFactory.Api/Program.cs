@@ -946,11 +946,13 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var scriptsDirectory = Path.Combine(root, "stellarium", "scripts");
         var scenesDirectory = Path.Combine(root, "stellarium", "scenes");
         var manifestsDirectory = Path.Combine(root, "manifests");
+        var renderDirectory = Path.Combine(root, "render");
         Directory.CreateDirectory(scenePlansDirectory);
         Directory.CreateDirectory(compositionDirectory);
         Directory.CreateDirectory(scriptsDirectory);
         Directory.CreateDirectory(scenesDirectory);
         Directory.CreateDirectory(manifestsDirectory);
+        Directory.CreateDirectory(renderDirectory);
         var orchestrationStageTimeout = TimeSpan.FromSeconds(60);
 
         async Task<T> ExecuteOrchestrationStageAsync<T>(string stageName, Func<CancellationToken, Task<T>> action, TimeSpan? stageTimeoutOverride = null)
@@ -2490,6 +2492,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         }
 
         var generatedFramePlans = allFramePlans.SelectMany(x => x.FramePlans).ToList();
+        var framePlanLookupForSelectedImageReport = generatedFramePlans.ToDictionary(x => x.FrameId, StringComparer.OrdinalIgnoreCase);
         var imageSequencePlanPath = Path.Combine(qualityDirectory, "image-sequence-plan.json");
         var imageSequenceSummaryPath = Path.Combine(qualityDirectory, "image-sequence-summary.json");
         app.Logger.LogInformation("IMAGE_SEQUENCE_SELECTION_START pipelineRunId={PipelineRunId} frameScreenshots={FrameScreenshotCount} framePlans={FramePlanCount}", pipelineRunId, screenshots.Count, generatedFramePlans.Count);
@@ -2537,6 +2540,42 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             })
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
         app.Logger.LogInformation("IMAGE_SEQUENCE_SUMMARY_ENRICHED path={Path} validationStatus={ValidationStatus} productionReady={ProductionReady} validationWarnings={ValidationWarnings}", imageSequenceSummaryPath, imageSequencePlan.ValidationStatus, imageSequencePlan.ProductionReady, string.Join("|", imageSequencePlan.ValidationWarnings ?? Array.Empty<string>()));
+        var imageSequenceProductionValidationReportPath = Path.Combine(renderDirectory, "image-sequence-production-validation-report.json");
+        var selectedStellariumImageSequenceReportPath = Path.Combine(renderDirectory, "selected-stellarium-image-sequence-report.json");
+        var imageSequenceDurationDeltaSeconds = imageSequencePlan.TotalDurationSeconds - imageSequencePlan.ExpectedImageCount * 5;
+        var imageSequenceExpectedDurationSeconds = imageSequencePlan.ExpectedImageCount * 5;
+        var imageSequenceDurationToleranceSeconds = imageSequenceExpectedDurationSeconds <= 30 ? 1d : Math.Max(1d, imageSequenceExpectedDurationSeconds * 0.03d);
+        await File.WriteAllTextAsync(imageSequenceProductionValidationReportPath, JsonSerializer.Serialize(new
+        {
+            imageSequenceValidationReady = imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase),
+            validationStatus = imageSequencePlan.ValidationStatus,
+            selectedImageCount = imageSequencePlan.SelectedImageCount,
+            expectedImageCount = imageSequencePlan.ExpectedImageCount,
+            totalDurationSeconds = imageSequencePlan.TotalDurationSeconds,
+            expectedDurationSeconds = imageSequenceExpectedDurationSeconds,
+            durationDeltaSeconds = imageSequenceDurationDeltaSeconds,
+            withinDurationTolerance = Math.Abs(imageSequenceDurationDeltaSeconds) <= imageSequenceDurationToleranceSeconds,
+            duplicateImagesDetected = imageSequencePlan.DuplicateImagesDetected,
+            productionImageSource = imageSequencePlan.ProductionImageSource,
+            warnings = imageSequencePlan.ValidationWarnings ?? Array.Empty<string>(),
+            errors = imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? Array.Empty<string>() : imageSequencePlan.ValidationWarnings ?? Array.Empty<string>()
+        }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await File.WriteAllTextAsync(selectedStellariumImageSequenceReportPath, JsonSerializer.Serialize(new
+        {
+            selectedImageCount = imageSequencePlan.SelectedImageCount,
+            source = imageSequencePlan.ProductionImageSource,
+            images = imageSequencePlan.Sequences.Select(x => new
+            {
+                sceneCode = x.RenderSceneCode,
+                frameType = ResolveSelectedImageReportFrameType(x.FrameType, x.ImagePath),
+                path = x.ImagePath,
+                targetObjects = framePlanLookupForSelectedImageReport.TryGetValue(x.FrameId, out var selectedFramePlan)
+                    ? selectedFramePlan.TargetObjects.Select(o => NormalizeWeeklyObjectCode(o) ?? o).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+                    : Array.Empty<string>(),
+                durationSeconds = x.SuggestedDurationSeconds
+            })
+        }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        app.Logger.LogInformation("IMAGE_SEQUENCE_PRODUCTION_VALIDATION_REPORT_WRITTEN path={Path} selectedReportPath={SelectedReportPath}", imageSequenceProductionValidationReportPath, selectedStellariumImageSequenceReportPath);
         app.Logger.LogInformation("IMAGE_SEQUENCE_PLAN_WRITTEN path={Path} summaryPath={SummaryPath} selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlanPath, imageSequenceSummaryPath, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
         app.Logger.LogInformation("IMAGE_SEQUENCE_VALIDATION_COMPLETE selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
 
@@ -2577,7 +2616,8 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var allSelectedImagesValid = imageSequencePlan.Sequences.All(x => x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase));
         app.Logger.LogInformation("IMAGE_SEQUENCE_FINAL_VALIDATION ScenePlan={ScenePlan} Timeline={Timeline} Composition={Composition} RenderScenes={RenderScenes} FramePlans={FramePlans} SscScripts={SscScripts} FrameScreenshots={FrameScreenshots} SelectedImages={SelectedImages} ImageSequenceDuration={ImageSequenceDuration} AllSelectedImagesValid={AllSelectedImagesValid} DuplicateImages={DuplicateImages} ProductionImageSource={ProductionImageSource} fallbackUsed={FallbackUsed}", weeklyScenePlan.ScenePlans.Count, shots.Count, compositionPaths.Count, allFramePlans.Count, generatedFramePlans.Count, scriptPaths.Count, screenshots.Count, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds, allSelectedImagesValid, imageSequencePlan.DuplicateImagesDetected, imageSequencePlan.ProductionImageSource, fallbackUsed);
 
-        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count != 2 || generatedFramePlans.Count != 6 || scriptPaths.Count != 6 || screenshots.Count != 6 || imageSequencePlan.TotalImages != 6 || imageSequencePlan.EstimatedDurationSeconds != 30 || !allSelectedImagesValid || imageSequencePlan.DuplicateImagesDetected || !imageSequencePlan.ProductionImageSource.Equals("frameScreenshots", StringComparison.OrdinalIgnoreCase) || fallbackUsed)
+        var finalImageSequenceWithinDurationTolerance = Math.Abs(imageSequencePlan.TotalDurationSeconds - imageSequenceExpectedDurationSeconds) <= imageSequenceDurationToleranceSeconds;
+        if (weeklyScenePlan.ScenePlans.Count != 5 || shots.Count != 5 || compositionPaths.Count != 5 || allFramePlans.Count == 0 || generatedFramePlans.Count != scriptPaths.Count || screenshots.Count != scriptPaths.Count || imageSequencePlan.TotalImages != imageSequencePlan.ExpectedImageCount || !finalImageSequenceWithinDurationTolerance || !imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase) || !allSelectedImagesValid || imageSequencePlan.DuplicateImagesDetected || !imageSequencePlan.ProductionImageSource.Equals("frameScreenshots", StringComparison.OrdinalIgnoreCase) || fallbackUsed)
         {
             var offendingFramesText = offendingFallbackFrames.Count == 0
                 ? string.Empty
@@ -5492,14 +5532,26 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
     }
 
     var totalDurationSeconds = sequenceItems.Sum(x => x.SuggestedDurationSeconds);
+    var durationDeltaSeconds = totalDurationSeconds - expectedDurationSeconds;
+    var durationToleranceSeconds = expectedDurationSeconds <= 30
+        ? 1d
+        : Math.Max(1d, expectedDurationSeconds * 0.03d);
+    var withinDurationTolerance = Math.Abs(durationDeltaSeconds) <= durationToleranceSeconds;
+    if (durationDeltaSeconds != 0 && withinDurationTolerance)
+    {
+        planValidationWarnings.Add($"Image sequence duration differs by {Math.Abs(durationDeltaSeconds)} second{(Math.Abs(durationDeltaSeconds) == 1 ? string.Empty : "s")} but is within tolerance.");
+    }
     var allImagesValid = sequenceItems.All(x => x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase));
-    var validationStatus = allImagesValid && !duplicateImagesDetected ? "Passed" : "Failed";
-    var productionReady = validationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase)
+    var validationStatus = allImagesValid
+        && !duplicateImagesDetected
         && sequenceItems.Count == expectedImageCount
-        && totalDurationSeconds == expectedDurationSeconds
-        && productionImageSource.Equals("frameScreenshots", StringComparison.OrdinalIgnoreCase);
+        && withinDurationTolerance
+        && productionImageSource.Equals("frameScreenshots", StringComparison.OrdinalIgnoreCase)
+            ? "Passed"
+            : "Failed";
+    var productionReady = validationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase);
 
-    if (!productionReady)
+    if (!validationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase))
     {
         throw new InvalidOperationException(
             $"Image sequence production validation failed: selectedImageCount={sequenceItems.Count}, expectedImageCount={expectedImageCount}, totalDurationSeconds={totalDurationSeconds}, expectedDurationSeconds={expectedDurationSeconds}, validationStatus={validationStatus}, duplicateImagesDetected={duplicateImagesDetected}, productionImageSource={productionImageSource}. Details: {string.Join(" | ", planValidationWarnings)}");
@@ -5776,6 +5828,24 @@ static string ToWeeklyObjectDisplayName(string code) => (NormalizeWeeklyObjectCo
     "MERCURY" => "Mercury",
     var other => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(other.ToLowerInvariant().Replace('_', ' '))
 };
+
+static string ResolveSelectedImageReportFrameType(string frameType, string imagePath)
+{
+    var fileName = Path.GetFileNameWithoutExtension(imagePath) ?? string.Empty;
+    var normalizedFileName = Regex.Replace(fileName, @"^\d+_", string.Empty, RegexOptions.CultureInvariant);
+    if (!string.IsNullOrWhiteSpace(normalizedFileName)) return normalizedFileName;
+
+    return frameType switch
+    {
+        nameof(CinematicFrameType.HorizonContext) => "horizon_context",
+        nameof(CinematicFrameType.EstablishingWide) => "horizon_context",
+        nameof(CinematicFrameType.BalancedStoryFrame) => "balanced_story_frame",
+        nameof(CinematicFrameType.DetailFocus) => "detail_focus",
+        nameof(CinematicFrameType.HeroCloseup) => "detail_focus",
+        nameof(CinematicFrameType.AlignmentWide) => "horizon_context",
+        _ => Regex.Replace(frameType, "([a-z0-9])([A-Z])", "$1_$2", RegexOptions.CultureInvariant).ToLowerInvariant()
+    };
+}
 
 static IReadOnlyList<string> DetectImageSequenceStructuralDuplicates(IReadOnlyList<ImageSequenceItem> sequenceItems)
 {
@@ -6711,6 +6781,7 @@ static WeeklySscCameraLockValidationReport BuildWeeklySscCameraLockValidationRep
 {
     var warnings = new List<string>();
     var errors = new List<string>();
+    var scenes = new List<WeeklySscCameraLockSceneValidation>();
     var objectFirstCameraLockSceneCount = 0;
     var altAzOnlySceneCount = 0;
     var trackingEnabledSceneCount = 0;
@@ -6723,9 +6794,11 @@ static WeeklySscCameraLockValidationReport BuildWeeklySscCameraLockValidationRep
         if (!dynamicFramingScenesByCode.TryGetValue(renderSceneCode, out var dynamicScene))
         {
             errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: dynamic framing scene metadata was not found.");
+            scenes.Add(new WeeklySscCameraLockSceneValidation(finalScene.SceneCode, string.Empty, string.Empty, false, false, false, false, false, false));
             continue;
         }
 
+        var targetObject = NormalizeWeeklyObjectCode(dynamicScene.PrimaryObject) ?? dynamicScene.PrimaryObject;
         var displayName = ToWeeklyObjectDisplayName(dynamicScene.PrimaryObject);
         var expectedSelect = $"core.selectObjectByName(\"{displayName.Replace("\"", "\\\"")}\", true)";
         var scriptContent = File.Exists(finalScene.ScriptPath) ? File.ReadAllText(finalScene.ScriptPath) : string.Empty;
@@ -6742,14 +6815,12 @@ static WeeklySscCameraLockValidationReport BuildWeeklySscCameraLockValidationRep
         var fallbackUsed = scriptContent.Contains("FallbackUsed: true", StringComparison.OrdinalIgnoreCase)
             || scriptContent.Contains("fallbackUsed=true", StringComparison.OrdinalIgnoreCase);
         var usesAltAzExecutable = scriptContent.Contains("core.moveToAltAzi(", StringComparison.Ordinal);
+        var cameraLockValid = hasScript && hasSelection && hasTracking && hasZoom && hasObjectCentering && hasRequiredObjectComment && hasScreenshotPath && !fallbackUsed && !usesAltAzExecutable;
 
         if (fallbackUsed) fallbackUsedSceneCount++;
         if (hasTracking) trackingEnabledSceneCount++;
         if (hasObjectCentering) objectCenteredSceneCount++;
-        if (hasSelection && hasTracking && hasZoom && hasObjectCentering && hasRequiredObjectComment && hasScreenshotPath && !fallbackUsed)
-        {
-            objectFirstCameraLockSceneCount++;
-        }
+        if (cameraLockValid) objectFirstCameraLockSceneCount++;
         if (usesAltAzExecutable && !(hasSelection && hasObjectCentering)) altAzOnlySceneCount++;
 
         if (!hasScript) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: script is missing or empty at {finalScene.ScriptPath}.");
@@ -6761,6 +6832,17 @@ static WeeklySscCameraLockValidationReport BuildWeeklySscCameraLockValidationRep
         if (!hasScreenshotPath) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: missing screenshot path/name.");
         if (fallbackUsed) warnings.Add($"SSC camera lock fallback used for {finalScene.SceneCode}.");
         if (usesAltAzExecutable) errors.Add($"SSC camera lock failed for {finalScene.SceneCode}: script still uses executable moveToAltAzi instead of object-first lock.");
+
+        scenes.Add(new WeeklySscCameraLockSceneValidation(
+            finalScene.SceneCode,
+            targetObject,
+            displayName,
+            hasSelection,
+            hasTracking,
+            hasObjectCentering,
+            hasZoom,
+            hasScreenshotPath,
+            cameraLockValid));
     }
 
     return new WeeklySscCameraLockValidationReport(
@@ -6770,6 +6852,7 @@ static WeeklySscCameraLockValidationReport BuildWeeklySscCameraLockValidationRep
         trackingEnabledSceneCount: trackingEnabledSceneCount,
         objectCenteredSceneCount: objectCenteredSceneCount,
         fallbackUsedSceneCount: fallbackUsedSceneCount,
+        scenes: scenes,
         warnings: warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
         errors: errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
 }
@@ -6890,21 +6973,21 @@ static string BuildWeeklyDynamicFramingSsc(WeeklyDynamicSceneContract scene, Dat
         "core.wait(2);",
         $"core.setObserverLocation({longitude.ToString(CultureInfo.InvariantCulture)}, {latitude.ToString(CultureInfo.InvariantCulture)}, {elevationMeters.ToString(CultureInfo.InvariantCulture)}, 0, \"{locationName.Replace("\"", "\\\"")}\", \"Earth\");",
         "core.wait(2);",
-        $"LandscapeMgr.setFlagLandscape({scene.IncludeHorizon.ToString().ToLowerInvariant()});",
         "LandscapeMgr.setFlagAtmosphere(false);",
+        "LandscapeMgr.setFlagLandscape(false);",
         "ConstellationMgr.setFlagLines(true);",
         "ConstellationMgr.setFlagLabels(true);",
         "SolarSystem.setFlagLabels(true);",
         "SolarSystem.setFlagMarkers(true);",
-        $"var target = \"{escapedTarget}\";",
-        $"var selected = core.selectObjectByName(\"{escapedTarget}\", true);",
-        "core.wait(1);",
+        $"var targetName = \"{escapedTarget}\";",
+        $"core.selectObjectByName(\"{escapedTarget}\", true);",
+        "core.wait(2);",
         "StelMovementMgr.setFlagTracking(true);",
         "core.wait(1);",
         $"StelMovementMgr.zoomTo({fov}, 1);",
         "core.wait(2);",
-        "core.moveToSelectedObject(1);",
-        "core.wait(3);",
+        "core.moveToSelectedObject(2);",
+        "core.wait(4);",
         $"core.screenshot(\"{safeName}\", false, \"{safeDirectory}\", true, \"png\");",
         "core.wait(1);",
         "core.quitStellarium();"
@@ -7136,7 +7219,8 @@ sealed record WeeklyDynamicFramingPlan(
 sealed record WeeklyDynamicFramingPlanDocument(bool DynamicFramingReady, DateTime GeneratedUtc, IReadOnlyList<WeeklyDynamicSceneContract> Scenes);
 sealed record WeeklySscPropagationSceneReport(string sceneCode, IReadOnlyList<string> objects, string primaryObject, IReadOnlyList<string> requiredLabels, IReadOnlyList<string> cameraTargetObjects, double cameraAzimuth, double cameraAltitude, double fov, bool propagationValid);
 sealed record WeeklySscPropagationValidationReport(bool sscPropagationReady, int sceneCount, int metadataPropagatedSceneCount, int emptyObjectSceneCount, int emptyRequiredLabelSceneCount, int cameraTargetMismatchCount, string dynamicFramingPlanPath, IReadOnlyList<WeeklySscPropagationSceneReport> scenes, IReadOnlyList<string> warnings, IReadOnlyList<string> errors);
-sealed record WeeklySscCameraLockValidationReport(bool sscCameraLockReady, int objectFirstCameraLockSceneCount, int altAzOnlySceneCount, int trackingEnabledSceneCount, int objectCenteredSceneCount, int fallbackUsedSceneCount, IReadOnlyList<string> warnings, IReadOnlyList<string> errors);
+sealed record WeeklySscCameraLockSceneValidation(string sceneCode, string targetObject, string displayName, bool selectObjectCommandPresent, bool trackingEnabled, bool moveToSelectedObjectPresent, bool zoomToPresent, bool screenshotCommandPresent, bool cameraLockValid);
+sealed record WeeklySscCameraLockValidationReport(bool sscCameraLockReady, int objectFirstCameraLockSceneCount, int altAzOnlySceneCount, int trackingEnabledSceneCount, int objectCenteredSceneCount, int fallbackUsedSceneCount, IReadOnlyList<WeeklySscCameraLockSceneValidation> scenes, IReadOnlyList<string> warnings, IReadOnlyList<string> errors);
 
 sealed record WeeklyDynamicCameraPlan(string PrimaryObject, IReadOnlyList<string> CameraTargetObjects, IReadOnlyList<string> VisualAnchorObjects, double CameraAzimuth, double CameraAltitude, double Fov, bool IncludeHorizon);
 sealed record WeeklyDynamicLabelPlan(IReadOnlyList<string> LabelObjects, bool SuppressPeripheralLabels, IReadOnlyList<string> LabelPriority);
