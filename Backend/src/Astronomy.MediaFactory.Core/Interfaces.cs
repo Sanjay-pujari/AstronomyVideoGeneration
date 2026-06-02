@@ -1303,6 +1303,14 @@ public sealed record ImageSequenceItem(
     bool IsProductionSelected = true,
     string? PerceptualHash = null);
 
+public sealed record WeeklySkyForecastAssetProviderSummary(
+    int FrameScreenshots,
+    int NasaAssets,
+    int JwstAssets,
+    int MotionGraphicsAssets,
+    int AICinematicAssets,
+    int NullCollectionsDetected);
+
 public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     Guid PipelineRunId,
     string WorkingDirectoryRoot,
@@ -1563,7 +1571,8 @@ public sealed record WeeklySkyForecastV2GenerateWeeklyScenesResponse(
     string? SscCameraLockValidationReportPath = null,
     int ObjectFirstCameraLockSceneCount = 0,
     int AltAzOnlySceneCount = 0,
-    int FallbackUsedSceneCount = 0);
+    int FallbackUsedSceneCount = 0,
+    WeeklySkyForecastAssetProviderSummary? AssetProviderSummary = null);
 
 public enum WeeklySkyForecastV2DiagnosticsPhase
 {

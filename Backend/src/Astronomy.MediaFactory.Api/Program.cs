@@ -2720,13 +2720,26 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         var visualBalanceHealthyAfterAICinematicAssets = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
             && aiCinematicAssets.AICinematicRequiredPackageReady;
 
+        var nullCollectionsDetected = 0;
+        IReadOnlyList<T> NormalizeEndpointAssetCollection<T>(string provider, IReadOnlyList<T>? source)
+        {
+            if (source is not null) return source;
+            nullCollectionsDetected++;
+            app.Logger.LogWarning("NULL_ASSET_COLLECTION_NORMALIZED provider={Provider}", provider);
+            return [];
+        }
+
         var aiCinematicImagePaths = aiCinematicAssets.AICinematicImagePaths?.Count > 0
-            ? aiCinematicAssets.AICinematicImagePaths
+            ? NormalizeEndpointAssetCollection("AICinematic", aiCinematicAssets.AICinematicImagePaths)
             : await CollectProductionReadyAICinematicImagePathsAsync(aiCinematicAssets.ResultsPath, app.Logger, ct);
-        var stellariumProductionFrameScreenshots = screenshots.Concat(expandedStellariumExecution.ExpandedFrameScreenshots).ToList();
+        aiCinematicImagePaths = NormalizeEndpointAssetCollection("AICinematic", aiCinematicImagePaths);
+        var frameScreenshots = NormalizeEndpointAssetCollection("FrameScreenshots", screenshots);
+        var expandedFrameScreenshots = NormalizeEndpointAssetCollection("ExpandedFrameScreenshots", expandedStellariumExecution.ExpandedFrameScreenshots);
+        app.Logger.LogInformation("ASSET_PROVIDER_RESULT provider=AICinematic assetCount={AssetCount} isNull=False", aiCinematicImagePaths.Count);
+        var stellariumProductionFrameScreenshots = frameScreenshots.Concat(expandedFrameScreenshots).ToList();
         var allProductionImageAssets = BuildAllProductionImageAssets(
-            screenshots,
-            expandedStellariumExecution.ExpandedFrameScreenshots,
+            frameScreenshots,
+            expandedFrameScreenshots,
             aiCinematicImagePaths,
             [],
             [],
@@ -2757,14 +2770,25 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         warnings.AddRange(assetRealization.RealizationReport.Warnings);
         warnings = warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var failedAssetPaths = new HashSet<string>(assetRealization.FailedAssetPaths ?? [], StringComparer.OrdinalIgnoreCase);
+        var nasaImagePaths = NormalizeEndpointAssetCollection("NASA", assetRealization.NasaImagePaths);
+        var jwstImagePaths = NormalizeEndpointAssetCollection("JWST", assetRealization.JwstImagePaths);
+        var motionGraphicPaths = NormalizeEndpointAssetCollection("MotionGraphics", assetRealization.MotionGraphicPaths);
+        var educationalOverlayPaths = NormalizeEndpointAssetCollection("EducationalOverlay", assetRealization.EducationalOverlayPaths);
         var realizedAllProductionImageAssets = allProductionImageAssets
-            .Concat(assetRealization.NasaImagePaths)
-            .Concat(assetRealization.JwstImagePaths)
-            .Concat(assetRealization.MotionGraphicPaths ?? [])
-            .Concat(assetRealization.EducationalOverlayPaths ?? [])
+            .Concat(nasaImagePaths)
+            .Concat(jwstImagePaths)
+            .Concat(motionGraphicPaths)
+            .Concat(educationalOverlayPaths)
             .Where(path => !failedAssetPaths.Contains(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var assetProviderSummary = new WeeklySkyForecastAssetProviderSummary(
+            frameScreenshots.Count + expandedFrameScreenshots.Count,
+            nasaImagePaths.Count,
+            jwstImagePaths.Count,
+            motionGraphicPaths.Count,
+            aiCinematicImagePaths.Count,
+            nullCollectionsDetected);
 
         var narrationVisualTimeline = await ExecuteOrchestrationStageAsync("Composing narration visual timeline", stageCt =>
             narrationVisualTimelineComposer.ComposeAndPersistAsync(
@@ -2814,6 +2838,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             motionGraphicPaths = assetRealization.MotionGraphicPaths,
             educationalOverlayPaths = assetRealization.EducationalOverlayPaths,
             allProductionImageAssets = realizedAllProductionImageAssets,
+            assetProviderSummary,
             imageSequencePlanPath,
             episodeArchitecture = new
             {
@@ -3356,7 +3381,8 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             sscCameraLockValidationReportPath,
             sscCameraLockValidationReport.objectFirstCameraLockSceneCount,
             sscCameraLockValidationReport.altAzOnlySceneCount,
-            sscCameraLockValidationReport.fallbackUsedSceneCount);
+            sscCameraLockValidationReport.fallbackUsedSceneCount,
+            assetProviderSummary);
 
         return Results.Ok(output);
     }
@@ -6168,20 +6194,26 @@ static IReadOnlyList<string> BuildAllProductionImageAssets(
     IReadOnlyList<string> motionGraphicsImagePaths,
     Microsoft.Extensions.Logging.ILogger logger)
 {
-    var allProductionImageAssets = frameScreenshots
-        .Concat(expandedFrameScreenshots)
-        .Concat(aiCinematicImagePaths)
-        .Concat(nasaOrJwstImagePaths)
-        .Concat(motionGraphicsImagePaths)
+    var safeFrameScreenshots = frameScreenshots ?? [];
+    var safeExpandedFrameScreenshots = expandedFrameScreenshots ?? [];
+    var safeAICinematicImagePaths = aiCinematicImagePaths ?? [];
+    var safeNasaOrJwstImagePaths = nasaOrJwstImagePaths ?? [];
+    var safeMotionGraphicsImagePaths = motionGraphicsImagePaths ?? [];
+
+    var allProductionImageAssets = safeFrameScreenshots
+        .Concat(safeExpandedFrameScreenshots)
+        .Concat(safeAICinematicImagePaths)
+        .Concat(safeNasaOrJwstImagePaths)
+        .Concat(safeMotionGraphicsImagePaths)
         .Where(path => !string.IsNullOrWhiteSpace(path))
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToList();
 
     logger.LogInformation(
         "PRODUCTION_IMAGE_ASSET_LIST_BUILT stellarium={StellariumCount} expanded={ExpandedCount} ai={AICinematicCount}",
-        frameScreenshots.Count,
-        expandedFrameScreenshots.Count,
-        aiCinematicImagePaths.Count);
+        safeFrameScreenshots.Count,
+        safeExpandedFrameScreenshots.Count,
+        safeAICinematicImagePaths.Count);
 
     return allProductionImageAssets;
 }
