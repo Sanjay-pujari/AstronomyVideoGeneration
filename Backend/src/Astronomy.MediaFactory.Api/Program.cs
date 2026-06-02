@@ -2491,8 +2491,13 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             seenFrameHashes[hash] = screenshotPath;
         }
 
-        var generatedFramePlans = allFramePlans.SelectMany(x => x.FramePlans).ToList();
-        var framePlanLookupForSelectedImageReport = generatedFramePlans.ToDictionary(x => x.FrameId, StringComparer.OrdinalIgnoreCase);
+        var generatedFramePlans = ((IEnumerable<CinematicSceneFramePlan>?)allFramePlans ?? Array.Empty<CinematicSceneFramePlan>())
+            .SelectMany(x => x.FramePlans ?? Array.Empty<CinematicFramePlan>())
+            .ToList();
+        var framePlanLookupForSelectedImageReport = generatedFramePlans
+            .Where(x => !string.IsNullOrWhiteSpace(x.FrameId))
+            .GroupBy(x => x.FrameId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         var imageSequencePlanPath = Path.Combine(qualityDirectory, "image-sequence-plan.json");
         var imageSequenceSummaryPath = Path.Combine(qualityDirectory, "image-sequence-summary.json");
         app.Logger.LogInformation("IMAGE_SEQUENCE_SELECTION_START pipelineRunId={PipelineRunId} frameScreenshots={FrameScreenshotCount} framePlans={FramePlanCount}", pipelineRunId, screenshots.Count, generatedFramePlans.Count);
@@ -2563,17 +2568,41 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         await File.WriteAllTextAsync(selectedStellariumImageSequenceReportPath, JsonSerializer.Serialize(new
         {
             selectedImageCount = imageSequencePlan.SelectedImageCount,
-            source = imageSequencePlan.ProductionImageSource,
-            images = imageSequencePlan.Sequences.Select(x => new
+            expectedImageCount = imageSequencePlan.ExpectedImageCount,
+            productionImageSource = imageSequencePlan.ProductionImageSource,
+            validationStatus = imageSequencePlan.ValidationStatus,
+            totalDurationSeconds = imageSequencePlan.TotalDurationSeconds,
+            expectedDurationSeconds = imageSequenceExpectedDurationSeconds,
+            withinDurationTolerance = Math.Abs(imageSequenceDurationDeltaSeconds) <= imageSequenceDurationToleranceSeconds,
+            images = imageSequencePlan.Sequences.Select(x =>
             {
-                sceneCode = x.RenderSceneCode,
-                frameType = ResolveSelectedImageReportFrameType(x.FrameType, x.ImagePath),
-                path = x.ImagePath,
-                targetObjects = framePlanLookupForSelectedImageReport.TryGetValue(x.FrameId, out var selectedFramePlan)
-                    ? selectedFramePlan.TargetObjects.Select(o => NormalizeWeeklyObjectCode(o) ?? o).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
-                    : Array.Empty<string>(),
-                durationSeconds = x.SuggestedDurationSeconds
-            })
+                var source = ResolveSelectedImageSource(imageSequencePlan.ProductionImageSource, x.ImagePath);
+                var sourceSceneCode = ResolveImageSequenceSourceSceneCode(x.SourceSceneCode, x.ImagePath, x.RenderSceneCode);
+                var sceneCode = string.IsNullOrWhiteSpace(x.RenderSceneCode) ? sourceSceneCode : x.RenderSceneCode;
+                var frameType = ResolveSelectedImageReportFrameType(x.FrameType, x.ImagePath);
+                var targetObjects = framePlanLookupForSelectedImageReport.TryGetValue(x.FrameId, out var selectedFramePlan)
+                    ? (selectedFramePlan.TargetObjects ?? Array.Empty<string>())
+                        .Select(o => NormalizeWeeklyObjectCode(o) ?? o)
+                        .Where(o => !string.IsNullOrWhiteSpace(o))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray()
+                    : Array.Empty<string>();
+
+                return new
+                {
+                    source,
+                    sourceSceneCode,
+                    sceneCode,
+                    frameType,
+                    path = x.ImagePath ?? string.Empty,
+                    targetObjects,
+                    durationSeconds = Math.Max(1, x.SuggestedDurationSeconds)
+                };
+            }),
+            warnings = imageSequencePlan.ValidationWarnings ?? Array.Empty<string>(),
+            errors = imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase)
+                ? Array.Empty<string>()
+                : imageSequencePlan.ValidationWarnings ?? Array.Empty<string>()
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
         app.Logger.LogInformation("IMAGE_SEQUENCE_PRODUCTION_VALIDATION_REPORT_WRITTEN path={Path} selectedReportPath={SelectedReportPath}", imageSequenceProductionValidationReportPath, selectedStellariumImageSequenceReportPath);
         app.Logger.LogInformation("IMAGE_SEQUENCE_PLAN_WRITTEN path={Path} summaryPath={SummaryPath} selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlanPath, imageSequenceSummaryPath, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
@@ -5355,14 +5384,27 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
     const long minimumProductionImageBytes = 50 * 1024;
     const string productionImageSource = "frameScreenshots";
 
-    var screenshotPathSet = frameScreenshots.ToHashSet(StringComparer.OrdinalIgnoreCase);
-    var primaryScreenshotPathSet = primaryScreenshots.ToHashSet(StringComparer.OrdinalIgnoreCase);
-    var framePlanLookup = sceneFramePlans
-        .SelectMany(scene => scene.FramePlans)
-        .ToDictionary(frame => $"{frame.RenderSceneCode}|{frame.FrameType}", StringComparer.OrdinalIgnoreCase);
-    var frameIdLookup = sceneFramePlans
-        .SelectMany(scene => scene.FramePlans)
-        .ToDictionary(frame => frame.FrameId, StringComparer.OrdinalIgnoreCase);
+    var candidateSceneFramePlans = sceneFramePlans ?? Array.Empty<CinematicSceneFramePlan>();
+    var candidateImages = frameScreenshots ?? Array.Empty<string>();
+    var candidatePrimaryScreenshots = primaryScreenshots ?? Array.Empty<string>();
+    var candidateFramePlans = candidateSceneFramePlans
+        .SelectMany(scene => scene.FramePlans ?? Array.Empty<CinematicFramePlan>())
+        .Where(frame => frame is not null)
+        .ToList();
+    var screenshotPathSet = candidateImages
+        .Where(path => !string.IsNullOrWhiteSpace(path))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var primaryScreenshotPathSet = candidatePrimaryScreenshots
+        .Where(path => !string.IsNullOrWhiteSpace(path))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var framePlanLookup = candidateFramePlans
+        .Where(frame => !string.IsNullOrWhiteSpace(frame.RenderSceneCode))
+        .GroupBy(frame => $"{frame.RenderSceneCode}|{frame.FrameType}", StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+    var frameIdLookup = candidateFramePlans
+        .Where(frame => !string.IsNullOrWhiteSpace(frame.FrameId))
+        .GroupBy(frame => frame.FrameId, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
     var preferredOrder = new (string RenderSceneCode, CinematicFrameType FrameType)[]
     {
@@ -5375,8 +5417,7 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
     };
     var deterministicOrder = preferredOrder
         .Where(x => framePlanLookup.ContainsKey($"{x.RenderSceneCode}|{x.FrameType}"))
-        .Concat(sceneFramePlans
-            .SelectMany(scene => scene.FramePlans)
+        .Concat(candidateFramePlans
             .OrderBy(frame => frame.FrameType == CinematicFrameType.BalancedStoryFrame ? 0 : frame.FrameType == CinematicFrameType.HorizonContext ? 1 : 2)
             .ThenBy(frame => frame.RenderSceneCode, StringComparer.OrdinalIgnoreCase)
             .Select(frame => (frame.RenderSceneCode, frame.FrameType)))
@@ -5405,10 +5446,23 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
             framePlan.ImagePath);
 
         var validationWarnings = new List<string>();
-        var imageInfo = new FileInfo(framePlan.ImagePath);
-        var imageExists = imageInfo.Exists;
-        var fileSizeBytes = imageExists ? imageInfo.Length : 0;
-        var extension = Path.GetExtension(framePlan.ImagePath);
+        var imagePath = framePlan.ImagePath ?? string.Empty;
+        var sourceSceneCode = ResolveImageSequenceSourceSceneCode(framePlan.SourceSceneCode, imagePath, framePlan.RenderSceneCode);
+        var renderSceneCode = string.IsNullOrWhiteSpace(framePlan.RenderSceneCode) ? sourceSceneCode : framePlan.RenderSceneCode;
+        var frameId = string.IsNullOrWhiteSpace(framePlan.FrameId) ? $"{renderSceneCode}_{framePlan.FrameType}" : framePlan.FrameId;
+        var targetObjects = framePlan.TargetObjects ?? Array.Empty<string>();
+        var safetyWarnings = framePlan.SafetyWarnings ?? Array.Empty<string>();
+        var suggestedDurationSeconds = Math.Max(1, ResolveImageSequenceDuration(renderSceneCode, framePlan.FrameType));
+        if (string.IsNullOrWhiteSpace(imagePath))
+            validationWarnings.Add("imagePath is required.");
+        if (string.IsNullOrWhiteSpace(sourceSceneCode))
+            validationWarnings.Add("sourceSceneCode is required.");
+        if (string.IsNullOrWhiteSpace(renderSceneCode))
+            validationWarnings.Add("sceneCode is required.");
+        var imageInfo = string.IsNullOrWhiteSpace(imagePath) ? null : new FileInfo(imagePath);
+        var imageExists = imageInfo?.Exists == true;
+        var fileSizeBytes = imageExists ? imageInfo!.Length : 0;
+        var extension = Path.GetExtension(imagePath);
         var width = 0;
         var height = 0;
 
@@ -5418,20 +5472,20 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
             validationWarnings.Add($"imagePath extension must be .png but was '{extension}'.");
         if (fileSizeBytes <= minimumProductionImageBytes)
             validationWarnings.Add($"image file size must be greater than {minimumProductionImageBytes} bytes but was {fileSizeBytes}.");
-        if (!frameIdLookup.TryGetValue(framePlan.FrameId, out var frameIdPlan))
-            validationWarnings.Add($"frameId '{framePlan.FrameId}' does not exist in cinematic-frame-plan.");
-        else if (!string.Equals(frameIdPlan.ImagePath, framePlan.ImagePath, StringComparison.OrdinalIgnoreCase))
-            validationWarnings.Add($"imagePath '{framePlan.ImagePath}' does not match cinematic-frame-plan imagePath '{frameIdPlan.ImagePath}'.");
-        if (!screenshotPathSet.Contains(framePlan.ImagePath))
+        if (!frameIdLookup.TryGetValue(frameId, out var frameIdPlan))
+            validationWarnings.Add($"frameId '{frameId}' does not exist in cinematic-frame-plan.");
+        else if (!string.Equals(frameIdPlan.ImagePath, imagePath, StringComparison.OrdinalIgnoreCase))
+            validationWarnings.Add($"imagePath '{imagePath}' does not match cinematic-frame-plan imagePath '{frameIdPlan.ImagePath}'.");
+        if (!screenshotPathSet.Contains(imagePath))
             validationWarnings.Add("imagePath was not selected from frameScreenshots.");
-        if (primaryScreenshotPathSet.Contains(framePlan.ImagePath))
+        if (primaryScreenshotPathSet.Contains(imagePath))
             validationWarnings.Add("imagePath resolves to primaryScreenshots, which are compatibility-only and not a production source.");
 
         if (imageExists)
         {
             try
             {
-                using var imageStream = File.OpenRead(framePlan.ImagePath);
+                using var imageStream = File.OpenRead(imagePath);
                 var identifiedImage = Image.Identify(imageStream);
                 if (identifiedImage is null)
                 {
@@ -5455,7 +5509,7 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
 
         var imageValidationStatus = validationWarnings.Count == 0 ? "Passed" : "Failed";
         if (validationWarnings.Count > 0)
-            planValidationWarnings.AddRange(validationWarnings.Select(w => $"sequenceIndex={i + 1}; frameId={framePlan.FrameId}; imagePath={framePlan.ImagePath}; {w}"));
+            planValidationWarnings.AddRange(validationWarnings.Select(w => $"sequenceIndex={i + 1}; frameId={frameId}; imagePath={imagePath}; {w}"));
 
         var imageValidation = new ImageSequenceImageValidation(
             ImageExists: imageExists,
@@ -5469,8 +5523,8 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
         logger.LogInformation(
             "IMAGE_SEQUENCE_IMAGE_VALIDATED sequenceIndex={SequenceIndex} frameId={FrameId} imagePath={ImagePath} fileSizeBytes={FileSizeBytes} width={Width} height={Height} validationStatus={ValidationStatus}",
             i + 1,
-            framePlan.FrameId,
-            framePlan.ImagePath,
+            frameId,
+            imagePath,
             fileSizeBytes,
             width,
             height,
@@ -5478,19 +5532,19 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
 
         sequenceItems.Add(new ImageSequenceItem(
             SequenceIndex: i + 1,
-            SourceSceneCode: framePlan.SourceSceneCode,
-            RenderSceneCode: framePlan.RenderSceneCode,
-            FrameId: framePlan.FrameId,
+            SourceSceneCode: sourceSceneCode,
+            RenderSceneCode: renderSceneCode,
+            FrameId: frameId,
             FrameType: framePlan.FrameType.ToString(),
-            ImagePath: framePlan.ImagePath,
+            ImagePath: imagePath,
             VisualPurpose: framePlan.VisualPurpose,
             NarrationUse: ResolveImageSequenceNarrationUse(framePlan),
-            SuggestedDurationSeconds: ResolveImageSequenceDuration(framePlan.RenderSceneCode, framePlan.FrameType),
+            SuggestedDurationSeconds: suggestedDurationSeconds,
             TransitionIntent: ResolveImageSequenceTransitionIntent(i + 1),
             MotionIntentForFutureVideo: ResolveImageSequenceMotionIntent(framePlan.FrameType),
-            ImportanceScore: ResolveImageSequenceImportanceScore(framePlan.RenderSceneCode, framePlan.FrameType),
+            ImportanceScore: ResolveImageSequenceImportanceScore(renderSceneCode, framePlan.FrameType),
             SelectionReason: "Selected by deterministic Phase 5 image-sequence order from generated frameScreenshots; no primaryScreenshots were used as production source.",
-            Warnings: framePlan.SafetyWarnings,
+            Warnings: safetyWarnings,
             ImageExists: imageExists,
             FileSizeBytes: fileSizeBytes,
             Width: width,
@@ -5575,6 +5629,45 @@ static ImageSequencePlan BuildWeeklyImageSequencePlan(
         PrimaryScreenshotsDeprecated: true,
         DuplicateImagesDetected: duplicateImagesDetected,
         ValidationWarnings: planValidationWarnings);
+}
+
+static string ResolveImageSequenceSourceSceneCode(string? sourceSceneCode, string? imagePath, string? renderSceneCode)
+{
+    if (!string.IsNullOrWhiteSpace(sourceSceneCode))
+        return sourceSceneCode;
+
+    var derivedSceneCode = DeriveStellariumSceneCodeFromImagePath(imagePath);
+    if (!string.IsNullOrWhiteSpace(derivedSceneCode))
+        return derivedSceneCode;
+
+    return string.IsNullOrWhiteSpace(renderSceneCode) ? "unknown_scene" : renderSceneCode;
+}
+
+static string? DeriveStellariumSceneCodeFromImagePath(string? imagePath)
+{
+    if (string.IsNullOrWhiteSpace(imagePath))
+        return null;
+
+    var normalizedPath = imagePath.Replace('\\', '/');
+    var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+    for (var i = 0; i < segments.Length - 2; i++)
+    {
+        if (segments[i].Equals("stellarium", StringComparison.OrdinalIgnoreCase)
+            && segments[i + 1].Equals("scenes", StringComparison.OrdinalIgnoreCase))
+        {
+            return segments[i + 2];
+        }
+    }
+
+    return null;
+}
+
+static string ResolveSelectedImageSource(string? source, string? imagePath)
+{
+    if (!string.IsNullOrWhiteSpace(source))
+        return source;
+
+    return "frameScreenshots";
 }
 
 
