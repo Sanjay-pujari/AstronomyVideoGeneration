@@ -867,12 +867,20 @@ public sealed class WeeklyAssetRealizationService(
     public async Task<WeeklyAssetRealizationResult> RealizeAndPersistAsync(WeeklyAssetRealizationInput input, CancellationToken cancellationToken)
     {
         logger.LogInformation("ASSET_REALIZATION_START pipelineRunId={PipelineRunId} root={Root}", input.PipelineRunId, input.RootPath);
-        var motionOverlayAssets = await new MotionGraphicsAndEducationalOverlayRealizer(logger).RealizeAsync(input, cancellationToken);
-        input = input with { AllProductionImageAssets = input.AllProductionImageAssets
-            .Concat(motionOverlayAssets.MotionGraphicPaths)
-            .Concat(motionOverlayAssets.EducationalOverlayPaths)
+        var normalizedInput = NormalizeAssetRealizationInput(input);
+        logger.LogInformation("ASSET_AGGREGATION_START");
+        logger.LogInformation("ASSET_PROVIDER_RESULT provider=FrameScreenshots assetCount={AssetCount} isNull=False", normalizedInput.FrameScreenshots.Count + normalizedInput.ExpandedFrameScreenshots.Count);
+        logger.LogInformation("ASSET_PROVIDER_RESULT provider=AICinematic assetCount={AssetCount} isNull=False", normalizedInput.AICinematicImagePaths.Count);
+        var motionOverlayAssets = await new MotionGraphicsAndEducationalOverlayRealizer(logger).RealizeAsync(normalizedInput, cancellationToken);
+        var motionGraphicPaths = NormalizeAssetCollection("MotionGraphics", motionOverlayAssets.MotionGraphicPaths, logger, _ => { }).ToList();
+        var educationalOverlayPaths = NormalizeAssetCollection("EducationalOverlay", motionOverlayAssets.EducationalOverlayPaths, logger, _ => { }).ToList();
+        logger.LogInformation("ASSET_PROVIDER_RESULT provider=MotionGraphics assetCount={AssetCount} isNull=False", motionGraphicPaths.Count);
+        normalizedInput = normalizedInput with { AllProductionImageAssets = NormalizeAssetCollection("allVisualAssets", normalizedInput.AllProductionImageAssets, logger, _ => { })
+            .Concat(motionGraphicPaths)
+            .Concat(educationalOverlayPaths)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList() };
+        input = normalizedInput;
         var assets = RegisterAssets(input);
         var assetQuality = await new WeeklyAssetQualityValidator(logger).ValidateAndPersistAsync(input.RootPath, assets, motionOverlayAssets.MotionGraphics, motionOverlayAssets.EducationalOverlays, cancellationToken);
         assets = ApplyQualityStatuses(assets, assetQuality);
@@ -883,7 +891,11 @@ public sealed class WeeklyAssetRealizationService(
         var paths = await persister.PersistAsync(input.RootPath, manifest, report, readiness, cancellationToken);
 
         var nasaAssets = await nasaAssetRealizationService.RealizeAsync(input.RootPath, input.WeeklyVisualAssetPlanPath, paths.ManifestPath, paths.RealizationReportPath, continueOnFailure: true, cancellationToken);
-        var realizedNasaOrJwstPaths = nasaAssets.Report.NasaImagePaths.Concat(nasaAssets.Report.JwstImagePaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var nasaImagePaths = NormalizeAssetCollection("NASA", nasaAssets.Report?.NasaImagePaths, logger, _ => { }).ToList();
+        var jwstImagePaths = NormalizeAssetCollection("JWST", nasaAssets.Report?.JwstImagePaths, logger, _ => { }).ToList();
+        logger.LogInformation("ASSET_PROVIDER_RESULT provider=NASA assetCount={AssetCount} isNull=False", nasaImagePaths.Count);
+        logger.LogInformation("ASSET_PROVIDER_RESULT provider=JWST assetCount={AssetCount} isNull=False", jwstImagePaths.Count);
+        var realizedNasaOrJwstPaths = nasaImagePaths.Concat(jwstImagePaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (realizedNasaOrJwstPaths.Count > 0)
         {
             var enrichedInput = input with { AllProductionImageAssets = input.AllProductionImageAssets.Concat(realizedNasaOrJwstPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList() };
@@ -897,8 +909,37 @@ public sealed class WeeklyAssetRealizationService(
             paths = await persister.PersistAsync(enrichedInput.RootPath, manifest, report, readiness, cancellationToken);
         }
 
+        logger.LogInformation("ASSET_AGGREGATION_COMPLETE");
         logger.LogInformation("ASSET_REALIZATION_COMPLETE pipelineRunId={PipelineRunId} testReady={TestReady} finalReady={FinalReady} segmentCount={SegmentCount} nasaGenerated={NasaGenerated} nasaProductionReady={NasaProductionReady}", input.PipelineRunId, readiness.TestVideoPipelineReady, readiness.FinalVideoPipelineReady, bundles.Count, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount);
-        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.FailedNASAAssetCount, nasaAssets.Report.NasaImagePaths, nasaAssets.Report.NasaImagePaths.Count, nasaAssets.JwstPlanPath, nasaAssets.JwstResultsPath, nasaAssets.JwstReportPath, nasaAssets.Report.PlannedJWSTAssetCount, nasaAssets.Report.GeneratedJWSTAssetCount, nasaAssets.Report.ProductionReadyJWSTAssetCount, nasaAssets.Report.FailedJWSTAssetCount, nasaAssets.Report.JwstImagePaths, nasaAssets.Report.JwstImagePaths.Count, nasaAssets.Report.NasaProviderConfigured, motionOverlayAssets.MotionGraphicsManifestPath, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionOverlayAssets.MotionGraphicPaths, motionOverlayAssets.EducationalOverlayManifestPath, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionOverlayAssets.EducationalOverlayPaths, assetQuality.ReportPath, assetQuality.DetailsPath, assetQuality.Report.TotalAssets, assetQuality.Report.ProductionReadyCount, assetQuality.Report.ProductionWarningCount, assetQuality.Report.ProductionFailedCount, assetQuality.Report.QualityGatePassed, assetQuality.FailedAssetPaths);
+        return new WeeklyAssetRealizationResult(manifest, report, readiness, paths.ManifestPath, paths.RealizationReportPath, paths.VideoReadinessReportPath, readiness.TestVideoPipelineReady, nasaAssets.PlanPath, nasaAssets.ResultsPath, nasaAssets.ReportPath, nasaAssets.Report.PlannedNASAAssetCount, nasaAssets.Report.GeneratedNASAAssetCount, nasaAssets.Report.ProductionReadyNASAAssetCount, nasaAssets.Report.FailedNASAAssetCount, nasaImagePaths, nasaImagePaths.Count, nasaAssets.JwstPlanPath, nasaAssets.JwstResultsPath, nasaAssets.JwstReportPath, nasaAssets.Report.PlannedJWSTAssetCount, nasaAssets.Report.GeneratedJWSTAssetCount, nasaAssets.Report.ProductionReadyJWSTAssetCount, nasaAssets.Report.FailedJWSTAssetCount, jwstImagePaths, jwstImagePaths.Count, nasaAssets.Report.NasaProviderConfigured, motionOverlayAssets.MotionGraphicsManifestPath, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count, motionOverlayAssets.MotionGraphics.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), motionGraphicPaths, motionOverlayAssets.EducationalOverlayManifestPath, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count, motionOverlayAssets.EducationalOverlays.Count(x => File.Exists(x.AssetPath) && ImageDimensionReader.Read(x.AssetPath).Width > 0), educationalOverlayPaths, assetQuality.ReportPath, assetQuality.DetailsPath, assetQuality.Report.TotalAssets, assetQuality.Report.ProductionReadyCount, assetQuality.Report.ProductionWarningCount, assetQuality.Report.ProductionFailedCount, assetQuality.Report.QualityGatePassed, assetQuality.FailedAssetPaths ?? []);
+    }
+
+    private WeeklyAssetRealizationInput NormalizeAssetRealizationInput(WeeklyAssetRealizationInput input)
+    {
+        var nullCollectionsDetected = 0;
+        var frameScreenshots = NormalizeAssetCollection("FrameScreenshots", input.FrameScreenshots, logger, _ => nullCollectionsDetected++).ToList();
+        var expandedFrameScreenshots = NormalizeAssetCollection("ExpandedFrameScreenshots", input.ExpandedFrameScreenshots, logger, _ => nullCollectionsDetected++).ToList();
+        var aiCinematicImagePaths = NormalizeAssetCollection("AICinematic", input.AICinematicImagePaths, logger, _ => nullCollectionsDetected++).ToList();
+        var allProductionImageAssets = NormalizeAssetCollection("allVisualAssets", input.AllProductionImageAssets, logger, _ => nullCollectionsDetected++).ToList();
+
+        logger.LogInformation("ASSET_COLLECTION_NORMALIZATION_COMPLETE nullCollectionsDetected={NullCollectionsDetected}", nullCollectionsDetected);
+        return input with
+        {
+            FrameScreenshots = frameScreenshots,
+            ExpandedFrameScreenshots = expandedFrameScreenshots,
+            AICinematicImagePaths = aiCinematicImagePaths,
+            AllProductionImageAssets = allProductionImageAssets
+        };
+    }
+
+    private static IEnumerable<T> NormalizeAssetCollection<T>(string provider, IEnumerable<T>? source, ILogger logger, Action<string> onNull)
+    {
+        if (source is not null)
+            return source;
+
+        logger.LogWarning("NULL_ASSET_COLLECTION_NORMALIZED provider={Provider}", provider);
+        onNull(provider);
+        return Enumerable.Empty<T>();
     }
 
     private static List<RealizedVisualAsset> ApplyQualityStatuses(IReadOnlyList<RealizedVisualAsset> assets, WeeklyAssetQualityValidationResult quality)
@@ -929,13 +970,18 @@ public sealed class WeeklyAssetRealizationService(
 
     private List<RealizedVisualAsset> RegisterAssets(WeeklyAssetRealizationInput input)
     {
+        var frameScreenshots = NormalizeAssetCollection("FrameScreenshots", input.FrameScreenshots, logger, _ => { });
+        var expandedFrameScreenshots = NormalizeAssetCollection("ExpandedFrameScreenshots", input.ExpandedFrameScreenshots, logger, _ => { });
+        var aiCinematicImagePaths = NormalizeAssetCollection("AICinematic", input.AICinematicImagePaths, logger, _ => { });
+        var allProductionImageAssets = NormalizeAssetCollection("allVisualAssets", input.AllProductionImageAssets, logger, _ => { });
+
         var registrations = new List<(string Path, RealizedVisualAssetSourceType Source)>();
-        registrations.AddRange(input.FrameScreenshots.Select(path => (path, RealizedVisualAssetSourceType.StellariumBase)));
-        registrations.AddRange(input.ExpandedFrameScreenshots.Select(path => (path, RealizedVisualAssetSourceType.StellariumExpanded)));
-        registrations.AddRange(input.AICinematicImagePaths.Select(path => (path, RealizedVisualAssetSourceType.AICinematic)));
+        registrations.AddRange(frameScreenshots.Select(path => (path, RealizedVisualAssetSourceType.StellariumBase)));
+        registrations.AddRange(expandedFrameScreenshots.Select(path => (path, RealizedVisualAssetSourceType.StellariumExpanded)));
+        registrations.AddRange(aiCinematicImagePaths.Select(path => (path, RealizedVisualAssetSourceType.AICinematic)));
 
         var known = new HashSet<string>(registrations.Select(x => x.Path), StringComparer.OrdinalIgnoreCase);
-        foreach (var path in input.AllProductionImageAssets.Where(path => !string.IsNullOrWhiteSpace(path) && known.Add(path)))
+        foreach (var path in allProductionImageAssets.Where(path => !string.IsNullOrWhiteSpace(path) && known.Add(path)))
         {
             registrations.Add((path, InferSourceType(path)));
         }
