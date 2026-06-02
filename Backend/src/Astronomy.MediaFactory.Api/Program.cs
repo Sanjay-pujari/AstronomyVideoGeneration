@@ -2513,6 +2513,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             primaryScreenshots,
             app.Logger);
         app.Logger.LogInformation("IMAGE_SEQUENCE_PLAN_ENRICHED path={Path} validationStatus={ValidationStatus} selectedImageCount={SelectedImageCount} totalDurationSeconds={TotalDurationSeconds} productionReady={ProductionReady} productionImageSource={ProductionImageSource}", imageSequencePlanPath, imageSequencePlan.ValidationStatus, imageSequencePlan.SelectedImageCount, imageSequencePlan.TotalDurationSeconds, imageSequencePlan.ProductionReady, imageSequencePlan.ProductionImageSource);
+        var selectedImageSequenceItems = (imageSequencePlan.Sequences ?? Array.Empty<ImageSequenceItem>()).ToList();
         await File.WriteAllTextAsync(imageSequencePlanPath, JsonSerializer.Serialize(imageSequencePlan, new JsonSerializerOptions { WriteIndented = true }), ct);
         await File.WriteAllTextAsync(imageSequenceSummaryPath, JsonSerializer.Serialize(new
         {
@@ -2530,7 +2531,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             validationWarnings = imageSequencePlan.ValidationWarnings ?? Array.Empty<string>(),
             primaryScreenshotsDeprecated = imageSequencePlan.PrimaryScreenshotsDeprecated,
             imageSequencePlanPath,
-            sequence = imageSequencePlan.Sequences.Select(x => new
+            sequence = selectedImageSequenceItems.Select(x => new
             {
                 x.SequenceIndex,
                 x.RenderSceneCode,
@@ -2546,7 +2547,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
         app.Logger.LogInformation("IMAGE_SEQUENCE_SUMMARY_ENRICHED path={Path} validationStatus={ValidationStatus} productionReady={ProductionReady} validationWarnings={ValidationWarnings}", imageSequenceSummaryPath, imageSequencePlan.ValidationStatus, imageSequencePlan.ProductionReady, string.Join("|", imageSequencePlan.ValidationWarnings ?? Array.Empty<string>()));
         var imageSequenceProductionValidationReportPath = Path.Combine(renderDirectory, "image-sequence-production-validation-report.json");
-        var selectedStellariumImageSequenceReportPath = Path.Combine(renderDirectory, "selected-stellarium-image-sequence-report.json");
+        var selectedStellariumImageSequenceReportPath = ResolveSelectedImageSequenceReportPath(null, root);
         var imageSequenceDurationDeltaSeconds = imageSequencePlan.TotalDurationSeconds - imageSequencePlan.ExpectedImageCount * 5;
         var imageSequenceExpectedDurationSeconds = imageSequencePlan.ExpectedImageCount * 5;
         var imageSequenceDurationToleranceSeconds = imageSequenceExpectedDurationSeconds <= 30 ? 1d : Math.Max(1d, imageSequenceExpectedDurationSeconds * 0.03d);
@@ -2561,49 +2562,21 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             durationDeltaSeconds = imageSequenceDurationDeltaSeconds,
             withinDurationTolerance = Math.Abs(imageSequenceDurationDeltaSeconds) <= imageSequenceDurationToleranceSeconds,
             duplicateImagesDetected = imageSequencePlan.DuplicateImagesDetected,
-            productionImageSource = imageSequencePlan.ProductionImageSource,
+            productionImageSource = ResolveSelectedImageSource(imageSequencePlan.ProductionImageSource, null),
             warnings = imageSequencePlan.ValidationWarnings ?? Array.Empty<string>(),
             errors = imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase) ? Array.Empty<string>() : imageSequencePlan.ValidationWarnings ?? Array.Empty<string>()
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
-        await File.WriteAllTextAsync(selectedStellariumImageSequenceReportPath, JsonSerializer.Serialize(new
-        {
-            selectedImageCount = imageSequencePlan.SelectedImageCount,
-            expectedImageCount = imageSequencePlan.ExpectedImageCount,
-            productionImageSource = imageSequencePlan.ProductionImageSource,
-            validationStatus = imageSequencePlan.ValidationStatus,
-            totalDurationSeconds = imageSequencePlan.TotalDurationSeconds,
-            expectedDurationSeconds = imageSequenceExpectedDurationSeconds,
-            withinDurationTolerance = Math.Abs(imageSequenceDurationDeltaSeconds) <= imageSequenceDurationToleranceSeconds,
-            images = imageSequencePlan.Sequences.Select(x =>
-            {
-                var source = ResolveSelectedImageSource(imageSequencePlan.ProductionImageSource, x.ImagePath);
-                var sourceSceneCode = ResolveImageSequenceSourceSceneCode(x.SourceSceneCode, x.ImagePath, x.RenderSceneCode);
-                var sceneCode = string.IsNullOrWhiteSpace(x.RenderSceneCode) ? sourceSceneCode : x.RenderSceneCode;
-                var frameType = ResolveSelectedImageReportFrameType(x.FrameType, x.ImagePath);
-                var targetObjects = framePlanLookupForSelectedImageReport.TryGetValue(x.FrameId, out var selectedFramePlan)
-                    ? (selectedFramePlan.TargetObjects ?? Array.Empty<string>())
-                        .Select(o => NormalizeWeeklyObjectCode(o) ?? o)
-                        .Where(o => !string.IsNullOrWhiteSpace(o))
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToArray()
-                    : Array.Empty<string>();
-
-                return new
-                {
-                    source,
-                    sourceSceneCode,
-                    sceneCode,
-                    frameType,
-                    path = x.ImagePath ?? string.Empty,
-                    targetObjects,
-                    durationSeconds = Math.Max(1, x.SuggestedDurationSeconds)
-                };
-            }),
-            warnings = imageSequencePlan.ValidationWarnings ?? Array.Empty<string>(),
-            errors = imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase)
-                ? Array.Empty<string>()
-                : imageSequencePlan.ValidationWarnings ?? Array.Empty<string>()
-        }, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await WriteSelectedImageSequenceReportAsync(
+            selectedStellariumImageSequenceReportPath,
+            imageSequencePlan,
+            selectedImageSequenceItems,
+            framePlanLookupForSelectedImageReport,
+            root,
+            imageSequenceExpectedDurationSeconds,
+            imageSequenceDurationDeltaSeconds,
+            imageSequenceDurationToleranceSeconds,
+            app.Logger,
+            ct);
         app.Logger.LogInformation("IMAGE_SEQUENCE_PRODUCTION_VALIDATION_REPORT_WRITTEN path={Path} selectedReportPath={SelectedReportPath}", imageSequenceProductionValidationReportPath, selectedStellariumImageSequenceReportPath);
         app.Logger.LogInformation("IMAGE_SEQUENCE_PLAN_WRITTEN path={Path} summaryPath={SummaryPath} selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlanPath, imageSequenceSummaryPath, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
         app.Logger.LogInformation("IMAGE_SEQUENCE_VALIDATION_COMPLETE selectedImageCount={SelectedImageCount} estimatedDurationSeconds={EstimatedDurationSeconds}", imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds);
@@ -2642,7 +2615,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             .ToList();
         var fallbackUsed = fallbackFramePlans.Count > 0 || fallbackDescriptors.Count > 0;
 
-        var allSelectedImagesValid = imageSequencePlan.Sequences.All(x => x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase));
+        var allSelectedImagesValid = selectedImageSequenceItems.All(x => x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase));
         app.Logger.LogInformation("IMAGE_SEQUENCE_FINAL_VALIDATION ScenePlan={ScenePlan} Timeline={Timeline} Composition={Composition} RenderScenes={RenderScenes} FramePlans={FramePlans} SscScripts={SscScripts} FrameScreenshots={FrameScreenshots} SelectedImages={SelectedImages} ImageSequenceDuration={ImageSequenceDuration} AllSelectedImagesValid={AllSelectedImagesValid} DuplicateImages={DuplicateImages} ProductionImageSource={ProductionImageSource} fallbackUsed={FallbackUsed}", weeklyScenePlan.ScenePlans.Count, shots.Count, compositionPaths.Count, allFramePlans.Count, generatedFramePlans.Count, scriptPaths.Count, screenshots.Count, imageSequencePlan.TotalImages, imageSequencePlan.EstimatedDurationSeconds, allSelectedImagesValid, imageSequencePlan.DuplicateImagesDetected, imageSequencePlan.ProductionImageSource, fallbackUsed);
 
         var finalImageSequenceWithinDurationTolerance = Math.Abs(imageSequencePlan.TotalDurationSeconds - imageSequenceExpectedDurationSeconds) <= imageSequenceDurationToleranceSeconds;
@@ -2660,13 +2633,13 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                             $"- sceneCode={x.SceneCode}",
                             $"- frameId={x.FrameId}",
                             $"- fallbackReason={x.FallbackReason}")));
-            var invalidImagesText = imageSequencePlan.Sequences.Any(x => !x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase))
+            var invalidImagesText = selectedImageSequenceItems.Any(x => !x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase))
                 ? Environment.NewLine
                     + "InvalidImages:"
                     + Environment.NewLine
                     + string.Join(
                         Environment.NewLine,
-                        imageSequencePlan.Sequences
+                        selectedImageSequenceItems
                             .Where(x => !x.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase))
                             .Select(x => $"- sequenceIndex={x.SequenceIndex} sceneCode={x.RenderSceneCode} frameId={x.FrameId} imagePath={x.ImagePath} validationStatus={x.ValidationStatus} warnings={string.Join("|", x.ValidationWarnings ?? Array.Empty<string>())}"))
                 : string.Empty;
@@ -3365,7 +3338,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             File.Exists(visualNarrationCoverageReportPath),
             visualNarrationCoverage.VisualNarrationAligned,
             weeklyFocusPlan.FocusObjects,
-            weeklyFocusPlan.FocusGroupings.Select(x => x.GroupingCode).ToList(),
+            (weeklyFocusPlan.FocusGroupings ?? Array.Empty<WeeklyFocusGrouping>()).Select(x => x.GroupingCode).ToList(),
             visualNarrationCoverage.MoonSceneCount,
             visualNarrationCoverage.VenusSceneCount,
             visualNarrationCoverage.SaturnSceneCount,
@@ -5670,6 +5643,103 @@ static string ResolveSelectedImageSource(string? source, string? imagePath)
     return "frameScreenshots";
 }
 
+static string ResolveSelectedImageSequenceReportPath(string? selectedReportPath, string runRoot)
+{
+    if (!string.IsNullOrWhiteSpace(selectedReportPath))
+        return selectedReportPath;
+
+    return Path.Combine(runRoot, "render", "selected-stellarium-image-sequence-report.json");
+}
+
+static async Task WriteSelectedImageSequenceReportAsync(
+    string? selectedReportPath,
+    ImageSequencePlan imageSequencePlan,
+    IReadOnlyList<ImageSequenceItem>? selectedImages,
+    IReadOnlyDictionary<string, CinematicFramePlan>? framePlanLookup,
+    string runRoot,
+    int expectedDurationSeconds,
+    int durationDeltaSeconds,
+    double durationToleranceSeconds,
+    Microsoft.Extensions.Logging.ILogger logger,
+    CancellationToken ct)
+{
+    var resolvedSelectedReportPath = ResolveSelectedImageSequenceReportPath(selectedReportPath, runRoot);
+    string? nullFieldName = null;
+
+    try
+    {
+        logger.LogInformation("SELECTED_IMAGE_SEQUENCE_REPORT_BUILD_START path={Path} selectedImageCount={SelectedImageCount} validationStatus={ValidationStatus}", resolvedSelectedReportPath, imageSequencePlan.SelectedImageCount, imageSequencePlan.ValidationStatus);
+
+        var safeSelectedImages = selectedImages ?? Array.Empty<ImageSequenceItem>();
+        var safeFramePlanLookup = framePlanLookup ?? new Dictionary<string, CinematicFramePlan>(StringComparer.OrdinalIgnoreCase);
+        var productionImageSource = ResolveSelectedImageSource(imageSequencePlan.ProductionImageSource, null);
+        var warnings = imageSequencePlan.ValidationWarnings ?? Array.Empty<string>();
+        var validationPassed = imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase);
+
+        var images = safeSelectedImages.Select(x =>
+        {
+            var imagePath = x.ImagePath ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(imagePath))
+                nullFieldName = "imagePath";
+
+            var source = ResolveSelectedImageSource(productionImageSource, imagePath);
+            var sourceType = "StellariumFrameScreenshot";
+            var sourceSceneCode = ResolveImageSequenceSourceSceneCode(x.SourceSceneCode, imagePath, x.RenderSceneCode);
+            var sceneCode = string.IsNullOrWhiteSpace(x.RenderSceneCode)
+                ? (DeriveStellariumSceneCodeFromImagePath(imagePath) ?? sourceSceneCode)
+                : x.RenderSceneCode;
+            var frameType = ResolveSelectedImageReportFrameType(x.FrameType, imagePath);
+            var selectedFramePlan = !string.IsNullOrWhiteSpace(x.FrameId) && safeFramePlanLookup.TryGetValue(x.FrameId, out var foundFramePlan)
+                ? foundFramePlan
+                : null;
+            var targetObjects = (selectedFramePlan?.TargetObjects ?? Array.Empty<string>())
+                .Select(o => NormalizeWeeklyObjectCode(o) ?? o)
+                .Where(o => !string.IsNullOrWhiteSpace(o))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var requiredLabels = Array.Empty<string>();
+
+            return new
+            {
+                source,
+                productionImageSource,
+                sourceType,
+                sourceSceneCode,
+                sceneCode,
+                frameType,
+                imagePath,
+                path = imagePath,
+                targetObjects,
+                requiredLabels,
+                durationSeconds = Math.Max(1, x.SuggestedDurationSeconds)
+            };
+        }).ToArray();
+
+        await File.WriteAllTextAsync(resolvedSelectedReportPath, JsonSerializer.Serialize(new
+        {
+            selectedImageCount = imageSequencePlan.SelectedImageCount,
+            expectedImageCount = imageSequencePlan.ExpectedImageCount,
+            productionImageSource,
+            validationStatus = imageSequencePlan.ValidationStatus,
+            imageSequenceValidationReady = validationPassed,
+            totalDurationSeconds = imageSequencePlan.TotalDurationSeconds,
+            expectedDurationSeconds,
+            durationDeltaSeconds,
+            withinDurationTolerance = Math.Abs(durationDeltaSeconds) <= durationToleranceSeconds,
+            images,
+            warnings,
+            errors = validationPassed ? Array.Empty<string>() : warnings
+        }, new JsonSerializerOptions { WriteIndented = true }), ct);
+
+        logger.LogInformation("SELECTED_IMAGE_SEQUENCE_REPORT_BUILD_COMPLETE path={Path} selectedImageCount={SelectedImageCount} validationStatus={ValidationStatus}", resolvedSelectedReportPath, images.Length, imageSequencePlan.ValidationStatus);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "SELECTED_IMAGE_SEQUENCE_REPORT_BUILD_FAILED path={Path} nullFieldName={NullFieldName}", resolvedSelectedReportPath, nullFieldName ?? "unknown");
+        throw;
+    }
+}
+
 
 static WeeklyFocusObjectPlan BuildWeeklyFocusObjectPlan(DateOnly weekStartDate, string regionId, string language, WeeklySkyForecastV2IntelligenceResponse context, string narrationText)
 {
@@ -5922,13 +5992,15 @@ static string ToWeeklyObjectDisplayName(string code) => (NormalizeWeeklyObjectCo
     var other => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(other.ToLowerInvariant().Replace('_', ' '))
 };
 
-static string ResolveSelectedImageReportFrameType(string frameType, string imagePath)
+static string ResolveSelectedImageReportFrameType(string? frameType, string? imagePath)
 {
-    var fileName = Path.GetFileNameWithoutExtension(imagePath) ?? string.Empty;
+    var fileName = string.IsNullOrWhiteSpace(imagePath) ? string.Empty : Path.GetFileNameWithoutExtension(imagePath) ?? string.Empty;
     var normalizedFileName = Regex.Replace(fileName, @"^\d+_", string.Empty, RegexOptions.CultureInvariant);
     if (!string.IsNullOrWhiteSpace(normalizedFileName)) return normalizedFileName;
 
-    return frameType switch
+    var resolvedFrameType = string.IsNullOrWhiteSpace(frameType) ? null : frameType;
+
+    return resolvedFrameType switch
     {
         nameof(CinematicFrameType.HorizonContext) => "horizon_context",
         nameof(CinematicFrameType.EstablishingWide) => "horizon_context",
@@ -5936,7 +6008,8 @@ static string ResolveSelectedImageReportFrameType(string frameType, string image
         nameof(CinematicFrameType.DetailFocus) => "detail_focus",
         nameof(CinematicFrameType.HeroCloseup) => "detail_focus",
         nameof(CinematicFrameType.AlignmentWide) => "horizon_context",
-        _ => Regex.Replace(frameType, "([a-z0-9])([A-Z])", "$1_$2", RegexOptions.CultureInvariant).ToLowerInvariant()
+        null => "stellarium_frame_screenshot",
+        _ => Regex.Replace(resolvedFrameType, "([a-z0-9])([A-Z])", "$1_$2", RegexOptions.CultureInvariant).ToLowerInvariant()
     };
 }
 
