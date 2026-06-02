@@ -5786,7 +5786,7 @@ static async Task WriteSelectedImageSequenceReportAsync(
             withinDurationTolerance = Math.Abs(durationDeltaSeconds) <= durationToleranceSeconds,
             images,
             warnings = reportWarnings,
-            errors = validationPassed ? Array.Empty<string>() : reportWarnings
+            errors = validationPassed ? Array.Empty<string>() : reportWarnings.ToArray()
         }, new JsonSerializerOptions { WriteIndented = true }), ct);
 
         logger.LogInformation("SELECTED_IMAGE_SEQUENCE_REPORT_BUILD_COMPLETE path={Path} selectedImageCount={SelectedImageCount} validationStatus={ValidationStatus}", resolvedSelectedReportPath, images.Length, imageSequencePlan.ValidationStatus);
