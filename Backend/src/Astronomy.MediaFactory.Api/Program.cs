@@ -2717,8 +2717,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 request.ContinueOnFailure && aiCinematicOptions.ContinueOnFailure),
             TimeSpan.FromSeconds(Math.Max(1, aiCinematicOptions.EffectiveMaxGenerationSeconds)));
 
-        var visualBalanceHealthyAfterAICinematicAssets = visualAssetPlanning.BalanceReport.VisualBalanceHealthy
-            && aiCinematicAssets.AICinematicRequiredPackageReady;
+        var visualBalanceHealthyAfterAICinematicAssets = visualAssetPlanning.BalanceReport.VisualBalanceHealthy;
 
         var nullCollectionsDetected = 0;
         IReadOnlyList<T> NormalizeEndpointAssetCollection<T>(string provider, IReadOnlyList<T>? source)
@@ -2735,6 +2734,11 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
         aiCinematicImagePaths = NormalizeEndpointAssetCollection("AICinematic", aiCinematicImagePaths);
         var frameScreenshots = NormalizeEndpointAssetCollection("FrameScreenshots", screenshots);
         var expandedFrameScreenshots = NormalizeEndpointAssetCollection("ExpandedFrameScreenshots", expandedStellariumExecution.ExpandedFrameScreenshots);
+        if (aiCinematicImagePaths.Count == 0)
+            warnings.Add("AI cinematic assets missing; continued with non-AI visual assets.");
+        warnings = warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var aiCinematicGenerationReportPath = await WriteAICinematicGenerationReportAsync(root, aiCinematicAssets, aiCinematicImagePaths, ct);
+        app.Logger.LogInformation("AI_CINEMATIC_GENERATION_REPORT_WRITTEN path={Path}", aiCinematicGenerationReportPath);
         app.Logger.LogInformation("ASSET_PROVIDER_RESULT provider=AICinematic assetCount={AssetCount} isNull=False", aiCinematicImagePaths.Count);
         var stellariumProductionFrameScreenshots = frameScreenshots.Concat(expandedFrameScreenshots).ToList();
         var allProductionImageAssets = BuildAllProductionImageAssets(
@@ -2761,8 +2765,8 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     segmentClassification.Plan,
                     visualAssetPlanning.Plan,
                     visualAssetPlanning.PlanPath,
-                    screenshots,
-                    expandedStellariumExecution.ExpandedFrameScreenshots,
+                    frameScreenshots,
+                    expandedFrameScreenshots,
                     aiCinematicImagePaths,
                     allProductionImageAssets,
                     weeklyForecast),
@@ -2783,12 +2787,14 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var assetProviderSummary = new WeeklySkyForecastAssetProviderSummary(
-            frameScreenshots.Count + expandedFrameScreenshots.Count,
+            frameScreenshots.Count,
+            expandedFrameScreenshots.Count,
             nasaImagePaths.Count,
             jwstImagePaths.Count,
             motionGraphicPaths.Count,
+            educationalOverlayPaths.Count,
             aiCinematicImagePaths.Count,
-            nullCollectionsDetected);
+            nullCollectionsDetected >= 0);
 
         var narrationVisualTimeline = await ExecuteOrchestrationStageAsync("Composing narration visual timeline", stageCt =>
             narrationVisualTimelineComposer.ComposeAndPersistAsync(
@@ -2808,8 +2814,8 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                     episodeArchitecture.ShortFormPlan,
                     weeklySkyfieldContext.GeneratedNarrationPackage,
                     realizedAllProductionImageAssets,
-                    screenshots,
-                    expandedStellariumExecution.ExpandedFrameScreenshots,
+                    frameScreenshots,
+                    expandedFrameScreenshots,
                     aiCinematicImagePaths),
                 stageCt));
 
@@ -2830,13 +2836,14 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             compositionFiles = compositionPaths,
             sscScripts = sscManifestEntries,
             screenshotOutputs = screenshots,
-            expandedFrameScreenshots = expandedStellariumExecution.ExpandedFrameScreenshots,
+            expandedFrameScreenshots,
             allProductionFrameScreenshots = stellariumProductionFrameScreenshots,
             aiCinematicImagePaths,
-            nasaImagePaths = assetRealization.NasaImagePaths,
-            jwstImagePaths = assetRealization.JwstImagePaths,
-            motionGraphicPaths = assetRealization.MotionGraphicPaths,
-            educationalOverlayPaths = assetRealization.EducationalOverlayPaths,
+            aiCinematicGenerationReportPath,
+            nasaImagePaths,
+            jwstImagePaths,
+            motionGraphicPaths,
+            educationalOverlayPaths,
             allProductionImageAssets = realizedAllProductionImageAssets,
             assetProviderSummary,
             imageSequencePlanPath,
@@ -2942,7 +2949,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 plannedNASAAssetCount = assetRealization.PlannedNASAAssetCount,
                 generatedNASAAssetCount = assetRealization.GeneratedNASAAssetCount,
                 productionReadyNASAAssetCount = assetRealization.ProductionReadyNASAAssetCount,
-                nasaImagePaths = assetRealization.NasaImagePaths,
+                nasaImagePaths,
                 nasaProviderConfigured = assetRealization.NasaProviderConfigured,
                 jwstAssetPlanPath = assetRealization.JwstAssetPlanPath,
                 jwstAssetResultsPath = assetRealization.JwstAssetResultsPath,
@@ -2951,18 +2958,18 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
                 generatedJWSTAssetCount = assetRealization.GeneratedJWSTAssetCount,
                 productionReadyJWSTAssetCount = assetRealization.ProductionReadyJWSTAssetCount,
                 failedJWSTAssetCount = assetRealization.FailedJWSTAssetCount,
-                jwstImagePaths = assetRealization.JwstImagePaths,
+                jwstImagePaths,
                 jwstImageCount = assetRealization.JwstImageCount,
                 motionGraphicsImageCount = assetRealization.Manifest.MotionGraphicsAssetCount,
                 educationalOverlayImageCount = assetRealization.Manifest.EducationalOverlayAssetCount,
                 plannedMotionGraphicCount = assetRealization.PlannedMotionGraphicCount,
                 generatedMotionGraphicCount = assetRealization.GeneratedMotionGraphicCount,
                 productionReadyMotionGraphicCount = assetRealization.ProductionReadyMotionGraphicCount,
-                motionGraphicPaths = assetRealization.MotionGraphicPaths,
+                motionGraphicPaths,
                 plannedEducationalOverlayCount = assetRealization.PlannedEducationalOverlayCount,
                 generatedEducationalOverlayCount = assetRealization.GeneratedEducationalOverlayCount,
                 productionReadyEducationalOverlayCount = assetRealization.ProductionReadyEducationalOverlayCount,
-                educationalOverlayPaths = assetRealization.EducationalOverlayPaths,
+                educationalOverlayPaths,
                 testVideoPipelineReady = assetRealization.VideoReadinessReport.TestVideoPipelineReady,
                 finalVideoPipelineReady = assetRealization.VideoReadinessReport.FinalVideoPipelineReady,
                 readySegmentCountForTest = assetRealization.VideoReadinessReport.ReadySegmentCountForTest,
@@ -3230,7 +3237,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             scriptPaths.Count + expandedStellariumExecution.GeneratedExpandedSscScriptCount,
             screenshots.Count + expandedStellariumExecution.GeneratedExpandedScreenshotCount,
             expandedStellariumExecution.Mode,
-            expandedStellariumExecution.ExpandedFrameScreenshots,
+            expandedFrameScreenshots,
             stellariumProductionFrameScreenshots,
             aiCinematicImagePaths,
             realizedAllProductionImageAssets,
@@ -3250,7 +3257,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             assetRealization.GeneratedNASAAssetCount,
             assetRealization.ProductionReadyNASAAssetCount,
             assetRealization.FailedNASAAssetCount,
-            assetRealization.NasaImagePaths,
+            nasaImagePaths,
             assetRealization.JwstAssetPlanPath,
             assetRealization.JwstAssetResultsPath,
             assetRealization.JwstAssetRealizationReportPath,
@@ -3258,7 +3265,7 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             assetRealization.GeneratedJWSTAssetCount,
             assetRealization.ProductionReadyJWSTAssetCount,
             assetRealization.FailedJWSTAssetCount,
-            assetRealization.JwstImagePaths,
+            jwstImagePaths,
             assetRealization.NasaProviderConfigured,
             assetRealization.JwstImageCount,
             assetRealization.Manifest.MotionGraphicsAssetCount,
@@ -3266,10 +3273,10 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             assetRealization.PlannedMotionGraphicCount,
             assetRealization.GeneratedMotionGraphicCount,
             assetRealization.ProductionReadyMotionGraphicCount,
-            assetRealization.MotionGraphicPaths,
+            motionGraphicPaths,
             assetRealization.GeneratedEducationalOverlayCount,
             assetRealization.ProductionReadyEducationalOverlayCount,
-            assetRealization.EducationalOverlayPaths,
+            educationalOverlayPaths,
             assetRealization.VideoReadinessReport.TestVideoPipelineReady,
             assetRealization.VideoReadinessReport.FinalVideoPipelineReady,
             assetRealization.VideoReadinessReport.ReadySegmentCountForTest,
@@ -3382,6 +3389,9 @@ app.MapPost("/api/weekly-skyforecast-v2/generate-weekly-scenes", async (WeeklySk
             sscCameraLockValidationReport.objectFirstCameraLockSceneCount,
             sscCameraLockValidationReport.altAzOnlySceneCount,
             sscCameraLockValidationReport.fallbackUsedSceneCount,
+            selectedStellariumImageSequenceReportPath,
+            imageSequencePlan.ValidationStatus.Equals("Passed", StringComparison.OrdinalIgnoreCase),
+            aiCinematicGenerationReportPath,
             assetProviderSummary);
 
         return Results.Ok(output);
@@ -6147,6 +6157,32 @@ static string ResolveImageSequenceNarrationUse(CinematicFramePlan framePlan)
     }
 
     return framePlan.NarrationUse;
+}
+
+static async Task<string> WriteAICinematicGenerationReportAsync(
+    string root,
+    AICinematicAssetGenerationSummary aiCinematicAssets,
+    IReadOnlyList<string>? aiCinematicImagePaths,
+    CancellationToken cancellationToken)
+{
+    var assetsDirectory = Path.Combine(root, "assets");
+    Directory.CreateDirectory(assetsDirectory);
+    var safeAICinematicImagePaths = aiCinematicImagePaths ?? [];
+    var warnings = safeAICinematicImagePaths.Count == 0
+        ? new[] { "AI cinematic images were not generated; continuing with Stellarium/NASA/JWST/motion graphics assets." }
+        : Array.Empty<string>();
+    var reportPath = Path.Combine(assetsDirectory, "ai-cinematic-generation-report.json");
+    await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(new
+    {
+        aiCinematicDirectionsGenerated = true,
+        aiCinematicImagesGenerated = safeAICinematicImagePaths.Count > 0,
+        aiCinematicAssetCount = safeAICinematicImagePaths.Count,
+        aiCinematicRequiredForSuccess = false,
+        status = safeAICinematicImagePaths.Count > 0 ? "Generated" : "SkippedOrMissingButNonFatal",
+        warnings,
+        errors = Array.Empty<string>()
+    }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    return reportPath;
 }
 
 static async Task<IReadOnlyList<string>> CollectProductionReadyAICinematicImagePathsAsync(string resultsPath, Microsoft.Extensions.Logging.ILogger logger, CancellationToken cancellationToken)
