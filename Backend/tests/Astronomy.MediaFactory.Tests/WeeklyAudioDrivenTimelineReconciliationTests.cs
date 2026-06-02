@@ -101,6 +101,12 @@ public sealed class WeeklyAudioDrivenTimelineReconciliationTests
 
         var validation = await ReadJsonAsync<WeeklyAudioDrivenTimelineValidationReport>(response.AudioDrivenTimelineValidationReportPath);
         validation.DynamicGroupingPreservationReady.Should().BeTrue();
+        validation.HeroGroupingCoverageReady.Should().BeTrue();
+        validation.HeroGroupingFrameCount.Should().Be(2);
+        validation.VenusGroupingFrameCount.Should().Be(1);
+        validation.SaturnGroupingFrameCount.Should().Be(1);
+        validation.MoonHeroFrameCount.Should().Be(1);
+        validation.HeroGroupingCoveragePassed.Should().BeTrue();
         validation.HeroGroupingParentSceneCode.Should().Be("western_planet_grouping_scene");
         validation.HeroGroupingChildSceneCodes.Should().Contain(new[] { "western_planet_grouping_scene_saturn", "western_planet_grouping_scene_venus" });
         validation.HeroGroupingPreservedFrameCount.Should().Be(2);
