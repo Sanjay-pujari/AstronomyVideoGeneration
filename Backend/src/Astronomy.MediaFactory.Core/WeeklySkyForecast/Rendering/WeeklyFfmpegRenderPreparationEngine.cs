@@ -340,7 +340,9 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
         var ordered = assets.OrderBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase).ToList();
         var totalProduction = Math.Max(productionManifest?.TotalProductionImageAssetCount ?? 0, ordered.Count);
         var hydrationPassed = totalProduction == 0 || ordered.Count >= Math.Ceiling(totalProduction * 0.8);
-        var warnings = hydrationPassed ? [] : [$"Render input hydration discovered {ordered.Count} assets; expected at least 80% of {totalProduction} production assets."];
+        var warnings = hydrationPassed
+            ? new List<string>()
+            : new List<string> { $"Render input hydration discovered {ordered.Count} assets; expected at least 80% of {totalProduction} production assets." };
         var manifest = new WeeklyRenderInputManifest(pipelineRunId, DateTime.UtcNow, ordered, allFound, allReadable, warnings, assets.SelectMany(x => (x.ValidationErrors ?? []).Select(e => $"{x.AssetId}: {e}")).ToList(), totalProduction, ordered.Count, hydrationPassed);
         var validationReport = new WeeklyFfmpegInputManifestValidationReport(true, normalizedShots.Count, nullVisualAssetCollections, nullTimelineItemCollections, nullRenderInputCollections, warnings, manifest.Errors);
         await File.WriteAllTextAsync(Path.Combine(renderDirectory, "ffmpeg-input-manifest-validation-report.json"), JsonSerializer.Serialize(validationReport, JsonOptions), cancellationToken);
