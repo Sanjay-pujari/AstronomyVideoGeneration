@@ -118,7 +118,11 @@ public sealed record RealizedVisualAsset(
     int Height,
     string SegmentUsageRole,
     bool Reusable,
-    bool ProductionReady);
+    bool ProductionReady,
+    string? Family = null,
+    IReadOnlyList<string>? IntentTags = null,
+    IReadOnlyList<string>? SupportedObjects = null,
+    IReadOnlyList<string>? SupportedSegments = null);
 
 public sealed record SegmentProductionAssetBundle(
     string SegmentId,
