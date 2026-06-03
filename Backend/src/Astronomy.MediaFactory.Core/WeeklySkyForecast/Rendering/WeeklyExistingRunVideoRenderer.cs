@@ -26,7 +26,8 @@ public sealed record WeeklyExistingRunRenderRequest(
     bool AllowSilent = true,
     bool? UseStagedRendering = null,
     bool UseAudioDrivenTimeline = false,
-    bool MergeAudio = false);
+    bool MergeAudio = false,
+    bool UseVisualIntentPlan = false);
 
 public sealed record WeeklyExistingRunRenderResponse(
     Guid PipelineRunId,
@@ -144,6 +145,18 @@ public sealed record WeeklyExistingRunRenderResponse(
     double LongformVideoDurationSeconds,
     double ShortformVideoDurationSeconds,
     IReadOnlyList<string> AudioDrivenValidationErrors,
+    bool UseVisualIntentPlan,
+    bool VisualIntentPlanLoaded,
+    bool VisualIntentRenderReady,
+    bool VisualIntentValidationPassed,
+    string VisualIntentShotPlanPath,
+    string VisualStorytellingReportPath,
+    int SameFamilyConsecutiveMax,
+    int FallbackVisualCount,
+    int MotionGraphicOverlayUsageCount,
+    int EducationalOverlayUsageCount,
+    int FullscreenMotionGraphicCount,
+    int FullscreenEducationalOverlayCount,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
@@ -172,6 +185,43 @@ public sealed record WeeklyAudioDrivenRenderValidationReport(
     double LongformExpectedDurationSeconds,
     double ShortformExpectedDurationSeconds,
     IReadOnlyList<string> AudioDrivenValidationErrors,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
+
+public sealed record WeeklyVisualIntentRenderApplicationReport(
+    bool VisualIntentRenderReady,
+    bool VisualIntentPlanLoaded,
+    bool VisualIntentShotPlanLoaded,
+    bool VisualIntentAppliedToLongform,
+    bool VisualIntentAppliedToShortform,
+    int SameFamilyConsecutiveMax,
+    int FallbackVisualCount,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
+internal sealed record WeeklyVisualIntentRenderInputs(
+    string VisualIntentPlanPath,
+    string VisualIntentShotPlanPath,
+    string VisualIntentValidationReportPath,
+    string VisualStorytellingReportPath,
+    string VisualIntentRenderApplicationReportPath,
+    WeeklyVisualIntentPlan? Plan,
+    WeeklyVisualIntentShotPlan? ShotPlan,
+    WeeklyVisualIntentValidationReport? ValidationReport,
+    WeeklyVisualStorytellingReport? StorytellingReport,
+    bool VisualIntentPlanLoaded,
+    bool VisualIntentShotPlanLoaded,
+    bool VisualIntentValidationReportLoaded,
+    bool VisualStorytellingReportLoaded,
+    bool VisualIntentRenderReady,
+    bool VisualIntentValidationPassed,
+    int SameFamilyConsecutiveMax,
+    int FallbackVisualCount,
+    int MotionGraphicOverlayUsageCount,
+    int EducationalOverlayUsageCount,
+    int FullscreenMotionGraphicCount,
+    int FullscreenEducationalOverlayCount,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
@@ -493,6 +543,14 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var renderDirectory = Path.Combine(root, "render");
             var paths = WeeklyExistingRunRequiredPaths.FromRoot(root, request.UseAudioDrivenTimeline);
             var loaded = await LoadInputsAsync(paths, cancellationToken);
+            var visualIntentInputs = request.UseVisualIntentPlan
+                ? await LoadVisualIntentRenderInputsAsync(pipelineRunId, renderDirectory, cancellationToken)
+                : EmptyVisualIntentRenderInputs(renderDirectory);
+            if (request.UseVisualIntentPlan && visualIntentInputs.ShotPlan is not null)
+            {
+                loaded = loaded with { Timeline = ApplyVisualIntentShotPlanToTimeline(loaded.Timeline, visualIntentInputs.ShotPlan) };
+                logger.LogInformation("WEEKLY_VISUAL_INTENT_RENDER_INPUTS_LOADED pipelineRunId={PipelineRunId} shotPlanPath={ShotPlanPath} ready={Ready}", pipelineRunId, visualIntentInputs.VisualIntentShotPlanPath, visualIntentInputs.VisualIntentRenderReady);
+            }
             var hydration = await HydrateRenderInputManifestAsync(pipelineRunId, root, loaded.Manifest, loaded.ProductionAssetManifest, loaded.Timeline, cancellationToken);
             loaded = loaded with { Manifest = hydration.Manifest };
             await File.WriteAllTextAsync(paths.InputManifest, JsonSerializer.Serialize(loaded.Manifest, JsonOptions), cancellationToken);
@@ -504,6 +562,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
 
             logger.LogInformation("WEEKLY_RENDER_VALIDATION_START pipelineRunId={PipelineRunId}", pipelineRunId);
             ValidateInputs(pipelineRunId, root, request, loaded, errors);
+            if (request.UseVisualIntentPlan) errors.AddRange(visualIntentInputs.Errors);
             if (errors.Count > 0)
             {
                 throw new InvalidOperationException(string.Join(" ", errors));
@@ -528,9 +587,11 @@ public sealed class WeeklyExistingRunVideoRenderer(
             var videoReportPath = request.MergeAudio ? Path.Combine(renderDirectory, "final-render-video-only-report.json") : Path.Combine(renderDirectory, "video-render-report.json");
             var ffmpegReportPath = Path.Combine(renderDirectory, "ffmpeg-execution-report.json");
             var qualityReportPath = Path.Combine(renderDirectory, "render-quality-report.json");
-            var resolvedShotPlanPath = request.UseAudioDrivenTimeline
-                ? Path.Combine(renderDirectory, "audio-driven-resolved-render-shot-plan.json")
-                : Path.Combine(renderDirectory, "resolved-render-shot-plan.json");
+            var resolvedShotPlanPath = request.UseVisualIntentPlan
+                ? Path.Combine(renderDirectory, "visual-intent-shot-plan.json")
+                : request.UseAudioDrivenTimeline
+                    ? Path.Combine(renderDirectory, "audio-driven-resolved-render-shot-plan.json")
+                    : Path.Combine(renderDirectory, "resolved-render-shot-plan.json");
             var visualSelectionReportPath = Path.Combine(renderDirectory, "render-visual-selection-report.json");
             var diversityValidationReportPath = Path.Combine(renderDirectory, "render-diversity-validation-report.json");
             var audioDrivenRenderValidationReportPath = Path.Combine(renderDirectory, "audio-driven-render-validation-report.json");
@@ -596,6 +657,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 renderVisualSelectionReady = true;
                 if (!hydration.RenderInputHydrationPassed) failFastErrors.Add("renderInputHydrationPassed is false; render input manifest does not include enough production assets.");
                 failFastErrors.AddRange(audioDrivenValidationReport.Errors);
+                if (request.UseVisualIntentPlan && !visualIntentInputs.VisualIntentRenderReady) failFastErrors.AddRange(visualIntentInputs.Errors);
             }
             else
             {
@@ -610,6 +672,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 if (!renderVisualSelectionReady) failFastErrors.Add("renderVisualSelectionReady is false; resolved shot plan failed segment visual rules.");
                 if (!diversityValidationReport.RenderVisualDiversityReady) failFastErrors.Add("renderVisualDiversityReady is false; diversity validation failed.");
                 if (!visualSelectionReport.VisualDistributionPassed) failFastErrors.Add("visualDistributionPassed is false; NASA/JWST or scene distribution requirements failed.");
+                if (request.UseVisualIntentPlan && !visualIntentInputs.VisualIntentRenderReady) failFastErrors.AddRange(visualIntentInputs.Errors);
             }
             await File.WriteAllTextAsync(storyboardReportPath, JsonSerializer.Serialize(BuildStoryboardReport(pipelineRunId, commandPlans, loaded.AudioPlan), JsonOptions), cancellationToken);
             errors.AddRange(failFastErrors);
@@ -814,6 +877,18 @@ public sealed class WeeklyExistingRunVideoRenderer(
                 audioDrivenValidationReport?.LongformVideoDurationSeconds ?? longformMerge.VideoDurationSeconds,
                 audioDrivenValidationReport?.ShortformVideoDurationSeconds ?? shortformMerge.VideoDurationSeconds,
                 audioDrivenValidationReport?.Errors ?? [],
+                request.UseVisualIntentPlan,
+                visualIntentInputs.VisualIntentPlanLoaded,
+                visualIntentInputs.VisualIntentRenderReady,
+                visualIntentInputs.VisualIntentValidationPassed,
+                request.UseVisualIntentPlan ? visualIntentInputs.VisualIntentShotPlanPath : string.Empty,
+                request.UseVisualIntentPlan ? visualIntentInputs.VisualStorytellingReportPath : string.Empty,
+                visualIntentInputs.SameFamilyConsecutiveMax,
+                visualIntentInputs.FallbackVisualCount,
+                visualIntentInputs.MotionGraphicOverlayUsageCount,
+                visualIntentInputs.EducationalOverlayUsageCount,
+                visualIntentInputs.FullscreenMotionGraphicCount,
+                visualIntentInputs.FullscreenEducationalOverlayCount,
                 warnings,
                 errors);
         }
@@ -1068,6 +1143,236 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private static RenderDiversityValidationReport EmptyDiversityValidationReport()
         => new(true, true, true, true, true, true, "skippedForAudioDrivenTimeline", true, true, 0, 0, 0, true, true, true, true, [], []);
 
+    private static WeeklyVisualIntentRenderInputs EmptyVisualIntentRenderInputs(string renderDirectory)
+        => new(
+            Path.Combine(renderDirectory, "visual-intent-plan.json"),
+            Path.Combine(renderDirectory, "visual-intent-shot-plan.json"),
+            Path.Combine(renderDirectory, "visual-intent-validation-report.json"),
+            Path.Combine(renderDirectory, "visual-storytelling-report.json"),
+            Path.Combine(renderDirectory, "visual-intent-render-application-report.json"),
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            [],
+            []);
+
+    private static async Task<WeeklyVisualIntentRenderInputs> LoadVisualIntentRenderInputsAsync(Guid pipelineRunId, string renderDirectory, CancellationToken cancellationToken)
+    {
+        var planPath = Path.Combine(renderDirectory, "visual-intent-plan.json");
+        var shotPlanPath = Path.Combine(renderDirectory, "visual-intent-shot-plan.json");
+        var validationPath = Path.Combine(renderDirectory, "visual-intent-validation-report.json");
+        var storytellingPath = Path.Combine(renderDirectory, "visual-storytelling-report.json");
+        var applicationReportPath = Path.Combine(renderDirectory, "visual-intent-render-application-report.json");
+        var warnings = new List<string>();
+        var errors = new List<string>();
+
+        var plan = await TryReadJsonAsync<WeeklyVisualIntentPlan>(planPath, errors, cancellationToken);
+        var shotPlan = await TryReadJsonAsync<WeeklyVisualIntentShotPlan>(shotPlanPath, errors, cancellationToken);
+        var validation = await TryReadJsonAsync<WeeklyVisualIntentValidationReport>(validationPath, errors, cancellationToken);
+        var storytelling = await TryReadJsonAsync<WeeklyVisualStorytellingReport>(storytellingPath, errors, cancellationToken);
+
+        var planLoaded = plan is not null && plan.PipelineRunId == pipelineRunId;
+        var shotPlanLoaded = shotPlan is not null && shotPlan.PipelineRunId == pipelineRunId;
+        var validationLoaded = validation is not null;
+        var storytellingLoaded = storytelling is not null;
+        if (!planLoaded) errors.Add($"Visual intent plan is missing or invalid: {planPath}");
+        if (!shotPlanLoaded) errors.Add($"Visual intent shot plan is missing or invalid: {shotPlanPath}");
+        if (!validationLoaded) errors.Add($"Visual intent validation report is missing or invalid: {validationPath}");
+        if (!storytellingLoaded) errors.Add($"Visual storytelling report is missing or invalid: {storytellingPath}");
+
+        var sameFamilyConsecutiveMax = Math.Max(validation?.SameFamilyConsecutiveMax ?? 0, storytelling?.SameFamilyConsecutiveMax ?? 0);
+        var fallbackVisualCount = Math.Max(validation?.FallbackVisualCount ?? 0, storytelling?.FallbackVisualCount ?? 0);
+        var motionGraphicOverlayUsageCount = Math.Max(validation?.MotionGraphicOverlayUsageCount ?? 0, storytelling?.MotionGraphicOverlayUsageCount ?? 0);
+        var educationalOverlayUsageCount = Math.Max(validation?.EducationalOverlayUsageCount ?? 0, storytelling?.EducationalOverlayUsageCount ?? 0);
+        var fullscreenMotionGraphicCount = Math.Max(validation?.FullscreenMotionGraphicCount ?? 0, storytelling?.FullscreenMotionGraphicCount ?? 0);
+        var fullscreenEducationalOverlayCount = Math.Max(validation?.FullscreenEducationalOverlayCount ?? 0, storytelling?.FullscreenEducationalOverlayCount ?? 0);
+
+        if (validation is not null)
+        {
+            if (!validation.VisualIntentReady) errors.Add("visualIntentReady is false in visual-intent-validation-report.json.");
+            if (validation.NarrationVisualMismatchCount != 0) errors.Add($"narrationVisualMismatchCount must be 0 but was {validation.NarrationVisualMismatchCount}.");
+            if (validation.FallbackVisualCount != 0) errors.Add($"fallbackVisualCount must be 0 but was {validation.FallbackVisualCount}.");
+            if (validation.SameFamilyConsecutiveMax > 2) errors.Add($"sameFamilyConsecutiveMax must be <= 2 but was {validation.SameFamilyConsecutiveMax}.");
+        }
+        if (storytelling is not null)
+        {
+            if (!storytelling.VisualStorytellingReady) errors.Add("visualStorytellingReady is false in visual-storytelling-report.json.");
+            if (storytelling.FallbackVisualCount != 0) errors.Add($"storytelling fallbackVisualCount must be 0 but was {storytelling.FallbackVisualCount}.");
+            if (storytelling.SameFamilyConsecutiveMax > 2) errors.Add($"storytelling sameFamilyConsecutiveMax must be <= 2 but was {storytelling.SameFamilyConsecutiveMax}.");
+        }
+
+        ValidateVisualIntentShotPlanAssets(shotPlan, warnings, errors);
+        var validationPassed = validationLoaded && storytellingLoaded && validation?.VisualIntentReady == true && storytelling?.VisualStorytellingReady == true && validation?.NarrationVisualMismatchCount == 0 && fallbackVisualCount == 0 && sameFamilyConsecutiveMax <= 2;
+        var ready = planLoaded && shotPlanLoaded && validationPassed && errors.Count == 0;
+        var applicationReport = new WeeklyVisualIntentRenderApplicationReport(
+            ready,
+            planLoaded,
+            shotPlanLoaded,
+            ready && (shotPlan?.Episodes ?? []).Any(episode => episode.EpisodeType.Equals("longform", StringComparison.OrdinalIgnoreCase)),
+            ready && (shotPlan?.Episodes ?? []).Any(episode => episode.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase)),
+            sameFamilyConsecutiveMax,
+            fallbackVisualCount,
+            warnings,
+            errors);
+        await File.WriteAllTextAsync(applicationReportPath, JsonSerializer.Serialize(applicationReport, JsonOptions), cancellationToken);
+
+        return new WeeklyVisualIntentRenderInputs(planPath, shotPlanPath, validationPath, storytellingPath, applicationReportPath, plan, shotPlan, validation, storytelling, planLoaded, shotPlanLoaded, validationLoaded, storytellingLoaded, ready, validationPassed, sameFamilyConsecutiveMax, fallbackVisualCount, motionGraphicOverlayUsageCount, educationalOverlayUsageCount, fullscreenMotionGraphicCount, fullscreenEducationalOverlayCount, warnings, errors);
+    }
+
+    private static async Task<T?> TryReadJsonAsync<T>(string path, List<string> errors, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
+        {
+            errors.Add($"Required visual-intent render input file is missing: {path}");
+            return default;
+        }
+        try
+        {
+            return JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            errors.Add($"Required visual-intent render input file could not be read: {path}. {ex.Message}");
+            return default;
+        }
+    }
+
+    private static void ValidateVisualIntentShotPlanAssets(WeeklyVisualIntentShotPlan? shotPlan, List<string> warnings, List<string> errors)
+    {
+        if (shotPlan is null) return;
+        foreach (var segment in shotPlan.Episodes.SelectMany(episode => episode.Segments ?? []))
+        {
+            foreach (var shot in (segment.Shots ?? []).Concat(segment.Overlays ?? []))
+            {
+                if (string.IsNullOrWhiteSpace(shot.AssetPath)) errors.Add($"Visual-intent shot {segment.SegmentId}/{shot.ShotNumber} has an empty asset path.");
+                else if (!File.Exists(shot.AssetPath)) errors.Add($"Visual-intent asset file is missing: {shot.AssetPath}");
+                if (shot.RequestedButUnavailable) errors.Add($"Visual-intent shot {segment.SegmentId}/{shot.ShotNumber} requested an unavailable fallback asset: {shot.AssetId}");
+                if (!shot.ProductionReady) warnings.Add($"Visual-intent shot {segment.SegmentId}/{shot.ShotNumber} is not marked production-ready: {shot.AssetId}");
+            }
+            foreach (var overlay in segment.Overlays ?? [])
+            {
+                if (!overlay.IsOverlay) warnings.Add($"Visual-intent overlay {segment.SegmentId}/{overlay.ShotNumber} was normalized as overlay-only for render.");
+            }
+        }
+    }
+
+    private static FinalRenderTimeline ApplyVisualIntentShotPlanToTimeline(FinalRenderTimeline timeline, WeeklyVisualIntentShotPlan shotPlan)
+        => timeline with
+        {
+            Longform = ApplyVisualIntentEpisodeShotPlan(timeline.Longform, shotPlan.Episodes.FirstOrDefault(episode => episode.EpisodeType.Equals("longform", StringComparison.OrdinalIgnoreCase))),
+            Shortform = ApplyVisualIntentEpisodeShotPlan(timeline.Shortform, shotPlan.Episodes.FirstOrDefault(episode => episode.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase)))
+        };
+
+    private static FinalRenderEpisodeTimeline ApplyVisualIntentEpisodeShotPlan(FinalRenderEpisodeTimeline timeline, WeeklyVisualIntentEpisodeShotPlan? visualEpisode)
+    {
+        if (visualEpisode is null) return timeline;
+        var visualSegments = (visualEpisode.Segments ?? [])
+            .GroupBy(segment => segment.SegmentId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var segments = new List<FinalRenderSegment>();
+        foreach (var segment in timeline.Segments ?? [])
+        {
+            if (!visualSegments.TryGetValue(segment.SegmentId, out var visualSegment))
+            {
+                segments.Add(segment);
+                continue;
+            }
+
+            var visualShots = (visualSegment.Shots ?? []).Where(shot => !shot.IsOverlay).ToList();
+            var forceOverlayOff = false;
+            if (visualShots.Count == 0)
+            {
+                visualShots = (visualSegment.Shots ?? []).ToList();
+                forceOverlayOff = true;
+            }
+            var shots = ConvertVisualIntentShotsForTimelineSegment(segment, visualSegment, visualShots, forceOverlayOff);
+            segments.Add(segment with
+            {
+                NarrationText = string.IsNullOrWhiteSpace(visualSegment.NarrationText) ? segment.NarrationText : visualSegment.NarrationText,
+                Shots = shots.Count == 0 ? segment.Shots : shots
+            });
+        }
+        return timeline with { Segments = segments, ActualDurationSeconds = segments.Sum(segment => segment.DurationSeconds) };
+    }
+
+    private static IReadOnlyList<FinalRenderShot> ConvertVisualIntentShotsForTimelineSegment(FinalRenderSegment segment, WeeklyVisualIntentSegmentShotPlan visualSegment, IReadOnlyList<WeeklyVisualIntentShotPlanEntry> visualShots, bool forceOverlayOff = false)
+    {
+        if (visualShots.Count == 0) return [];
+        var visualDuration = Math.Max(0.001d, visualSegment.DurationSeconds);
+        var cursor = segment.StartSecond;
+        var shots = new List<FinalRenderShot>();
+        for (var i = 0; i < visualShots.Count; i++)
+        {
+            var visualShot = visualShots[i];
+            var duration = i == visualShots.Count - 1
+                ? Math.Max(0.001d, segment.EndSecond - cursor)
+                : Math.Max(0.001d, segment.DurationSeconds * (visualShot.DurationSeconds / visualDuration));
+            var start = cursor;
+            var end = i == visualShots.Count - 1 ? segment.EndSecond : Math.Min(segment.EndSecond, cursor + duration);
+            shots.Add(ConvertVisualIntentShot(segment, visualShot, i + 1, start, end, forceOverlayOff));
+            cursor = end;
+        }
+        return shots;
+    }
+
+    private static FinalRenderShot ConvertVisualIntentShot(FinalRenderSegment segment, WeeklyVisualIntentShotPlanEntry shot, int shotNumber, double startSecond, double endSecond, bool forceOverlayOff = false)
+    {
+        var assetType = NormalizeRenderAssetType(shot.AssetType);
+        var isOverlay = !forceOverlayOff && shot.IsOverlay;
+        var transitionIn = shotNumber == 1 ? (segment.StartSecond == 0 ? "FadeIn" : "CrossFade") : "Dissolve";
+        var transitionOut = Math.Abs(endSecond - segment.EndSecond) < 0.02d ? "FadeOut" : "Dissolve";
+        var purpose = $"visual-intent {shot.Usage} for {segment.SegmentType}; family={shot.VisualFamily}; matched={string.Join(",", shot.MatchedObjects ?? [])}";
+        return new FinalRenderShot(shotNumber, shot.AssetId, assetType, shot.AssetPath, startSecond, endSecond, Math.Max(0.001d, endSecond - startSecond), transitionIn, transitionOut, ResolveRenderMotion(assetType, segment.SegmentType), purpose, isOverlay, isOverlay ? (int)Math.Floor(startSecond) : null, isOverlay ? (int)Math.Ceiling(endSecond) : null);
+    }
+
+    private static FinalRenderSegment ApplyVisualIntentRenderRulesToSegment(FinalRenderSegment segment)
+    {
+        var primaryShots = (segment.Shots ?? [])
+            .Where(shot => !shot.IsOverlay && !IsEducationalOverlayShot(shot))
+            .Select((shot, index) => NormalizeVisualIntentPrimaryShot(segment, shot, index + 1))
+            .ToList();
+        return segment with { Shots = primaryShots.Count == 0 ? segment.Shots : primaryShots };
+    }
+
+    private static FinalRenderShot NormalizeVisualIntentPrimaryShot(FinalRenderSegment segment, FinalRenderShot shot, int shotNumber)
+    {
+        var assetType = NormalizeRenderAssetType(shot.AssetType);
+        if (IsMotionGraphicPath(shot.AssetPath + " " + shot.AssetId) && !IsMotionGraphicAllowedFullscreen(segment.SegmentType, shot.Purpose))
+        {
+            // Motion graphics are only allowed fullscreen when visual intent selected them as a primary visual.
+            // Since this method receives primary shots from the visual-intent shot list, preserve them but normalize metadata.
+        }
+        return shot with
+        {
+            ShotNumber = shotNumber,
+            AssetType = assetType,
+            IsOverlay = false,
+            OverlayStartSecond = null,
+            OverlayEndSecond = null,
+            MotionEffect = ResolveRenderMotion(assetType, segment.SegmentType)
+        };
+    }
+
+    private static bool IsEducationalOverlayShot(FinalRenderShot shot)
+        => shot.AssetType.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase) || shot.AssetPath.Contains("educational-overlays", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsMotionGraphicAllowedFullscreen(string segmentType, string purpose)
+        => segmentType is "OpeningHook" or "ShortHook" or "WeeklySummary" or "CallToAction" or "RetentionReset"
+            || purpose.Contains("primary", StringComparison.OrdinalIgnoreCase);
+
     private async Task<(bool SkipLongformFinal, bool SkipShortformFinal)> PrepareFinalRenderOutputsAsync(Guid pipelineRunId, WeeklyExistingRunRenderRequest request, string videoOnlyLongformOutput, string videoOnlyShortformOutput, string finalLongformOutput, string finalShortformOutput, CancellationToken cancellationToken)
     {
         var skipLongform = request.RenderLongform && !request.OverwriteExisting && await IsExistingFinalOutputValidAsync(finalLongformOutput, cancellationToken);
@@ -1269,7 +1574,9 @@ public sealed class WeeklyExistingRunVideoRenderer(
         Directory.CreateDirectory(tempDirectory);
         Directory.CreateDirectory(clipsDirectory);
 
-        var refinedTimeline = RefineTimelineForRender(episodeType, timeline, manifest, productionManifest, warnings);
+        var refinedTimeline = request.UseVisualIntentPlan
+            ? timeline with { Segments = (timeline.Segments ?? []).Select(ApplyVisualIntentRenderRulesToSegment).ToList(), ActualDurationSeconds = (timeline.Segments ?? []).Sum(segment => segment.DurationSeconds) }
+            : RefineTimelineForRender(episodeType, timeline, manifest, productionManifest, warnings);
         var shots = refinedTimeline.Segments.SelectMany(segment => segment.Shots.Select(shot => (Segment: segment, Shot: shot))).ToList();
         var segmentFiles = new List<string>();
         var index = 0;
