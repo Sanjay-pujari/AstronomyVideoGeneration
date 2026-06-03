@@ -209,7 +209,7 @@ public sealed class WeeklyVisualIntentEngine(
         var shotPlan = await ReadJsonAsync<ResolvedRenderShotPlan>(Path.Combine(renderDirectory, "audio-driven-resolved-render-shot-plan.json"), cancellationToken);
         var manifest = await ReadJsonAsync<WeeklyProductionAssetManifest>(Path.Combine(episodeDirectory, "weekly-production-asset-manifest.json"), cancellationToken);
         var narrationAssetMap = await ReadJsonAsync<IReadOnlyList<NarrationAssetMapEntry>>(Path.Combine(episodeDirectory, "narration-asset-map.json"), cancellationToken) ?? [];
-        var narrationTimelineMap = await ReadJsonAsync<IReadOnlyList<NarrationTimelineMapEntry>>(Path.Combine(episodeDirectory, "narration-timeline-map.json"), cancellationToken) ?? [];
+        var narrationTimelineMap = await ReadNarrationTimelineMapAsync(Path.Combine(episodeDirectory, "narration-timeline-map.json"), cancellationToken);
         var longformNarration = await ReadJsonAsync<WeeklyNarrationPackage>(Path.Combine(episodeDirectory, "longform-narration.json"), cancellationToken);
         var shortformNarration = await ReadJsonAsync<WeeklyNarrationPackage>(Path.Combine(episodeDirectory, "shortform-narration.json"), cancellationToken);
 
@@ -301,6 +301,23 @@ public sealed class WeeklyVisualIntentEngine(
 
         logger.LogInformation("WEEKLY_VISUAL_INTENT_COMPLETE pipelineRunId={PipelineRunId} ready={Ready} totalBeats={TotalBeats} mismatches={MismatchCount}", pipelineRunId, validation.VisualIntentReady, validation.TotalBeats, validation.NarrationVisualMismatchCount);
         return ToResponse(pipelineRunId, root, planPath, visualShotPlanPath, validationPath, validation);
+    }
+
+    private static async Task<IReadOnlyList<NarrationTimelineMapEntry>> ReadNarrationTimelineMapAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(path);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var root = document.RootElement;
+        var segments = root.ValueKind == JsonValueKind.Array
+            ? root
+            : root.ValueKind == JsonValueKind.Object && root.TryGetProperty("segments", out var segmentElement)
+                ? segmentElement
+                : default;
+
+        if (segments.ValueKind is not JsonValueKind.Array)
+            throw new JsonException("narration-timeline-map.json must be either a timeline entry array or an object with a segments array.");
+
+        return segments.Deserialize<IReadOnlyList<NarrationTimelineMapEntry>>(JsonOptions) ?? [];
     }
 
     private static async Task<T?> ReadJsonAsync<T>(string path, CancellationToken cancellationToken)
