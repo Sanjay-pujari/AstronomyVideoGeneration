@@ -4355,6 +4355,23 @@ app.MapGet("/api/pipeline/{runId:guid}/thumbnail-publish-status", async (Guid ru
         thumbnailDiagnostics = new { youtube = youtubeThumb, youtubeShort = youtubeShortThumb, facebook = facebookThumb, instagram = instagramThumb }
     });
 });
+app.MapPost("/api/weekly-skyforecast-v2/runs/{pipelineRunId:guid}/build-visual-intent-plan", async (Guid pipelineRunId, IWeeklyVisualIntentEngine visualIntentEngine, CancellationToken ct) =>
+{
+    try
+    {
+        var result = await visualIntentEngine.BuildAsync(pipelineRunId, ct);
+        return result.Errors.Count > 0 ? Results.BadRequest(result) : Results.Ok(result);
+    }
+    catch (DirectoryNotFoundException ex)
+    {
+        return Results.NotFound(new { pipelineRunId, message = ex.Message });
+    }
+    catch (FileNotFoundException ex)
+    {
+        return Results.NotFound(new { pipelineRunId, message = ex.Message });
+    }
+});
+
 app.MapPost("/api/pipeline/resume/{pipelineRunId:guid}", async (Guid pipelineRunId, string? forceStage, IPipelineRecoveryService recoveryService, CancellationToken ct) =>
 {
     var status = await recoveryService.ResumeAsync(pipelineRunId, forceStage, ct);
