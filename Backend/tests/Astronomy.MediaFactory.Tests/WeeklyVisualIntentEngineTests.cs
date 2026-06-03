@@ -57,10 +57,17 @@ public sealed class WeeklyVisualIntentEngineTests
         renderSafeReport.EmptyAssetPathShotCount.Should().Be(0);
         renderSafeReport.OverlayOnlyShotCount.Should().Be(0);
         renderSafeReport.MissingAssetFileCount.Should().Be(0);
+        renderSafeReport.NonRenderableAssetsRejected.Should().BeGreaterThan(0);
+        renderSafeReport.OverlayAssetsRejectedAsPrimary.Should().BeGreaterThan(0);
         renderSafeReport.InvalidShots.Should().BeEmpty();
 
         var plan = await ReadJsonAsync<WeeklyVisualIntentPlan>(response.VisualIntentPlanPath);
         plan.Beats.Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
+        var rejectedInternalCandidates = plan.Beats.SelectMany(x => x.PrimaryVisualCandidatePool)
+            .Where(x => x.AssetId == "internal-celestial-deepskyobject-requested")
+            .ToList();
+        rejectedInternalCandidates.Should().NotBeEmpty();
+        rejectedInternalCandidates.Should().OnlyContain(x => !x.IsEligibleAsPrimary && !x.IsEligibleAsSecondary);
         plan.Beats.Single(x => x.SegmentId == "saturn").PrimaryVisual.MatchedObjects.Should().Contain("Saturn");
         plan.Beats.Single(x => x.SegmentId == "saturn").PrimaryVisual.VisualFamily.Should().NotBe("AICinematic");
         plan.Beats.Single(x => x.SegmentId == "venus").PrimaryVisual.MatchedObjects.Should().Contain("Venus");
@@ -141,7 +148,7 @@ public sealed class WeeklyVisualIntentEngineTests
         var shotPlan = new ResolvedRenderShotPlan(pipelineRunId, DateTime.UtcNow, [ToEpisode("longform", timeline.Longform), ToEpisode("shortform", timeline.Shortform)]);
         var manifest = new WeeklyProductionAssetManifest(pipelineRunId, "us", "en", new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 7), 39, 8, 7, 3, 0, 2, 1, 0, 1, 1,
         [
-            Bundle("opening", "longform", "OpeningHook", Realized("ai_hook", RealizedVisualAssetSourceType.AICinematic, ai), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion)),
+            Bundle("opening", "longform", "OpeningHook", Realized("ai_hook", RealizedVisualAssetSourceType.AICinematic, ai), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion), BadRealized("internal-celestial-deepskyobject-requested", "InternalCelestial")),
             Bundle("saturn", "longform", "ScientificContext", Realized("saturn_nasa", RealizedVisualAssetSourceType.NASA, saturn), Realized("ai_saturn_cinematic", RealizedVisualAssetSourceType.AICinematic, aiSaturn)),
             Bundle("venus", "longform", "DirectionGuidance", Realized("venus_stellarium", RealizedVisualAssetSourceType.StellariumBase, venus), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion)),
             Bundle("moon", "longform", "Observation", Realized("moon_stellarium", RealizedVisualAssetSourceType.StellariumBase, moon)),
@@ -178,6 +185,9 @@ public sealed class WeeklyVisualIntentEngineTests
 
     private static RealizedVisualAsset Realized(string id, RealizedVisualAssetSourceType sourceType, string path)
         => new(id, sourceType, id, path, true, new FileInfo(path).Length, 1920, 1080, "primary", true, true);
+
+    private static RealizedVisualAsset BadRealized(string id, string family)
+        => new(id, RealizedVisualAssetSourceType.NASA, id, string.Empty, true, 0, 1920, 1080, "primary", true, true, family);
 
     private static Task WriteJson<T>(string path, T value) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Options));
 
