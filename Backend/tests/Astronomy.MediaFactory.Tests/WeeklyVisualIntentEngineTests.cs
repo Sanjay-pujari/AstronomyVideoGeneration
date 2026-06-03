@@ -40,12 +40,24 @@ public sealed class WeeklyVisualIntentEngineTests
         File.Exists(response.VisualIntentPlanPath).Should().BeTrue();
         File.Exists(response.VisualIntentShotPlanPath).Should().BeTrue();
         File.Exists(response.VisualIntentValidationReportPath).Should().BeTrue();
+        var renderSafeReportPath = Path.Combine(runRoot, "render", "visual-intent-render-safe-validation-report.json");
+        File.Exists(renderSafeReportPath).Should().BeTrue();
 
         var validation = await ReadJsonAsync<WeeklyVisualIntentValidationReport>(response.VisualIntentValidationReportPath);
         validation.FamilyRotationApplied.Should().BeTrue();
         validation.ObjectCoverage.Should().ContainKey("MOON").WhoseValue.Should().BeTrue();
         validation.ObjectCoverage.Should().ContainKey("VENUS").WhoseValue.Should().BeTrue();
         validation.ObjectCoverage.Should().ContainKey("SATURN").WhoseValue.Should().BeTrue();
+        validation.RenderSafeShotPlanReady.Should().BeTrue();
+        validation.EmptyAssetPathShotCount.Should().Be(0);
+        validation.OverlayOnlyShotCount.Should().Be(0);
+
+        var renderSafeReport = await ReadJsonAsync<WeeklyVisualIntentRenderSafeValidationReport>(renderSafeReportPath);
+        renderSafeReport.RenderSafeShotPlanReady.Should().BeTrue();
+        renderSafeReport.EmptyAssetPathShotCount.Should().Be(0);
+        renderSafeReport.OverlayOnlyShotCount.Should().Be(0);
+        renderSafeReport.MissingAssetFileCount.Should().Be(0);
+        renderSafeReport.InvalidShots.Should().BeEmpty();
 
         var plan = await ReadJsonAsync<WeeklyVisualIntentPlan>(response.VisualIntentPlanPath);
         plan.Beats.Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
@@ -56,7 +68,8 @@ public sealed class WeeklyVisualIntentEngineTests
 
         var shotPlan = await ReadJsonAsync<WeeklyVisualIntentShotPlan>(response.VisualIntentShotPlanPath);
         shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Overlays).Should().OnlyContain(x => x.IsOverlay);
-        shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Shots).Should().NotContain(x => x.VisualFamily is "MotionGraphics" or "EducationalOverlay");
+        shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Shots).Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.AssetPath) && File.Exists(x.AssetPath));
+        shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Shots).Should().NotContain(x => x.VisualFamily is "MotionGraphic" or "MotionGraphics" or "EducationalOverlay" || x.IsOverlay);
     }
 
     [Fact]
