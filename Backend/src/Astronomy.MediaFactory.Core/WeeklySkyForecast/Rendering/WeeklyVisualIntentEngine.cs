@@ -228,6 +228,13 @@ public sealed record WeeklyVisualFamilyDistributionReport(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
+public sealed record ProductionAssetSemanticRegistryEntry(
+    string Path,
+    string Family,
+    IReadOnlyList<string> IntentTags,
+    IReadOnlyList<string> SupportedObjects,
+    IReadOnlyList<string> SupportedSegments);
+
 public sealed class WeeklyVisualIntentEngine(
     IWeeklyPipelineRunDirectoryResolver pipelineRunDirectoryResolver,
     ILogger<WeeklyVisualIntentEngine> logger) : IWeeklyVisualIntentEngine
@@ -239,6 +246,10 @@ public sealed class WeeklyVisualIntentEngine(
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter() }
     };
+
+
+    private static readonly Lazy<IReadOnlyList<ProductionAssetSemanticRegistryEntry>> ProductionAssetSemanticRegistry = new(LoadProductionAssetSemanticRegistry);
+    private const string ProductionAssetSemanticRegistryRelativePath = "render/production-asset-semantic-registry.json";
 
     private static readonly string[] InputFileNames =
     [
@@ -422,6 +433,61 @@ public sealed class WeeklyVisualIntentEngine(
         return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken);
     }
 
+    private static IReadOnlyList<ProductionAssetSemanticRegistryEntry> LoadProductionAssetSemanticRegistry()
+    {
+        var registryPath = FindProductionAssetSemanticRegistryPath();
+        if (registryPath is null) return [];
+
+        try
+        {
+            using var stream = File.OpenRead(registryPath);
+            return JsonSerializer.Deserialize<IReadOnlyList<ProductionAssetSemanticRegistryEntry>>(stream, JsonOptions) ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static string? FindProductionAssetSemanticRegistryPath()
+    {
+        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var directory = new DirectoryInfo(start);
+            while (directory is not null)
+            {
+                var candidate = Path.Combine(directory.FullName, ProductionAssetSemanticRegistryRelativePath);
+                if (File.Exists(candidate)) return candidate;
+                directory = directory.Parent;
+            }
+        }
+        return null;
+    }
+
+    private static ProductionAssetSemanticRegistryEntry? ResolveSemanticRegistryEntry(string assetId, string assetCode, string assetPath)
+    {
+        var searchText = BuildSearchText(assetId, assetCode, assetPath);
+        return ProductionAssetSemanticRegistry.Value.FirstOrDefault(entry => RegistryEntryMatches(entry, searchText, assetPath));
+    }
+
+    private static bool RegistryEntryMatches(ProductionAssetSemanticRegistryEntry entry, string searchText, string assetPath)
+    {
+        if (string.IsNullOrWhiteSpace(entry.Path)) return false;
+        var entryPath = entry.Path.Replace('\\', '/');
+        var fileName = Path.GetFileNameWithoutExtension(entryPath);
+        if (!string.IsNullOrWhiteSpace(fileName) && searchText.Contains(fileName, StringComparison.OrdinalIgnoreCase)) return true;
+        var entryWithoutExtension = Path.ChangeExtension(entryPath, null);
+        if (!string.IsNullOrWhiteSpace(entryWithoutExtension) && searchText.Replace('\\', '/').Contains(entryWithoutExtension, StringComparison.OrdinalIgnoreCase)) return true;
+        return !string.IsNullOrWhiteSpace(assetPath) && assetPath.Replace('\\', '/').Contains(entryPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<string> MergeSemanticValues(params IReadOnlyList<string>?[] values)
+        => values.Where(x => x is not null)
+            .SelectMany(x => x!)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
     private static WeeklyProductionAssetManifest EnrichProductionAssetManifest(WeeklyProductionAssetManifest manifest)
     {
         var bundles = (manifest.SegmentBundles ?? [])
@@ -430,10 +496,15 @@ public sealed class WeeklyVisualIntentEngine(
                 AssignedVisualAssets = (bundle.AssignedVisualAssets ?? [])
                     .Select(asset =>
                     {
-                        var family = NormalizeFamily(asset.SourceType.ToString(), asset.FilePath, asset.AssetCode);
-                        var supportedObjects = DetectObjects(BuildSearchText(asset.AssetId, asset.AssetCode, asset.FilePath, bundle.SegmentId, bundle.SegmentType, asset.SegmentUsageRole));
-                        var intentTags = ResolveAssetIntentTags(asset.AssetId, asset.AssetCode, asset.FilePath, family, bundle.SegmentType, asset.SegmentUsageRole, supportedObjects);
-                        var supportedSegments = intentTags.Concat([bundle.SegmentType, bundle.SegmentId]).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        var registryEntry = ResolveSemanticRegistryEntry(asset.AssetId, asset.AssetCode, asset.FilePath);
+                        var family = string.IsNullOrWhiteSpace(registryEntry?.Family)
+                            ? NormalizeFamily(asset.SourceType.ToString(), asset.FilePath, asset.AssetCode)
+                            : registryEntry!.Family;
+                        var detectedObjects = DetectObjects(BuildSearchText(asset.AssetId, asset.AssetCode, asset.FilePath, bundle.SegmentId, bundle.SegmentType, asset.SegmentUsageRole));
+                        var supportedObjects = MergeSemanticValues(asset.SupportedObjects, registryEntry?.SupportedObjects, detectedObjects);
+                        var inferredIntentTags = ResolveAssetIntentTags(asset.AssetId, asset.AssetCode, asset.FilePath, family, bundle.SegmentType, asset.SegmentUsageRole, supportedObjects);
+                        var intentTags = MergeSemanticValues(asset.IntentTags, registryEntry?.IntentTags, inferredIntentTags);
+                        var supportedSegments = MergeSemanticValues(asset.SupportedSegments, registryEntry?.SupportedSegments, [bundle.SegmentType, bundle.SegmentId]);
                         return asset with
                         {
                             Family = family,
@@ -496,6 +567,29 @@ public sealed class WeeklyVisualIntentEngine(
         return tags.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    private static AssetCandidate ToRenderedAssetCandidate(string assetId, string assetCode, string assetType, string assetPath, string segmentId, string episodeType, string segmentType, string usageText)
+    {
+        var registryEntry = ResolveSemanticRegistryEntry(assetId, assetCode, assetPath);
+        var family = string.IsNullOrWhiteSpace(registryEntry?.Family) ? NormalizeFamily(assetType, assetPath, assetCode) : registryEntry!.Family;
+        var detectedObjects = DetectObjects(BuildSearchText(assetId, assetType, assetPath, segmentId, segmentType, usageText));
+        var supportedObjects = MergeSemanticValues(registryEntry?.SupportedObjects, detectedObjects);
+        var intentTags = MergeSemanticValues(registryEntry?.IntentTags, ResolveAssetIntentTags(assetId, assetCode, assetPath, family, segmentType, usageText, supportedObjects));
+        var supportedSegments = MergeSemanticValues(registryEntry?.SupportedSegments, [segmentType, segmentId]);
+        return new AssetCandidate(
+            assetId,
+            assetCode,
+            assetType,
+            family,
+            assetPath,
+            segmentId,
+            episodeType,
+            segmentType,
+            string.IsNullOrWhiteSpace(assetPath) || File.Exists(assetPath) || !Path.IsPathRooted(assetPath),
+            supportedObjects,
+            intentTags,
+            supportedSegments);
+    }
+
     private static IReadOnlyList<AssetCandidate> BuildAssetCatalog(WeeklyProductionAssetManifest manifest, ResolvedRenderShotPlan shotPlan, FinalRenderTimeline timeline)
     {
         var manifestAssets = (manifest.SegmentBundles ?? [])
@@ -503,38 +597,36 @@ public sealed class WeeklyVisualIntentEngine(
                 asset.AssetId,
                 asset.AssetCode,
                 asset.SourceType.ToString(),
-                NormalizeFamily(asset.SourceType.ToString(), asset.FilePath, asset.AssetCode),
+                asset.Family ?? NormalizeFamily(asset.SourceType.ToString(), asset.FilePath, asset.AssetCode),
                 asset.FilePath,
                 bundle.SegmentId,
                 bundle.EpisodeType,
                 bundle.SegmentType,
                 asset.Exists && asset.ProductionReady,
-                DetectObjects(BuildSearchText(asset.AssetId, asset.AssetCode, asset.FilePath, bundle.SegmentId, bundle.SegmentType, asset.SourceType.ToString(), asset.SegmentUsageRole))))
+                MergeSemanticValues(asset.SupportedObjects, DetectObjects(BuildSearchText(asset.AssetId, asset.AssetCode, asset.FilePath, bundle.SegmentId, bundle.SegmentType, asset.SourceType.ToString(), asset.SegmentUsageRole))),
+                asset.IntentTags ?? [],
+                asset.SupportedSegments ?? [])))
             .ToList());
 
-        var renderedAssets = shotPlan.Episodes.SelectMany(episode => episode.Segments.SelectMany(segment => segment.Shots.Select(shot => new AssetCandidate(
+        var renderedAssets = shotPlan.Episodes.SelectMany(episode => episode.Segments.SelectMany(segment => segment.Shots.Select(shot => ToRenderedAssetCandidate(
                 shot.AssetId,
                 shot.AssetId,
                 shot.AssetType,
-                NormalizeFamily(shot.AssetType, shot.AssetPath, shot.AssetId),
                 shot.AssetPath,
                 segment.SegmentId,
                 episode.EpisodeType,
                 segment.SegmentType,
-                string.IsNullOrWhiteSpace(shot.AssetPath) || File.Exists(shot.AssetPath) || !Path.IsPathRooted(shot.AssetPath),
-                DetectObjects(BuildSearchText(shot.AssetId, shot.AssetType, shot.AssetPath, segment.SegmentId, segment.SegmentType, shot.Purpose, shot.LayoutMode)))))
-            .Concat(EnumerateTimelineSegments(timeline).SelectMany(row => row.Segment.Shots.Select(shot => new AssetCandidate(
+                BuildSearchText(shot.Purpose, shot.LayoutMode)))))
+            .Concat(EnumerateTimelineSegments(timeline).SelectMany(row => row.Segment.Shots.Select(shot => ToRenderedAssetCandidate(
                 shot.AssetId,
                 shot.AssetId,
                 shot.AssetType,
-                NormalizeFamily(shot.AssetType, shot.AssetPath, shot.AssetId),
                 shot.AssetPath,
                 row.Segment.SegmentId,
                 row.EpisodeType,
                 row.Segment.SegmentType,
-                string.IsNullOrWhiteSpace(shot.AssetPath) || File.Exists(shot.AssetPath) || !Path.IsPathRooted(shot.AssetPath),
-                DetectObjects(BuildSearchText(shot.AssetId, shot.AssetType, shot.AssetPath, row.Segment.SegmentId, row.Segment.SegmentType, shot.Purpose)))))
-            .ToList()));
+                shot.Purpose))))
+            .ToList());
 
         return manifestAssets.Concat(renderedAssets)
             .Where(x => !string.IsNullOrWhiteSpace(x.AssetId) || !string.IsNullOrWhiteSpace(x.AssetPath))
@@ -642,7 +734,7 @@ public sealed class WeeklyVisualIntentEngine(
     }
 
     private static AssetCandidate ToAssetCandidate(WeeklyVisualIntentAssetCandidate candidate, string segmentId, string episodeType, string segmentType)
-        => new(candidate.AssetId, candidate.SceneCode, candidate.SourceType, candidate.Family, candidate.Path, segmentId, episodeType, segmentType, true, candidate.TargetObjects);
+        => new(candidate.AssetId, candidate.SceneCode, candidate.SourceType, candidate.Family, candidate.Path, segmentId, episodeType, segmentType, true, candidate.TargetObjects, [], []);
 
     private static string ResolveCandidateReason(AssetCandidate asset, WeeklyVisualIntentType intent, IReadOnlyList<string> matchedSubjects, bool eligiblePrimary, bool eligibleOverlay, bool astronomyAssetExists)
     {
@@ -688,7 +780,14 @@ public sealed class WeeklyVisualIntentEngine(
         if (overlayFamily is null) return [];
         var selected = catalog
             .Where(x => x.VisualFamily.Equals(overlayFamily, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(x => x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.IntentTags.Count > 0)
+            .OrderByDescending(x => AssetMatchesIntent(x, intent, segment.SegmentType))
+            .ThenByDescending(x => SemanticAssetNameMatchesSegment(x, segment.SegmentType))
+            .ThenByDescending(x => x.SupportedSegments.Contains(segment.SegmentType, StringComparer.OrdinalIgnoreCase))
+            .ThenByDescending(x => x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(x => x.SupportedSegments.Contains(segment.SegmentId, StringComparer.OrdinalIgnoreCase))
+            .ThenBy(x => x.IntentTags.Count)
+            .ThenBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
         if (selected is null) return [];
         var duration = Math.Min(segment.DurationSeconds, overlayFamily.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase) ? 3 : Math.Max(3, Math.Min(6, segment.DurationSeconds)));
@@ -754,6 +853,44 @@ public sealed class WeeklyVisualIntentEngine(
         return index >= 0 ? index : preferredFamilies.Count + 1;
     }
 
+    private static bool SemanticAssetNameMatchesSegment(AssetCandidate asset, string segmentType)
+    {
+        var normalizedSegment = NormalizeSemanticToken(segmentType);
+        var searchText = NormalizeSemanticToken(BuildSearchText(asset.AssetId, asset.AssetCode, asset.AssetPath));
+        return !string.IsNullOrWhiteSpace(normalizedSegment) && searchText.Contains(normalizedSegment, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeSemanticToken(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var chars = new List<char>();
+        for (var i = 0; i < value.Length; i++)
+        {
+            var current = value[i];
+            if (char.IsLetterOrDigit(current))
+                chars.Add(char.ToLowerInvariant(current));
+        }
+        return new string(chars.ToArray());
+    }
+
+    private static bool AssetMatchesIntent(AssetCandidate asset, WeeklyVisualIntentType intent, string segmentType)
+        => IntentAliases(intent, segmentType).Any(tag => asset.IntentTags.Contains(tag, StringComparer.OrdinalIgnoreCase));
+
+    private static IReadOnlyList<string> IntentAliases(WeeklyVisualIntentType intent, string segmentType)
+    {
+        var aliases = new List<string> { intent.ToString() };
+        if (intent is WeeklyVisualIntentType.BestTime) aliases.Add("ObservationWindow");
+        if (intent is WeeklyVisualIntentType.DirectionGuidance) aliases.Add("ObservationGuidance");
+        if (intent is WeeklyVisualIntentType.CallToAction) aliases.Add("CTA");
+        if (intent is WeeklyVisualIntentType.Summary) aliases.Add("WeeklySummary");
+        if (intent is WeeklyVisualIntentType.Hook && segmentType.Contains("Retention", StringComparison.OrdinalIgnoreCase)) aliases.Add("RetentionReset");
+        if (intent is WeeklyVisualIntentType.Observation && segmentType.Contains("HeroEvent", StringComparison.OrdinalIgnoreCase)) aliases.Add("HeroEvent");
+        if (segmentType.Contains("BestObservationWindow", StringComparison.OrdinalIgnoreCase)) aliases.Add("ObservationWindow");
+        if (segmentType.Contains("WhereToLook", StringComparison.OrdinalIgnoreCase)) aliases.Add("DirectionGuidance");
+        if (segmentType.Contains("WeeklySkyOverview", StringComparison.OrdinalIgnoreCase)) aliases.Add("WeeklyOverview");
+        return aliases.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     private static int ScoreVisualMatch(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<string> preferredFamilies)
     {
         var score = 0;
@@ -782,14 +919,16 @@ public sealed class WeeklyVisualIntentEngine(
 
     private static int ScoreVisualCandidate(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<string> matchedSubjects, bool astronomyAssetExists)
     {
+        if (asset.IntentTags.Count == 0) return 0;
+
         var score = 0;
+        if (AssetMatchesIntent(asset, intent, segment.SegmentType)) score += 100;
         if (mentionedObjects.Count > 0)
         {
             if (matchedSubjects.Count == 0) return 0;
-            if (AssetMatchesObject(asset, narrationSubject)) score += 100;
             foreach (var subject in matchedSubjects)
             {
-                if (asset.MatchedObjects.Contains(subject, StringComparer.OrdinalIgnoreCase)) score += 80;
+                if (asset.MatchedObjects.Contains(subject, StringComparer.OrdinalIgnoreCase) || asset.IntentTags.Contains(subject, StringComparer.OrdinalIgnoreCase)) score += 80;
                 if (ContainsObjectName(asset.AssetPath, subject)) score += 70;
                 if (ContainsObjectName(asset.AssetCode, subject) || ContainsObjectName(asset.AssetId, subject)) score += 60;
             }
@@ -799,7 +938,9 @@ public sealed class WeeklyVisualIntentEngine(
             score += 20;
         }
 
-        if (IsFamilySuitableForIntent(asset.VisualFamily, intent, segment.SegmentType, mentionedObjects)) score += 40;
+        if (IsFamilySuitableForIntent(asset.VisualFamily, intent, segment.SegmentType, mentionedObjects)) score += 50;
+        if (asset.SupportedSegments.Contains(segment.SegmentType, StringComparer.OrdinalIgnoreCase)) score += 25;
+        if (asset.SupportedSegments.Contains(segment.SegmentId, StringComparer.OrdinalIgnoreCase)) score += 15;
         score += FamilyIntentBonus(asset, intent, segment, mentionedObjects, astronomyAssetExists);
         if (asset.SegmentType.Equals(segment.SegmentType, StringComparison.OrdinalIgnoreCase)) score += 25;
         if (asset.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase)) score += 15;
@@ -1326,5 +1467,7 @@ public sealed class WeeklyVisualIntentEngine(
         string EpisodeType,
         string SegmentType,
         bool ProductionReady,
-        IReadOnlyList<string> MatchedObjects);
+        IReadOnlyList<string> MatchedObjects,
+        IReadOnlyList<string> IntentTags,
+        IReadOnlyList<string> SupportedSegments);
 }
