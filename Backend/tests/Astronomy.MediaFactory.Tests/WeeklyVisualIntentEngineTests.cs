@@ -102,7 +102,7 @@ public sealed class WeeklyVisualIntentEngineTests
         await WriteJson(Path.Combine(runRoot, "episode", "longform-narration.json"), longNarration);
         await WriteJson(Path.Combine(runRoot, "episode", "shortform-narration.json"), shortNarration);
         await WriteJson(Path.Combine(runRoot, "episode", "narration-asset-map.json"), assetMap);
-        await WriteJson(Path.Combine(runRoot, "episode", "narration-timeline-map.json"), timelineMap);
+        await WriteJson(Path.Combine(runRoot, "episode", "narration-timeline-map.json"), new { pipelineRunId, generatedAtUtc = DateTime.UtcNow, segments = timelineMap });
     }
 
     private static FinalRenderSegment Segment(string id, string type, string episodeType, double start, double end, string narration, FinalRenderShot shot)
