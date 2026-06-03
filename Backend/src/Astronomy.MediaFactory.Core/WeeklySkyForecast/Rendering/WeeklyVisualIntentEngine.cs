@@ -16,19 +16,13 @@ public interface IWeeklyVisualIntentEngine
 public enum WeeklyVisualIntentType
 {
     Hook,
-    HeroEvent,
-    StrongestEvent,
-    MoonHighlights,
-    PlanetHighlights,
     Observation,
-    ObservationWindow,
     DirectionGuidance,
     BestTime,
     ScientificContext,
     EducationalExplanation,
     AstrophotographyTip,
     Summary,
-    RetentionReset,
     CallToAction
 }
 
@@ -561,16 +555,16 @@ public sealed class WeeklyVisualIntentEngine(
     {
         var text = $"{segmentType} {narration}".ToLowerInvariant();
         if (segmentType.Contains("CallToAction", StringComparison.OrdinalIgnoreCase) || text.Contains("subscribe") || text.Contains("follow")) return WeeklyVisualIntentType.CallToAction;
-        if (segmentType.Contains("Retention", StringComparison.OrdinalIgnoreCase) || text.Contains("don't miss") || text.Contains("stay with")) return WeeklyVisualIntentType.RetentionReset;
+        if (segmentType.Contains("Retention", StringComparison.OrdinalIgnoreCase) || text.Contains("don't miss") || text.Contains("stay with")) return WeeklyVisualIntentType.Hook;
         if (segmentType.Contains("Summary", StringComparison.OrdinalIgnoreCase) || text.Contains("recap") || text.Contains("in summary")) return WeeklyVisualIntentType.Summary;
         if (segmentType.Contains("Hook", StringComparison.OrdinalIgnoreCase) || startSecond <= 1) return WeeklyVisualIntentType.Hook;
-        if (segmentType.Contains("HeroEvent", StringComparison.OrdinalIgnoreCase)) return WeeklyVisualIntentType.HeroEvent;
-        if (segmentType.Contains("StrongestEvent", StringComparison.OrdinalIgnoreCase)) return WeeklyVisualIntentType.StrongestEvent;
-        if (segmentType.Contains("MoonHighlight", StringComparison.OrdinalIgnoreCase) || text.Contains("moon") || text.Contains("lunar") || text.Contains("chandra") || text.Contains("चंद्र") || text.Contains("चाँद")) return WeeklyVisualIntentType.MoonHighlights;
-        if (segmentType.Contains("PlanetHighlight", StringComparison.OrdinalIgnoreCase) || text.Contains("saturn") || text.Contains("venus") || text.Contains("shani") || text.Contains("shukra") || text.Contains("शनि") || text.Contains("शुक्र")) return WeeklyVisualIntentType.PlanetHighlights;
+        if (segmentType.Contains("HeroEvent", StringComparison.OrdinalIgnoreCase)) return WeeklyVisualIntentType.Observation;
+        if (segmentType.Contains("StrongestEvent", StringComparison.OrdinalIgnoreCase)) return WeeklyVisualIntentType.Observation;
+        if (segmentType.Contains("MoonHighlight", StringComparison.OrdinalIgnoreCase) || text.Contains("moon") || text.Contains("lunar") || text.Contains("chandra") || text.Contains("चंद्र") || text.Contains("चाँद")) return WeeklyVisualIntentType.Observation;
+        if (segmentType.Contains("PlanetHighlight", StringComparison.OrdinalIgnoreCase) || text.Contains("saturn") || text.Contains("venus") || text.Contains("shani") || text.Contains("shukra") || text.Contains("शनि") || text.Contains("शुक्र")) return WeeklyVisualIntentType.Observation;
         if (text.Contains("camera") || text.Contains("photo") || text.Contains("astrophotography") || text.Contains("exposure") || text.Contains("tripod")) return WeeklyVisualIntentType.AstrophotographyTip;
         if (text.Contains("why") || text.Contains("rings") || text.Contains("phase") || text.Contains("detail") || text.Contains("science")) return WeeklyVisualIntentType.ScientificContext;
-        if (text.Contains("visibility") || text.Contains("calendar") || text.Contains("window")) return WeeklyVisualIntentType.ObservationWindow;
+        if (text.Contains("visibility") || text.Contains("calendar") || text.Contains("window")) return WeeklyVisualIntentType.BestTime;
         if (text.Contains("look") || text.Contains("direction") || text.Contains("east") || text.Contains("west") || text.Contains("north") || text.Contains("south") || text.Contains("horizon") || text.Contains("ऊपर") || text.Contains("क्षितिज")) return WeeklyVisualIntentType.DirectionGuidance;
         if (text.Contains("best time") || text.Contains("time") || text.Contains("after sunset") || text.Contains("before sunrise") || text.Contains("minutes") || text.Contains(" बजे")) return WeeklyVisualIntentType.BestTime;
         if (text.Contains("learn") || text.Contains("explain") || text.Contains("checklist") || text.Contains("समझ")) return WeeklyVisualIntentType.EducationalExplanation;
@@ -685,7 +679,7 @@ public sealed class WeeklyVisualIntentEngine(
     {
         var overlayFamily = intent switch
         {
-            WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.ObservationWindow or WeeklyVisualIntentType.Summary => "MotionGraphic",
+            WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.Summary => "MotionGraphic",
             WeeklyVisualIntentType.EducationalExplanation => "EducationalOverlay",
             WeeklyVisualIntentType.AstrophotographyTip => "EducationalOverlay",
             WeeklyVisualIntentType.CallToAction => "MotionGraphic",
@@ -706,14 +700,14 @@ public sealed class WeeklyVisualIntentEngine(
         var text = $"{segmentType} {narration}";
         if (intent is WeeklyVisualIntentType.CallToAction) return ["AICinematic"];
         if (intent is WeeklyVisualIntentType.Summary) return ["AICinematic", "MotionGraphic", "Stellarium", "CelestialReference"];
-        if (intent is WeeklyVisualIntentType.MoonHighlights || IsMoonHighlight(text, mentionedObjects)) return ["Stellarium", "CelestialReference", "NASA", "AICinematic"];
-        if (intent is WeeklyVisualIntentType.PlanetHighlights or WeeklyVisualIntentType.HeroEvent or WeeklyVisualIntentType.StrongestEvent || IsPlanetHighlight(text, mentionedObjects) || IsHeroOrStrongestEvent(segmentType)) return ["Stellarium", "CelestialReference", "NASA", "JWST", "AICinematic"];
+        if (IsMoonHighlight(text, mentionedObjects)) return ["Stellarium", "CelestialReference", "NASA", "AICinematic"];
+        if (IsPlanetHighlight(text, mentionedObjects) || IsHeroOrStrongestEvent(segmentType)) return ["Stellarium", "CelestialReference", "NASA", "JWST", "AICinematic"];
         return intent switch
         {
-            WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.RetentionReset => ["AICinematic", "Stellarium"],
+            WeeklyVisualIntentType.Hook => ["AICinematic", "Stellarium"],
             WeeklyVisualIntentType.Observation => ["Stellarium", "CelestialReference", "AICinematic"],
             WeeklyVisualIntentType.DirectionGuidance => ["Stellarium", "MotionGraphic", "AICinematic"],
-            WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.ObservationWindow => ["Stellarium", "MotionGraphic", "AICinematic"],
+            WeeklyVisualIntentType.BestTime => ["Stellarium", "MotionGraphic", "AICinematic"],
             WeeklyVisualIntentType.ScientificContext => ["CelestialReference", "NASA", "JWST", "Stellarium", "AICinematic"],
             WeeklyVisualIntentType.EducationalExplanation => ["Stellarium", "CelestialReference", "AICinematic"],
             WeeklyVisualIntentType.AstrophotographyTip => ["Stellarium", "CelestialReference", "NASA", "AICinematic"],
@@ -816,19 +810,19 @@ public sealed class WeeklyVisualIntentEngine(
     {
         var family = asset.VisualFamily;
         var text = $"{segment.SegmentType} {segment.NarrationText}";
-        if (intent is WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.RetentionReset)
+        if (intent is WeeklyVisualIntentType.Hook)
             return family switch { "AICinematic" => 100, "Stellarium" => 40, _ => 0 };
-        if (intent is WeeklyVisualIntentType.HeroEvent or WeeklyVisualIntentType.StrongestEvent || IsHeroOrStrongestEvent(segment.SegmentType))
+        if (IsHeroOrStrongestEvent(segment.SegmentType))
             return family switch { "Stellarium" => 100, "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" => 80, "AICinematic" => astronomyAssetExists ? -100 : 0, _ => 0 };
-        if (intent is WeeklyVisualIntentType.MoonHighlights || IsMoonHighlight(text, mentionedObjects))
+        if (IsMoonHighlight(text, mentionedObjects))
             return family switch { "Stellarium" => 100, "NASA" or "InternalCelestial" or "CelestialReference" => 90, "AICinematic" => -100, _ => 0 };
-        if (intent is WeeklyVisualIntentType.PlanetHighlights || IsPlanetHighlight(text, mentionedObjects))
+        if (IsPlanetHighlight(text, mentionedObjects))
             return family switch { "Stellarium" => 100, "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" => 90, "AICinematic" => -100, _ => 0 };
         return intent switch
         {
             WeeklyVisualIntentType.ScientificContext => family switch { "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" => 100, "Stellarium" => 50, "AICinematic" => -50, _ => 0 },
             WeeklyVisualIntentType.DirectionGuidance => family switch { "Stellarium" => 100, "MotionGraphic" => 80, "AICinematic" => -50, _ => 0 },
-            WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.ObservationWindow => family switch { "Stellarium" => 100, "MotionGraphic" => 60, "AICinematic" => -30, _ => 0 },
+            WeeklyVisualIntentType.BestTime => family switch { "Stellarium" => 100, "MotionGraphic" => 60, "AICinematic" => -30, _ => 0 },
             WeeklyVisualIntentType.Summary => family switch { "AICinematic" => 90, "MotionGraphic" => 60, _ => 0 },
             WeeklyVisualIntentType.CallToAction => family switch { "AICinematic" => 100, "MotionGraphic" => 70, _ => 0 },
             _ => 0
@@ -841,9 +835,9 @@ public sealed class WeeklyVisualIntentEngine(
             return family is "Stellarium" or "NASA" or "JWST" or "InternalCelestial" or "CelestialReference";
         return intent switch
         {
-            WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.RetentionReset or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction => family is "AICinematic" or "Stellarium",
+            WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction => family is "AICinematic" or "Stellarium",
             WeeklyVisualIntentType.ScientificContext => family is "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" or "Stellarium",
-            WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.ObservationWindow => family is "Stellarium" or "MotionGraphic",
+            WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime => family is "Stellarium" or "MotionGraphic",
             _ => family is "Stellarium" or "NASA" or "JWST" or "InternalCelestial" or "CelestialReference"
         };
     }
@@ -855,7 +849,7 @@ public sealed class WeeklyVisualIntentEngine(
         if (asset.VisualFamily.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase)) return false;
         if (asset.VisualFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase))
         {
-            if (intent is WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.RetentionReset or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction) return true;
+            if (intent is WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction) return true;
             return !astronomyAssetExists;
         }
         return true;
@@ -864,7 +858,7 @@ public sealed class WeeklyVisualIntentEngine(
     private static bool IsEligibleAsOverlay(AssetCandidate asset, WeeklyVisualIntentType intent)
         => asset.VisualFamily is "EducationalOverlay"
             || (asset.VisualFamily is "MotionGraphic"
-                && intent is WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.ObservationWindow or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction);
+                && intent is WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction);
 
     private static WeeklyVisualIntentAssetCandidate? Pick(IReadOnlyList<WeeklyVisualIntentAssetCandidate> candidates, Queue<string> previousFamilies)
     {
