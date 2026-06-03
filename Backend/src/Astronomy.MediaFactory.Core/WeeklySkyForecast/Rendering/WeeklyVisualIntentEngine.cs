@@ -77,7 +77,21 @@ public sealed record WeeklyVisualIntentBeat(
     WeeklyVisualIntentAssetSelection? SecondaryVisual,
     IReadOnlyList<WeeklyVisualIntentAssetSelection> Overlays,
     bool MatchedToNarration,
+    IReadOnlyList<WeeklyVisualIntentAssetCandidate> PrimaryVisualCandidatePool,
     IReadOnlyList<string> Warnings);
+
+public sealed record WeeklyVisualIntentAssetCandidate(
+    string AssetId,
+    string Path,
+    string Family,
+    string SourceType,
+    string SceneCode,
+    IReadOnlyList<string> TargetObjects,
+    IReadOnlyList<string> MatchedSubjects,
+    int Score,
+    bool IsEligibleAsPrimary,
+    bool IsEligibleAsOverlay,
+    string Reason);
 
 public sealed record WeeklyVisualIntentAssetSelection(
     string AssetId,
@@ -160,7 +174,19 @@ public sealed record WeeklyVisualIntentValidationReport(
     bool MoonNarrationMatchedToMoonVisual,
     bool FamilyRotationApplied,
     int FamilyRotationSwapCount,
+    IReadOnlyDictionary<string, int> PrimaryFamilyCounts,
     IReadOnlyDictionary<string, bool> ObjectCoverage,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
+public sealed record WeeklyVisualFamilyDistributionReport(
+    bool VisualFamilyDistributionReady,
+    IReadOnlyDictionary<string, int> PrimaryFamilyCounts,
+    int SameFamilyConsecutiveMax,
+    bool RotationApplied,
+    int RotationSwapCount,
+    int CandidatePoolBuiltForBeatCount,
+    double AverageCandidatesPerBeat,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
@@ -253,7 +279,8 @@ public sealed class WeeklyVisualIntentEngine(
             var intent = ClassifyIntent(segment.SegmentType, narrationText, episodeType, segment.StartSecond);
             var mentionedObjects = DetectMentionedObjects(narrationText, segment.SegmentType);
             var narrationSubject = ResolveNarrationSubject(mentionedObjects, narrationText, segment.SegmentType);
-            var candidate = SelectPrimaryVisual(segment, intent, narrationSubject, mentionedObjects, catalog, previousFamilies, episodeType, warnings);
+            var candidatePool = BuildPrimaryVisualCandidatePool(segment, intent, narrationSubject, mentionedObjects, catalog);
+            var candidate = SelectPrimaryVisual(segment, candidatePool, previousFamilies, warnings);
             if (candidate is null)
             {
                 candidate = BuildUnavailableSelection(segment, intent, mentionedObjects, internalRequests, "No suitable production visual was found for the beat's editorial intent.");
@@ -284,6 +311,7 @@ public sealed class WeeklyVisualIntentEngine(
                 secondary,
                 overlays,
                 MatchesNarration(candidate, mentionedObjects, intent),
+                candidatePool,
                 beatWarnings);
             beats.Add(beat);
             TrackFamily(previousFamilies, candidate.VisualFamily);
@@ -291,8 +319,9 @@ public sealed class WeeklyVisualIntentEngine(
 
         EnsureShortformStrongVisual(beats, catalog, warnings);
         EnsureObjectCoverage(beats, catalog, warnings);
-        var rotationResult = ApplyVisualFamilyRotation(beats, catalog, warnings);
+        var rotationResult = ApplyVisualFamilyRotation(beats, warnings);
         var validation = BuildValidation(beats, warnings, errors, rotationResult.Applied, rotationResult.SwapCount);
+        var familyDistributionReport = BuildVisualFamilyDistributionReport(beats, validation, rotationResult, warnings, errors);
         var plan = new WeeklyVisualIntentPlan(
             pipelineRunId,
             DateTime.UtcNow,
@@ -310,9 +339,11 @@ public sealed class WeeklyVisualIntentEngine(
         var planPath = Path.Combine(renderDirectory, "visual-intent-plan.json");
         var visualShotPlanPath = Path.Combine(renderDirectory, "visual-intent-shot-plan.json");
         var validationPath = Path.Combine(renderDirectory, "visual-intent-validation-report.json");
+        var familyDistributionReportPath = Path.Combine(renderDirectory, "visual-family-distribution-report.json");
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(visualShotPlanPath, JsonSerializer.Serialize(visualShotPlan, JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(familyDistributionReportPath, JsonSerializer.Serialize(familyDistributionReport, JsonOptions), cancellationToken);
 
         logger.LogInformation("WEEKLY_VISUAL_INTENT_COMPLETE pipelineRunId={PipelineRunId} ready={Ready} totalBeats={TotalBeats} mismatches={MismatchCount}", pipelineRunId, validation.VisualIntentReady, validation.TotalBeats, validation.NarrationVisualMismatchCount);
         return ToResponse(pipelineRunId, root, planPath, visualShotPlanPath, validationPath, validation);
@@ -438,30 +469,60 @@ public sealed class WeeklyVisualIntentEngine(
         return objects.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static WeeklyVisualIntentAssetSelection? SelectPrimaryVisual(FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<AssetCandidate> catalog, Queue<string> previousFamilies, string episodeType, List<string> warnings)
+    private static IReadOnlyList<WeeklyVisualIntentAssetCandidate> BuildPrimaryVisualCandidatePool(FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<AssetCandidate> catalog)
     {
-        var preferredFamilies = PreferredPrimaryFamilies(intent, segment.NarrationText, segment.SegmentType, mentionedObjects);
-        var restrictAICinematic = ShouldRestrictAICinematicPrimary(segment, intent, mentionedObjects)
-            && HasAstronomyPrimaryAlternative(segment, intent, narrationSubject, mentionedObjects, preferredFamilies, catalog);
-
         var sameSegment = catalog.Where(x => x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase)).ToList();
-        var candidates = sameSegment.Concat(catalog)
-            .Where(x => x.ProductionReady && x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay")
-            .Where(x => !restrictAICinematic || !x.VisualFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase))
+        var uniqueAssets = sameSegment.Concat(catalog)
+            .Where(x => x.ProductionReady)
             .DistinctBy(x => $"{x.AssetId}|{x.AssetPath}")
-            .Select(x => new ScoredAssetCandidate(x, ScoreVisualMatch(x, segment, intent, narrationSubject, mentionedObjects, preferredFamilies)))
-            .Where(x => x.Score > 0)
+            .ToList();
+        var astronomyAssetExists = uniqueAssets.Any(x => IsAstronomyPrimaryFamily(x.VisualFamily)
+            && (mentionedObjects.Count == 0 || mentionedObjects.Any(o => AssetMatchesObject(x, o))));
+
+        return uniqueAssets
+            .Select(asset => ToVisualIntentCandidate(asset, segment, intent, narrationSubject, mentionedObjects, astronomyAssetExists))
             .OrderByDescending(x => x.Score)
-            .ThenBy(x => PrimaryFamilyRank(x.Asset.VisualFamily, preferredFamilies))
-            .ThenBy(x => x.Asset.VisualFamily, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(x => x.Asset.AssetId, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(x => x.IsEligibleAsPrimary)
+            .ThenBy(x => x.Family, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static WeeklyVisualIntentAssetSelection? SelectPrimaryVisual(FinalRenderSegment segment, IReadOnlyList<WeeklyVisualIntentAssetCandidate> candidatePool, Queue<string> previousFamilies, List<string> warnings)
+    {
+        var candidates = candidatePool
+            .Where(x => x.IsEligibleAsPrimary && x.Score > 0)
             .ToList();
 
         var selected = Pick(candidates, previousFamilies);
-        if (selected is not null) return ToSelection(selected.Asset, "primary", false, segment.StartSecond, segment.EndSecond);
+        if (selected is not null) return ToSelection(selected, "primary", false, segment.StartSecond, segment.EndSecond);
 
-        warnings.Add($"Primary visual fallback required for segment {segment.SegmentId}; no production asset scored above zero for subject '{narrationSubject}' and intent {intent}.");
+        warnings.Add($"Primary visual fallback required for segment {segment.SegmentId}; no eligible production candidate scored above zero.");
         return null;
+    }
+
+    private static WeeklyVisualIntentAssetCandidate ToVisualIntentCandidate(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, bool astronomyAssetExists)
+    {
+        var matchedSubjects = mentionedObjects.Where(o => AssetMatchesObject(asset, o)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var score = ScoreVisualCandidate(asset, segment, intent, narrationSubject, mentionedObjects, matchedSubjects, astronomyAssetExists);
+        var eligiblePrimary = IsEligibleAsPrimary(asset, segment, intent, mentionedObjects, astronomyAssetExists);
+        var eligibleOverlay = IsEligibleAsOverlay(asset, intent);
+        var reason = ResolveCandidateReason(asset, intent, matchedSubjects, eligiblePrimary, eligibleOverlay, astronomyAssetExists);
+        return new WeeklyVisualIntentAssetCandidate(asset.AssetId, asset.AssetPath, asset.VisualFamily, asset.AssetType, asset.AssetCode, asset.MatchedObjects, matchedSubjects, score, eligiblePrimary, eligibleOverlay, reason);
+    }
+
+    private static AssetCandidate ToAssetCandidate(WeeklyVisualIntentAssetCandidate candidate, string segmentId, string episodeType, string segmentType)
+        => new(candidate.AssetId, candidate.SceneCode, candidate.SourceType, candidate.Family, candidate.Path, segmentId, episodeType, segmentType, true, candidate.TargetObjects);
+
+    private static string ResolveCandidateReason(AssetCandidate asset, WeeklyVisualIntentType intent, IReadOnlyList<string> matchedSubjects, bool eligiblePrimary, bool eligibleOverlay, bool astronomyAssetExists)
+    {
+        var parts = new List<string>();
+        if (matchedSubjects.Count > 0) parts.Add($"matched {string.Join(", ", matchedSubjects)}");
+        parts.Add($"family {asset.VisualFamily} scored for {intent}");
+        parts.Add(eligiblePrimary ? "eligible primary" : "not primary eligible");
+        if (eligibleOverlay) parts.Add("overlay eligible");
+        if (asset.VisualFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase) && astronomyAssetExists && !eligiblePrimary) parts.Add("AI cinematic restricted because astronomy/celestial asset exists");
+        return string.Join("; ", parts);
     }
 
     private static WeeklyVisualIntentAssetSelection? SelectSecondaryVisual(FinalRenderSegment segment, WeeklyVisualIntentType intent, IReadOnlyList<string> mentionedObjects, IReadOnlyList<AssetCandidate> catalog, string primaryFamily)
@@ -471,7 +532,7 @@ public sealed class WeeklyVisualIntentEngine(
             WeeklyVisualIntentType.Hook => "Stellarium",
             WeeklyVisualIntentType.Observation => "CelestialReference",
             WeeklyVisualIntentType.ScientificContext => "Stellarium",
-            WeeklyVisualIntentType.Summary => "MotionGraphics",
+            WeeklyVisualIntentType.Summary => "MotionGraphic",
             _ => null
         };
         if (secondaryFamily is null) return null;
@@ -488,10 +549,10 @@ public sealed class WeeklyVisualIntentEngine(
     {
         var overlayFamily = intent switch
         {
-            WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.Summary => "MotionGraphics",
+            WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.Summary => "MotionGraphic",
             WeeklyVisualIntentType.EducationalExplanation => "EducationalOverlay",
             WeeklyVisualIntentType.AstrophotographyTip => "EducationalOverlay",
-            WeeklyVisualIntentType.CallToAction => "MotionGraphics",
+            WeeklyVisualIntentType.CallToAction => "MotionGraphic",
             _ => null
         };
         if (overlayFamily is null) return [];
@@ -500,23 +561,23 @@ public sealed class WeeklyVisualIntentEngine(
             .OrderByDescending(x => x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase))
             .FirstOrDefault();
         if (selected is null) return [];
-        var duration = Math.Min(segment.DurationSeconds, overlayFamily.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase) ? 3 : Math.Max(3, Math.Min(6, segment.DurationSeconds)));
-        return [ToSelection(selected, overlayFamily.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase) ? "lower_third_overlay" : "educational_overlay", true, segment.StartSecond, segment.StartSecond + duration)];
+        var duration = Math.Min(segment.DurationSeconds, overlayFamily.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase) ? 3 : Math.Max(3, Math.Min(6, segment.DurationSeconds)));
+        return [ToSelection(selected, overlayFamily.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase) ? "lower_third_overlay" : "educational_overlay", true, segment.StartSecond, segment.StartSecond + duration)];
     }
 
     private static string[] PreferredPrimaryFamilies(WeeklyVisualIntentType intent, string narration, string segmentType, IReadOnlyList<string> mentionedObjects)
     {
         var text = $"{segmentType} {narration}";
         if (intent is WeeklyVisualIntentType.CallToAction) return ["AICinematic"];
-        if (intent is WeeklyVisualIntentType.Summary) return ["AICinematic", "MotionGraphics", "Stellarium", "CelestialReference"];
+        if (intent is WeeklyVisualIntentType.Summary) return ["AICinematic", "MotionGraphic", "Stellarium", "CelestialReference"];
         if (IsMoonHighlight(text, mentionedObjects)) return ["Stellarium", "CelestialReference", "AICinematic"];
         if (IsPlanetHighlight(text, mentionedObjects) || IsHeroOrStrongestEvent(segmentType)) return ["Stellarium", "CelestialReference", "AICinematic"];
         return intent switch
         {
             WeeklyVisualIntentType.Hook => ["AICinematic", "Stellarium"],
             WeeklyVisualIntentType.Observation => ["Stellarium", "CelestialReference", "AICinematic"],
-            WeeklyVisualIntentType.DirectionGuidance => ["Stellarium", "MotionGraphics", "AICinematic"],
-            WeeklyVisualIntentType.BestTime => ["Stellarium", "MotionGraphics", "AICinematic"],
+            WeeklyVisualIntentType.DirectionGuidance => ["Stellarium", "MotionGraphic", "AICinematic"],
+            WeeklyVisualIntentType.BestTime => ["Stellarium", "MotionGraphic", "AICinematic"],
             WeeklyVisualIntentType.ScientificContext => ["Stellarium", "CelestialReference", "AICinematic"],
             WeeklyVisualIntentType.EducationalExplanation => ["Stellarium", "CelestialReference", "AICinematic"],
             WeeklyVisualIntentType.AstrophotographyTip => ["Stellarium", "CelestialReference", "NASA", "AICinematic"],
@@ -541,7 +602,7 @@ public sealed class WeeklyVisualIntentEngine(
             && ScoreVisualMatch(x, segment, intent, narrationSubject, mentionedObjects, preferredFamilies) > 0);
 
     private static bool IsAstronomyPrimaryFamily(string family)
-        => family is "Stellarium" or "CelestialReference";
+        => family is "Stellarium" or "NASA" or "JWST" or "InternalCelestial" or "CelestialReference";
 
     private static bool IsHeroOrStrongestEvent(string segmentType)
         => segmentType.Contains("HeroEvent", StringComparison.OrdinalIgnoreCase)
@@ -589,6 +650,97 @@ public sealed class WeeklyVisualIntentEngine(
         return score;
     }
 
+    private static int ScoreVisualCandidate(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<string> matchedSubjects, bool astronomyAssetExists)
+    {
+        var score = 0;
+        if (mentionedObjects.Count > 0)
+        {
+            if (matchedSubjects.Count == 0) return 0;
+            if (AssetMatchesObject(asset, narrationSubject)) score += 100;
+            foreach (var subject in matchedSubjects)
+            {
+                if (asset.MatchedObjects.Contains(subject, StringComparer.OrdinalIgnoreCase)) score += 80;
+                if (ContainsObjectName(asset.AssetPath, subject)) score += 70;
+                if (ContainsObjectName(asset.AssetCode, subject) || ContainsObjectName(asset.AssetId, subject)) score += 60;
+            }
+        }
+        else if (asset.MatchedObjects.Count > 0)
+        {
+            score += 20;
+        }
+
+        if (IsFamilySuitableForIntent(asset.VisualFamily, intent, segment.SegmentType, mentionedObjects)) score += 40;
+        score += FamilyIntentBonus(asset, intent, segment, mentionedObjects, astronomyAssetExists);
+        if (asset.SegmentType.Equals(segment.SegmentType, StringComparison.OrdinalIgnoreCase)) score += 25;
+        if (asset.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase)) score += 15;
+        return score;
+    }
+
+    private static int FamilyIntentBonus(AssetCandidate asset, WeeklyVisualIntentType intent, FinalRenderSegment segment, IReadOnlyList<string> mentionedObjects, bool astronomyAssetExists)
+    {
+        var family = asset.VisualFamily;
+        var text = $"{segment.SegmentType} {segment.NarrationText}";
+        if (intent is WeeklyVisualIntentType.Hook)
+            return family switch { "AICinematic" => 100, "Stellarium" => 40, _ => 0 };
+        if (IsHeroOrStrongestEvent(segment.SegmentType))
+            return family switch { "Stellarium" => 100, "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" => 80, "AICinematic" => astronomyAssetExists ? -100 : 0, _ => 0 };
+        if (IsMoonHighlight(text, mentionedObjects))
+            return family switch { "Stellarium" => 100, "NASA" or "InternalCelestial" or "CelestialReference" => 90, "AICinematic" => -100, _ => 0 };
+        if (IsPlanetHighlight(text, mentionedObjects))
+            return family switch { "Stellarium" => 100, "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" => 90, "AICinematic" => -100, _ => 0 };
+        return intent switch
+        {
+            WeeklyVisualIntentType.ScientificContext => family switch { "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" => 100, "Stellarium" => 50, "AICinematic" => -50, _ => 0 },
+            WeeklyVisualIntentType.DirectionGuidance => family switch { "Stellarium" => 100, "MotionGraphic" => 80, "AICinematic" => -50, _ => 0 },
+            WeeklyVisualIntentType.BestTime => family switch { "Stellarium" => 80, "MotionGraphic" => 80, "AICinematic" => -30, _ => 0 },
+            WeeklyVisualIntentType.Summary => family switch { "AICinematic" => 90, "MotionGraphic" => 60, _ => 0 },
+            WeeklyVisualIntentType.CallToAction => family switch { "AICinematic" => 100, "MotionGraphic" => 70, _ => 0 },
+            _ => 0
+        };
+    }
+
+    private static bool IsFamilySuitableForIntent(string family, WeeklyVisualIntentType intent, string segmentType, IReadOnlyList<string> mentionedObjects)
+    {
+        if (IsHeroOrStrongestEvent(segmentType) || IsMoonHighlight(segmentType, mentionedObjects) || IsPlanetHighlight(segmentType, mentionedObjects))
+            return family is "Stellarium" or "NASA" or "JWST" or "InternalCelestial" or "CelestialReference";
+        return intent switch
+        {
+            WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction => family is "AICinematic" or "Stellarium",
+            WeeklyVisualIntentType.ScientificContext => family is "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" or "Stellarium",
+            WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime => family is "Stellarium" or "MotionGraphic",
+            _ => family is "Stellarium" or "NASA" or "JWST" or "InternalCelestial" or "CelestialReference"
+        };
+    }
+
+    private static bool IsEligibleAsPrimary(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, IReadOnlyList<string> mentionedObjects, bool astronomyAssetExists)
+    {
+        if (!asset.ProductionReady) return false;
+        if (asset.VisualFamily.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase)) return false;
+        if (asset.VisualFamily.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase)) return false;
+        if (asset.VisualFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase))
+        {
+            if (intent is WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction) return true;
+            return !astronomyAssetExists;
+        }
+        return true;
+    }
+
+    private static bool IsEligibleAsOverlay(AssetCandidate asset, WeeklyVisualIntentType intent)
+        => asset.VisualFamily is "EducationalOverlay"
+            || (asset.VisualFamily is "MotionGraphic"
+                && intent is WeeklyVisualIntentType.DirectionGuidance or WeeklyVisualIntentType.BestTime or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction);
+
+    private static WeeklyVisualIntentAssetCandidate? Pick(IReadOnlyList<WeeklyVisualIntentAssetCandidate> candidates, Queue<string> previousFamilies)
+    {
+        if (candidates.Count == 0) return null;
+        if (previousFamilies.Count < 2) return candidates[0];
+
+        var lastTwo = previousFamilies.ToList();
+        if (!lastTwo[0].Equals(lastTwo[1], StringComparison.OrdinalIgnoreCase)) return candidates[0];
+
+        return candidates.FirstOrDefault(x => !x.Family.Equals(lastTwo[0], StringComparison.OrdinalIgnoreCase)) ?? candidates[0];
+    }
+
     private static ScoredAssetCandidate? Pick(IReadOnlyList<ScoredAssetCandidate> candidates, Queue<string> previousFamilies)
     {
         if (candidates.Count == 0) return null;
@@ -621,12 +773,15 @@ public sealed class WeeklyVisualIntentEngine(
     private static WeeklyVisualIntentAssetSelection ToSelection(AssetCandidate asset, string usage, bool isOverlay, double startSecond, double endSecond)
         => new(asset.AssetId, asset.AssetType, asset.VisualFamily, asset.AssetPath, usage, isOverlay, startSecond, endSecond, Math.Max(0, endSecond - startSecond), asset.MatchedObjects, asset.ProductionReady);
 
+    private static WeeklyVisualIntentAssetSelection ToSelection(WeeklyVisualIntentAssetCandidate candidate, string usage, bool isOverlay, double startSecond, double endSecond)
+        => new(candidate.AssetId, candidate.SourceType, candidate.Family, candidate.Path, usage, isOverlay, startSecond, endSecond, Math.Max(0, endSecond - startSecond), candidate.TargetObjects, true);
+
     private static WeeklyVisualIntentAssetSelection BuildUnavailableSelection(FinalRenderSegment segment, WeeklyVisualIntentType intent, IReadOnlyList<string> mentionedObjects, List<WeeklyInternalCelestialAssetRequest> internalRequests, string reason)
     {
         var objectCode = mentionedObjects.FirstOrDefault() ?? "DeepSkyObject";
         if (intent is WeeklyVisualIntentType.ScientificContext or WeeklyVisualIntentType.EducationalExplanation or WeeklyVisualIntentType.AstrophotographyTip || mentionedObjects.Count > 0)
             internalRequests.Add(new WeeklyInternalCelestialAssetRequest(objectCode, segment.SegmentId, segment.EpisodeType, reason, "requestedButUnavailable"));
-        return new WeeklyVisualIntentAssetSelection($"internal-celestial-{objectCode.ToLowerInvariant()}-requested", "InternalCelestial", "CelestialReference", string.Empty, "primary_internal_celestial_fallback_request", false, segment.StartSecond, segment.EndSecond, segment.DurationSeconds, mentionedObjects, false, true, "InternalCelestial");
+        return new WeeklyVisualIntentAssetSelection($"internal-celestial-{objectCode.ToLowerInvariant()}-requested", "InternalCelestial", "InternalCelestial", string.Empty, "primary_internal_celestial_fallback_request", false, segment.StartSecond, segment.EndSecond, segment.DurationSeconds, mentionedObjects, false, true, "InternalCelestial");
     }
 
     private static IEnumerable<string> ResolveRulesApplied(WeeklyVisualIntentType intent, IReadOnlyList<string> mentionedObjects, string narration)
@@ -644,7 +799,7 @@ public sealed class WeeklyVisualIntentEngine(
     {
         if (selection.RequestedButUnavailable) return false;
         if (mentionedObjects.Count > 0 && !mentionedObjects.Any(o => SelectionMatchesObject(selection, o))) return false;
-        if ((selection.VisualFamily is "MotionGraphics" or "EducationalOverlay") && !selection.IsOverlay) return false;
+        if ((selection.VisualFamily is "MotionGraphic" or "EducationalOverlay") && !selection.IsOverlay) return false;
         return true;
     }
 
@@ -652,8 +807,8 @@ public sealed class WeeklyVisualIntentEngine(
     {
         var firstShort = beats.Where(x => x.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.StartSecond).FirstOrDefault();
         if (firstShort is null || firstShort.StartSecond > 3) return;
-        if (firstShort.PrimaryVisual.VisualFamily is not ("MotionGraphics" or "EducationalOverlay") && !firstShort.PrimaryVisual.RequestedButUnavailable) return;
-        var strong = catalog.FirstOrDefault(x => x.VisualFamily is "AICinematic" or "Stellarium" or "CelestialReference" && x.ProductionReady);
+        if (firstShort.PrimaryVisual.VisualFamily is not ("MotionGraphic" or "EducationalOverlay") && !firstShort.PrimaryVisual.RequestedButUnavailable) return;
+        var strong = catalog.FirstOrDefault(x => x.VisualFamily is "AICinematic" or "Stellarium" or "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" && x.ProductionReady);
         if (strong is null) return;
         var replacement = ToSelection(strong, "shortform_strong_hook_primary", false, firstShort.StartSecond, firstShort.EndSecond);
         var index = beats.IndexOf(firstShort);
@@ -662,7 +817,7 @@ public sealed class WeeklyVisualIntentEngine(
     }
 
 
-    private static VisualFamilyRotationResult ApplyVisualFamilyRotation(List<WeeklyVisualIntentBeat> beats, IReadOnlyList<AssetCandidate> catalog, List<string> warnings)
+    private static VisualFamilyRotationResult ApplyVisualFamilyRotation(List<WeeklyVisualIntentBeat> beats, List<string> warnings)
     {
         var ordered = beats.Select((Beat, Index) => new { Beat, Index })
             .OrderBy(x => x.Beat.EpisodeType, StringComparer.OrdinalIgnoreCase)
@@ -686,7 +841,7 @@ public sealed class WeeklyVisualIntentEngine(
 
             if (runLength < 3) continue;
 
-            var replacement = FindRotationReplacement(beat, catalog, runFamily);
+            var replacement = FindRotationReplacement(beat, runFamily);
             if (replacement is null)
             {
                 warnings.Add($"Visual family rotation could not find a compatible different-family primary for segment {beat.SegmentId}; keeping {runFamily}.");
@@ -699,7 +854,7 @@ public sealed class WeeklyVisualIntentEngine(
                 PrimaryVisual = selection,
                 SecondaryVisual = beat.SecondaryVisual?.VisualFamily.Equals(selection.VisualFamily, StringComparison.OrdinalIgnoreCase) == true ? null : beat.SecondaryVisual,
                 MatchedToNarration = MatchesNarration(selection, beat.MentionedObjects, beat.VisualIntent),
-                Warnings = beat.Warnings.Append($"Visual family rotation replaced third consecutive {runFamily} primary with {selection.VisualFamily}.").ToList()
+                Warnings = beat.Warnings.Append($"Visual family rotation replaced third consecutive {runFamily} primary with {selection.VisualFamily} from candidate pool.").ToList()
             };
             swaps++;
             runFamily = selection.VisualFamily;
@@ -709,25 +864,14 @@ public sealed class WeeklyVisualIntentEngine(
         return new VisualFamilyRotationResult(true, swaps);
     }
 
-    private static AssetCandidate? FindRotationReplacement(WeeklyVisualIntentBeat beat, IReadOnlyList<AssetCandidate> catalog, string currentFamily)
-    {
-        var preferredFamilies = PreferredPrimaryFamilies(beat.VisualIntent, beat.NarrationText, beat.SegmentType, beat.MentionedObjects);
-        return catalog
-            .Where(x => x.ProductionReady)
-            .Where(x => x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay")
-            .Where(x => !x.VisualFamily.Equals(currentFamily, StringComparison.OrdinalIgnoreCase))
-            .Where(x => FamiliesAreCompatible(currentFamily, x.VisualFamily))
-            .Where(x => beat.MentionedObjects.Count == 0 || beat.MentionedObjects.Any(o => AssetMatchesObject(x, o)))
-            .DistinctBy(x => $"{x.AssetId}|{x.AssetPath}")
-            .Select(x => new ScoredAssetCandidate(x, ScoreVisualMatch(x, new FinalRenderSegment(beat.SegmentId, beat.SegmentType, beat.EpisodeType, beat.StartSecond, beat.EndSecond, beat.DurationSeconds, beat.NarrationText, beat.StartSecond, beat.EndSecond, []), beat.VisualIntent, beat.NarrationSubject, beat.MentionedObjects, preferredFamilies)))
-            .Where(x => x.Score > 0)
-            .OrderByDescending(x => x.Asset.SegmentId.Equals(beat.SegmentId, StringComparison.OrdinalIgnoreCase))
-            .ThenByDescending(x => x.Score)
-            .ThenBy(x => x.Asset.VisualFamily, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(x => x.Asset.AssetId, StringComparer.OrdinalIgnoreCase)
-            .Select(x => x.Asset)
+    private static WeeklyVisualIntentAssetCandidate? FindRotationReplacement(WeeklyVisualIntentBeat beat, string currentFamily)
+        => beat.PrimaryVisualCandidatePool
+            .Where(x => x.IsEligibleAsPrimary && x.Score > 0)
+            .Where(x => !x.Family.Equals(currentFamily, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Family, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
-    }
 
     private static bool FamiliesAreCompatible(string fromFamily, string toFamily)
     {
@@ -737,7 +881,7 @@ public sealed class WeeklyVisualIntentEngine(
 
     private static bool IsRotatablePrimaryFamily(string family)
     {
-        return family is "Stellarium" or "CelestialReference" or "AICinematic";
+        return family is "Stellarium" or "NASA" or "JWST" or "InternalCelestial" or "CelestialReference" or "AICinematic";
     }
 
     private static int EnsureObjectCoverage(List<WeeklyVisualIntentBeat> beats, IReadOnlyList<AssetCandidate> catalog, List<string> warnings)
@@ -754,7 +898,7 @@ public sealed class WeeklyVisualIntentEngine(
             if (row is null) continue;
 
             var replacement = catalog
-                .Where(x => x.ProductionReady && x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay")
+                .Where(x => x.ProductionReady && x.VisualFamily is not "MotionGraphic" and not "EducationalOverlay")
                 .Where(x => AssetMatchesObject(x, objectName))
                 .DistinctBy(x => $"{x.AssetId}|{x.AssetPath}")
                 .OrderByDescending(x => x.SegmentId.Equals(row.Beat.SegmentId, StringComparison.OrdinalIgnoreCase))
@@ -778,13 +922,13 @@ public sealed class WeeklyVisualIntentEngine(
 
     private static WeeklyVisualIntentValidationReport BuildValidation(IReadOnlyList<WeeklyVisualIntentBeat> beats, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, bool familyRotationApplied, int familyRotationSwapCount)
     {
-        var fullscreenMotion = beats.Count(x => x.PrimaryVisual.VisualFamily.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase) && !x.PrimaryVisual.IsOverlay && x.PrimaryVisual.DurationSeconds > 3);
+        var fullscreenMotion = beats.Count(x => x.PrimaryVisual.VisualFamily.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase) && !x.PrimaryVisual.IsOverlay && x.PrimaryVisual.DurationSeconds > 3);
         var fullscreenEdu = beats.Count(x => x.PrimaryVisual.VisualFamily.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase) && !x.PrimaryVisual.IsOverlay);
         var mismatches = beats.Count(x => !x.MatchedToNarration);
         var matched = beats.Count - mismatches;
         var sameFamilyMax = MaxConsecutive(beats.OrderBy(x => x.EpisodeType).ThenBy(x => x.StartSecond).Select(x => x.PrimaryVisual.VisualFamily));
         var shortHook = beats.Where(x => x.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.StartSecond).FirstOrDefault();
-        var shortHookPassed = shortHook is null || (shortHook.StartSecond <= 3 && shortHook.PrimaryVisual.VisualFamily is not ("MotionGraphics" or "EducationalOverlay") && !shortHook.PrimaryVisual.RequestedButUnavailable);
+        var shortHookPassed = shortHook is null || (shortHook.StartSecond <= 3 && shortHook.PrimaryVisual.VisualFamily is not ("MotionGraphic" or "EducationalOverlay") && !shortHook.PrimaryVisual.RequestedButUnavailable);
         var objectCoverage = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
         {
             ["MOON"] = ObjectMatchPassed(beats, "Moon"),
@@ -796,8 +940,48 @@ public sealed class WeeklyVisualIntentEngine(
         var moon = objectCoverage["MOON"];
         var everyBeatHasSubject = beats.All(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
         var ready = errors.Count == 0 && beats.Count > 0 && mismatches == 0 && fullscreenMotion == 0 && fullscreenEdu == 0 && sameFamilyMax <= 2 && shortHookPassed && everyBeatHasSubject && saturn && venus && moon;
-        return new WeeklyVisualIntentValidationReport(ready, beats.Count, matched, mismatches, mismatches, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, familyRotationApplied, familyRotationSwapCount, objectCoverage, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+        return new WeeklyVisualIntentValidationReport(ready, beats.Count, matched, mismatches, mismatches, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, familyRotationApplied, familyRotationSwapCount, BuildPrimaryFamilyCounts(beats), objectCoverage, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
     }
+
+    private static WeeklyVisualFamilyDistributionReport BuildVisualFamilyDistributionReport(IReadOnlyList<WeeklyVisualIntentBeat> beats, WeeklyVisualIntentValidationReport validation, VisualFamilyRotationResult rotationResult, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
+    {
+        var averageCandidates = beats.Count == 0 ? 0 : Math.Round(beats.Average(x => x.PrimaryVisualCandidatePool.Count), 2);
+        return new WeeklyVisualFamilyDistributionReport(
+            true,
+            validation.PrimaryFamilyCounts,
+            validation.SameFamilyConsecutiveMax,
+            rotationResult.Applied,
+            rotationResult.SwapCount,
+            beats.Count(x => x.PrimaryVisualCandidatePool.Count > 0),
+            averageCandidates,
+            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            errors.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+    }
+
+    private static IReadOnlyDictionary<string, int> BuildPrimaryFamilyCounts(IReadOnlyList<WeeklyVisualIntentBeat> beats)
+    {
+        var counts = EmptyFamilyCounts().ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
+        foreach (var family in beats.Select(x => CanonicalReportFamily(x.PrimaryVisual.VisualFamily)))
+            counts[family] = counts.GetValueOrDefault(family) + 1;
+        return counts;
+    }
+
+    private static IReadOnlyDictionary<string, int> EmptyFamilyCounts()
+        => new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Stellarium"] = 0,
+            ["NASA"] = 0,
+            ["JWST"] = 0,
+            ["InternalCelestial"] = 0,
+            ["AICinematic"] = 0,
+            ["MotionGraphic"] = 0,
+            ["EducationalOverlay"] = 0
+        };
+
+    private static string CanonicalReportFamily(string family)
+        => family.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase) ? "MotionGraphic"
+            : family.Equals("CelestialReference", StringComparison.OrdinalIgnoreCase) ? "InternalCelestial"
+            : family;
 
     private static bool ObjectMatchPassed(IReadOnlyList<WeeklyVisualIntentBeat> beats, string objectName)
     {
@@ -835,7 +1019,7 @@ public sealed class WeeklyVisualIntentEngine(
             var overlays = list.SelectMany(x => x.Overlays).Where(x => x.VisualFamily.Equals(family, StringComparison.OrdinalIgnoreCase)).Sum(x => x.DurationSeconds);
             return Math.Round((primary + overlays) / total * 100, 2);
         }
-        return new WeeklyVisualIntentAssetMix(P("Stellarium"), P("AICinematic"), P("CelestialReference"), P("MotionGraphics"), P("EducationalOverlay"));
+        return new WeeklyVisualIntentAssetMix(P("Stellarium"), P("AICinematic"), P("CelestialReference"), P("MotionGraphic"), P("EducationalOverlay"));
     }
 
     private static WeeklyVisualIntentShotPlan BuildShotPlan(Guid pipelineRunId, FinalRenderTimeline timeline, IReadOnlyList<WeeklyVisualIntentBeat> beats)
@@ -861,7 +1045,7 @@ public sealed class WeeklyVisualIntentEngine(
     private static async Task<WeeklyVisualIntentBuildResponse> PersistFailureAsync(Guid pipelineRunId, string root, string renderDirectory, IReadOnlyList<string> inputPaths, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(renderDirectory);
-        var validation = new WeeklyVisualIntentValidationReport(false, 0, 0, 0, 0, 0, 0, 0, true, true, true, true, false, 0, new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase), warnings, errors);
+        var validation = new WeeklyVisualIntentValidationReport(false, 0, 0, 0, 0, 0, 0, 0, true, true, true, true, false, 0, EmptyFamilyCounts(), new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase), warnings, errors);
         var planPath = Path.Combine(renderDirectory, "visual-intent-plan.json");
         var shotPlanPath = Path.Combine(renderDirectory, "visual-intent-shot-plan.json");
         var validationPath = Path.Combine(renderDirectory, "visual-intent-validation-report.json");
@@ -880,10 +1064,12 @@ public sealed class WeeklyVisualIntentEngine(
     private static string NormalizeFamily(string assetType, string assetPath, string assetCode)
     {
         var value = $"{assetType} {assetPath} {assetCode}".ToLowerInvariant();
-        if (value.Contains("motion")) return "MotionGraphics";
+        if (value.Contains("motion")) return "MotionGraphic";
         if (value.Contains("educational") || value.Contains("overlay")) return "EducationalOverlay";
         if (value.Contains("ai") || value.Contains("cinematic")) return "AICinematic";
-        if (value.Contains("nasa") || value.Contains("jwst") || value.Contains("internalcelestial") || value.Contains("celestial")) return "CelestialReference";
+        if (value.Contains("jwst")) return "JWST";
+        if (value.Contains("nasa")) return "NASA";
+        if (value.Contains("internalcelestial") || value.Contains("internal-celestial") || value.Contains("celestial")) return "InternalCelestial";
         if (value.Contains("stellarium") || value.Contains("scene") || value.Contains("frame")) return "Stellarium";
         return "Stellarium";
     }
