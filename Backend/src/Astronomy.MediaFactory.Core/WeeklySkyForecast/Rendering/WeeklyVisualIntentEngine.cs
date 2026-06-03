@@ -238,6 +238,9 @@ public sealed record WeeklyVisualIntentRenderSafeValidationReport(
     int MissingAssetFileCount,
     int NonRenderableAssetsRejected,
     int OverlayAssetsRejectedAsPrimary,
+    int InvalidPrimaryShots,
+    int OverlayPromotions,
+    int PlaceholderAssetsRejected,
     IReadOnlyList<WeeklyVisualIntentRenderSafeShotValidationRow> InvalidShots,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors)
@@ -1363,8 +1366,28 @@ public sealed class WeeklyVisualIntentEngine(
             var movedPrimaryOverlay = IsOverlayOnlyVisual(beat.PrimaryVisual) && HasExistingAssetPath(beat.PrimaryVisual)
                 ? beat.PrimaryVisual with { IsOverlay = true, Usage = $"overlay_preserved_from_primary: {beat.PrimaryVisual.Usage}" }
                 : null;
-            var replacement = ResolveBaseVisualForIntent(beat, catalog);
-            if (replacement is null)
+
+            WeeklyVisualIntentAssetSelection? selection = null;
+            if (secondary is not null && IsRenderSafeBaseVisual(secondary))
+            {
+                selection = secondary with
+                {
+                    IsOverlay = false,
+                    Usage = $"render_safe_base_visual_promoted_from_secondary: {secondary.Usage}",
+                    StartSecond = beat.StartSecond,
+                    EndSecond = beat.EndSecond,
+                    DurationSeconds = beat.DurationSeconds
+                };
+                secondary = null;
+            }
+            else
+            {
+                var replacement = ResolveBaseVisualForIntent(beat, catalog);
+                if (replacement is not null)
+                    selection = ToSelection(replacement, "render_safe_base_visual_normalized", false, beat.StartSecond, beat.EndSecond);
+            }
+
+            if (selection is null)
             {
                 errors.Add($"Visual-intent shot {beat.SegmentId}/1 could not resolve a render-safe base visual for intent {beat.VisualIntent} and subject '{beat.NarrationSubject}'.");
                 beats[i] = beat with { SecondaryVisual = secondary, Overlays = overlays };
@@ -1374,7 +1397,6 @@ public sealed class WeeklyVisualIntentEngine(
             if (movedPrimaryOverlay is not null && IsAllowedMovedPrimaryOverlay(beat, movedPrimaryOverlay) && overlays.All(x => !string.Equals(x.AssetPath, movedPrimaryOverlay.AssetPath, StringComparison.OrdinalIgnoreCase)))
                 overlays.Insert(0, movedPrimaryOverlay);
 
-            var selection = ToSelection(replacement, "render_safe_base_visual_normalized", false, beat.StartSecond, beat.EndSecond);
             beats[i] = beat with
             {
                 PrimaryVisual = selection,
@@ -1605,6 +1627,7 @@ public sealed class WeeklyVisualIntentEngine(
         var missing = rows.Count(x => x.HasAssetPath && !x.AssetFileExists);
         var overlayOnlyCount = baseRows.Count(x => x.OverlayOnly);
         var reportErrors = errors.Concat(rows.SelectMany(row => row.Errors.Select(error => $"Visual-intent shot {row.SegmentId}/{row.ShotNumber}: {error}."))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var invalidRows = rows.Where(row => row.Errors.Count > 0).ToList();
         return new WeeklyVisualIntentRenderSafeValidationReport(
             empty == 0 && missing == 0 && overlayOnlyCount == 0 && reportErrors.Count == 0,
             rows.Count,
@@ -1614,7 +1637,10 @@ public sealed class WeeklyVisualIntentEngine(
             missing,
             rejectionStats.NonRenderableAssetsRejected,
             rejectionStats.OverlayAssetsRejectedAsPrimary,
-            rows.Where(row => row.Errors.Count > 0).ToList(),
+            baseRows.Count(row => row.Errors.Count > 0),
+            0,
+            0,
+            invalidRows,
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             reportErrors);
     }
@@ -1639,6 +1665,12 @@ public sealed class WeeklyVisualIntentEngine(
         => selection.ProductionReady
            && !selection.RequestedButUnavailable
            && selection.IsOverlay
+           && HasExistingAssetPath(selection);
+
+    private static bool IsMovableRenderSafeOverlayVisual(WeeklyVisualIntentAssetSelection selection)
+        => selection.ProductionReady
+           && !selection.RequestedButUnavailable
+           && IsOverlayOnlyFamily(selection.VisualFamily)
            && HasExistingAssetPath(selection);
 
     private static bool IsOverlayOnlyVisual(WeeklyVisualIntentAssetSelection selection)
@@ -1779,10 +1811,25 @@ public sealed class WeeklyVisualIntentEngine(
             var segments = episode.Segments.Select(segment =>
             {
                 var beat = beats.First(x => x.EpisodeType.Equals(episodeType, StringComparison.OrdinalIgnoreCase) && x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase));
-                var shots = new[] { beat.PrimaryVisual }.Concat(beat.SecondaryVisual is null ? [] : new[] { beat.SecondaryVisual })
-                    .Select((selection, index) => ToShotEntry(index + 1, selection))
+                var shots = new List<WeeklyVisualIntentShotPlanEntry>();
+                var overlays = beat.Overlays
+                    .Where(IsRenderSafeOverlayVisual)
+                    .Select(selection => selection with { IsOverlay = true })
                     .ToList();
-                return new WeeklyVisualIntentSegmentShotPlan(segment.SegmentId, segment.SegmentType, beat.VisualIntent, segment.StartSecond, segment.EndSecond, segment.DurationSeconds, beat.NarrationText, shots, beat.Overlays.Select((selection, index) => ToShotEntry(index + 1, selection)).ToList());
+
+                foreach (var selection in new[] { beat.PrimaryVisual }.Concat(beat.SecondaryVisual is null ? [] : new[] { beat.SecondaryVisual }))
+                {
+                    if (IsRenderSafeBaseVisual(selection))
+                    {
+                        shots.Add(ToShotEntry(shots.Count + 1, selection with { IsOverlay = false }));
+                    }
+                    else if (IsMovableRenderSafeOverlayVisual(selection) && overlays.All(x => !string.Equals(x.AssetPath, selection.AssetPath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        overlays.Add(selection with { IsOverlay = true, Usage = $"overlay_moved_from_shot_plan: {selection.Usage}" });
+                    }
+                }
+
+                return new WeeklyVisualIntentSegmentShotPlan(segment.SegmentId, segment.SegmentType, beat.VisualIntent, segment.StartSecond, segment.EndSecond, segment.DurationSeconds, beat.NarrationText, shots, overlays.Select((selection, index) => ToShotEntry(index + 1, selection)).ToList());
             }).ToList();
             return new WeeklyVisualIntentEpisodeShotPlan(episodeType, episode.ActualDurationSeconds, segments);
         }
@@ -1934,7 +1981,7 @@ public sealed class WeeklyVisualIntentEngine(
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(new WeeklyVisualIntentPlan(pipelineRunId, DateTime.UtcNow, "weekly-visual-intent-v1", inputPaths, [], new WeeklyVisualIntentAssetMix(40, 15, 20, 12, 8), new WeeklyVisualIntentAssetMix(0, 0, 0, 0, 0), new WeeklyVisualIntentAssetMix(45, 30, 10, 8, 4), new WeeklyVisualIntentAssetMix(0, 0, 0, 0, 0), [], warnings), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(shotPlanPath, JsonSerializer.Serialize(new WeeklyVisualIntentShotPlan(pipelineRunId, DateTime.UtcNow, []), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(renderSafeValidationReportPath, JsonSerializer.Serialize(new WeeklyVisualIntentRenderSafeValidationReport(false, 0, 0, 0, 0, 0, 0, 0, [], warnings, errors), JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(renderSafeValidationReportPath, JsonSerializer.Serialize(new WeeklyVisualIntentRenderSafeValidationReport(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, [], warnings, errors), JsonOptions), cancellationToken);
         return ToResponse(pipelineRunId, root, planPath, shotPlanPath, validationPath, validation);
     }
 
