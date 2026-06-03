@@ -70,6 +70,7 @@ public sealed record WeeklyVisualIntentBeat(
     double EndSecond,
     double DurationSeconds,
     string NarrationText,
+    string NarrationSubject,
     IReadOnlyList<string> MentionedObjects,
     IReadOnlyList<string> EditorialRulesApplied,
     WeeklyVisualIntentAssetSelection PrimaryVisual,
@@ -248,7 +249,8 @@ public sealed class WeeklyVisualIntentEngine(
             var narrationText = ResolveNarrationText(segment, narrationBySegment);
             var intent = ClassifyIntent(segment.SegmentType, narrationText, episodeType, segment.StartSecond);
             var mentionedObjects = DetectMentionedObjects(narrationText, segment.SegmentType);
-            var candidate = SelectPrimaryVisual(segment, intent, mentionedObjects, catalog, previousFamilies, episodeType, warnings);
+            var narrationSubject = ResolveNarrationSubject(mentionedObjects, narrationText, segment.SegmentType);
+            var candidate = SelectPrimaryVisual(segment, intent, narrationSubject, mentionedObjects, catalog, previousFamilies, episodeType, warnings);
             if (candidate is null)
             {
                 candidate = BuildUnavailableSelection(segment, intent, mentionedObjects, internalRequests, "No suitable production visual was found for the beat's editorial intent.");
@@ -272,6 +274,7 @@ public sealed class WeeklyVisualIntentEngine(
                 segment.EndSecond,
                 segment.DurationSeconds,
                 narrationText,
+                narrationSubject,
                 mentionedObjects,
                 rules,
                 candidate,
@@ -405,6 +408,15 @@ public sealed class WeeklyVisualIntentEngine(
     private static IReadOnlyList<string> DetectMentionedObjects(string narration, string segmentType)
         => DetectObjects($"{narration} {segmentType}");
 
+    private static string ResolveNarrationSubject(IReadOnlyList<string> mentionedObjects, string narration, string segmentType)
+    {
+        var primary = mentionedObjects.FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(primary)) return primary;
+        var text = $"{narration} {segmentType}";
+        if (text.Contains("sky", StringComparison.OrdinalIgnoreCase) || text.Contains("night", StringComparison.OrdinalIgnoreCase)) return "Sky";
+        return "Astronomy";
+    }
+
     private static IReadOnlyList<string> DetectObjects(string text)
     {
         var value = text.ToLowerInvariant();
@@ -418,7 +430,7 @@ public sealed class WeeklyVisualIntentEngine(
         return objects.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static WeeklyVisualIntentAssetSelection? SelectPrimaryVisual(FinalRenderSegment segment, WeeklyVisualIntentType intent, IReadOnlyList<string> mentionedObjects, IReadOnlyList<AssetCandidate> catalog, Queue<string> previousFamilies, string episodeType, List<string> warnings)
+    private static WeeklyVisualIntentAssetSelection? SelectPrimaryVisual(FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<AssetCandidate> catalog, Queue<string> previousFamilies, string episodeType, List<string> warnings)
     {
         var preferredFamilies = PreferredPrimaryFamilies(intent, segment.NarrationText);
         if (mentionedObjects.Count > 0)
@@ -428,26 +440,20 @@ public sealed class WeeklyVisualIntentEngine(
         }
 
         var sameSegment = catalog.Where(x => x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase)).ToList();
-        var candidates = sameSegment.Concat(catalog).Where(x => x.ProductionReady).DistinctBy(x => $"{x.AssetId}|{x.AssetPath}").ToList();
-        var objectCandidates = mentionedObjects.Count == 0 ? candidates : candidates.Where(x => mentionedObjects.Any(o => x.MatchedObjects.Contains(o, StringComparer.OrdinalIgnoreCase))).ToList();
-        var search = objectCandidates.Count > 0 ? objectCandidates : candidates;
+        var candidates = sameSegment.Concat(catalog)
+            .Where(x => x.ProductionReady && x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay")
+            .DistinctBy(x => $"{x.AssetId}|{x.AssetPath}")
+            .Select(x => new ScoredAssetCandidate(x, ScoreVisualMatch(x, segment, intent, narrationSubject, mentionedObjects, preferredFamilies)))
+            .Where(x => x.Score > 0)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Asset.VisualFamily, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.Asset.AssetId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        foreach (var family in preferredFamilies)
-        {
-            var selected = Pick(search, family, previousFamilies);
-            if (selected is null && objectCandidates.Count == 0)
-                selected = Pick(candidates, family, previousFamilies);
-            if (selected is not null) return ToSelection(selected, "primary", false, segment.StartSecond, segment.EndSecond);
-        }
+        var selected = Pick(candidates, previousFamilies);
+        if (selected is not null) return ToSelection(selected.Asset, "primary", false, segment.StartSecond, segment.EndSecond);
 
-        var fallback = Pick(search.Where(x => x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay"), null, previousFamilies)
-            ?? Pick(candidates.Where(x => x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay"), null, previousFamilies);
-        if (fallback is not null)
-        {
-            warnings.Add($"Primary visual fallback used for segment {segment.SegmentId}; no preferred-family asset matched {intent}.");
-            return ToSelection(fallback, "primary_editorial_fallback", false, segment.StartSecond, segment.EndSecond);
-        }
-
+        warnings.Add($"Primary visual fallback required for segment {segment.SegmentId}; no production asset scored above zero for subject '{narrationSubject}' and intent {intent}.");
         return null;
     }
 
@@ -464,6 +470,7 @@ public sealed class WeeklyVisualIntentEngine(
         if (secondaryFamily is null) return null;
         var selected = catalog
             .Where(x => x.VisualFamily.Equals(secondaryFamily, StringComparison.OrdinalIgnoreCase) && !x.VisualFamily.Equals(primaryFamily, StringComparison.OrdinalIgnoreCase))
+            .Where(x => mentionedObjects.Count == 0 || mentionedObjects.Any(o => x.MatchedObjects.Contains(o, StringComparer.OrdinalIgnoreCase)))
             .OrderByDescending(x => x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase))
             .ThenByDescending(x => mentionedObjects.Any(o => x.MatchedObjects.Contains(o, StringComparer.OrdinalIgnoreCase)))
             .FirstOrDefault();
@@ -505,18 +512,35 @@ public sealed class WeeklyVisualIntentEngine(
             _ => ["Stellarium"]
         };
 
-    private static AssetCandidate? Pick(IEnumerable<AssetCandidate> candidates, string? family, Queue<string> previousFamilies)
+    private static int ScoreVisualMatch(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<string> preferredFamilies)
     {
-        var list = candidates.Where(x => family is null || x.VisualFamily.Equals(family, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (list.Count == 0) return null;
-        var wouldBeThird = previousFamilies.Count >= 2 && previousFamilies.All(x => x.Equals(list[0].VisualFamily, StringComparison.OrdinalIgnoreCase));
-        if (wouldBeThird)
+        var score = 0;
+        var hasAstronomicalSubject = mentionedObjects.Count > 0;
+        if (hasAstronomicalSubject)
         {
-            var alternate = list.FirstOrDefault(x => !x.VisualFamily.Equals(previousFamilies.Peek(), StringComparison.OrdinalIgnoreCase));
-            if (alternate is not null) return alternate;
-            return null;
+            if (!asset.MatchedObjects.Contains(narrationSubject, StringComparer.OrdinalIgnoreCase)) return 0;
+            score += 100;
         }
-        return list.First();
+        else if (asset.MatchedObjects.Count > 0)
+        {
+            score += 10;
+        }
+
+        if (preferredFamilies.Contains(asset.VisualFamily, StringComparer.OrdinalIgnoreCase)) score += 50;
+        if (asset.SegmentType.Equals(segment.SegmentType, StringComparison.OrdinalIgnoreCase)) score += 25;
+        if (asset.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase)) score += 15;
+        return score;
+    }
+
+    private static ScoredAssetCandidate? Pick(IReadOnlyList<ScoredAssetCandidate> candidates, Queue<string> previousFamilies)
+    {
+        if (candidates.Count == 0) return null;
+        if (previousFamilies.Count < 2) return candidates[0];
+
+        var lastTwo = previousFamilies.ToList();
+        if (!lastTwo[0].Equals(lastTwo[1], StringComparison.OrdinalIgnoreCase)) return candidates[0];
+
+        return candidates.FirstOrDefault(x => !x.Asset.VisualFamily.Equals(lastTwo[0], StringComparison.OrdinalIgnoreCase)) ?? candidates[0];
     }
 
     private static WeeklyVisualIntentAssetSelection ToSelection(AssetCandidate asset, string usage, bool isOverlay, double startSecond, double endSecond)
@@ -574,7 +598,8 @@ public sealed class WeeklyVisualIntentEngine(
         var saturn = ObjectMatchPassed(beats, "Saturn");
         var venus = ObjectMatchPassed(beats, "Venus");
         var moon = ObjectMatchPassed(beats, "Moon");
-        var ready = errors.Count == 0 && beats.Count > 0 && fullscreenMotion == 0 && fullscreenEdu == 0 && shortHookPassed && saturn && venus && moon;
+        var everyBeatHasSubject = beats.All(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
+        var ready = errors.Count == 0 && beats.Count > 0 && mismatches == 0 && fullscreenMotion == 0 && fullscreenEdu == 0 && sameFamilyMax <= 2 && shortHookPassed && everyBeatHasSubject && saturn && venus && moon;
         return new WeeklyVisualIntentValidationReport(ready, beats.Count, matched, mismatches, mismatches, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
     }
 
@@ -668,6 +693,8 @@ public sealed class WeeklyVisualIntentEngine(
         previousFamilies.Enqueue(family);
         while (previousFamilies.Count > 2) previousFamilies.Dequeue();
     }
+
+    private sealed record ScoredAssetCandidate(AssetCandidate Asset, int Score);
 
     private sealed record AssetCandidate(
         string AssetId,
