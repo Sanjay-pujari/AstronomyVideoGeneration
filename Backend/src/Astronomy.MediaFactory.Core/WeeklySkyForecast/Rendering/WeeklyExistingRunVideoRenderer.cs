@@ -1176,6 +1176,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var validationPath = Path.Combine(renderDirectory, "visual-intent-validation-report.json");
         var storytellingPath = Path.Combine(renderDirectory, "visual-storytelling-report.json");
         var applicationReportPath = Path.Combine(renderDirectory, "visual-intent-render-application-report.json");
+        var renderSafeValidationPath = Path.Combine(renderDirectory, "visual-intent-render-safe-validation-report.json");
         var warnings = new List<string>();
         var errors = new List<string>();
 
@@ -1183,15 +1184,18 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var shotPlan = await TryReadJsonAsync<WeeklyVisualIntentShotPlan>(shotPlanPath, errors, cancellationToken);
         var validation = await TryReadJsonAsync<WeeklyVisualIntentValidationReport>(validationPath, errors, cancellationToken);
         var storytelling = await TryReadJsonAsync<WeeklyVisualStorytellingReport>(storytellingPath, errors, cancellationToken);
+        var renderSafeValidation = await TryReadJsonAsync<WeeklyVisualIntentRenderSafeValidationReport>(renderSafeValidationPath, errors, cancellationToken);
 
         var planLoaded = plan is not null && plan.PipelineRunId == pipelineRunId;
         var shotPlanLoaded = shotPlan is not null && shotPlan.PipelineRunId == pipelineRunId;
         var validationLoaded = validation is not null;
         var storytellingLoaded = storytelling is not null;
+        var renderSafeValidationLoaded = renderSafeValidation is not null;
         if (!planLoaded) errors.Add($"Visual intent plan is missing or invalid: {planPath}");
         if (!shotPlanLoaded) errors.Add($"Visual intent shot plan is missing or invalid: {shotPlanPath}");
         if (!validationLoaded) errors.Add($"Visual intent validation report is missing or invalid: {validationPath}");
         if (!storytellingLoaded) errors.Add($"Visual storytelling report is missing or invalid: {storytellingPath}");
+        if (!renderSafeValidationLoaded) errors.Add($"Visual intent render-safe validation report is missing or invalid: {renderSafeValidationPath}");
 
         var sameFamilyConsecutiveMax = Math.Max(validation?.SameFamilyConsecutiveMax ?? 0, storytelling?.SameFamilyConsecutiveMax ?? 0);
         var fallbackVisualCount = Math.Max(validation?.FallbackVisualCount ?? 0, storytelling?.FallbackVisualCount ?? 0);
@@ -1203,6 +1207,10 @@ public sealed class WeeklyExistingRunVideoRenderer(
         if (validation is not null)
         {
             if (!validation.VisualIntentReady) errors.Add("visualIntentReady is false in visual-intent-validation-report.json.");
+            if (!validation.RenderSafeShotPlanReady) errors.Add("renderSafeShotPlanReady is false in visual-intent-validation-report.json.");
+            if (validation.EmptyAssetPathShotCount != 0) errors.Add($"emptyAssetPathShotCount must be 0 but was {validation.EmptyAssetPathShotCount}.");
+            if (validation.MissingAssetFileCount != 0) errors.Add($"missingAssetFileCount must be 0 but was {validation.MissingAssetFileCount}.");
+            if (validation.OverlayOnlyShotCount != 0) errors.Add($"overlayOnlyShotCount must be 0 but was {validation.OverlayOnlyShotCount}.");
             if (validation.NarrationVisualMismatchCount != 0) errors.Add($"narrationVisualMismatchCount must be 0 but was {validation.NarrationVisualMismatchCount}.");
             if (validation.FallbackVisualCount != 0) errors.Add($"fallbackVisualCount must be 0 but was {validation.FallbackVisualCount}.");
             if (validation.SameFamilyConsecutiveMax > 2) errors.Add($"sameFamilyConsecutiveMax must be <= 2 but was {validation.SameFamilyConsecutiveMax}.");
@@ -1214,8 +1222,18 @@ public sealed class WeeklyExistingRunVideoRenderer(
             if (storytelling.SameFamilyConsecutiveMax > 2) errors.Add($"storytelling sameFamilyConsecutiveMax must be <= 2 but was {storytelling.SameFamilyConsecutiveMax}.");
         }
 
+        if (renderSafeValidation is not null)
+        {
+            if (!renderSafeValidation.RenderSafeShotPlanReady) errors.Add("renderSafeShotPlanReady is false in visual-intent-render-safe-validation-report.json.");
+            foreach (var row in renderSafeValidation.Shots ?? [])
+            {
+                var rowErrors = row.Errors ?? [];
+                if (rowErrors.Count > 0) errors.Add($"Invalid visual-intent render-safe row {row.EpisodeType}/{row.SegmentId}/{row.ShotNumber}: {string.Join("; ", rowErrors)}");
+            }
+        }
+
         ValidateVisualIntentShotPlanAssets(shotPlan, warnings, errors);
-        var validationPassed = validationLoaded && storytellingLoaded && validation?.VisualIntentReady == true && storytelling?.VisualStorytellingReady == true && validation?.NarrationVisualMismatchCount == 0 && fallbackVisualCount == 0 && sameFamilyConsecutiveMax <= 2;
+        var validationPassed = validationLoaded && storytellingLoaded && renderSafeValidationLoaded && validation?.VisualIntentReady == true && storytelling?.VisualStorytellingReady == true && validation?.RenderSafeShotPlanReady == true && renderSafeValidation?.RenderSafeShotPlanReady == true && validation?.NarrationVisualMismatchCount == 0 && validation?.EmptyAssetPathShotCount == 0 && validation?.MissingAssetFileCount == 0 && validation?.OverlayOnlyShotCount == 0 && fallbackVisualCount == 0 && sameFamilyConsecutiveMax <= 2;
         var ready = planLoaded && shotPlanLoaded && validationPassed && errors.Count == 0;
         var applicationReport = new WeeklyVisualIntentRenderApplicationReport(
             ready,
@@ -1253,18 +1271,28 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private static void ValidateVisualIntentShotPlanAssets(WeeklyVisualIntentShotPlan? shotPlan, List<string> warnings, List<string> errors)
     {
         if (shotPlan is null) return;
-        foreach (var segment in shotPlan.Episodes.SelectMany(episode => episode.Segments ?? []))
+        foreach (var episode in shotPlan.Episodes ?? [])
         {
-            foreach (var shot in (segment.Shots ?? []).Concat(segment.Overlays ?? []))
+            foreach (var segment in episode.Segments ?? [])
             {
-                if (string.IsNullOrWhiteSpace(shot.AssetPath)) errors.Add($"Visual-intent shot {segment.SegmentId}/{shot.ShotNumber} has an empty asset path.");
-                else if (!File.Exists(shot.AssetPath)) errors.Add($"Visual-intent asset file is missing: {shot.AssetPath}");
-                if (shot.RequestedButUnavailable) errors.Add($"Visual-intent shot {segment.SegmentId}/{shot.ShotNumber} requested an unavailable fallback asset: {shot.AssetId}");
-                if (!shot.ProductionReady) warnings.Add($"Visual-intent shot {segment.SegmentId}/{shot.ShotNumber} is not marked production-ready: {shot.AssetId}");
-            }
-            foreach (var overlay in segment.Overlays ?? [])
-            {
-                if (!overlay.IsOverlay) warnings.Add($"Visual-intent overlay {segment.SegmentId}/{overlay.ShotNumber} was normalized as overlay-only for render.");
+                foreach (var shot in segment.Shots ?? [])
+                {
+                    var row = $"{episode.EpisodeType}/{segment.SegmentId}/{shot.ShotNumber}";
+                    if (string.IsNullOrWhiteSpace(shot.AssetPath)) errors.Add($"Visual-intent shot {row} has an empty asset path.");
+                    else if (!File.Exists(shot.AssetPath)) errors.Add($"Visual-intent shot {row} asset file is missing: {shot.AssetPath}");
+                    if (shot.IsOverlay || shot.VisualFamily is "MotionGraphic" or "EducationalOverlay") errors.Add($"Visual-intent shot {row} is overlay-only and cannot be used as a standalone render shot: {shot.AssetId}");
+                    if (shot.RequestedButUnavailable) errors.Add($"Visual-intent shot {row} requested an unavailable fallback asset: {shot.AssetId}");
+                    if (!shot.ProductionReady) warnings.Add($"Visual-intent shot {row} is not marked production-ready: {shot.AssetId}");
+                }
+
+                foreach (var overlay in segment.Overlays ?? [])
+                {
+                    var row = $"{episode.EpisodeType}/{segment.SegmentId}/overlay-{overlay.ShotNumber}";
+                    if (string.IsNullOrWhiteSpace(overlay.AssetPath)) errors.Add($"Visual-intent overlay {row} has an empty asset path.");
+                    else if (!File.Exists(overlay.AssetPath)) errors.Add($"Visual-intent overlay {row} asset file is missing: {overlay.AssetPath}");
+                    if (!overlay.IsOverlay) warnings.Add($"Visual-intent overlay {row} was not marked as an overlay.");
+                    if (overlay.RequestedButUnavailable) errors.Add($"Visual-intent overlay {row} requested an unavailable fallback asset: {overlay.AssetId}");
+                }
             }
         }
     }
