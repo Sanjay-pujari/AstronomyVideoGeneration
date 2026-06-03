@@ -355,7 +355,7 @@ public sealed class WeeklyVisualIntentEngine(
                 bundle.SegmentType,
                 asset.Exists && asset.ProductionReady,
                 DetectObjects(BuildSearchText(asset.AssetId, asset.AssetCode, asset.FilePath, bundle.SegmentId, bundle.SegmentType, asset.SourceType.ToString(), asset.SegmentUsageRole))))
-            .ToList();
+            .ToList());
 
         var renderedAssets = shotPlan.Episodes.SelectMany(episode => episode.Segments.SelectMany(segment => segment.Shots.Select(shot => new AssetCandidate(
                 shot.AssetId,
@@ -379,7 +379,7 @@ public sealed class WeeklyVisualIntentEngine(
                 row.Segment.SegmentType,
                 string.IsNullOrWhiteSpace(shot.AssetPath) || File.Exists(shot.AssetPath) || !Path.IsPathRooted(shot.AssetPath),
                 DetectObjects(BuildSearchText(shot.AssetId, shot.AssetType, shot.AssetPath, row.Segment.SegmentId, row.Segment.SegmentType, shot.Purpose)))))
-            .ToList();
+            .ToList()));
 
         return manifestAssets.Concat(renderedAssets)
             .Where(x => !string.IsNullOrWhiteSpace(x.AssetId) || !string.IsNullOrWhiteSpace(x.AssetPath))
