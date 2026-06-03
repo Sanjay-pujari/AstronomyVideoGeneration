@@ -605,7 +605,7 @@ public sealed class WeeklyVisualIntentEngine(
                 asset.Exists && asset.ProductionReady,
                 MergeSemanticValues(asset.SupportedObjects, DetectObjects(BuildSearchText(asset.AssetId, asset.AssetCode, asset.FilePath, bundle.SegmentId, bundle.SegmentType, asset.SourceType.ToString(), asset.SegmentUsageRole))),
                 asset.IntentTags ?? [],
-                asset.SupportedSegments ?? [])))
+                asset.SupportedSegments ?? []))
             .ToList());
 
         var renderedAssets = shotPlan.Episodes.SelectMany(episode => episode.Segments.SelectMany(segment => segment.Shots.Select(shot => ToRenderedAssetCandidate(
@@ -625,7 +625,7 @@ public sealed class WeeklyVisualIntentEngine(
                 row.Segment.SegmentId,
                 row.EpisodeType,
                 row.Segment.SegmentType,
-                shot.Purpose))))
+                shot.Purpose)))
             .ToList());
 
         return manifestAssets.Concat(renderedAssets)
