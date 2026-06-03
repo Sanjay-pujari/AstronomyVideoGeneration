@@ -44,7 +44,33 @@ public sealed class WeeklyVisualIntentEngineTests
         shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Shots).Should().NotContain(x => x.VisualFamily is "MotionGraphics" or "EducationalOverlay");
     }
 
-    private static async Task WriteInputsAsync(string runRoot, Guid pipelineRunId)
+    [Fact]
+    public async Task BuildAsync_NormalizesEpisodeContainerWhenTimelineSegmentEpisodeTypeIsStale()
+    {
+        var pipelineRunId = Guid.NewGuid();
+        var runRoot = Path.Combine(Path.GetTempPath(), "weekly-visual-intent-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "episode"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "render"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "audio"));
+        await WriteInputsAsync(runRoot, pipelineRunId, useStaleSegmentEpisodeTypes: true);
+
+        var service = new WeeklyVisualIntentEngine(new StaticWeeklyPipelineRunDirectoryResolver(runRoot), NullLogger<WeeklyVisualIntentEngine>.Instance);
+
+        var response = await service.BuildAsync(pipelineRunId, CancellationToken.None);
+
+        response.VisualIntentReady.Should().BeTrue(string.Join("; ", response.Errors.Concat(response.Warnings)));
+        response.Warnings.Should().Contain(x => x.Contains("visual intent normalized it", StringComparison.OrdinalIgnoreCase));
+
+        var plan = await ReadJsonAsync<WeeklyVisualIntentPlan>(response.VisualIntentPlanPath);
+        plan.Beats.Should().Contain(x => x.EpisodeType == "longform" && x.SegmentId == "opening");
+        plan.Beats.Should().Contain(x => x.EpisodeType == "shortform" && x.SegmentId == "short-hook");
+
+        var shotPlan = await ReadJsonAsync<WeeklyVisualIntentShotPlan>(response.VisualIntentShotPlanPath);
+        shotPlan.Episodes.Single(x => x.EpisodeType == "longform").Segments.Should().HaveCount(6);
+        shotPlan.Episodes.Single(x => x.EpisodeType == "shortform").Segments.Should().HaveCount(2);
+    }
+
+    private static async Task WriteInputsAsync(string runRoot, Guid pipelineRunId, bool useStaleSegmentEpisodeTypes = false)
     {
         var assetRoot = Path.Combine(runRoot, "assets");
         Directory.CreateDirectory(assetRoot);
@@ -63,19 +89,22 @@ public sealed class WeeklyVisualIntentEngineTests
         var education = Asset("educational-camera-tip-overlay.png");
         var cta = Asset("ai-cinematic-cta.png");
 
+        var longSegmentEpisodeType = useStaleSegmentEpisodeTypes ? "Long" : "longform";
+        var shortSegmentEpisodeType = useStaleSegmentEpisodeTypes ? "Short" : "shortform";
+
         var longSegments = new[]
         {
-            Segment("opening", "OpeningHook", "longform", 0, 5, "This week starts with a cinematic view of the night sky." , Shot(1, "ai_hook", "AICinematic", ai, 0, 5)),
-            Segment("saturn", "ScientificContext", "longform", 5, 13, "Saturn and its rings show delicate planet detail.", Shot(1, "saturn_nasa", "NASA", saturn, 5, 13)),
-            Segment("venus", "DirectionGuidance", "longform", 13, 20, "Look west after sunset for Venus near the horizon.", Shot(1, "venus_stellarium", "Stellarium", venus, 13, 20)),
-            Segment("moon", "Observation", "longform", 20, 27, "The Moon is the easiest bright landmark tonight.", Shot(1, "moon_stellarium", "Stellarium", moon, 20, 27)),
-            Segment("tip", "AstrophotographyTip", "longform", 27, 34, "Use a tripod and camera timer for a cleaner Moon photo.", Shot(1, "moon_stellarium", "Stellarium", moon, 27, 34)),
-            Segment("summary", "WeeklySummary", "longform", 34, 39, "In summary, these are the strongest sky moments of the week.", Shot(1, "ai_hook", "AICinematic", ai, 34, 39))
+            Segment("opening", "OpeningHook", longSegmentEpisodeType, 0, 5, "This week starts with a cinematic view of the night sky." , Shot(1, "ai_hook", "AICinematic", ai, 0, 5)),
+            Segment("saturn", "ScientificContext", longSegmentEpisodeType, 5, 13, "Saturn and its rings show delicate planet detail.", Shot(1, "saturn_nasa", "NASA", saturn, 5, 13)),
+            Segment("venus", "DirectionGuidance", longSegmentEpisodeType, 13, 20, "Look west after sunset for Venus near the horizon.", Shot(1, "venus_stellarium", "Stellarium", venus, 13, 20)),
+            Segment("moon", "Observation", longSegmentEpisodeType, 20, 27, "The Moon is the easiest bright landmark tonight.", Shot(1, "moon_stellarium", "Stellarium", moon, 20, 27)),
+            Segment("tip", "AstrophotographyTip", longSegmentEpisodeType, 27, 34, "Use a tripod and camera timer for a cleaner Moon photo.", Shot(1, "moon_stellarium", "Stellarium", moon, 27, 34)),
+            Segment("summary", "WeeklySummary", longSegmentEpisodeType, 34, 39, "In summary, these are the strongest sky moments of the week.", Shot(1, "ai_hook", "AICinematic", ai, 34, 39))
         };
         var shortSegments = new[]
         {
-            Segment("short-hook", "ShortHook", "shortform", 0, 4, "Saturn rings are the strongest sky visual this week.", Shot(1, "saturn_nasa", "NASA", saturn, 0, 4)),
-            Segment("short-cta", "CallToAction", "shortform", 4, 8, "Follow for next week's sky forecast.", Shot(1, "ai_cta", "AICinematic", cta, 4, 8))
+            Segment("short-hook", "ShortHook", shortSegmentEpisodeType, 0, 4, "Saturn rings are the strongest sky visual this week.", Shot(1, "saturn_nasa", "NASA", saturn, 0, 4)),
+            Segment("short-cta", "CallToAction", shortSegmentEpisodeType, 4, 8, "Follow for next week's sky forecast.", Shot(1, "ai_cta", "AICinematic", cta, 4, 8))
         };
 
         var timeline = new FinalRenderTimeline(pipelineRunId, DateTime.UtcNow, new FinalRenderEpisodeTimeline(39, 39, longSegments), new FinalRenderEpisodeTimeline(8, 8, shortSegments));

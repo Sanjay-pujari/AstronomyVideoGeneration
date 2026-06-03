@@ -236,12 +236,19 @@ public sealed class WeeklyVisualIntentEngine(
         var beats = new List<WeeklyVisualIntentBeat>();
         var internalRequests = new List<WeeklyInternalCelestialAssetRequest>();
         var previousFamilies = new Queue<string>();
-        foreach (var segment in timeline!.Longform.Segments.Concat(timeline.Shortform.Segments))
+        foreach (var (episodeType, sourceSegment) in EnumerateTimelineSegments(timeline!))
         {
+            var segment = sourceSegment;
+            if (!string.Equals(sourceSegment.EpisodeType, episodeType, StringComparison.OrdinalIgnoreCase))
+            {
+                warnings.Add($"Timeline segment {sourceSegment.SegmentId} carried episode type '{sourceSegment.EpisodeType}' inside the {episodeType} episode; visual intent normalized it to '{episodeType}'.");
+                segment = sourceSegment with { EpisodeType = episodeType };
+            }
+
             var narrationText = ResolveNarrationText(segment, narrationBySegment);
-            var intent = ClassifyIntent(segment.SegmentType, narrationText, segment.EpisodeType, segment.StartSecond);
+            var intent = ClassifyIntent(segment.SegmentType, narrationText, episodeType, segment.StartSecond);
             var mentionedObjects = DetectMentionedObjects(narrationText, segment.SegmentType);
-            var candidate = SelectPrimaryVisual(segment, intent, mentionedObjects, catalog, previousFamilies, segment.EpisodeType, warnings);
+            var candidate = SelectPrimaryVisual(segment, intent, mentionedObjects, catalog, previousFamilies, episodeType, warnings);
             if (candidate is null)
             {
                 candidate = BuildUnavailableSelection(segment, intent, mentionedObjects, internalRequests, "No suitable production visual was found for the beat's editorial intent.");
@@ -353,17 +360,17 @@ public sealed class WeeklyVisualIntentEngine(
                 segment.SegmentType,
                 string.IsNullOrWhiteSpace(shot.AssetPath) || File.Exists(shot.AssetPath) || !Path.IsPathRooted(shot.AssetPath),
                 DetectObjects($"{shot.AssetId} {shot.AssetType} {shot.AssetPath} {segment.SegmentId} {segment.SegmentType}")))))
-            .Concat(timeline.Longform.Segments.Concat(timeline.Shortform.Segments).SelectMany(segment => segment.Shots.Select(shot => new AssetCandidate(
+            .Concat(EnumerateTimelineSegments(timeline).SelectMany(row => row.Segment.Shots.Select(shot => new AssetCandidate(
                 shot.AssetId,
                 shot.AssetId,
                 shot.AssetType,
                 NormalizeFamily(shot.AssetType, shot.AssetPath, shot.AssetId),
                 shot.AssetPath,
-                segment.SegmentId,
-                segment.EpisodeType,
-                segment.SegmentType,
+                row.Segment.SegmentId,
+                row.EpisodeType,
+                row.Segment.SegmentType,
                 string.IsNullOrWhiteSpace(shot.AssetPath) || File.Exists(shot.AssetPath) || !Path.IsPathRooted(shot.AssetPath),
-                DetectObjects($"{shot.AssetId} {shot.AssetType} {shot.AssetPath} {segment.SegmentId} {segment.SegmentType}")))))
+                DetectObjects($"{shot.AssetId} {shot.AssetType} {shot.AssetPath} {row.Segment.SegmentId} {row.Segment.SegmentType}")))))
             .ToList();
 
         return manifestAssets.Concat(renderedAssets)
@@ -371,6 +378,14 @@ public sealed class WeeklyVisualIntentEngine(
             .GroupBy(x => $"{x.AssetId}|{x.AssetPath}", StringComparer.OrdinalIgnoreCase)
             .Select(x => x.First())
             .ToList();
+    }
+
+    private static IEnumerable<(string EpisodeType, FinalRenderSegment Segment)> EnumerateTimelineSegments(FinalRenderTimeline timeline)
+    {
+        foreach (var segment in timeline.Longform.Segments)
+            yield return ("longform", segment);
+        foreach (var segment in timeline.Shortform.Segments)
+            yield return ("shortform", segment);
     }
 
     private static WeeklyVisualIntentType ClassifyIntent(string segmentType, string narration, string episodeType, double startSecond)
