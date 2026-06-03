@@ -100,6 +100,7 @@ public sealed record WeeklyVisualIntentAssetCandidate(
     IReadOnlyList<string> MatchedSubjects,
     int Score,
     bool IsEligibleAsPrimary,
+    bool IsEligibleAsSecondary,
     bool IsEligibleAsOverlay,
     string Reason);
 
@@ -235,6 +236,8 @@ public sealed record WeeklyVisualIntentRenderSafeValidationReport(
     int OverlayOnlyShotCount,
     int NormalizedShotCount,
     int MissingAssetFileCount,
+    int NonRenderableAssetsRejected,
+    int OverlayAssetsRejectedAsPrimary,
     IReadOnlyList<WeeklyVisualIntentRenderSafeShotValidationRow> InvalidShots,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors)
@@ -354,6 +357,7 @@ public sealed class WeeklyVisualIntentEngine(
         await File.WriteAllTextAsync(Path.Combine(episodeDirectory, "weekly-production-asset-manifest.json"), JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
 
         var catalog = BuildAssetCatalog(manifest!, shotPlan!, timeline!);
+        var renderSafeRejectionStats = LogRenderSafeCandidateRejections(catalog);
         var narrationBySegment = longformNarration?.Segments.Concat(shortformNarration?.Segments ?? []).ToDictionary(x => x.SegmentId, x => x.NarrationText, StringComparer.OrdinalIgnoreCase)
             ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in narrationAssetMap)
@@ -429,7 +433,7 @@ public sealed class WeeklyVisualIntentEngine(
         var normalizationResult = NormalizeVisualIntentShotPlanForRender(beats, catalog, warnings, errors);
         visualShotPlan = BuildShotPlan(pipelineRunId, timeline!, beats);
         var renderSafeErrors = ValidateShotPlanRenderSafe(visualShotPlan);
-        var renderSafeReport = BuildRenderSafeValidationReport(visualShotPlan, normalizationResult.NormalizedBaseVisualCount, warnings, renderSafeErrors);
+        var renderSafeReport = BuildRenderSafeValidationReport(visualShotPlan, normalizationResult.NormalizedBaseVisualCount, renderSafeRejectionStats, warnings, renderSafeErrors);
         errors.AddRange(renderSafeErrors);
         var validation = BuildValidation(beats, warnings, errors, rotationResult.Applied, rotationResult.SwapCount, renderSafeReport);
         var familyDistributionReport = BuildVisualFamilyDistributionReport(beats, validation, rotationResult, warnings, errors);
@@ -695,6 +699,50 @@ public sealed class WeeklyVisualIntentEngine(
             .ToList();
     }
 
+
+    private RenderSafeRejectionStats LogRenderSafeCandidateRejections(IReadOnlyList<AssetCandidate> catalog)
+    {
+        var uniqueAssets = catalog
+            .DistinctBy(x => $"{x.AssetId}|{x.AssetPath}")
+            .ToList();
+        var nonRenderable = 0;
+        var overlayRejectedAsPrimary = 0;
+
+        foreach (var asset in uniqueAssets)
+        {
+            var eligibility = ResolveRenderEligibility(asset, allowFullScreen: false);
+            if (!eligibility.IsRenderable)
+            {
+                nonRenderable++;
+                logger.LogWarning(
+                    "RENDERABLE_FILTER_REJECTED assetId={AssetId} family={Family} assetPath={AssetPath} segmentId={SegmentId} episodeType={EpisodeType}",
+                    asset.AssetId,
+                    asset.VisualFamily,
+                    asset.AssetPath ?? string.Empty,
+                    asset.SegmentId,
+                    asset.EpisodeType);
+            }
+
+            if (eligibility.RejectedOverlayAsPrimary)
+                overlayRejectedAsPrimary++;
+        }
+
+        return new RenderSafeRejectionStats(nonRenderable, overlayRejectedAsPrimary);
+    }
+
+    private static RenderEligibility ResolveRenderEligibility(AssetCandidate asset, bool allowFullScreen)
+    {
+        var isRenderable = HasExistingAssetPath(asset.AssetPath);
+        if (!isRenderable)
+            return new RenderEligibility(false, false, false, false, false);
+
+        var overlayFamily = IsOverlayOnlyFamily(asset.VisualFamily);
+        if (overlayFamily && !allowFullScreen)
+            return new RenderEligibility(true, false, false, true, true);
+
+        return new RenderEligibility(true, asset.ProductionReady, asset.ProductionReady, overlayFamily, false);
+    }
+
     private static IEnumerable<(string EpisodeType, FinalRenderSegment Segment)> EnumerateTimelineSegments(FinalRenderTimeline timeline)
     {
         foreach (var segment in timeline.Longform.Segments)
@@ -751,14 +799,14 @@ public sealed class WeeklyVisualIntentEngine(
         return objects.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static IReadOnlyList<WeeklyVisualIntentAssetCandidate> BuildPrimaryVisualCandidatePool(FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<AssetCandidate> catalog)
+    private IReadOnlyList<WeeklyVisualIntentAssetCandidate> BuildPrimaryVisualCandidatePool(FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<AssetCandidate> catalog)
     {
         var sameSegment = catalog.Where(x => x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase)).ToList();
         var uniqueAssets = sameSegment.Concat(catalog)
-            .Where(x => x.ProductionReady)
             .DistinctBy(x => $"{x.AssetId}|{x.AssetPath}")
             .ToList();
-        var astronomyAssetExists = uniqueAssets.Any(x => IsAstronomyPrimaryFamily(x.VisualFamily)
+        var astronomyAssetExists = uniqueAssets.Any(x => IsRenderSafeBaseAsset(x)
+            && IsAstronomyPrimaryFamily(x.VisualFamily)
             && (mentionedObjects.Count == 0 || mentionedObjects.Any(o => AssetMatchesObject(x, o))));
 
         return uniqueAssets
@@ -786,22 +834,27 @@ public sealed class WeeklyVisualIntentEngine(
     private static WeeklyVisualIntentAssetCandidate ToVisualIntentCandidate(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, bool astronomyAssetExists)
     {
         var matchedSubjects = mentionedObjects.Where(o => AssetMatchesObject(asset, o)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var score = ScoreVisualCandidate(asset, segment, intent, narrationSubject, mentionedObjects, matchedSubjects, astronomyAssetExists);
-        var eligiblePrimary = IsEligibleAsPrimary(asset, segment, intent, mentionedObjects, astronomyAssetExists);
-        var eligibleOverlay = IsEligibleAsOverlay(asset, intent);
-        var reason = ResolveCandidateReason(asset, intent, matchedSubjects, eligiblePrimary, eligibleOverlay, astronomyAssetExists);
-        return new WeeklyVisualIntentAssetCandidate(asset.AssetId, asset.AssetPath, asset.VisualFamily, asset.AssetType, asset.AssetCode, asset.MatchedObjects, matchedSubjects, score, eligiblePrimary, eligibleOverlay, reason);
+        var renderEligibility = ResolveRenderEligibility(asset, allowFullScreen: false);
+        var eligiblePrimary = renderEligibility.IsEligibleAsPrimary && IsEligibleAsPrimary(asset, segment, intent, mentionedObjects, astronomyAssetExists);
+        var eligibleSecondary = renderEligibility.IsEligibleAsSecondary && IsEligibleAsSecondary(asset, segment, intent, mentionedObjects, astronomyAssetExists);
+        var eligibleOverlay = renderEligibility.IsEligibleAsOverlay && IsEligibleAsOverlay(asset, intent);
+        var score = renderEligibility.IsRenderable ? ScoreVisualCandidate(asset, segment, intent, narrationSubject, mentionedObjects, matchedSubjects, astronomyAssetExists) : 0;
+        var reason = ResolveCandidateReason(asset, intent, matchedSubjects, eligiblePrimary, eligibleSecondary, eligibleOverlay, renderEligibility, astronomyAssetExists);
+        return new WeeklyVisualIntentAssetCandidate(asset.AssetId, asset.AssetPath, asset.VisualFamily, asset.AssetType, asset.AssetCode, asset.MatchedObjects, matchedSubjects, score, eligiblePrimary, eligibleSecondary, eligibleOverlay, reason);
     }
 
     private static AssetCandidate ToAssetCandidate(WeeklyVisualIntentAssetCandidate candidate, string segmentId, string episodeType, string segmentType)
         => new(candidate.AssetId, candidate.SceneCode, candidate.SourceType, candidate.Family, candidate.Path, segmentId, episodeType, segmentType, true, candidate.TargetObjects, [], []);
 
-    private static string ResolveCandidateReason(AssetCandidate asset, WeeklyVisualIntentType intent, IReadOnlyList<string> matchedSubjects, bool eligiblePrimary, bool eligibleOverlay, bool astronomyAssetExists)
+    private static string ResolveCandidateReason(AssetCandidate asset, WeeklyVisualIntentType intent, IReadOnlyList<string> matchedSubjects, bool eligiblePrimary, bool eligibleSecondary, bool eligibleOverlay, RenderEligibility renderEligibility, bool astronomyAssetExists)
     {
         var parts = new List<string>();
+        if (!renderEligibility.IsRenderable) parts.Add("not renderable: assetPath is empty or file does not exist");
+        if (renderEligibility.RejectedOverlayAsPrimary) parts.Add("overlay-only family cannot be primary or secondary without allowFullScreen");
         if (matchedSubjects.Count > 0) parts.Add($"matched {string.Join(", ", matchedSubjects)}");
         parts.Add($"family {asset.VisualFamily} scored for {intent}");
         parts.Add(eligiblePrimary ? "eligible primary" : "not primary eligible");
+        parts.Add(eligibleSecondary ? "eligible secondary" : "not secondary eligible");
         if (eligibleOverlay) parts.Add("overlay eligible");
         if (asset.VisualFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase) && astronomyAssetExists && !eligiblePrimary) parts.Add("AI cinematic restricted because astronomy/celestial asset exists");
         return string.Join("; ", parts);
@@ -819,6 +872,7 @@ public sealed class WeeklyVisualIntentEngine(
         };
         if (secondaryFamily is null) return null;
         var selected = catalog
+            .Where(x => IsEligibleAsSecondary(x, segment, intent, mentionedObjects, astronomyAssetExists: true))
             .Where(x => x.VisualFamily.Equals(secondaryFamily, StringComparison.OrdinalIgnoreCase) && !x.VisualFamily.Equals(primaryFamily, StringComparison.OrdinalIgnoreCase))
             .Where(x => mentionedObjects.Count == 0 || mentionedObjects.Any(o => x.MatchedObjects.Contains(o, StringComparer.OrdinalIgnoreCase)))
             .OrderByDescending(x => x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase))
@@ -839,6 +893,8 @@ public sealed class WeeklyVisualIntentEngine(
         };
         if (overlayFamily is null) return [];
         var selected = catalog
+            .Where(x => x.ProductionReady)
+            .Where(x => ResolveRenderEligibility(x, allowFullScreen: false).IsEligibleAsOverlay)
             .Where(x => x.VisualFamily.Equals(overlayFamily, StringComparison.OrdinalIgnoreCase) || overlayFamily.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase) && x.VisualFamily.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase))
             .Where(x => x.IntentTags.Count > 0)
             .OrderByDescending(x => AssetMatchesIntent(x, intent, segment.SegmentType))
@@ -1069,8 +1125,7 @@ public sealed class WeeklyVisualIntentEngine(
 
     private static bool IsEligibleAsPrimary(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, IReadOnlyList<string> mentionedObjects, bool astronomyAssetExists)
     {
-        if (!asset.ProductionReady) return false;
-        if (IsOverlayOnlyFamily(asset.VisualFamily)) return false;
+        if (!ResolveRenderEligibility(asset, allowFullScreen: false).IsEligibleAsPrimary) return false;
         if (asset.VisualFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase))
         {
             if (intent is WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction) return true;
@@ -1078,6 +1133,9 @@ public sealed class WeeklyVisualIntentEngine(
         }
         return true;
     }
+
+    private static bool IsEligibleAsSecondary(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, IReadOnlyList<string> mentionedObjects, bool astronomyAssetExists)
+        => IsEligibleAsPrimary(asset, segment, intent, mentionedObjects, astronomyAssetExists);
 
     private static bool IsEligibleAsOverlay(AssetCandidate asset, WeeklyVisualIntentType intent)
         => asset.VisualFamily.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase)
@@ -1503,7 +1561,7 @@ public sealed class WeeklyVisualIntentEngine(
            || text.Contains("visibility-calendar", StringComparison.OrdinalIgnoreCase)
            || text.Contains("best-time-card", StringComparison.OrdinalIgnoreCase);
 
-    private static WeeklyVisualIntentRenderSafeValidationReport BuildRenderSafeValidationReport(WeeklyVisualIntentShotPlan shotPlan, int normalizedBaseVisualCount, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
+    private static WeeklyVisualIntentRenderSafeValidationReport BuildRenderSafeValidationReport(WeeklyVisualIntentShotPlan shotPlan, int normalizedBaseVisualCount, RenderSafeRejectionStats rejectionStats, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
     {
         WeeklyVisualIntentRenderSafeShotValidationRow BuildRow(string episodeType, WeeklyVisualIntentSegmentShotPlan segment, WeeklyVisualIntentShotPlanEntry selection, bool isOverlayEntry)
         {
@@ -1554,6 +1612,8 @@ public sealed class WeeklyVisualIntentEngine(
             overlayOnlyCount,
             normalizedBaseVisualCount,
             missing,
+            rejectionStats.NonRenderableAssetsRejected,
+            rejectionStats.OverlayAssetsRejectedAsPrimary,
             rows.Where(row => row.Errors.Count > 0).ToList(),
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             reportErrors);
@@ -1874,7 +1934,7 @@ public sealed class WeeklyVisualIntentEngine(
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(new WeeklyVisualIntentPlan(pipelineRunId, DateTime.UtcNow, "weekly-visual-intent-v1", inputPaths, [], new WeeklyVisualIntentAssetMix(40, 15, 20, 12, 8), new WeeklyVisualIntentAssetMix(0, 0, 0, 0, 0), new WeeklyVisualIntentAssetMix(45, 30, 10, 8, 4), new WeeklyVisualIntentAssetMix(0, 0, 0, 0, 0), [], warnings), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(shotPlanPath, JsonSerializer.Serialize(new WeeklyVisualIntentShotPlan(pipelineRunId, DateTime.UtcNow, []), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(renderSafeValidationReportPath, JsonSerializer.Serialize(new WeeklyVisualIntentRenderSafeValidationReport(false, 0, 0, 0, 0, 0, [], warnings, errors), JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(renderSafeValidationReportPath, JsonSerializer.Serialize(new WeeklyVisualIntentRenderSafeValidationReport(false, 0, 0, 0, 0, 0, 0, 0, [], warnings, errors), JsonOptions), cancellationToken);
         return ToResponse(pipelineRunId, root, planPath, shotPlanPath, validationPath, validation);
     }
 
@@ -1906,6 +1966,10 @@ public sealed class WeeklyVisualIntentEngine(
     private sealed record VisualFamilyRotationResult(bool Applied, int SwapCount);
 
     private sealed record RenderSafeNormalizationResult(int NormalizedBaseVisualCount);
+
+    private sealed record RenderEligibility(bool IsRenderable, bool IsEligibleAsPrimary, bool IsEligibleAsSecondary, bool IsEligibleAsOverlay, bool RejectedOverlayAsPrimary);
+
+    private sealed record RenderSafeRejectionStats(int NonRenderableAssetsRejected, int OverlayAssetsRejectedAsPrimary);
 
     private sealed record ScoredAssetCandidate(AssetCandidate Asset, int Score);
 
