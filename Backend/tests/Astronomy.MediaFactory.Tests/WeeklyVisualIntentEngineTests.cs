@@ -50,6 +50,7 @@ public sealed class WeeklyVisualIntentEngineTests
         var plan = await ReadJsonAsync<WeeklyVisualIntentPlan>(response.VisualIntentPlanPath);
         plan.Beats.Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
         plan.Beats.Single(x => x.SegmentId == "saturn").PrimaryVisual.MatchedObjects.Should().Contain("Saturn");
+        plan.Beats.Single(x => x.SegmentId == "saturn").PrimaryVisual.VisualFamily.Should().NotBe("AICinematic");
         plan.Beats.Single(x => x.SegmentId == "venus").PrimaryVisual.MatchedObjects.Should().Contain("Venus");
         plan.Beats.Single(x => x.SegmentId == "moon").PrimaryVisual.MatchedObjects.Should().Contain("Moon");
 
@@ -96,6 +97,7 @@ public sealed class WeeklyVisualIntentEngineTests
         }
 
         var ai = Asset("ai-cinematic-hook.png");
+        var aiSaturn = Asset("ai-cinematic-saturn-rings.png");
         var saturn = Asset("nasa-saturn-rings-detail.png");
         var venus = Asset("stellarium-venus-west-horizon.png");
         var moon = Asset("stellarium-moon-hero.png");
@@ -127,12 +129,12 @@ public sealed class WeeklyVisualIntentEngineTests
         var manifest = new WeeklyProductionAssetManifest(pipelineRunId, "us", "en", new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 7), 39, 8, 7, 3, 0, 2, 1, 0, 1, 1,
         [
             Bundle("opening", "longform", "OpeningHook", Realized("ai_hook", RealizedVisualAssetSourceType.AICinematic, ai), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion)),
-            Bundle("saturn", "longform", "ScientificContext", Realized("saturn_nasa", RealizedVisualAssetSourceType.NASA, saturn)),
+            Bundle("saturn", "longform", "ScientificContext", Realized("saturn_nasa", RealizedVisualAssetSourceType.NASA, saturn), Realized("ai_saturn_cinematic", RealizedVisualAssetSourceType.AICinematic, aiSaturn)),
             Bundle("venus", "longform", "DirectionGuidance", Realized("venus_stellarium", RealizedVisualAssetSourceType.StellariumBase, venus), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion)),
             Bundle("moon", "longform", "Observation", Realized("moon_stellarium", RealizedVisualAssetSourceType.StellariumBase, moon)),
             Bundle("tip", "longform", "AstrophotographyTip", Realized("moon_stellarium", RealizedVisualAssetSourceType.StellariumBase, moon), Realized("moon_reference", RealizedVisualAssetSourceType.NASA, moonReference), Realized("educational_camera", RealizedVisualAssetSourceType.EducationalOverlay, education)),
             Bundle("summary", "longform", "WeeklySummary", Realized("ai_hook", RealizedVisualAssetSourceType.AICinematic, ai), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion)),
-            Bundle("short-hook", "shortform", "ShortHook", Realized("saturn_nasa", RealizedVisualAssetSourceType.NASA, saturn)),
+            Bundle("short-hook", "shortform", "ShortHook", Realized("saturn_nasa", RealizedVisualAssetSourceType.NASA, saturn), Realized("ai_saturn_cinematic", RealizedVisualAssetSourceType.AICinematic, aiSaturn)),
             Bundle("short-cta", "shortform", "CallToAction", Realized("ai_cta", RealizedVisualAssetSourceType.AICinematic, cta), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion))
         ]);
         var longNarration = new WeeklyNarrationPackage(pipelineRunId, DateTime.UtcNow, "en", "test", 39, 39, longSegments.Select(x => new WeeklyNarrationSegment(x.SegmentId, x.SegmentType, x.NarrationText, (int)x.DurationSeconds, 1, 1, false)).ToList());

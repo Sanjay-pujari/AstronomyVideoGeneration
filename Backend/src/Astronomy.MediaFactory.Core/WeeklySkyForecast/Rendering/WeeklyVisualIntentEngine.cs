@@ -440,20 +440,19 @@ public sealed class WeeklyVisualIntentEngine(
 
     private static WeeklyVisualIntentAssetSelection? SelectPrimaryVisual(FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<AssetCandidate> catalog, Queue<string> previousFamilies, string episodeType, List<string> warnings)
     {
-        var preferredFamilies = PreferredPrimaryFamilies(intent, segment.NarrationText);
-        if (mentionedObjects.Count > 0)
-        {
-            if (segment.NarrationText.Contains("rings", StringComparison.OrdinalIgnoreCase) || segment.NarrationText.Contains("detail", StringComparison.OrdinalIgnoreCase))
-                preferredFamilies = new[] { "CelestialReference" }.Concat(preferredFamilies.Where(x => !x.Equals("CelestialReference", StringComparison.OrdinalIgnoreCase))).ToArray();
-        }
+        var preferredFamilies = PreferredPrimaryFamilies(intent, segment.NarrationText, segment.SegmentType, mentionedObjects);
+        var restrictAICinematic = ShouldRestrictAICinematicPrimary(segment, intent, mentionedObjects)
+            && HasAstronomyPrimaryAlternative(segment, intent, narrationSubject, mentionedObjects, preferredFamilies, catalog);
 
         var sameSegment = catalog.Where(x => x.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase)).ToList();
         var candidates = sameSegment.Concat(catalog)
             .Where(x => x.ProductionReady && x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay")
+            .Where(x => !restrictAICinematic || !x.VisualFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase))
             .DistinctBy(x => $"{x.AssetId}|{x.AssetPath}")
             .Select(x => new ScoredAssetCandidate(x, ScoreVisualMatch(x, segment, intent, narrationSubject, mentionedObjects, preferredFamilies)))
             .Where(x => x.Score > 0)
             .OrderByDescending(x => x.Score)
+            .ThenBy(x => PrimaryFamilyRank(x.Asset.VisualFamily, preferredFamilies))
             .ThenBy(x => x.Asset.VisualFamily, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.Asset.AssetId, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -505,20 +504,64 @@ public sealed class WeeklyVisualIntentEngine(
         return [ToSelection(selected, overlayFamily.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase) ? "lower_third_overlay" : "educational_overlay", true, segment.StartSecond, segment.StartSecond + duration)];
     }
 
-    private static string[] PreferredPrimaryFamilies(WeeklyVisualIntentType intent, string narration)
-        => intent switch
+    private static string[] PreferredPrimaryFamilies(WeeklyVisualIntentType intent, string narration, string segmentType, IReadOnlyList<string> mentionedObjects)
+    {
+        var text = $"{segmentType} {narration}";
+        if (intent is WeeklyVisualIntentType.CallToAction) return ["AICinematic"];
+        if (intent is WeeklyVisualIntentType.Summary) return ["AICinematic", "MotionGraphics", "Stellarium", "CelestialReference"];
+        if (IsMoonHighlight(text, mentionedObjects)) return ["Stellarium", "CelestialReference", "AICinematic"];
+        if (IsPlanetHighlight(text, mentionedObjects) || IsHeroOrStrongestEvent(segmentType)) return ["Stellarium", "CelestialReference", "AICinematic"];
+        return intent switch
         {
             WeeklyVisualIntentType.Hook => ["AICinematic", "Stellarium"],
-            WeeklyVisualIntentType.Observation => ["Stellarium", "CelestialReference"],
-            WeeklyVisualIntentType.DirectionGuidance => ["Stellarium"],
-            WeeklyVisualIntentType.BestTime => ["Stellarium", "AICinematic"],
-            WeeklyVisualIntentType.ScientificContext => ["CelestialReference", "Stellarium"],
-            WeeklyVisualIntentType.EducationalExplanation => ["Stellarium", "CelestialReference"],
-            WeeklyVisualIntentType.AstrophotographyTip => ["Stellarium", "CelestialReference"],
-            WeeklyVisualIntentType.Summary => ["AICinematic", "Stellarium"],
-            WeeklyVisualIntentType.CallToAction => ["AICinematic", "Stellarium"],
-            _ => ["Stellarium"]
+            WeeklyVisualIntentType.Observation => ["Stellarium", "CelestialReference", "AICinematic"],
+            WeeklyVisualIntentType.DirectionGuidance => ["Stellarium", "MotionGraphics", "AICinematic"],
+            WeeklyVisualIntentType.BestTime => ["Stellarium", "MotionGraphics", "AICinematic"],
+            WeeklyVisualIntentType.ScientificContext => ["Stellarium", "CelestialReference", "AICinematic"],
+            WeeklyVisualIntentType.EducationalExplanation => ["Stellarium", "CelestialReference", "AICinematic"],
+            WeeklyVisualIntentType.AstrophotographyTip => ["Stellarium", "CelestialReference", "NASA", "AICinematic"],
+            _ => ["Stellarium", "CelestialReference", "AICinematic"]
         };
+    }
+
+    private static bool ShouldRestrictAICinematicPrimary(FinalRenderSegment segment, WeeklyVisualIntentType intent, IReadOnlyList<string> mentionedObjects)
+    {
+        if (IsHeroOrStrongestEvent(segment.SegmentType)) return true;
+        if (segment.SegmentType.Contains("MoonHighlight", StringComparison.OrdinalIgnoreCase)) return true;
+        if (segment.SegmentType.Contains("PlanetHighlight", StringComparison.OrdinalIgnoreCase)) return true;
+        if (intent is WeeklyVisualIntentType.Hook or WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction) return false;
+        if (IsMoonHighlight($"{segment.SegmentType} {segment.NarrationText}", mentionedObjects)) return true;
+        if (IsPlanetHighlight($"{segment.SegmentType} {segment.NarrationText}", mentionedObjects)) return true;
+        return false;
+    }
+
+    private static bool HasAstronomyPrimaryAlternative(FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<string> preferredFamilies, IReadOnlyList<AssetCandidate> catalog)
+        => catalog.Any(x => x.ProductionReady
+            && IsAstronomyPrimaryFamily(x.VisualFamily)
+            && ScoreVisualMatch(x, segment, intent, narrationSubject, mentionedObjects, preferredFamilies) > 0);
+
+    private static bool IsAstronomyPrimaryFamily(string family)
+        => family is "Stellarium" or "CelestialReference";
+
+    private static bool IsHeroOrStrongestEvent(string segmentType)
+        => segmentType.Contains("HeroEvent", StringComparison.OrdinalIgnoreCase)
+            || segmentType.Contains("StrongestEvent", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsMoonHighlight(string text, IReadOnlyList<string> mentionedObjects)
+        => text.Contains("MoonHighlight", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("Moon", StringComparison.OrdinalIgnoreCase)
+            || mentionedObjects.Contains("Moon", StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsPlanetHighlight(string text, IReadOnlyList<string> mentionedObjects)
+        => text.Contains("PlanetHighlight", StringComparison.OrdinalIgnoreCase)
+            || mentionedObjects.Contains("Saturn", StringComparer.OrdinalIgnoreCase)
+            || mentionedObjects.Contains("Venus", StringComparer.OrdinalIgnoreCase);
+
+    private static int PrimaryFamilyRank(string family, IReadOnlyList<string> preferredFamilies)
+    {
+        var index = preferredFamilies.ToList().FindIndex(x => x.Equals(family, StringComparison.OrdinalIgnoreCase));
+        return index >= 0 ? index : preferredFamilies.Count + 1;
+    }
 
     private static int ScoreVisualMatch(AssetCandidate asset, FinalRenderSegment segment, WeeklyVisualIntentType intent, string narrationSubject, IReadOnlyList<string> mentionedObjects, IReadOnlyList<string> preferredFamilies)
     {
@@ -538,7 +581,9 @@ public sealed class WeeklyVisualIntentEngine(
             score += 10;
         }
 
-        if (preferredFamilies.Contains(asset.VisualFamily, StringComparer.OrdinalIgnoreCase)) score += 50;
+        var familyRank = PrimaryFamilyRank(asset.VisualFamily, preferredFamilies);
+        if (familyRank <= preferredFamilies.Count) score += (preferredFamilies.Count - familyRank) * 1_000;
+        if (intent is WeeklyVisualIntentType.AstrophotographyTip && asset.AssetType.Contains("StellariumExpanded", StringComparison.OrdinalIgnoreCase)) score += 125;
         if (asset.SegmentType.Equals(segment.SegmentType, StringComparison.OrdinalIgnoreCase)) score += 25;
         if (asset.SegmentId.Equals(segment.SegmentId, StringComparison.OrdinalIgnoreCase)) score += 15;
         return score;
@@ -666,7 +711,7 @@ public sealed class WeeklyVisualIntentEngine(
 
     private static AssetCandidate? FindRotationReplacement(WeeklyVisualIntentBeat beat, IReadOnlyList<AssetCandidate> catalog, string currentFamily)
     {
-        var preferredFamilies = PreferredPrimaryFamilies(beat.VisualIntent, beat.NarrationText);
+        var preferredFamilies = PreferredPrimaryFamilies(beat.VisualIntent, beat.NarrationText, beat.SegmentType, beat.MentionedObjects);
         return catalog
             .Where(x => x.ProductionReady)
             .Where(x => x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay")
@@ -686,13 +731,13 @@ public sealed class WeeklyVisualIntentEngine(
 
     private static bool FamiliesAreCompatible(string fromFamily, string toFamily)
     {
-        if (fromFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase))
-            return toFamily is "CelestialReference" or "AICinematic";
-        if (fromFamily.Equals("CelestialReference", StringComparison.OrdinalIgnoreCase))
-            return toFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase);
-        if (fromFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase))
-            return toFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase);
-        return false;
+        if (fromFamily.Equals(toFamily, StringComparison.OrdinalIgnoreCase)) return false;
+        return IsRotatablePrimaryFamily(fromFamily) && IsRotatablePrimaryFamily(toFamily);
+    }
+
+    private static bool IsRotatablePrimaryFamily(string family)
+    {
+        return family is "Stellarium" or "CelestialReference" or "AICinematic";
     }
 
     private static int EnsureObjectCoverage(List<WeeklyVisualIntentBeat> beats, IReadOnlyList<AssetCandidate> catalog, List<string> warnings)
