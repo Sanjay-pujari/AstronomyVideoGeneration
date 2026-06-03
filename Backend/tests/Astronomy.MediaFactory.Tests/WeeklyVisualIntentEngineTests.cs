@@ -41,6 +41,12 @@ public sealed class WeeklyVisualIntentEngineTests
         File.Exists(response.VisualIntentShotPlanPath).Should().BeTrue();
         File.Exists(response.VisualIntentValidationReportPath).Should().BeTrue();
 
+        var validation = await ReadJsonAsync<WeeklyVisualIntentValidationReport>(response.VisualIntentValidationReportPath);
+        validation.FamilyRotationApplied.Should().BeTrue();
+        validation.ObjectCoverage.Should().ContainKey("MOON").WhoseValue.Should().BeTrue();
+        validation.ObjectCoverage.Should().ContainKey("VENUS").WhoseValue.Should().BeTrue();
+        validation.ObjectCoverage.Should().ContainKey("SATURN").WhoseValue.Should().BeTrue();
+
         var plan = await ReadJsonAsync<WeeklyVisualIntentPlan>(response.VisualIntentPlanPath);
         plan.Beats.Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
         plan.Beats.Single(x => x.SegmentId == "saturn").PrimaryVisual.MatchedObjects.Should().Contain("Saturn");

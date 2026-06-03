@@ -158,6 +158,9 @@ public sealed record WeeklyVisualIntentValidationReport(
     bool SaturnNarrationMatchedToSaturnVisual,
     bool VenusNarrationMatchedToVenusVisual,
     bool MoonNarrationMatchedToMoonVisual,
+    bool FamilyRotationApplied,
+    int FamilyRotationSwapCount,
+    IReadOnlyDictionary<string, bool> ObjectCoverage,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
 
@@ -287,7 +290,9 @@ public sealed class WeeklyVisualIntentEngine(
         }
 
         EnsureShortformStrongVisual(beats, catalog, warnings);
-        var validation = BuildValidation(beats, warnings, errors);
+        EnsureObjectCoverage(beats, catalog, warnings);
+        var rotationResult = ApplyVisualFamilyRotation(beats, catalog, warnings);
+        var validation = BuildValidation(beats, warnings, errors, rotationResult.Applied, rotationResult.SwapCount);
         var plan = new WeeklyVisualIntentPlan(
             pipelineRunId,
             DateTime.UtcNow,
@@ -349,7 +354,7 @@ public sealed class WeeklyVisualIntentEngine(
                 bundle.EpisodeType,
                 bundle.SegmentType,
                 asset.Exists && asset.ProductionReady,
-                DetectObjects($"{asset.AssetId} {asset.AssetCode} {asset.FilePath} {bundle.SegmentId} {bundle.SegmentType}"))))
+                DetectObjects(BuildSearchText(asset.AssetId, asset.AssetCode, asset.FilePath, bundle.SegmentId, bundle.SegmentType, asset.SourceType.ToString(), asset.SegmentUsageRole))))
             .ToList();
 
         var renderedAssets = shotPlan.Episodes.SelectMany(episode => episode.Segments.SelectMany(segment => segment.Shots.Select(shot => new AssetCandidate(
@@ -362,7 +367,7 @@ public sealed class WeeklyVisualIntentEngine(
                 episode.EpisodeType,
                 segment.SegmentType,
                 string.IsNullOrWhiteSpace(shot.AssetPath) || File.Exists(shot.AssetPath) || !Path.IsPathRooted(shot.AssetPath),
-                DetectObjects($"{shot.AssetId} {shot.AssetType} {shot.AssetPath} {segment.SegmentId} {segment.SegmentType}")))))
+                DetectObjects(BuildSearchText(shot.AssetId, shot.AssetType, shot.AssetPath, segment.SegmentId, segment.SegmentType, shot.Purpose, shot.LayoutMode)))))
             .Concat(EnumerateTimelineSegments(timeline).SelectMany(row => row.Segment.Shots.Select(shot => new AssetCandidate(
                 shot.AssetId,
                 shot.AssetId,
@@ -373,7 +378,7 @@ public sealed class WeeklyVisualIntentEngine(
                 row.EpisodeType,
                 row.Segment.SegmentType,
                 string.IsNullOrWhiteSpace(shot.AssetPath) || File.Exists(shot.AssetPath) || !Path.IsPathRooted(shot.AssetPath),
-                DetectObjects($"{shot.AssetId} {shot.AssetType} {shot.AssetPath} {row.Segment.SegmentId} {row.Segment.SegmentType}")))))
+                DetectObjects(BuildSearchText(shot.AssetId, shot.AssetType, shot.AssetPath, row.Segment.SegmentId, row.Segment.SegmentType, shot.Purpose)))))
             .ToList();
 
         return manifestAssets.Concat(renderedAssets)
@@ -405,6 +410,9 @@ public sealed class WeeklyVisualIntentEngine(
         return WeeklyVisualIntentType.Observation;
     }
 
+    private static string BuildSearchText(params string?[] values)
+        => string.Join(' ', values.Where(x => !string.IsNullOrWhiteSpace(x)));
+
     private static IReadOnlyList<string> DetectMentionedObjects(string narration, string segmentType)
         => DetectObjects($"{narration} {segmentType}");
 
@@ -421,9 +429,9 @@ public sealed class WeeklyVisualIntentEngine(
     {
         var value = text.ToLowerInvariant();
         var objects = new List<string>();
-        if (value.Contains("saturn") || value.Contains("शनि")) objects.Add("Saturn");
-        if (value.Contains("venus") || value.Contains("शुक्र")) objects.Add("Venus");
-        if (value.Contains("moon") || value.Contains("lunar") || value.Contains("चंद्र") || value.Contains("चाँद")) objects.Add("Moon");
+        if (value.Contains("saturn") || value.Contains("shani") || value.Contains("शनि")) objects.Add("Saturn");
+        if (value.Contains("venus") || value.Contains("shukra") || value.Contains("शुक्र")) objects.Add("Venus");
+        if (value.Contains("moon") || value.Contains("lunar") || value.Contains("chandra") || value.Contains("चंद्र") || value.Contains("चाँद")) objects.Add("Moon");
         if (value.Contains("jupiter") || value.Contains("बृहस्पति")) objects.Add("Jupiter");
         if (value.Contains("mars") || value.Contains("मंगल")) objects.Add("Mars");
         if (value.Contains("mercury") || value.Contains("बुध")) objects.Add("Mercury");
@@ -518,8 +526,12 @@ public sealed class WeeklyVisualIntentEngine(
         var hasAstronomicalSubject = mentionedObjects.Count > 0;
         if (hasAstronomicalSubject)
         {
-            if (!asset.MatchedObjects.Contains(narrationSubject, StringComparer.OrdinalIgnoreCase)) return 0;
-            score += 100;
+            if (!AssetMatchesObject(asset, narrationSubject)) return 0;
+            score += 100; // exact narration subject match
+            if (asset.MatchedObjects.Contains(narrationSubject, StringComparer.OrdinalIgnoreCase)) score += 80; // target object/object labels contain subject
+            if (ContainsObjectName(asset.AssetPath, narrationSubject)) score += 70;
+            if (ContainsObjectName(asset.AssetCode, narrationSubject) || ContainsObjectName(asset.AssetId, narrationSubject)) score += 60;
+            if (IsGroupingAsset(asset) && asset.MatchedObjects.Contains(narrationSubject, StringComparer.OrdinalIgnoreCase)) score += 30;
         }
         else if (asset.MatchedObjects.Count > 0)
         {
@@ -542,6 +554,24 @@ public sealed class WeeklyVisualIntentEngine(
 
         return candidates.FirstOrDefault(x => !x.Asset.VisualFamily.Equals(lastTwo[0], StringComparison.OrdinalIgnoreCase)) ?? candidates[0];
     }
+
+    private static bool AssetMatchesObject(AssetCandidate asset, string objectName)
+        => asset.MatchedObjects.Contains(objectName, StringComparer.OrdinalIgnoreCase)
+           || ContainsObjectName(asset.AssetId, objectName)
+           || ContainsObjectName(asset.AssetCode, objectName)
+           || ContainsObjectName(asset.AssetPath, objectName);
+
+    private static bool SelectionMatchesObject(WeeklyVisualIntentAssetSelection selection, string objectName)
+        => selection.MatchedObjects.Contains(objectName, StringComparer.OrdinalIgnoreCase)
+           || ContainsObjectName(selection.AssetId, objectName)
+           || ContainsObjectName(selection.AssetType, objectName)
+           || ContainsObjectName(selection.AssetPath, objectName);
+
+    private static bool ContainsObjectName(string? value, string objectName)
+        => !string.IsNullOrWhiteSpace(value) && value.Contains(objectName, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsGroupingAsset(AssetCandidate asset)
+        => BuildSearchText(asset.AssetId, asset.AssetCode, asset.AssetPath, asset.SegmentId, asset.SegmentType).Contains("grouping", StringComparison.OrdinalIgnoreCase);
 
     private static WeeklyVisualIntentAssetSelection ToSelection(AssetCandidate asset, string usage, bool isOverlay, double startSecond, double endSecond)
         => new(asset.AssetId, asset.AssetType, asset.VisualFamily, asset.AssetPath, usage, isOverlay, startSecond, endSecond, Math.Max(0, endSecond - startSecond), asset.MatchedObjects, asset.ProductionReady);
@@ -568,7 +598,7 @@ public sealed class WeeklyVisualIntentEngine(
     private static bool MatchesNarration(WeeklyVisualIntentAssetSelection selection, IReadOnlyList<string> mentionedObjects, WeeklyVisualIntentType intent)
     {
         if (selection.RequestedButUnavailable) return false;
-        if (mentionedObjects.Count > 0 && !mentionedObjects.Any(o => selection.MatchedObjects.Contains(o, StringComparer.OrdinalIgnoreCase))) return false;
+        if (mentionedObjects.Count > 0 && !mentionedObjects.Any(o => SelectionMatchesObject(selection, o))) return false;
         if ((selection.VisualFamily is "MotionGraphics" or "EducationalOverlay") && !selection.IsOverlay) return false;
         return true;
     }
@@ -586,7 +616,122 @@ public sealed class WeeklyVisualIntentEngine(
         warnings.Add("Shortform hook visual was upgraded to avoid weak full-screen card usage in the first 3 seconds.");
     }
 
-    private static WeeklyVisualIntentValidationReport BuildValidation(IReadOnlyList<WeeklyVisualIntentBeat> beats, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
+
+    private static VisualFamilyRotationResult ApplyVisualFamilyRotation(List<WeeklyVisualIntentBeat> beats, IReadOnlyList<AssetCandidate> catalog, List<string> warnings)
+    {
+        var ordered = beats.Select((Beat, Index) => new { Beat, Index })
+            .OrderBy(x => x.Beat.EpisodeType, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.Beat.StartSecond)
+            .ToList();
+        var swaps = 0;
+        var runFamily = string.Empty;
+        var runLength = 0;
+        foreach (var row in ordered)
+        {
+            var beat = beats[row.Index];
+            if (beat.PrimaryVisual.VisualFamily.Equals(runFamily, StringComparison.OrdinalIgnoreCase))
+            {
+                runLength++;
+            }
+            else
+            {
+                runFamily = beat.PrimaryVisual.VisualFamily;
+                runLength = 1;
+            }
+
+            if (runLength < 3) continue;
+
+            var replacement = FindRotationReplacement(beat, catalog, runFamily);
+            if (replacement is null)
+            {
+                warnings.Add($"Visual family rotation could not find a compatible different-family primary for segment {beat.SegmentId}; keeping {runFamily}.");
+                continue;
+            }
+
+            var selection = ToSelection(replacement, "primary_family_rotation", false, beat.StartSecond, beat.EndSecond);
+            beats[row.Index] = beat with
+            {
+                PrimaryVisual = selection,
+                SecondaryVisual = beat.SecondaryVisual?.VisualFamily.Equals(selection.VisualFamily, StringComparison.OrdinalIgnoreCase) == true ? null : beat.SecondaryVisual,
+                MatchedToNarration = MatchesNarration(selection, beat.MentionedObjects, beat.VisualIntent),
+                Warnings = beat.Warnings.Append($"Visual family rotation replaced third consecutive {runFamily} primary with {selection.VisualFamily}.").ToList()
+            };
+            swaps++;
+            runFamily = selection.VisualFamily;
+            runLength = 1;
+        }
+
+        return new VisualFamilyRotationResult(true, swaps);
+    }
+
+    private static AssetCandidate? FindRotationReplacement(WeeklyVisualIntentBeat beat, IReadOnlyList<AssetCandidate> catalog, string currentFamily)
+    {
+        var preferredFamilies = PreferredPrimaryFamilies(beat.VisualIntent, beat.NarrationText);
+        return catalog
+            .Where(x => x.ProductionReady)
+            .Where(x => x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay")
+            .Where(x => !x.VisualFamily.Equals(currentFamily, StringComparison.OrdinalIgnoreCase))
+            .Where(x => FamiliesAreCompatible(currentFamily, x.VisualFamily))
+            .Where(x => beat.MentionedObjects.Count == 0 || beat.MentionedObjects.Any(o => AssetMatchesObject(x, o)))
+            .DistinctBy(x => $"{x.AssetId}|{x.AssetPath}")
+            .Select(x => new ScoredAssetCandidate(x, ScoreVisualMatch(x, new FinalRenderSegment(beat.SegmentId, beat.SegmentType, beat.EpisodeType, beat.StartSecond, beat.EndSecond, beat.DurationSeconds, beat.NarrationText, beat.StartSecond, beat.EndSecond, []), beat.VisualIntent, beat.NarrationSubject, beat.MentionedObjects, preferredFamilies)))
+            .Where(x => x.Score > 0)
+            .OrderByDescending(x => x.Asset.SegmentId.Equals(beat.SegmentId, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(x => x.Score)
+            .ThenBy(x => x.Asset.VisualFamily, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.Asset.AssetId, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.Asset)
+            .FirstOrDefault();
+    }
+
+    private static bool FamiliesAreCompatible(string fromFamily, string toFamily)
+    {
+        if (fromFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase))
+            return toFamily is "CelestialReference" or "AICinematic";
+        if (fromFamily.Equals("CelestialReference", StringComparison.OrdinalIgnoreCase))
+            return toFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase);
+        if (fromFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase))
+            return toFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase);
+        return false;
+    }
+
+    private static int EnsureObjectCoverage(List<WeeklyVisualIntentBeat> beats, IReadOnlyList<AssetCandidate> catalog, List<string> warnings)
+    {
+        var fixes = 0;
+        foreach (var objectName in new[] { "Moon", "Venus", "Saturn" })
+        {
+            if (ObjectMatchPassed(beats, objectName)) continue;
+            var row = beats.Select((Beat, Index) => new { Beat, Index })
+                .Where(x => x.Beat.MentionedObjects.Contains(objectName, StringComparer.OrdinalIgnoreCase) || x.Beat.NarrationSubject.Equals(objectName, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(x => x.Beat.EpisodeType, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(x => x.Beat.StartSecond)
+                .FirstOrDefault();
+            if (row is null) continue;
+
+            var replacement = catalog
+                .Where(x => x.ProductionReady && x.VisualFamily is not "MotionGraphics" and not "EducationalOverlay")
+                .Where(x => AssetMatchesObject(x, objectName))
+                .DistinctBy(x => $"{x.AssetId}|{x.AssetPath}")
+                .OrderByDescending(x => x.SegmentId.Equals(row.Beat.SegmentId, StringComparison.OrdinalIgnoreCase))
+                .ThenByDescending(x => x.VisualFamily.Equals(row.Beat.PrimaryVisual.VisualFamily, StringComparison.OrdinalIgnoreCase) || FamiliesAreCompatible(row.Beat.PrimaryVisual.VisualFamily, x.VisualFamily))
+                .ThenBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (replacement is null) continue;
+
+            var selection = ToSelection(replacement, "primary_object_coverage", false, row.Beat.StartSecond, row.Beat.EndSecond);
+            beats[row.Index] = row.Beat with
+            {
+                PrimaryVisual = selection,
+                MatchedToNarration = MatchesNarration(selection, row.Beat.MentionedObjects, row.Beat.VisualIntent),
+                Warnings = row.Beat.Warnings.Append($"Object coverage pass selected {objectName} primary visual.").ToList()
+            };
+            warnings.Add($"Object coverage pass ensured {objectName} visual coverage on segment {row.Beat.SegmentId}.");
+            fixes++;
+        }
+        return fixes;
+    }
+
+    private static WeeklyVisualIntentValidationReport BuildValidation(IReadOnlyList<WeeklyVisualIntentBeat> beats, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, bool familyRotationApplied, int familyRotationSwapCount)
     {
         var fullscreenMotion = beats.Count(x => x.PrimaryVisual.VisualFamily.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase) && !x.PrimaryVisual.IsOverlay && x.PrimaryVisual.DurationSeconds > 3);
         var fullscreenEdu = beats.Count(x => x.PrimaryVisual.VisualFamily.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase) && !x.PrimaryVisual.IsOverlay);
@@ -595,18 +740,28 @@ public sealed class WeeklyVisualIntentEngine(
         var sameFamilyMax = MaxConsecutive(beats.OrderBy(x => x.EpisodeType).ThenBy(x => x.StartSecond).Select(x => x.PrimaryVisual.VisualFamily));
         var shortHook = beats.Where(x => x.EpisodeType.Equals("shortform", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.StartSecond).FirstOrDefault();
         var shortHookPassed = shortHook is null || (shortHook.StartSecond <= 3 && shortHook.PrimaryVisual.VisualFamily is not ("MotionGraphics" or "EducationalOverlay") && !shortHook.PrimaryVisual.RequestedButUnavailable);
-        var saturn = ObjectMatchPassed(beats, "Saturn");
-        var venus = ObjectMatchPassed(beats, "Venus");
-        var moon = ObjectMatchPassed(beats, "Moon");
+        var objectCoverage = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["MOON"] = ObjectMatchPassed(beats, "Moon"),
+            ["VENUS"] = ObjectMatchPassed(beats, "Venus"),
+            ["SATURN"] = ObjectMatchPassed(beats, "Saturn")
+        };
+        var saturn = objectCoverage["SATURN"];
+        var venus = objectCoverage["VENUS"];
+        var moon = objectCoverage["MOON"];
         var everyBeatHasSubject = beats.All(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
         var ready = errors.Count == 0 && beats.Count > 0 && mismatches == 0 && fullscreenMotion == 0 && fullscreenEdu == 0 && sameFamilyMax <= 2 && shortHookPassed && everyBeatHasSubject && saturn && venus && moon;
-        return new WeeklyVisualIntentValidationReport(ready, beats.Count, matched, mismatches, mismatches, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+        return new WeeklyVisualIntentValidationReport(ready, beats.Count, matched, mismatches, mismatches, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, familyRotationApplied, familyRotationSwapCount, objectCoverage, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
     }
 
     private static bool ObjectMatchPassed(IReadOnlyList<WeeklyVisualIntentBeat> beats, string objectName)
     {
-        var relevant = beats.Where(x => x.MentionedObjects.Contains(objectName, StringComparer.OrdinalIgnoreCase)).ToList();
-        return relevant.Count == 0 || relevant.All(x => x.PrimaryVisual.MatchedObjects.Contains(objectName, StringComparer.OrdinalIgnoreCase) || x.SecondaryVisual?.MatchedObjects.Contains(objectName, StringComparer.OrdinalIgnoreCase) == true);
+        var relevant = beats.Where(x => x.MentionedObjects.Contains(objectName, StringComparer.OrdinalIgnoreCase)
+            || x.NarrationSubject.Equals(objectName, StringComparison.OrdinalIgnoreCase)
+            || SelectionMatchesObject(x.PrimaryVisual, objectName)
+            || x.SecondaryVisual is not null && SelectionMatchesObject(x.SecondaryVisual, objectName)
+            || x.Overlays.Any(o => SelectionMatchesObject(o, objectName))).ToList();
+        return relevant.Any(x => SelectionMatchesObject(x.PrimaryVisual, objectName) || x.SecondaryVisual is not null && SelectionMatchesObject(x.SecondaryVisual, objectName));
     }
 
     private static int MaxConsecutive(IEnumerable<string> families)
@@ -661,7 +816,7 @@ public sealed class WeeklyVisualIntentEngine(
     private static async Task<WeeklyVisualIntentBuildResponse> PersistFailureAsync(Guid pipelineRunId, string root, string renderDirectory, IReadOnlyList<string> inputPaths, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(renderDirectory);
-        var validation = new WeeklyVisualIntentValidationReport(false, 0, 0, 0, 0, 0, 0, 0, true, true, true, true, warnings, errors);
+        var validation = new WeeklyVisualIntentValidationReport(false, 0, 0, 0, 0, 0, 0, 0, true, true, true, true, false, 0, new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase), warnings, errors);
         var planPath = Path.Combine(renderDirectory, "visual-intent-plan.json");
         var shotPlanPath = Path.Combine(renderDirectory, "visual-intent-shot-plan.json");
         var validationPath = Path.Combine(renderDirectory, "visual-intent-validation-report.json");
@@ -693,6 +848,8 @@ public sealed class WeeklyVisualIntentEngine(
         previousFamilies.Enqueue(family);
         while (previousFamilies.Count > 2) previousFamilies.Dequeue();
     }
+
+    private sealed record VisualFamilyRotationResult(bool Applied, int SwapCount);
 
     private sealed record ScoredAssetCandidate(AssetCandidate Asset, int Score);
 
