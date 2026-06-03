@@ -35,9 +35,17 @@ public sealed class WeeklyVisualIntentEngineTests
         response.SaturnNarrationMatchedToSaturnVisual.Should().BeTrue();
         response.VenusNarrationMatchedToVenusVisual.Should().BeTrue();
         response.MoonNarrationMatchedToMoonVisual.Should().BeTrue();
+        response.SameFamilyConsecutiveMax.Should().BeLessThanOrEqualTo(2);
+        response.NarrationVisualMismatchCount.Should().Be(0);
         File.Exists(response.VisualIntentPlanPath).Should().BeTrue();
         File.Exists(response.VisualIntentShotPlanPath).Should().BeTrue();
         File.Exists(response.VisualIntentValidationReportPath).Should().BeTrue();
+
+        var plan = await ReadJsonAsync<WeeklyVisualIntentPlan>(response.VisualIntentPlanPath);
+        plan.Beats.Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
+        plan.Beats.Single(x => x.SegmentId == "saturn").PrimaryVisual.MatchedObjects.Should().Contain("Saturn");
+        plan.Beats.Single(x => x.SegmentId == "venus").PrimaryVisual.MatchedObjects.Should().Contain("Venus");
+        plan.Beats.Single(x => x.SegmentId == "moon").PrimaryVisual.MatchedObjects.Should().Contain("Moon");
 
         var shotPlan = await ReadJsonAsync<WeeklyVisualIntentShotPlan>(response.VisualIntentShotPlanPath);
         shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Overlays).Should().OnlyContain(x => x.IsOverlay);
@@ -85,6 +93,7 @@ public sealed class WeeklyVisualIntentEngineTests
         var saturn = Asset("nasa-saturn-rings-detail.png");
         var venus = Asset("stellarium-venus-west-horizon.png");
         var moon = Asset("stellarium-moon-hero.png");
+        var moonReference = Asset("nasa-moon-surface-reference.png");
         var motion = Asset("motion-best-time-lower-third.png");
         var education = Asset("educational-camera-tip-overlay.png");
         var cta = Asset("ai-cinematic-cta.png");
@@ -115,7 +124,7 @@ public sealed class WeeklyVisualIntentEngineTests
             Bundle("saturn", "longform", "ScientificContext", Realized("saturn_nasa", RealizedVisualAssetSourceType.NASA, saturn)),
             Bundle("venus", "longform", "DirectionGuidance", Realized("venus_stellarium", RealizedVisualAssetSourceType.StellariumBase, venus), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion)),
             Bundle("moon", "longform", "Observation", Realized("moon_stellarium", RealizedVisualAssetSourceType.StellariumBase, moon)),
-            Bundle("tip", "longform", "AstrophotographyTip", Realized("moon_stellarium", RealizedVisualAssetSourceType.StellariumBase, moon), Realized("educational_camera", RealizedVisualAssetSourceType.EducationalOverlay, education)),
+            Bundle("tip", "longform", "AstrophotographyTip", Realized("moon_stellarium", RealizedVisualAssetSourceType.StellariumBase, moon), Realized("moon_reference", RealizedVisualAssetSourceType.NASA, moonReference), Realized("educational_camera", RealizedVisualAssetSourceType.EducationalOverlay, education)),
             Bundle("summary", "longform", "WeeklySummary", Realized("ai_hook", RealizedVisualAssetSourceType.AICinematic, ai), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion)),
             Bundle("short-hook", "shortform", "ShortHook", Realized("saturn_nasa", RealizedVisualAssetSourceType.NASA, saturn)),
             Bundle("short-cta", "shortform", "CallToAction", Realized("ai_cta", RealizedVisualAssetSourceType.AICinematic, cta), Realized("motion_best_time", RealizedVisualAssetSourceType.MotionGraphics, motion))
