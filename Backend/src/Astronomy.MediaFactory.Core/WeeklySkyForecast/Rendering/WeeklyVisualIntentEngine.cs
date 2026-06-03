@@ -421,10 +421,16 @@ public sealed class WeeklyVisualIntentEngine(
         EnsureShortformStrongVisual(beats, catalog, warnings);
         EnsureObjectCoverage(beats, catalog, warnings);
         var rotationResult = ApplyVisualFamilyRotation(beats, warnings);
-        var normalizationResult = NormalizeVisualIntentShotPlanForRender(beats, catalog, warnings, errors);
+
+        // Build the editorial shot plan first, then force render-safe normalization and rebuild
+        // the plan that will be persisted/consumed by render-video. This keeps normalization
+        // mandatory and local to build-visual-intent-plan output.
         var visualShotPlan = BuildShotPlan(pipelineRunId, timeline!, beats);
-        errors.AddRange(ValidateShotPlanRenderSafe(visualShotPlan));
-        var renderSafeReport = BuildRenderSafeValidationReport(beats, normalizationResult.NormalizedBaseVisualCount, warnings, errors);
+        var normalizationResult = NormalizeVisualIntentShotPlanForRender(beats, catalog, warnings, errors);
+        visualShotPlan = BuildShotPlan(pipelineRunId, timeline!, beats);
+        var renderSafeErrors = ValidateShotPlanRenderSafe(visualShotPlan);
+        var renderSafeReport = BuildRenderSafeValidationReport(visualShotPlan, normalizationResult.NormalizedBaseVisualCount, warnings, renderSafeErrors);
+        errors.AddRange(renderSafeErrors);
         var validation = BuildValidation(beats, warnings, errors, rotationResult.Applied, rotationResult.SwapCount, renderSafeReport);
         var familyDistributionReport = BuildVisualFamilyDistributionReport(beats, validation, rotationResult, warnings, errors);
         var plan = new WeeklyVisualIntentPlan(
@@ -1201,7 +1207,7 @@ public sealed class WeeklyVisualIntentEngine(
             {
                 PrimaryVisual = selection,
                 SecondaryVisual = beat.SecondaryVisual?.VisualFamily.Equals(selection.VisualFamily, StringComparison.OrdinalIgnoreCase) == true ? null : beat.SecondaryVisual,
-                MatchedToNarration = MatchesNarration(selection, beat.MentionedObjects, beat.VisualIntent),
+                MatchedToNarration = beat.MatchedToNarration || MatchesNarration(selection, beat.MentionedObjects, beat.VisualIntent) || IsObservationWindowIntent(beat) || IsWeeklySummaryIntent(beat),
                 Warnings = beat.Warnings.Append($"Visual family rotation replaced third consecutive {runFamily} primary with {selection.VisualFamily} from candidate pool.").ToList()
             };
             swaps++;
@@ -1278,6 +1284,7 @@ public sealed class WeeklyVisualIntentEngine(
             var overlays = beat.Overlays.Where(IsRenderSafeOverlayVisual).ToList();
             if (overlays.Count != beat.Overlays.Count)
                 warnings.Add($"Render-safe normalization removed one or more missing overlay assets from segment {beat.SegmentId}.");
+            overlays = NormalizeOverlaysForRenderIntent(beat, overlays, catalog, warnings);
 
             var secondary = beat.SecondaryVisual;
             if (secondary is not null && !IsRenderSafeBaseVisual(secondary))
@@ -1306,7 +1313,7 @@ public sealed class WeeklyVisualIntentEngine(
                 continue;
             }
 
-            if (movedPrimaryOverlay is not null && overlays.All(x => !string.Equals(x.AssetPath, movedPrimaryOverlay.AssetPath, StringComparison.OrdinalIgnoreCase)))
+            if (movedPrimaryOverlay is not null && IsAllowedMovedPrimaryOverlay(beat, movedPrimaryOverlay) && overlays.All(x => !string.Equals(x.AssetPath, movedPrimaryOverlay.AssetPath, StringComparison.OrdinalIgnoreCase)))
                 overlays.Insert(0, movedPrimaryOverlay);
 
             var selection = ToSelection(replacement, "render_safe_base_visual_normalized", false, beat.StartSecond, beat.EndSecond);
@@ -1315,7 +1322,7 @@ public sealed class WeeklyVisualIntentEngine(
                 PrimaryVisual = selection,
                 SecondaryVisual = secondary,
                 Overlays = overlays,
-                MatchedToNarration = MatchesNarration(selection, beat.MentionedObjects, beat.VisualIntent),
+                MatchedToNarration = beat.MatchedToNarration || MatchesNarration(selection, beat.MentionedObjects, beat.VisualIntent) || IsObservationWindowIntent(beat) || IsWeeklySummaryIntent(beat),
                 Warnings = beat.Warnings.Append($"Render-safe normalization replaced invalid or overlay-only primary with {selection.VisualFamily} base visual {selection.AssetId}.").ToList()
             };
             warnings.Add($"Render-safe normalization supplied a base visual for segment {beat.SegmentId} shot 1.");
@@ -1324,6 +1331,54 @@ public sealed class WeeklyVisualIntentEngine(
 
         return new RenderSafeNormalizationResult(normalized);
     }
+
+    private static bool IsAllowedMovedPrimaryOverlay(WeeklyVisualIntentBeat beat, WeeklyVisualIntentAssetSelection movedPrimaryOverlay)
+    {
+        if (IsWeeklySummaryIntent(beat)) return IsWeeklySummaryCard(movedPrimaryOverlay);
+        if (IsObservationWindowIntent(beat)) return IsObservationWindowOverlayCard(movedPrimaryOverlay);
+        return true;
+    }
+
+    private static List<WeeklyVisualIntentAssetSelection> NormalizeOverlaysForRenderIntent(WeeklyVisualIntentBeat beat, List<WeeklyVisualIntentAssetSelection> overlays, IReadOnlyList<AssetCandidate> catalog, List<string> warnings)
+    {
+        if (IsWeeklySummaryIntent(beat))
+        {
+            var summaryOverlay = overlays.FirstOrDefault(IsWeeklySummaryCard)
+                ?? ResolveOverlayForIntent(catalog, IsWeeklySummaryCard, beat, "weekly_summary_overlay_normalized");
+            if (summaryOverlay is null)
+            {
+                if (overlays.Count > 0) warnings.Add($"Render-safe normalization removed non-summary overlays from weekly summary segment {beat.SegmentId}.");
+                return [];
+            }
+
+            if (overlays.Count != 1 || !IsWeeklySummaryCard(overlays[0]))
+                warnings.Add($"Render-safe normalization forced weekly-summary-card as the only overlay for segment {beat.SegmentId}.");
+            return [summaryOverlay with { IsOverlay = true }];
+        }
+
+        if (IsObservationWindowIntent(beat))
+        {
+            var allowed = overlays.Where(IsObservationWindowOverlayCard).ToList();
+            var preferred = allowed.FirstOrDefault()
+                ?? ResolveOverlayForIntent(catalog, IsObservationWindowOverlayCard, beat, "observation_window_overlay_normalized");
+            if (preferred is not null && allowed.All(x => !string.Equals(x.AssetPath, preferred.AssetPath, StringComparison.OrdinalIgnoreCase)))
+                allowed.Insert(0, preferred);
+            if (allowed.Count != overlays.Count)
+                warnings.Add($"Render-safe normalization kept only observation-window overlays for segment {beat.SegmentId}.");
+            return allowed;
+        }
+
+        return overlays;
+    }
+
+    private static WeeklyVisualIntentAssetSelection? ResolveOverlayForIntent(IReadOnlyList<AssetCandidate> catalog, Func<AssetCandidate, bool> predicate, WeeklyVisualIntentBeat beat, string usage)
+        => catalog
+            .Where(IsRenderSafeOverlayAsset)
+            .Where(predicate)
+            .OrderByDescending(x => x.SegmentId.Equals(beat.SegmentId, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase)
+            .Select(x => ToSelection(x, usage, true, beat.StartSecond, beat.StartSecond + Math.Min(beat.DurationSeconds, 3)))
+            .FirstOrDefault();
 
     private static AssetCandidate? ResolveBaseVisualForIntent(WeeklyVisualIntentBeat beat, IReadOnlyList<AssetCandidate> catalog)
     {
@@ -1352,12 +1407,13 @@ public sealed class WeeklyVisualIntentEngine(
 
         if (IsObservationWindowIntent(beat))
         {
-            return Rank(productionAssets.Where(x => x.VisualFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase))
-                    .Where(x => IsPreferredObservationWindowStellariumScene(x) || focusObjects.Any(o => AssetMatchesObject(x, o))))
+            return productionAssets.Where(x => x.VisualFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase))
+                .Where(x => IsPreferredObservationWindowStellariumScene(x))
+                .OrderByDescending(x => ObservationWindowBaseVisualPriority(x))
+                .ThenBy(x => x.AssetId, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault()
                 ?? FirstFamily("AICinematic")
                 ?? FirstFamily("Stellarium")
-                ?? FirstFamily("AICinematic")
                 ?? Rank(productionAssets.Where(x => x.VisualFamily is "NASA" or "JWST" or "InternalCelestial" or "CelestialReference")).FirstOrDefault()
                 ?? Rank(productionAssets).FirstOrDefault();
         }
@@ -1367,9 +1423,11 @@ public sealed class WeeklyVisualIntentEngine(
             return Rank(productionAssets.Where(x => x.VisualFamily.Equals("AICinematic", StringComparison.OrdinalIgnoreCase))
                     .Where(IsPreferredWeeklySummaryAICinematic))
                 .FirstOrDefault()
+                ?? Rank(productionAssets.Where(x => x.VisualFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase))
+                    .Where(IsWideStellariumScene))
+                    .FirstOrDefault()
                 ?? Rank(productionAssets.Where(x => x.VisualFamily.Equals("Stellarium", StringComparison.OrdinalIgnoreCase)))
                     .FirstOrDefault()
-                ?? FirstFamily("AICinematic")
                 ?? Rank(productionAssets).FirstOrDefault();
         }
 
@@ -1407,25 +1465,66 @@ public sealed class WeeklyVisualIntentEngine(
             || text.Contains("cosmic_closing_background", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static WeeklyVisualIntentRenderSafeValidationReport BuildRenderSafeValidationReport(IReadOnlyList<WeeklyVisualIntentBeat> beats, int normalizedBaseVisualCount, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
+    private static int ObservationWindowBaseVisualPriority(AssetCandidate asset)
     {
-        WeeklyVisualIntentRenderSafeShotValidationRow BuildRow(WeeklyVisualIntentBeat beat, WeeklyVisualIntentAssetSelection selection, int shotNumber)
+        var text = BuildSearchText(asset.AssetId, asset.AssetCode, asset.AssetPath);
+        if (text.Contains("moon_hero_scene", StringComparison.OrdinalIgnoreCase)) return 300;
+        if (text.Contains("western_planet_grouping_scene_venus", StringComparison.OrdinalIgnoreCase)) return 200;
+        if (text.Contains("western_planet_grouping_scene_saturn", StringComparison.OrdinalIgnoreCase)) return 100;
+        return 0;
+    }
+
+    private static bool IsWideStellariumScene(AssetCandidate asset)
+    {
+        var text = BuildSearchText(asset.AssetId, asset.AssetCode, asset.AssetPath);
+        return text.Contains("wide", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("scene", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("grouping", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsWeeklySummaryCard(WeeklyVisualIntentAssetSelection selection)
+        => IsWeeklySummaryCard(BuildSearchText(selection.AssetId, selection.AssetType, selection.AssetPath));
+
+    private static bool IsWeeklySummaryCard(AssetCandidate asset)
+        => IsWeeklySummaryCard(BuildSearchText(asset.AssetId, asset.AssetCode, asset.AssetPath));
+
+    private static bool IsWeeklySummaryCard(string text)
+        => text.Contains("weekly-summary-card", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("weekly_summary_card", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsObservationWindowOverlayCard(WeeklyVisualIntentAssetSelection selection)
+        => IsObservationWindowOverlayCard(BuildSearchText(selection.AssetId, selection.AssetType, selection.AssetPath));
+
+    private static bool IsObservationWindowOverlayCard(AssetCandidate asset)
+        => IsObservationWindowOverlayCard(BuildSearchText(asset.AssetId, asset.AssetCode, asset.AssetPath));
+
+    private static bool IsObservationWindowOverlayCard(string text)
+        => text.Contains("best-observation-window-card", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("visibility-calendar", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("best-time-card", StringComparison.OrdinalIgnoreCase);
+
+    private static WeeklyVisualIntentRenderSafeValidationReport BuildRenderSafeValidationReport(WeeklyVisualIntentShotPlan shotPlan, int normalizedBaseVisualCount, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
+    {
+        WeeklyVisualIntentRenderSafeShotValidationRow BuildRow(string episodeType, WeeklyVisualIntentSegmentShotPlan segment, WeeklyVisualIntentShotPlanEntry selection, bool isOverlayEntry)
         {
             var shotErrors = new List<string>();
             var hasPath = !string.IsNullOrWhiteSpace(selection.AssetPath);
             var exists = hasPath && File.Exists(selection.AssetPath);
-            var overlayOnly = IsOverlayOnlyVisual(selection);
+            var overlayOnly = !isOverlayEntry && (selection.IsOverlay || IsOverlayOnlyFamily(selection.VisualFamily));
+
             if (!hasPath) shotErrors.Add("assetPath is empty");
             if (hasPath && !exists) shotErrors.Add("assetPath file does not exist");
-            if (overlayOnly) shotErrors.Add("visual is overlay-only and cannot be rendered standalone");
+            if (!isOverlayEntry && selection.IsOverlay) shotErrors.Add("primary shot is marked as an overlay");
+            if (!isOverlayEntry && IsOverlayOnlyFamily(selection.VisualFamily)) shotErrors.Add("primary family is overlay-only and cannot be rendered standalone");
             if (selection.RequestedButUnavailable) shotErrors.Add("visual requested an unavailable fallback asset");
             if (!selection.ProductionReady) shotErrors.Add("visual is not marked production-ready");
+
             return new WeeklyVisualIntentRenderSafeShotValidationRow(
-                beat.EpisodeType,
-                beat.SegmentId,
-                shotNumber,
-                beat.VisualIntent,
-                beat.NarrationSubject,
+                episodeType,
+                segment.SegmentId,
+                selection.ShotNumber,
+                segment.VisualIntent,
+                string.Empty,
                 selection.AssetId,
                 selection.AssetType,
                 selection.VisualFamily,
@@ -1438,13 +1537,15 @@ public sealed class WeeklyVisualIntentEngine(
                 shotErrors);
         }
 
-        var rows = beats.SelectMany(beat => new[] { beat.PrimaryVisual }.Concat(beat.SecondaryVisual is null ? [] : new[] { beat.SecondaryVisual })
-                .Select((selection, index) => BuildRow(beat, selection, index + 1)))
+        var baseRows = shotPlan.Episodes.SelectMany(episode => episode.Segments.SelectMany(segment => segment.Shots.Select(shot => BuildRow(episode.EpisodeType, segment, shot, false))))
             .ToList();
+        var overlayRows = shotPlan.Episodes.SelectMany(episode => episode.Segments.SelectMany(segment => segment.Overlays.Select(overlay => BuildRow(episode.EpisodeType, segment, overlay, true))))
+            .ToList();
+        var rows = baseRows.Concat(overlayRows).ToList();
 
         var empty = rows.Count(x => !x.HasAssetPath);
         var missing = rows.Count(x => x.HasAssetPath && !x.AssetFileExists);
-        var overlayOnlyCount = rows.Count(x => x.OverlayOnly);
+        var overlayOnlyCount = baseRows.Count(x => x.OverlayOnly);
         var reportErrors = errors.Concat(rows.SelectMany(row => row.Errors.Select(error => $"Visual-intent shot {row.SegmentId}/{row.ShotNumber}: {error}."))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         return new WeeklyVisualIntentRenderSafeValidationReport(
             empty == 0 && missing == 0 && overlayOnlyCount == 0 && reportErrors.Count == 0,
@@ -1462,6 +1563,11 @@ public sealed class WeeklyVisualIntentEngine(
         => asset.ProductionReady
            && HasExistingAssetPath(asset.AssetPath)
            && !IsOverlayOnlyFamily(asset.VisualFamily);
+
+    private static bool IsRenderSafeOverlayAsset(AssetCandidate asset)
+        => asset.ProductionReady
+           && HasExistingAssetPath(asset.AssetPath)
+           && IsOverlayOnlyFamily(asset.VisualFamily);
 
     private static bool IsRenderSafeBaseVisual(WeeklyVisualIntentAssetSelection selection)
         => selection.ProductionReady
@@ -1639,6 +1745,15 @@ public sealed class WeeklyVisualIntentEngine(
                     if (shot.IsOverlay || IsOverlayOnlyFamily(shot.VisualFamily)) errors.Add($"Visual-intent shot {row} is overlay-only after render-safe normalization: {shot.AssetId}.");
                     if (shot.RequestedButUnavailable) errors.Add($"Visual-intent shot {row} still references an unavailable fallback after render-safe normalization: {shot.AssetId}.");
                     if (!shot.ProductionReady) errors.Add($"Visual-intent shot {row} is not production-ready after render-safe normalization: {shot.AssetId}.");
+                }
+
+                foreach (var overlay in segment.Overlays ?? [])
+                {
+                    var row = $"{episode.EpisodeType}/{segment.SegmentId}/overlay-{overlay.ShotNumber}";
+                    if (string.IsNullOrWhiteSpace(overlay.AssetPath)) errors.Add($"Visual-intent overlay {row} has an empty asset path after render-safe normalization.");
+                    else if (!File.Exists(overlay.AssetPath)) errors.Add($"Visual-intent overlay {row} asset file is missing after render-safe normalization: {overlay.AssetPath}");
+                    if (overlay.RequestedButUnavailable) errors.Add($"Visual-intent overlay {row} still references an unavailable fallback after render-safe normalization: {overlay.AssetId}.");
+                    if (!overlay.ProductionReady) errors.Add($"Visual-intent overlay {row} is not production-ready after render-safe normalization: {overlay.AssetId}.");
                 }
             }
         }
