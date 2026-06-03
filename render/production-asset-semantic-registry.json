@@ -1,0 +1,135 @@
+[
+  {
+    "path": "motion-graphics/weekly-overview-timeline.png",
+    "family": "MotionGraphic",
+    "intentTags": ["WeeklyOverview", "WeeklySummary"],
+    "supportedObjects": [],
+    "supportedSegments": ["WeeklySkyOverview", "WeeklySummary"]
+  },
+  {
+    "path": "motion-graphics/best-observation-window-card.png",
+    "family": "MotionGraphic",
+    "intentTags": ["ObservationWindow", "DirectionGuidance", "BestTime"],
+    "supportedObjects": [],
+    "supportedSegments": ["BestObservationWindow", "WhereToLook", "BestTime"]
+  },
+  {
+    "path": "motion-graphics/visibility-calendar.png",
+    "family": "MotionGraphic",
+    "intentTags": ["ObservationWindow", "BestTime"],
+    "supportedObjects": [],
+    "supportedSegments": ["BestObservationWindow", "BestTime"]
+  },
+  {
+    "path": "motion-graphics/where-to-look-card.png",
+    "family": "MotionGraphic",
+    "intentTags": ["DirectionGuidance"],
+    "supportedObjects": [],
+    "supportedSegments": ["WhereToLook", "DirectionGuidance"]
+  },
+  {
+    "path": "motion-graphics/best-time-card.png",
+    "family": "MotionGraphic",
+    "intentTags": ["BestTime"],
+    "supportedObjects": [],
+    "supportedSegments": ["BestTime"]
+  },
+  {
+    "path": "motion-graphics/call-to-action-card.png",
+    "family": "MotionGraphic",
+    "intentTags": ["CTA"],
+    "supportedObjects": [],
+    "supportedSegments": ["CallToAction"]
+  },
+  {
+    "path": "motion-graphics/hero-event-card.png",
+    "family": "MotionGraphic",
+    "intentTags": ["HeroEvent"],
+    "supportedObjects": [],
+    "supportedSegments": ["HeroEvent", "StrongestEvent"]
+  },
+  {
+    "path": "educational-overlays/planet-visibility-explainer.png",
+    "family": "EducationalOverlay",
+    "intentTags": ["EducationalExplanation", "ObservationGuidance"],
+    "supportedObjects": [],
+    "supportedSegments": ["EducationalExplanation", "DirectionGuidance", "BestObservationWindow"]
+  },
+  {
+    "path": "nasa/nasa-moon-context.png",
+    "family": "NASA",
+    "intentTags": ["ScientificContext", "Moon"],
+    "supportedObjects": ["Moon"],
+    "supportedSegments": ["ScientificContext", "MoonHighlights"]
+  },
+  {
+    "path": "nasa/nasa-saturn-context.png",
+    "family": "NASA",
+    "intentTags": ["ScientificContext", "Saturn"],
+    "supportedObjects": ["Saturn"],
+    "supportedSegments": ["ScientificContext", "PlanetHighlights"]
+  },
+  {
+    "path": "jwst/jwst-saturn-context.png",
+    "family": "JWST",
+    "intentTags": ["ScientificContext", "Saturn"],
+    "supportedObjects": ["Saturn"],
+    "supportedSegments": ["ScientificContext", "PlanetHighlights"]
+  },
+  {
+    "path": "stellarium/moon_hero_scene.png",
+    "family": "Stellarium",
+    "intentTags": ["Observation", "Moon"],
+    "supportedObjects": ["Moon"],
+    "supportedSegments": ["Observation", "MoonHighlights", "HeroEvent"]
+  },
+  {
+    "path": "stellarium/western_planet_grouping_scene_venus.png",
+    "family": "Stellarium",
+    "intentTags": ["Observation", "Venus"],
+    "supportedObjects": ["Venus"],
+    "supportedSegments": ["Observation", "PlanetHighlights", "DirectionGuidance", "WhereToLook"]
+  },
+  {
+    "path": "stellarium/western_planet_grouping_scene_saturn.png",
+    "family": "Stellarium",
+    "intentTags": ["Observation", "Saturn"],
+    "supportedObjects": ["Saturn"],
+    "supportedSegments": ["Observation", "PlanetHighlights", "ShortHook"]
+  },
+  {
+    "path": "stellarium/expanded-astrophotography-scene.png",
+    "family": "Stellarium",
+    "intentTags": ["AstrophotographyTip"],
+    "supportedObjects": [],
+    "supportedSegments": ["AstrophotographyTip"]
+  },
+  {
+    "path": "ai-cinematic/opening_hook.png",
+    "family": "AICinematic",
+    "intentTags": ["Hook"],
+    "supportedObjects": [],
+    "supportedSegments": ["OpeningHook", "ShortHook"]
+  },
+  {
+    "path": "ai-cinematic/weekly_summary.png",
+    "family": "AICinematic",
+    "intentTags": ["Summary"],
+    "supportedObjects": [],
+    "supportedSegments": ["WeeklySummary"]
+  },
+  {
+    "path": "ai-cinematic/retention_reset.png",
+    "family": "AICinematic",
+    "intentTags": ["RetentionReset"],
+    "supportedObjects": [],
+    "supportedSegments": ["RetentionReset", "ShortHook"]
+  },
+  {
+    "path": "ai-cinematic/call_to_action.png",
+    "family": "AICinematic",
+    "intentTags": ["CTA"],
+    "supportedObjects": [],
+    "supportedSegments": ["CallToAction"]
+  }
+]
