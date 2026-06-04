@@ -34,6 +34,9 @@ public sealed record WeeklyVisualIntentBuildResponse(
     int EmptyAssetPathShotCount,
     int MissingAssetFileCount,
     int OverlayOnlyShotCount,
+    int MotionGraphicStandaloneShotCount,
+    int EducationalOverlayStandaloneShotCount,
+    int RequestedUnavailableStandaloneShotCount,
     int NormalizedBaseVisualCount,
     string ResolvedPipelineRunRoot,
     string VisualIntentPlanPath,
@@ -205,6 +208,9 @@ public sealed record WeeklyVisualIntentValidationReport(
     int EmptyAssetPathShotCount,
     int MissingAssetFileCount,
     int OverlayOnlyShotCount,
+    int MotionGraphicStandaloneShotCount,
+    int EducationalOverlayStandaloneShotCount,
+    int RequestedUnavailableStandaloneShotCount,
     int NormalizedBaseVisualCount,
     int TotalBeats,
     int MatchedBeatCount,
@@ -232,9 +238,16 @@ public sealed record WeeklyVisualIntentValidationReport(
 public sealed record WeeklyVisualIntentRenderSafeValidationReport(
     bool RenderSafeShotPlanReady,
     int TotalShots,
+    int TotalOverlays,
     int EmptyAssetPathShotCount,
     int OverlayOnlyShotCount,
+    int MotionGraphicStandaloneShotCount,
+    int EducationalOverlayStandaloneShotCount,
+    int RequestedUnavailableStandaloneShotCount,
     int NormalizedShotCount,
+    int PromotedSecondaryShotCount,
+    int MovedShotToOverlayCount,
+    int RemovedPlaceholderShotCount,
     int MissingAssetFileCount,
     int NonRenderableAssetsRejected,
     int OverlayAssetsRejectedAsPrimary,
@@ -436,7 +449,7 @@ public sealed class WeeklyVisualIntentEngine(
         var normalizationResult = NormalizeVisualIntentShotPlanForRender(beats, catalog, warnings, errors);
         visualShotPlan = BuildShotPlan(pipelineRunId, timeline!, beats);
         var renderSafeErrors = ValidateShotPlanRenderSafe(visualShotPlan);
-        var renderSafeReport = BuildRenderSafeValidationReport(visualShotPlan, normalizationResult.NormalizedBaseVisualCount, renderSafeRejectionStats, warnings, renderSafeErrors);
+        var renderSafeReport = BuildRenderSafeValidationReport(visualShotPlan, normalizationResult, renderSafeRejectionStats, warnings, renderSafeErrors);
         errors.AddRange(renderSafeErrors);
         var validation = BuildValidation(beats, warnings, errors, rotationResult.Applied, rotationResult.SwapCount, renderSafeReport);
         var familyDistributionReport = BuildVisualFamilyDistributionReport(beats, validation, rotationResult, warnings, errors);
@@ -1339,22 +1352,37 @@ public sealed class WeeklyVisualIntentEngine(
     private static RenderSafeNormalizationResult NormalizeVisualIntentShotPlanForRender(List<WeeklyVisualIntentBeat> beats, IReadOnlyList<AssetCandidate> catalog, List<string> warnings, List<string> errors)
     {
         var normalized = 0;
+        var promotedSecondary = 0;
+        var movedShotToOverlay = 0;
+        var removedPlaceholder = 0;
+        var requestedUnavailableStandalone = 0;
+
         for (var i = 0; i < beats.Count; i++)
         {
             var beat = beats[i];
-            var overlays = beat.Overlays.Where(IsRenderSafeOverlayVisual).ToList();
+            var overlays = beat.Overlays.Where(IsRenderSafeOverlayVisual).Select(NormalizeOverlaySelection).ToList();
             if (overlays.Count != beat.Overlays.Count)
                 warnings.Add($"Render-safe normalization removed one or more missing overlay assets from segment {beat.SegmentId}.");
-            overlays = NormalizeOverlaysForRenderIntent(beat, overlays, catalog, warnings);
 
             var secondary = beat.SecondaryVisual;
             if (secondary is not null && !IsRenderSafeBaseVisual(secondary))
             {
-                if (IsOverlayOnlyVisual(secondary) && HasExistingAssetPath(secondary) && overlays.All(x => !string.Equals(x.AssetPath, secondary.AssetPath, StringComparison.OrdinalIgnoreCase)))
-                    overlays.Add(secondary with { IsOverlay = true, Usage = $"overlay_preserved_from_secondary: {secondary.Usage}" });
+                if (ShouldMoveStandaloneOverlayToOverlayList(beat, secondary) && overlays.All(x => !string.Equals(x.AssetPath, secondary.AssetPath, StringComparison.OrdinalIgnoreCase)))
+                {
+                    overlays.Add(NormalizeOverlaySelection(secondary));
+                    movedShotToOverlay++;
+                }
+                else if (IsUnavailableRequestedPlaceholder(secondary))
+                {
+                    requestedUnavailableStandalone++;
+                    removedPlaceholder++;
+                }
+
                 secondary = null;
                 warnings.Add($"Render-safe normalization removed invalid secondary visual from segment {beat.SegmentId}.");
             }
+
+            overlays = NormalizeOverlaysForRenderIntent(beat, overlays, catalog, warnings);
 
             if (IsRenderSafeBaseVisual(beat.PrimaryVisual))
             {
@@ -1363,8 +1391,14 @@ public sealed class WeeklyVisualIntentEngine(
                 continue;
             }
 
-            var movedPrimaryOverlay = IsOverlayOnlyVisual(beat.PrimaryVisual) && HasExistingAssetPath(beat.PrimaryVisual)
-                ? beat.PrimaryVisual with { IsOverlay = true, Usage = $"overlay_preserved_from_primary: {beat.PrimaryVisual.Usage}" }
+            if (IsUnavailableRequestedPlaceholder(beat.PrimaryVisual))
+            {
+                requestedUnavailableStandalone++;
+                removedPlaceholder++;
+            }
+
+            var movedPrimaryOverlay = ShouldMoveStandaloneOverlayToOverlayList(beat, beat.PrimaryVisual)
+                ? NormalizeOverlaySelection(beat.PrimaryVisual)
                 : null;
 
             WeeklyVisualIntentAssetSelection? selection = null;
@@ -1373,18 +1407,19 @@ public sealed class WeeklyVisualIntentEngine(
                 selection = secondary with
                 {
                     IsOverlay = false,
-                    Usage = $"render_safe_base_visual_promoted_from_secondary: {secondary.Usage}",
+                    Usage = "primary",
                     StartSecond = beat.StartSecond,
                     EndSecond = beat.EndSecond,
                     DurationSeconds = beat.DurationSeconds
                 };
                 secondary = null;
+                promotedSecondary++;
             }
             else
             {
                 var replacement = ResolveBaseVisualForIntent(beat, catalog);
                 if (replacement is not null)
-                    selection = ToSelection(replacement, "render_safe_base_visual_normalized", false, beat.StartSecond, beat.EndSecond);
+                    selection = ToSelection(replacement, "primary", false, beat.StartSecond, beat.EndSecond);
             }
 
             if (selection is null)
@@ -1394,8 +1429,11 @@ public sealed class WeeklyVisualIntentEngine(
                 continue;
             }
 
-            if (movedPrimaryOverlay is not null && IsAllowedMovedPrimaryOverlay(beat, movedPrimaryOverlay) && overlays.All(x => !string.Equals(x.AssetPath, movedPrimaryOverlay.AssetPath, StringComparison.OrdinalIgnoreCase)))
+            if (movedPrimaryOverlay is not null && overlays.All(x => !string.Equals(x.AssetPath, movedPrimaryOverlay.AssetPath, StringComparison.OrdinalIgnoreCase)))
+            {
                 overlays.Insert(0, movedPrimaryOverlay);
+                movedShotToOverlay++;
+            }
 
             beats[i] = beat with
             {
@@ -1403,13 +1441,40 @@ public sealed class WeeklyVisualIntentEngine(
                 SecondaryVisual = secondary,
                 Overlays = overlays,
                 MatchedToNarration = beat.MatchedToNarration || MatchesNarration(selection, beat.MentionedObjects, beat.VisualIntent) || IsObservationWindowIntent(beat) || IsWeeklySummaryIntent(beat),
-                Warnings = beat.Warnings.Append($"Render-safe normalization replaced invalid or overlay-only primary with {selection.VisualFamily} base visual {selection.AssetId}.").ToList()
+                Warnings = beat.Warnings.Append($"Render-safe normalization replaced invalid, missing, requested, or overlay-only primary with {selection.VisualFamily} base visual {selection.AssetId}.").ToList()
             };
             warnings.Add($"Render-safe normalization supplied a base visual for segment {beat.SegmentId} shot 1.");
             normalized++;
         }
 
-        return new RenderSafeNormalizationResult(normalized);
+        return new RenderSafeNormalizationResult(normalized, promotedSecondary, movedShotToOverlay, removedPlaceholder, requestedUnavailableStandalone);
+    }
+
+    private static bool ShouldMoveStandaloneOverlayToOverlayList(WeeklyVisualIntentBeat beat, WeeklyVisualIntentAssetSelection selection)
+        => IsMovableRenderSafeOverlayVisual(selection)
+           && IsAllowedMovedPrimaryOverlay(beat, selection);
+
+    private static bool IsUnavailableRequestedPlaceholder(WeeklyVisualIntentAssetSelection selection)
+        => string.IsNullOrWhiteSpace(selection.AssetPath)
+           && (selection.RequestedButUnavailable
+               || selection.AssetId.Contains("requested", StringComparison.OrdinalIgnoreCase));
+
+    private static WeeklyVisualIntentAssetSelection NormalizeOverlaySelection(WeeklyVisualIntentAssetSelection selection)
+    {
+        var durationSeconds = Math.Min(Math.Max(selection.DurationSeconds, 0), 3);
+        if (durationSeconds <= 0) durationSeconds = 3;
+        var startSecond = selection.StartSecond;
+        var endSecond = startSecond + durationSeconds;
+        var usage = selection.VisualFamily.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase)
+            ? "educational_overlay"
+            : "lower_third_overlay";
+        return selection with
+        {
+            IsOverlay = true,
+            Usage = usage,
+            DurationSeconds = durationSeconds,
+            EndSecond = endSecond
+        };
     }
 
     private static bool IsAllowedMovedPrimaryOverlay(WeeklyVisualIntentBeat beat, WeeklyVisualIntentAssetSelection movedPrimaryOverlay)
@@ -1433,7 +1498,7 @@ public sealed class WeeklyVisualIntentEngine(
 
             if (overlays.Count != 1 || !IsWeeklySummaryCard(overlays[0]))
                 warnings.Add($"Render-safe normalization forced weekly-summary-card as the only overlay for segment {beat.SegmentId}.");
-            return [summaryOverlay with { IsOverlay = true }];
+            return [NormalizeOverlaySelection(summaryOverlay)];
         }
 
         if (IsObservationWindowIntent(beat))
@@ -1445,10 +1510,10 @@ public sealed class WeeklyVisualIntentEngine(
                 allowed.Insert(0, preferred);
             if (allowed.Count != overlays.Count)
                 warnings.Add($"Render-safe normalization kept only observation-window overlays for segment {beat.SegmentId}.");
-            return allowed;
+            return allowed.Select(NormalizeOverlaySelection).ToList();
         }
 
-        return overlays;
+        return overlays.Select(NormalizeOverlaySelection).ToList();
     }
 
     private static WeeklyVisualIntentAssetSelection? ResolveOverlayForIntent(IReadOnlyList<AssetCandidate> catalog, Func<AssetCandidate, bool> predicate, WeeklyVisualIntentBeat beat, string usage)
@@ -1570,7 +1635,9 @@ public sealed class WeeklyVisualIntentEngine(
 
     private static bool IsWeeklySummaryCard(string text)
         => text.Contains("weekly-summary-card", StringComparison.OrdinalIgnoreCase)
-           || text.Contains("weekly_summary_card", StringComparison.OrdinalIgnoreCase);
+           || text.Contains("weekly_summary_card", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("weekly-overview-timeline", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("weekly_overview_timeline", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsObservationWindowOverlayCard(WeeklyVisualIntentAssetSelection selection)
         => IsObservationWindowOverlayCard(BuildSearchText(selection.AssetId, selection.AssetType, selection.AssetPath));
@@ -1583,7 +1650,7 @@ public sealed class WeeklyVisualIntentEngine(
            || text.Contains("visibility-calendar", StringComparison.OrdinalIgnoreCase)
            || text.Contains("best-time-card", StringComparison.OrdinalIgnoreCase);
 
-    private static WeeklyVisualIntentRenderSafeValidationReport BuildRenderSafeValidationReport(WeeklyVisualIntentShotPlan shotPlan, int normalizedBaseVisualCount, RenderSafeRejectionStats rejectionStats, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
+    private static WeeklyVisualIntentRenderSafeValidationReport BuildRenderSafeValidationReport(WeeklyVisualIntentShotPlan shotPlan, RenderSafeNormalizationResult normalizationResult, RenderSafeRejectionStats rejectionStats, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
     {
         WeeklyVisualIntentRenderSafeShotValidationRow BuildRow(string episodeType, WeeklyVisualIntentSegmentShotPlan segment, WeeklyVisualIntentShotPlanEntry selection, bool isOverlayEntry)
         {
@@ -1596,6 +1663,8 @@ public sealed class WeeklyVisualIntentEngine(
             if (hasPath && !exists) shotErrors.Add("assetPath file does not exist");
             if (!isOverlayEntry && selection.IsOverlay) shotErrors.Add("primary shot is marked as an overlay");
             if (!isOverlayEntry && IsOverlayOnlyFamily(selection.VisualFamily)) shotErrors.Add("primary family is overlay-only and cannot be rendered standalone");
+            if (isOverlayEntry && !selection.IsOverlay) shotErrors.Add("overlay entry is not marked isOverlay=true");
+            if (!isOverlayEntry && selection.AssetId.Contains("requested", StringComparison.OrdinalIgnoreCase) && !hasPath) shotErrors.Add("requested placeholder cannot be rendered standalone without an assetPath");
             if (selection.RequestedButUnavailable) shotErrors.Add("visual requested an unavailable fallback asset");
             if (!selection.ProductionReady) shotErrors.Add("visual is not marked production-ready");
 
@@ -1623,23 +1692,33 @@ public sealed class WeeklyVisualIntentEngine(
             .ToList();
         var rows = baseRows.Concat(overlayRows).ToList();
 
-        var empty = rows.Count(x => !x.HasAssetPath);
+        var empty = baseRows.Count(x => !x.HasAssetPath);
         var missing = rows.Count(x => x.HasAssetPath && !x.AssetFileExists);
         var overlayOnlyCount = baseRows.Count(x => x.OverlayOnly);
+        var motionGraphicStandaloneCount = baseRows.Count(x => IsMotionGraphicFamily(x.VisualFamily));
+        var educationalOverlayStandaloneCount = baseRows.Count(x => x.VisualFamily.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase));
+        var requestedUnavailableStandaloneCount = baseRows.Count(x => x.AssetId.Contains("requested", StringComparison.OrdinalIgnoreCase) && !x.HasAssetPath);
         var reportErrors = errors.Concat(rows.SelectMany(row => row.Errors.Select(error => $"Visual-intent shot {row.SegmentId}/{row.ShotNumber}: {error}."))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var invalidRows = rows.Where(row => row.Errors.Count > 0).ToList();
         return new WeeklyVisualIntentRenderSafeValidationReport(
-            empty == 0 && missing == 0 && overlayOnlyCount == 0 && reportErrors.Count == 0,
-            rows.Count,
+            empty == 0 && missing == 0 && overlayOnlyCount == 0 && motionGraphicStandaloneCount == 0 && educationalOverlayStandaloneCount == 0 && requestedUnavailableStandaloneCount == 0 && reportErrors.Count == 0,
+            baseRows.Count,
+            overlayRows.Count,
             empty,
             overlayOnlyCount,
-            normalizedBaseVisualCount,
+            motionGraphicStandaloneCount,
+            educationalOverlayStandaloneCount,
+            requestedUnavailableStandaloneCount,
+            normalizationResult.NormalizedBaseVisualCount,
+            normalizationResult.PromotedSecondaryShotCount,
+            normalizationResult.MovedShotToOverlayCount,
+            normalizationResult.RemovedPlaceholderShotCount,
             missing,
             rejectionStats.NonRenderableAssetsRejected,
             rejectionStats.OverlayAssetsRejectedAsPrimary,
             baseRows.Count(row => row.Errors.Count > 0),
-            0,
-            0,
+            normalizationResult.MovedShotToOverlayCount,
+            normalizationResult.RemovedPlaceholderShotCount,
             invalidRows,
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             reportErrors);
@@ -1678,10 +1757,13 @@ public sealed class WeeklyVisualIntentEngine(
            || IsOverlayOnlyFamily(selection.VisualFamily);
 
     private static bool IsOverlayOnlyFamily(string? family)
+        => IsMotionGraphicFamily(family)
+           || (family is not null && family.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsMotionGraphicFamily(string? family)
         => family is not null
            && (family.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase)
-               || family.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase)
-               || family.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase));
+               || family.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase));
 
     private static bool HasExistingAssetPath(WeeklyVisualIntentAssetSelection selection)
         => HasExistingAssetPath(selection.AssetPath);
@@ -1722,7 +1804,7 @@ public sealed class WeeklyVisualIntentEngine(
         var everyBeatHasSubject = beats.All(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
         var validationErrors = errors.Concat(renderSafeReport.Errors).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var ready = validationErrors.Count == 0 && beats.Count > 0 && mismatches == 0 && fullscreenMotion == 0 && fullscreenEdu == 0 && sameFamilyMax <= 2 && shortHookPassed && everyBeatHasSubject && saturn && venus && moon && renderSafeReport.RenderSafeShotPlanReady;
-        return new WeeklyVisualIntentValidationReport(ready, renderSafeReport.RenderSafeShotPlanReady, renderSafeReport.EmptyAssetPathShotCount, renderSafeReport.MissingAssetFileCount, renderSafeReport.OverlayOnlyShotCount, renderSafeReport.NormalizedBaseVisualCount, beats.Count, matched, mismatches, mismatches, fallbackVisualCount, motionOverlayUsage, educationalOverlayUsage, fullscreenMotion, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, familyRotationApplied, familyRotationSwapCount, BuildPrimaryFamilyCounts(beats), objectCoverage, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), validationErrors);
+        return new WeeklyVisualIntentValidationReport(ready, renderSafeReport.RenderSafeShotPlanReady, renderSafeReport.EmptyAssetPathShotCount, renderSafeReport.MissingAssetFileCount, renderSafeReport.OverlayOnlyShotCount, renderSafeReport.MotionGraphicStandaloneShotCount, renderSafeReport.EducationalOverlayStandaloneShotCount, renderSafeReport.RequestedUnavailableStandaloneShotCount, renderSafeReport.NormalizedBaseVisualCount, beats.Count, matched, mismatches, mismatches, fallbackVisualCount, motionOverlayUsage, educationalOverlayUsage, fullscreenMotion, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, familyRotationApplied, familyRotationSwapCount, BuildPrimaryFamilyCounts(beats), objectCoverage, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), validationErrors);
     }
 
     private static WeeklyVisualFamilyDistributionReport BuildVisualFamilyDistributionReport(IReadOnlyList<WeeklyVisualIntentBeat> beats, WeeklyVisualIntentValidationReport validation, VisualFamilyRotationResult rotationResult, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
@@ -1821,11 +1903,12 @@ public sealed class WeeklyVisualIntentEngine(
                 {
                     if (IsRenderSafeBaseVisual(selection))
                     {
-                        shots.Add(ToShotEntry(shots.Count + 1, selection with { IsOverlay = false }));
+                        var shotNumber = shots.Count + 1;
+                        shots.Add(ToShotEntry(shotNumber, selection with { IsOverlay = false, Usage = shotNumber == 1 ? "primary" : selection.Usage }));
                     }
-                    else if (IsMovableRenderSafeOverlayVisual(selection) && overlays.All(x => !string.Equals(x.AssetPath, selection.AssetPath, StringComparison.OrdinalIgnoreCase)))
+                    else if (IsMovableRenderSafeOverlayVisual(selection) && ShouldMoveStandaloneOverlayToOverlayList(beat, selection) && overlays.All(x => !string.Equals(x.AssetPath, selection.AssetPath, StringComparison.OrdinalIgnoreCase)))
                     {
-                        overlays.Add(selection with { IsOverlay = true, Usage = $"overlay_moved_from_shot_plan: {selection.Usage}" });
+                        overlays.Add(NormalizeOverlaySelection(selection));
                     }
                 }
 
@@ -1973,7 +2056,7 @@ public sealed class WeeklyVisualIntentEngine(
     private static async Task<WeeklyVisualIntentBuildResponse> PersistFailureAsync(Guid pipelineRunId, string root, string renderDirectory, IReadOnlyList<string> inputPaths, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(renderDirectory);
-        var validation = new WeeklyVisualIntentValidationReport(false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, true, true, true, true, false, 0, EmptyFamilyCounts(), new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase), warnings, errors);
+        var validation = new WeeklyVisualIntentValidationReport(false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, true, true, true, true, false, 0, EmptyFamilyCounts(), new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase), warnings, errors);
         var planPath = Path.Combine(renderDirectory, "visual-intent-plan.json");
         var shotPlanPath = Path.Combine(renderDirectory, "visual-intent-shot-plan.json");
         var validationPath = Path.Combine(renderDirectory, "visual-intent-validation-report.json");
@@ -1981,12 +2064,12 @@ public sealed class WeeklyVisualIntentEngine(
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(new WeeklyVisualIntentPlan(pipelineRunId, DateTime.UtcNow, "weekly-visual-intent-v1", inputPaths, [], new WeeklyVisualIntentAssetMix(40, 15, 20, 12, 8), new WeeklyVisualIntentAssetMix(0, 0, 0, 0, 0), new WeeklyVisualIntentAssetMix(45, 30, 10, 8, 4), new WeeklyVisualIntentAssetMix(0, 0, 0, 0, 0), [], warnings), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(shotPlanPath, JsonSerializer.Serialize(new WeeklyVisualIntentShotPlan(pipelineRunId, DateTime.UtcNow, []), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(renderSafeValidationReportPath, JsonSerializer.Serialize(new WeeklyVisualIntentRenderSafeValidationReport(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, [], warnings, errors), JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(renderSafeValidationReportPath, JsonSerializer.Serialize(new WeeklyVisualIntentRenderSafeValidationReport(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, [], warnings, errors), JsonOptions), cancellationToken);
         return ToResponse(pipelineRunId, root, planPath, shotPlanPath, validationPath, validation);
     }
 
     private static WeeklyVisualIntentBuildResponse ToResponse(Guid pipelineRunId, string root, string planPath, string shotPlanPath, string validationPath, WeeklyVisualIntentValidationReport validation)
-        => new(pipelineRunId, validation.VisualIntentReady, validation.VisualIntentReady, validation.RenderSafeShotPlanReady, validation.EmptyAssetPathShotCount, validation.MissingAssetFileCount, validation.OverlayOnlyShotCount, validation.NormalizedBaseVisualCount, root, planPath, shotPlanPath, validationPath, validation.TotalBeats, validation.MatchedBeatCount, validation.UnmatchedBeatCount, validation.NarrationVisualMismatchCount, validation.FallbackVisualCount, validation.MotionGraphicOverlayUsageCount, validation.EducationalOverlayUsageCount, validation.FullscreenMotionGraphicCount, validation.FullscreenMotionGraphicOveruseCount, validation.FullscreenEducationalOverlayCount, validation.SameFamilyConsecutiveMax, validation.ShortformHookStrongVisualPassed, validation.SaturnNarrationMatchedToSaturnVisual, validation.VenusNarrationMatchedToVenusVisual, validation.MoonNarrationMatchedToMoonVisual, validation.Warnings, validation.Errors);
+        => new(pipelineRunId, validation.VisualIntentReady, validation.VisualIntentReady, validation.RenderSafeShotPlanReady, validation.EmptyAssetPathShotCount, validation.MissingAssetFileCount, validation.OverlayOnlyShotCount, validation.MotionGraphicStandaloneShotCount, validation.EducationalOverlayStandaloneShotCount, validation.RequestedUnavailableStandaloneShotCount, validation.NormalizedBaseVisualCount, root, planPath, shotPlanPath, validationPath, validation.TotalBeats, validation.MatchedBeatCount, validation.UnmatchedBeatCount, validation.NarrationVisualMismatchCount, validation.FallbackVisualCount, validation.MotionGraphicOverlayUsageCount, validation.EducationalOverlayUsageCount, validation.FullscreenMotionGraphicCount, validation.FullscreenMotionGraphicOveruseCount, validation.FullscreenEducationalOverlayCount, validation.SameFamilyConsecutiveMax, validation.ShortformHookStrongVisualPassed, validation.SaturnNarrationMatchedToSaturnVisual, validation.VenusNarrationMatchedToVenusVisual, validation.MoonNarrationMatchedToMoonVisual, validation.Warnings, validation.Errors);
 
     private static string ResolveNarrationText(FinalRenderSegment segment, IReadOnlyDictionary<string, string> narrationBySegment)
         => !string.IsNullOrWhiteSpace(segment.NarrationText) ? segment.NarrationText : narrationBySegment.GetValueOrDefault(segment.SegmentId, string.Empty);
@@ -2012,7 +2095,7 @@ public sealed class WeeklyVisualIntentEngine(
 
     private sealed record VisualFamilyRotationResult(bool Applied, int SwapCount);
 
-    private sealed record RenderSafeNormalizationResult(int NormalizedBaseVisualCount);
+    private sealed record RenderSafeNormalizationResult(int NormalizedBaseVisualCount, int PromotedSecondaryShotCount, int MovedShotToOverlayCount, int RemovedPlaceholderShotCount, int RequestedUnavailableStandaloneShotCount);
 
     private sealed record RenderEligibility(bool IsRenderable, bool IsEligibleAsPrimary, bool IsEligibleAsSecondary, bool IsEligibleAsOverlay, bool RejectedOverlayAsPrimary);
 
