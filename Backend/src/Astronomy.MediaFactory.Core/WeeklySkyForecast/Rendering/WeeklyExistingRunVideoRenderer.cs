@@ -1870,10 +1870,19 @@ public sealed class WeeklyExistingRunVideoRenderer(
     {
         var haystack = shot.AssetPath + " " + shot.AssetId + " " + shot.AssetType;
         if (IsTextSafeContainAsset(shot)) return "ContainWithBackground";
-        if (shot.AssetType.Equals("NASA", StringComparison.OrdinalIgnoreCase) || shot.AssetType.Equals("JWST", StringComparison.OrdinalIgnoreCase) || ContainsAny(haystack, "/nasa/", "/jwst/")) return "ContainWithBackground";
-        if (ContainsAny(haystack, "western_planet_grouping_scene", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide")) return "ContainBlurBackground";
-        if (shot.AssetType.Equals("Stellarium", StringComparison.OrdinalIgnoreCase) || shot.AssetType.Equals("ExpandedStellarium", StringComparison.OrdinalIgnoreCase) || shot.AssetPath.Contains("stellarium", StringComparison.OrdinalIgnoreCase)) return "SmartCropVertical";
+        if (IsShortformFullFrameVisual(shot, haystack)) return "SmartCropVertical";
         return "VerticalCinematicCrop";
+    }
+
+    private static bool IsShortformFullFrameVisual(FinalRenderShot shot, string haystack)
+    {
+        return shot.AssetType.Equals("Stellarium", StringComparison.OrdinalIgnoreCase)
+            || shot.AssetType.Equals("ExpandedStellarium", StringComparison.OrdinalIgnoreCase)
+            || shot.AssetType.Equals("NASA", StringComparison.OrdinalIgnoreCase)
+            || shot.AssetType.Equals("JWST", StringComparison.OrdinalIgnoreCase)
+            || shot.AssetType.Equals("InternalCelestial", StringComparison.OrdinalIgnoreCase)
+            || shot.AssetType.Equals("AICinematic", StringComparison.OrdinalIgnoreCase)
+            || ContainsAny(haystack, "stellarium", "/nasa/", "/jwst/", "internalcelestial", "internal-celestial", "ai-cinematic", "/cinematic/", "western_planet_grouping_scene", "01_horizon_context", "02_balanced_story_frame", "03_alignment_wide");
     }
 
     private static bool IsTextSafeContainAsset(FinalRenderShot shot)
