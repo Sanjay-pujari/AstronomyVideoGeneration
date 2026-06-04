@@ -1181,10 +1181,20 @@ public sealed class WeeklyExistingRunVideoRenderer(
         var errors = new List<string>();
 
         var plan = await TryReadJsonAsync<WeeklyVisualIntentPlan>(planPath, errors, cancellationToken);
-        var shotPlan = await TryReadJsonAsync<WeeklyVisualIntentShotPlan>(shotPlanPath, errors, cancellationToken);
         var validation = await TryReadJsonAsync<WeeklyVisualIntentValidationReport>(validationPath, errors, cancellationToken);
         var storytelling = await TryReadJsonAsync<WeeklyVisualStorytellingReport>(storytellingPath, errors, cancellationToken);
-        var renderSafeValidation = await TryReadJsonAsync<WeeklyVisualIntentRenderSafeValidationReport>(renderSafeValidationPath, errors, cancellationToken);
+        WeeklyVisualIntentRenderSafeValidationReport? renderSafeValidation = null;
+        if (!File.Exists(renderSafeValidationPath))
+        {
+            errors.Add("Run build-visual-intent-plan after latest changes. visual-intent-render-safe-validation-report.json is missing.");
+        }
+        else
+        {
+            renderSafeValidation = await TryReadJsonAsync<WeeklyVisualIntentRenderSafeValidationReport>(renderSafeValidationPath, errors, cancellationToken);
+        }
+        var shotPlan = renderSafeValidation?.RenderSafeShotPlanReady == true
+            ? await TryReadJsonAsync<WeeklyVisualIntentShotPlan>(shotPlanPath, errors, cancellationToken)
+            : null;
 
         var planLoaded = plan is not null && plan.PipelineRunId == pipelineRunId;
         var shotPlanLoaded = shotPlan is not null && shotPlan.PipelineRunId == pipelineRunId;
@@ -1268,6 +1278,12 @@ public sealed class WeeklyExistingRunVideoRenderer(
         }
     }
 
+    private static bool IsVisualIntentOverlayOnlyFamily(string? family)
+        => family is not null
+           && (family.Equals("MotionGraphic", StringComparison.OrdinalIgnoreCase)
+               || family.Equals("MotionGraphics", StringComparison.OrdinalIgnoreCase)
+               || family.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase));
+
     private static void ValidateVisualIntentShotPlanAssets(WeeklyVisualIntentShotPlan? shotPlan, List<string> warnings, List<string> errors)
     {
         if (shotPlan is null) return;
@@ -1280,7 +1296,8 @@ public sealed class WeeklyExistingRunVideoRenderer(
                     var row = $"{episode.EpisodeType}/{segment.SegmentId}/{shot.ShotNumber}";
                     if (string.IsNullOrWhiteSpace(shot.AssetPath)) errors.Add($"Visual-intent shot {row} has an empty asset path.");
                     else if (!File.Exists(shot.AssetPath)) errors.Add($"Visual-intent shot {row} asset file is missing: {shot.AssetPath}");
-                    if (shot.IsOverlay || shot.VisualFamily is "MotionGraphic" or "EducationalOverlay") errors.Add($"Visual-intent shot {row} is overlay-only and cannot be used as a standalone render shot: {shot.AssetId}");
+                    if (shot.IsOverlay || IsVisualIntentOverlayOnlyFamily(shot.VisualFamily)) errors.Add($"Visual-intent shot {row} is overlay-only and cannot be used as a standalone render shot: {shot.AssetId}");
+                    if (shot.AssetId.Contains("requested", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(shot.AssetPath)) errors.Add($"Visual-intent shot {row} contains an unavailable requested placeholder without an assetPath: {shot.AssetId}");
                     if (shot.RequestedButUnavailable) errors.Add($"Visual-intent shot {row} requested an unavailable fallback asset: {shot.AssetId}");
                     if (!shot.ProductionReady) warnings.Add($"Visual-intent shot {row} is not marked production-ready: {shot.AssetId}");
                 }
@@ -1290,7 +1307,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
                     var row = $"{episode.EpisodeType}/{segment.SegmentId}/overlay-{overlay.ShotNumber}";
                     if (string.IsNullOrWhiteSpace(overlay.AssetPath)) errors.Add($"Visual-intent overlay {row} has an empty asset path.");
                     else if (!File.Exists(overlay.AssetPath)) errors.Add($"Visual-intent overlay {row} asset file is missing: {overlay.AssetPath}");
-                    if (!overlay.IsOverlay) warnings.Add($"Visual-intent overlay {row} was not marked as an overlay.");
+                    if (!overlay.IsOverlay) errors.Add($"Visual-intent overlay {row} was not marked as an overlay.");
                     if (overlay.RequestedButUnavailable) errors.Add($"Visual-intent overlay {row} requested an unavailable fallback asset: {overlay.AssetId}");
                 }
             }
