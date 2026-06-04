@@ -30,6 +30,7 @@ using Astronomy.MediaFactory.Api;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.Http.Json;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
@@ -4355,6 +4356,165 @@ app.MapGet("/api/pipeline/{runId:guid}/thumbnail-publish-status", async (Guid ru
         thumbnailDiagnostics = new { youtube = youtubeThumb, youtubeShort = youtubeShortThumb, facebook = facebookThumb, instagram = instagramThumb }
     });
 });
+
+app.MapPost("/api/weekly-skyforecast-v2/run-end-to-end", async (WeeklySkyForecastV2EndToEndRunRequest request, HttpContext httpContext, ILogger<Program> logger, CancellationToken ct) =>
+{
+    var pipelineRunId = Guid.NewGuid();
+    var reports = new WeeklySkyForecastV2EndToEndReports(null, null, null, null, null, null);
+    var warnings = new List<string>();
+    var errors = new List<string>();
+    WeeklySkyForecastV2GenerateWeeklyScenesResponse? sceneResponse = null;
+    WeeklySkyForecastAudioGenerationResponse? audioResponse = null;
+    WeeklyVisualIntentBuildResponse? visualIntentResponse = null;
+    WeeklyAudioDrivenTimelineReconciliationResponse? timelineResponse = null;
+    WeeklyExistingRunRenderResponse? renderResponse = null;
+
+    try
+    {
+        var weekStartDate = DateOnly.Parse(request.WeekStartDate, CultureInfo.InvariantCulture);
+        var scheduledUtc = new DateTimeOffset(weekStartDate.ToDateTime(new TimeOnly(12, 0), DateTimeKind.Utc));
+        var baseUri = new Uri($"{httpContext.Request.Scheme}://{httpContext.Request.Host}");
+        using var client = new HttpClient { BaseAddress = baseUri, Timeout = Timeout.InfiniteTimeSpan };
+
+        var sceneRequest = new WeeklySkyForecastV2GenerateWeeklyScenesRequest(
+            "WeeklySkyForecast",
+            request.Language,
+            request.RegionId,
+            request.LocationName,
+            scheduledUtc,
+            weekStartDate,
+            Diagnostics: true,
+            ContinueOnFailure: false,
+            PipelineRunId: pipelineRunId);
+        var sceneResult = await PostJsonStageAsync<WeeklySkyForecastV2GenerateWeeklyScenesResponse>(client, "/api/weekly-skyforecast-v2/generate-weekly-scenes", sceneRequest, "generateWeeklyScenes", ct);
+        if (!sceneResult.Success)
+            return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "generateWeeklyScenes", reports, warnings, sceneResult.Errors));
+        sceneResponse = sceneResult.Value!;
+        pipelineRunId = sceneResponse.PipelineRunId;
+        warnings.AddRange(sceneResponse.Warnings ?? []);
+        reports = reports with { SceneGenerationReportPath = sceneResponse.WeeklyVideoReadinessReportPath ?? sceneResponse.ScenePlanPath };
+        if (!sceneResponse.WeeklyScenesReady)
+            return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "generateWeeklyScenes", reports, warnings, ["Weekly scene generation completed but WeeklyScenesReady was false."]));
+
+        if (request.GenerateAudio)
+        {
+            var audioRequest = new WeeklySkyForecastAudioGenerationRequest(
+                request.GenerateLongform,
+                request.GenerateShortform,
+                request.OverwriteExisting,
+                DryRun: false,
+                VoiceName: null,
+                AudioFormat: "mp3",
+                Language: request.Language);
+            var audioResult = await PostJsonStageAsync<WeeklySkyForecastAudioGenerationResponse>(client, $"/api/weekly-skyforecast-v2/runs/{pipelineRunId}/generate-audio", audioRequest, "generateAudio", ct);
+            if (!audioResult.Success)
+                return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "generateAudio", reports, warnings, audioResult.Errors));
+            audioResponse = audioResult.Value!;
+            warnings.AddRange(audioResponse.Warnings ?? []);
+            reports = reports with { AudioGenerationReportPath = audioResponse.AudioGenerationReportPath };
+            if (!audioResponse.AudioGenerationReady)
+                return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "generateAudio", reports, warnings, audioResponse.Errors.Count > 0 ? audioResponse.Errors : ["Audio generation completed but AudioGenerationReady was false."]));
+        }
+
+        var visualResult = await PostJsonStageAsync<WeeklyVisualIntentBuildResponse>(client, $"/api/weekly-skyforecast-v2/runs/{pipelineRunId}/build-visual-intent-plan", new { }, "buildVisualIntentPlan", ct);
+        if (!visualResult.Success)
+            return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "buildVisualIntentPlan", reports, warnings, visualResult.Errors));
+        visualIntentResponse = visualResult.Value!;
+        warnings.AddRange(visualIntentResponse.Warnings ?? []);
+        var renderSafeValidationReportPath = Path.Combine(visualIntentResponse.ResolvedPipelineRunRoot, "render", "visual-intent-render-safe-validation-report.json");
+        reports = reports with
+        {
+            VisualIntentValidationReportPath = visualIntentResponse.VisualIntentValidationReportPath,
+            VisualIntentRenderSafeValidationReportPath = renderSafeValidationReportPath
+        };
+        if (!visualIntentResponse.VisualIntentReady || !visualIntentResponse.RenderSafeShotPlanReady)
+            return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "buildVisualIntentPlan", reports, warnings, visualIntentResponse.Errors.Count > 0 ? visualIntentResponse.Errors : ["Visual intent or render-safe shot plan was not ready."]));
+
+        var timelineRequest = new WeeklyAudioDrivenTimelineReconciliationRequest(
+            request.GenerateLongform,
+            request.GenerateShortform,
+            OverwriteExisting: true,
+            DryRun: false);
+        var timelineResult = await PostJsonStageAsync<WeeklyAudioDrivenTimelineReconciliationResponse>(client, $"/api/weekly-skyforecast-v2/runs/{pipelineRunId}/reconcile-timeline-from-audio", timelineRequest, "reconcileAudioDrivenTimeline", ct);
+        if (!timelineResult.Success)
+            return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "reconcileAudioDrivenTimeline", reports, warnings, timelineResult.Errors));
+        timelineResponse = timelineResult.Value!;
+        warnings.AddRange(timelineResponse.Warnings ?? []);
+        if (!timelineResponse.AudioDrivenTimelineReady)
+            return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "reconcileAudioDrivenTimeline", reports, warnings, timelineResponse.Errors.Count > 0 ? timelineResponse.Errors : ["Audio-driven timeline reconciliation completed but AudioDrivenTimelineReady was false."]));
+
+        var renderRequest = new WeeklyExistingRunRenderRequest(
+            request.GenerateLongform,
+            request.GenerateShortform,
+            OverwriteExisting: true,
+            DryRun: false,
+            DebugStoryboard: false,
+            AllowSilent: !request.GenerateAudio,
+            UseStagedRendering: true,
+            UseAudioDrivenTimeline: true,
+            MergeAudio: true,
+            UseVisualIntentPlan: true);
+        var renderResult = await PostJsonStageAsync<WeeklyExistingRunRenderResponse>(client, $"/api/weekly-skyforecast-v2/runs/{pipelineRunId}/render-video", renderRequest, "renderVideo", ct);
+        if (!renderResult.Success)
+            return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "renderVideo", reports, warnings, renderResult.Errors));
+        renderResponse = renderResult.Value!;
+        warnings.AddRange(renderResponse.Warnings ?? []);
+        reports = reports with
+        {
+            RenderQualityReportPath = renderResponse.RenderQualityReportPath,
+            FinalRenderReportPath = renderResponse.FinalRenderReportPath
+        };
+        if (!renderResponse.RenderVideoReady || !renderResponse.FinalVideoRenderReady)
+            return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "renderVideo", reports, warnings, renderResponse.Errors.Count > 0 ? renderResponse.Errors : ["Render completed but final video was not ready."]));
+
+        var shortformVisualClipCount = Math.Max(1, renderResponse.ShortformClipCount);
+        var shortformSmartCropRatioPassed = renderResponse.ShortformSmartCropLayoutCount >= Math.Ceiling(shortformVisualClipCount * 0.80d);
+        var shortformFullFrameCoveragePassed = shortformSmartCropRatioPassed && renderResponse.ShortformContainLayoutCount <= 1 && renderResponse.ShortformCroppedTextRiskCount == 0;
+        var shortformVisualProfessionalReady = shortformFullFrameCoveragePassed
+            && visualIntentResponse.MotionGraphicStandaloneShotCount == 0
+            && visualIntentResponse.EducationalOverlayStandaloneShotCount == 0
+            && renderResponse.ShortformVerticalLayoutPassed
+            && renderResponse.ShortformSafeAreaPassed;
+        var longformVisualProfessionalReady = renderResponse.LongformPacingPassed
+            && renderResponse.MaxLongformShotDurationSeconds <= 12
+            && renderResponse.LongformSameFamilyConsecutiveMax <= 2;
+
+        return Results.Ok(new WeeklySkyForecastV2EndToEndRunResponse(
+            pipelineRunId,
+            true,
+            request.RegionId,
+            request.LocationName,
+            request.WeekStartDate,
+            true,
+            audioResponse?.AudioGenerationReady ?? !request.GenerateAudio,
+            visualIntentResponse.VisualIntentReady,
+            visualIntentResponse.RenderSafeShotPlanReady,
+            timelineResponse.AudioDrivenTimelineReady,
+            renderResponse.RenderVideoReady,
+            renderResponse.AudioVideoMergeReady,
+            renderResponse.LongformFinalVideoPath,
+            renderResponse.ShortformFinalVideoPath,
+            shortformVisualProfessionalReady,
+            longformVisualProfessionalReady,
+            reports,
+            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            errors,
+            null,
+            renderResponse.ShortformSmartCropLayoutCount,
+            renderResponse.ShortformContainLayoutCount,
+            renderResponse.ShortformCroppedTextRiskCount,
+            shortformFullFrameCoveragePassed,
+            visualIntentResponse.MotionGraphicStandaloneShotCount,
+            visualIntentResponse.EducationalOverlayStandaloneShotCount));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "WEEKLY_END_TO_END_FAILED pipelineRunId={PipelineRunId}", pipelineRunId);
+        errors.Add(ex.Message);
+        return Results.BadRequest(BuildWeeklyEndToEndFailure(request, pipelineRunId, "unhandledException", reports, warnings, errors));
+    }
+});
+
 app.MapPost("/api/weekly-skyforecast-v2/runs/{pipelineRunId:guid}/build-visual-intent-plan", async (Guid pipelineRunId, IWeeklyVisualIntentEngine visualIntentEngine, CancellationToken ct) =>
 {
     try
@@ -4573,6 +4733,86 @@ app.MapGet("/api/assets/celestial/{objectKey}", async (string objectKey, ICelest
 });
 
 app.Run();
+
+
+static async Task<WeeklyEndToEndStageResult<T>> PostJsonStageAsync<T>(HttpClient client, string path, object payload, string stage, CancellationToken cancellationToken)
+{
+    using var response = await client.PostAsJsonAsync(path, payload, new JsonSerializerOptions(JsonSerializerDefaults.Web), cancellationToken);
+    var body = await response.Content.ReadAsStringAsync(cancellationToken);
+    if (!response.IsSuccessStatusCode)
+    {
+        return new WeeklyEndToEndStageResult<T>(false, default, ExtractWeeklyStageErrors(body, stage));
+    }
+
+    try
+    {
+        var value = JsonSerializer.Deserialize<T>(body, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return value is null
+            ? new WeeklyEndToEndStageResult<T>(false, default, [$"{stage} returned an empty response."])
+            : new WeeklyEndToEndStageResult<T>(true, value, []);
+    }
+    catch (JsonException ex)
+    {
+        return new WeeklyEndToEndStageResult<T>(false, default, [$"{stage} response could not be parsed: {ex.Message}", body]);
+    }
+}
+
+static IReadOnlyList<string> ExtractWeeklyStageErrors(string body, string stage)
+{
+    if (string.IsNullOrWhiteSpace(body)) return [$"{stage} failed with an empty error response."];
+    try
+    {
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        var errors = new List<string>();
+        if (root.TryGetProperty("errors", out var errorsElement) && errorsElement.ValueKind == JsonValueKind.Array)
+        {
+            errors.AddRange(errorsElement.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() ?? string.Empty : x.GetRawText()).Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+        if (root.TryGetProperty("error", out var errorElement)) errors.Add(errorElement.ValueKind == JsonValueKind.String ? errorElement.GetString() ?? string.Empty : errorElement.GetRawText());
+        if (root.TryGetProperty("message", out var messageElement)) errors.Add(messageElement.ValueKind == JsonValueKind.String ? messageElement.GetString() ?? string.Empty : messageElement.GetRawText());
+        return errors.Count > 0 ? errors : [$"{stage} failed: {body}"];
+    }
+    catch (JsonException)
+    {
+        return [$"{stage} failed: {body}"];
+    }
+}
+
+static WeeklySkyForecastV2EndToEndRunResponse BuildWeeklyEndToEndFailure(
+    WeeklySkyForecastV2EndToEndRunRequest request,
+    Guid pipelineRunId,
+    string failedStage,
+    WeeklySkyForecastV2EndToEndReports reports,
+    IReadOnlyList<string> warnings,
+    IReadOnlyList<string> errors)
+    => new(
+        pipelineRunId,
+        false,
+        request.RegionId,
+        request.LocationName,
+        request.WeekStartDate,
+        !string.IsNullOrWhiteSpace(reports.SceneGenerationReportPath),
+        !string.IsNullOrWhiteSpace(reports.AudioGenerationReportPath),
+        !string.IsNullOrWhiteSpace(reports.VisualIntentValidationReportPath),
+        !string.IsNullOrWhiteSpace(reports.VisualIntentRenderSafeValidationReportPath),
+        false,
+        false,
+        false,
+        string.Empty,
+        string.Empty,
+        false,
+        false,
+        reports,
+        warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+        errors.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+        failedStage,
+        0,
+        0,
+        0,
+        false,
+        0,
+        0);
 
 static AnalyticsIntelligenceRequest BuildAnalyticsIntelligenceRequest(int? days, string? platform, string? contentType, string? location, int? limit)
     => new(days ?? 14, platform, contentType, location, limit ?? 10);
@@ -7268,6 +7508,62 @@ static string BuildWeeklyDynamicFramingSsc(WeeklyDynamicSceneContract scene, Dat
     });
 }
 
+
+
+sealed record WeeklyEndToEndStageResult<T>(bool Success, T? Value, IReadOnlyList<string> Errors);
+
+public sealed record WeeklySkyForecastV2EndToEndRunRequest(
+    string RegionId,
+    string LocationName,
+    double Latitude,
+    double Longitude,
+    string Timezone,
+    string Language,
+    string WeekStartDate,
+    bool GenerateLongform = true,
+    bool GenerateShortform = true,
+    bool GenerateAudio = true,
+    bool MergeAudio = true,
+    bool OverwriteExisting = true,
+    bool PublishToYouTube = false,
+    bool PublishToFacebook = false,
+    bool PublishToInstagram = false);
+
+public sealed record WeeklySkyForecastV2EndToEndReports(
+    string? SceneGenerationReportPath = null,
+    string? AudioGenerationReportPath = null,
+    string? VisualIntentValidationReportPath = null,
+    string? VisualIntentRenderSafeValidationReportPath = null,
+    string? RenderQualityReportPath = null,
+    string? FinalRenderReportPath = null);
+
+public sealed record WeeklySkyForecastV2EndToEndRunResponse(
+    Guid PipelineRunId,
+    bool EndToEndReady,
+    string RegionId,
+    string LocationName,
+    string WeekStartDate,
+    bool ScenesGenerated,
+    bool AudioGenerated,
+    bool VisualIntentReady,
+    bool RenderSafeShotPlanReady,
+    bool AudioDrivenTimelineReady,
+    bool RenderVideoReady,
+    bool AudioVideoMergeReady,
+    string LongformFinalVideoPath,
+    string ShortformFinalVideoPath,
+    bool ShortformVisualProfessionalReady,
+    bool LongformVisualProfessionalReady,
+    WeeklySkyForecastV2EndToEndReports Reports,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors,
+    string? FailedStage,
+    int ShortformSmartCropLayoutCount,
+    int ShortformContainLayoutCount,
+    int ShortformCroppedTextRiskCount,
+    bool ShortformFullFrameCoveragePassed,
+    int MotionGraphicsStandaloneClipCount,
+    int EducationalOverlayStandaloneClipCount);
 
 sealed record WeeklyFocusObjectPlan(
     string WeekStartDate,
