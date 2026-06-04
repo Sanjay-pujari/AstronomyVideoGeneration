@@ -37,6 +37,9 @@ public sealed class WeeklyVisualIntentEngineTests
         response.MoonNarrationMatchedToMoonVisual.Should().BeTrue();
         response.SameFamilyConsecutiveMax.Should().BeLessThanOrEqualTo(2);
         response.NarrationVisualMismatchCount.Should().Be(0);
+        response.ZeroDurationShotCount.Should().Be(0);
+        response.MinimumDurationViolations.Should().Be(0);
+        response.TimelineNormalizationApplied.Should().BeTrue();
         File.Exists(response.VisualIntentPlanPath).Should().BeTrue();
         File.Exists(response.VisualIntentShotPlanPath).Should().BeTrue();
         File.Exists(response.VisualIntentValidationReportPath).Should().BeTrue();
@@ -51,12 +54,18 @@ public sealed class WeeklyVisualIntentEngineTests
         validation.RenderSafeShotPlanReady.Should().BeTrue();
         validation.EmptyAssetPathShotCount.Should().Be(0);
         validation.OverlayOnlyShotCount.Should().Be(0);
+        validation.ZeroDurationShotCount.Should().Be(0);
+        validation.MinimumDurationViolations.Should().Be(0);
+        validation.TimelineNormalizationApplied.Should().BeTrue();
 
         var renderSafeReport = await ReadJsonAsync<WeeklyVisualIntentRenderSafeValidationReport>(renderSafeReportPath);
         renderSafeReport.RenderSafeShotPlanReady.Should().BeTrue();
         renderSafeReport.EmptyAssetPathShotCount.Should().Be(0);
         renderSafeReport.OverlayOnlyShotCount.Should().Be(0);
         renderSafeReport.MissingAssetFileCount.Should().Be(0);
+        renderSafeReport.ZeroDurationShotCount.Should().Be(0);
+        renderSafeReport.MinimumDurationViolations.Should().Be(0);
+        renderSafeReport.TimelineNormalizationApplied.Should().BeTrue();
         renderSafeReport.NonRenderableAssetsRejected.Should().BeGreaterThan(0);
         renderSafeReport.OverlayAssetsRejectedAsPrimary.Should().BeGreaterThan(0);
         renderSafeReport.InvalidShots.Should().BeEmpty();
@@ -77,6 +86,45 @@ public sealed class WeeklyVisualIntentEngineTests
         shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Overlays).Should().OnlyContain(x => x.IsOverlay);
         shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Shots).Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.AssetPath) && File.Exists(x.AssetPath));
         shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Shots).Should().NotContain(x => x.VisualFamily is "MotionGraphic" or "MotionGraphics" or "EducationalOverlay" || x.IsOverlay);
+    }
+
+    [Fact]
+    public async Task BuildAsync_NormalizesCollapsedShotDurationsAfterRenderSafePass()
+    {
+        var pipelineRunId = Guid.NewGuid();
+        var runRoot = Path.Combine(Path.GetTempPath(), "weekly-visual-intent-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "episode"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "render"));
+        Directory.CreateDirectory(Path.Combine(runRoot, "audio"));
+        await WriteInputsAsync(runRoot, pipelineRunId);
+
+        var timelinePath = Path.Combine(runRoot, "render", "audio-driven-final-render-timeline.json");
+        var timeline = await ReadJsonAsync<FinalRenderTimeline>(timelinePath);
+        var collapsedShortHook = timeline.Shortform.Segments[0] with { EndSecond = timeline.Shortform.Segments[0].StartSecond, DurationSeconds = 0, NarrationEnd = timeline.Shortform.Segments[0].NarrationStart };
+        var shiftedShortCta = timeline.Shortform.Segments[1] with { StartSecond = 0, EndSecond = 4, DurationSeconds = 4, NarrationStart = 0, NarrationEnd = 4 };
+        timeline = timeline with { Shortform = timeline.Shortform with { ActualDurationSeconds = 4, Segments = [collapsedShortHook, shiftedShortCta] } };
+        await WriteJson(timelinePath, timeline);
+
+        var service = new WeeklyVisualIntentEngine(new StaticWeeklyPipelineRunDirectoryResolver(runRoot), NullLogger<WeeklyVisualIntentEngine>.Instance);
+
+        var response = await service.BuildAsync(pipelineRunId, CancellationToken.None);
+
+        response.VisualIntentReady.Should().BeTrue(string.Join("; ", response.Errors.Concat(response.Warnings)));
+        response.ZeroDurationShotCount.Should().Be(0);
+        response.MinimumDurationViolations.Should().Be(0);
+        response.TimelineNormalizationApplied.Should().BeTrue();
+
+        var shotPlan = await ReadJsonAsync<WeeklyVisualIntentShotPlan>(response.VisualIntentShotPlanPath);
+        var shortformSegments = shotPlan.Episodes.Single(x => x.EpisodeType == "shortform").Segments.OrderBy(x => x.StartSecond).ToList();
+        shortformSegments.Should().OnlyContain(segment => segment.EndSecond > segment.StartSecond && segment.DurationSeconds >= 1);
+        shortformSegments.SelectMany(segment => segment.Shots).Should().OnlyContain(shot => shot.EndSecond > shot.StartSecond && shot.DurationSeconds >= 1);
+        shortformSegments.First().StartSecond.Should().Be(0);
+        shortformSegments.Zip(shortformSegments.Skip(1)).Should().OnlyContain(pair => Math.Abs(pair.First.EndSecond - pair.Second.StartSecond) <= 0.001d);
+
+        var validation = await ReadJsonAsync<WeeklyVisualIntentValidationReport>(response.VisualIntentValidationReportPath);
+        validation.ZeroDurationShotCount.Should().Be(0);
+        validation.MinimumDurationViolations.Should().Be(0);
+        validation.TimelineNormalizationApplied.Should().BeTrue();
     }
 
     [Fact]

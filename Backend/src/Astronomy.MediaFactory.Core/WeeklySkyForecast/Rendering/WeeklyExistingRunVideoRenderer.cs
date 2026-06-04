@@ -1223,6 +1223,9 @@ public sealed class WeeklyExistingRunVideoRenderer(
             if (validation.OverlayOnlyShotCount != 0) errors.Add($"overlayOnlyShotCount must be 0 but was {validation.OverlayOnlyShotCount}.");
             if (validation.NarrationVisualMismatchCount != 0) errors.Add($"narrationVisualMismatchCount must be 0 but was {validation.NarrationVisualMismatchCount}.");
             if (validation.FallbackVisualCount != 0) errors.Add($"fallbackVisualCount must be 0 but was {validation.FallbackVisualCount}.");
+            if (validation.ZeroDurationShotCount != 0) errors.Add($"zeroDurationShotCount must be 0 but was {validation.ZeroDurationShotCount}.");
+            if (validation.MinimumDurationViolations != 0) errors.Add($"minimumDurationViolations must be 0 but was {validation.MinimumDurationViolations}.");
+            if (!validation.TimelineNormalizationApplied) errors.Add("timelineNormalizationApplied must be true in visual-intent-validation-report.json.");
             if (validation.SameFamilyConsecutiveMax > 2) errors.Add($"sameFamilyConsecutiveMax must be <= 2 but was {validation.SameFamilyConsecutiveMax}.");
         }
         if (storytelling is not null)
@@ -1235,6 +1238,9 @@ public sealed class WeeklyExistingRunVideoRenderer(
         if (renderSafeValidation is not null)
         {
             if (!renderSafeValidation.RenderSafeShotPlanReady) errors.Add("renderSafeShotPlanReady is false in visual-intent-render-safe-validation-report.json.");
+            if (renderSafeValidation.ZeroDurationShotCount != 0) errors.Add($"render-safe zeroDurationShotCount must be 0 but was {renderSafeValidation.ZeroDurationShotCount}.");
+            if (renderSafeValidation.MinimumDurationViolations != 0) errors.Add($"render-safe minimumDurationViolations must be 0 but was {renderSafeValidation.MinimumDurationViolations}.");
+            if (!renderSafeValidation.TimelineNormalizationApplied) errors.Add("timelineNormalizationApplied must be true in visual-intent-render-safe-validation-report.json.");
             foreach (var row in renderSafeValidation.Shots ?? [])
             {
                 var rowErrors = row.Errors ?? [];
@@ -1243,7 +1249,7 @@ public sealed class WeeklyExistingRunVideoRenderer(
         }
 
         ValidateVisualIntentShotPlanAssets(shotPlan, warnings, errors);
-        var validationPassed = validationLoaded && storytellingLoaded && renderSafeValidationLoaded && validation?.VisualIntentReady == true && storytelling?.VisualStorytellingReady == true && validation?.RenderSafeShotPlanReady == true && renderSafeValidation?.RenderSafeShotPlanReady == true && validation?.NarrationVisualMismatchCount == 0 && validation?.EmptyAssetPathShotCount == 0 && validation?.MissingAssetFileCount == 0 && validation?.OverlayOnlyShotCount == 0 && fallbackVisualCount == 0 && sameFamilyConsecutiveMax <= 2;
+        var validationPassed = validationLoaded && storytellingLoaded && renderSafeValidationLoaded && validation?.VisualIntentReady == true && storytelling?.VisualStorytellingReady == true && validation?.RenderSafeShotPlanReady == true && renderSafeValidation?.RenderSafeShotPlanReady == true && validation?.NarrationVisualMismatchCount == 0 && validation?.EmptyAssetPathShotCount == 0 && validation?.MissingAssetFileCount == 0 && validation?.OverlayOnlyShotCount == 0 && validation?.ZeroDurationShotCount == 0 && validation?.MinimumDurationViolations == 0 && validation?.TimelineNormalizationApplied == true && renderSafeValidation?.ZeroDurationShotCount == 0 && renderSafeValidation?.MinimumDurationViolations == 0 && renderSafeValidation?.TimelineNormalizationApplied == true && fallbackVisualCount == 0 && sameFamilyConsecutiveMax <= 2;
         var ready = planLoaded && shotPlanLoaded && validationPassed && errors.Count == 0;
         var applicationReport = new WeeklyVisualIntentRenderApplicationReport(
             ready,
@@ -1324,18 +1330,22 @@ public sealed class WeeklyExistingRunVideoRenderer(
     private static FinalRenderEpisodeTimeline ApplyVisualIntentEpisodeShotPlan(FinalRenderEpisodeTimeline timeline, WeeklyVisualIntentEpisodeShotPlan? visualEpisode)
     {
         if (visualEpisode is null) return timeline;
-        var visualSegments = (visualEpisode.Segments ?? [])
+        var originalSegments = (timeline.Segments ?? [])
             .GroupBy(segment => segment.SegmentId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         var segments = new List<FinalRenderSegment>();
-        foreach (var segment in timeline.Segments ?? [])
+        foreach (var visualSegment in (visualEpisode.Segments ?? []).OrderBy(segment => segment.StartSecond))
         {
-            if (!visualSegments.TryGetValue(segment.SegmentId, out var visualSegment))
-            {
-                segments.Add(segment);
-                continue;
-            }
+            if (!originalSegments.TryGetValue(visualSegment.SegmentId, out var segment)) continue;
 
+            segment = segment with
+            {
+                StartSecond = visualSegment.StartSecond,
+                EndSecond = visualSegment.EndSecond,
+                DurationSeconds = visualSegment.DurationSeconds,
+                NarrationStart = visualSegment.StartSecond,
+                NarrationEnd = visualSegment.EndSecond
+            };
             var visualShots = (visualSegment.Shots ?? []).Where(shot => !shot.IsOverlay).ToList();
             var forceOverlayOff = false;
             if (visualShots.Count == 0)
