@@ -38,6 +38,9 @@ public sealed record WeeklyVisualIntentBuildResponse(
     int EducationalOverlayStandaloneShotCount,
     int RequestedUnavailableStandaloneShotCount,
     int NormalizedBaseVisualCount,
+    int ZeroDurationShotCount,
+    int MinimumDurationViolations,
+    bool TimelineNormalizationApplied,
     string ResolvedPipelineRunRoot,
     string VisualIntentPlanPath,
     string VisualIntentShotPlanPath,
@@ -229,6 +232,9 @@ public sealed record WeeklyVisualIntentValidationReport(
     bool MoonNarrationMatchedToMoonVisual,
     bool FamilyRotationApplied,
     int FamilyRotationSwapCount,
+    int ZeroDurationShotCount,
+    int MinimumDurationViolations,
+    bool TimelineNormalizationApplied,
     IReadOnlyDictionary<string, int> PrimaryFamilyCounts,
     IReadOnlyDictionary<string, bool> ObjectCoverage,
     IReadOnlyList<string> Warnings,
@@ -254,6 +260,9 @@ public sealed record WeeklyVisualIntentRenderSafeValidationReport(
     int InvalidPrimaryShots,
     int OverlayPromotions,
     int PlaceholderAssetsRejected,
+    int ZeroDurationShotCount,
+    int MinimumDurationViolations,
+    bool TimelineNormalizationApplied,
     IReadOnlyList<WeeklyVisualIntentRenderSafeShotValidationRow> InvalidShots,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors)
@@ -448,8 +457,12 @@ public sealed class WeeklyVisualIntentEngine(
         var visualShotPlan = BuildShotPlan(pipelineRunId, timeline!, beats);
         var normalizationResult = NormalizeVisualIntentShotPlanForRender(beats, catalog, warnings, errors);
         visualShotPlan = BuildShotPlan(pipelineRunId, timeline!, beats);
+        var shotTimelineNormalizationResult = NormalizeShotDurations(visualShotPlan);
+        visualShotPlan = shotTimelineNormalizationResult.ShotPlan;
+        if (shotTimelineNormalizationResult.MergedShotCount > 0)
+            warnings.Add($"Shot timeline normalization merged {shotTimelineNormalizationResult.MergedShotCount} collapsed visual-intent shot(s) to maintain continuous render-safe timing.");
         var renderSafeErrors = ValidateShotPlanRenderSafe(visualShotPlan);
-        var renderSafeReport = BuildRenderSafeValidationReport(visualShotPlan, normalizationResult, renderSafeRejectionStats, warnings, renderSafeErrors);
+        var renderSafeReport = BuildRenderSafeValidationReport(visualShotPlan, normalizationResult, renderSafeRejectionStats, shotTimelineNormalizationResult, warnings, renderSafeErrors);
         errors.AddRange(renderSafeErrors);
         var validation = BuildValidation(beats, warnings, errors, rotationResult.Applied, rotationResult.SwapCount, renderSafeReport);
         var familyDistributionReport = BuildVisualFamilyDistributionReport(beats, validation, rotationResult, warnings, errors);
@@ -1650,7 +1663,7 @@ public sealed class WeeklyVisualIntentEngine(
            || text.Contains("visibility-calendar", StringComparison.OrdinalIgnoreCase)
            || text.Contains("best-time-card", StringComparison.OrdinalIgnoreCase);
 
-    private static WeeklyVisualIntentRenderSafeValidationReport BuildRenderSafeValidationReport(WeeklyVisualIntentShotPlan shotPlan, RenderSafeNormalizationResult normalizationResult, RenderSafeRejectionStats rejectionStats, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
+    private static WeeklyVisualIntentRenderSafeValidationReport BuildRenderSafeValidationReport(WeeklyVisualIntentShotPlan shotPlan, RenderSafeNormalizationResult normalizationResult, RenderSafeRejectionStats rejectionStats, ShotTimelineNormalizationResult shotTimelineNormalizationResult, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
     {
         WeeklyVisualIntentRenderSafeShotValidationRow BuildRow(string episodeType, WeeklyVisualIntentSegmentShotPlan segment, WeeklyVisualIntentShotPlanEntry selection, bool isOverlayEntry)
         {
@@ -1698,7 +1711,11 @@ public sealed class WeeklyVisualIntentEngine(
         var motionGraphicStandaloneCount = baseRows.Count(x => IsMotionGraphicFamily(x.VisualFamily));
         var educationalOverlayStandaloneCount = baseRows.Count(x => x.VisualFamily.Equals("EducationalOverlay", StringComparison.OrdinalIgnoreCase));
         var requestedUnavailableStandaloneCount = baseRows.Count(x => x.AssetId.Contains("requested", StringComparison.OrdinalIgnoreCase) && !x.HasAssetPath);
-        var reportErrors = errors.Concat(rows.SelectMany(row => row.Errors.Select(error => $"Visual-intent shot {row.SegmentId}/{row.ShotNumber}: {error}."))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var timelineErrors = new List<string>();
+        if (shotTimelineNormalizationResult.ZeroDurationShotCount != 0) timelineErrors.Add($"zeroDurationShotCount must be 0 but was {shotTimelineNormalizationResult.ZeroDurationShotCount}.");
+        if (shotTimelineNormalizationResult.MinimumDurationViolations != 0) timelineErrors.Add($"minimumDurationViolations must be 0 but was {shotTimelineNormalizationResult.MinimumDurationViolations}.");
+        if (!shotTimelineNormalizationResult.TimelineContinuous) timelineErrors.Add("visual-intent shot timeline is not continuous after duration normalization.");
+        var reportErrors = errors.Concat(timelineErrors).Concat(rows.SelectMany(row => row.Errors.Select(error => $"Visual-intent shot {row.SegmentId}/{row.ShotNumber}: {error}."))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var invalidRows = rows.Where(row => row.Errors.Count > 0).ToList();
         return new WeeklyVisualIntentRenderSafeValidationReport(
             empty == 0 && missing == 0 && overlayOnlyCount == 0 && motionGraphicStandaloneCount == 0 && educationalOverlayStandaloneCount == 0 && requestedUnavailableStandaloneCount == 0 && reportErrors.Count == 0,
@@ -1719,6 +1736,9 @@ public sealed class WeeklyVisualIntentEngine(
             baseRows.Count(row => row.Errors.Count > 0),
             normalizationResult.MovedShotToOverlayCount,
             normalizationResult.RemovedPlaceholderShotCount,
+            shotTimelineNormalizationResult.ZeroDurationShotCount,
+            shotTimelineNormalizationResult.MinimumDurationViolations,
+            shotTimelineNormalizationResult.TimelineNormalizationApplied,
             invalidRows,
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             reportErrors);
@@ -1803,8 +1823,8 @@ public sealed class WeeklyVisualIntentEngine(
         var moon = objectCoverage["MOON"];
         var everyBeatHasSubject = beats.All(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
         var validationErrors = errors.Concat(renderSafeReport.Errors).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var ready = validationErrors.Count == 0 && beats.Count > 0 && mismatches == 0 && fullscreenMotion == 0 && fullscreenEdu == 0 && sameFamilyMax <= 2 && shortHookPassed && everyBeatHasSubject && saturn && venus && moon && renderSafeReport.RenderSafeShotPlanReady;
-        return new WeeklyVisualIntentValidationReport(ready, renderSafeReport.RenderSafeShotPlanReady, renderSafeReport.EmptyAssetPathShotCount, renderSafeReport.MissingAssetFileCount, renderSafeReport.OverlayOnlyShotCount, renderSafeReport.MotionGraphicStandaloneShotCount, renderSafeReport.EducationalOverlayStandaloneShotCount, renderSafeReport.RequestedUnavailableStandaloneShotCount, renderSafeReport.NormalizedBaseVisualCount, beats.Count, matched, mismatches, mismatches, fallbackVisualCount, motionOverlayUsage, educationalOverlayUsage, fullscreenMotion, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, familyRotationApplied, familyRotationSwapCount, BuildPrimaryFamilyCounts(beats), objectCoverage, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), validationErrors);
+        var ready = validationErrors.Count == 0 && beats.Count > 0 && mismatches == 0 && fullscreenMotion == 0 && fullscreenEdu == 0 && sameFamilyMax <= 2 && shortHookPassed && everyBeatHasSubject && saturn && venus && moon && renderSafeReport.RenderSafeShotPlanReady && renderSafeReport.ZeroDurationShotCount == 0 && renderSafeReport.MinimumDurationViolations == 0;
+        return new WeeklyVisualIntentValidationReport(ready, renderSafeReport.RenderSafeShotPlanReady, renderSafeReport.EmptyAssetPathShotCount, renderSafeReport.MissingAssetFileCount, renderSafeReport.OverlayOnlyShotCount, renderSafeReport.MotionGraphicStandaloneShotCount, renderSafeReport.EducationalOverlayStandaloneShotCount, renderSafeReport.RequestedUnavailableStandaloneShotCount, renderSafeReport.NormalizedBaseVisualCount, beats.Count, matched, mismatches, mismatches, fallbackVisualCount, motionOverlayUsage, educationalOverlayUsage, fullscreenMotion, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, familyRotationApplied, familyRotationSwapCount, renderSafeReport.ZeroDurationShotCount, renderSafeReport.MinimumDurationViolations, renderSafeReport.TimelineNormalizationApplied, BuildPrimaryFamilyCounts(beats), objectCoverage, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), validationErrors);
     }
 
     private static WeeklyVisualFamilyDistributionReport BuildVisualFamilyDistributionReport(IReadOnlyList<WeeklyVisualIntentBeat> beats, WeeklyVisualIntentValidationReport validation, VisualFamilyRotationResult rotationResult, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)
@@ -1917,6 +1937,149 @@ public sealed class WeeklyVisualIntentEngine(
             return new WeeklyVisualIntentEpisodeShotPlan(episodeType, episode.ActualDurationSeconds, segments);
         }
         return new WeeklyVisualIntentShotPlan(pipelineRunId, DateTime.UtcNow, new[] { BuildEpisode("longform", timeline.Longform), BuildEpisode("shortform", timeline.Shortform) });
+    }
+
+
+    private static ShotTimelineNormalizationResult NormalizeShotDurations(WeeklyVisualIntentShotPlan shotPlan)
+    {
+        const double minimumShotDurationSeconds = 1.0d;
+        var mergedShotCount = 0;
+
+        WeeklyVisualIntentEpisodeShotPlan NormalizeEpisode(WeeklyVisualIntentEpisodeShotPlan episode)
+        {
+            var segments = (episode.Segments ?? [])
+                .OrderBy(segment => segment.StartSecond)
+                .ThenBy(segment => segment.EndSecond)
+                .ToList();
+
+            for (var i = 0; i < segments.Count && segments.Count > 1;)
+            {
+                if (segments[i].EndSecond > segments[i].StartSecond && segments[i].DurationSeconds >= minimumShotDurationSeconds)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (i == 0)
+                {
+                    var next = segments[1];
+                    segments[1] = next with
+                    {
+                        StartSecond = segments[0].StartSecond,
+                        DurationSeconds = Math.Max(0d, next.EndSecond - segments[0].StartSecond)
+                    };
+                    segments.RemoveAt(0);
+                }
+                else
+                {
+                    var previous = segments[i - 1];
+                    segments[i - 1] = previous with
+                    {
+                        EndSecond = Math.Max(previous.EndSecond, segments[i].EndSecond),
+                        DurationSeconds = Math.Max(0d, Math.Max(previous.EndSecond, segments[i].EndSecond) - previous.StartSecond)
+                    };
+                    segments.RemoveAt(i);
+                }
+
+                mergedShotCount++;
+            }
+
+            var cursor = 0d;
+            var normalizedSegments = new List<WeeklyVisualIntentSegmentShotPlan>();
+            foreach (var segment in segments)
+            {
+                var duration = Math.Max(minimumShotDurationSeconds, segment.DurationSeconds);
+                var start = cursor;
+                var end = start + duration;
+                normalizedSegments.Add(segment with
+                {
+                    StartSecond = start,
+                    EndSecond = end,
+                    DurationSeconds = duration,
+                    Shots = NormalizeShotEntries(segment.Shots ?? [], start, end, false, ref mergedShotCount),
+                    Overlays = NormalizeOverlayEntries(segment.Overlays ?? [], start, end)
+                });
+                cursor = end;
+            }
+
+            return episode with { ActualDurationSeconds = cursor, Segments = normalizedSegments };
+        }
+
+        var normalizedPlan = shotPlan with
+        {
+            GeneratedAtUtc = DateTime.UtcNow,
+            Episodes = (shotPlan.Episodes ?? []).Select(NormalizeEpisode).ToList()
+        };
+        var zeroDurationShotCount = CountZeroDurationShots(normalizedPlan);
+        var minimumDurationViolations = CountMinimumDurationViolations(normalizedPlan, minimumShotDurationSeconds);
+        var timelineContinuous = IsShotPlanTimelineContinuous(normalizedPlan);
+        return new ShotTimelineNormalizationResult(normalizedPlan, true, mergedShotCount, zeroDurationShotCount, minimumDurationViolations, timelineContinuous);
+    }
+
+    private static IReadOnlyList<WeeklyVisualIntentShotPlanEntry> NormalizeShotEntries(IReadOnlyList<WeeklyVisualIntentShotPlanEntry> entries, double segmentStart, double segmentEnd, bool forceOverlay, ref int mergedShotCount)
+    {
+        const double minimumShotDurationSeconds = 1.0d;
+        var duration = Math.Max(0d, segmentEnd - segmentStart);
+        var normalizedEntries = entries.ToList();
+        while (normalizedEntries.Count > 1 && duration / normalizedEntries.Count < minimumShotDurationSeconds)
+        {
+            normalizedEntries.RemoveAt(normalizedEntries.Count - 1);
+            mergedShotCount++;
+        }
+
+        if (normalizedEntries.Count == 0) return [];
+        var cursor = segmentStart;
+        var shotDuration = duration / normalizedEntries.Count;
+        var result = new List<WeeklyVisualIntentShotPlanEntry>();
+        for (var i = 0; i < normalizedEntries.Count; i++)
+        {
+            var start = cursor;
+            var end = i == normalizedEntries.Count - 1 ? segmentEnd : cursor + shotDuration;
+            result.Add(normalizedEntries[i] with
+            {
+                ShotNumber = i + 1,
+                StartSecond = start,
+                EndSecond = end,
+                DurationSeconds = Math.Max(0d, end - start),
+                IsOverlay = forceOverlay || normalizedEntries[i].IsOverlay
+            });
+            cursor = end;
+        }
+        return result;
+    }
+
+    private static IReadOnlyList<WeeklyVisualIntentShotPlanEntry> NormalizeOverlayEntries(IReadOnlyList<WeeklyVisualIntentShotPlanEntry> entries, double segmentStart, double segmentEnd)
+        => entries.Select((entry, index) => entry with
+        {
+            ShotNumber = index + 1,
+            StartSecond = segmentStart,
+            EndSecond = segmentEnd,
+            DurationSeconds = Math.Max(0d, segmentEnd - segmentStart),
+            IsOverlay = true
+        }).ToList();
+
+    private static int CountZeroDurationShots(WeeklyVisualIntentShotPlan shotPlan)
+        => (shotPlan.Episodes ?? []).SelectMany(episode => episode.Segments ?? [])
+            .SelectMany(segment => (segment.Shots ?? []).Concat(segment.Overlays ?? []))
+            .Count(shot => shot.EndSecond <= shot.StartSecond || shot.DurationSeconds <= 0);
+
+    private static int CountMinimumDurationViolations(WeeklyVisualIntentShotPlan shotPlan, double minimumShotDurationSeconds)
+        => (shotPlan.Episodes ?? []).SelectMany(episode => episode.Segments ?? [])
+            .SelectMany(segment => (segment.Shots ?? []).Concat(segment.Overlays ?? []))
+            .Count(shot => shot.DurationSeconds < minimumShotDurationSeconds || shot.EndSecond - shot.StartSecond < minimumShotDurationSeconds);
+
+    private static bool IsShotPlanTimelineContinuous(WeeklyVisualIntentShotPlan shotPlan)
+    {
+        foreach (var episode in shotPlan.Episodes ?? [])
+        {
+            var cursor = 0d;
+            foreach (var segment in (episode.Segments ?? []).OrderBy(segment => segment.StartSecond))
+            {
+                if (Math.Abs(segment.StartSecond - cursor) > 0.001d || segment.EndSecond <= segment.StartSecond) return false;
+                cursor = segment.EndSecond;
+            }
+        }
+        return true;
     }
 
 
@@ -2056,7 +2219,7 @@ public sealed class WeeklyVisualIntentEngine(
     private static async Task<WeeklyVisualIntentBuildResponse> PersistFailureAsync(Guid pipelineRunId, string root, string renderDirectory, IReadOnlyList<string> inputPaths, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(renderDirectory);
-        var validation = new WeeklyVisualIntentValidationReport(false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, true, true, true, true, false, 0, EmptyFamilyCounts(), new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase), warnings, errors);
+        var validation = new WeeklyVisualIntentValidationReport(false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, true, true, true, true, false, 0, 0, 0, true, EmptyFamilyCounts(), new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase), warnings, errors);
         var planPath = Path.Combine(renderDirectory, "visual-intent-plan.json");
         var shotPlanPath = Path.Combine(renderDirectory, "visual-intent-shot-plan.json");
         var validationPath = Path.Combine(renderDirectory, "visual-intent-validation-report.json");
@@ -2064,12 +2227,12 @@ public sealed class WeeklyVisualIntentEngine(
         await File.WriteAllTextAsync(planPath, JsonSerializer.Serialize(new WeeklyVisualIntentPlan(pipelineRunId, DateTime.UtcNow, "weekly-visual-intent-v1", inputPaths, [], new WeeklyVisualIntentAssetMix(40, 15, 20, 12, 8), new WeeklyVisualIntentAssetMix(0, 0, 0, 0, 0), new WeeklyVisualIntentAssetMix(45, 30, 10, 8, 4), new WeeklyVisualIntentAssetMix(0, 0, 0, 0, 0), [], warnings), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(shotPlanPath, JsonSerializer.Serialize(new WeeklyVisualIntentShotPlan(pipelineRunId, DateTime.UtcNow, []), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
-        await File.WriteAllTextAsync(renderSafeValidationReportPath, JsonSerializer.Serialize(new WeeklyVisualIntentRenderSafeValidationReport(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, [], warnings, errors), JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(renderSafeValidationReportPath, JsonSerializer.Serialize(new WeeklyVisualIntentRenderSafeValidationReport(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, true, [], warnings, errors), JsonOptions), cancellationToken);
         return ToResponse(pipelineRunId, root, planPath, shotPlanPath, validationPath, validation);
     }
 
     private static WeeklyVisualIntentBuildResponse ToResponse(Guid pipelineRunId, string root, string planPath, string shotPlanPath, string validationPath, WeeklyVisualIntentValidationReport validation)
-        => new(pipelineRunId, validation.VisualIntentReady, validation.VisualIntentReady, validation.RenderSafeShotPlanReady, validation.EmptyAssetPathShotCount, validation.MissingAssetFileCount, validation.OverlayOnlyShotCount, validation.MotionGraphicStandaloneShotCount, validation.EducationalOverlayStandaloneShotCount, validation.RequestedUnavailableStandaloneShotCount, validation.NormalizedBaseVisualCount, root, planPath, shotPlanPath, validationPath, validation.TotalBeats, validation.MatchedBeatCount, validation.UnmatchedBeatCount, validation.NarrationVisualMismatchCount, validation.FallbackVisualCount, validation.MotionGraphicOverlayUsageCount, validation.EducationalOverlayUsageCount, validation.FullscreenMotionGraphicCount, validation.FullscreenMotionGraphicOveruseCount, validation.FullscreenEducationalOverlayCount, validation.SameFamilyConsecutiveMax, validation.ShortformHookStrongVisualPassed, validation.SaturnNarrationMatchedToSaturnVisual, validation.VenusNarrationMatchedToVenusVisual, validation.MoonNarrationMatchedToMoonVisual, validation.Warnings, validation.Errors);
+        => new(pipelineRunId, validation.VisualIntentReady, validation.VisualIntentReady, validation.RenderSafeShotPlanReady, validation.EmptyAssetPathShotCount, validation.MissingAssetFileCount, validation.OverlayOnlyShotCount, validation.MotionGraphicStandaloneShotCount, validation.EducationalOverlayStandaloneShotCount, validation.RequestedUnavailableStandaloneShotCount, validation.NormalizedBaseVisualCount, validation.ZeroDurationShotCount, validation.MinimumDurationViolations, validation.TimelineNormalizationApplied, root, planPath, shotPlanPath, validationPath, validation.TotalBeats, validation.MatchedBeatCount, validation.UnmatchedBeatCount, validation.NarrationVisualMismatchCount, validation.FallbackVisualCount, validation.MotionGraphicOverlayUsageCount, validation.EducationalOverlayUsageCount, validation.FullscreenMotionGraphicCount, validation.FullscreenMotionGraphicOveruseCount, validation.FullscreenEducationalOverlayCount, validation.SameFamilyConsecutiveMax, validation.ShortformHookStrongVisualPassed, validation.SaturnNarrationMatchedToSaturnVisual, validation.VenusNarrationMatchedToVenusVisual, validation.MoonNarrationMatchedToMoonVisual, validation.Warnings, validation.Errors);
 
     private static string ResolveNarrationText(FinalRenderSegment segment, IReadOnlyDictionary<string, string> narrationBySegment)
         => !string.IsNullOrWhiteSpace(segment.NarrationText) ? segment.NarrationText : narrationBySegment.GetValueOrDefault(segment.SegmentId, string.Empty);
@@ -2100,6 +2263,8 @@ public sealed class WeeklyVisualIntentEngine(
     private sealed record RenderEligibility(bool IsRenderable, bool IsEligibleAsPrimary, bool IsEligibleAsSecondary, bool IsEligibleAsOverlay, bool RejectedOverlayAsPrimary);
 
     private sealed record RenderSafeRejectionStats(int NonRenderableAssetsRejected, int OverlayAssetsRejectedAsPrimary);
+
+    private sealed record ShotTimelineNormalizationResult(WeeklyVisualIntentShotPlan ShotPlan, bool TimelineNormalizationApplied, int MergedShotCount, int ZeroDurationShotCount, int MinimumDurationViolations, bool TimelineContinuous);
 
     private sealed record ScoredAssetCandidate(AssetCandidate Asset, int Score);
 
