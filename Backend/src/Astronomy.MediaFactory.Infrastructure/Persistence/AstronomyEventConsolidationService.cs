@@ -20,7 +20,7 @@ public sealed class AstronomyEventConsolidationService : IAstronomyEventConsolid
         if (detectedEvents.Count <= 1) return detectedEvents;
 
         var consolidated = new List<DetectedAstronomyEventDto>();
-        foreach (var regionGroup in detectedEvents.GroupBy(e => $"{e.RegionId ?? string.Empty}::{e.EventType}", StringComparer.OrdinalIgnoreCase))
+        foreach (var regionGroup in detectedEvents.GroupBy(ConsolidationGroupKey, StringComparer.OrdinalIgnoreCase))
         {
             var ordered = regionGroup.OrderBy(e => e.StartUtc).ThenByDescending(e => e.VisibilityScore).ToList();
             var groupType = ordered.First().EventType;
@@ -53,6 +53,14 @@ public sealed class AstronomyEventConsolidationService : IAstronomyEventConsolid
             .ToArray();
     }
 
+    private static string ConsolidationGroupKey(DetectedAstronomyEventDto dto)
+    {
+        var baseKey = $"{dto.RegionId ?? string.Empty}::{dto.EventType}";
+        return dto.EventType.Equals("PLANET_CONJUNCTION", StringComparison.OrdinalIgnoreCase)
+            ? $"{baseKey}::{ObjectPairKey(dto)}"
+            : baseKey;
+    }
+
     private static bool CanMerge(DetectedAstronomyEventDto previous, DetectedAstronomyEventDto next, IReadOnlyList<DetectedAstronomyEventDto> currentWindow)
     {
         if (!string.Equals(previous.RegionId, next.RegionId, StringComparison.OrdinalIgnoreCase)) return false;
@@ -75,7 +83,6 @@ public sealed class AstronomyEventConsolidationService : IAstronomyEventConsolid
 
         var ordered = window.OrderBy(e => e.StartUtc).ToArray();
         var first = ordered.First();
-        var last = ordered.Last();
         var start = ordered.Min(e => e.StartUtc);
         var end = ordered.Max(e => e.EndUtc ?? e.StartUtc);
         var best = SelectPeakEvent(first.EventType, ordered);
@@ -83,21 +90,22 @@ public sealed class AstronomyEventConsolidationService : IAstronomyEventConsolid
         var startDate = DateOnly.FromDateTime(start.UtcDateTime);
         var endDate = DateOnly.FromDateTime(end.UtcDateTime);
         var region = SanitizeCodePart(first.RegionId ?? "REGION");
-        var eventCode = $"{first.EventType}_{startDate:yyyyMMdd}_{endDate:yyyyMMdd}_{region}";
-        var title = BuildTitle(first.EventType, first.LocationName, ordered);
-        var summary = BuildSummary(first.EventType, first.LocationName, ordered, objects, startDate, endDate);
-        var rawDataJson = BuildRawDataJson(first.EventType, ordered, startDate, endDate);
+        var pairCode = first.EventType.Equals("PLANET_CONJUNCTION", StringComparison.OrdinalIgnoreCase) ? $"_{SanitizeCodePart(ObjectPairLabel(objects))}" : string.Empty;
+        var eventCode = $"{first.EventType}_{startDate:yyyyMMdd}_{endDate:yyyyMMdd}_{region}{pairCode}";
+        var title = BuildTitle(first.EventType, first.LocationName, ordered, objects, best);
+        var summary = BuildSummary(first.EventType, first.LocationName, ordered, objects, startDate, endDate, best);
+        var rawDataJson = BuildRawDataJson(first.EventType, ordered, startDate, endDate, best);
         var rulesAppliedJson = JsonSerializer.Serialize(new
         {
             rule = "astronomy_event_consolidation",
-            phase = "Phase7B.1",
+            phase = "Phase7B.2",
             sourceEventType = first.EventType,
             sourceEventCount = ordered.Length,
             mergeCriteria = MergeCriteria(first.EventType)
         }, JsonOptions);
         var metadataJson = JsonSerializer.Serialize(new
         {
-            consolidationVersion = "Phase7B.1",
+            consolidationVersion = "Phase7B.2",
             sourceEventCodes = ordered.Select(e => e.EventCode).ToArray(),
             first.MetadataJson
         }, JsonOptions);
@@ -130,7 +138,8 @@ public sealed class AstronomyEventConsolidationService : IAstronomyEventConsolid
 
     private static DetectedAstronomyEventDto SelectPeakEvent(string eventType, IReadOnlyList<DetectedAstronomyEventDto> events)
     {
-        if (eventType.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase))
+        if (eventType.Equals("PLANET_GROUPING", StringComparison.OrdinalIgnoreCase)
+            || eventType.Equals("PLANET_CONJUNCTION", StringComparison.OrdinalIgnoreCase))
         {
             var withSeparations = events.Select(e => new { Event = e, Separation = ExtractAngularSeparation(e) }).Where(x => x.Separation.HasValue).ToArray();
             if (withSeparations.Length > 0) return withSeparations.OrderBy(x => x.Separation!.Value).ThenByDescending(x => x.Event.VisibilityScore).First().Event;
@@ -162,7 +171,7 @@ public sealed class AstronomyEventConsolidationService : IAstronomyEventConsolid
             .ToArray();
     }
 
-    private static string BuildTitle(string eventType, string? locationName, IReadOnlyList<DetectedAstronomyEventDto> events)
+    private static string BuildTitle(string eventType, string? locationName, IReadOnlyList<DetectedAstronomyEventDto> events, IReadOnlyList<DetectedAstronomyEventObjectDto> objects, DetectedAstronomyEventDto peakEvent)
     {
         var location = string.IsNullOrWhiteSpace(locationName) ? "this region" : locationName;
         return eventType.ToUpperInvariant() switch
@@ -170,12 +179,12 @@ public sealed class AstronomyEventConsolidationService : IAstronomyEventConsolid
             "BRIGHT_PLANET_VISIBILITY" => $"Bright planet visibility window over {location}",
             "MOON_SPECIAL" => $"{MoonPhaseLabel(events.First())} to {MoonPhaseLabel(events.Last())} Moon over {location}",
             "PLANET_GROUPING" => $"Planet grouping window over {location}",
-            "PLANET_CONJUNCTION" => events.First().Title,
+            "PLANET_CONJUNCTION" => $"{ObjectPairLabel(objects)} conjunction peaks {FormatUtcDate(peakEvent.PeakUtc ?? peakEvent.StartUtc)} over {location}",
             _ => events.First().Title
         };
     }
 
-    private static string BuildSummary(string eventType, string? locationName, IReadOnlyList<DetectedAstronomyEventDto> events, IReadOnlyList<DetectedAstronomyEventObjectDto> objects, DateOnly startDate, DateOnly endDate)
+    private static string BuildSummary(string eventType, string? locationName, IReadOnlyList<DetectedAstronomyEventDto> events, IReadOnlyList<DetectedAstronomyEventObjectDto> objects, DateOnly startDate, DateOnly endDate, DetectedAstronomyEventDto peakEvent)
     {
         var location = string.IsNullOrWhiteSpace(locationName) ? "this region" : locationName;
         var range = FormatDateRange(startDate, endDate);
@@ -198,11 +207,34 @@ public sealed class AstronomyEventConsolidationService : IAstronomyEventConsolid
             return $"Grouped planets over {location} from {range}: {ObjectList(objects)}; {separationText}. Consolidated from {events.Count} daily detections.";
         }
 
+        if (eventType.Equals("PLANET_CONJUNCTION", StringComparison.OrdinalIgnoreCase))
+        {
+            var minimumSeparation = MinAngularSeparation(events);
+            var separationText = minimumSeparation.HasValue ? $"minimum angular separation about {minimumSeparation.Value:0.##}°" : "minimum angular separation unavailable";
+            var peakUtc = peakEvent.PeakUtc ?? peakEvent.StartUtc;
+            return $"{ObjectPairLabel(objects)} conjunction over {location}; {separationText} at peak on {FormatUtcDateTime(peakUtc)}. Visibility window runs from {FormatUtcDateTime(events.Min(e => e.StartUtc))} to {FormatUtcDateTime(events.Max(e => e.EndUtc ?? e.StartUtc))}. Consolidated from {events.Count} same-pair daily detections.";
+        }
+
         return events.First().Summary ?? events.First().Description ?? events.First().Title;
     }
 
-    private static string BuildRawDataJson(string eventType, IReadOnlyList<DetectedAstronomyEventDto> events, DateOnly startDate, DateOnly endDate)
+    private static string BuildRawDataJson(string eventType, IReadOnlyList<DetectedAstronomyEventDto> events, DateOnly startDate, DateOnly endDate, DetectedAstronomyEventDto peakEvent)
     {
+        if (eventType.Equals("PLANET_CONJUNCTION", StringComparison.OrdinalIgnoreCase))
+        {
+            var visibilityWindowStartUtc = events.Min(e => e.StartUtc);
+            var visibilityWindowEndUtc = events.Max(e => e.EndUtc ?? e.StartUtc);
+            return JsonSerializer.Serialize(new
+            {
+                peakDate = (peakEvent.PeakUtc ?? peakEvent.StartUtc).UtcDateTime.ToString("O"),
+                minimumAngularSeparationDegrees = MinAngularSeparation(events),
+                visibilityWindowStartUtc = visibilityWindowStartUtc.UtcDateTime.ToString("O"),
+                visibilityWindowEndUtc = visibilityWindowEndUtc.UtcDateTime.ToString("O"),
+                sourceEventCount = events.Count,
+                sourceEventCodes = events.Select(e => e.EventCode).ToArray()
+            }, JsonOptions);
+        }
+
         var moonIlluminations = events.Select(ExtractMoonIllumination).Where(x => x.HasValue).Select(x => x!.Value).ToArray();
         return JsonSerializer.Serialize(new
         {
@@ -255,11 +287,19 @@ public sealed class AstronomyEventConsolidationService : IAstronomyEventConsolid
 
     private static HashSet<string> ObjectSet(DetectedAstronomyEventDto dto) => dto.Objects.Select(ObjectKey).Where(k => !string.IsNullOrWhiteSpace(k)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+    private static string ObjectPairKey(DetectedAstronomyEventDto dto) => string.Join("+", ObjectSet(dto).OrderBy(k => k, StringComparer.OrdinalIgnoreCase));
+
     private static string ObjectKey(DetectedAstronomyEventObjectDto obj) => !string.IsNullOrWhiteSpace(obj.CatalogId) ? obj.CatalogId! : obj.ObjectName;
 
     private static string ObjectList(IReadOnlyList<DetectedAstronomyEventObjectDto> objects) => string.Join(", ", objects.Select(o => o.ObjectName).Distinct(StringComparer.OrdinalIgnoreCase));
 
+    private static string ObjectPairLabel(IReadOnlyList<DetectedAstronomyEventObjectDto> objects) => string.Join(" and ", objects.Select(o => o.ObjectName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).Take(2));
+
     private static string FormatDateRange(DateOnly startDate, DateOnly endDate) => startDate == endDate ? $"{startDate:yyyy-MM-dd}" : $"{startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}";
+
+    private static string FormatUtcDate(DateTimeOffset value) => value.UtcDateTime.ToString("yyyy-MM-dd");
+
+    private static string FormatUtcDateTime(DateTimeOffset value) => value.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'");
 
     private static string MoonPhaseLabel(DetectedAstronomyEventDto dto) => ExtractString(dto.RawDataJson, "moonPhase") ?? dto.Title.Split(" Moon over ", StringSplitOptions.None).FirstOrDefault() ?? "Moon";
 
