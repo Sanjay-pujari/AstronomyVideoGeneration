@@ -69,6 +69,8 @@ public sealed record AstronomyAssetProductionJobRequest(
 
 public sealed record AstronomyAssetProductionJobResult(
     int JobCount,
+    int SavedCount,
+    int SkippedDuplicates,
     int RequiredJobs,
     int PreferredJobs,
     int OptionalJobs,
@@ -98,6 +100,7 @@ public sealed record AstronomyAssetProductionJobDto(
     string AssetExecutionGroup,
     IReadOnlyList<string> DependsOn,
     object? MetadataJson,
+    string Status,
     bool DryRun);
 
 public interface IAstronomyAssetPlanningService
