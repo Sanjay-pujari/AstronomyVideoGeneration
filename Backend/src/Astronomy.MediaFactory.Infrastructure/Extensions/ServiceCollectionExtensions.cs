@@ -496,6 +496,14 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAstronomyVideoPlanningService, AstronomyVideoPlanningService>();
         services.AddScoped<IAstronomyAssetPlanningService, AstronomyAssetPlanningService>();
         services.AddScoped<IAstronomyAssetProductionJobService, AstronomyAssetProductionJobService>();
+        services.AddScoped<IAstronomyAssetProducer, TextOverlayAssetProducer>();
+        services.AddScoped<IAstronomyAssetProducer, ThumbnailConceptAssetProducer>();
+        services.AddScoped<IAstronomyAssetProducer, StellariumScreenshotAssetProducer>();
+        services.AddScoped<IAstronomyAssetProducer, ConstellationGuideAssetProducer>();
+        services.AddScoped<IAstronomyAssetProducer, SkyMapCardAssetProducer>();
+        services.AddScoped<IAstronomyAssetProducer, NasaAssetProducer>();
+        services.AddScoped<IAstronomyAssetProducer, AiImageAssetProducer>();
+        services.AddScoped<IAstronomyAssetProducerPreviewService, AstronomyAssetProducerPreviewService>();
         services.AddScoped<IStellariumScriptGenerator, StellariumScriptGenerator>();
         services.AddScoped<IStellariumImageCaptureExecutor, StellariumImageCaptureExecutor>();
         services.AddScoped<IDailySkyGuideVisualAssetPackager, DailySkyGuideVisualAssetPackager>();
