@@ -108,10 +108,15 @@ public sealed class AstronomyVideoPlanningService(
             {
                 var marker = DuplicateMarker(plan.OpportunityId, plan.PlannedFormat);
                 var duplicate = await db.ContentGenerationPlans.AsNoTracking().AnyAsync(p =>
-                    p.ContentCategoryCode == plan.ContentCategory &&
-                    p.RegionId == plan.RegionId &&
-                    p.PlanningReason != null &&
-                    p.PlanningReason.Contains(marker), cancellationToken);
+                    (p.AstronomyContentOpportunityId == plan.OpportunityId &&
+                     p.ContentCategoryCode == plan.ContentCategory &&
+                     p.PlannedFormat == plan.PlannedFormat &&
+                     p.RegionId == plan.RegionId &&
+                     p.Language == plan.Language) ||
+                    (p.ContentCategoryCode == plan.ContentCategory &&
+                     p.RegionId == plan.RegionId &&
+                     p.PlanningReason != null &&
+                     p.PlanningReason.Contains(marker)), cancellationToken);
 
                 if (duplicate)
                 {
@@ -138,6 +143,12 @@ public sealed class AstronomyVideoPlanningService(
     {
         var scenes = ResolveScenes(opportunity.ContentCategory, plannedFormat);
         var objectNames = evt.Objects.Select(o => o.ObjectName).Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var sourceEventObjectIdsJson = !string.IsNullOrWhiteSpace(opportunity.SelectedEventObjectIdsJson)
+            ? opportunity.SelectedEventObjectIdsJson
+            : JsonSerializer.Serialize(evt.Objects.Select(o => o.Id).ToArray(), JsonOptions);
+        var plannedObjectNamesJson = !string.IsNullOrWhiteSpace(opportunity.SelectedObjectNamesJson)
+            ? opportunity.SelectedObjectNamesJson
+            : JsonSerializer.Serialize(objectNames, JsonOptions);
         var scheduledUtc = evt.PeakUtc ?? evt.StartUtc;
         var locationName = evt.LocationName;
         var regionId = evt.RegionId ?? string.Empty;
@@ -204,6 +215,10 @@ public sealed class AstronomyVideoPlanningService(
             "Planned",
             opportunity.PriorityScore,
             scheduledUtc,
+            opportunity.SelectedEventObjectIdsJson,
+            opportunity.SelectedObjectNamesJson,
+            sourceEventObjectIdsJson,
+            plannedObjectNamesJson,
             false);
     }
 
@@ -215,6 +230,13 @@ public sealed class AstronomyVideoPlanningService(
         RegionId = plan.RegionId,
         ScheduledUtc = plan.ScheduledUtc,
         Status = "Planned",
+        AstronomyContentOpportunityId = plan.OpportunityId,
+        AstronomyEventIntelligenceId = plan.AstronomyEventIntelligenceId,
+        SourceEventObjectIdsJson = plan.SourceEventObjectIdsJson,
+        PlannedObjectNamesJson = plan.PlannedObjectNamesJson,
+        PlanStatus = "Planned",
+        PlannedFormat = plan.PlannedFormat,
+        PriorityScore = plan.PriorityScore,
         PrimaryAstronomyEventTypeCode = plan.EventType,
         GeneratedByAi = false,
         Priority = PriorityFromScore(plan.PriorityScore),
@@ -238,6 +260,10 @@ public sealed class AstronomyVideoPlanningService(
         status = plan.Status,
         priorityScore = plan.PriorityScore,
         scheduledUtc = plan.ScheduledUtc,
+        selectedEventObjectIdsJson = plan.SelectedEventObjectIdsJson,
+        selectedObjectNamesJson = plan.SelectedObjectNamesJson,
+        sourceEventObjectIdsJson = plan.SourceEventObjectIdsJson,
+        plannedObjectNamesJson = plan.PlannedObjectNamesJson,
         duplicateMarker = DuplicateMarker(plan.OpportunityId, plan.PlannedFormat),
         visualStrategy = TryParseJson(plan.VisualStrategyJson),
         narrationStrategy = TryParseJson(plan.NarrationStrategyJson),

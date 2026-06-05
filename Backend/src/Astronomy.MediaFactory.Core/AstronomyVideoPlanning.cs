@@ -36,6 +36,10 @@ public sealed record AstronomyVideoPlanDto(
     string Status,
     decimal PriorityScore,
     DateTimeOffset ScheduledUtc,
+    string? SelectedEventObjectIdsJson,
+    string? SelectedObjectNamesJson,
+    string? SourceEventObjectIdsJson,
+    string? PlannedObjectNamesJson,
     bool DuplicateSkipped);
 
 public interface IAstronomyVideoPlanningService
