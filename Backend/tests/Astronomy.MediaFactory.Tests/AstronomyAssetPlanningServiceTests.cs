@@ -96,10 +96,10 @@ public sealed class AstronomyAssetPlanningServiceTests
         Assert.Equal(1, result.SavedCount);
         Assert.DoesNotContain(result.Warnings, w => w.Contains("asset_plan_json", StringComparison.OrdinalIgnoreCase));
         Assert.Single(result.AssetPlans);
-        var savedJson = await db.ContentGenerationPlans.Select(p => p.AssetPlanJson).SingleAsync();
-        var savedStatus = await db.ContentGenerationPlans.Select(p => p.AssetPlanStatus).SingleAsync();
-        Assert.False(string.IsNullOrWhiteSpace(savedJson));
-        Assert.Equal("Planned", savedStatus);
+        var saved = await db.ContentGenerationPlans.Select(p => new { p.AssetPlanJson, p.AssetPlanStatus, p.UpdatedUtc }).SingleAsync();
+        Assert.False(string.IsNullOrWhiteSpace(saved.AssetPlanJson));
+        Assert.Equal("Planned", saved.AssetPlanStatus);
+        Assert.Null(saved.UpdatedUtc);
     }
 
     [Fact]
