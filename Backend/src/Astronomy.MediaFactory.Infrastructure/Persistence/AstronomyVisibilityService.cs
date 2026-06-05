@@ -75,7 +75,7 @@ public sealed class AstronomyVisibilityService(MediaFactoryDbContext db, ISkyfie
             (moonPhase, moonIllum) = ApproxMoonPhase(request.TargetDate);
             warnings.Add("Using approximate moon phase calculation.");
             visible = selected.Select(x => new VisibleCelestialObjectResult(
-                x.Code, x.Name, x.ObjectType, true, null, null, null, bestStartUtc, bestEndUtc, Convert.ToDouble(x.VisibilityPriority), Convert.ToDouble(x.VisibilityPriority), Convert.ToDouble(x.PhotogenicScore), Convert.ToDouble(x.EducationalScore), Convert.ToDouble(x.ViralityScore), null)).ToList();
+                x.Code, x.Name, x.ObjectType, true, null, null, null, bestStartUtc, bestEndUtc, Convert.ToDouble(x.VisibilityPriority), Convert.ToDouble(x.VisibilityPriority), Convert.ToDouble(x.PhotogenicScore), Convert.ToDouble(x.EducationalScore), Convert.ToDouble(x.ViralityScore), null, null, null, ApproxMagnitude(x.Code), null)).ToList();
         }
 
         visible = visible.OrderByDescending(x => string.Equals(x.ObjectCode, request.PreferredObjectCode, StringComparison.OrdinalIgnoreCase) && x.Visible)
@@ -99,7 +99,7 @@ public sealed class AstronomyVisibilityService(MediaFactoryDbContext db, ISkyfie
             var altitudeScore = o.AltitudeScore > 0 ? o.AltitudeScore : AltitudeScoreFor(o.MaxAltitudeDegrees);
             var visibilityScore = (0.4 * altitudeScore) + (0.3 * Convert.ToDouble(x.VisibilityPriority)) + (0.15 * Convert.ToDouble(x.EducationalScore)) + (0.15 * Convert.ToDouble(x.ViralityScore));
             var photographyScore = (0.6 * Convert.ToDouble(x.PhotogenicScore)) + (0.4 * altitudeScore);
-            result.Add(new VisibleCelestialObjectResult(x.Code, x.Name, x.ObjectType, o.Visible, o.RiseUtc, o.SetUtc, o.TransitUtc, o.BestViewingStartUtc, o.BestViewingEndUtc, altitudeScore, visibilityScore, photographyScore, Convert.ToDouble(x.EducationalScore), Convert.ToDouble(x.ViralityScore), o.Reason));
+            result.Add(new VisibleCelestialObjectResult(x.Code, x.Name, x.ObjectType, o.Visible, o.RiseUtc, o.SetUtc, o.TransitUtc, o.BestViewingStartUtc, o.BestViewingEndUtc, altitudeScore, visibilityScore, photographyScore, Convert.ToDouble(x.EducationalScore), Convert.ToDouble(x.ViralityScore), o.Reason, o.MaxAltitudeDegrees, o.BestViewingAzimuthDegrees, o.Magnitude, o.AngularSeparationDegrees));
         }
         if (!string.IsNullOrWhiteSpace(preferredObjectCode) && result.All(r => !r.ObjectCode.Equals(preferredObjectCode, StringComparison.OrdinalIgnoreCase)))
         {
@@ -108,6 +108,16 @@ public sealed class AstronomyVisibilityService(MediaFactoryDbContext db, ISkyfie
         }
         return result;
     }
+    private static decimal? ApproxMagnitude(string objectCode) => objectCode.ToUpperInvariant() switch
+    {
+        "VENUS" => -4.0m,
+        "JUPITER" => -2.2m,
+        "MARS" => -1.0m,
+        "SATURN" => 0.6m,
+        "MERCURY" => 0.4m,
+        _ => null
+    };
+
     private static double AltitudeScoreFor(double maxAltitude) => maxAltitude switch { >= 60 => 10, >= 45 => 8, >= 30 => 6, >= 15 => 4, _ => 2 };
 
     private static TimeZoneInfo ResolveZone(string timezone, List<string> warnings)

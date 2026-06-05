@@ -148,7 +148,9 @@ public sealed class SkyfieldVisibilityClient(HttpClient httpClient, IOptions<Sky
             visibleStartUtc,
             visibleEndUtc,
             altitudeScore,
-            obj.VisibilityReason);
+            obj.VisibilityReason,
+            obj.AzimuthDegrees,
+            obj.Magnitude.HasValue ? Convert.ToDecimal(obj.Magnitude.Value) : (decimal?)null);
     }
 
     private static async Task<string> ReadResponseBodyAsync(HttpResponseMessage response, CancellationToken cancellationToken)

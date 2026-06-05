@@ -329,7 +329,11 @@ public sealed record VisibleCelestialObjectResult(
     double PhotographyScore,
     double EducationalScore,
     double ViralityScore,
-    string? Reason);
+    string? Reason,
+    double? MaxAltitudeDegrees = null,
+    double? BestViewingAzimuthDegrees = null,
+    decimal? Magnitude = null,
+    double? AngularSeparationDegrees = null);
 
 public sealed record AstronomyVisibilityResult(
     string RegionId,
@@ -379,7 +383,10 @@ public sealed record SkyfieldVisibilityObjectResult(
     DateTime? BestViewingStartUtc,
     DateTime? BestViewingEndUtc,
     double AltitudeScore,
-    string? Reason);
+    string? Reason,
+    double? BestViewingAzimuthDegrees = null,
+    decimal? Magnitude = null,
+    double? AngularSeparationDegrees = null);
 
 public sealed record SkyfieldVisibilityResponse(
     bool Success,
