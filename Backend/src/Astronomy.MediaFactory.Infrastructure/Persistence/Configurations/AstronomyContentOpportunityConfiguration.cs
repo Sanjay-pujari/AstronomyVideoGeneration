@@ -20,6 +20,12 @@ public sealed class AstronomyContentOpportunityConfiguration : IEntityTypeConfig
         builder.Property(x => x.UpdatedUtc).IsRequired(false);
 
         builder.Property(x => x.PriorityScore).HasPrecision(5, 2);
+        builder.Property(x => x.SelectedEventObjectIdsJson)
+            .HasColumnName("selected_event_object_ids_json")
+            .HasColumnType("jsonb");
+        builder.Property(x => x.SelectedObjectNamesJson)
+            .HasColumnName("selected_object_names_json")
+            .HasColumnType("jsonb");
         builder.Property(x => x.VisualStrategyJson).HasColumnType("jsonb");
         builder.Property(x => x.NarrationStrategyJson).HasColumnType("jsonb");
         builder.Property(x => x.MetadataJson).HasColumnType("jsonb");

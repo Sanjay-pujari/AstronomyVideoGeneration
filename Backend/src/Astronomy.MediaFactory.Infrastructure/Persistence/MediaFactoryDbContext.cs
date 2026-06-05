@@ -268,12 +268,29 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<AstronomyEventTypeMaster>().HasIndex(x => x.Code).IsUnique();
 
         modelBuilder.Entity<ContentGenerationPlan>().ToTable("content_generation_plans").HasKey(x => x.Id);
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.AstronomyContentOpportunityId).HasColumnName("astronomy_content_opportunity_id");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.AstronomyEventIntelligenceId).HasColumnName("astronomy_event_intelligence_id");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.SourceEventObjectIdsJson).HasColumnName("source_event_object_ids_json").HasColumnType("jsonb");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.PlannedObjectNamesJson).HasColumnName("planned_object_names_json").HasColumnType("jsonb");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.PlanStatus).HasColumnName("plan_status").HasMaxLength(60).HasDefaultValue("Planned");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.PlannedFormat).HasColumnName("planned_format").HasMaxLength(80);
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.PriorityScore).HasColumnName("priority_score").HasPrecision(5, 2);
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.FinalVideoPath).HasColumnName("final_video_path");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.ThumbnailPath).HasColumnName("thumbnail_path");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.FailureReason).HasColumnName("failure_reason");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.CompletedUtc).HasColumnName("completed_utc");
+        modelBuilder.Entity<ContentGenerationPlan>().HasOne(x => x.AstronomyContentOpportunity).WithMany().HasForeignKey(x => x.AstronomyContentOpportunityId).OnDelete(DeleteBehavior.SetNull);
+        modelBuilder.Entity<ContentGenerationPlan>().HasOne(x => x.AstronomyEventIntelligence).WithMany().HasForeignKey(x => x.AstronomyEventIntelligenceId).OnDelete(DeleteBehavior.SetNull);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.ContentCategoryCode);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.PipelineRunId);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.Language);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.RegionId);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.ScheduledUtc);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.Status);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.AstronomyContentOpportunityId);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.AstronomyEventIntelligenceId);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.PlanStatus);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.PlannedFormat);
 
         modelBuilder.Entity<ContentPipelineExecution>().ToTable("content_pipeline_executions").HasKey(x => x.Id);
         modelBuilder.Entity<ContentPipelineExecution>().HasIndex(x => x.ContentGenerationPlanId);

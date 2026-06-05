@@ -517,6 +517,17 @@ public sealed class ContentGenerationPlan : EntityBase
     public string RegionId { get; set; } = "";
     public DateTimeOffset? ScheduledUtc { get; set; }
     public string Status { get; set; } = "Planned";
+    public Guid? AstronomyContentOpportunityId { get; set; }
+    public Guid? AstronomyEventIntelligenceId { get; set; }
+    public string? SourceEventObjectIdsJson { get; set; }
+    public string? PlannedObjectNamesJson { get; set; }
+    public string PlanStatus { get; set; } = "Planned";
+    public string? PlannedFormat { get; set; }
+    public decimal? PriorityScore { get; set; }
+    public string? FinalVideoPath { get; set; }
+    public string? ThumbnailPath { get; set; }
+    public string? FailureReason { get; set; }
+    public DateTimeOffset? CompletedUtc { get; set; }
     public string? PrimaryCelestialObjectCode { get; set; }
     public string? PrimaryAstronomyEventTypeCode { get; set; }
     public string? HookStyleCode { get; set; }
@@ -525,6 +536,8 @@ public sealed class ContentGenerationPlan : EntityBase
     public bool GeneratedByAi { get; set; }
     public int Priority { get; set; } = 100;
     public string? PlanningReason { get; set; }
+    public AstronomyContentOpportunity? AstronomyContentOpportunity { get; set; }
+    public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
 }
 
 public sealed class ContentPipelineExecution : EntityBase
@@ -609,6 +622,8 @@ public sealed class AstronomyContentOpportunity : EntityBase
     public string? AudienceSegment { get; set; }
     public decimal PriorityScore { get; set; }
     public string Status { get; set; } = "Proposed";
+    public string? SelectedEventObjectIdsJson { get; set; }
+    public string? SelectedObjectNamesJson { get; set; }
     public string? VisualStrategyJson { get; set; }
     public string? NarrationStrategyJson { get; set; }
     public string? MetadataJson { get; set; }
