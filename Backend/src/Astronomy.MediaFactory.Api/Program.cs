@@ -289,6 +289,19 @@ app.MapGet("/api/events/{eventId}", async (string eventId, IAstronomyEventDiscov
 app.MapPost("/api/events/refresh", async (int? days, IAstronomyEventDiscoveryService events, CancellationToken ct) =>
     Results.Ok(await events.RefreshAsync(days, ct)));
 
+app.MapPost("/api/astronomy-intelligence/detect-events", async (AstronomyEventDetectionRequest request, IAstronomyEventDetectionService detection, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy intelligence detect-events request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await detection.DetectEventsAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 
 
 app.MapGet("/api/content-master/categories", async (MediaFactoryDbContext db, CancellationToken ct) =>

@@ -489,6 +489,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICategoryRequirementResolver, CategoryRequirementResolver>();
         services.AddScoped<IVisualStrategyResolver, VisualStrategyResolver>();
         services.AddScoped<IAstronomyVisibilityService, AstronomyVisibilityService>();
+        services.AddScoped<IAstronomyEventDetectionService, AstronomyEventDetectionService>();
         services.AddScoped<IStellariumScriptGenerator, StellariumScriptGenerator>();
         services.AddScoped<IStellariumImageCaptureExecutor, StellariumImageCaptureExecutor>();
         services.AddScoped<IDailySkyGuideVisualAssetPackager, DailySkyGuideVisualAssetPackager>();
