@@ -21,7 +21,7 @@ public sealed class AstronomyAssetProductionJobService(
         var categories = ToSet(request.ContentCategories);
         var formats = ToSet(request.PlannedFormats);
 
-        var query = db.ContentGenerationPlans.AsNoTracking().Where(p => p.AssetPlanJson != null && p.AssetPlanJson != "");
+        var query = db.ContentGenerationPlans.AsNoTracking().Where(p => p.AssetPlanJson != null);
         if (!string.IsNullOrWhiteSpace(request.RegionId))
             query = query.Where(p => p.RegionId == request.RegionId);
         if (planIds is { Count: > 0 })
@@ -37,10 +37,11 @@ public sealed class AstronomyAssetProductionJobService(
 
         var rows = await query.Select(p => new { p.Id, p.AssetPlanJson }).ToListAsync(cancellationToken);
         var jobs = new List<AstronomyAssetProductionJobDto>();
+        var warnings = new List<string>();
 
         foreach (var row in rows)
         {
-            var assetPlan = DeserializeAssetPlan(row.Id, row.AssetPlanJson);
+            var assetPlan = DeserializeAssetPlan(row.Id, row.AssetPlanJson, warnings);
             if (assetPlan is null)
                 continue;
 
@@ -85,24 +86,27 @@ public sealed class AstronomyAssetProductionJobService(
             jobs.Count(j => j.AssetPriority.Equals(AstronomyAssetClassificationRules.Required, StringComparison.OrdinalIgnoreCase)),
             jobs.Count(j => j.AssetPriority.Equals(AstronomyAssetClassificationRules.Preferred, StringComparison.OrdinalIgnoreCase)),
             jobs.Count(j => j.AssetPriority.Equals(AstronomyAssetClassificationRules.Optional, StringComparison.OrdinalIgnoreCase)),
-            jobs);
+            jobs,
+            warnings);
 
-        logger.LogInformation("Phase 8A.1 asset production job DTO dry run created {JobCount} job(s): required={RequiredJobs} preferred={PreferredJobs} optional={OptionalJobs}", result.JobCount, result.RequiredJobs, result.PreferredJobs, result.OptionalJobs);
+        logger.LogInformation("Phase 8A.1 asset production job DTO dry run created {JobCount} job(s): required={RequiredJobs} preferred={PreferredJobs} optional={OptionalJobs} warnings={WarningCount}", result.JobCount, result.RequiredJobs, result.PreferredJobs, result.OptionalJobs, result.Warnings.Count);
         return result;
     }
 
-    private static AstronomyAssetPlanDto? DeserializeAssetPlan(Guid contentGenerationPlanId, string? assetPlanJson)
+    private static AstronomyAssetPlanDto? DeserializeAssetPlan(Guid contentGenerationPlanId, string? assetPlanJson, ICollection<string> warnings)
     {
         if (string.IsNullOrWhiteSpace(assetPlanJson))
             return null;
 
         try
         {
+            using var _ = JsonDocument.Parse(assetPlanJson);
             return JsonSerializer.Deserialize<AstronomyAssetPlanDto>(assetPlanJson, JsonOptions);
         }
         catch (JsonException ex)
         {
-            throw new ArgumentException($"Content generation plan '{contentGenerationPlanId}' has invalid AssetPlanJson and cannot be converted into production job DTOs.", ex);
+            warnings.Add($"Content generation plan '{contentGenerationPlanId}' has invalid AssetPlanJson and was skipped: {ex.Message}");
+            return null;
         }
     }
 
