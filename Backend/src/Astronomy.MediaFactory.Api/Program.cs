@@ -315,6 +315,19 @@ app.MapPost("/api/astronomy-intelligence/generate-content-opportunities", async 
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-video-plans", async (AstronomyVideoPlanningRequest request, IAstronomyVideoPlanningService planning, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy video planning request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await planning.GenerateVideoPlansAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 
 
 app.MapGet("/api/content-master/categories", async (MediaFactoryDbContext db, CancellationToken ct) =>
