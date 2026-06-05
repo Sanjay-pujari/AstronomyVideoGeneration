@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Analytics;
+using Astronomy.MediaFactory.Infrastructure.Persistence.Configurations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 
@@ -53,6 +54,11 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<ContentCategoryStyleSettings> ContentCategoryStyleSettings => Set<ContentCategoryStyleSettings>();
     public DbSet<ContentVarietyRule> ContentVarietyRules => Set<ContentVarietyRule>();
     public DbSet<ContentIdeaTemplate> ContentIdeaTemplates => Set<ContentIdeaTemplate>();
+    public DbSet<AstronomyEventIntelligence> AstronomyEventIntelligences => Set<AstronomyEventIntelligence>();
+    public DbSet<AstronomyEventObject> AstronomyEventObjects => Set<AstronomyEventObject>();
+    public DbSet<AstronomyContentOpportunity> AstronomyContentOpportunities => Set<AstronomyContentOpportunity>();
+    public DbSet<AstronomyReferenceSource> AstronomyReferenceSources => Set<AstronomyReferenceSource>();
+    public DbSet<AstronomyEventValidation> AstronomyEventValidations => Set<AstronomyEventValidation>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
         (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
@@ -85,6 +91,12 @@ public sealed class MediaFactoryDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ApplyConfiguration(new AstronomyEventIntelligenceConfiguration());
+        modelBuilder.ApplyConfiguration(new AstronomyEventObjectConfiguration());
+        modelBuilder.ApplyConfiguration(new AstronomyContentOpportunityConfiguration());
+        modelBuilder.ApplyConfiguration(new AstronomyReferenceSourceConfiguration());
+        modelBuilder.ApplyConfiguration(new AstronomyEventValidationConfiguration());
+
         modelBuilder.Entity<PipelineRun>().ToTable("pipeline_runs").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineRun>().Property(x => x.RegionId).HasColumnName("regionId");
         modelBuilder.Entity<PipelineRun>().Property(x => x.Language).HasColumnName("language");

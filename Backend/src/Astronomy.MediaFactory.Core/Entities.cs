@@ -555,3 +555,90 @@ public sealed class ContentCategoryStyleSettings : EntityBase
     public int Priority { get; set; } = 100;
     public bool Enabled { get; set; } = true;
 }
+
+public sealed class AstronomyEventIntelligence : EntityBase
+{
+    public string EventCode { get; set; } = "";
+    public string EventType { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string? Summary { get; set; }
+    public string? Description { get; set; }
+    public DateTimeOffset StartUtc { get; set; }
+    public DateTimeOffset? PeakUtc { get; set; }
+    public DateTimeOffset? EndUtc { get; set; }
+    public string? RegionId { get; set; }
+    public string? LocationName { get; set; }
+    public string? TimeZone { get; set; }
+    public string RecommendedCategory { get; set; } = "";
+    public string Status { get; set; } = "Discovered";
+    public Guid? SourcePipelineRunId { get; set; }
+    public decimal ConfidenceScore { get; set; }
+    public decimal RarityScore { get; set; }
+    public decimal VisibilityScore { get; set; }
+    public decimal AudienceInterestScore { get; set; }
+    public decimal TimingUrgencyScore { get; set; }
+    public decimal ContentOpportunityScore { get; set; }
+    public string? RawDataJson { get; set; }
+    public string? RulesAppliedJson { get; set; }
+    public string? MetadataJson { get; set; }
+    public ICollection<AstronomyEventObject> Objects { get; set; } = [];
+    public ICollection<AstronomyContentOpportunity> ContentOpportunities { get; set; } = [];
+    public ICollection<AstronomyReferenceSource> ReferenceSources { get; set; } = [];
+    public ICollection<AstronomyEventValidation> Validations { get; set; } = [];
+}
+
+public sealed class AstronomyEventObject : EntityBase
+{
+    public Guid AstronomyEventIntelligenceId { get; set; }
+    public string ObjectName { get; set; } = "";
+    public string ObjectType { get; set; } = "";
+    public string? ObjectRole { get; set; }
+    public string? CatalogId { get; set; }
+    public decimal? Magnitude { get; set; }
+    public decimal? VisibilityScore { get; set; }
+    public string? MetadataJson { get; set; }
+    public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
+}
+
+public sealed class AstronomyContentOpportunity : EntityBase
+{
+    public Guid AstronomyEventIntelligenceId { get; set; }
+    public string ContentCategory { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string? Angle { get; set; }
+    public string? AudienceSegment { get; set; }
+    public decimal PriorityScore { get; set; }
+    public string Status { get; set; } = "Proposed";
+    public string? VisualStrategyJson { get; set; }
+    public string? NarrationStrategyJson { get; set; }
+    public string? MetadataJson { get; set; }
+    public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
+}
+
+public sealed class AstronomyReferenceSource : EntityBase
+{
+    public Guid AstronomyEventIntelligenceId { get; set; }
+    public string SourceName { get; set; } = "";
+    public string SourceType { get; set; } = "";
+    public string? SourceUrl { get; set; }
+    public string? Citation { get; set; }
+    public DateTimeOffset? PublishedUtc { get; set; }
+    public DateTimeOffset? RetrievedUtc { get; set; }
+    public decimal? ConfidenceScore { get; set; }
+    public string? EvidenceJson { get; set; }
+    public string? MetadataJson { get; set; }
+    public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
+}
+
+public sealed class AstronomyEventValidation : EntityBase
+{
+    public Guid AstronomyEventIntelligenceId { get; set; }
+    public string ValidationType { get; set; } = "";
+    public string Status { get; set; } = "Pending";
+    public string? ValidatorName { get; set; }
+    public decimal? ConfidenceScore { get; set; }
+    public string? Message { get; set; }
+    public string? EvidenceJson { get; set; }
+    public string? MetadataJson { get; set; }
+    public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
+}
