@@ -81,6 +81,7 @@ public sealed class AstronomyEventsOptions
     public double MajorEventThreshold { get => _majorEventThreshold; set => _majorEventThreshold = value; }
     public double MinimumContentOpportunityScore { get; set; } = 0.65;
     public bool EnableDailyGuideEventInjection { get; set; } = true;
+    public bool EnableEventConsolidation { get; set; } = true;
     public bool EnableSpecialEventVideos { get; set; } = true;
     public int MaxInjectedEventsPerDailyGuide { get; set; } = 1;
     public int MaxSpecialEventVideosPerDay { get; set; } = 2;

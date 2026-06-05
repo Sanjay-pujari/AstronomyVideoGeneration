@@ -28,7 +28,17 @@ public sealed record AstronomyEventDetectionDiagnostics(
     int DaysScanned,
     int SkyfieldDaysSuccessful,
     int VisibleObjectCount,
-    IReadOnlyList<AstronomyEventCandidateReason> CandidateReasons);
+    IReadOnlyList<AstronomyEventCandidateReason> CandidateReasons,
+    int RawDetectedCount = 0,
+    int ConsolidatedCount = 0,
+    bool ConsolidationApplied = false,
+    IReadOnlyList<AstronomyEventConsolidationSummaryItem>? ConsolidationSummary = null);
+
+public sealed record AstronomyEventConsolidationSummaryItem(
+    string EventType,
+    int RawCount,
+    int ConsolidatedCount,
+    int MergedCount);
 
 public sealed record AstronomyEventCandidateReason(
     string EventCode,
@@ -74,4 +84,9 @@ public sealed record DetectedAstronomyEventObjectDto(
 public interface IAstronomyEventDetectionService
 {
     Task<AstronomyEventDetectionResult> DetectEventsAsync(AstronomyEventDetectionRequest request, CancellationToken cancellationToken);
+}
+
+public interface IAstronomyEventConsolidationService
+{
+    IReadOnlyList<DetectedAstronomyEventDto> Consolidate(IReadOnlyList<DetectedAstronomyEventDto> detectedEvents);
 }

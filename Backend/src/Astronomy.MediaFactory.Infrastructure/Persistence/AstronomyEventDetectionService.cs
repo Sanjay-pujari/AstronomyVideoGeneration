@@ -1,13 +1,17 @@
 using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class AstronomyEventDetectionService(
     MediaFactoryDbContext db,
     IAstronomyVisibilityService visibilityService,
+    IAstronomyEventConsolidationService consolidationService,
+    IOptions<AstronomyEventsOptions> options,
     ILogger<AstronomyEventDetectionService> logger) : IAstronomyEventDetectionService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -87,6 +91,19 @@ public sealed class AstronomyEventDetectionService(
             }
         }
 
+        var rawDetectedCount = detected.Count;
+        logger.LogInformation("Astronomy event detection raw count for {RegionId} ({LocationName}): {RawDetectedCount}", request.RegionId, request.LocationName, rawDetectedCount);
+
+        var rawTypeCounts = detected.GroupBy(e => e.EventType, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+        var consolidationApplied = options.Value.EnableEventConsolidation;
+        if (consolidationApplied)
+        {
+            detected = consolidationService.Consolidate(detected).ToList();
+        }
+
+        var consolidationSummary = BuildConsolidationSummary(rawTypeCounts, detected);
+        logger.LogInformation("Astronomy event detection consolidation for {RegionId} ({LocationName}). Applied={ConsolidationApplied}, RawDetected={RawDetectedCount}, Consolidated={ConsolidatedCount}, MergedByType={@ConsolidationSummary}", request.RegionId, request.LocationName, consolidationApplied, rawDetectedCount, detected.Count, consolidationSummary);
+
         detected = detected
             .OrderByDescending(e => e.ViralPotentialScore)
             .ThenByDescending(e => e.VisibilityScore)
@@ -94,18 +111,39 @@ public sealed class AstronomyEventDetectionService(
             .Take(request.MaxEvents ?? int.MaxValue)
             .ToList();
 
-        var retainedEventCodes = detected.Select(e => e.EventCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        candidateReasons = candidateReasons.Where(r => retainedEventCodes.Contains(r.EventCode)).ToList();
+        if (!consolidationApplied)
+        {
+            var retainedEventCodes = detected.Select(e => e.EventCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            candidateReasons = candidateReasons.Where(r => retainedEventCodes.Contains(r.EventCode)).ToList();
+        }
 
         var saved = request.DryRun ? detected : await SaveAsync(detected, cancellationToken);
         var savedCount = request.DryRun ? 0 : saved.Count(e => e.Id.HasValue);
         var diagnostics = request.DryRun
-            ? new AstronomyEventDetectionDiagnostics(daysScanned, skyfieldDaysSuccessful, visibleObjectCount, candidateReasons)
+            ? new AstronomyEventDetectionDiagnostics(daysScanned, skyfieldDaysSuccessful, visibleObjectCount, candidateReasons, rawDetectedCount, detected.Count, consolidationApplied, consolidationSummary)
             : null;
 
-        logger.LogInformation("Astronomy event detection completed for {RegionId} ({LocationName}). Detected={DetectedCount}, Saved={SavedCount}, DryRun={DryRun}, DaysScanned={DaysScanned}, SkyfieldDaysSuccessful={SkyfieldDaysSuccessful}, VisibleObjectCount={VisibleObjectCount}", request.RegionId, request.LocationName, detected.Count, savedCount, request.DryRun, daysScanned, skyfieldDaysSuccessful, visibleObjectCount);
+        logger.LogInformation("Astronomy event detection completed for {RegionId} ({LocationName}). RawDetected={RawDetectedCount}, Consolidated={ConsolidatedCount}, Saved={SavedCount}, DryRun={DryRun}, DaysScanned={DaysScanned}, SkyfieldDaysSuccessful={SkyfieldDaysSuccessful}, VisibleObjectCount={VisibleObjectCount}", request.RegionId, request.LocationName, rawDetectedCount, detected.Count, savedCount, request.DryRun, daysScanned, skyfieldDaysSuccessful, visibleObjectCount);
 
         return new AstronomyEventDetectionResult(request.RegionId, request.LocationName, request.StartUtc, request.EndUtc, request.DryRun, saved.Count, savedCount, saved, warnings.Distinct().ToArray(), diagnostics);
+    }
+
+
+    private static IReadOnlyList<AstronomyEventConsolidationSummaryItem> BuildConsolidationSummary(IReadOnlyDictionary<string, int> rawTypeCounts, IReadOnlyList<DetectedAstronomyEventDto> consolidated)
+    {
+        var consolidatedTypeCounts = consolidated
+            .GroupBy(e => e.EventType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+        return rawTypeCounts.Keys
+            .Union(consolidatedTypeCounts.Keys, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(type => type, StringComparer.OrdinalIgnoreCase)
+            .Select(type =>
+            {
+                rawTypeCounts.TryGetValue(type, out var rawCount);
+                consolidatedTypeCounts.TryGetValue(type, out var consolidatedCount);
+                return new AstronomyEventConsolidationSummaryItem(type, rawCount, consolidatedCount, Math.Max(0, rawCount - consolidatedCount));
+            })
+            .ToArray();
     }
 
     private static void AddSkyfieldCandidateEvents(
