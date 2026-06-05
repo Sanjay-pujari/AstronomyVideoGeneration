@@ -224,6 +224,8 @@ public sealed class AstronomyAssetPlanningService(
             Math.Clamp((sceneNumber * 10) + assetIndex, 1, 100),
             PlannedStatus,
             [],
+            AstronomyAssetClassificationRules.ResolvePriority(plan.ContentCategoryCode, assetType),
+            AstronomyAssetClassificationRules.ResolveExecutionGroup(assetType),
             MetadataFor(plan, sceneName, assetType, objectNames, prompt));
     }
 

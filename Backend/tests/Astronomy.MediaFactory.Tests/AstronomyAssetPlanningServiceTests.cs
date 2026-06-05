@@ -142,6 +142,50 @@ public sealed class AstronomyAssetPlanningServiceTests
         Assert.Equal("Planned", plan.AssetPlanStatus);
     }
 
+    [Fact]
+    public async Task GenerateAssetPlansAsync_ClassifiesAssetPriorityAndExecutionGroup()
+    {
+        await using var db = CreateInMemoryDb();
+        SeedPlan(db, "PlanetConjunction", "Long", ["Venus", "Jupiter"]);
+        var service = CreateService(db);
+
+        var result = await service.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: true), CancellationToken.None);
+
+        var requirements = Assert.Single(result.AssetPlans).AssetRequirements;
+        Assert.Contains(requirements, r => r.AssetType == "TextOverlayCard" && r.AssetPriority == "Required" && r.AssetExecutionGroup == "Core");
+        Assert.Contains(requirements, r => r.AssetType == "StellariumScreenshot" && r.AssetPriority == "Preferred" && r.AssetExecutionGroup == "AstronomyVisualization");
+        Assert.Contains(requirements, r => r.AssetType == "ConstellationGuide" && r.AssetPriority == "Preferred" && r.AssetExecutionGroup == "Educational");
+        Assert.Contains(requirements, r => r.AssetType == "AiCinematicImage" && r.AssetPriority == "Optional" && r.AssetExecutionGroup == "Cinematic");
+    }
+
+    [Fact]
+    public async Task CreateAssetProductionJobsAsync_DryRun_ConvertsSavedAssetPlanRequirements()
+    {
+        await using var db = CreateInMemoryDb();
+        SeedPlan(db, "PlanetConjunction", "Long", ["Venus", "Jupiter"]);
+        var planning = CreateService(db);
+        await planning.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: false), CancellationToken.None);
+        var service = new AstronomyAssetProductionJobService(db, NullLogger<AstronomyAssetProductionJobService>.Instance);
+
+        var result = await service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: true), CancellationToken.None);
+
+        Assert.Equal(9, result.JobCount);
+        Assert.Equal(3, result.RequiredJobs);
+        Assert.Equal(3, result.PreferredJobs);
+        Assert.Equal(3, result.OptionalJobs);
+        Assert.All(result.Jobs, job => Assert.True(job.DryRun));
+        Assert.Contains(result.Jobs, j => j.AssetType == "StellariumScreenshot" && j.AssetPriority == "Preferred" && j.AssetExecutionGroup == "AstronomyVisualization");
+    }
+
+    [Fact]
+    public async Task CreateAssetProductionJobsAsync_DryRunFalse_IsRejected()
+    {
+        await using var db = CreateInMemoryDb();
+        var service = new AstronomyAssetProductionJobService(db, NullLogger<AstronomyAssetProductionJobService>.Instance);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: false), CancellationToken.None));
+    }
+
     private static AstronomyAssetPlanningService CreateService(MediaFactoryDbContext db)
         => new(db, NullLogger<AstronomyAssetPlanningService>.Instance);
 
