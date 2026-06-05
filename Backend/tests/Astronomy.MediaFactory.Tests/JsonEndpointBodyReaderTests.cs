@@ -57,6 +57,43 @@ public sealed class JsonEndpointBodyReaderTests
         await app.StopAsync();
     }
 
+
+    [Fact]
+    public async Task PreviewAssetProductionEndpoint_ReturnsBadRequestForMissingJsonContentType()
+    {
+        var previewService = new StubAssetProducerPreviewService();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IAstronomyAssetProducerPreviewService>(previewService);
+
+        var app = builder.Build();
+        app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpRequest httpRequest, IAstronomyAssetProducerPreviewService previews, ILogger<JsonEndpointBodyReaderTests> logger, CancellationToken ct) =>
+        {
+            var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyAssetProducerPreviewRequest>(httpRequest, "request", logger, ct);
+            if (requestBody.HasError)
+            {
+                return requestBody.ErrorResult!;
+            }
+
+            return Results.Ok(await previews.PreviewAssetProductionAsync(requestBody.Value!, ct));
+        });
+
+        await app.StartAsync();
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync(
+            "/api/astronomy-intelligence/preview-asset-production",
+            new ByteArrayContent([]));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<Dictionary<string, object?>>();
+        Assert.Equal("Request content type must be application/json.", payload!["message"]?.ToString());
+        Assert.Equal("request", payload["parameter"]?.ToString());
+        Assert.Equal(0, previewService.Calls);
+
+        await app.StopAsync();
+    }
+
     [Fact]
     public async Task PreviewAssetProductionEndpoint_PassesValidJsonToService()
     {

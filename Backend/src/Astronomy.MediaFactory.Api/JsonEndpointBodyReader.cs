@@ -8,6 +8,7 @@ public static class JsonEndpointBodyReader
 {
     private const string InvalidJsonMessage = "Request body must be a single valid JSON object.";
     private const string EmptyJsonMessage = "Request body is required.";
+    private const string InvalidJsonContentTypeMessage = "Request content type must be application/json.";
 
     public static async Task<JsonEndpointBodyReadResult<T>> ReadRequiredAsync<T>(
         HttpRequest request,
@@ -35,6 +36,16 @@ public static class JsonEndpointBodyReader
             return JsonEndpointBodyReadResult<T>.Invalid(Results.BadRequest(new
             {
                 message = InvalidJsonMessage,
+                parameter = parameterName,
+                detail = ex.Message
+            }));
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogWarning(ex, "Invalid JSON content type for {ParameterName}.", parameterName);
+            return JsonEndpointBodyReadResult<T>.Invalid(Results.BadRequest(new
+            {
+                message = InvalidJsonContentTypeMessage,
                 parameter = parameterName,
                 detail = ex.Message
             }));
