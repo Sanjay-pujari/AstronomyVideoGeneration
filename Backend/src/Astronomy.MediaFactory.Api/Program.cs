@@ -372,7 +372,8 @@ app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpR
     {
         return Results.BadRequest(new { message = ex.Message });
     }
-});
+})
+.Accepts<AstronomyAssetProducerPreviewRequest>("application/json");
 
 app.MapGet("/api/astronomy-intelligence/category-readiness", async (IAstronomyCategoryReadinessService readiness, CancellationToken ct) =>
     Results.Ok(await readiness.GetCategoryReadinessAsync(AstronomyOpportunityCategoryCodes.Phase7CategoryCodes, ct)));
