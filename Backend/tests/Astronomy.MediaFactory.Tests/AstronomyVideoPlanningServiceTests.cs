@@ -34,6 +34,8 @@ public sealed class AstronomyVideoPlanningServiceTests
             Assert.Equal("en", p.Language);
             Assert.Equal("IN-RJ-UDAIPUR", p.RegionId);
             Assert.Equal("Planned", p.Status);
+            Assert.False(string.IsNullOrWhiteSpace(p.SourceEventObjectIdsJson));
+            Assert.False(string.IsNullOrWhiteSpace(p.PlannedObjectNamesJson));
         });
         Assert.Contains(result.GeneratedPlans, p => p.PlannedFormat == "Short" && p.SceneCount == 5);
         Assert.Contains(result.GeneratedPlans, p => p.PlannedFormat == "Long" && p.SceneCount == 7);
@@ -61,12 +63,58 @@ public sealed class AstronomyVideoPlanningServiceTests
 
         Assert.Equal(1, first.SavedCount);
         Assert.Equal(1, await db.ContentGenerationPlans.CountAsync());
-        Assert.Contains(opportunity.Id.ToString("N"), (await db.ContentGenerationPlans.SingleAsync()).PlanningReason);
+        var saved = await db.ContentGenerationPlans.SingleAsync();
+        Assert.Equal(opportunity.Id, saved.AstronomyContentOpportunityId);
+        Assert.Equal(opportunity.AstronomyEventIntelligenceId, saved.AstronomyEventIntelligenceId);
+        Assert.False(string.IsNullOrWhiteSpace(saved.SourceEventObjectIdsJson));
+        Assert.False(string.IsNullOrWhiteSpace(saved.PlannedObjectNamesJson));
+        Assert.Equal("Planned", saved.PlanStatus);
+        Assert.Equal("Short", saved.PlannedFormat);
+        Assert.Equal(opportunity.PriorityScore, saved.PriorityScore);
+        Assert.Contains(opportunity.Id.ToString("N"), saved.PlanningReason);
         Assert.Equal(0, second.SavedCount);
         Assert.Equal(1, second.SkippedDuplicates);
         Assert.True(second.GeneratedPlans.Single().DuplicateSkipped);
         Assert.Equal(1, await db.ContentGenerationPlans.CountAsync());
     }
+
+    [Fact]
+    public async Task GenerateVideoPlansAsync_Save_DetectsDuplicateUsingTrackingColumns()
+    {
+        await using var db = CreateDb();
+        SeedMasterData(db);
+        var opportunity = SeedOpportunity(db, "TRACKING_DUPLICATE", "MoonSpecials", 8.5m);
+        db.ContentGenerationPlans.Add(new ContentGenerationPlan
+        {
+            ContentCategoryCode = "MoonSpecials",
+            Title = "Existing tracked plan",
+            Language = "en",
+            RegionId = "IN-RJ-UDAIPUR",
+            Status = "Planned",
+            AstronomyContentOpportunityId = opportunity.Id,
+            AstronomyEventIntelligenceId = opportunity.AstronomyEventIntelligenceId,
+            PlannedFormat = "Short",
+            PlanStatus = "Planned",
+            PriorityScore = opportunity.PriorityScore
+        });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        var result = await service.GenerateVideoPlansAsync(new AstronomyVideoPlanningRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            StartUtc: DateTimeOffset.Parse("2026-06-05T00:00:00Z"),
+            EndUtc: DateTimeOffset.Parse("2026-06-13T23:59:59Z"),
+            ContentCategories: ["MoonSpecials"],
+            MinPriorityScore: 7.5m,
+            MaxPlans: 10,
+            DryRun: false), CancellationToken.None);
+
+        Assert.Equal(0, result.SavedCount);
+        Assert.Equal(1, result.SkippedDuplicates);
+        Assert.True(result.GeneratedPlans.Single().DuplicateSkipped);
+        Assert.Equal(1, await db.ContentGenerationPlans.CountAsync());
+    }
+
 
     [Fact]
     public async Task GenerateVideoPlansAsync_FiltersStatusRegionDateCategoryAndScore()
