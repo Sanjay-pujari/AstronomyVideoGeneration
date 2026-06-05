@@ -19,6 +19,18 @@ public sealed class AstronomyContentOpportunityService(
         ["MOON_SPECIAL"] = ["MoonSpecials", "AstroPhotographyGuide"]
     };
 
+    private static readonly IReadOnlyDictionary<string, decimal> CategoryWeights = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["RareEventAlert"] = 2.00m,
+        ["PlanetConjunction"] = 1.75m,
+        ["PlanetGrouping"] = 1.00m,
+        ["AstroExplainer"] = 0.75m,
+        ["WeeklySkyForecast"] = 0.50m,
+        ["MoonSpecials"] = 0.50m,
+        ["AstroPhotographyGuide"] = 0.40m,
+        ["PlanetVisibilityGuide"] = 0.00m
+    };
+
     public async Task<AstronomyContentOpportunityResult> GenerateAsync(AstronomyContentOpportunityRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -120,12 +132,15 @@ public sealed class AstronomyContentOpportunityService(
     {
         var storyScore = Clamp(evt.AudienceInterestScore);
         var viralPotentialScore = Clamp(evt.ContentOpportunityScore);
-        var priorityScore = Clamp(
+        var basePriorityScore = Clamp(
             (evt.VisibilityScore * 0.30m) +
             (evt.RarityScore * 0.25m) +
             (storyScore * 0.20m) +
             (viralPotentialScore * 0.15m) +
             (evt.ConfidenceScore * 0.10m));
+        var categoryWeight = CategoryWeight(category);
+        var priorityScore = Clamp(basePriorityScore + categoryWeight);
+        var scoringReason = ScoringReason(category);
         var educationalValueScore = EducationalValueScore(evt, category, storyScore);
         var viralScore = ViralScore(evt, category, viralPotentialScore);
         var productionReadinessScore = ProductionReadinessScore(evt, category);
@@ -145,6 +160,9 @@ public sealed class AstronomyContentOpportunityService(
             BuildAngle(evt, category),
             AudienceSegment(category),
             priorityScore,
+            basePriorityScore,
+            categoryWeight,
+            scoringReason,
             Clamp(evt.VisibilityScore),
             Clamp(evt.RarityScore),
             storyScore,
@@ -185,7 +203,14 @@ public sealed class AstronomyContentOpportunityService(
             hook = Hook(dto.ContentCategory),
             tone = Tone(dto.ContentCategory),
             educationalValueScore = dto.EducationalValueScore,
-            viralScore = dto.ViralScore
+            viralScore = dto.ViralScore,
+            scoring = new
+            {
+                basePriorityScore = dto.BasePriorityScore,
+                categoryWeight = dto.CategoryWeight,
+                finalPriorityScore = dto.PriorityScore,
+                scoringReason = dto.ScoringReason
+            }
         }, JsonOptions),
         MetadataJson = JsonSerializer.Serialize(new
         {
@@ -201,12 +226,16 @@ public sealed class AstronomyContentOpportunityService(
             dto.EducationalValueScore,
             dto.ViralScore,
             dto.ProductionReadinessScore,
+            dto.BasePriorityScore,
+            dto.CategoryWeight,
+            finalPriorityScore = dto.PriorityScore,
+            dto.ScoringReason,
             dto.RequiresSkyfield,
             dto.RequiresConstellationGuide,
             dto.RequiresStellarium,
             dto.RequiresNasaAssets,
             dto.RequiresAiImages,
-            scoringFormula = "VisibilityScore * 0.30 + RarityScore * 0.25 + StoryScore * 0.20 + ViralPotentialScore * 0.15 + ConfidenceScore * 0.10"
+            scoringFormula = "FinalPriorityScore = min(10.00, (VisibilityScore * 0.30 + RarityScore * 0.25 + StoryScore * 0.20 + ViralPotentialScore * 0.15 + ConfidenceScore * 0.10) + CategoryWeight)"
         }, JsonOptions)
     };
 
@@ -262,6 +291,21 @@ public sealed class AstronomyContentOpportunityService(
         "AstroExplainer" => "Curious learners and science explainers audience",
         "AstroPhotographyGuide" => "Phone photographers and beginner astrophotographers",
         _ => "Beginner astronomy viewers"
+    };
+
+    private static decimal CategoryWeight(string category) => CategoryWeights.TryGetValue(category, out var weight) ? weight : 0m;
+
+    private static string ScoringReason(string category) => category switch
+    {
+        "RareEventAlert" => "Rare alert format has the highest urgency and strongest short-form hook.",
+        "PlanetConjunction" => "Specific conjunction event has higher urgency and stronger short-form hook than generic visibility.",
+        "PlanetGrouping" => "Multi-object grouping is more visually distinctive than a generic visibility window.",
+        "AstroExplainer" => "Explainer angle adds story depth and educational retention potential.",
+        "WeeklySkyForecast" => "Weekly highlight benefits from forecast context while staying below specific rare-event alerts.",
+        "MoonSpecials" => "Moon-focused special adds seasonal and visual hook value over routine visibility.",
+        "AstroPhotographyGuide" => "Photography guide adds practical capture value for viewers planning a sky shot.",
+        "PlanetVisibilityGuide" => "Generic planet visibility keeps the base score without an event-specific urgency boost.",
+        _ => "No category-specific priority adjustment was configured."
     };
 
     private static bool RequiresAiImages(string category) => category is "RareEventAlert" or "PlanetGrouping" or "AstroExplainer" or "MoonSpecials" or "AstroPhotographyGuide";
