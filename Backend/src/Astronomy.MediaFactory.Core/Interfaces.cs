@@ -359,7 +359,15 @@ public sealed record SkyfieldVisibilityRequest(
     double Longitude,
     string Timezone,
     DateOnly TargetDate,
-    IReadOnlyList<string> ObjectCodes);
+    IReadOnlyList<SkyfieldVisibilityCandidateRequest> Candidates)
+{
+    public IReadOnlyList<string> ObjectCodes => (Candidates ?? []).Select(candidate => candidate.ObjectCode).ToArray();
+}
+
+public sealed record SkyfieldVisibilityCandidateRequest(
+    string ObjectCode,
+    string ObjectName,
+    string ObjectType);
 
 public sealed record SkyfieldVisibilityObjectResult(
     string ObjectCode,
