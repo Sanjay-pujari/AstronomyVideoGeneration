@@ -115,6 +115,32 @@ public sealed class AstronomyVideoPlanningServiceTests
         Assert.Equal(1, await db.ContentGenerationPlans.CountAsync());
     }
 
+    [Fact]
+    public async Task GenerateVideoPlansAsync_Save_DoesNotPersistInactiveCategory()
+    {
+        await using var db = CreateDb();
+        SeedMasterData(db);
+        var category = await db.ContentCategories.SingleAsync(c => c.Code == "MoonSpecials");
+        category.Enabled = false;
+        db.ContentCategories.Update(category);
+        SeedOpportunity(db, "INACTIVE_MOON_SPECIAL", "MoonSpecials", 8.5m);
+
+        var service = CreateService(db);
+        var result = await service.GenerateVideoPlansAsync(new AstronomyVideoPlanningRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            StartUtc: DateTimeOffset.Parse("2026-06-05T00:00:00Z"),
+            EndUtc: DateTimeOffset.Parse("2026-06-13T23:59:59Z"),
+            ContentCategories: ["MoonSpecials"],
+            MinPriorityScore: 7.5m,
+            MaxPlans: 10,
+            DryRun: false), CancellationToken.None);
+
+        Assert.Equal(1, result.PlanCount);
+        Assert.Equal(0, result.SavedCount);
+        Assert.Equal(0, await db.ContentGenerationPlans.CountAsync());
+        Assert.Contains(result.Warnings, warning => warning.Contains("MoonSpecials", StringComparison.OrdinalIgnoreCase) && warning.Contains("inactive", StringComparison.OrdinalIgnoreCase));
+    }
+
 
     [Fact]
     public async Task GenerateVideoPlansAsync_FiltersStatusRegionDateCategoryAndScore()
@@ -144,7 +170,7 @@ public sealed class AstronomyVideoPlanningServiceTests
     }
 
     private static AstronomyVideoPlanningService CreateService(MediaFactoryDbContext db)
-        => new(db, NullLogger<AstronomyVideoPlanningService>.Instance);
+        => new(db, new AstronomyCategoryReadinessService(db), NullLogger<AstronomyVideoPlanningService>.Instance);
 
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
@@ -154,7 +180,12 @@ public sealed class AstronomyVideoPlanningServiceTests
         db.ContentCategories.AddRange(
             new ContentCategoryMaster { Code = "RareEventAlert", DisplayName = "Rare Event Alert", Enabled = true },
             new ContentCategoryMaster { Code = "PlanetConjunction", DisplayName = "Planet Conjunction", Enabled = true },
-            new ContentCategoryMaster { Code = "MoonSpecials", DisplayName = "Moon Specials", Enabled = true });
+            new ContentCategoryMaster { Code = "PlanetGrouping", DisplayName = "Planet Grouping", Enabled = true },
+            new ContentCategoryMaster { Code = "MoonSpecials", DisplayName = "Moon Specials", Enabled = true },
+            new ContentCategoryMaster { Code = "PlanetVisibilityGuide", DisplayName = "Planet Visibility Guide", Enabled = true },
+            new ContentCategoryMaster { Code = "AstroPhotographyGuide", DisplayName = "Astro Photography Guide", Enabled = true },
+            new ContentCategoryMaster { Code = "AstroExplainer", DisplayName = "Astro Explainer", Enabled = true },
+            new ContentCategoryMaster { Code = "WeeklySkyForecast", DisplayName = "Weekly Sky Forecast", Enabled = true });
         db.NarrationStyles.Add(new NarrationStyle { Code = "documentary", DisplayName = "Documentary", Enabled = true, Priority = 1 });
         db.ThumbnailStyles.Add(new ThumbnailStyle { Code = "bold", DisplayName = "Bold", Enabled = true, Priority = 1 });
         db.SaveChanges();
