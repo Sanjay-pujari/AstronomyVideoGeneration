@@ -7,6 +7,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class AstronomyVideoPlanningService(
     MediaFactoryDbContext db,
+    IAstronomyCategoryReadinessService categoryReadiness,
     ILogger<AstronomyVideoPlanningService> logger) : IAstronomyVideoPlanningService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -44,13 +45,16 @@ public sealed class AstronomyVideoPlanningService(
             ? request.ContentCategories.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : null;
 
-        var categories = await db.ContentCategories.AsNoTracking().ToListAsync(cancellationToken);
-        var enabledCategoryCodes = categories.Where(c => c.Enabled).Select(c => c.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (requestedCategories is not null)
-        {
-            foreach (var category in requestedCategories.Where(c => !enabledCategoryCodes.Contains(c)).OrderBy(c => c, StringComparer.OrdinalIgnoreCase))
-                warnings.Add($"Content category '{category}' is not present or enabled in content_categories; saved plans can still reference existing opportunity categories but downstream execution may reject them.");
-        }
+        var readinessCodes = requestedCategories is { Count: > 0 }
+            ? AstronomyOpportunityCategoryCodes.Phase7CategoryCodes.Concat(requestedCategories).ToArray()
+            : AstronomyOpportunityCategoryCodes.Phase7CategoryCodes;
+        var categoryReadinessResult = await categoryReadiness.GetCategoryReadinessAsync(readinessCodes, cancellationToken);
+        var readinessByCode = categoryReadinessResult.Categories.ToDictionary(c => c.CategoryCode, StringComparer.OrdinalIgnoreCase);
+        var allCategories = await db.ContentCategories.AsNoTracking().ToListAsync(cancellationToken);
+        var categoryByCode = allCategories.ToDictionary(c => c.Code, StringComparer.OrdinalIgnoreCase);
+        var enabledCategoryCodes = allCategories.Where(c => c.Enabled).Select(c => c.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var readiness in categoryReadinessResult.Categories.Where(c => !c.CanPlan))
+            warnings.Add($"{readiness.Warning} Phase 7D will not save plans for this category until it is active.");
 
         var defaultNarrationStyle = await db.NarrationStyles.AsNoTracking().Where(x => x.Enabled).OrderBy(x => x.Priority).Select(x => x.Code).FirstOrDefaultAsync(cancellationToken);
         var defaultThumbnailStyle = await db.ThumbnailStyles.AsNoTracking().Where(x => x.Enabled).OrderBy(x => x.Priority).Select(x => x.Code).FirstOrDefaultAsync(cancellationToken);
@@ -122,6 +126,18 @@ public sealed class AstronomyVideoPlanningService(
                 {
                     skippedDuplicates++;
                     persisted.Add(plan with { DuplicateSkipped = true });
+                    continue;
+                }
+
+                if (!enabledCategoryCodes.Contains(plan.ContentCategory))
+                {
+                    var readiness = readinessByCode.GetValueOrDefault(plan.ContentCategory);
+                    var warning = readiness?.Warning
+                        ?? (categoryByCode.TryGetValue(plan.ContentCategory, out var category) && !category.Enabled
+                            ? $"Content category '{plan.ContentCategory}' exists but is inactive in content_categories."
+                            : $"Content category '{plan.ContentCategory}' is missing from content_categories.");
+                    warnings.Add($"Plan for opportunity '{plan.OpportunityId}' was not saved because {warning}");
+                    persisted.Add(plan);
                     continue;
                 }
 

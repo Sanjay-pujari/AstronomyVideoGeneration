@@ -328,6 +328,9 @@ app.MapPost("/api/astronomy-intelligence/generate-video-plans", async (Astronomy
     }
 });
 
+app.MapGet("/api/astronomy-intelligence/category-readiness", async (IAstronomyCategoryReadinessService readiness, CancellationToken ct) =>
+    Results.Ok(await readiness.GetCategoryReadinessAsync(AstronomyOpportunityCategoryCodes.Phase7CategoryCodes, ct)));
+
 
 
 app.MapGet("/api/content-master/categories", async (MediaFactoryDbContext db, CancellationToken ct) =>
