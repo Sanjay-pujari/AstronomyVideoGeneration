@@ -2,6 +2,8 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Astronomy.MediaFactory.Contracts;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -31,7 +33,7 @@ public sealed class AstronomyEventDetectionServiceTests
                 new VisibleCelestialObjectResult("VENUS", "Venus", "Planet", true, null, null, null, new DateTime(2026, 6, 5, 15, 5, 0, DateTimeKind.Utc), new DateTime(2026, 6, 5, 15, 50, 0, DateTimeKind.Utc), 7, 8.5, 8, 8, 9, "Visible", 40, 112, -4.0m, null)
             ],
             ["Visibility source: Skyfield."]);
-        var service = new AstronomyEventDetectionService(db, new StubVisibilityService(visibility), NullLogger<AstronomyEventDetectionService>.Instance);
+        var service = new AstronomyEventDetectionService(db, new StubVisibilityService(visibility), new AstronomyEventConsolidationService(), Options.Create(new AstronomyEventsOptions()), NullLogger<AstronomyEventDetectionService>.Instance);
 
         var result = await service.DetectEventsAsync(new AstronomyEventDetectionRequest(
             "udaipur",
@@ -40,7 +42,7 @@ public sealed class AstronomyEventDetectionServiceTests
             73.7125,
             "Asia/Kolkata",
             new DateTimeOffset(2026, 6, 5, 0, 0, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 6, 5, 23, 59, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 6, 5, 18, 0, 0, TimeSpan.Zero),
             ["MoonSpecial", "BrightPlanetVisibility", "PlanetGrouping", "PlanetConjunction"],
             DryRun: true), CancellationToken.None);
 
@@ -48,6 +50,8 @@ public sealed class AstronomyEventDetectionServiceTests
         Assert.Contains(result.Events, e => e.EventType == "BRIGHT_PLANET_VISIBILITY");
         Assert.Contains(result.Events, e => e.EventType == "PLANET_GROUPING");
         Assert.Contains(result.Events, e => e.EventType == "PLANET_CONJUNCTION");
+        Assert.True(result.DryRun);
+        Assert.Equal(0, result.SavedCount);
         Assert.Equal(1, result.Diagnostics?.DaysScanned);
         Assert.Equal(1, result.Diagnostics?.SkyfieldDaysSuccessful);
         Assert.Equal(3, result.Diagnostics?.VisibleObjectCount);
