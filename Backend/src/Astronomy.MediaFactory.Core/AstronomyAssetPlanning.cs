@@ -72,7 +72,8 @@ public sealed record AstronomyAssetProductionJobResult(
     int RequiredJobs,
     int PreferredJobs,
     int OptionalJobs,
-    IReadOnlyList<AstronomyAssetProductionJobDto> Jobs);
+    IReadOnlyList<AstronomyAssetProductionJobDto> Jobs,
+    IReadOnlyList<string> Warnings);
 
 public sealed record AstronomyAssetProductionJobDto(
     Guid ContentGenerationPlanId,

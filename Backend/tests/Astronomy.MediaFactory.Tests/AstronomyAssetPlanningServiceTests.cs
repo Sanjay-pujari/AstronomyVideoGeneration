@@ -178,6 +178,31 @@ public sealed class AstronomyAssetPlanningServiceTests
     }
 
     [Fact]
+    public async Task CreateAssetProductionJobsAsync_DryRun_SkipsInvalidAssetPlanJsonWithWarning()
+    {
+        await using var db = CreateInMemoryDb();
+        SeedPlan(db, "PlanetConjunction", "Long", ["Venus", "Jupiter"]);
+        var invalidPlan = SeedPlan(db, "RareEventAlert", "Short", ["Moon"]);
+        invalidPlan.AssetPlanJson = "{not-json";
+        await db.SaveChangesAsync();
+
+        var planning = CreateService(db);
+        await planning.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(
+            DryRun: false,
+            ContentCategories: ["PlanetConjunction"]), CancellationToken.None);
+        var service = new AstronomyAssetProductionJobService(db, NullLogger<AstronomyAssetProductionJobService>.Instance);
+
+        var result = await service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: true), CancellationToken.None);
+
+        Assert.Equal(9, result.JobCount);
+        var warning = Assert.Single(result.Warnings);
+        Assert.Contains(invalidPlan.Id.ToString(), warning);
+        Assert.Contains("invalid AssetPlanJson", warning);
+        Assert.All(result.Jobs, job => Assert.NotEqual(invalidPlan.Id, job.ContentGenerationPlanId));
+        Assert.DoesNotContain(db.ChangeTracker.Entries(), entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted);
+    }
+
+    [Fact]
     public async Task CreateAssetProductionJobsAsync_DryRunFalse_IsRejected()
     {
         await using var db = CreateInMemoryDb();
