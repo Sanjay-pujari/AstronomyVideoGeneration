@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.Common;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Astronomy.MediaFactory.Core;
 
@@ -536,6 +537,10 @@ public sealed class ContentGenerationPlan : EntityBase
     public bool GeneratedByAi { get; set; }
     public int Priority { get; set; } = 100;
     public string? PlanningReason { get; set; }
+    [NotMapped]
+    public string? AssetPlanJson { get; set; }
+    [NotMapped]
+    public string? AssetPlanStatus { get; set; }
     public AstronomyContentOpportunity? AstronomyContentOpportunity { get; set; }
     public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
 }
