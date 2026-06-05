@@ -70,9 +70,27 @@ public sealed class AstronomyContentOpportunityServiceTests
         Assert.Contains("urgency", scoring.GetProperty("scoringReason").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void SeedEvent(MediaFactoryDbContext db, string code, string eventType, string title, decimal score)
+
+    [Fact]
+    public async Task GenerateAsync_PersistsSelectedEventObjectTrackingJson()
     {
-        db.AstronomyEventIntelligences.Add(new AstronomyEventIntelligence
+        await using var db = CreateDb();
+        SeedEvent(db, "tracked-conjunction", "PLANET_CONJUNCTION", "Tracked conjunction", 7.18m, "Venus", "Jupiter");
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        await service.GenerateAsync(new AstronomyContentOpportunityRequest(DryRun: false), CancellationToken.None);
+
+        var saved = await db.AstronomyContentOpportunities.SingleAsync(o => o.ContentCategory == "PlanetConjunction");
+        using var idDoc = JsonDocument.Parse(saved.SelectedEventObjectIdsJson!);
+        using var nameDoc = JsonDocument.Parse(saved.SelectedObjectNamesJson!);
+        Assert.Equal(2, idDoc.RootElement.GetArrayLength());
+        Assert.Equal(["Venus", "Jupiter"], nameDoc.RootElement.EnumerateArray().Select(x => x.GetString()).ToArray());
+    }
+
+    private static void SeedEvent(MediaFactoryDbContext db, string code, string eventType, string title, decimal score, params string[] objectNames)
+    {
+        var evt = new AstronomyEventIntelligence
         {
             EventCode = code,
             EventType = eventType,
@@ -87,7 +105,19 @@ public sealed class AstronomyContentOpportunityServiceTests
             AudienceInterestScore = score,
             TimingUrgencyScore = score,
             ContentOpportunityScore = score
-        });
+        };
+
+        foreach (var objectName in objectNames)
+        {
+            evt.Objects.Add(new AstronomyEventObject
+            {
+                ObjectName = objectName,
+                ObjectType = "Planet",
+                ObjectRole = "Primary"
+            });
+        }
+
+        db.AstronomyEventIntelligences.Add(evt);
     }
 
     private static AstronomyContentOpportunityService CreateService(MediaFactoryDbContext db) => new(db, NullLogger<AstronomyContentOpportunityService>.Instance);

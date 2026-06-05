@@ -43,6 +43,8 @@ public sealed record AstronomyContentOpportunityDto(
     bool RequiresNasaAssets,
     bool RequiresAiImages,
     string Status,
+    IReadOnlyList<Guid> SelectedEventObjectIds,
+    IReadOnlyList<string> SelectedObjectNames,
     bool DuplicateSkipped);
 
 public interface IAstronomyContentOpportunityService

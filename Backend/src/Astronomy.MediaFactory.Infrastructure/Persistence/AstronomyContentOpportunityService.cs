@@ -57,6 +57,7 @@ public sealed class AstronomyContentOpportunityService(
             query = query.Where(e => requestedTypes.Contains(e.EventType));
 
         var events = await query
+            .Include(e => e.Objects)
             .OrderByDescending(e => e.ContentOpportunityScore)
             .ThenByDescending(e => e.VisibilityScore)
             .ThenBy(e => e.StartUtc)
@@ -149,6 +150,11 @@ public sealed class AstronomyContentOpportunityService(
         var requiresNasaAssets = category is "MoonSpecials" or "AstroExplainer";
         var requiresAiImages = RequiresAiImages(category);
 
+        var selectedObjects = evt.Objects
+            .OrderBy(o => o.CreatedUtc)
+            .ThenBy(o => o.ObjectName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         return new AstronomyContentOpportunityDto(
             null,
             evt.Id,
@@ -177,6 +183,8 @@ public sealed class AstronomyContentOpportunityService(
             RequiresNasaAssets: requiresNasaAssets,
             RequiresAiImages: requiresAiImages,
             Status: "Proposed",
+            SelectedEventObjectIds: selectedObjects.Select(o => o.Id).ToArray(),
+            SelectedObjectNames: selectedObjects.Select(o => o.ObjectName).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             DuplicateSkipped: false);
     }
 
@@ -189,6 +197,8 @@ public sealed class AstronomyContentOpportunityService(
         AudienceSegment = dto.AudienceSegment,
         PriorityScore = dto.PriorityScore,
         Status = dto.Status,
+        SelectedEventObjectIdsJson = JsonSerializer.Serialize(dto.SelectedEventObjectIds, JsonOptions),
+        SelectedObjectNamesJson = JsonSerializer.Serialize(dto.SelectedObjectNames, JsonOptions),
         VisualStrategyJson = JsonSerializer.Serialize(new
         {
             dto.RequiresSkyfield,
