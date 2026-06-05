@@ -3,6 +3,8 @@ using Astronomy.MediaFactory.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -129,6 +131,24 @@ public sealed class JsonEndpointBodyReaderTests
         Assert.Equal(1, previewService.LastRequest?.MaxJobs);
 
         await app.StopAsync();
+    }
+
+
+    [Fact]
+    public void PreviewAssetProductionEndpoint_DeclaresJsonRequestBodyForOpenApi()
+    {
+        var app = WebApplication.CreateBuilder().Build();
+
+        app.MapPost("/api/astronomy-intelligence/preview-asset-production", () => Results.Ok())
+            .Accepts<AstronomyAssetProducerPreviewRequest>("application/json");
+
+        var dataSource = Assert.Single(((IEndpointRouteBuilder)app).DataSources);
+        var endpoint = Assert.Single(dataSource.Endpoints);
+        var acceptsMetadata = endpoint.Metadata.GetMetadata<IAcceptsMetadata>();
+
+        Assert.NotNull(acceptsMetadata);
+        Assert.Equal(typeof(AstronomyAssetProducerPreviewRequest), acceptsMetadata.RequestType);
+        Assert.Contains("application/json", acceptsMetadata.ContentTypes);
     }
 
     private sealed class StubAssetProducerPreviewService : IAstronomyAssetProducerPreviewService
