@@ -27,7 +27,7 @@ public sealed class AstronomyAssetPlanningServiceTests
         Assert.Equal(0, result.SavedCount);
         Assert.False(string.IsNullOrWhiteSpace(result.AssetPlans.Single().AssetRequirements.First().PromptOrInstruction));
         Assert.Null(plan.AssetPlanJson);
-        Assert.Null(plan.AssetPlanStatus);
+        Assert.Equal("Planned", plan.AssetPlanStatus);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public sealed class AstronomyAssetPlanningServiceTests
     }
 
     [Fact]
-    public async Task GenerateAssetPlansAsync_DryRunFalse_SkipsSaveWhenAssetPlanColumnsDoNotExist()
+    public async Task GenerateAssetPlansAsync_DryRunFalse_SavesWhenAssetPlanColumnsExist()
     {
         await using var connection = new SqliteConnection("DataSource=:memory:");
         await connection.OpenAsync();
@@ -93,9 +93,13 @@ public sealed class AstronomyAssetPlanningServiceTests
         var result = await service.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: false), CancellationToken.None);
 
         Assert.Equal(1, result.PlanCount);
-        Assert.Equal(0, result.SavedCount);
-        Assert.Contains(result.Warnings, w => w.Contains("asset_plan_json", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(1, result.SavedCount);
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("asset_plan_json", StringComparison.OrdinalIgnoreCase));
         Assert.Single(result.AssetPlans);
+        var savedJson = await db.ContentGenerationPlans.Select(p => p.AssetPlanJson).SingleAsync();
+        var savedStatus = await db.ContentGenerationPlans.Select(p => p.AssetPlanStatus).SingleAsync();
+        Assert.False(string.IsNullOrWhiteSpace(savedJson));
+        Assert.Equal("Planned", savedStatus);
     }
 
     [Fact]
@@ -115,6 +119,27 @@ public sealed class AstronomyAssetPlanningServiceTests
         Assert.Equal(1, result.SkippedDuplicates);
         Assert.Empty(result.AssetPlans);
         Assert.Equal("{\"existing\":true}", plan.AssetPlanJson);
+    }
+
+
+    [Fact]
+    public async Task GenerateAssetPlansAsync_OverwriteTrue_ReplacesExistingAssetPlan()
+    {
+        await using var db = CreateInMemoryDb();
+        var plan = SeedPlan(db, "RareEventAlert", "Short");
+        plan.AssetPlanJson = "{\"existing\":true}";
+        plan.AssetPlanStatus = "Planned";
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        var result = await service.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: false, OverwriteExisting: true), CancellationToken.None);
+
+        Assert.Equal(1, result.PlanCount);
+        Assert.Equal(1, result.SavedCount);
+        Assert.Equal(0, result.SkippedDuplicates);
+        Assert.NotEqual("{\"existing\":true}", plan.AssetPlanJson);
+        Assert.Contains("sceneAssetGroups", plan.AssetPlanJson);
+        Assert.Equal("Planned", plan.AssetPlanStatus);
     }
 
     private static AstronomyAssetPlanningService CreateService(MediaFactoryDbContext db)

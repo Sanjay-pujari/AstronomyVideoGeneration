@@ -1,6 +1,5 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.Common;
-using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Astronomy.MediaFactory.Core;
 
@@ -511,6 +510,14 @@ public sealed class ContentIdeaTemplate : EntityBase
 
 public sealed class ContentGenerationPlan : EntityBase
 {
+    public void AssignId(Guid id)
+    {
+        if (id == Guid.Empty)
+            throw new ArgumentException("Content generation plan id cannot be empty.", nameof(id));
+
+        Id = id;
+    }
+
     public string ContentCategoryCode { get; set; } = "";
     public Guid? PipelineRunId { get; set; }
     public string? Title { get; set; }
@@ -537,10 +544,8 @@ public sealed class ContentGenerationPlan : EntityBase
     public bool GeneratedByAi { get; set; }
     public int Priority { get; set; } = 100;
     public string? PlanningReason { get; set; }
-    [NotMapped]
     public string? AssetPlanJson { get; set; }
-    [NotMapped]
-    public string? AssetPlanStatus { get; set; }
+    public string AssetPlanStatus { get; set; } = "Planned";
     public AstronomyContentOpportunity? AstronomyContentOpportunity { get; set; }
     public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
 }
