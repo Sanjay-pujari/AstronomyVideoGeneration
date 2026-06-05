@@ -3,6 +3,7 @@ using System;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(MediaFactoryDbContext))]
-    partial class MediaFactoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260605135918_UpdateEntities_20260605_2")]
+    partial class UpdateEntities_20260605_2
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
