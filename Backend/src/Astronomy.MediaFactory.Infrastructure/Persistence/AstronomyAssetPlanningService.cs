@@ -78,9 +78,6 @@ public sealed class AstronomyAssetPlanningService(
             if (!request.DryRun && schemaSupportsSave)
             {
                 var json = JsonSerializer.Serialize(assetPlan, JsonOptions);
-                plan.AssetPlanJson = json;
-                plan.AssetPlanStatus = PlannedStatus;
-                plan.Touch();
                 await SaveAssetPlanAsync(plan, json, cancellationToken);
                 savedCount++;
             }
@@ -412,34 +409,31 @@ public sealed class AstronomyAssetPlanningService(
         if (!db.Database.IsRelational())
             return plan.AssetPlanJson;
 
-        var connection = db.Database.GetDbConnection();
-        await db.Database.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "select asset_plan_json from content_generation_plans where id = @id";
-        var parameter = command.CreateParameter();
-        parameter.ParameterName = "@id";
-        parameter.Value = plan.Id;
-        command.Parameters.Add(parameter);
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-        return result is null or DBNull ? null : Convert.ToString(result);
+        return await db.ContentGenerationPlans
+            .Where(x => x.Id == plan.Id)
+            .Select(x => x.AssetPlanJson)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     private async Task SaveAssetPlanAsync(ContentGenerationPlan plan, string assetPlanJson, CancellationToken cancellationToken)
     {
-        if (!db.Database.IsRelational())
+        if (db.Database.IsRelational())
         {
-            await db.SaveChangesAsync(cancellationToken);
+            await db.ContentGenerationPlans
+                .Where(x => x.Id == plan.Id)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(x => x.AssetPlanJson, assetPlanJson)
+                    .SetProperty(x => x.AssetPlanStatus, PlannedStatus), cancellationToken);
+
+            plan.AssetPlanJson = assetPlanJson;
+            plan.AssetPlanStatus = PlannedStatus;
+            db.Entry(plan).State = EntityState.Unchanged;
             return;
         }
 
-        var provider = db.Database.ProviderName ?? "";
-        if (provider.Contains("Npgsql", StringComparison.OrdinalIgnoreCase))
-        {
-            await db.Database.ExecuteSqlInterpolatedAsync($"update content_generation_plans set asset_plan_json = {assetPlanJson}::jsonb, asset_plan_status = {PlannedStatus}, updated_utc = {DateTimeOffset.UtcNow} where id = {plan.Id}", cancellationToken);
-            return;
-        }
-
-        await db.Database.ExecuteSqlInterpolatedAsync($"update content_generation_plans set asset_plan_json = {assetPlanJson}, asset_plan_status = {PlannedStatus}, updated_utc = {DateTimeOffset.UtcNow} where id = {plan.Id}", cancellationToken);
+        plan.AssetPlanJson = assetPlanJson;
+        plan.AssetPlanStatus = PlannedStatus;
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     private static HashSet<string>? ToSet(IReadOnlyList<string>? values) => values is { Count: > 0 }
