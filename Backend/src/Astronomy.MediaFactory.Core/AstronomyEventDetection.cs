@@ -21,7 +21,20 @@ public sealed record AstronomyEventDetectionResult(
     int DetectedCount,
     int SavedCount,
     IReadOnlyList<DetectedAstronomyEventDto> Events,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    AstronomyEventDetectionDiagnostics? Diagnostics = null);
+
+public sealed record AstronomyEventDetectionDiagnostics(
+    int DaysScanned,
+    int SkyfieldDaysSuccessful,
+    int VisibleObjectCount,
+    IReadOnlyList<AstronomyEventCandidateReason> CandidateReasons);
+
+public sealed record AstronomyEventCandidateReason(
+    string EventCode,
+    string EventType,
+    DateOnly TargetDate,
+    string CandidateReason);
 
 public sealed record DetectedAstronomyEventDto(
     Guid? Id,

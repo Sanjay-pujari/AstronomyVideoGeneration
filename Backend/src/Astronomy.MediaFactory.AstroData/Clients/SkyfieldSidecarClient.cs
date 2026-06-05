@@ -202,6 +202,7 @@ public sealed class SkyfieldObjectVisibility
     public string? BestUtcTime { get; set; }
     public double? AltitudeDegrees { get; set; }
     public double? AzimuthDegrees { get; set; }
+    public double? Magnitude { get; set; }
     public string? DirectionLabel { get; set; }
     public List<SkyfieldVisibilitySample> Samples { get; set; } = new();
 }

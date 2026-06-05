@@ -46,6 +46,8 @@ public sealed class SkyfieldVisibilityClientTests
         Assert.True(response.Success);
         Assert.Equal("JUPITER", response.Objects.Single().ObjectCode);
         Assert.True(response.Objects.Single().Visible);
+        Assert.Equal(42.5, response.Objects.Single().MaxAltitudeDegrees);
+        Assert.Equal(110, response.Objects.Single().BestViewingAzimuthDegrees);
         Assert.Equal("/visibility/night-plan", handler.RequestUri?.AbsolutePath);
         using var doc = JsonDocument.Parse(handler.RequestBody!);
         var root = doc.RootElement;
