@@ -173,7 +173,11 @@ public sealed class AstronomyAssetPlanningServiceTests
         Assert.Equal(3, result.RequiredJobs);
         Assert.Equal(3, result.PreferredJobs);
         Assert.Equal(3, result.OptionalJobs);
+        Assert.Equal(0, result.SavedCount);
+        Assert.Equal(0, result.SkippedDuplicates);
+        Assert.Empty(db.AstronomyAssetProductionJobs);
         Assert.All(result.Jobs, job => Assert.True(job.DryRun));
+        Assert.All(result.Jobs, job => Assert.Equal(AstronomyAssetProductionJobStatuses.Pending, job.Status));
         Assert.Contains(result.Jobs, j => j.AssetType == "StellariumScreenshot" && j.AssetPriority == "Preferred" && j.AssetExecutionGroup == "AstronomyVisualization");
     }
 
@@ -203,12 +207,80 @@ public sealed class AstronomyAssetPlanningServiceTests
     }
 
     [Fact]
-    public async Task CreateAssetProductionJobsAsync_DryRunFalse_IsRejected()
+    public async Task CreateAssetProductionJobsAsync_DryRunFalse_SavesJobs()
     {
         await using var db = CreateInMemoryDb();
+        SeedPlan(db, "PlanetConjunction", "Long", ["Venus", "Jupiter"]);
+        var planning = CreateService(db);
+        await planning.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: false), CancellationToken.None);
         var service = new AstronomyAssetProductionJobService(db, NullLogger<AstronomyAssetProductionJobService>.Instance);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: false), CancellationToken.None));
+        var result = await service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: false), CancellationToken.None);
+
+        Assert.Equal(9, result.JobCount);
+        Assert.Equal(9, result.SavedCount);
+        Assert.Equal(0, result.SkippedDuplicates);
+        Assert.Equal(9, await db.AstronomyAssetProductionJobs.CountAsync());
+        Assert.All(await db.AstronomyAssetProductionJobs.ToListAsync(), job => Assert.Equal(AstronomyAssetProductionJobStatuses.Pending, job.Status));
+        Assert.Contains(await db.AstronomyAssetProductionJobs.ToListAsync(), j => j.ObjectNamesJson != null && j.ObjectNamesJson.Contains("Venus"));
+    }
+
+    [Fact]
+    public async Task CreateAssetProductionJobsAsync_DuplicateRetry_DoesNotCreateAdditionalJobs()
+    {
+        await using var db = CreateInMemoryDb();
+        SeedPlan(db, "PlanetConjunction", "Long", ["Venus", "Jupiter"]);
+        var planning = CreateService(db);
+        await planning.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: false), CancellationToken.None);
+        var service = new AstronomyAssetProductionJobService(db, NullLogger<AstronomyAssetProductionJobService>.Instance);
+
+        var first = await service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: false), CancellationToken.None);
+        var second = await service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: false), CancellationToken.None);
+
+        Assert.Equal(9, first.SavedCount);
+        Assert.Equal(0, second.JobCount);
+        Assert.Equal(0, second.SavedCount);
+        Assert.Equal(9, second.SkippedDuplicates);
+        Assert.Equal(9, await db.AstronomyAssetProductionJobs.CountAsync());
+    }
+
+    [Fact]
+    public async Task CreateAssetProductionJobsAsync_CompletedJobsArePreserved()
+    {
+        await using var db = CreateInMemoryDb();
+        SeedPlan(db, "PlanetConjunction", "Long", ["Venus", "Jupiter"]);
+        var planning = CreateService(db);
+        var planResult = await planning.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: false), CancellationToken.None);
+        var service = new AstronomyAssetProductionJobService(db, NullLogger<AstronomyAssetProductionJobService>.Instance);
+        var firstRequirement = Assert.Single(planResult.AssetPlans).AssetRequirements.First();
+        var completed = new AstronomyAssetProductionJob
+        {
+            ContentGenerationPlanId = planResult.AssetPlans.Single().ContentGenerationPlanId,
+            SceneNumber = firstRequirement.SceneNumber,
+            SceneName = firstRequirement.SceneName,
+            AssetType = firstRequirement.AssetType,
+            AssetPurpose = firstRequirement.AssetPurpose,
+            PlannedProvider = firstRequirement.PlannedProvider,
+            PromptOrInstruction = firstRequirement.PromptOrInstruction,
+            ExpectedOutputType = firstRequirement.ExpectedOutputType,
+            Priority = firstRequirement.Priority,
+            AssetPriority = firstRequirement.AssetPriority,
+            AssetExecutionGroup = firstRequirement.AssetExecutionGroup,
+            Status = AstronomyAssetProductionJobStatuses.Completed,
+            OutputPath = "/assets/completed.png",
+            CompletedUtc = DateTimeOffset.Parse("2026-06-07T13:00:00Z")
+        };
+        db.AstronomyAssetProductionJobs.Add(completed);
+        await db.SaveChangesAsync();
+
+        var result = await service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: false), CancellationToken.None);
+
+        Assert.Equal(8, result.SavedCount);
+        Assert.Equal(1, result.SkippedDuplicates);
+        var preserved = await db.AstronomyAssetProductionJobs.SingleAsync(j => j.Id == completed.Id);
+        Assert.Equal(AstronomyAssetProductionJobStatuses.Completed, preserved.Status);
+        Assert.Equal("/assets/completed.png", preserved.OutputPath);
+        Assert.Equal(9, await db.AstronomyAssetProductionJobs.CountAsync());
     }
 
     private static AstronomyAssetPlanningService CreateService(MediaFactoryDbContext db)

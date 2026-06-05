@@ -59,6 +59,7 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<AstronomyContentOpportunity> AstronomyContentOpportunities => Set<AstronomyContentOpportunity>();
     public DbSet<AstronomyReferenceSource> AstronomyReferenceSources => Set<AstronomyReferenceSource>();
     public DbSet<AstronomyEventValidation> AstronomyEventValidations => Set<AstronomyEventValidation>();
+    public DbSet<AstronomyAssetProductionJob> AstronomyAssetProductionJobs => Set<AstronomyAssetProductionJob>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
         (left, right) => left != null && right != null ? left.SequenceEqual(right) : left == right,
@@ -96,6 +97,7 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.ApplyConfiguration(new AstronomyContentOpportunityConfiguration());
         modelBuilder.ApplyConfiguration(new AstronomyReferenceSourceConfiguration());
         modelBuilder.ApplyConfiguration(new AstronomyEventValidationConfiguration());
+        modelBuilder.ApplyConfiguration(new AstronomyAssetProductionJobConfiguration());
 
         modelBuilder.Entity<PipelineRun>().ToTable("pipeline_runs").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineRun>().Property(x => x.RegionId).HasColumnName("regionId");

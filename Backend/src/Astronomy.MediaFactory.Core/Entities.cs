@@ -550,6 +550,45 @@ public sealed class ContentGenerationPlan : EntityBase
     public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
 }
 
+
+public sealed class AstronomyAssetProductionJob : EntityBase
+{
+    public Guid ContentGenerationPlanId { get; set; }
+    public Guid? AstronomyContentOpportunityId { get; set; }
+    public Guid? AstronomyEventIntelligenceId { get; set; }
+    public int SceneNumber { get; set; }
+    public string SceneName { get; set; } = "";
+    public string AssetType { get; set; } = "";
+    public string AssetPurpose { get; set; } = "";
+    public string PlannedProvider { get; set; } = "";
+    public string? ObjectNamesJson { get; set; }
+    public string? PromptOrInstruction { get; set; }
+    public string? ExpectedOutputType { get; set; }
+    public int Priority { get; set; }
+    public string AssetPriority { get; set; } = AstronomyAssetClassificationRules.Optional;
+    public string AssetExecutionGroup { get; set; } = AstronomyAssetClassificationRules.Core;
+    public string Status { get; set; } = AstronomyAssetProductionJobStatuses.Pending;
+    public string? OutputPath { get; set; }
+    public string? MetadataJson { get; set; }
+    public string? FailureReason { get; set; }
+    public DateTimeOffset? StartedUtc { get; set; }
+    public DateTimeOffset? CompletedUtc { get; set; }
+
+    public ContentGenerationPlan? ContentGenerationPlan { get; set; }
+    public AstronomyContentOpportunity? AstronomyContentOpportunity { get; set; }
+    public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
+}
+
+public static class AstronomyAssetProductionJobStatuses
+{
+    public const string Pending = "Pending";
+    public const string Queued = "Queued";
+    public const string InProgress = "InProgress";
+    public const string Completed = "Completed";
+    public const string Failed = "Failed";
+    public const string Skipped = "Skipped";
+}
+
 public sealed class ContentPipelineExecution : EntityBase
 {
     public Guid? ContentGenerationPlanId { get; set; }
