@@ -31,8 +31,11 @@ public sealed class AstronomyAssetPlanningService(
         var categories = ToSet(request.ContentCategories);
         var formats = ToSet(request.PlannedFormats);
 
+        var schemaSupportsSave = await SchemaSupportsAssetPlanAsync(cancellationToken);
+        if (!schemaSupportsSave)
+            warnings.Add("content_generation_plans has no suitable asset plan JSON/status fields. Proposed minimal schema: asset_plan_json jsonb nullable; asset_plan_status varchar default 'Planned'. No asset plans were saved.");
+
         var query = db.ContentGenerationPlans
-            .Include(p => p.AstronomyEventIntelligence)
             .AsQueryable()
             .Where(p => p.PlanStatus == PlannedStatus);
 
@@ -51,10 +54,9 @@ public sealed class AstronomyAssetPlanningService(
         if (request.MaxPlans.HasValue)
             query = query.Take(request.MaxPlans.Value);
 
-        var plans = await query.ToListAsync(cancellationToken);
-        var schemaSupportsSave = await SchemaSupportsAssetPlanAsync(cancellationToken);
-        if (!schemaSupportsSave)
-            warnings.Add("content_generation_plans has no suitable asset plan JSON/status fields. Proposed minimal schema: asset_plan_json jsonb nullable; asset_plan_status varchar default 'Planned'. No asset plans were saved.");
+        var plans = schemaSupportsSave || !db.Database.IsRelational()
+            ? await query.Include(p => p.AstronomyEventIntelligence).ToListAsync(cancellationToken)
+            : await LoadPlansWithoutAssetColumnsAsync(query, cancellationToken);
 
         var assetPlans = new List<AstronomyAssetPlanDto>();
         var savedCount = 0;
@@ -86,6 +88,80 @@ public sealed class AstronomyAssetPlanningService(
 
         logger.LogInformation("Phase 7E asset planning generated {PlanCount} plan(s), {RequirementCount} requirement(s). DryRun={DryRun} Saved={SavedCount}", assetPlans.Count, assetPlans.Sum(p => p.AssetRequirementCount), request.DryRun, savedCount);
         return new AstronomyAssetPlanningResult(plans.Count, assetPlans.Sum(p => p.AssetRequirementCount), savedCount, skippedDuplicates, request.DryRun, assetPlans, warnings);
+    }
+
+    private static async Task<List<ContentGenerationPlan>> LoadPlansWithoutAssetColumnsAsync(IQueryable<ContentGenerationPlan> query, CancellationToken cancellationToken)
+    {
+        var projected = await query
+            .Select(p => new
+            {
+                p.Id,
+                p.ContentCategoryCode,
+                p.PipelineRunId,
+                p.Title,
+                p.Language,
+                p.RegionId,
+                p.ScheduledUtc,
+                p.Status,
+                p.AstronomyContentOpportunityId,
+                p.AstronomyEventIntelligenceId,
+                p.SourceEventObjectIdsJson,
+                p.PlannedObjectNamesJson,
+                p.PlanStatus,
+                p.PlannedFormat,
+                p.PriorityScore,
+                p.FinalVideoPath,
+                p.ThumbnailPath,
+                p.FailureReason,
+                p.CompletedUtc,
+                p.PrimaryCelestialObjectCode,
+                p.PrimaryAstronomyEventTypeCode,
+                p.HookStyleCode,
+                p.NarrationStyleCode,
+                p.ThumbnailStyleCode,
+                p.GeneratedByAi,
+                p.Priority,
+                p.PlanningReason,
+                EventLocationName = p.AstronomyEventIntelligence == null ? null : p.AstronomyEventIntelligence.LocationName,
+                EventPeakUtc = p.AstronomyEventIntelligence == null ? null : p.AstronomyEventIntelligence.PeakUtc
+            })
+            .ToListAsync(cancellationToken);
+
+        return projected.Select(p =>
+        {
+            var plan = new ContentGenerationPlan
+            {
+                ContentCategoryCode = p.ContentCategoryCode,
+                PipelineRunId = p.PipelineRunId,
+                Title = p.Title,
+                Language = p.Language,
+                RegionId = p.RegionId,
+                ScheduledUtc = p.ScheduledUtc,
+                Status = p.Status,
+                AstronomyContentOpportunityId = p.AstronomyContentOpportunityId,
+                AstronomyEventIntelligenceId = p.AstronomyEventIntelligenceId,
+                SourceEventObjectIdsJson = p.SourceEventObjectIdsJson,
+                PlannedObjectNamesJson = p.PlannedObjectNamesJson,
+                PlanStatus = p.PlanStatus,
+                PlannedFormat = p.PlannedFormat,
+                PriorityScore = p.PriorityScore,
+                FinalVideoPath = p.FinalVideoPath,
+                ThumbnailPath = p.ThumbnailPath,
+                FailureReason = p.FailureReason,
+                CompletedUtc = p.CompletedUtc,
+                PrimaryCelestialObjectCode = p.PrimaryCelestialObjectCode,
+                PrimaryAstronomyEventTypeCode = p.PrimaryAstronomyEventTypeCode,
+                HookStyleCode = p.HookStyleCode,
+                NarrationStyleCode = p.NarrationStyleCode,
+                ThumbnailStyleCode = p.ThumbnailStyleCode,
+                GeneratedByAi = p.GeneratedByAi,
+                Priority = p.Priority,
+                PlanningReason = p.PlanningReason,
+                AstronomyEventIntelligence = p.EventLocationName is null && p.EventPeakUtc is null ? null : new AstronomyEventIntelligence { LocationName = p.EventLocationName ?? string.Empty, PeakUtc = p.EventPeakUtc }
+            };
+            plan.AssignId(p.Id);
+            return plan;
+        }).ToList();
     }
 
     private AstronomyAssetPlanDto BuildAssetPlan(ContentGenerationPlan plan, List<string> warnings)
