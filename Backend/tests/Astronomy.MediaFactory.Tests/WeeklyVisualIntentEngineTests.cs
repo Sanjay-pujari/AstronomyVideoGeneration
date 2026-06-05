@@ -85,7 +85,7 @@ public sealed class WeeklyVisualIntentEngineTests
         var shotPlan = await ReadJsonAsync<WeeklyVisualIntentShotPlan>(response.VisualIntentShotPlanPath);
         shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Overlays).Should().OnlyContain(x => x.IsOverlay);
         shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Shots).Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.AssetPath) && File.Exists(x.AssetPath));
-        shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Shots).Should().NotContain(x => x.VisualFamily is "MotionGraphic" or "MotionGraphics" or "EducationalOverlay" || x.IsOverlay);
+        shotPlan.Episodes.SelectMany(x => x.Segments).SelectMany(x => x.Shots).Should().NotContain(x => x.VisualFamily == "MotionGraphic" || x.VisualFamily == "MotionGraphics" || x.VisualFamily == "EducationalOverlay" || x.IsOverlay);
     }
 
     [Fact]
