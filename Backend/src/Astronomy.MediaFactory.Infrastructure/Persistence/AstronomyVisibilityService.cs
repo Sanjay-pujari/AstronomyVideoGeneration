@@ -25,7 +25,14 @@ public sealed class AstronomyVisibilityService(MediaFactoryDbContext db, ISkyfie
         }
 
         var cfg = options.Value;
-        var skyReq = new SkyfieldVisibilityRequest(request.RegionId, request.LocationName, request.Latitude, request.Longitude, request.Timezone, request.TargetDate, selected.Select(x => x.Code).ToArray());
+        var skyReq = new SkyfieldVisibilityRequest(
+            request.RegionId,
+            request.LocationName,
+            request.Latitude,
+            request.Longitude,
+            request.Timezone,
+            request.TargetDate,
+            selected.Select(x => new SkyfieldVisibilityCandidateRequest(x.Code, x.Name, x.ObjectType)).ToArray());
         var sky = await skyfieldClient.CalculateAsync(skyReq, cancellationToken);
 
         DateTime sunsetUtc;
