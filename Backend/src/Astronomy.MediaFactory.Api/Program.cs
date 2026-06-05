@@ -302,6 +302,19 @@ app.MapPost("/api/astronomy-intelligence/detect-events", async (AstronomyEventDe
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-content-opportunities", async (AstronomyContentOpportunityRequest request, IAstronomyContentOpportunityService opportunities, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy content opportunity generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await opportunities.GenerateAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 
 
 app.MapGet("/api/content-master/categories", async (MediaFactoryDbContext db, CancellationToken ct) =>
