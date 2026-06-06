@@ -40,29 +40,45 @@ public sealed class StellariumCaptureExecutionService(
         var failedCount = 0;
         var skippedCount = 0;
 
+        var jobIdsSupplied = request.JobIds is { Count: > 0 };
+        var requestedJobIds = request.JobIds?.Where(id => id != Guid.Empty).Distinct().ToArray() ?? [];
+        var requestedJobIdsCount = request.JobIds?.Count ?? 0;
+
         var query = db.AstronomyAssetProductionJobs
             .Include(j => j.ContentGenerationPlan)
-            .Where(j => j.AssetType.ToLower() == StellariumScreenshot.ToLower())
-            .Where(j => j.OutputPath != null && j.OutputPath.ToLower().EndsWith(".ssc"))
+            .Where(x => x.AssetType == StellariumScreenshot)
             .AsQueryable();
+
+        if (jobIdsSupplied)
+            query = query.Where(x => requestedJobIds.Contains(x.Id));
 
         if (!string.IsNullOrWhiteSpace(request.RegionId))
         {
             var regionId = request.RegionId.Trim();
-            query = query.Where(j => j.ContentGenerationPlan != null && j.ContentGenerationPlan.RegionId == regionId);
+            query = query.Where(x => x.ContentGenerationPlan != null && x.ContentGenerationPlan.RegionId == regionId);
         }
 
-        if (request.JobIds is { Count: > 0 })
-        {
-            var jobIds = request.JobIds.Where(id => id != Guid.Empty).ToHashSet();
-            query = query.Where(j => jobIds.Contains(j.Id));
-        }
+        var databaseMatchedJobIdsCount = jobIdsSupplied
+            ? await query.CountAsync(cancellationToken)
+            : 0;
+
+        query = query.Where(x =>
+            x.OutputPath != null &&
+            x.OutputPath.EndsWith(".ssc"));
 
         var candidates = await query
             .OrderBy(j => j.Priority)
             .ThenBy(j => j.SceneNumber)
             .ThenBy(j => j.Id)
             .ToListAsync(cancellationToken);
+        var eligibleJobCount = candidates.Count;
+
+        if (jobIdsSupplied && eligibleJobCount == 0)
+        {
+            const string warning = "Requested jobIds were not found after capture eligibility filtering.";
+            warnings.Add(warning);
+            logger.LogWarning("Requested jobIds were not found after capture eligibility filtering.");
+        }
 
         var selectedJobs = new List<CaptureJobPlan>();
         foreach (var job in candidates)
@@ -155,7 +171,10 @@ public sealed class StellariumCaptureExecutionService(
             lastValidation?.FileSizeBytes,
             lastValidation?.ImageWidth,
             lastValidation?.ImageHeight,
-            lastValidation?.RetryCount ?? 0);
+            lastValidation?.RetryCount ?? 0,
+            requestedJobIdsCount,
+            databaseMatchedJobIdsCount,
+            eligibleJobCount);
     }
 
     private CaptureJobPlan BuildPlan(AstronomyAssetProductionJob job, string? requestedRegionId)

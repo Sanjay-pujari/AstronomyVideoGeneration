@@ -19,7 +19,10 @@ public sealed record StellariumCaptureExecutionResult(
     long? FileSizeBytes = null,
     int? ImageWidth = null,
     int? ImageHeight = null,
-    int RetryCount = 0);
+    int RetryCount = 0,
+    int RequestedJobIdsCount = 0,
+    int DatabaseMatchedJobIdsCount = 0,
+    int EligibleJobCount = 0);
 
 public sealed record StellariumCaptureValidationSummary(
     Guid JobId,
