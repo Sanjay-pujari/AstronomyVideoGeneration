@@ -50,7 +50,45 @@ public sealed class StellariumCapturePreviewServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task PreviewCaptureAsync_MissingMetadata_ReturnsInvalidPreviewWarningWithoutLaunchingOrGeneratingFiles()
+    public async Task PreviewCaptureAsync_FalseLandscapeAndConstellationLineRequirements_ReturnsValidPreviewWithoutWarnings()
+    {
+        await using var db = CreateDb();
+        var job = await SeedCompletedStellariumScreenshotJobAsync(db, _workingDirectory);
+        var metadataPath = Path.Combine(Path.GetDirectoryName(job.OutputPath)!, $"{Path.GetFileNameWithoutExtension(job.OutputPath)}.metadata.json");
+        await File.WriteAllTextAsync(metadataPath, JsonSerializer.Serialize(new
+        {
+            assetType = "StellariumScreenshot",
+            objectNames = new[] { "Moon" },
+            regionId = "IN-RJ-UDAIPUR",
+            scheduledUtc = "2026-06-07T11:00:00Z",
+            peakUtc = "2026-06-07T11:30:00Z",
+            orientation = "Portrait clean astronomy scene",
+            requiresConstellationLines = false,
+            requiresLabels = true,
+            requiresLandscape = false,
+            sscFile = job.OutputPath,
+            captureExecuted = false
+        }));
+        var beforeFiles = Directory.GetFiles(_workingDirectory, "*", SearchOption.AllDirectories).OrderBy(path => path).ToArray();
+        var service = CreateService(db);
+
+        var result = await service.PreviewCaptureAsync(new StellariumCapturePreviewRequest("IN-RJ-UDAIPUR", [job.Id], 50), CancellationToken.None);
+
+        Assert.Equal(1, result.JobCount);
+        Assert.Equal(1, result.Valid);
+        Assert.Equal(0, result.Invalid);
+        Assert.Equal(0, result.Warnings);
+        var preview = Assert.Single(result.CapturePreviews);
+        Assert.False(preview.RequiresConstellationLines);
+        Assert.False(preview.RequiresLandscape);
+        Assert.Empty(preview.Warnings);
+        Assert.Equal("Valid", preview.ValidationStatus);
+        Assert.False(File.Exists(preview.ExpectedCapturePath));
+        Assert.Equal(beforeFiles, Directory.GetFiles(_workingDirectory, "*", SearchOption.AllDirectories).OrderBy(path => path).ToArray());
+    }
+
+    [Fact]
+    public async Task PreviewCaptureAsync_MissingMetadata_ReturnsValidPreviewWarningWithoutLaunchingOrGeneratingFiles()
     {
         await using var db = CreateDb();
         var job = await SeedCompletedStellariumScreenshotJobAsync(db, _workingDirectory, writeMetadata: false);
@@ -60,11 +98,11 @@ public sealed class StellariumCapturePreviewServiceTests : IDisposable
         var result = await service.PreviewCaptureAsync(new StellariumCapturePreviewRequest("IN-RJ-UDAIPUR", [job.Id], 50), CancellationToken.None);
 
         Assert.Equal(1, result.JobCount);
-        Assert.Equal(0, result.Valid);
-        Assert.Equal(1, result.Invalid);
+        Assert.Equal(1, result.Valid);
+        Assert.Equal(0, result.Invalid);
         Assert.Equal(1, result.Warnings);
         var preview = Assert.Single(result.CapturePreviews);
-        Assert.Equal("Invalid", preview.ValidationStatus);
+        Assert.Equal("Valid", preview.ValidationStatus);
         Assert.Contains(preview.Warnings, warning => warning.Contains("Metadata file does not exist", StringComparison.OrdinalIgnoreCase));
         Assert.EndsWith($"capture-scene-{job.SceneNumber}-{job.Id:D}.png", preview.ExpectedCapturePath);
         Assert.Contains("Stellarium.exe", preview.CaptureCommandPreview);

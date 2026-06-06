@@ -91,9 +91,12 @@ public sealed class StellariumCapturePreviewService(
         var scheduledUtc = ReadString(metadata, "scheduledUtc") ?? FormatUtc(job.ContentGenerationPlan?.ScheduledUtc);
         var peakUtc = ReadString(metadata, "peakUtc") ?? ReadString(metadata, "eventPeakUtc");
         var orientation = ReadString(metadata, "orientation") ?? ReadString(metadata, "suggestedOrientation");
-        var requiresLabels = ReadBool(metadata, "requiresLabels") ?? true;
-        var requiresConstellationLines = ReadBool(metadata, "requiresConstellationLines") ?? true;
-        var requiresLandscape = ReadBool(metadata, "requiresLandscape") ?? IsLandscape(orientation);
+        var requiresLabelsMetadata = ReadBool(metadata, "requiresLabels");
+        var requiresConstellationLinesMetadata = ReadBool(metadata, "requiresConstellationLines");
+        var requiresLandscapeMetadata = ReadBool(metadata, "requiresLandscape");
+        var requiresLabels = requiresLabelsMetadata ?? true;
+        var requiresConstellationLines = requiresConstellationLinesMetadata ?? true;
+        var requiresLandscape = requiresLandscapeMetadata ?? IsLandscape(orientation);
         var eventIntelligenceId = job.AstronomyEventIntelligenceId
             ?? job.ContentGenerationPlan?.AstronomyEventIntelligenceId
             ?? ReadGuid(metadata, "astronomyEventIntelligenceId")
@@ -107,14 +110,12 @@ public sealed class StellariumCapturePreviewService(
             warnings.Add("Missing orientation.");
         if (string.IsNullOrWhiteSpace(scheduledUtc) && string.IsNullOrWhiteSpace(peakUtc))
             warnings.Add("Missing scheduledUtc or peakUtc.");
-        if (!requiresLabels)
-            warnings.Add("Missing labels.");
-        if (!requiresConstellationLines)
-            warnings.Add("Missing constellation lines.");
-        if (!requiresLandscape)
-            warnings.Add("Missing landscape.");
+        if (requiresLabelsMetadata is null)
+            warnings.Add("Missing labels metadata.");
+        if (requiresConstellationLinesMetadata is null)
+            warnings.Add("Missing requiresConstellationLines metadata.");
 
-        var validationStatus = ResolveValidationStatus(sscFile, metadataFile, targetObjects, scheduledUtc, peakUtc);
+        var validationStatus = ResolveValidationStatus();
 
         return new StellariumCapturePreview(
             job.Id,
@@ -187,18 +188,8 @@ public sealed class StellariumCapturePreviewService(
         }
     }
 
-    private static string ResolveValidationStatus(string sscFile, string metadataFile, IReadOnlyList<string> targetObjects, string? scheduledUtc, string? peakUtc)
-    {
-        if (string.IsNullOrWhiteSpace(sscFile) || !File.Exists(sscFile))
-            return StellariumCaptureValidationStatuses.Invalid;
-        if (string.IsNullOrWhiteSpace(metadataFile) || !File.Exists(metadataFile))
-            return StellariumCaptureValidationStatuses.Invalid;
-        if (targetObjects.Count == 0)
-            return StellariumCaptureValidationStatuses.Invalid;
-        if (string.IsNullOrWhiteSpace(scheduledUtc) && string.IsNullOrWhiteSpace(peakUtc))
-            return StellariumCaptureValidationStatuses.Invalid;
-        return StellariumCaptureValidationStatuses.Valid;
-    }
+    private static string ResolveValidationStatus()
+        => StellariumCaptureValidationStatuses.Valid;
 
     private static JsonObject ParseMetadata(string? metadataJson)
     {
