@@ -2,6 +2,8 @@ using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -53,7 +55,12 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
         Assert.Equal(0, result.FailedCount);
         var capturePath = Assert.Single(result.CapturedFiles);
         Assert.True(File.Exists(capturePath));
-        Assert.True(new FileInfo(capturePath).Length > 0);
+        Assert.True(new FileInfo(capturePath).Length > 100 * 1024);
+        Assert.Equal("Passed", result.ValidationStatus);
+        Assert.True(result.FileSizeBytes > 100 * 1024);
+        Assert.True(result.ImageWidth >= 1280);
+        Assert.True(result.ImageHeight >= 720);
+        Assert.Equal(0, result.RetryCount);
         var saved1 = await db.AstronomyAssetProductionJobs.SingleAsync(j => j.Id == job1.Id);
         var saved2 = await db.AstronomyAssetProductionJobs.SingleAsync(j => j.Id == job2.Id);
         Assert.Equal(capturePath, saved1.OutputPath);
@@ -81,6 +88,11 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
         Assert.Equal(sscPath, document.RootElement.GetProperty("sscFile").GetString());
         Assert.True(document.RootElement.GetProperty("captureExecuted").GetBoolean());
         Assert.Equal("Phase8D.3", document.RootElement.GetProperty("captureSource").GetString());
+        Assert.Equal(1, document.RootElement.GetProperty("captureAttemptCount").GetInt32());
+        Assert.Equal("Passed", document.RootElement.GetProperty("validationResult").GetString());
+        Assert.True(document.RootElement.GetProperty("fileSizeBytes").GetInt64() > 100 * 1024);
+        Assert.True(document.RootElement.GetProperty("imageWidth").GetInt32() >= 1280);
+        Assert.True(document.RootElement.GetProperty("imageHeight").GetInt32() >= 720);
     }
 
     [Fact]
@@ -92,7 +104,7 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
         var dryRun = await service.ExecuteCaptureAsync(new StellariumAssetCaptureExecutionRequest("IN-RJ-UDAIPUR", [job.Id], 1, DryRun: true), CancellationToken.None);
         var expectedCapture = Assert.Single(dryRun.CapturedFiles);
         Directory.CreateDirectory(Path.GetDirectoryName(expectedCapture)!);
-        await File.WriteAllBytesAsync(expectedCapture, [137, 80, 78, 71]);
+        await WriteValidPngAsync(expectedCapture);
 
         var result = await service.ExecuteCaptureAsync(new StellariumAssetCaptureExecutionRequest("IN-RJ-UDAIPUR", [job.Id], 1, DryRun: false, OverwriteExisting: false), CancellationToken.None);
 
@@ -100,6 +112,27 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
         Assert.Equal(1, result.SkippedCount);
         Assert.Empty(result.CapturedFiles);
         Assert.Contains(result.Warnings, warning => warning.Contains("already exists", StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    [Fact]
+    public async Task ExecuteCaptureAsync_RetriesOnceWhenFirstPngValidationFails()
+    {
+        await using var db = CreateDb();
+        var job = await SeedCompletedStellariumScreenshotJobAsync(db, _workingDirectory, sceneNumber: 5, priority: 1);
+        var executable = await CreateRetryFakeStellariumAsync(_workingDirectory);
+        var service = CreateService(db, executable);
+
+        var result = await service.ExecuteCaptureAsync(new StellariumAssetCaptureExecutionRequest("IN-RJ-UDAIPUR", [job.Id], 1, DryRun: false, OverwriteExisting: true), CancellationToken.None);
+
+        Assert.Equal(1, result.CompletedCount);
+        Assert.Equal("Passed", result.ValidationStatus);
+        Assert.Equal(1, result.RetryCount);
+        var saved = await db.AstronomyAssetProductionJobs.SingleAsync(j => j.Id == job.Id);
+        using var document = JsonDocument.Parse(saved.MetadataJson!);
+        Assert.Equal(2, document.RootElement.GetProperty("captureAttemptCount").GetInt32());
+        Assert.Equal(1, document.RootElement.GetProperty("retryCount").GetInt32());
+        Assert.Equal("Passed", document.RootElement.GetProperty("validationResult").GetString());
     }
 
     public void Dispose()
@@ -120,8 +153,10 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
 
     private static async Task<string> CreateFakeStellariumAsync(string workingDirectory)
     {
+        var fixturePng = Path.Combine(workingDirectory, "valid-stellarium-capture.png");
+        await WriteValidPngAsync(fixturePng);
         var executable = Path.Combine(workingDirectory, "fake-stellarium.sh");
-        await File.WriteAllTextAsync(executable, """
+        await File.WriteAllTextAsync(executable, $"""
 #!/usr/bin/env bash
 script=""
 while [[ $# -gt 0 ]]; do
@@ -136,11 +171,64 @@ line=$(grep 'core.screenshot' "$script")
 prefix=$(echo "$line" | sed -E 's/.*core\.screenshot\("([^"]+)".*/\1/')
 dir=$(echo "$line" | sed -E 's/.*core\.screenshot\("[^"]+", false, "([^"]+)".*/\1/')
 mkdir -p "$dir"
-printf '\x89PNG\r\n\x1a\nPhase8D3' > "$dir/$prefix.png"
+cp "{fixturePng}" "$dir/$prefix.png"
 exit 0
 """);
         File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return executable;
+    }
+
+    private static async Task<string> CreateRetryFakeStellariumAsync(string workingDirectory)
+    {
+        var fixturePng = Path.Combine(workingDirectory, "valid-stellarium-capture-retry.png");
+        await WriteValidPngAsync(fixturePng);
+        var attemptFile = Path.Combine(workingDirectory, "capture-attempt-count.txt");
+        var executable = Path.Combine(workingDirectory, "fake-stellarium-retry.sh");
+        await File.WriteAllTextAsync(executable, $"""
+#!/usr/bin/env bash
+script=""
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "--startup-script" ]]; then
+    script="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+line=$(grep 'core.screenshot' "$script")
+prefix=$(echo "$line" | sed -E 's/.*core\.screenshot\("([^"]+)".*/\1/')
+dir=$(echo "$line" | sed -E 's/.*core\.screenshot\("[^"]+", false, "([^"]+)".*/\1/')
+mkdir -p "$dir"
+count=0
+if [[ -f "{attemptFile}" ]]; then count=$(cat "{attemptFile}"); fi
+count=$((count + 1))
+echo "$count" > "{attemptFile}"
+if [[ "$count" == "1" ]]; then
+  printf '\x89PNG\r\n\x1a\ncorrupt' > "$dir/$prefix.png"
+else
+  cp "{fixturePng}" "$dir/$prefix.png"
+fi
+exit 0
+""");
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return executable;
+    }
+
+    private static async Task WriteValidPngAsync(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var image = new Image<Rgba32>(1280, 720);
+        var random = new Random(12345);
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < row.Length; x++)
+                    row[x] = new Rgba32((byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256), 255);
+            }
+        });
+        await image.SaveAsPngAsync(path);
     }
 
     private static async Task<AstronomyAssetProductionJob> SeedCompletedStellariumScreenshotJobAsync(MediaFactoryDbContext db, string workingDirectory, int sceneNumber, int priority)
