@@ -43,7 +43,6 @@ public sealed class StellariumCaptureExecutionService(
         var query = db.AstronomyAssetProductionJobs
             .Include(j => j.ContentGenerationPlan)
             .Where(j => j.AssetType.ToLower() == StellariumScreenshot.ToLower())
-            .Where(j => j.Status == AstronomyAssetProductionJobStatuses.Completed)
             .Where(j => j.OutputPath != null && j.OutputPath.ToLower().EndsWith(".ssc"))
             .AsQueryable();
 
@@ -69,6 +68,13 @@ public sealed class StellariumCaptureExecutionService(
         foreach (var job in candidates)
         {
             var plan = BuildPlan(job, request.RegionId);
+            if (!IsUsableSsc(plan.SscPath))
+            {
+                skippedCount++;
+                warnings.Add($"Skipped StellariumScreenshot job '{job.Id}' because its SSC OutputPath is not usable or the file does not exist: {plan.SscPath}");
+                continue;
+            }
+
             if (!request.OverwriteExisting && ValidatePng(plan.CapturePath).Passed)
             {
                 skippedCount++;
@@ -289,6 +295,8 @@ public sealed class StellariumCaptureExecutionService(
         metadata["capturePath"] = plan.CapturePath;
         metadata["sscFile"] = plan.SscPath;
         metadata["captureExecuted"] = true;
+        metadata["sscGenerationStatus"] = AstronomyAssetProductionJobStatuses.Completed;
+        metadata["captureStatus"] = AstronomyAssetProductionJobStatuses.Completed;
         metadata["captureSource"] = CaptureSource;
         metadata["captureCompletedUtc"] = DateTimeOffset.UtcNow.ToString("O");
         metadata["captureExecutionScriptPath"] = execution.ExecutionScriptPath;
@@ -335,6 +343,9 @@ public sealed class StellariumCaptureExecutionService(
         metadata["sscPath"] = plan.SscPath;
         metadata["capturePath"] = plan.CapturePath;
         metadata["captureExecuted"] = false;
+        metadata["sscGenerationStatus"] = AstronomyAssetProductionJobStatuses.Completed;
+        metadata["captureStatus"] = AstronomyAssetProductionJobStatuses.Failed;
+        metadata["failureReason"] = warning;
         metadata["captureWarning"] = warning;
         metadata["captureWarningUtc"] = DateTimeOffset.UtcNow.ToString("O");
         metadata["captureSource"] = CaptureSource;
