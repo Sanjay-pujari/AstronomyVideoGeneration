@@ -205,7 +205,17 @@ public sealed record WeeklyRendererValidationReport(
     bool ResolutionPlanPassed,
     bool TransitionPlanPassed,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    bool ProfessionalVideoQualityPassed = false,
+    bool NotScreenshotSlideshowPassed = false,
+    bool EditorialStructurePassed = false,
+    bool CinematicPacingPassed = false,
+    bool CleanVisualHierarchyPassed = false,
+    bool ReadableOverlayPassed = false,
+    bool NarrationDrivenSceneFlowPassed = false,
+    bool ReusableAstronomyAssetsPassed = false,
+    bool FallbackAssetCoveragePassed = false,
+    bool QualityValidationBeforeRenderPassed = false);
 
 public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRenderPreparationEngine> logger) : IWeeklyFfmpegRenderPreparationEngine
 {
@@ -512,7 +522,29 @@ public sealed class WeeklyFfmpegRenderPreparationEngine(ILogger<WeeklyFfmpegRend
         if (!durationPassed) errors.Add("Timeline durations do not match target render contract durations.");
         if (!resolutionPassed) errors.Add("Resolution/fps/pixel-format plan failed.");
         if (!transitionPassed) errors.Add("Transition plan failed.");
-        var ready = longformReady && shortformReady && manifest.AllTimelineAssetsFound && manifest.AllTimelineAssetsReadable && durationPassed && resolutionPassed && transitionPassed && audioPlan.AudioAlignmentPlanReady && motionPlan.MotionEffectPlanReady;
-        return new WeeklyRendererValidationReport(ready, longformReady, shortformReady, manifest.Assets.Count > 0 && manifest.Errors.Count == 0, filterGraphPlan.Outputs.Count == 2, motionPlan.MotionEffectPlanReady, transitionPlan.TransitionPlanReady, audioPlan.AudioAlignmentPlanReady, manifest.AllTimelineAssetsFound, manifest.AllTimelineAssetsReadable, durationPassed, resolutionPassed, transitionPassed, warnings, errors);
+
+        var allSegments = (timeline.Longform.Segments ?? []).Concat(timeline.Shortform.Segments ?? []).ToList();
+        var allShots = allSegments.SelectMany(x => x.Shots ?? []).ToList();
+        var distinctSegmentTypes = allSegments.Select(x => x.SegmentType).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var distinctAssetTypes = manifest.Assets.Select(x => x.AssetType).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var distinctMotionEffects = motionPlan.Motions.Select(x => x.MotionEffect).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var overlayShots = allShots.Where(x => x.IsOverlay).ToList();
+        var screenshotLikeShots = allShots.Count(x => x.AssetType.Contains("Stellarium", StringComparison.OrdinalIgnoreCase) || x.AssetType.Contains("NASA", StringComparison.OrdinalIgnoreCase) || x.AssetType.Contains("Screenshot", StringComparison.OrdinalIgnoreCase));
+        var screenshotLikeRatio = allShots.Count == 0 ? 1d : (double)screenshotLikeShots / allShots.Count;
+        var notScreenshotSlideshowPassed = allShots.Count > 0 && distinctAssetTypes >= 3 && distinctMotionEffects >= 2 && screenshotLikeRatio < 0.85d;
+        var editorialStructurePassed = allSegments.Count >= 3 && distinctSegmentTypes >= 3;
+        var cinematicPacingPassed = motionPlan.MotionEffectPlanReady && transitionPlan.TransitionPlanReady && allShots.All(x => x.DurationSeconds > 0) && distinctMotionEffects >= 2;
+        var cleanVisualHierarchyPassed = allSegments.All(segment => (segment.Shots ?? []).Any(shot => !shot.IsOverlay));
+        var readableOverlayPassed = overlayShots.Count == 0 || overlayShots.All(x => x.OverlayStartSecond is null || x.OverlayEndSecond is null || x.OverlayEndSecond > x.OverlayStartSecond);
+        var narrationDrivenSceneFlowPassed = audioPlan.AudioAlignmentPlanReady && allSegments.All(x => !string.IsNullOrWhiteSpace(x.NarrationText));
+        var reusableAstronomyAssetsPassed = manifest.Assets.Count >= allShots.Count && distinctAssetTypes >= 3;
+        var fallbackAssetCoveragePassed = manifest.RenderInputHydrationPassed && manifest.AllTimelineAssetsFound && manifest.AllTimelineAssetsReadable && distinctAssetTypes >= 3;
+        var qualityValidationBeforeRenderPassed = errors.Count == 0 && manifest.Errors.Count == 0 && filterGraphPlan.Outputs.Count == 2;
+        var professionalVideoQualityPassed = notScreenshotSlideshowPassed && editorialStructurePassed && cinematicPacingPassed && cleanVisualHierarchyPassed && readableOverlayPassed && narrationDrivenSceneFlowPassed && reusableAstronomyAssetsPassed && fallbackAssetCoveragePassed && qualityValidationBeforeRenderPassed;
+        if (!professionalVideoQualityPassed)
+            errors.Add("Professional video quality gate failed before rendering: AstroPulse output cannot be a screenshot slideshow and must include editorial structure, cinematic pacing, readable overlays, narration-driven scene flow, reusable astronomy/fallback assets, and validation artifacts.");
+
+        var ready = longformReady && shortformReady && manifest.AllTimelineAssetsFound && manifest.AllTimelineAssetsReadable && durationPassed && resolutionPassed && transitionPassed && audioPlan.AudioAlignmentPlanReady && motionPlan.MotionEffectPlanReady && professionalVideoQualityPassed;
+        return new WeeklyRendererValidationReport(ready, longformReady, shortformReady, manifest.Assets.Count > 0 && manifest.Errors.Count == 0, filterGraphPlan.Outputs.Count == 2, motionPlan.MotionEffectPlanReady, transitionPlan.TransitionPlanReady, audioPlan.AudioAlignmentPlanReady, manifest.AllTimelineAssetsFound, manifest.AllTimelineAssetsReadable, durationPassed, resolutionPassed, transitionPassed, warnings, errors, professionalVideoQualityPassed, notScreenshotSlideshowPassed, editorialStructurePassed, cinematicPacingPassed, cleanVisualHierarchyPassed, readableOverlayPassed, narrationDrivenSceneFlowPassed, reusableAstronomyAssetsPassed, fallbackAssetCoveragePassed, qualityValidationBeforeRenderPassed);
     }
 }
