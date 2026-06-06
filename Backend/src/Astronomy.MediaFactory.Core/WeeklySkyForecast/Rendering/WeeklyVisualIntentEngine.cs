@@ -238,7 +238,17 @@ public sealed record WeeklyVisualIntentValidationReport(
     IReadOnlyDictionary<string, int> PrimaryFamilyCounts,
     IReadOnlyDictionary<string, bool> ObjectCoverage,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    bool ProfessionalVideoQualityPassed = false,
+    bool NotScreenshotSlideshowPassed = false,
+    bool EditorialStructurePassed = false,
+    bool CinematicPacingPassed = false,
+    bool CleanVisualHierarchyPassed = false,
+    bool ReadableOverlayPassed = false,
+    bool NarrationDrivenSceneFlowPassed = false,
+    bool ReusableAstronomyAssetsPassed = false,
+    bool FallbackAssetCoveragePassed = false,
+    bool QualityValidationBeforeRenderPassed = false);
 
 
 public sealed record WeeklyVisualIntentRenderSafeValidationReport(
@@ -1822,9 +1832,37 @@ public sealed class WeeklyVisualIntentEngine(
         var venus = objectCoverage["VENUS"];
         var moon = objectCoverage["MOON"];
         var everyBeatHasSubject = beats.All(x => !string.IsNullOrWhiteSpace(x.NarrationSubject));
+        var primaryFamilies = beats.Select(x => x.PrimaryVisual.VisualFamily).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
+        var allFamilies = beats.SelectMany(x => new[] { x.PrimaryVisual }.Concat(x.SecondaryVisual is null ? [] : new[] { x.SecondaryVisual }).Concat(x.Overlays))
+            .Select(x => x.VisualFamily)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToList();
+        var screenshotLikePrimaryCount = primaryFamilies.Count(x => x.Equals("Stellarium", StringComparison.OrdinalIgnoreCase) || x.Equals("NASA", StringComparison.OrdinalIgnoreCase) || x.Equals("CelestialReference", StringComparison.OrdinalIgnoreCase));
+        var screenshotLikePrimaryRatio = beats.Count == 0 ? 1d : (double)screenshotLikePrimaryCount / beats.Count;
+        var distinctPrimaryFamilies = primaryFamilies.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var distinctAllFamilies = allFamilies.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var overlays = beats.SelectMany(x => x.Overlays).ToList();
+        var averageBeatDuration = beats.Count == 0 ? 0d : beats.Average(x => x.DurationSeconds);
+        var notScreenshotSlideshowPassed = beats.Count > 0 && distinctPrimaryFamilies >= 3 && sameFamilyMax <= 2 && screenshotLikePrimaryRatio < 0.75d;
+        var editorialStructurePassed = beats.Count >= 3
+            && beats.Any(x => x.VisualIntent is WeeklyVisualIntentType.Hook)
+            && beats.Any(x => x.VisualIntent is WeeklyVisualIntentType.Summary or WeeklyVisualIntentType.CallToAction)
+            && beats.Select(x => x.VisualIntent).Distinct().Count() >= 3;
+        var cinematicPacingPassed = averageBeatDuration >= 2d && averageBeatDuration <= 12d && sameFamilyMax <= 2 && beats.Any(x => x.SecondaryVisual is not null || x.Overlays.Count > 0);
+        var cleanVisualHierarchyPassed = renderSafeReport.RenderSafeShotPlanReady && fullscreenMotion == 0 && fullscreenEdu == 0 && renderSafeReport.OverlayOnlyShotCount == 0;
+        var readableOverlayPassed = overlays.Count > 0 && overlays.All(x => x.IsOverlay && x.DurationSeconds >= 2d && x.DurationSeconds <= 6d && x.StartSecond < x.EndSecond);
+        var narrationDrivenSceneFlowPassed = mismatches == 0 && everyBeatHasSubject && beats.All(x => !string.IsNullOrWhiteSpace(x.NarrationText));
+        var reusableAstronomyAssetsPassed = allFamilies.Any(x => x.Equals("Stellarium", StringComparison.OrdinalIgnoreCase))
+            && allFamilies.Any(x => x.Equals("AICinematic", StringComparison.OrdinalIgnoreCase))
+            && allFamilies.Any(x => x.Equals("NASA", StringComparison.OrdinalIgnoreCase) || x.Equals("CelestialReference", StringComparison.OrdinalIgnoreCase) || x.Equals("InternalCelestial", StringComparison.OrdinalIgnoreCase));
+        var fallbackAssetCoveragePassed = renderSafeReport.RequestedUnavailableStandaloneShotCount == 0 && distinctAllFamilies >= 4 && reusableAstronomyAssetsPassed;
+        var qualityValidationBeforeRenderPassed = renderSafeReport.RenderSafeShotPlanReady && renderSafeReport.ZeroDurationShotCount == 0 && renderSafeReport.MinimumDurationViolations == 0 && renderSafeReport.Errors.Count == 0;
+        var professionalVideoQualityPassed = notScreenshotSlideshowPassed && editorialStructurePassed && cinematicPacingPassed && cleanVisualHierarchyPassed && readableOverlayPassed && narrationDrivenSceneFlowPassed && reusableAstronomyAssetsPassed && fallbackAssetCoveragePassed && qualityValidationBeforeRenderPassed;
         var validationErrors = errors.Concat(renderSafeReport.Errors).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var ready = validationErrors.Count == 0 && beats.Count > 0 && mismatches == 0 && fullscreenMotion == 0 && fullscreenEdu == 0 && sameFamilyMax <= 2 && shortHookPassed && everyBeatHasSubject && saturn && venus && moon && renderSafeReport.RenderSafeShotPlanReady && renderSafeReport.ZeroDurationShotCount == 0 && renderSafeReport.MinimumDurationViolations == 0;
-        return new WeeklyVisualIntentValidationReport(ready, renderSafeReport.RenderSafeShotPlanReady, renderSafeReport.EmptyAssetPathShotCount, renderSafeReport.MissingAssetFileCount, renderSafeReport.OverlayOnlyShotCount, renderSafeReport.MotionGraphicStandaloneShotCount, renderSafeReport.EducationalOverlayStandaloneShotCount, renderSafeReport.RequestedUnavailableStandaloneShotCount, renderSafeReport.NormalizedBaseVisualCount, beats.Count, matched, mismatches, mismatches, fallbackVisualCount, motionOverlayUsage, educationalOverlayUsage, fullscreenMotion, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, familyRotationApplied, familyRotationSwapCount, renderSafeReport.ZeroDurationShotCount, renderSafeReport.MinimumDurationViolations, renderSafeReport.TimelineNormalizationApplied, BuildPrimaryFamilyCounts(beats), objectCoverage, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), validationErrors);
+        if (!professionalVideoQualityPassed)
+            validationErrors.Add("Professional video quality gate failed: AstroPulse videos must include editorial structure, cinematic pacing, readable overlays, narration-driven scene flow, reusable astronomy/fallback assets, and cannot be screenshot slideshows.");
+        var ready = validationErrors.Count == 0 && beats.Count > 0 && mismatches == 0 && fullscreenMotion == 0 && fullscreenEdu == 0 && sameFamilyMax <= 2 && shortHookPassed && everyBeatHasSubject && saturn && venus && moon && renderSafeReport.RenderSafeShotPlanReady && renderSafeReport.ZeroDurationShotCount == 0 && renderSafeReport.MinimumDurationViolations == 0 && professionalVideoQualityPassed;
+        return new WeeklyVisualIntentValidationReport(ready, renderSafeReport.RenderSafeShotPlanReady, renderSafeReport.EmptyAssetPathShotCount, renderSafeReport.MissingAssetFileCount, renderSafeReport.OverlayOnlyShotCount, renderSafeReport.MotionGraphicStandaloneShotCount, renderSafeReport.EducationalOverlayStandaloneShotCount, renderSafeReport.RequestedUnavailableStandaloneShotCount, renderSafeReport.NormalizedBaseVisualCount, beats.Count, matched, mismatches, mismatches, fallbackVisualCount, motionOverlayUsage, educationalOverlayUsage, fullscreenMotion, fullscreenMotion, fullscreenEdu, sameFamilyMax, shortHookPassed, saturn, venus, moon, familyRotationApplied, familyRotationSwapCount, renderSafeReport.ZeroDurationShotCount, renderSafeReport.MinimumDurationViolations, renderSafeReport.TimelineNormalizationApplied, BuildPrimaryFamilyCounts(beats), objectCoverage, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), validationErrors.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), professionalVideoQualityPassed, notScreenshotSlideshowPassed, editorialStructurePassed, cinematicPacingPassed, cleanVisualHierarchyPassed, readableOverlayPassed, narrationDrivenSceneFlowPassed, reusableAstronomyAssetsPassed, fallbackAssetCoveragePassed, qualityValidationBeforeRenderPassed);
     }
 
     private static WeeklyVisualFamilyDistributionReport BuildVisualFamilyDistributionReport(IReadOnlyList<WeeklyVisualIntentBeat> beats, WeeklyVisualIntentValidationReport validation, VisualFamilyRotationResult rotationResult, IReadOnlyList<string> warnings, IReadOnlyList<string> errors)

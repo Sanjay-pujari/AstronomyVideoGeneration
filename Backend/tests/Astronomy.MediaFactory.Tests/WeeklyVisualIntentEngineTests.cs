@@ -57,6 +57,16 @@ public sealed class WeeklyVisualIntentEngineTests
         validation.ZeroDurationShotCount.Should().Be(0);
         validation.MinimumDurationViolations.Should().Be(0);
         validation.TimelineNormalizationApplied.Should().BeTrue();
+        validation.ProfessionalVideoQualityPassed.Should().BeTrue();
+        validation.NotScreenshotSlideshowPassed.Should().BeTrue();
+        validation.EditorialStructurePassed.Should().BeTrue();
+        validation.CinematicPacingPassed.Should().BeTrue();
+        validation.CleanVisualHierarchyPassed.Should().BeTrue();
+        validation.ReadableOverlayPassed.Should().BeTrue();
+        validation.NarrationDrivenSceneFlowPassed.Should().BeTrue();
+        validation.ReusableAstronomyAssetsPassed.Should().BeTrue();
+        validation.FallbackAssetCoveragePassed.Should().BeTrue();
+        validation.QualityValidationBeforeRenderPassed.Should().BeTrue();
 
         var renderSafeReport = await ReadJsonAsync<WeeklyVisualIntentRenderSafeValidationReport>(renderSafeReportPath);
         renderSafeReport.RenderSafeShotPlanReady.Should().BeTrue();
