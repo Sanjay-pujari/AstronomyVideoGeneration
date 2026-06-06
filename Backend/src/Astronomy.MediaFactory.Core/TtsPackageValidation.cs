@@ -23,7 +23,13 @@ public sealed record TtsSegmentValidationResult(
     int SceneNumber,
     bool IsValid,
     IReadOnlyList<string> Issues,
-    IReadOnlyList<string> FixesApplied);
+    IReadOnlyList<string> FixesApplied,
+    TtsAlignmentMismatchDetail? AlignmentMismatch = null);
+
+public sealed record TtsAlignmentMismatchDetail(
+    string SourceNormalized,
+    string SpokenNormalized,
+    IReadOnlyList<string> MissingWords);
 
 public sealed record CleanTtsPackageDocument(
     string ContentGenerationPlanId,
