@@ -501,6 +501,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPolishedNarrationService, PolishedNarrationService>();
         services.AddScoped<ITtsPackagePlanningService, TtsPackagePlanningService>();
         services.AddScoped<ITtsPackageValidationService, TtsPackageValidationService>();
+        services.AddScoped<ITtsAlignmentRepairService, TtsAlignmentRepairService>();
         services.AddScoped<IAstronomyAssetProductionJobService, AstronomyAssetProductionJobService>();
         services.AddScoped<IAstronomyProductionMonitoringService, AstronomyProductionMonitoringService>();
         services.AddScoped<IAssetExecutionService, AssetExecutionService>();
