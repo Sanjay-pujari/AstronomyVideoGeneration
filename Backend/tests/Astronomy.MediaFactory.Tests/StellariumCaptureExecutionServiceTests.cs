@@ -88,6 +88,8 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
         Assert.Equal(sscPath, document.RootElement.GetProperty("sscFile").GetString());
         Assert.True(document.RootElement.GetProperty("captureExecuted").GetBoolean());
         Assert.Equal("Phase8D.3", document.RootElement.GetProperty("captureSource").GetString());
+        Assert.Equal("Completed", document.RootElement.GetProperty("sscGenerationStatus").GetString());
+        Assert.Equal("Completed", document.RootElement.GetProperty("captureStatus").GetString());
         Assert.Equal(1, document.RootElement.GetProperty("captureAttemptCount").GetInt32());
         Assert.Equal("Passed", document.RootElement.GetProperty("validationResult").GetString());
         Assert.True(document.RootElement.GetProperty("fileSizeBytes").GetInt64() > 100 * 1024);
@@ -133,6 +135,65 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
         Assert.Equal(2, document.RootElement.GetProperty("captureAttemptCount").GetInt32());
         Assert.Equal(1, document.RootElement.GetProperty("retryCount").GetInt32());
         Assert.Equal("Passed", document.RootElement.GetProperty("validationResult").GetString());
+    }
+
+
+    [Fact]
+    public async Task ExecuteCaptureAsync_UsesJobIdFilterAndDoesNotMatchContentPlanId()
+    {
+        await using var db = CreateDb();
+        var job = await SeedCompletedStellariumScreenshotJobAsync(db, _workingDirectory, sceneNumber: 6, priority: 1);
+        var service = CreateService(db, await CreateFakeStellariumAsync(_workingDirectory));
+
+        var result = await service.ExecuteCaptureAsync(new StellariumAssetCaptureExecutionRequest("IN-RJ-UDAIPUR", [job.ContentGenerationPlanId], 1, DryRun: true), CancellationToken.None);
+
+        Assert.Equal(0, result.JobCount);
+        Assert.Empty(result.CapturedFiles);
+    }
+
+    [Fact]
+    public async Task ExecuteCaptureAsync_MissingExecutableKeepsCompletedSscJobAndRecordsFailedCaptureMetadata()
+    {
+        await using var db = CreateDb();
+        var job = await SeedCompletedStellariumScreenshotJobAsync(db, _workingDirectory, sceneNumber: 7, priority: 1);
+        var sscPath = job.OutputPath!;
+        var service = CreateService(db, Path.Combine(_workingDirectory, "missing-stellarium"));
+
+        var result = await service.ExecuteCaptureAsync(new StellariumAssetCaptureExecutionRequest("IN-RJ-UDAIPUR", [job.Id], 1, DryRun: false, OverwriteExisting: true), CancellationToken.None);
+
+        Assert.Equal(1, result.JobCount);
+        Assert.Equal(0, result.CompletedCount);
+        Assert.Equal(0, result.FailedCount);
+        Assert.Contains(result.Warnings, warning => warning.Contains("failed non-blockingly", StringComparison.OrdinalIgnoreCase));
+        var saved = await db.AstronomyAssetProductionJobs.SingleAsync(j => j.Id == job.Id);
+        Assert.Equal(AstronomyAssetProductionJobStatuses.Completed, saved.Status);
+        Assert.Equal(sscPath, saved.OutputPath);
+        Assert.Null(saved.FailureReason);
+        using var document = JsonDocument.Parse(saved.MetadataJson!);
+        Assert.Equal(sscPath, document.RootElement.GetProperty("sscPath").GetString());
+        Assert.Equal("Completed", document.RootElement.GetProperty("sscGenerationStatus").GetString());
+        Assert.Equal("Failed", document.RootElement.GetProperty("captureStatus").GetString());
+        Assert.True(document.RootElement.TryGetProperty("failureReason", out var failureReason));
+        Assert.Contains("Stellarium executable", failureReason.GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+
+    [Fact]
+    public async Task ExecuteCaptureAsync_SelectsUsableSscWithoutRequiringPendingStatus()
+    {
+        await using var db = CreateDb();
+        var job = await SeedCompletedStellariumScreenshotJobAsync(db, _workingDirectory, sceneNumber: 8, priority: 1);
+        job.Status = AstronomyAssetProductionJobStatuses.Completed;
+        await db.SaveChangesAsync();
+        var service = CreateService(db, await CreateFakeStellariumAsync(_workingDirectory));
+
+        var result = await service.ExecuteCaptureAsync(new StellariumAssetCaptureExecutionRequest("IN-RJ-UDAIPUR", [job.Id], 1, DryRun: false), CancellationToken.None);
+
+        Assert.Equal(1, result.JobCount);
+        Assert.Equal(1, result.CompletedCount);
+        var saved = await db.AstronomyAssetProductionJobs.SingleAsync(j => j.Id == job.Id);
+        Assert.Equal(AstronomyAssetProductionJobStatuses.Completed, saved.Status);
+        Assert.EndsWith(".png", saved.OutputPath);
     }
 
     public void Dispose()
