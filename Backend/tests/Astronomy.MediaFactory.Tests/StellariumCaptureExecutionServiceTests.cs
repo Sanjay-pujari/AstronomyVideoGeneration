@@ -31,6 +31,9 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
         Assert.Equal(0, result.CompletedCount);
         Assert.Equal(0, result.FailedCount);
         Assert.Equal(0, result.SkippedCount);
+        Assert.Equal(0, result.RequestedJobIdsCount);
+        Assert.Equal(0, result.DatabaseMatchedJobIdsCount);
+        Assert.Equal(2, result.EligibleJobCount);
         var previewPath = Assert.Single(result.CapturedFiles);
         Assert.EndsWith(Path.Combine("assets", "IN-RJ-UDAIPUR", "events", job1.AstronomyEventIntelligenceId!.Value.ToString("D"), "stellarium-captures", $"capture-scene-{job1.SceneNumber}-{job1.Id:D}.png"), previewPath);
         Assert.False(File.Exists(previewPath));
@@ -53,6 +56,9 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
         Assert.Equal(1, result.JobCount);
         Assert.Equal(1, result.CompletedCount);
         Assert.Equal(0, result.FailedCount);
+        Assert.Equal(0, result.RequestedJobIdsCount);
+        Assert.Equal(0, result.DatabaseMatchedJobIdsCount);
+        Assert.Equal(2, result.EligibleJobCount);
         var capturePath = Assert.Single(result.CapturedFiles);
         Assert.True(File.Exists(capturePath));
         Assert.True(new FileInfo(capturePath).Length > 100 * 1024);
@@ -114,6 +120,17 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
         Assert.Equal(1, result.SkippedCount);
         Assert.Empty(result.CapturedFiles);
         Assert.Contains(result.Warnings, warning => warning.Contains("already exists", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(1, result.RequestedJobIdsCount);
+        Assert.Equal(1, result.DatabaseMatchedJobIdsCount);
+        Assert.Equal(1, result.EligibleJobCount);
+
+        var overwriteResult = await service.ExecuteCaptureAsync(new StellariumAssetCaptureExecutionRequest("IN-RJ-UDAIPUR", [job.Id], 1, DryRun: false, OverwriteExisting: true), CancellationToken.None);
+
+        Assert.Equal(1, overwriteResult.JobCount);
+        Assert.Equal(1, overwriteResult.CompletedCount);
+        Assert.Equal(1, overwriteResult.RequestedJobIdsCount);
+        Assert.Equal(1, overwriteResult.DatabaseMatchedJobIdsCount);
+        Assert.Equal(1, overwriteResult.EligibleJobCount);
     }
 
 
@@ -149,6 +166,10 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
 
         Assert.Equal(0, result.JobCount);
         Assert.Empty(result.CapturedFiles);
+        Assert.Equal(1, result.RequestedJobIdsCount);
+        Assert.Equal(0, result.DatabaseMatchedJobIdsCount);
+        Assert.Equal(0, result.EligibleJobCount);
+        Assert.Contains("Requested jobIds were not found after capture eligibility filtering.", result.Warnings);
     }
 
     [Fact]
@@ -191,6 +212,9 @@ public sealed class StellariumCaptureExecutionServiceTests : IDisposable
 
         Assert.Equal(1, result.JobCount);
         Assert.Equal(1, result.CompletedCount);
+        Assert.Equal(1, result.RequestedJobIdsCount);
+        Assert.Equal(1, result.DatabaseMatchedJobIdsCount);
+        Assert.Equal(1, result.EligibleJobCount);
         var saved = await db.AstronomyAssetProductionJobs.SingleAsync(j => j.Id == job.Id);
         Assert.Equal(AstronomyAssetProductionJobStatuses.Completed, saved.Status);
         Assert.EndsWith(".png", saved.OutputPath);
