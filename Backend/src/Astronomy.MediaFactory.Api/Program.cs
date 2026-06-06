@@ -368,7 +368,7 @@ app.MapPost("/api/astronomy-intelligence/execute-required-assets", async (AssetE
 });
 
 
-app.MapPost("/api/astronomy-intelligence/execute-preferred-assets", async (AssetExecutionRequest request, ISkyMapCardExecutionService skyMapExecution, IConstellationGuideExecutionService constellationGuideExecution, ILogger<Program> logger, CancellationToken ct) =>
+app.MapPost("/api/astronomy-intelligence/execute-preferred-assets", async (AssetExecutionRequest request, ISkyMapCardExecutionService skyMapExecution, IConstellationGuideExecutionService constellationGuideExecution, IStellariumScreenshotExecutionService stellariumScreenshotExecution, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Preferred astronomy asset execution request received for {RegionId}. DryRun={DryRun} MaxJobs={MaxJobs}", request.RegionId, request.DryRun, request.MaxJobs);
     try
@@ -378,30 +378,28 @@ app.MapPost("/api/astronomy-intelligence/execute-preferred-assets", async (Asset
             : null;
         var executeSkyMap = requestedTypes is null || requestedTypes.Contains(NormalizePreferredAssetType("SkyMapCard"));
         var executeConstellationGuide = requestedTypes is null || requestedTypes.Contains(NormalizePreferredAssetType("ConstellationGuide"));
+        var executeStellariumScreenshot = requestedTypes is null || requestedTypes.Contains(NormalizePreferredAssetType("StellariumScreenshot"));
 
-        if (executeSkyMap && !executeConstellationGuide)
-            return Results.Ok(await skyMapExecution.ExecutePreferredAssetsAsync(request, ct));
+        var results = new List<AssetExecutionResult>();
+        if (executeSkyMap)
+            results.Add(await skyMapExecution.ExecutePreferredAssetsAsync(request with { AssetTypes = ["SkyMapCard"] }, ct));
+        if (executeConstellationGuide)
+            results.Add(await constellationGuideExecution.ExecutePreferredAssetsAsync(request with { AssetTypes = ["ConstellationGuide"] }, ct));
+        if (executeStellariumScreenshot)
+            results.Add(await stellariumScreenshotExecution.ExecutePreferredAssetsAsync(request with { AssetTypes = ["StellariumScreenshot"] }, ct));
 
-        if (executeConstellationGuide && !executeSkyMap)
-            return Results.Ok(await constellationGuideExecution.ExecutePreferredAssetsAsync(request, ct));
-
-        if (executeSkyMap && executeConstellationGuide)
+        if (results.Count > 0)
         {
-            var skyMapRequest = request with { AssetTypes = ["SkyMapCard"] };
-            var constellationGuideRequest = request with { AssetTypes = ["ConstellationGuide"] };
-            var skyMapResult = await skyMapExecution.ExecutePreferredAssetsAsync(skyMapRequest, ct);
-            var constellationGuideResult = await constellationGuideExecution.ExecutePreferredAssetsAsync(constellationGuideRequest, ct);
-
             return Results.Ok(new AssetExecutionResult(
-                skyMapResult.JobCount + constellationGuideResult.JobCount,
-                skyMapResult.CompletedCount + constellationGuideResult.CompletedCount,
-                skyMapResult.FailedCount + constellationGuideResult.FailedCount,
-                skyMapResult.SkippedCount + constellationGuideResult.SkippedCount,
-                skyMapResult.GeneratedFiles.Concat(constellationGuideResult.GeneratedFiles).ToList(),
-                skyMapResult.Warnings.Concat(constellationGuideResult.Warnings).ToList()));
+                results.Sum(result => result.JobCount),
+                results.Sum(result => result.CompletedCount),
+                results.Sum(result => result.FailedCount),
+                results.Sum(result => result.SkippedCount),
+                results.SelectMany(result => result.GeneratedFiles).ToList(),
+                results.SelectMany(result => result.Warnings).ToList()));
         }
 
-        return Results.Ok(new AssetExecutionResult(0, 0, 0, 0, [], ["No supported preferred asset type was requested; supported types are SkyMapCard and ConstellationGuide."]));
+        return Results.Ok(new AssetExecutionResult(0, 0, 0, 0, [], ["No supported preferred asset type was requested; supported types are SkyMapCard, ConstellationGuide, and StellariumScreenshot."]));
     }
     catch (ArgumentException ex)
     {
