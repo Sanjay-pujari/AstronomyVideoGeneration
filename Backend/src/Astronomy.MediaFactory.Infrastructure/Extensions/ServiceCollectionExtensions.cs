@@ -503,6 +503,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITtsPackageValidationService, TtsPackageValidationService>();
         services.AddScoped<ITtsAlignmentRepairService, TtsAlignmentRepairService>();
         services.AddScoped<ITtsAudioGenerationService, AzureTtsAudioGenerationService>();
+        services.AddScoped<IDirectorTimelineService, DirectorTimelineService>();
         services.AddScoped<IAstronomyAssetProductionJobService, AstronomyAssetProductionJobService>();
         services.AddScoped<IAstronomyProductionMonitoringService, AstronomyProductionMonitoringService>();
         services.AddScoped<IAssetExecutionService, AssetExecutionService>();
