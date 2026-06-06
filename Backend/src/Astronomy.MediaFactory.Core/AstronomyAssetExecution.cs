@@ -6,7 +6,8 @@ public sealed record AssetExecutionRequest(
     string? RegionId = null,
     int MaxJobs = 50,
     bool DryRun = true,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    bool EnableExternalLookup = false);
 
 public sealed record AssetExecutionResult(
     int JobCount,

@@ -407,6 +407,28 @@ app.MapPost("/api/astronomy-intelligence/execute-preferred-assets", async (Asset
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/execute-optional-assets", async (AssetExecutionRequest request, INasaAssetExecutionService nasaAssetExecution, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Optional astronomy asset execution request received for {RegionId}. DryRun={DryRun} MaxJobs={MaxJobs} EnableExternalLookup={EnableExternalLookup}", request.RegionId, request.DryRun, request.MaxJobs, request.EnableExternalLookup);
+    try
+    {
+        var requestedTypes = request.AssetTypes is { Count: > 0 }
+            ? request.AssetTypes.Where(t => !string.IsNullOrWhiteSpace(t)).Select(NormalizePreferredAssetType).ToHashSet(StringComparer.Ordinal)
+            : null;
+        var executeNasaAsset = requestedTypes is null || requestedTypes.Contains(NormalizePreferredAssetType("NasaAsset"));
+
+        if (executeNasaAsset)
+            return Results.Ok(await nasaAssetExecution.ExecuteOptionalAssetsAsync(request with { AssetTypes = ["NasaAsset"] }, ct));
+
+        return Results.Ok(new AssetExecutionResult(0, 0, 0, 0, [], ["No supported optional asset type was requested; supported types are NasaAsset."]));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
+
 app.MapPost("/api/astronomy-intelligence/preview-stellarium-capture", async (HttpRequest httpRequest, IStellariumCapturePreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<StellariumCapturePreviewRequest>(httpRequest, "request", logger, ct);

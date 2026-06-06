@@ -501,6 +501,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISkyMapCardExecutionService, SkyMapCardExecutionService>();
         services.AddScoped<IConstellationGuideExecutionService, ConstellationGuideExecutionService>();
         services.AddScoped<IStellariumScreenshotExecutionService, StellariumScreenshotExecutionService>();
+        services.AddScoped<INasaAssetExecutionService, NasaAssetExecutionService>();
         services.AddScoped<IStellariumCapturePreviewService, StellariumCapturePreviewService>();
         services.AddScoped<IStellariumCaptureExecutionService, StellariumCaptureExecutionService>();
         services.AddScoped<IAstronomyAssetProducer, TextOverlayAssetProducer>();
