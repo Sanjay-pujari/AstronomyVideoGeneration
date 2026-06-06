@@ -341,6 +341,19 @@ app.MapPost("/api/astronomy-intelligence/generate-asset-plans", async (Astronomy
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-narration-scripts", async (NarrationPlanningRequest request, INarrationPlanningService narration, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy narration planning request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await narration.GenerateNarrationScriptsAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
