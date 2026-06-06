@@ -428,6 +428,28 @@ app.MapPost("/api/astronomy-intelligence/preview-stellarium-capture", async (Htt
 })
 .Accepts<StellariumCapturePreviewRequest>("application/json");
 
+
+app.MapPost("/api/astronomy-intelligence/execute-stellarium-capture", async (HttpRequest httpRequest, IStellariumCaptureExecutionService execution, ILogger<Program> logger, CancellationToken ct) =>
+{
+    var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<StellariumAssetCaptureExecutionRequest>(httpRequest, "request", logger, ct);
+    if (requestBody.HasError)
+    {
+        return requestBody.ErrorResult!;
+    }
+
+    var request = requestBody.Value!;
+    logger.LogInformation("Stellarium capture execution request received for {RegionId}. DryRun={DryRun} MaxJobs={MaxJobs}", request.RegionId, request.DryRun, request.MaxJobs);
+    try
+    {
+        return Results.Ok(await execution.ExecuteCaptureAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+})
+.Accepts<StellariumAssetCaptureExecutionRequest>("application/json");
+
 app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpRequest httpRequest, IAstronomyAssetProducerPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyAssetProducerPreviewRequest>(httpRequest, "request", logger, ct);
