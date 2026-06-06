@@ -7652,6 +7652,9 @@ static string BuildWeeklyDynamicFramingSsc(WeeklyDynamicSceneContract scene, Dat
     });
 }
 
+static string NormalizePreferredAssetType(string? assetType)
+    => (assetType ?? string.Empty).Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).Trim().ToLowerInvariant();
+
 
 
 sealed record WeeklyEndToEndStageResult<T>(bool Success, T? Value, IReadOnlyList<string> Errors);
@@ -7930,8 +7933,6 @@ sealed record WeeklyDynamicFramingPlan(
         CameraPlan.IncludeHorizon);
 }
 
-static string NormalizePreferredAssetType(string? assetType)
-    => (assetType ?? string.Empty).Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).Trim().ToLowerInvariant();
 
 sealed record WeeklyDynamicFramingPlanDocument(bool DynamicFramingReady, DateTime GeneratedUtc, IReadOnlyList<WeeklyDynamicSceneContract> Scenes);
 sealed record WeeklySscPropagationSceneReport(string sceneCode, IReadOnlyList<string> objects, string primaryObject, IReadOnlyList<string> requiredLabels, IReadOnlyList<string> cameraTargetObjects, double cameraAzimuth, double cameraAltitude, double fov, bool propagationValid);
