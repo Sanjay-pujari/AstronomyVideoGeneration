@@ -148,6 +148,148 @@ public sealed class AzureTtsAudioGenerationService(
         return new TtsAudioGenerationResult(packagePaths.Count, segmentAudioCount, combinedAudioCount, completedCount, failedCount, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings);
     }
 
+
+    public async Task<TtsAudioBulkGenerationResult> GenerateTtsAudioBulkAsync(TtsAudioBulkGenerationRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.MaxPlans is < 1)
+            throw new ArgumentException("MaxPlans must be greater than zero when provided.");
+
+        var warnings = new List<string>();
+        var generatedFiles = new List<string>();
+        var completedCount = 0;
+        var failedCount = 0;
+        var skippedExistingCount = 0;
+        var combinedAudioCount = 0;
+        var packagePaths = await SelectBulkPackageFilesAsync(request, warnings, cancellationToken);
+        var selectedPackagePaths = new List<string>();
+
+        foreach (var candidate in packagePaths)
+        {
+            var ttsDirectory = Path.GetDirectoryName(candidate.Path) ?? ResolveTtsDirectory(candidate.Package.RegionId, candidate.Package.ContentGenerationPlanId);
+            var combinedPath = Path.Combine(ttsDirectory, "audio", "narration-combined.wav");
+            if (!request.OverwriteExisting && File.Exists(combinedPath))
+            {
+                skippedExistingCount++;
+                continue;
+            }
+
+            selectedPackagePaths.Add(candidate.Path);
+            if (selectedPackagePaths.Count >= (request.MaxPlans ?? int.MaxValue))
+                break;
+        }
+
+        if (!request.DryRun && selectedPackagePaths.Count > 0 && !IsAzureSpeechConfigured(azureSpeechOptions.Value, out var configurationWarning))
+        {
+            warnings.Add(configurationWarning);
+            return new TtsAudioBulkGenerationResult(selectedPackagePaths.Count, 0, 0, skippedExistingCount, 0, generatedFiles, warnings);
+        }
+
+        foreach (var packagePath in selectedPackagePaths)
+        {
+            try
+            {
+                var package = await ReadFinalPackageAsync(packagePath, cancellationToken);
+                if (package is null)
+                {
+                    warnings.Add($"Skipped invalid final TTS package JSON at {packagePath}.");
+                    continue;
+                }
+
+                var validationWarnings = ValidateBulkPackage(package, request, packagePath).ToList();
+                if (validationWarnings.Count > 0)
+                {
+                    warnings.AddRange(validationWarnings);
+                    if (!request.DryRun)
+                        failedCount++;
+                    continue;
+                }
+
+                var ttsDirectory = Path.GetDirectoryName(packagePath) ?? ResolveTtsDirectory(package.RegionId, package.ContentGenerationPlanId);
+                var audioDirectory = Path.Combine(ttsDirectory, "audio");
+                var segmentPlans = package.Segments
+                    .OrderBy(segment => segment.SceneNumber)
+                    .Select(segment => new SegmentPlan(segment, Path.Combine(audioDirectory, $"scene-{segment.SceneNumber:00}.wav")))
+                    .ToList();
+                var combinedPath = Path.Combine(audioDirectory, "narration-combined.wav");
+                var manifestPath = Path.Combine(audioDirectory, ManifestFileName);
+
+                if (request.DryRun)
+                {
+                    generatedFiles.AddRange(segmentPlans.Select(plan => plan.AudioPath));
+                    if (request.CombineSegments)
+                        generatedFiles.Add(combinedPath);
+                    generatedFiles.Add(manifestPath);
+                    continue;
+                }
+
+                Directory.CreateDirectory(audioDirectory);
+                var manifestSegments = new List<TtsAudioManifestSegment>();
+                foreach (var segmentPlan in segmentPlans)
+                {
+                    if (File.Exists(segmentPlan.AudioPath) && !request.OverwriteExisting)
+                    {
+                        var existingInfo = ValidateWavFile(segmentPlan.AudioPath);
+                        EnsurePilotWavQuality(existingInfo, $"existing scene {segmentPlan.Segment.SceneNumber}");
+                        manifestSegments.Add(new TtsAudioManifestSegment(segmentPlan.Segment.SceneNumber, segmentPlan.AudioPath, existingInfo.DurationSeconds, existingInfo.FileSizeBytes, "Completed"));
+                        generatedFiles.Add(segmentPlan.AudioPath);
+                        continue;
+                    }
+
+                    var audioBytes = await speechClient.SynthesizeWavSsmlAsync(segmentPlan.Segment.Ssml, azureSpeechOptions.Value, cancellationToken);
+                    await File.WriteAllBytesAsync(segmentPlan.AudioPath, audioBytes, cancellationToken);
+
+                    var validation = ValidateWavFile(segmentPlan.AudioPath);
+                    EnsurePilotWavQuality(validation, $"scene {segmentPlan.Segment.SceneNumber}");
+
+                    manifestSegments.Add(new TtsAudioManifestSegment(segmentPlan.Segment.SceneNumber, segmentPlan.AudioPath, validation.DurationSeconds, validation.FileSizeBytes, "Completed"));
+                    generatedFiles.Add(segmentPlan.AudioPath);
+                }
+
+                var combinedAudioPath = string.Empty;
+                var totalDurationSeconds = manifestSegments.Sum(segment => segment.DurationSeconds);
+                if (request.CombineSegments)
+                {
+                    if (!File.Exists(combinedPath) || request.OverwriteExisting)
+                        CombineWavFiles(segmentPlans.Select(plan => plan.AudioPath).ToList(), combinedPath);
+
+                    var combinedValidation = ValidateWavFile(combinedPath);
+                    EnsurePilotWavQuality(combinedValidation, "combined narration");
+
+                    combinedAudioPath = combinedPath;
+                    totalDurationSeconds = combinedValidation.DurationSeconds;
+                    combinedAudioCount++;
+                    generatedFiles.Add(combinedPath);
+                }
+
+                var manifest = new TtsAudioManifest(
+                    package.ContentGenerationPlanId,
+                    package.RegionId,
+                    package.VoiceProfile.VoiceName,
+                    ProviderName,
+                    manifestSegments,
+                    combinedAudioPath,
+                    totalDurationSeconds,
+                    DateTimeOffset.UtcNow);
+                await using (var stream = File.Create(manifestPath))
+                {
+                    await JsonSerializer.SerializeAsync(stream, manifest, JsonOptions, cancellationToken);
+                }
+
+                generatedFiles.Add(manifestPath);
+                completedCount++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogError(ex, "Bulk TTS audio generation failed for package {PackagePath}", packagePath);
+                warnings.Add($"Bulk TTS audio generation failed for package {packagePath}: {ex.Message}");
+                failedCount++;
+            }
+        }
+
+        return new TtsAudioBulkGenerationResult(selectedPackagePaths.Count, completedCount, failedCount, skippedExistingCount, combinedAudioCount, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings);
+    }
+
     private IEnumerable<string> EnumeratePackageFiles(TtsAudioGenerationRequest request)
     {
         var root = ResolveWorkingDirectoryRoot();
@@ -174,6 +316,60 @@ public sealed class AzureTtsAudioGenerationService(
         return files.Where(File.Exists).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).Take(request.MaxPlans ?? int.MaxValue);
     }
 
+
+    private async Task<IReadOnlyList<BulkPackageCandidate>> SelectBulkPackageFilesAsync(TtsAudioBulkGenerationRequest request, List<string> warnings, CancellationToken cancellationToken)
+    {
+        var root = ResolveWorkingDirectoryRoot();
+        var assetsRoot = Path.Combine(root, "assets");
+        var region = SanitizePathSegment(request.RegionId);
+        var requestedPlanIds = request.PlanIds is { Count: > 0 } ? request.PlanIds.ToArray() : [];
+
+        IEnumerable<string> files;
+        if (requestedPlanIds.Length > 0)
+        {
+            var regionRoots = !string.IsNullOrWhiteSpace(region)
+                ? new[] { Path.Combine(assetsRoot, region) }
+                : Directory.Exists(assetsRoot) ? Directory.EnumerateDirectories(assetsRoot).ToArray() : [];
+            files = regionRoots.SelectMany(regionRoot => requestedPlanIds.Select(planId => Path.Combine(regionRoot, "plans", planId.ToString("D"), "tts", FinalPackageFileName)));
+        }
+        else
+        {
+            var searchRoot = !string.IsNullOrWhiteSpace(region) ? Path.Combine(assetsRoot, region, "plans") : assetsRoot;
+            files = Directory.Exists(searchRoot)
+                ? Directory.EnumerateFiles(searchRoot, FinalPackageFileName, SearchOption.AllDirectories)
+                : [];
+        }
+
+        var candidates = new List<BulkPackageCandidate>();
+        foreach (var path in files.Where(File.Exists).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            FinalTtsPackageDocument? package;
+            try
+            {
+                package = await ReadFinalPackageAsync(path, cancellationToken);
+            }
+            catch (JsonException ex)
+            {
+                warnings.Add($"Skipped invalid final TTS package JSON at {path}: {ex.Message}");
+                continue;
+            }
+
+            if (package is null)
+            {
+                warnings.Add($"Skipped invalid final TTS package JSON at {path}.");
+                continue;
+            }
+
+            var validationWarnings = ValidateBulkPackage(package, request, path).ToList();
+            if (validationWarnings.Count > 0)
+                continue;
+
+            candidates.Add(new BulkPackageCandidate(path, package));
+        }
+
+        return candidates;
+    }
+
     private static async Task<FinalTtsPackageDocument?> ReadFinalPackageAsync(string path, CancellationToken cancellationToken)
     {
         await using var stream = File.OpenRead(path);
@@ -184,6 +380,25 @@ public sealed class AzureTtsAudioGenerationService(
     {
         if (!string.Equals(package.ContentCategory, "RareEventAlert", StringComparison.OrdinalIgnoreCase))
             yield return $"Skipped plan {package.ContentGenerationPlanId}: Phase 9C.1 pilot only supports contentCategory RareEventAlert.";
+        if (!string.Equals(package.TtsProvider, ProviderName, StringComparison.OrdinalIgnoreCase))
+            yield return $"Skipped plan {package.ContentGenerationPlanId}: TTS provider must be {ProviderName}.";
+        if (!package.ReadyForTts)
+            yield return $"Skipped plan {package.ContentGenerationPlanId}: readyForTts must be true.";
+        if (!package.ReadyForAudioGeneration)
+            yield return $"Skipped plan {package.ContentGenerationPlanId}: readyForAudioGeneration must be true.";
+        if (!string.Equals(package.SsmlValidationStatus, "Valid", StringComparison.OrdinalIgnoreCase))
+            yield return $"Skipped plan {package.ContentGenerationPlanId}: ssmlValidationStatus must be Valid.";
+        if (package.Segments.Count == 0)
+            yield return $"Skipped plan {package.ContentGenerationPlanId}: at least one TTS segment is required.";
+        if (!string.IsNullOrWhiteSpace(request.RegionId) && !string.Equals(package.RegionId, request.RegionId.Trim(), StringComparison.OrdinalIgnoreCase))
+            yield return $"Skipped package {path}: regionId does not match the request.";
+        if (request.PlanIds is { Count: > 0 } planIds && (!Guid.TryParse(package.ContentGenerationPlanId, out var planId) || !planIds.Contains(planId)))
+            yield return $"Skipped package {path}: contentGenerationPlanId does not match the request.";
+    }
+
+
+    private static IEnumerable<string> ValidateBulkPackage(FinalTtsPackageDocument package, TtsAudioBulkGenerationRequest request, string path)
+    {
         if (!string.Equals(package.TtsProvider, ProviderName, StringComparison.OrdinalIgnoreCase))
             yield return $"Skipped plan {package.ContentGenerationPlanId}: TTS provider must be {ProviderName}.";
         if (!package.ReadyForTts)
@@ -327,5 +542,6 @@ public sealed class AzureTtsAudioGenerationService(
     }
 
     private sealed record SegmentPlan(TtsPackageSegment Segment, string AudioPath);
+    private sealed record BulkPackageCandidate(string Path, FinalTtsPackageDocument Package);
     private sealed record WavInfo(long FileSizeBytes, double DurationSeconds, int DataOffset, int DataSize, ushort Channels, uint SampleRate, uint ByteRate);
 }

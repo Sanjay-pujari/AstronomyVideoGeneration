@@ -17,6 +17,23 @@ public sealed record TtsAudioGenerationResult(
     IReadOnlyList<string> GeneratedFiles,
     IReadOnlyList<string> Warnings);
 
+public sealed record TtsAudioBulkGenerationRequest(
+    string? RegionId = null,
+    IReadOnlyList<Guid>? PlanIds = null,
+    int? MaxPlans = 20,
+    bool DryRun = true,
+    bool OverwriteExisting = false,
+    bool CombineSegments = true);
+
+public sealed record TtsAudioBulkGenerationResult(
+    int PlanCount,
+    int CompletedCount,
+    int FailedCount,
+    int SkippedExistingCount,
+    int CombinedAudioCount,
+    IReadOnlyList<string> GeneratedFiles,
+    IReadOnlyList<string> Warnings);
+
 public sealed record TtsAudioManifest(
     string ContentGenerationPlanId,
     string RegionId,
@@ -37,4 +54,6 @@ public sealed record TtsAudioManifestSegment(
 public interface ITtsAudioGenerationService
 {
     Task<TtsAudioGenerationResult> GenerateTtsAudioAsync(TtsAudioGenerationRequest request, CancellationToken cancellationToken);
+
+    Task<TtsAudioBulkGenerationResult> GenerateTtsAudioBulkAsync(TtsAudioBulkGenerationRequest request, CancellationToken cancellationToken);
 }
