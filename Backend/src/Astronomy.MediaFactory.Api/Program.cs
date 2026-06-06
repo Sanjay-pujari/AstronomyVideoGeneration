@@ -419,6 +419,19 @@ app.MapPost("/api/astronomy-intelligence/validate-tts-packages", async (TtsPacka
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/repair-tts-alignment", async (TtsAlignmentRepairRequest request, ITtsAlignmentRepairService repair, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy TTS package SSML/text alignment repair request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await repair.RepairTtsAlignmentAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
