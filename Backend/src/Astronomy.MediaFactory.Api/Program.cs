@@ -368,12 +368,40 @@ app.MapPost("/api/astronomy-intelligence/execute-required-assets", async (AssetE
 });
 
 
-app.MapPost("/api/astronomy-intelligence/execute-preferred-assets", async (AssetExecutionRequest request, ISkyMapCardExecutionService execution, ILogger<Program> logger, CancellationToken ct) =>
+app.MapPost("/api/astronomy-intelligence/execute-preferred-assets", async (AssetExecutionRequest request, ISkyMapCardExecutionService skyMapExecution, IConstellationGuideExecutionService constellationGuideExecution, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Preferred astronomy asset execution request received for {RegionId}. DryRun={DryRun} MaxJobs={MaxJobs}", request.RegionId, request.DryRun, request.MaxJobs);
     try
     {
-        return Results.Ok(await execution.ExecutePreferredAssetsAsync(request, ct));
+        var requestedTypes = request.AssetTypes is { Count: > 0 }
+            ? request.AssetTypes.Where(t => !string.IsNullOrWhiteSpace(t)).Select(NormalizePreferredAssetType).ToHashSet(StringComparer.Ordinal)
+            : null;
+        var executeSkyMap = requestedTypes is null || requestedTypes.Contains(NormalizePreferredAssetType("SkyMapCard"));
+        var executeConstellationGuide = requestedTypes is null || requestedTypes.Contains(NormalizePreferredAssetType("ConstellationGuide"));
+
+        if (executeSkyMap && !executeConstellationGuide)
+            return Results.Ok(await skyMapExecution.ExecutePreferredAssetsAsync(request, ct));
+
+        if (executeConstellationGuide && !executeSkyMap)
+            return Results.Ok(await constellationGuideExecution.ExecutePreferredAssetsAsync(request, ct));
+
+        if (executeSkyMap && executeConstellationGuide)
+        {
+            var skyMapRequest = request with { AssetTypes = ["SkyMapCard"] };
+            var constellationGuideRequest = request with { AssetTypes = ["ConstellationGuide"] };
+            var skyMapResult = await skyMapExecution.ExecutePreferredAssetsAsync(skyMapRequest, ct);
+            var constellationGuideResult = await constellationGuideExecution.ExecutePreferredAssetsAsync(constellationGuideRequest, ct);
+
+            return Results.Ok(new AssetExecutionResult(
+                skyMapResult.JobCount + constellationGuideResult.JobCount,
+                skyMapResult.CompletedCount + constellationGuideResult.CompletedCount,
+                skyMapResult.FailedCount + constellationGuideResult.FailedCount,
+                skyMapResult.SkippedCount + constellationGuideResult.SkippedCount,
+                skyMapResult.GeneratedFiles.Concat(constellationGuideResult.GeneratedFiles).ToList(),
+                skyMapResult.Warnings.Concat(constellationGuideResult.Warnings).ToList()));
+        }
+
+        return Results.Ok(new AssetExecutionResult(0, 0, 0, 0, [], ["No supported preferred asset type was requested; supported types are SkyMapCard and ConstellationGuide."]));
     }
     catch (ArgumentException ex)
     {
@@ -7901,6 +7929,9 @@ sealed record WeeklyDynamicFramingPlan(
         SplitRequired,
         CameraPlan.IncludeHorizon);
 }
+
+static string NormalizePreferredAssetType(string? assetType)
+    => (assetType ?? string.Empty).Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).Trim().ToLowerInvariant();
 
 sealed record WeeklyDynamicFramingPlanDocument(bool DynamicFramingReady, DateTime GeneratedUtc, IReadOnlyList<WeeklyDynamicSceneContract> Scenes);
 sealed record WeeklySscPropagationSceneReport(string sceneCode, IReadOnlyList<string> objects, string primaryObject, IReadOnlyList<string> requiredLabels, IReadOnlyList<string> cameraTargetObjects, double cameraAzimuth, double cameraAltitude, double fov, bool propagationValid);
