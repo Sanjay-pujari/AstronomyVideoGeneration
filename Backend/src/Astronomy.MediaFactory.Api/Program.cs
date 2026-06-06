@@ -471,6 +471,19 @@ app.MapPost("/api/astronomy-intelligence/generate-tts-audio-bulk", async (TtsAud
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-director-timelines", async (DirectorTimelineRequest request, IDirectorTimelineService timelines, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy director timeline generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await timelines.GenerateDirectorTimelinesAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);

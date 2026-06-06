@@ -1,0 +1,370 @@
+using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace Astronomy.MediaFactory.Infrastructure.Persistence;
+
+public sealed class DirectorTimelineService(
+    MediaFactoryDbContext db,
+    IOptions<RenderingOptions> renderingOptions,
+    ILogger<DirectorTimelineService> logger) : IDirectorTimelineService
+{
+    private const string GenerationSource = "Phase9D";
+    private const string FinalPackageFileName = "tts-package-final.json";
+    private const string PolishedNarrationFileName = "narration-polished.json";
+    private const string AudioManifestFileName = "tts-audio-manifest.json";
+    private const string TimelineFileName = "director-timeline.json";
+    private const string AiPromptMissingWarning = "AI image prompt exists but generated image is not available yet.";
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
+    public async Task<DirectorTimelineResult> GenerateDirectorTimelinesAsync(DirectorTimelineRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.MaxPlans is < 1)
+            throw new ArgumentException("MaxPlans must be greater than zero when provided.");
+
+        var root = ResolveWorkingDirectoryRoot();
+        var warnings = new List<string>();
+        var generatedFiles = new List<string>();
+        var timelines = new List<DirectorTimelineDocument>();
+        var candidates = await ResolveCandidatesAsync(request, cancellationToken);
+
+        foreach (var plan in candidates)
+        {
+            try
+            {
+                var timelinePath = BuildTimelinePath(root, plan.RegionId, plan.Id);
+                if (!request.DryRun && File.Exists(timelinePath) && !request.OverwriteExisting)
+                {
+                    warnings.Add($"Skipped existing director timeline for plan {plan.Id}. Set overwriteExisting=true to replace it.");
+                    continue;
+                }
+
+                var timeline = await BuildTimelineAsync(root, plan, cancellationToken);
+                timelines.Add(timeline);
+                warnings.AddRange(timeline.RenderReadiness.Warnings.Select(w => $"Plan {plan.Id}: {w}"));
+
+                if (!request.DryRun)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(timelinePath) ?? root);
+                    await File.WriteAllTextAsync(timelinePath, JsonSerializer.Serialize(timeline, JsonOptions), cancellationToken);
+                    generatedFiles.Add(timelinePath);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                warnings.Add($"Failed to generate director timeline for plan {plan.Id}: {ex.Message}");
+                logger.LogWarning(ex, "Phase 9D director timeline generation failed for plan {PlanId}", plan.Id);
+            }
+        }
+
+        var readyCount = timelines.Count(t => t.RenderReadiness.ReadyForRender);
+        logger.LogInformation("Phase 9D processed {PlanCount} content generation plan(s). Generated={GeneratedCount} ReadyForRender={ReadyForRenderCount} DryRun={DryRun}", candidates.Count, timelines.Count, readyCount, request.DryRun);
+        return new DirectorTimelineResult(candidates.Count, timelines.Count, readyCount, timelines.Count - readyCount, timelines, generatedFiles, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private async Task<IReadOnlyList<ContentGenerationPlan>> ResolveCandidatesAsync(DirectorTimelineRequest request, CancellationToken cancellationToken)
+    {
+        var requestedCategories = ToSet(request.ContentCategories);
+        var requestedFormats = ToSet(request.PlannedFormats);
+        var query = db.ContentGenerationPlans.AsNoTracking().AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(request.RegionId))
+        {
+            var region = request.RegionId.Trim();
+            query = query.Where(p => p.RegionId == region);
+        }
+
+        if (request.PlanIds is { Count: > 0 })
+        {
+            var ids = request.PlanIds.ToHashSet();
+            query = query.Where(p => ids.Contains(p.Id));
+        }
+
+        if (requestedCategories is not null)
+            query = query.Where(p => requestedCategories.Contains(p.ContentCategoryCode));
+        if (requestedFormats is not null)
+            query = query.Where(p => p.PlannedFormat != null && requestedFormats.Contains(p.PlannedFormat));
+
+        return await query
+            .OrderByDescending(p => p.ScheduledUtc ?? DateTimeOffset.MinValue)
+            .ThenBy(p => p.Id)
+            .Take(request.MaxPlans ?? int.MaxValue)
+            .ToListAsync(cancellationToken);
+    }
+
+    private async Task<DirectorTimelineDocument> BuildTimelineAsync(string root, ContentGenerationPlan plan, CancellationToken cancellationToken)
+    {
+        var planRoot = BuildPlanRoot(root, plan.RegionId, plan.Id);
+        var finalPackage = await ReadJsonAsync<FinalTtsPackageDocument>(Path.Combine(planRoot, "tts", FinalPackageFileName), cancellationToken);
+        var manifest = await ReadJsonAsync<TtsAudioManifest>(Path.Combine(planRoot, "tts", "audio", AudioManifestFileName), cancellationToken);
+        var polished = await ReadJsonAsync<PolishedNarrationDocument>(Path.Combine(planRoot, "narration", PolishedNarrationFileName), cancellationToken);
+        var assetJobs = await db.AstronomyAssetProductionJobs
+            .AsNoTracking()
+            .Where(j => j.ContentGenerationPlanId == plan.Id && j.Status == AstronomyAssetProductionJobStatuses.Completed)
+            .OrderBy(j => j.SceneNumber)
+            .ThenBy(j => j.Priority)
+            .ThenBy(j => j.AssetType)
+            .ToListAsync(cancellationToken);
+
+        var missingRequiredAssets = new List<string>();
+        var warnings = new List<string>();
+        if (finalPackage is null)
+            missingRequiredAssets.Add($"Missing final TTS package: {Path.Combine(planRoot, "tts", FinalPackageFileName)}");
+        if (manifest is null)
+            missingRequiredAssets.Add($"Missing TTS audio manifest: {Path.Combine(planRoot, "tts", "audio", AudioManifestFileName)}");
+
+        var combinedPath = manifest?.CombinedAudioPath ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(combinedPath) || !File.Exists(combinedPath))
+            missingRequiredAssets.Add("Missing required combined narration audio.");
+
+        var segments = finalPackage?.Segments.OrderBy(s => s.SceneNumber).ToList() ?? [];
+        if (segments.Count == 0 && polished is not null)
+        {
+            segments = polished.Segments.OrderBy(s => s.SceneNumber)
+                .Select(s => new TtsPackageSegment(s.SceneNumber, s.SceneName, s.FinalNarration, string.Empty, 0, s.PauseHints, s.EmphasisWords, s.VoicePerformance, string.Empty))
+                .ToList();
+        }
+
+        if (segments.Count == 0)
+            missingRequiredAssets.Add("No narration scenes were found in the final TTS package or polished narration.");
+
+        var manifestDurations = (manifest?.Segments ?? [])
+            .GroupBy(s => s.SceneNumber)
+            .ToDictionary(g => g.Key, g => g.First(), EqualityComparer<int>.Default);
+        var sceneCount = segments.Count;
+        var fallbackTotal = finalPackage?.TotalEstimatedDurationSeconds ?? segments.Sum(s => s.EstimatedDurationSeconds);
+        var narrationTotal = manifest?.TotalDurationSeconds > 0 ? manifest.TotalDurationSeconds : fallbackTotal;
+        var rawSceneDurations = segments.Select(s => ResolveSceneDuration(s, manifestDurations)).ToList();
+        var totalRawDuration = rawSceneDurations.Sum();
+        var breathers = CalculateBreathers(sceneCount, narrationTotal, totalRawDuration);
+        var scenes = new List<DirectorTimelineScene>();
+        var cursor = 0d;
+        var lastSceneNumber = segments.Count == 0 ? 0 : segments.Max(s => s.SceneNumber);
+
+        for (var i = 0; i < segments.Count; i++)
+        {
+            var segment = segments[i];
+            var duration = rawSceneDurations[i];
+            var sceneStart = Round(cursor);
+            var sceneEnd = Round(cursor + duration);
+            cursor = sceneEnd + breathers.ElementAtOrDefault(i);
+
+            var jobsForScene = assetJobs.Where(j => j.SceneNumber == segment.SceneNumber).ToList();
+            var selectedAssets = SelectVisualAssets(plan.ContentCategoryCode, segment.SceneNumber, lastSceneNumber, jobsForScene, warnings);
+            var textOverlay = jobsForScene.FirstOrDefault(j => IsAssetType(j, "TextOverlayCard") && HasUsablePath(j));
+            var qualityNotes = new List<string>();
+            if (selectedAssets.Count == 0)
+            {
+                missingRequiredAssets.Add($"Scene {segment.SceneNumber} has no usable visual asset.");
+                qualityNotes.Add("No primary visual source is currently available for this scene.");
+            }
+
+            scenes.Add(new DirectorTimelineScene(
+                segment.SceneNumber,
+                string.IsNullOrWhiteSpace(segment.SceneName) ? $"Scene {segment.SceneNumber}" : segment.SceneName,
+                sceneStart,
+                sceneEnd,
+                Round(sceneEnd - sceneStart),
+                segment.Text,
+                manifestDurations.TryGetValue(segment.SceneNumber, out var manifestSegment) && !string.IsNullOrWhiteSpace(manifestSegment.AudioPath) ? manifestSegment.AudioPath : segment.OutputAudioPath,
+                selectedAssets.FirstOrDefault() ?? new DirectorTimelineAsset(string.Empty, string.Empty, string.Empty),
+                selectedAssets.Skip(1).Take(4).ToList(),
+                new DirectorTimelineOverlayPlan(textOverlay?.OutputPath ?? string.Empty, "center-safe 80% width / 70% height; keep lower captions clear", true),
+                ResolveCameraMotion(plan.ContentCategoryCode, segment.SceneNumber, lastSceneNumber),
+                segment.SceneNumber == 1 ? "fade from black" : "soft crossfade",
+                segment.SceneNumber == lastSceneNumber ? "fade to black" : "soft crossfade",
+                ResolveVisualMood(plan.ContentCategoryCode, segment.SceneNumber, lastSceneNumber),
+                ResolveMusicCue(plan.ContentCategoryCode, segment.SceneNumber, lastSceneNumber),
+                qualityNotes));
+        }
+
+        var timelineDuration = scenes.Count == 0 ? 0 : scenes.Max(s => s.EndSecond);
+        if (timelineDuration <= 0)
+            missingRequiredAssets.Add("Timeline duration is invalid.");
+        if (narrationTotal > 0 && timelineDuration > 0 && Math.Abs(timelineDuration - narrationTotal) > Math.Max(1.5, narrationTotal * 0.08))
+            warnings.Add($"Timeline duration {timelineDuration:0.###}s differs from combined narration duration {narrationTotal:0.###}s.");
+
+        var renderReady = missingRequiredAssets.Count == 0 && timelineDuration > 0;
+        return new DirectorTimelineDocument(
+            plan.Id.ToString("D"),
+            plan.RegionId,
+            plan.ContentCategoryCode,
+            finalPackage?.PlannedFormat ?? plan.PlannedFormat ?? string.Empty,
+            finalPackage?.Title ?? polished?.Title ?? plan.Title ?? string.Empty,
+            Round(narrationTotal),
+            new DirectorTimelineAudio(combinedPath, Round(narrationTotal), finalPackage?.VoiceProfile.VoiceName ?? manifest?.VoiceName ?? string.Empty, finalPackage?.MusicProfile.Mood ?? string.Empty, finalPackage?.MusicProfile.Intensity ?? string.Empty),
+            scenes,
+            new DirectorTimelineRenderReadiness(renderReady, missingRequiredAssets.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()),
+            GenerationSource,
+            DateTimeOffset.UtcNow);
+    }
+
+    private static double ResolveSceneDuration(TtsPackageSegment segment, IReadOnlyDictionary<int, TtsAudioManifestSegment> manifestDurations)
+    {
+        if (manifestDurations.TryGetValue(segment.SceneNumber, out var manifestSegment) && manifestSegment.DurationSeconds > 0)
+            return Round(manifestSegment.DurationSeconds);
+        return Math.Max(0.1, segment.EstimatedDurationSeconds);
+    }
+
+    private static IReadOnlyList<double> CalculateBreathers(int sceneCount, double narrationTotal, double rawDuration)
+    {
+        if (sceneCount <= 1 || narrationTotal <= rawDuration + 0.3)
+            return Enumerable.Repeat(0d, Math.Max(sceneCount, 0)).ToArray();
+
+        var gapCount = sceneCount - 1;
+        var gap = Math.Clamp((narrationTotal - rawDuration) / gapCount, 0.3, 0.7);
+        return Enumerable.Range(0, sceneCount).Select(i => i < gapCount ? Round(gap) : 0d).ToArray();
+    }
+
+    private static List<DirectorTimelineAsset> SelectVisualAssets(string category, int sceneNumber, int lastSceneNumber, IReadOnlyList<AstronomyAssetProductionJob> jobs, List<string> warnings)
+    {
+        var orderedTypes = PreferredAssetTypes(sceneNumber, lastSceneNumber);
+        return jobs
+            .Where(IsVisualJob)
+            .Select(job => new { Job = job, Rank = Rank(job.AssetType, orderedTypes), Asset = ToTimelineAsset(job, warnings) })
+            .Where(x => x.Asset is not null)
+            .OrderBy(x => x.Rank)
+            .ThenBy(x => x.Job.Priority)
+            .Select(x => x.Asset!)
+            .ToList();
+    }
+
+    private static IReadOnlyList<string> PreferredAssetTypes(int sceneNumber, int lastSceneNumber)
+    {
+        if (sceneNumber == 1)
+            return ["AiHeroImage", "AiCinematicImage", "AiImage", "StellariumCapture", "StellariumScreenshot", "SkyMapCard", "TextOverlayCard"];
+        if (sceneNumber == lastSceneNumber)
+            return ["AiCinematicImage", "AiHeroImage", "AiImage", "StellariumCapture", "StellariumScreenshot", "SkyMapCard", "TextOverlayCard"];
+        return ["StellariumCapture", "StellariumScreenshot", "SkyMapCard", "ConstellationGuide", "NasaAsset", "TextOverlayCard", "AiCinematicImage", "AiHeroImage", "AiImage"];
+    }
+
+    private static int Rank(string assetType, IReadOnlyList<string> preferredTypes)
+    {
+        var index = preferredTypes.ToList().FindIndex(t => string.Equals(t, assetType, StringComparison.OrdinalIgnoreCase));
+        return index >= 0 ? index : preferredTypes.Count + 1;
+    }
+
+    private static DirectorTimelineAsset? ToTimelineAsset(AstronomyAssetProductionJob job, List<string> warnings)
+    {
+        if (IsAiImageType(job.AssetType) && !HasActualGeneratedAiImage(job))
+        {
+            warnings.Add(AiPromptMissingWarning);
+            var plannedPath = FirstNonBlank(job.OutputPath, job.PromptOrInstruction, ExtractMetadataValue(job.MetadataJson, "imagePrompt"), ExtractMetadataValue(job.MetadataJson, "prompt"));
+            return string.IsNullOrWhiteSpace(plannedPath)
+                ? null
+                : new DirectorTimelineAsset("PlannedVisual", plannedPath, BuildUsage(job));
+        }
+
+        var path = FirstNonBlank(job.OutputPath, ExtractMetadataValue(job.MetadataJson, "outputPath"), ExtractMetadataValue(job.MetadataJson, "assetPath"));
+        return string.IsNullOrWhiteSpace(path) ? null : new DirectorTimelineAsset(job.AssetType, path, BuildUsage(job));
+    }
+
+    private static bool IsVisualJob(AstronomyAssetProductionJob job)
+        => IsAiImageType(job.AssetType) || HasUsablePath(job) || !string.IsNullOrWhiteSpace(job.PromptOrInstruction);
+
+    private static bool HasUsablePath(AstronomyAssetProductionJob job)
+        => !string.IsNullOrWhiteSpace(job.OutputPath) || !string.IsNullOrWhiteSpace(ExtractMetadataValue(job.MetadataJson, "outputPath")) || !string.IsNullOrWhiteSpace(ExtractMetadataValue(job.MetadataJson, "assetPath"));
+
+    private static bool HasActualGeneratedAiImage(AstronomyAssetProductionJob job)
+    {
+        var path = FirstNonBlank(job.OutputPath, ExtractMetadataValue(job.MetadataJson, "generatedImagePath"), ExtractMetadataValue(job.MetadataJson, "imagePath"));
+        return !string.IsNullOrWhiteSpace(path) && File.Exists(path) && !Path.GetExtension(path).Equals(".json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAiImageType(string assetType)
+        => assetType.Contains("Ai", StringComparison.OrdinalIgnoreCase) && assetType.Contains("Image", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAssetType(AstronomyAssetProductionJob job, string assetType)
+        => string.Equals(job.AssetType, assetType, StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildUsage(AstronomyAssetProductionJob job)
+        => string.IsNullOrWhiteSpace(job.AssetPurpose) ? $"Primary visual for {job.SceneName}" : job.AssetPurpose;
+
+    private static string ResolveCameraMotion(string category, int sceneNumber, int lastSceneNumber)
+        => category switch
+        {
+            "RareEventAlert" when sceneNumber == 1 => "slow push-in",
+            "RareEventAlert" when sceneNumber == lastSceneNumber => "slow fade out",
+            "RareEventAlert" => "subtle pan / hold",
+            "PlanetConjunction" when sceneNumber == 1 => "slow zoom toward pairing",
+            "PlanetConjunction" when sceneNumber == lastSceneNumber => "slow pull-back",
+            "PlanetConjunction" => "gentle orbit / line-of-sight style",
+            "PlanetGrouping" when sceneNumber == lastSceneNumber => "closing hold",
+            "PlanetGrouping" => "guided pan across group with object sequence emphasis",
+            "WeeklySkyForecast" => "episode montage crossfade with night-by-night progression",
+            _ when sceneNumber == lastSceneNumber => "slow pull-back",
+            _ => "subtle push-in"
+        };
+
+    private static string ResolveVisualMood(string category, int sceneNumber, int lastSceneNumber)
+        => category switch
+        {
+            "RareEventAlert" => sceneNumber == 1 ? "urgent cinematic skywatch" : "focused observational clarity",
+            "PlanetConjunction" => "calm wonder with clear positional emphasis",
+            "PlanetGrouping" => "guided discovery across multiple bright objects",
+            "WeeklySkyForecast" => "weekly night-sky guide montage",
+            _ => sceneNumber == lastSceneNumber ? "reflective closing sky" : "calm astronomy explainer"
+        };
+
+    private static string ResolveMusicCue(string category, int sceneNumber, int lastSceneNumber)
+        => sceneNumber == 1
+            ? category == "RareEventAlert" ? "low tension bed enters" : "ambient bed fades in"
+            : sceneNumber == lastSceneNumber ? "music resolves and fades" : "maintain gentle underscore";
+
+    private static async Task<T?> ReadJsonAsync<T>(string path, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
+            return default;
+        await using var stream = File.OpenRead(path);
+        return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken);
+    }
+
+    private string ResolveWorkingDirectoryRoot()
+        => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
+
+    private static string BuildPlanRoot(string root, string regionId, Guid planId)
+        => Path.Combine(root, "assets", SanitizePathSegment(regionId) ?? "unknown-region", "plans", planId.ToString("D"));
+
+    private static string BuildTimelinePath(string root, string regionId, Guid planId)
+        => Path.Combine(BuildPlanRoot(root, regionId, planId), "timeline", TimelineFileName);
+
+    private static HashSet<string>? ToSet(IReadOnlyList<string>? values)
+        => values is { Count: > 0 }
+            ? values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+
+    private static string? SanitizePathSegment(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = new string(value.Trim().Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray());
+        return string.IsNullOrWhiteSpace(sanitized) ? null : sanitized;
+    }
+
+    private static string? ExtractMetadataValue(string? metadataJson, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+            return null;
+        try
+        {
+            using var document = JsonDocument.Parse(metadataJson);
+            return document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string FirstNonBlank(params string?[] values)
+        => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
+
+    private static double Round(double value)
+        => Math.Round(value, 3, MidpointRounding.AwayFromZero);
+}
