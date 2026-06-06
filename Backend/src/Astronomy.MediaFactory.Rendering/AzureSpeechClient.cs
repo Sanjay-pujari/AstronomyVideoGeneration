@@ -12,11 +12,33 @@ public interface IAzureSpeechClient
         string text,
         AzureSpeechOptions options,
         CancellationToken cancellationToken);
+
+    Task<byte[]> SynthesizeWavSsmlAsync(
+        string ssml,
+        AzureSpeechOptions options,
+        CancellationToken cancellationToken);
 }
 
 public sealed class AzureSpeechClient(ILogger<AzureSpeechClient> logger, ISsmlBuilder ssmlBuilder) : IAzureSpeechClient
 {
     private static readonly TokenRequestContext AzureCognitiveServicesScope = new(["https://cognitiveservices.azure.com/.default"]);
+
+    public async Task<byte[]> SynthesizeWavSsmlAsync(string ssml, AzureSpeechOptions options, CancellationToken cancellationToken)
+    {
+        var speechConfig = options.UseManagedIdentity
+            ? await CreateManagedIdentityConfigAsync(options, cancellationToken)
+            : CreateSubscriptionConfig(options);
+
+        speechConfig.SetSpeechSynthesisOutputFormat(SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm);
+
+        using var synthesizer = new SpeechSynthesizer(speechConfig, audioConfig: null);
+        var result = await synthesizer.SpeakSsmlAsync(ssml).WaitAsync(cancellationToken);
+        if (result.Reason == ResultReason.SynthesizingAudioCompleted)
+            return result.AudioData;
+
+        var cancellationDetails = SpeechSynthesisCancellationDetails.FromResult(result);
+        throw new InvalidOperationException($"Speech synthesis failed. Reason={result.Reason}, ErrorCode={cancellationDetails.ErrorCode}, Details={cancellationDetails.ErrorDetails}");
+    }
 
     public async Task<byte[]> SynthesizeMp3Async(string text, AzureSpeechOptions options, CancellationToken cancellationToken)
     {

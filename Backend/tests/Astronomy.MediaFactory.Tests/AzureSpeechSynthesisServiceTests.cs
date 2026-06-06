@@ -127,6 +127,12 @@ public sealed class AzureSpeechSynthesisServiceTests
             WasCalled = true;
             return _synthesizer(options);
         }
+
+        public Task<byte[]> SynthesizeWavSsmlAsync(string ssml, AzureSpeechOptions options, CancellationToken cancellationToken)
+        {
+            WasCalled = true;
+            return _synthesizer(options);
+        }
     }
 
     private sealed class InMemoryFileSystem : IFileSystem

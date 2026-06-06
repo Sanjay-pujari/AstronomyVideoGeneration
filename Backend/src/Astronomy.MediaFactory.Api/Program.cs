@@ -445,6 +445,19 @@ app.MapPost("/api/astronomy-intelligence/normalize-tts-alignment", async (TtsAli
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-tts-audio", async (TtsAudioGenerationRequest request, ITtsAudioGenerationService audioGeneration, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy TTS audio generation request received for {RegionId}. DryRun={DryRun}. MaxPlans={MaxPlans}", request.RegionId, request.DryRun, request.MaxPlans);
+    try
+    {
+        return Results.Ok(await audioGeneration.GenerateTtsAudioAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
