@@ -407,20 +407,42 @@ app.MapPost("/api/astronomy-intelligence/execute-preferred-assets", async (Asset
     }
 });
 
-app.MapPost("/api/astronomy-intelligence/execute-optional-assets", async (AssetExecutionRequest request, INasaAssetExecutionService nasaAssetExecution, ILogger<Program> logger, CancellationToken ct) =>
+app.MapPost("/api/astronomy-intelligence/execute-optional-assets", async (AssetExecutionRequest request, INasaAssetExecutionService nasaAssetExecution, IAiImagePromptExecutionService aiImagePromptExecution, ILogger<Program> logger, CancellationToken ct) =>
 {
-    logger.LogInformation("Optional astronomy asset execution request received for {RegionId}. DryRun={DryRun} MaxJobs={MaxJobs} EnableExternalLookup={EnableExternalLookup}", request.RegionId, request.DryRun, request.MaxJobs, request.EnableExternalLookup);
+    logger.LogInformation("Optional astronomy asset execution request received for {RegionId}. DryRun={DryRun} MaxJobs={MaxJobs} EnableExternalLookup={EnableExternalLookup} EnableExternalGeneration={EnableExternalGeneration}", request.RegionId, request.DryRun, request.MaxJobs, request.EnableExternalLookup, request.EnableExternalGeneration);
     try
     {
         var requestedTypes = request.AssetTypes is { Count: > 0 }
             ? request.AssetTypes.Where(t => !string.IsNullOrWhiteSpace(t)).Select(NormalizePreferredAssetType).ToHashSet(StringComparer.Ordinal)
             : null;
         var executeNasaAsset = requestedTypes is null || requestedTypes.Contains(NormalizePreferredAssetType("NasaAsset"));
+        var executeAiHeroImage = requestedTypes is null || requestedTypes.Contains(NormalizePreferredAssetType("AiHeroImage"));
+        var executeAiCinematicImage = requestedTypes is null || requestedTypes.Contains(NormalizePreferredAssetType("AiCinematicImage"));
 
+        var results = new List<AssetExecutionResult>();
         if (executeNasaAsset)
-            return Results.Ok(await nasaAssetExecution.ExecuteOptionalAssetsAsync(request with { AssetTypes = ["NasaAsset"] }, ct));
+            results.Add(await nasaAssetExecution.ExecuteOptionalAssetsAsync(request with { AssetTypes = ["NasaAsset"] }, ct));
 
-        return Results.Ok(new AssetExecutionResult(0, 0, 0, 0, [], ["No supported optional asset type was requested; supported types are NasaAsset."]));
+        var aiAssetTypes = new List<string>();
+        if (executeAiHeroImage)
+            aiAssetTypes.Add("AiHeroImage");
+        if (executeAiCinematicImage)
+            aiAssetTypes.Add("AiCinematicImage");
+        if (aiAssetTypes.Count > 0)
+            results.Add(await aiImagePromptExecution.ExecuteOptionalAssetsAsync(request with { AssetTypes = aiAssetTypes }, ct));
+
+        if (results.Count > 0)
+        {
+            return Results.Ok(new AssetExecutionResult(
+                results.Sum(result => result.JobCount),
+                results.Sum(result => result.CompletedCount),
+                results.Sum(result => result.FailedCount),
+                results.Sum(result => result.SkippedCount),
+                results.SelectMany(result => result.GeneratedFiles).ToList(),
+                results.SelectMany(result => result.Warnings).ToList()));
+        }
+
+        return Results.Ok(new AssetExecutionResult(0, 0, 0, 0, [], ["No supported optional asset type was requested; supported types are NasaAsset, AiHeroImage, and AiCinematicImage."]));
     }
     catch (ArgumentException ex)
     {

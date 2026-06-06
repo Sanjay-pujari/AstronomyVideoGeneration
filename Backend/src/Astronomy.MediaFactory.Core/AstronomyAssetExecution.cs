@@ -7,7 +7,8 @@ public sealed record AssetExecutionRequest(
     int MaxJobs = 50,
     bool DryRun = true,
     bool OverwriteExisting = false,
-    bool EnableExternalLookup = false);
+    bool EnableExternalLookup = false,
+    bool EnableExternalGeneration = false);
 
 public sealed record AssetExecutionResult(
     int JobCount,
