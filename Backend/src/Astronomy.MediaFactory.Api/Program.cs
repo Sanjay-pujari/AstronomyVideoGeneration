@@ -354,6 +354,19 @@ app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (A
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/execute-required-assets", async (AssetExecutionRequest request, IAssetExecutionService execution, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Required astronomy asset execution request received for {RegionId}. DryRun={DryRun} MaxJobs={MaxJobs}", request.RegionId, request.DryRun, request.MaxJobs);
+    try
+    {
+        return Results.Ok(await execution.ExecuteRequiredAssetsAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpRequest httpRequest, IAstronomyAssetProducerPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyAssetProducerPreviewRequest>(httpRequest, "request", logger, ct);
