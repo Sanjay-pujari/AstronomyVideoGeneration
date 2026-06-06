@@ -98,6 +98,67 @@ public sealed class TtsAudioGenerationServiceTests : IDisposable
         Assert.Contains(result.Warnings, warning => warning.Contains("AzureSpeech:Key", StringComparison.OrdinalIgnoreCase));
     }
 
+
+    [Fact]
+    public async Task GenerateTtsAudioBulk_DryRun_SelectsReadyPlansAndSkipsExistingCombinedAudio()
+    {
+        var approvedPilotPlanId = Guid.Parse("36cb768a-4aa6-4189-ac48-f45ae5ee4f6b");
+        var remainingPlanId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var notReadyPlanId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        WriteFinalPackage(approvedPilotPlanId);
+        WriteFinalPackage(remainingPlanId, contentCategory: "DailySkyGuide");
+        WriteFinalPackage(notReadyPlanId, readyForTts: false);
+        WriteExistingCombinedAudio(approvedPilotPlanId);
+        var service = CreateService(new StubAzureSpeechClient(_ => throw new InvalidOperationException("dry run should not synthesize")));
+
+        var result = await service.GenerateTtsAudioBulkAsync(new TtsAudioBulkGenerationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            PlanIds: [],
+            MaxPlans: 20,
+            DryRun: true,
+            OverwriteExisting: false,
+            CombineSegments: true), CancellationToken.None);
+
+        Assert.Equal(1, result.PlanCount);
+        Assert.Equal(0, result.CompletedCount);
+        Assert.Equal(0, result.FailedCount);
+        Assert.Equal(1, result.SkippedExistingCount);
+        Assert.Contains(result.GeneratedFiles, path => path.Contains(remainingPlanId.ToString("D"), StringComparison.Ordinal) && path.EndsWith(Path.Combine("tts", "audio", "scene-01.wav"), StringComparison.Ordinal));
+        Assert.Contains(result.GeneratedFiles, path => path.Contains(remainingPlanId.ToString("D"), StringComparison.Ordinal) && path.EndsWith(Path.Combine("tts", "audio", "narration-combined.wav"), StringComparison.Ordinal));
+        Assert.Contains(result.GeneratedFiles, path => path.Contains(remainingPlanId.ToString("D"), StringComparison.Ordinal) && path.EndsWith(Path.Combine("tts", "audio", "tts-audio-manifest.json"), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GenerateTtsAudioBulk_DryRunFalse_CreatesAudioForMultipleReadyPlans()
+    {
+        var firstPlanId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var secondPlanId = Guid.Parse("44444444-4444-4444-4444-444444444444");
+        WriteFinalPackage(firstPlanId, contentCategory: "DailySkyGuide");
+        WriteFinalPackage(secondPlanId, contentCategory: "WeeklySkyForecast");
+        var service = CreateService(new StubAzureSpeechClient(_ => Task.FromResult(CreateWavBytes())));
+
+        var result = await service.GenerateTtsAudioBulkAsync(new TtsAudioBulkGenerationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            PlanIds: [firstPlanId, secondPlanId],
+            MaxPlans: 20,
+            DryRun: false,
+            OverwriteExisting: false,
+            CombineSegments: true), CancellationToken.None);
+
+        Assert.Equal(2, result.PlanCount);
+        Assert.Equal(2, result.CompletedCount);
+        Assert.Equal(0, result.FailedCount);
+        Assert.Equal(0, result.SkippedExistingCount);
+        Assert.Equal(2, result.CombinedAudioCount);
+        foreach (var planId in new[] { firstPlanId, secondPlanId })
+        {
+            var audioRoot = Path.Combine(outputRoot, "assets", "IN-RJ-UDAIPUR", "plans", planId.ToString("D"), "tts", "audio");
+            Assert.True(File.Exists(Path.Combine(audioRoot, "scene-01.wav")));
+            Assert.True(File.Exists(Path.Combine(audioRoot, "narration-combined.wav")));
+            Assert.True(File.Exists(Path.Combine(audioRoot, "tts-audio-manifest.json")));
+        }
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(outputRoot))
@@ -113,7 +174,7 @@ public sealed class TtsAudioGenerationServiceTests : IDisposable
             NullLogger<AzureTtsAudioGenerationService>.Instance);
     }
 
-    private void WriteFinalPackage(Guid planId)
+    private void WriteFinalPackage(Guid planId, string contentCategory = "RareEventAlert", bool readyForTts = true, bool readyForAudioGeneration = true)
     {
         var ttsRoot = Path.Combine(outputRoot, "assets", "IN-RJ-UDAIPUR", "plans", planId.ToString("D"), "tts");
         Directory.CreateDirectory(ttsRoot);
@@ -121,7 +182,7 @@ public sealed class TtsAudioGenerationServiceTests : IDisposable
             planId.ToString("D"),
             "IN-RJ-UDAIPUR",
             "en",
-            "RareEventAlert",
+            contentCategory,
             "ShortForm",
             "Rare Event Alert",
             "AzureSpeech",
@@ -138,17 +199,25 @@ public sealed class TtsAudioGenerationServiceTests : IDisposable
                 null,
                 $"/tts/audio/scene-{scene:00}.wav")).ToArray(),
             16,
-            true,
+            readyForAudioGeneration,
             "Phase9B.3",
             DateTimeOffset.UtcNow,
             "Valid",
             DateTimeOffset.UtcNow,
-            true,
+            readyForTts,
             "AlreadyValid",
             DateTimeOffset.UtcNow,
             []);
 
         File.WriteAllText(Path.Combine(ttsRoot, "tts-package-final.json"), JsonSerializer.Serialize(package, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+    }
+
+
+    private void WriteExistingCombinedAudio(Guid planId)
+    {
+        var audioRoot = Path.Combine(outputRoot, "assets", "IN-RJ-UDAIPUR", "plans", planId.ToString("D"), "tts", "audio");
+        Directory.CreateDirectory(audioRoot);
+        File.WriteAllBytes(Path.Combine(audioRoot, "narration-combined.wav"), CreateWavBytes());
     }
 
     private static byte[] CreateWavBytes()
@@ -158,7 +227,7 @@ public sealed class TtsAudioGenerationServiceTests : IDisposable
         const ushort bitsPerSample = 16;
         const uint byteRate = sampleRate * channels * bitsPerSample / 8;
         const ushort blockAlign = (ushort)(channels * bitsPerSample / 8);
-        const int dataSize = 48000;
+        const int dataSize = 96000;
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write("RIFF"u8.ToArray());

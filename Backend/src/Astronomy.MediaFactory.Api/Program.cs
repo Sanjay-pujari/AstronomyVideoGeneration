@@ -458,6 +458,19 @@ app.MapPost("/api/astronomy-intelligence/generate-tts-audio", async (TtsAudioGen
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-tts-audio-bulk", async (TtsAudioBulkGenerationRequest request, ITtsAudioGenerationService audioGeneration, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy bulk TTS audio generation request received for {RegionId}. DryRun={DryRun}. MaxPlans={MaxPlans}. OverwriteExisting={OverwriteExisting}", request.RegionId, request.DryRun, request.MaxPlans, request.OverwriteExisting);
+    try
+    {
+        return Results.Ok(await audioGeneration.GenerateTtsAudioBulkAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
