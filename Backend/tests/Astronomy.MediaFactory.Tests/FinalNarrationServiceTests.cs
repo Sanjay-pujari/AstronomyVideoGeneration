@@ -117,12 +117,67 @@ public sealed class FinalNarrationServiceTests : IDisposable
         Assert.DoesNotContain(files, path => path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase));
     }
 
+
+    [Fact]
+    public async Task PolishedNarration_WeeklySkyForecastHasEpisodeStructureAndTtsMetadata()
+    {
+        await using var db = CreateDb();
+        await SeedPlanAsync(db, "WeeklySkyForecast", "Long", ["Moon", "Saturn", "Venus"]);
+        var service = CreatePolishService(db);
+
+        var result = await service.PolishFinalNarrationAsync(new PolishedNarrationRequest(DryRun: true), CancellationToken.None);
+
+        var polished = Assert.Single(result.PolishedNarrations);
+        var purposes = string.Join("\n", polished.Segments.Select(s => s.ScenePurpose));
+        Assert.Contains("Opening Hook", purposes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("What changed", purposes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Main highlight", purposes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Best viewing opportunity", purposes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Scientific or emotional context", purposes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Final viewer takeaway", purposes, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Monday:", string.Join("\n", polished.Segments.Select(s => s.FinalNarration)), StringComparison.OrdinalIgnoreCase);
+        Assert.All(polished.Segments, segment => Assert.NotNull(segment.VoicePerformance));
+        Assert.Equal("cinematic storyteller", polished.TtsReadiness.RecommendedVoice);
+        Assert.True(polished.DurationValidation.WordCount > 0);
+        Assert.Equal(polished.QualityBreakdown.Total, polished.QualityScore);
+        Assert.Equal(polished.QualityScore >= 90, polished.TtsReadiness.ReadyForTts);
+    }
+
+    [Fact]
+    public async Task DryRunFalse_WritesPolishedNarrationJsonOnly_NoTtsAudioOrRendering()
+    {
+        await using var db = CreateDb();
+        var plan = await SeedPlanAsync(db, "PlanetConjunction", "Short", ["Venus", "Jupiter"]);
+        var service = CreatePolishService(db);
+
+        var result = await service.PolishFinalNarrationAsync(new PolishedNarrationRequest(DryRun: false), CancellationToken.None);
+
+        var file = Assert.Single(result.GeneratedFiles);
+        Assert.Equal(ExpectedPolishedPath(plan.Id), file);
+        Assert.True(File.Exists(file));
+        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(file));
+        Assert.Equal("Phase9A.3", doc.RootElement.GetProperty("generationSource").GetString());
+        Assert.True(doc.RootElement.TryGetProperty("ttsReadiness", out var ttsReadiness));
+        Assert.True(doc.RootElement.TryGetProperty("durationValidation", out _));
+        Assert.True(doc.RootElement.TryGetProperty("qualityBreakdown", out var qualityBreakdown));
+        Assert.True(doc.RootElement.GetProperty("segments")[0].TryGetProperty("voicePerformance", out _));
+        Assert.Equal(doc.RootElement.GetProperty("qualityScore").GetInt32() >= 90, ttsReadiness.GetProperty("readyForTts").GetBoolean());
+        Assert.Equal(qualityBreakdown.GetProperty("total").GetInt32(), doc.RootElement.GetProperty("qualityScore").GetInt32());
+
+        var files = Directory.GetFiles(outputRoot, "*", SearchOption.AllDirectories);
+        Assert.All(files, path => Assert.EndsWith(".json", path));
+        Assert.DoesNotContain(files, path => path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase));
+    }
+
     private FinalNarrationService CreateService(MediaFactoryDbContext db)
     {
         var narration = new NarrationPlanningService(db, Options.Create(new RenderingOptions { WorkingDirectory = outputRoot }), NullLogger<NarrationPlanningService>.Instance);
         var director = new DirectorNarrationService(narration, Options.Create(new RenderingOptions { WorkingDirectory = outputRoot }), NullLogger<DirectorNarrationService>.Instance);
         return new FinalNarrationService(director, Options.Create(new RenderingOptions { WorkingDirectory = outputRoot }), NullLogger<FinalNarrationService>.Instance);
     }
+
+    private PolishedNarrationService CreatePolishService(MediaFactoryDbContext db)
+        => new(CreateService(db), Options.Create(new RenderingOptions { WorkingDirectory = outputRoot }), NullLogger<PolishedNarrationService>.Instance);
 
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
@@ -171,6 +226,9 @@ public sealed class FinalNarrationServiceTests : IDisposable
 
     private string ExpectedFinalPath(Guid planId)
         => Path.Combine(outputRoot, "assets", "IN-RJ-UDAIPUR", "plans", planId.ToString("D"), "narration", "narration-final.json");
+
+    private string ExpectedPolishedPath(Guid planId)
+        => Path.Combine(outputRoot, "assets", "IN-RJ-UDAIPUR", "plans", planId.ToString("D"), "narration", "narration-polished.json");
 
     public void Dispose()
     {

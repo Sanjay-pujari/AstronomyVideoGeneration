@@ -21,6 +21,9 @@ public sealed record FinalNarrationResult(
 
 public sealed record FinalNarrationDocument(
     string Title,
+    string RegionId,
+    string ContentGenerationPlanId,
+    string ContentCategory,
     string ExecutiveProducerStyle,
     int EstimatedDurationSeconds,
     IReadOnlyList<FinalNarrationSegment> Segments,

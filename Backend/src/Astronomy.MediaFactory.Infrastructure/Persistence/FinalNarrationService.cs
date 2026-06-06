@@ -123,6 +123,9 @@ public sealed class FinalNarrationService(
 
         return new FinalNarrationDocument(
             directorCut.Title,
+            directorCut.RegionId,
+            directorCut.ContentGenerationPlanId,
+            directorCut.ContentCategory,
             ExecutiveProducerStyle,
             estimatedDuration,
             segments,
