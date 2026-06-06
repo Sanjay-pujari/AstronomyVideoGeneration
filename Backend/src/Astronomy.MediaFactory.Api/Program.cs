@@ -407,6 +407,27 @@ app.MapPost("/api/astronomy-intelligence/execute-preferred-assets", async (Asset
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/preview-stellarium-capture", async (HttpRequest httpRequest, IStellariumCapturePreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
+{
+    var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<StellariumCapturePreviewRequest>(httpRequest, "request", logger, ct);
+    if (requestBody.HasError)
+    {
+        return requestBody.ErrorResult!;
+    }
+
+    var request = requestBody.Value!;
+    logger.LogInformation("Stellarium capture preview request received for {RegionId}. MaxJobs={MaxJobs}", request.RegionId, request.MaxJobs);
+    try
+    {
+        return Results.Ok(await previews.PreviewCaptureAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+})
+.Accepts<StellariumCapturePreviewRequest>("application/json");
+
 app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpRequest httpRequest, IAstronomyAssetProducerPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyAssetProducerPreviewRequest>(httpRequest, "request", logger, ct);
