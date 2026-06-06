@@ -380,6 +380,19 @@ app.MapPost("/api/astronomy-intelligence/generate-final-narration", async (Final
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/polish-final-narration", async (PolishedNarrationRequest request, IPolishedNarrationService polishedNarration, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy polished narration request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await polishedNarration.PolishFinalNarrationAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
