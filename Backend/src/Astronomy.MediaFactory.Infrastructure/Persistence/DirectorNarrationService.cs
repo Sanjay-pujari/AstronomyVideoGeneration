@@ -78,7 +78,11 @@ public sealed class DirectorNarrationService(
             draft.Title,
             DirectorStyle,
             estimatedDuration,
-            segments);
+            segments,
+            draft.ContentGenerationPlanId,
+            draft.ContentCategory,
+            draft.RegionId,
+            draft.LocationName);
     }
 
     private static DirectorNarrationSegment BuildDirectorSegment(NarrationScriptDocument draft, NarrationScriptSegment segment, int index)

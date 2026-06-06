@@ -21,7 +21,12 @@ public sealed record DirectorNarrationDocument(
     string Title,
     string DirectorStyle,
     int EstimatedDurationSeconds,
-    IReadOnlyList<DirectorNarrationSegment> Segments);
+    IReadOnlyList<DirectorNarrationSegment> Segments,
+    string ContentGenerationPlanId = "",
+    string ContentCategory = "",
+    string RegionId = "",
+    string LocationName = "",
+    string GenerationSource = "Phase9A.1");
 
 public sealed record DirectorNarrationSegment(
     int SceneNumber,
