@@ -20,6 +20,18 @@ public sealed class StellariumOptions
     [Range(1, 600)]
     public int CaptureTimeoutSeconds { get; set; } = 60;
 
+    [Range(0, 120)]
+    public double StartupWaitSeconds { get; set; } = 5;
+
+    [Range(0, 120)]
+    public double ScriptExecutionWaitSeconds { get; set; } = 5;
+
+    [Range(0, 120)]
+    public double PreCaptureWaitSeconds { get; set; } = 3;
+
+    [Range(0, 120)]
+    public double PostCaptureWaitSeconds { get; set; } = 2;
+
     public bool UseExistingCaptureUtility { get; set; } = true;
 
     [MaxLength(1024)]
