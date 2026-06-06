@@ -431,6 +431,19 @@ app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpR
 app.MapGet("/api/astronomy-intelligence/category-readiness", async (IAstronomyCategoryReadinessService readiness, CancellationToken ct) =>
     Results.Ok(await readiness.GetCategoryReadinessAsync(AstronomyOpportunityCategoryCodes.Phase7CategoryCodes, ct)));
 
+app.MapGet("/api/astronomy-intelligence/production-summary", async (string? regionId, DateTimeOffset? startUtc, DateTimeOffset? endUtc, IAstronomyProductionMonitoringService monitoring, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy production summary requested for {RegionId} from {StartUtc} to {EndUtc}.", regionId, startUtc, endUtc);
+    try
+    {
+        return Results.Ok(await monitoring.GetProductionSummaryAsync(new AstronomyProductionMonitoringRequest(regionId, startUtc, endUtc), ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 
 
 app.MapGet("/api/content-master/categories", async (MediaFactoryDbContext db, CancellationToken ct) =>
