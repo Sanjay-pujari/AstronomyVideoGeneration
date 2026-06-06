@@ -393,6 +393,19 @@ app.MapPost("/api/astronomy-intelligence/polish-final-narration", async (Polishe
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-tts-packages", async (TtsPackagePlanningRequest request, ITtsPackagePlanningService ttsPackages, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy TTS package planning request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await ttsPackages.GenerateTtsPackagesAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);

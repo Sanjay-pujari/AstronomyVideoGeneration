@@ -169,6 +169,69 @@ public sealed class FinalNarrationServiceTests : IDisposable
         Assert.DoesNotContain(files, path => path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase));
     }
 
+
+    [Fact]
+    public async Task TtsPackagePlanning_ReadsPolishedNarration_CreatesSsmlAndOutputPathsWithoutAudio()
+    {
+        await using var db = CreateDb();
+        var plan = await SeedPlanAsync(db, "PlanetConjunction", "Short", ["Venus", "Jupiter"]);
+        var polishService = CreatePolishService(db);
+        await polishService.PolishFinalNarrationAsync(new PolishedNarrationRequest(DryRun: false), CancellationToken.None);
+        var service = CreateTtsPackageService(db);
+
+        var result = await service.GenerateTtsPackagesAsync(new TtsPackagePlanningRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            PlanIds: [plan.Id],
+            Language: "en",
+            DryRun: false), CancellationToken.None);
+
+        var package = Assert.Single(result.TtsPackages);
+        var file = Assert.Single(result.GeneratedFiles);
+        Assert.Equal(ExpectedTtsPackagePath(plan.Id), file);
+        Assert.True(File.Exists(file));
+        Assert.Equal("Phase9B", package.GenerationSource);
+        Assert.Equal("AzureSpeech", package.TtsProvider);
+        Assert.Equal("en-US-DavisNeural", package.VoiceProfile.VoiceName);
+        Assert.Equal("Short", package.PlannedFormat);
+        Assert.True(package.ReadyForAudioGeneration);
+        Assert.All(package.Segments, segment =>
+        {
+            Assert.Contains("<speak", segment.Ssml, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("<prosody", segment.Ssml, StringComparison.OrdinalIgnoreCase);
+            Assert.EndsWith($"tts{Path.DirectorySeparatorChar}audio{Path.DirectorySeparatorChar}scene-{segment.SceneNumber:00}.wav", segment.OutputAudioPath);
+        });
+
+        var files = Directory.GetFiles(outputRoot, "*", SearchOption.AllDirectories);
+        Assert.All(files, path => Assert.EndsWith(".json", path));
+        Assert.DoesNotContain(files, path => path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task TtsPackagePlanning_DryRunReturnsPreviewWithoutWritingPackage()
+    {
+        await using var db = CreateDb();
+        var plan = await SeedPlanAsync(db, "RareEventAlert", "Short", ["meteor shower"]);
+        var polishService = CreatePolishService(db);
+        await polishService.PolishFinalNarrationAsync(new PolishedNarrationRequest(DryRun: false), CancellationToken.None);
+        var service = CreateTtsPackageService(db);
+
+        var result = await service.GenerateTtsPackagesAsync(new TtsPackagePlanningRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            PlanIds: [plan.Id],
+            DryRun: true), CancellationToken.None);
+
+        var package = Assert.Single(result.TtsPackages);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.False(File.Exists(ExpectedTtsPackagePath(plan.Id)));
+        Assert.Equal("serious newscast documentary", package.VoiceProfile.Style);
+        Assert.Equal("-5%", package.VoiceProfile.Rate);
+        Assert.Equal("subtle tension", package.MusicProfile.Mood);
+        Assert.Contains(package.Segments, segment => segment.Ssml.Contains("<break", StringComparison.OrdinalIgnoreCase));
+
+        var files = Directory.GetFiles(outputRoot, "*", SearchOption.AllDirectories);
+        Assert.DoesNotContain(files, path => path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase));
+    }
+
     private FinalNarrationService CreateService(MediaFactoryDbContext db)
     {
         var narration = new NarrationPlanningService(db, Options.Create(new RenderingOptions { WorkingDirectory = outputRoot }), NullLogger<NarrationPlanningService>.Instance);
@@ -178,6 +241,9 @@ public sealed class FinalNarrationServiceTests : IDisposable
 
     private PolishedNarrationService CreatePolishService(MediaFactoryDbContext db)
         => new(CreateService(db), Options.Create(new RenderingOptions { WorkingDirectory = outputRoot }), NullLogger<PolishedNarrationService>.Instance);
+
+    private TtsPackagePlanningService CreateTtsPackageService(MediaFactoryDbContext db)
+        => new(db, Options.Create(new RenderingOptions { WorkingDirectory = outputRoot }), NullLogger<TtsPackagePlanningService>.Instance);
 
     private static MediaFactoryDbContext CreateDb()
         => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
@@ -229,6 +295,9 @@ public sealed class FinalNarrationServiceTests : IDisposable
 
     private string ExpectedPolishedPath(Guid planId)
         => Path.Combine(outputRoot, "assets", "IN-RJ-UDAIPUR", "plans", planId.ToString("D"), "narration", "narration-polished.json");
+
+    private string ExpectedTtsPackagePath(Guid planId)
+        => Path.Combine(outputRoot, "assets", "IN-RJ-UDAIPUR", "plans", planId.ToString("D"), "tts", "tts-package.json");
 
     public void Dispose()
     {
