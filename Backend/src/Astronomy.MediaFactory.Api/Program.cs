@@ -367,6 +367,20 @@ app.MapPost("/api/astronomy-intelligence/execute-required-assets", async (AssetE
     }
 });
 
+
+app.MapPost("/api/astronomy-intelligence/execute-preferred-assets", async (AssetExecutionRequest request, ISkyMapCardExecutionService execution, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Preferred astronomy asset execution request received for {RegionId}. DryRun={DryRun} MaxJobs={MaxJobs}", request.RegionId, request.DryRun, request.MaxJobs);
+    try
+    {
+        return Results.Ok(await execution.ExecutePreferredAssetsAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpRequest httpRequest, IAstronomyAssetProducerPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyAssetProducerPreviewRequest>(httpRequest, "request", logger, ct);

@@ -2,6 +2,7 @@ namespace Astronomy.MediaFactory.Core;
 
 public sealed record AssetExecutionRequest(
     IReadOnlyList<Guid>? JobIds = null,
+    IReadOnlyList<string>? AssetTypes = null,
     string? RegionId = null,
     int MaxJobs = 50,
     bool DryRun = true,
