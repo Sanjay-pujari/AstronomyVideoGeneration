@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -63,17 +65,17 @@ public sealed partial class TtsAlignmentRepairService(
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 warnings.Add($"Failed to repair TTS package '{path}': {ex.Message}");
-                logger.LogWarning(ex, "Phase 9B.2 TTS alignment repair failed for {Path}", path);
+                logger.LogWarning(ex, "Phase 9B.3 TTS alignment normalization failed for {Path}", path);
             }
         }
 
-        var repairedCount = finalPackages.Count(p => string.Equals(p.AlignmentRepairStatus, "Repaired", StringComparison.OrdinalIgnoreCase));
+        var normalizedValidCount = finalPackages.Count(p => string.Equals(p.AlignmentRepairStatus, "NormalizedValid", StringComparison.OrdinalIgnoreCase));
         var alreadyValidCount = finalPackages.Count(p => string.Equals(p.AlignmentRepairStatus, "AlreadyValid", StringComparison.OrdinalIgnoreCase));
         var failedCount = finalPackages.Count(p => string.Equals(p.AlignmentRepairStatus, "Failed", StringComparison.OrdinalIgnoreCase));
         var readyForAudioCount = finalPackages.Count(p => p.ReadyForAudioGeneration);
-        logger.LogInformation("Phase 9B.2 repaired {PlanCount} TTS package(s). Repaired={RepairedCount} AlreadyValid={AlreadyValidCount} Failed={FailedCount} ReadyForAudio={ReadyForAudioCount} DryRun={DryRun}", finalPackages.Count, repairedCount, alreadyValidCount, failedCount, readyForAudioCount, request.DryRun);
+        logger.LogInformation("Phase 9B.3 normalized {PlanCount} TTS package(s). NormalizedValid={NormalizedValidCount} AlreadyValid={AlreadyValidCount} Failed={FailedCount} ReadyForAudio={ReadyForAudioCount} DryRun={DryRun}", finalPackages.Count, normalizedValidCount, alreadyValidCount, failedCount, readyForAudioCount, request.DryRun);
 
-        return new TtsAlignmentRepairResult(finalPackages.Count, repairedCount, alreadyValidCount, failedCount, readyForAudioCount, finalPackages, generatedFiles, warnings);
+        return new TtsAlignmentRepairResult(finalPackages.Count, normalizedValidCount, alreadyValidCount, failedCount, readyForAudioCount, finalPackages, generatedFiles, warnings);
     }
 
     private static async Task<RepairableTtsPackage?> ReadPackageAsync(string path, CancellationToken cancellationToken)
@@ -107,7 +109,7 @@ public sealed partial class TtsAlignmentRepairService(
 
         var ready = repairedSegments.Count > 0 && validationResults.All(r => r.IsValid);
         var repairStatus = ready
-            ? allOriginalSegmentsAligned ? "AlreadyValid" : "Repaired"
+            ? allOriginalSegmentsAligned ? "AlreadyValid" : "NormalizedValid"
             : "Failed";
 
         return new FinalTtsPackageDocument(
@@ -123,7 +125,7 @@ public sealed partial class TtsAlignmentRepairService(
             repairedSegments,
             package.TotalEstimatedDurationSeconds,
             ready,
-            package.GenerationSource,
+            "Phase9B.3",
             package.GeneratedUtc,
             ready ? "Valid" : "Invalid",
             DateTimeOffset.UtcNow,
@@ -137,28 +139,49 @@ public sealed partial class TtsAlignmentRepairService(
     {
         var issues = new List<string>();
         var fixes = new List<string>();
-        var originalAligned = IsXmlAligned(segment.Ssml, segment.Text);
-        var voiceSettings = ExtractVoiceSettings(segment.Ssml, voiceProfile);
-        var rebuiltSsml = BuildSsmlFromText(segment.Text, language, voiceSettings, segment.EmphasisWords, isOpeningScene, isFinalScene, fixes);
-        var repairedSegment = segment with { Ssml = rebuiltSsml };
+        TtsAlignmentMismatchDetail? mismatch = null;
+        var normalizedAligned = TryValidateAlignment(segment.Ssml, segment.Text, out mismatch);
+        var legacyAligned = IsLegacyXmlAligned(segment.Ssml, segment.Text);
+        var originalAligned = normalizedAligned && legacyAligned;
+        var repairedSegment = segment;
 
-        try
+        if (normalizedAligned)
         {
-            var document = XDocument.Parse(rebuiltSsml, LoadOptions.PreserveWhitespace);
-            var spoken = ExtractSpokenText(document.Root!);
-            if (!AlignmentEquals(spoken, segment.Text))
-                issues.Add("Final SSML/text alignment mismatch.");
+            if (!legacyAligned)
+                fixes.Add("Accepted SSML/text alignment after inline-tag-aware normalization.");
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        else if (IsXmlParseable(segment.Ssml))
         {
-            issues.Add($"Final SSML XML parse failed: {ex.Message}");
+            issues.Add("SSML/text alignment mismatch after normalization.");
+            if (mismatch is not null)
+            {
+                issues.Add($"sourceNormalized={mismatch.SourceNormalized}");
+                issues.Add($"spokenNormalized={mismatch.SpokenNormalized}");
+                issues.Add($"missingWords={string.Join(',', mismatch.MissingWords)}");
+            }
+        }
+        else
+        {
+            var voiceSettings = ExtractVoiceSettings(segment.Ssml, voiceProfile);
+            var rebuiltSsml = BuildSsmlFromText(segment.Text, language, voiceSettings, segment.EmphasisWords, isOpeningScene, isFinalScene, fixes);
+            repairedSegment = segment with { Ssml = rebuiltSsml };
+            if (!TryValidateAlignment(rebuiltSsml, segment.Text, out mismatch))
+            {
+                issues.Add("Final SSML/text alignment mismatch.");
+                if (mismatch is not null)
+                {
+                    issues.Add($"sourceNormalized={mismatch.SourceNormalized}");
+                    issues.Add($"spokenNormalized={mismatch.SpokenNormalized}");
+                    issues.Add($"missingWords={string.Join(',', mismatch.MissingWords)}");
+                }
+            }
         }
 
         ValidateOutputAudioPath(segment, issues);
 
         return new SegmentRepairResult(
             repairedSegment,
-            new TtsSegmentValidationResult(segment.SceneNumber, issues.Count == 0, issues, fixes),
+            new TtsSegmentValidationResult(segment.SceneNumber, issues.Count == 0, issues, fixes, issues.Count == 0 ? null : mismatch),
             originalAligned);
     }
 
@@ -301,12 +324,35 @@ public sealed partial class TtsAlignmentRepairService(
         return DramaticHintRegex().IsMatch(combined);
     }
 
-    private static bool IsXmlAligned(string ssml, string text)
+    private static bool TryValidateAlignment(string ssml, string text, out TtsAlignmentMismatchDetail? mismatch)
     {
+        mismatch = null;
         try
         {
             var document = XDocument.Parse(ssml, LoadOptions.PreserveWhitespace);
-            return AlignmentEquals(ExtractSpokenText(document.Root!), text);
+            var spoken = ExtractSpokenText(document.Root!);
+            var sourceNormalized = NormalizeForAlignment(text);
+            var spokenNormalized = NormalizeForAlignment(spoken);
+            if (string.Equals(spokenNormalized, sourceNormalized, StringComparison.Ordinal))
+                return true;
+
+            mismatch = new TtsAlignmentMismatchDetail(sourceNormalized, spokenNormalized, FindMissingWords(sourceNormalized, spokenNormalized));
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            mismatch = new TtsAlignmentMismatchDetail(NormalizeForAlignment(text), string.Empty, TokenizeNormalized(NormalizeForAlignment(text)));
+            return false;
+        }
+    }
+
+
+    private static bool IsXmlParseable(string ssml)
+    {
+        try
+        {
+            XDocument.Parse(ssml, LoadOptions.PreserveWhitespace);
+            return true;
         }
         catch
         {
@@ -314,29 +360,40 @@ public sealed partial class TtsAlignmentRepairService(
         }
     }
 
-    private static bool AlignmentEquals(string spoken, string text)
-        => string.Equals(NormalizeForAlignment(spoken), NormalizeForAlignment(text), StringComparison.OrdinalIgnoreCase);
+    private static bool IsLegacyXmlAligned(string ssml, string text)
+    {
+        try
+        {
+            var document = XDocument.Parse(ssml, LoadOptions.PreserveWhitespace);
+            var legacySpoken = string.Join(' ', document.Root!.DescendantNodes().OfType<XText>().Select(t => t.Value));
+            return string.Equals(NormalizeForLegacyAlignment(legacySpoken), NormalizeForLegacyAlignment(text), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private static string ExtractSpokenText(XElement element)
     {
-        var parts = new List<string>();
-        AppendSpokenText(element, parts);
-        return string.Join(' ', parts);
+        var builder = new StringBuilder();
+        AppendSpokenText(element, builder);
+        return builder.ToString();
     }
 
-    private static void AppendSpokenText(XNode node, List<string> parts)
+    private static void AppendSpokenText(XNode node, StringBuilder builder)
     {
         switch (node)
         {
-            case XText text when !string.IsNullOrWhiteSpace(text.Value):
-                parts.Add(text.Value);
+            case XText text:
+                builder.Append(text.Value);
                 break;
             case XElement element when string.Equals(element.Name.LocalName, "break", StringComparison.OrdinalIgnoreCase):
-                parts.Add(" ");
+                builder.Append(' ');
                 break;
             case XElement element:
                 foreach (var child in element.Nodes())
-                    AppendSpokenText(child, parts);
+                    AppendSpokenText(child, builder);
                 break;
         }
     }
@@ -419,10 +476,50 @@ public sealed partial class TtsAlignmentRepairService(
 
     private static string NormalizeForAlignment(string text)
     {
+        var normalized = NormalizeQuotesAndDashes(WebUtility.HtmlDecode(text ?? string.Empty)).Normalize(NormalizationForm.FormKC).ToLowerInvariant();
+        var withoutPunctuation = PunctuationRegex().Replace(normalized, " ");
+        return NormalizeWhitespace(withoutPunctuation).Trim();
+    }
+
+    private static string NormalizeForLegacyAlignment(string text)
+    {
         var withoutTagsNormalized = NormalizeWhitespace(text);
         var withoutPunctuation = PunctuationRegex().Replace(withoutTagsNormalized, " ");
         return NormalizeWhitespace(withoutPunctuation).Trim();
     }
+
+    private static string NormalizeQuotesAndDashes(string text)
+        => text
+            .Replace('‘', '\'')
+            .Replace('’', '\'')
+            .Replace('‚', '\'')
+            .Replace('“', '"')
+            .Replace('”', '"')
+            .Replace('„', '"')
+            .Replace('‐', '-')
+            .Replace('‑', '-')
+            .Replace('‒', '-')
+            .Replace('–', '-')
+            .Replace('—', '-')
+            .Replace('―', '-');
+
+    private static IReadOnlyList<string> FindMissingWords(string sourceNormalized, string spokenNormalized)
+    {
+        var remaining = TokenizeNormalized(spokenNormalized).GroupBy(word => word).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var missing = new List<string>();
+        foreach (var word in TokenizeNormalized(sourceNormalized))
+        {
+            if (remaining.TryGetValue(word, out var count) && count > 0)
+                remaining[word] = count - 1;
+            else
+                missing.Add(word);
+        }
+
+        return missing;
+    }
+
+    private static IReadOnlyList<string> TokenizeNormalized(string normalized)
+        => NormalizeWhitespace(normalized).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private static string? SanitizePathSegment(string? value)
     {
@@ -452,6 +549,7 @@ public sealed partial class TtsAlignmentRepairService(
 
         public static RepairableTtsPackage FromClean(CleanTtsPackageDocument document)
             => new(document.ContentGenerationPlanId, document.RegionId, document.Language, document.ContentCategory, document.PlannedFormat, document.Title, document.TtsProvider, document.VoiceProfile, document.MusicProfile, document.Segments, document.TotalEstimatedDurationSeconds, document.GenerationSource, document.GeneratedUtc);
+
     }
 
     private sealed record VoiceSettings(string VoiceName, string Rate, string Pitch, string Volume);
@@ -466,7 +564,7 @@ public sealed partial class TtsAlignmentRepairService(
     [GeneratedRegex(@"\b[\p{L}\p{N}']+\b")]
     private static partial Regex WordRegex();
 
-    [GeneratedRegex(@"[\p{P}\p{S}]+")]
+    [GeneratedRegex(@"(?:[\p{P}\p{S}]|\p{Cf})+")]
     private static partial Regex PunctuationRegex();
 
     [GeneratedRegex(@"\b(dramatic|pause|final|opening|hook|reveal|wonder|awe)\b", RegexOptions.IgnoreCase)]

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Astronomy.MediaFactory.Core;
 
 public sealed record TtsAlignmentRepairRequest(
@@ -12,13 +14,17 @@ public sealed record TtsAlignmentRepairRequest(
 
 public sealed record TtsAlignmentRepairResult(
     int PlanCount,
-    int RepairedCount,
+    int NormalizedValidCount,
     int AlreadyValidCount,
     int FailedCount,
     int ReadyForAudioCount,
     IReadOnlyList<FinalTtsPackageDocument> FinalPackages,
     IReadOnlyList<string> GeneratedFiles,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    [JsonIgnore]
+    public int RepairedCount => NormalizedValidCount;
+}
 
 public sealed record FinalTtsPackageDocument(
     string ContentGenerationPlanId,

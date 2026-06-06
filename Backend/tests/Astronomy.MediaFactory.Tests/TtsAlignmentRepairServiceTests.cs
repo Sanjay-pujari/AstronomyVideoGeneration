@@ -17,7 +17,7 @@ public sealed class TtsAlignmentRepairServiceTests : IDisposable
     {
         var planId = Guid.NewGuid();
         var inputPath = WritePackage(planId,
-            ssml: BuildSsml("The Moon rises tonight."),
+            ssml: "<speak><voice><prosody>The Moon rises tonight.",
             text: "The Moon rises tonight. Watch Mars nearby.",
             emphasisWords: ["Mars"]);
         var service = CreateService();
@@ -28,7 +28,7 @@ public sealed class TtsAlignmentRepairServiceTests : IDisposable
             DryRun: true), CancellationToken.None);
 
         Assert.Equal(1, result.PlanCount);
-        Assert.Equal(1, result.RepairedCount);
+        Assert.Equal(1, result.NormalizedValidCount);
         Assert.Equal(0, result.FailedCount);
         Assert.Equal(1, result.ReadyForAudioCount);
         Assert.Empty(result.GeneratedFiles);
@@ -38,7 +38,7 @@ public sealed class TtsAlignmentRepairServiceTests : IDisposable
         Assert.True(finalPackage.ReadyForTts);
         Assert.True(finalPackage.ReadyForAudioGeneration);
         Assert.Equal("Valid", finalPackage.SsmlValidationStatus);
-        Assert.Equal("Repaired", finalPackage.AlignmentRepairStatus);
+        Assert.Equal("NormalizedValid", finalPackage.AlignmentRepairStatus);
         var segment = Assert.Single(finalPackage.Segments);
         XDocument.Parse(segment.Ssml);
         Assert.Contains("Watch", ExtractSpokenText(segment.Ssml), StringComparison.Ordinal);
@@ -53,8 +53,8 @@ public sealed class TtsAlignmentRepairServiceTests : IDisposable
     {
         var planId = Guid.NewGuid();
         WritePackage(planId,
-            ssml: BuildSsml("Only partial narration."),
-            text: "Only partial narration. The approved second sentence remains intact.");
+            ssml: BuildSsml("One sky, several <emphasis level=\"moderate\">night</emphasis>s."),
+            text: "One sky, several nights.");
         var service = CreateService();
 
         var result = await service.RepairTtsAlignmentAsync(new TtsAlignmentRepairRequest(
@@ -69,11 +69,81 @@ public sealed class TtsAlignmentRepairServiceTests : IDisposable
         Assert.True(document.RootElement.GetProperty("readyForTts").GetBoolean());
         Assert.True(document.RootElement.GetProperty("readyForAudioGeneration").GetBoolean());
         Assert.Equal("Valid", document.RootElement.GetProperty("ssmlValidationStatus").GetString());
-        Assert.Equal("Repaired", document.RootElement.GetProperty("alignmentRepairStatus").GetString());
+        Assert.Equal("NormalizedValid", document.RootElement.GetProperty("alignmentRepairStatus").GetString());
         XDocument.Parse(document.RootElement.GetProperty("segments")[0].GetProperty("ssml").GetString()!);
 
         var files = Directory.GetFiles(outputRoot, "*", SearchOption.AllDirectories);
         Assert.All(files, path => Assert.EndsWith(".json", path, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("One sky, several <emphasis level=\"moderate\">night</emphasis>s", "One sky, several nights")]
+    [InlineData("our <emphasis level=\"moderate\">view</emphasis>point", "our viewpoint")]
+    public async Task RepairTtsAlignment_InlineEmphasisSplittingWords_NormalizesAsValidWithoutRewriting(string ssmlBody, string text)
+    {
+        var planId = Guid.NewGuid();
+        var ssml = BuildSsml(ssmlBody);
+        WritePackage(planId, ssml: ssml, text: text);
+        var service = CreateService();
+
+        var result = await service.RepairTtsAlignmentAsync(new TtsAlignmentRepairRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            PlanIds: [planId],
+            DryRun: true), CancellationToken.None);
+
+        Assert.Equal(1, result.NormalizedValidCount);
+        Assert.Equal(0, result.FailedCount);
+        var finalPackage = Assert.Single(result.FinalPackages);
+        Assert.Equal("NormalizedValid", finalPackage.AlignmentRepairStatus);
+        Assert.True(finalPackage.ReadyForTts);
+        Assert.True(finalPackage.ReadyForAudioGeneration);
+        Assert.Equal(ssml, Assert.Single(finalPackage.Segments).Ssml);
+        var validation = Assert.Single(finalPackage.SegmentValidationResults);
+        Assert.True(validation.IsValid);
+        Assert.Contains(validation.FixesApplied, fix => fix.Contains("inline-tag-aware normalization", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task RepairTtsAlignment_BreakTagsAndPunctuationDifferences_DoNotCreateFalseMismatch()
+    {
+        var planId = Guid.NewGuid();
+        WritePackage(planId,
+            ssml: BuildSsml("Tonight’s Moon<break time=\"300ms\"/>watch Mars nearby!"),
+            text: "tonight's moon watch mars nearby");
+        var service = CreateService();
+
+        var result = await service.RepairTtsAlignmentAsync(new TtsAlignmentRepairRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            PlanIds: [planId],
+            DryRun: true), CancellationToken.None);
+
+        var finalPackage = Assert.Single(result.FinalPackages);
+        Assert.Equal("AlreadyValid", finalPackage.AlignmentRepairStatus);
+        Assert.True(finalPackage.ReadyForAudioGeneration);
+        Assert.True(Assert.Single(finalPackage.SegmentValidationResults).IsValid);
+    }
+
+    [Fact]
+    public async Task RepairTtsAlignment_RebuiltSsmlStillMissingWords_IncludesNormalizedMismatchDetails()
+    {
+        var planId = Guid.NewGuid();
+        WritePackage(planId,
+            ssml: BuildSsml("The Moon rises tonight."),
+            text: "The Moon rises tonight. Watch Mars nearby.");
+        var service = CreateService();
+
+        var result = await service.RepairTtsAlignmentAsync(new TtsAlignmentRepairRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            PlanIds: [planId],
+            DryRun: true), CancellationToken.None);
+
+        var finalPackage = Assert.Single(result.FinalPackages);
+        Assert.Equal("Failed", finalPackage.AlignmentRepairStatus);
+        var validation = Assert.Single(finalPackage.SegmentValidationResults);
+        Assert.NotNull(validation.AlignmentMismatch);
+        Assert.Contains(validation.Issues, issue => issue.StartsWith("sourceNormalized=", StringComparison.Ordinal));
+        Assert.Contains(validation.Issues, issue => issue.StartsWith("spokenNormalized=", StringComparison.Ordinal));
+        Assert.Contains(validation.Issues, issue => issue.StartsWith("missingWords=", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -85,7 +155,7 @@ public sealed class TtsAlignmentRepairServiceTests : IDisposable
             text: "Raw package text.");
         var ttsRoot = Path.GetDirectoryName(rawPath)!;
         var cleanPackage = CreatePackage(planId,
-            ssml: BuildSsml("Clean package text."),
+            ssml: BuildSsml("Clean package text. Clean package wins."),
             text: "Clean package text. Clean package wins.",
             emphasisWords: []);
         await File.WriteAllTextAsync(Path.Combine(ttsRoot, "tts-package-clean.json"), JsonSerializer.Serialize(new CleanTtsPackageDocument(
@@ -216,9 +286,27 @@ public sealed class TtsAlignmentRepairServiceTests : IDisposable
 
     private static string NormalizeForAlignment(string text)
     {
-        var collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        var withoutPunctuation = System.Text.RegularExpressions.Regex.Replace(collapsed, @"[\p{P}\p{S}]+", " ");
-        return string.Join(' ', withoutPunctuation.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).ToLowerInvariant();
+        var document = XDocument.Parse($"<root>{text}</root>");
+        var extracted = ExtractInlineAwareText(document.Root!);
+        var normalized = extracted.Replace('’', '\'').ToLowerInvariant();
+        var withoutPunctuation = System.Text.RegularExpressions.Regex.Replace(normalized, @"[\p{P}\p{S}]+", " ");
+        return string.Join(' ', withoutPunctuation.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    private static string ExtractInlineAwareText(XElement element)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (var node in element.Nodes())
+        {
+            if (node is XText text)
+                builder.Append(text.Value);
+            else if (node is XElement child && string.Equals(child.Name.LocalName, "break", StringComparison.OrdinalIgnoreCase))
+                builder.Append(' ');
+            else if (node is XElement childElement)
+                builder.Append(ExtractInlineAwareText(childElement));
+        }
+
+        return builder.ToString();
     }
 
     private TtsAlignmentRepairService CreateService()
