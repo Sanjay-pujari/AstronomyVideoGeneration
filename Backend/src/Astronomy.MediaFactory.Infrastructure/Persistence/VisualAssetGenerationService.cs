@@ -73,6 +73,7 @@ public sealed class VisualAssetGenerationService(
             }
 
             var package = DiscoverPackageFiles(planRoot);
+            var sameEventSkyMapCards = await DiscoverSameEventSkyMapCardsAsync(root, candidate, cancellationToken);
             foreach (var scene in assembly.Scenes.OrderBy(x => x.SceneNumber))
             {
                 sceneCount++;
@@ -80,7 +81,7 @@ public sealed class VisualAssetGenerationService(
                 var backgroundPath = Path.Combine(outputDir, $"scene-{scene.SceneNumber:000}-background.png");
                 var overlayPath = Path.Combine(outputDir, $"scene-{scene.SceneNumber:000}-overlay.png");
                 var manifestPath = Path.Combine(outputDir, $"scene-{scene.SceneNumber:000}-visual-manifest.json");
-                var source = SelectPrimarySource(planRoot, assembly, scene, package);
+                var source = SelectPrimarySource(planRoot, assembly, scene, package, sameEventSkyMapCards);
                 var overlaySource = SelectOverlaySource(planRoot, scene, package);
                 var objects = ExtractObjects(scene, source.Path).ToArray();
                 var availability = DiscoverVisualAvailability(planRoot, scene, package);
@@ -166,21 +167,34 @@ public sealed class VisualAssetGenerationService(
     }
 
     private static PackageFiles DiscoverPackageFiles(string planRoot)
-        => new(
-            Enumerate(planRoot, "stellarium")
-                .Concat(Enumerate(planRoot, "screenshots"))
-                .Concat(Directory.Exists(planRoot)
-                    ? Directory.EnumerateFiles(planRoot, "*.png", SearchOption.AllDirectories)
-                        .Where(path => path.Contains("stellarium", StringComparison.OrdinalIgnoreCase) || path.Contains("capture", StringComparison.OrdinalIgnoreCase))
-                    : [])
+    {
+        var roots = PlanAssetRoots(planRoot).ToArray();
+        return new(
+            roots.SelectMany(root => Enumerate(root, "stellarium"))
+                .Concat(roots.SelectMany(root => Enumerate(root, "screenshots")))
+                .Concat(roots.Where(Directory.Exists)
+                    .SelectMany(root => Directory.EnumerateFiles(root, "*.png", SearchOption.AllDirectories))
+                    .Where(path => path.Contains("stellarium", StringComparison.OrdinalIgnoreCase) || path.Contains("capture", StringComparison.OrdinalIgnoreCase)))
                 .Where(IsImage)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
-            Enumerate(planRoot, "ai-image-prompts").Where(path => IsJson(path) || IsImage(path)).ToArray(),
-            Enumerate(planRoot, "sky-map-cards").Where(IsJson).ToArray(),
-            Enumerate(planRoot, "constellation-guides").Where(IsJson).ToArray(),
-            Enumerate(planRoot, "text-cards").Where(IsJson).ToArray(),
-            Enumerate(planRoot, "nasa-assets").Where(IsJson).ToArray());
+            roots.SelectMany(root => Enumerate(root, "ai-image-prompts")).Where(path => IsJson(path) || IsImage(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            roots.SelectMany(root => Enumerate(root, "sky-map-cards")).Where(IsJson).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            roots.SelectMany(root => Enumerate(root, "constellation-guides")).Where(IsJson).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            roots.SelectMany(root => Enumerate(root, "text-cards")).Where(IsJson).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            roots.SelectMany(root => Enumerate(root, "nasa-assets")).Where(IsJson).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static IEnumerable<string> PlanAssetRoots(string planRoot)
+    {
+        yield return planRoot;
+
+        var parent = Directory.GetParent(planRoot);
+        var regionRoot = parent?.Name.Equals("plans", StringComparison.OrdinalIgnoreCase) == true
+            ? parent.Parent
+            : null;
+        if (regionRoot is not null) yield return Path.Combine(regionRoot.FullName, Path.GetFileName(planRoot));
+    }
 
     private static IEnumerable<string> Enumerate(string planRoot, string directoryName)
     {
@@ -188,20 +202,41 @@ public sealed class VisualAssetGenerationService(
         return Directory.Exists(path) ? Directory.EnumerateFiles(path, "*.*", SearchOption.AllDirectories) : [];
     }
 
-    private static VisualSource SelectPrimarySource(string planRoot, SceneAssemblyPlanDocument assembly, SceneAssemblyScene scene, PackageFiles package)
+    private async Task<IReadOnlyList<string>> DiscoverSameEventSkyMapCardsAsync(string root, ContentGenerationPlan candidate, CancellationToken cancellationToken)
+    {
+        if (candidate.AstronomyEventIntelligenceId is null) return [];
+
+        var planIds = await db.ContentGenerationPlans
+            .AsNoTracking()
+            .Where(plan =>
+                plan.Id != candidate.Id &&
+                plan.RegionId == candidate.RegionId &&
+                plan.AstronomyEventIntelligenceId == candidate.AstronomyEventIntelligenceId)
+            .Select(plan => plan.Id)
+            .ToArrayAsync(cancellationToken);
+
+        return planIds
+            .SelectMany(planId => EnumerateSkyMapCardsForPlan(root, candidate.RegionId, planId.ToString("D")))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IEnumerable<string> EnumerateSkyMapCardsForPlan(string root, string regionId, string planId)
+        => Enumerate(BuildPlanRoot(root, regionId, planId), "sky-map-cards")
+            .Concat(Enumerate(Path.Combine(root, "assets", regionId, planId), "sky-map-cards"))
+            .Where(IsJson);
+
+    private static VisualSource SelectPrimarySource(string planRoot, SceneAssemblyPlanDocument assembly, SceneAssemblyScene scene, PackageFiles package, IReadOnlyList<string> sameEventSkyMapCards)
     {
         var stellarium = PickStellariumSource(planRoot, scene, package);
         if (stellarium is not null) return new(StellariumCaptureType, stellarium);
 
+        if (ShouldPreferFinderMap(assembly, scene))
+            return SelectFinderMapSource(planRoot, assembly, scene, package, sameEventSkyMapCards);
+
         var ai = PickAiPromptSource(planRoot, scene, package);
         var sky = PickByLayerOrPackage(planRoot, scene, ["SkyMapVisual", "SkyMapCard"], package.SkyMapCards, scene.SceneNumber);
         var guide = PickByLayerOrPackage(planRoot, scene, ["ConstellationGuideVisual", "ConstellationGuide"], package.ConstellationGuides, scene.SceneNumber);
-
-        if (ShouldPreferFinderMap(assembly, scene))
-        {
-            if (sky is not null) return new(SkyMapVisualType, sky);
-            if (guide is not null) return new(ConstellationGuideVisualType, guide);
-        }
 
         if (ai is not null) return new(AiPromptVisualType, ai);
         if (sky is not null) return new(SkyMapVisualType, sky);
@@ -212,6 +247,24 @@ public sealed class VisualAssetGenerationService(
         var text = PickByLayerOrPackage(planRoot, scene, ["TextOverlayVisual", "TextOverlayCard"], package.TextCards, scene.SceneNumber);
         if (text is not null) return new(TextOverlayVisualType, text);
         return new(AiPromptVisualType, string.Empty);
+    }
+
+    private static VisualSource SelectFinderMapSource(string planRoot, SceneAssemblyPlanDocument assembly, SceneAssemblyScene scene, PackageFiles package, IReadOnlyList<string> sameEventSkyMapCards)
+    {
+        var sceneSky = PickSceneLayerOrSceneFile(planRoot, scene, ["SkyMapVisual", "SkyMapCard"], package.SkyMapCards, scene.SceneNumber);
+        if (sceneSky is not null) return new(SkyMapVisualType, sceneSky);
+
+        var samePlanSky = PickReusableAssemblyLayerOrFile(planRoot, assembly, ["SkyMapVisual", "SkyMapCard"], package.SkyMapCards, scene.SceneNumber);
+        if (samePlanSky is not null) return new(SkyMapVisualType, samePlanSky);
+
+        var sameEventSky = PickReusableSceneFile(sameEventSkyMapCards, scene.SceneNumber);
+        if (sameEventSky is not null) return new(SkyMapVisualType, sameEventSky);
+
+        var guide = PickByLayerOrPackage(planRoot, scene, ["ConstellationGuideVisual", "ConstellationGuide"], package.ConstellationGuides, scene.SceneNumber);
+        if (guide is not null) return new(ConstellationGuideVisualType, guide);
+
+        var ai = PickAiPromptSource(planRoot, scene, package);
+        return new(AiPromptVisualType, ai ?? string.Empty);
     }
 
     private static bool ShouldPreferFinderMap(SceneAssemblyPlanDocument assembly, SceneAssemblyScene scene)
@@ -255,10 +308,52 @@ public sealed class VisualAssetGenerationService(
         return PickSceneFile(packageFiles, sceneNumber);
     }
 
+    private static string? PickSceneLayerOrSceneFile(string planRoot, SceneAssemblyScene scene, string[] assetTypes, IReadOnlyList<string> packageFiles, int sceneNumber)
+    {
+        var layer = scene.Layers.FirstOrDefault(l => assetTypes.Contains(l.AssetType, StringComparer.OrdinalIgnoreCase));
+        if (layer is not null) return ResolveAssetPath(planRoot, layer.AssetPath);
+        return PickExactSceneFile(packageFiles, sceneNumber);
+    }
+
+    private static string? PickReusableAssemblyLayerOrFile(string planRoot, SceneAssemblyPlanDocument assembly, string[] assetTypes, IReadOnlyList<string> packageFiles, int sceneNumber)
+    {
+        var layer = assembly.Scenes
+            .SelectMany(scene => scene.Layers
+                .Where(layer => assetTypes.Contains(layer.AssetType, StringComparer.OrdinalIgnoreCase))
+                .Select(layer => new { scene.SceneNumber, Path = ResolveAssetPath(planRoot, layer.AssetPath) }))
+            .OrderBy(candidate => ReuseDistance(candidate.SceneNumber, sceneNumber))
+            .FirstOrDefault();
+        return layer?.Path ?? PickReusableSceneFile(packageFiles, sceneNumber);
+    }
+
     private static string? PickSceneFile(IEnumerable<string> files, int sceneNumber)
+        => PickExactSceneFile(files, sceneNumber) ?? files.FirstOrDefault();
+
+    private static string? PickExactSceneFile(IEnumerable<string> files, int sceneNumber)
     {
         var token = $"scene-{sceneNumber:000}";
-        return files.FirstOrDefault(f => Path.GetFileName(f).Contains(token, StringComparison.OrdinalIgnoreCase)) ?? files.FirstOrDefault();
+        return files.FirstOrDefault(f => Path.GetFileName(f).Contains(token, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? PickReusableSceneFile(IEnumerable<string> files, int sceneNumber)
+        => files
+            .Select((path, index) => new { Path = path, Index = index, SceneNumber = TryReadSceneNumber(path) })
+            .OrderBy(candidate => candidate.SceneNumber.HasValue ? ReuseDistance(candidate.SceneNumber.Value, sceneNumber) : int.MaxValue)
+            .ThenBy(candidate => candidate.Index)
+            .Select(candidate => candidate.Path)
+            .FirstOrDefault();
+
+    private static int ReuseDistance(int candidateSceneNumber, int requestedSceneNumber)
+    {
+        if (candidateSceneNumber == requestedSceneNumber) return 0;
+        if (candidateSceneNumber < requestedSceneNumber) return (requestedSceneNumber - candidateSceneNumber) * 2 - 1;
+        return (candidateSceneNumber - requestedSceneNumber) * 2;
+    }
+
+    private static int? TryReadSceneNumber(string path)
+    {
+        var match = Regex.Match(Path.GetFileName(path), "scene[-_](?<scene>[0-9]{1,3})", RegexOptions.IgnoreCase);
+        return match.Success && int.TryParse(match.Groups["scene"].Value, out var sceneNumber) ? sceneNumber : null;
     }
 
     private async Task RenderBackgroundAsync(string outputPath, SceneAssemblyPlanDocument assembly, SceneAssemblyScene scene, VisualSource source, IReadOnlyList<string> objects, CancellationToken ct)

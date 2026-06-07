@@ -33,7 +33,6 @@ public sealed class VisualAssetGenerationServiceTests : IDisposable
         await WriteJsonAsync(plan.Id, "ai-image-prompts/scene-001-cinematic-prompt.json", new { title = "Immediate hook", subtitle = "Cinematic sky event hero", keyMessage = "Look west after sunset." });
         await WriteJsonAsync(plan.Id, "ai-image-prompts/scene-004-cinematic-prompt.json", new { title = "Close", subtitle = "Cinematic closing sky", keyMessage = "Share the viewing window." });
         await WriteJsonAsync(plan.Id, "sky-map-cards/scene-002-sky-map.json", new { title = "What to watch", subtitle = "Clean western horizon map", keyMessage = "Track the event near Venus." });
-        await WriteJsonAsync(plan.Id, "sky-map-cards/scene-003-sky-map.json", new { title = "Viewing guidance", subtitle = "Finder map for the observing window", keyMessage = "Use the bright planets as anchors." });
         await WriteJsonAsync(plan.Id, "constellation-guides/scene-003-guide.json", new { title = "Viewing guidance", subtitle = "Guide stars frame the view", keyMessage = "Use nearby bright stars." });
         await WriteJsonAsync(plan.Id, "text-cards/scene-001-text.json", new { title = "Tonight", subtitle = "Do not miss it", keyMessage = "Set a reminder." });
         await WriteJsonAsync(plan.Id, "text-cards/scene-002-text.json", new { title = "Map note", subtitle = "Use binoculars", keyMessage = "Keep the horizon clear." });
@@ -65,9 +64,9 @@ public sealed class VisualAssetGenerationServiceTests : IDisposable
             scene =>
             {
                 Assert.Equal(3, scene.SceneNumber);
-                Assert.Contains(scene.VisualSourceType, new[] { "SkyMapVisual", "ConstellationGuideVisual" });
-                Assert.NotEqual("TextOverlayVisual", scene.VisualSourceType);
-                Assert.NotEmpty(scene.OverlayPath);
+                Assert.Equal("SkyMapVisual", scene.VisualSourceType);
+                Assert.EndsWith("scene-002-sky-map.json", scene.SourcePath);
+                Assert.EndsWith("scene-003-overlay.png", scene.OverlayPath);
                 Assert.Empty(scene.Issues);
             },
             scene =>
