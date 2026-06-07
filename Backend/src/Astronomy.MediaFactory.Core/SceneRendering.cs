@@ -1,13 +1,13 @@
 namespace Astronomy.MediaFactory.Core;
 
-public sealed record SceneRenderRequest(
+public sealed record SceneRenderingRequest(
     string? RegionId = null,
     IReadOnlyList<Guid>? PlanIds = null,
     int? MaxPlans = 1,
     bool DryRun = true,
     bool OverwriteExisting = false);
 
-public sealed record SceneRenderResponse(
+public sealed record SceneRenderingResponse(
     int PlanCount,
     int SceneCount,
     int CompletedCount,
@@ -56,5 +56,5 @@ public sealed record SceneRenderManifestOutput(
 
 public interface ISceneRenderer
 {
-    Task<SceneRenderResponse> RenderScenesAsync(SceneRenderRequest request, CancellationToken cancellationToken);
+    Task<SceneRenderingResponse> RenderScenesAsync(SceneRenderingRequest request, CancellationToken cancellationToken);
 }
