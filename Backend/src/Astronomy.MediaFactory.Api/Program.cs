@@ -315,6 +315,19 @@ app.MapPost("/api/astronomy-intelligence/generate-content-opportunities", async 
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-question-answers", async (QuestionAnswerGenerationRequest request, IQuestionEngine questionEngine, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy question answer generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await questionEngine.GenerateQuestionAnswersAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-video-plans", async (AstronomyVideoPlanningRequest request, IAstronomyVideoPlanningService planning, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy video planning request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
