@@ -10,12 +10,12 @@ public sealed class QuestionDrivenImagePromptGenerator : IQuestionDrivenImagePro
 
         var sceneMood = request.QuestionType.ToLowerInvariant() switch
         {
-            "what" => "hero opening twilight over Udaipur, cinematic western sky, elegant astronomy documentary mood",
-            "where" => "clear western horizon at dusk over Rajasthan, open negative space for a compass and labels",
-            "when" => "sunset fading into early evening blue, calm timeline-friendly sky gradient, warm horizon glow",
-            "how" => "practical stargazing guide atmosphere, unobstructed western sky and simple landscape silhouette",
-            "why" => "poetic close-pairing astronomy mood, deepening blue sky, subtle sense of wonder",
-            "action" => "beautiful closing evening sky over Udaipur, peaceful horizon, warm inviting atmosphere",
+            "what" => "hero opening sky over Udaipur with a cinematic western twilight glow, elegant astronomy documentary mood",
+            "where" => "western horizon location guide at dusk over Rajasthan, open negative space for a compass, West marker, and planet labels",
+            "when" => "sunset-to-viewing-time timeline background, fading into early evening blue, warm horizon glow with room for a 7:23 PM IST marker",
+            "how" => "practical stargazing how-to guide atmosphere, unobstructed western sky, simple landscape silhouette, room for arrows and three observing steps",
+            "why" => "poetic close bright pairing and astronomy significance mood, deepening blue sky, subtle sense of wonder",
+            "action" => "emotional closing sky over Udaipur, peaceful western horizon, warm inviting atmosphere for a minimal call to action",
             _ => "clean astronomy documentary twilight background over a western horizon"
         };
 

@@ -38,6 +38,7 @@ public sealed class QuestionDrivenVisualComposer(
 
         var warnings = new List<string>();
         var generatedFiles = new List<string>();
+        var plannedScenes = new List<QuestionDrivenPlannedScene>();
         var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
         var outputRoot = Path.Combine(questionEngineRoot, OutputDirectoryName);
 
@@ -48,6 +49,7 @@ public sealed class QuestionDrivenVisualComposer(
         EnsureInputFile(planPath, nameof(EnrichedPlanFileName));
         EnsureInputFile(narrationPath, nameof(NarrationFileName));
 
+        using var answerSetDocument = JsonDocument.Parse(await File.ReadAllTextAsync(answerSetPath, cancellationToken));
         var enrichedPlan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(await File.ReadAllTextAsync(planPath, cancellationToken), JsonOptions)
             ?? throw new ArgumentException("Enriched question-driven scene plan could not be parsed.", nameof(request));
         var narration = JsonSerializer.Deserialize<QuestionDrivenNarrationDto>(await File.ReadAllTextAsync(narrationPath, cancellationToken), JsonOptions)
@@ -83,6 +85,42 @@ public sealed class QuestionDrivenVisualComposer(
             var spec = BuildSpec(request, scene, narrationScene, prompt);
             var srt = BuildSrt(spec);
             var review = BuildReview(spec, srt, seenSrtTexts);
+
+            var finalPath = Path.Combine(outputRoot, $"{numberPrefix}-final.png");
+            var srtPath = Path.Combine(outputRoot, $"{numberPrefix}.srt");
+            var narrationTextPath = Path.Combine(outputRoot, $"{numberPrefix}-narration.txt");
+            var specPath = Path.Combine(outputRoot, $"{numberPrefix}-visual-spec.json");
+            var promptPath = Path.Combine(outputRoot, $"{numberPrefix}-image-prompt.txt");
+            var reviewPath = Path.Combine(outputRoot, $"{numberPrefix}-review.json");
+            var plannedOutputs = new QuestionDrivenPlannedOutputs(
+                NormalizePath(finalPath),
+                NormalizePath(srtPath),
+                NormalizePath(narrationTextPath),
+                NormalizePath(specPath),
+                NormalizePath(promptPath),
+                NormalizePath(reviewPath));
+            var overlayPlan = BuildOverlayPlan(spec);
+            var validationPreview = BuildValidationPreview(spec, srt, review, overlayPlan, plannedOutputs);
+            plannedScenes.Add(new QuestionDrivenPlannedScene(
+                scene.SceneNumber,
+                scene.QuestionType,
+                scene.ScenePurpose,
+                scene.ViewerQuestion,
+                scene.ViewerTakeaway,
+                narrationScene.NarrationText,
+                narrationScene.CaptionText,
+                scene.VisualIntent,
+                scene.ImagePromptIntent,
+                scene.OverlayIntent,
+                scene.AccessibilityIntent,
+                prompt,
+                overlayPlan,
+                plannedOutputs,
+                validationPreview));
+
+            if (validationPreview.Issues.Count > 0)
+                warnings.AddRange(validationPreview.Issues.Select(issue => $"Scene {sceneNumber:000}: {issue}"));
+
             if (request.DryRun) continue;
 
             if (review.Issues.Count == 0)
@@ -94,13 +132,6 @@ public sealed class QuestionDrivenVisualComposer(
             }
 
             Directory.CreateDirectory(outputRoot);
-
-            var finalPath = Path.Combine(outputRoot, $"{numberPrefix}-final.png");
-            var srtPath = Path.Combine(outputRoot, $"{numberPrefix}.srt");
-            var narrationTextPath = Path.Combine(outputRoot, $"{numberPrefix}-narration.txt");
-            var specPath = Path.Combine(outputRoot, $"{numberPrefix}-visual-spec.json");
-            var promptPath = Path.Combine(outputRoot, $"{numberPrefix}-image-prompt.txt");
-            var reviewPath = Path.Combine(outputRoot, $"{numberPrefix}-review.json");
 
             if (!request.OverwriteExisting && new[] { finalPath, srtPath, narrationTextPath, specPath, promptPath, reviewPath }.Any(File.Exists))
             {
@@ -119,6 +150,8 @@ public sealed class QuestionDrivenVisualComposer(
             srtCount++;
         }
 
+        AddPlanLevelWarnings(plannedScenes, warnings);
+
         return new QuestionDrivenVisualGenerationResponse(
             request.EventId,
             scenes.Length,
@@ -127,19 +160,23 @@ public sealed class QuestionDrivenVisualComposer(
             approvedSceneCount,
             failedSceneCount,
             generatedFiles.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            plannedScenes.Count,
+            plannedScenes.Count,
+            plannedScenes.Count,
+            plannedScenes);
     }
 
     private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt)
     {
         var overlays = scene.QuestionType.ToLowerInvariant() switch
         {
-            "what" => new[] { "Venus + Jupiter Tonight", "Look west after sunset" },
+            "what" => new[] { "Venus & Jupiter Tonight", "Look west after sunset" },
             "where" => new[] { "Face WEST", "Venus", "Jupiter", "About one-third above horizon" },
             "when" => new[] { "Sunset", "7:23 PM IST", "Best viewing time" },
             "how" => new[] { "1. Find Venus", "2. Look nearby for Jupiter", "3. Face west" },
-            "why" => new[] { "Two bright planets close together", "A beautiful evening pairing" },
-            "action" => new[] { "Step outside tonight", "Look west for Venus and Jupiter" },
+            "why" => new[] { "Why It Matters", "Two bright planets close together" },
+            "action" => new[] { "Step Outside Tonight", "Look west for Venus and Jupiter" },
             _ => new[] { scene.ViewerTakeaway }
         };
 
@@ -189,6 +226,183 @@ public sealed class QuestionDrivenVisualComposer(
 
         var approved = issues.Count == 0;
         return new QuestionDrivenSceneReview(spec.SceneNumber, spec.QuestionType, approved, approved, approved, approved, approved, issues, recommendations);
+    }
+
+    private static QuestionDrivenProgrammaticOverlayPlan BuildOverlayPlan(QuestionDrivenVisualSpec spec)
+    {
+        return spec.QuestionType.ToLowerInvariant() switch
+        {
+            "what" => new QuestionDrivenProgrammaticOverlayPlan(
+                "Venus & Jupiter Tonight",
+                "Look west after sunset",
+                ["Venus", "Jupiter"],
+                [],
+                ["Venus", "Jupiter"],
+                [],
+                [],
+                []),
+            "where" => new QuestionDrivenProgrammaticOverlayPlan(
+                "Where to Look",
+                "Face the western horizon",
+                ["West", "Venus", "Jupiter", "Horizon"],
+                ["west-facing horizon guide arrow"],
+                ["Venus", "Jupiter"],
+                ["West"],
+                [],
+                []),
+            "when" => new QuestionDrivenProgrammaticOverlayPlan(
+                "Best Time Tonight",
+                "Start looking shortly after sunset",
+                ["Sunset", "Viewing time"],
+                [],
+                [],
+                [],
+                ["7:23 PM IST"],
+                []),
+            "how" => new QuestionDrivenProgrammaticOverlayPlan(
+                "How to Find It",
+                "Use Venus as your anchor",
+                ["Venus", "Jupiter", "West"],
+                ["arrow from Venus toward Jupiter", "arrow pointing toward western horizon"],
+                ["Venus", "Jupiter"],
+                ["West"],
+                [],
+                ["Find Venus", "Look nearby for Jupiter", "Face west"]),
+            "why" => new QuestionDrivenProgrammaticOverlayPlan(
+                "Why It Matters",
+                "A close bright planetary pairing",
+                ["Venus", "Jupiter"],
+                ["pairing callout bracket"],
+                ["Venus", "Jupiter"],
+                [],
+                [],
+                []),
+            "action" => new QuestionDrivenProgrammaticOverlayPlan(
+                "Step Outside Tonight",
+                "Look west for the bright pair",
+                ["Venus", "Jupiter"],
+                [],
+                ["Venus", "Jupiter"],
+                ["West"],
+                [],
+                []),
+            _ => new QuestionDrivenProgrammaticOverlayPlan(
+                spec.ViewerTakeaway,
+                string.Empty,
+                [],
+                [],
+                [],
+                [],
+                [],
+                [])
+        };
+    }
+
+    private static QuestionDrivenValidationPreview BuildValidationPreview(
+        QuestionDrivenVisualSpec spec,
+        string srt,
+        QuestionDrivenSceneReview review,
+        QuestionDrivenProgrammaticOverlayPlan overlayPlan,
+        QuestionDrivenPlannedOutputs plannedOutputs)
+    {
+        var issues = new List<string>(review.Issues);
+        var imageSceneSpecific = IsSceneSpecific(spec);
+        var narrationAligned = NarrationAlignsWithImage(spec);
+        var srtReady = !string.IsNullOrWhiteSpace(spec.CaptionText) && srt.Contains(" --> ", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(plannedOutputs.SrtPath);
+        var accessibilityReady = spec.AccessibilityCues.Any(cue => !string.IsNullOrWhiteSpace(cue))
+            && (overlayPlan.Labels.Count > 0 || overlayPlan.Steps.Count > 0 || overlayPlan.TimingMarkers.Count > 0)
+            && !string.IsNullOrWhiteSpace(spec.CaptionText);
+
+        if (string.IsNullOrWhiteSpace(spec.NarrationText)) issues.Add("scene lacks narrationText.");
+        if (string.IsNullOrWhiteSpace(spec.BackgroundPrompt)) issues.Add("scene lacks aiBackgroundPrompt.");
+        if (string.IsNullOrWhiteSpace(plannedOutputs.FinalImagePath)) issues.Add("scene lacks finalImagePath.");
+        if (string.IsNullOrWhiteSpace(plannedOutputs.SrtPath)) issues.Add("scene lacks srtPath.");
+        if (!OverlayPlanMatchesQuestionType(spec.QuestionType, overlayPlan)) issues.Add("scene overlay plan does not match questionType.");
+        if (!srtReady) issues.Add("scene is not SRT-ready.");
+        if (!accessibilityReady) issues.Add("scene lacks accessible labels, steps, or timing markers.");
+
+        return new QuestionDrivenValidationPreview(
+            imageSceneSpecific,
+            narrationAligned,
+            srtReady,
+            accessibilityReady,
+            issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            review.Recommendations);
+    }
+
+    private static bool OverlayPlanMatchesQuestionType(string questionType, QuestionDrivenProgrammaticOverlayPlan overlayPlan)
+    {
+        return questionType.ToLowerInvariant() switch
+        {
+            "what" => overlayPlan.Title.Contains("Venus", StringComparison.OrdinalIgnoreCase)
+                && overlayPlan.Title.Contains("Jupiter", StringComparison.OrdinalIgnoreCase)
+                && overlayPlan.LocalAssetObjects.Contains("Venus", StringComparer.OrdinalIgnoreCase)
+                && overlayPlan.LocalAssetObjects.Contains("Jupiter", StringComparer.OrdinalIgnoreCase)
+                && overlayPlan.Steps.Count == 0
+                && overlayPlan.TimingMarkers.Count == 0,
+            "where" => overlayPlan.Labels.Contains("West", StringComparer.OrdinalIgnoreCase)
+                && overlayPlan.Labels.Contains("Venus", StringComparer.OrdinalIgnoreCase)
+                && overlayPlan.Labels.Contains("Jupiter", StringComparer.OrdinalIgnoreCase)
+                && overlayPlan.Labels.Contains("Horizon", StringComparer.OrdinalIgnoreCase)
+                && overlayPlan.DirectionMarkers.Contains("West", StringComparer.OrdinalIgnoreCase),
+            "when" => overlayPlan.Title.Contains("time", StringComparison.OrdinalIgnoreCase)
+                && overlayPlan.TimingMarkers.Contains("7:23 PM IST", StringComparer.OrdinalIgnoreCase),
+            "how" => overlayPlan.Steps.SequenceEqual(["Find Venus", "Look nearby for Jupiter", "Face west"], StringComparer.OrdinalIgnoreCase)
+                && overlayPlan.Arrows.Count > 0,
+            "why" => overlayPlan.Title.Equals("Why It Matters", StringComparison.OrdinalIgnoreCase)
+                && overlayPlan.Labels.Contains("Venus", StringComparer.OrdinalIgnoreCase)
+                && overlayPlan.Labels.Contains("Jupiter", StringComparer.OrdinalIgnoreCase),
+            "action" => overlayPlan.Title.Equals("Step Outside Tonight", StringComparison.OrdinalIgnoreCase)
+                && overlayPlan.Subtitle.Contains("west", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+    }
+
+    private static void AddPlanLevelWarnings(IReadOnlyList<QuestionDrivenPlannedScene> plannedScenes, List<string> warnings)
+    {
+        if (plannedScenes.Count == 0)
+        {
+            warnings.Add("plannedScenes is empty.");
+            return;
+        }
+
+        foreach (var scene in plannedScenes)
+        {
+            if (string.IsNullOrWhiteSpace(scene.NarrationText)) warnings.Add($"Scene {scene.SceneNumber:000}: scene lacks narrationText.");
+            if (string.IsNullOrWhiteSpace(scene.AiBackgroundPrompt)) warnings.Add($"Scene {scene.SceneNumber:000}: scene lacks aiBackgroundPrompt.");
+            if (string.IsNullOrWhiteSpace(scene.PlannedOutputs.FinalImagePath)) warnings.Add($"Scene {scene.SceneNumber:000}: scene lacks finalImagePath.");
+            if (string.IsNullOrWhiteSpace(scene.PlannedOutputs.SrtPath)) warnings.Add($"Scene {scene.SceneNumber:000}: scene lacks srtPath.");
+            if (!OverlayPlanMatchesQuestionType(scene.QuestionType, scene.ProgrammaticOverlayPlan)) warnings.Add($"Scene {scene.SceneNumber:000}: scene overlay plan does not match questionType.");
+        }
+
+        for (var i = 0; i < plannedScenes.Count; i++)
+        {
+            for (var j = i + 1; j < plannedScenes.Count; j++)
+            {
+                if (AreSubstantiallyIdenticalPrompts(plannedScenes[i].AiBackgroundPrompt, plannedScenes[j].AiBackgroundPrompt))
+                    warnings.Add($"Scene {plannedScenes[i].SceneNumber:000} and scene {plannedScenes[j].SceneNumber:000}: scene prompts are substantially identical.");
+            }
+        }
+    }
+
+    private static bool AreSubstantiallyIdenticalPrompts(string left, string right)
+    {
+        var leftWords = SignificantPromptWords(left).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rightWords = SignificantPromptWords(right).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (leftWords.Count == 0 || rightWords.Count == 0) return true;
+        var intersection = leftWords.Count(word => rightWords.Contains(word));
+        var union = leftWords.Union(rightWords, StringComparer.OrdinalIgnoreCase).Count();
+        return union > 0 && intersection / (double)union >= 0.88d;
+    }
+
+    private static IEnumerable<string> SignificantPromptWords(string prompt)
+    {
+        var stopWords = new HashSet<string>(["professional", "astronomy", "production", "background", "only", "over", "with", "cinematic", "sky", "horizon", "atmosphere", "landscape", "text", "labels", "watermarks", "diagrams", "filenames", "debug", "markings", "local", "assets", "programmatic", "overlays", "clean", "space", "foreground", "educational", "high", "quality", "polished", "generic", "scene", "specific", "mood", "include", "leave", "readable", "will", "added"], StringComparer.OrdinalIgnoreCase);
+        foreach (var word in prompt.Split([' ', '.', ',', ';', ':', '-', '/', '(', ')'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (word.Length < 4 || stopWords.Contains(word)) continue;
+            yield return word.ToLowerInvariant();
+        }
     }
 
     private static bool IsSceneSpecific(QuestionDrivenVisualSpec spec)
