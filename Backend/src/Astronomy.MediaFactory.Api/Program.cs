@@ -510,6 +510,19 @@ app.MapPost("/api/astronomy-intelligence/generate-scene-assembly-plans", async (
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-visual-assets", async (VisualAssetGenerationRequest request, IVisualAssetGenerationService visualAssets, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy visual asset generation request received for {RegionId}. DryRun={DryRun}. MaxPlans={MaxPlans}. OverwriteExisting={OverwriteExisting}", request.RegionId, request.DryRun, request.MaxPlans, request.OverwriteExisting);
+    try
+    {
+        return Results.Ok(await visualAssets.GenerateVisualAssetsAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-render-recipes", async (RenderRecipeRequest request, IRenderRecipeGenerator generator, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy render recipe generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
