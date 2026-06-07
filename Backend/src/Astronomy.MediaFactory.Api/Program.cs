@@ -523,7 +523,7 @@ app.MapPost("/api/astronomy-intelligence/generate-render-capabilities", async (R
     }
 });
 
-app.MapPost("/api/astronomy-intelligence/render-scenes", async (SceneRenderRequest request, ISceneRenderer renderer, ILogger<Program> logger, CancellationToken ct) =>
+app.MapPost("/api/astronomy-intelligence/render-scenes", async (SceneRenderingRequest request, ISceneRenderer renderer, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy scene rendering request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
     try

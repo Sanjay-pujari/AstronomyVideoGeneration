@@ -33,7 +33,7 @@ public sealed class FfmpegSceneRenderer(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".webp"];
 
-    public async Task<SceneRenderResponse> RenderScenesAsync(SceneRenderRequest request, CancellationToken cancellationToken)
+    public async Task<SceneRenderingResponse> RenderScenesAsync(SceneRenderingRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("RegionId is required.");
@@ -168,7 +168,7 @@ public sealed class FfmpegSceneRenderer(
                 await WriteManifestAsync(outputDirectory, planId.ToString("D"), planItems.Where(x => string.Equals(x.ContentGenerationPlanId, planId.ToString("D"), StringComparison.OrdinalIgnoreCase)).ToArray(), completed, failed, cancellationToken);
         }
 
-        return new SceneRenderResponse(selectedPlanIds.Length, planItems.Count, completed, failed, renderedFiles, warnings, planItems);
+        return new SceneRenderingResponse(selectedPlanIds.Length, planItems.Count, completed, failed, renderedFiles, warnings, planItems);
     }
 
     private async Task<ResolvedVisual> ResolveVisualAsync(string planRoot, string frameDirectory, string recipePath, RenderRecipeDocument recipe, bool dryRun, List<string> warnings, CancellationToken cancellationToken)
