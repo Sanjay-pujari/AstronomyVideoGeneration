@@ -69,7 +69,7 @@ public sealed class QuestionDrivenVisualComposer(
 
         using var answerSetDocument = JsonDocument.Parse(await File.ReadAllTextAsync(answerSetPath, cancellationToken));
         var answerSetQuestionCount = CountQuestions(answerSetDocument);
-        if (answerSetQuestionCount < 6) warnings.Add("question-answer-set.json has fewer than 6 detected questions; continuing with the approved 6-scene enriched plan.");
+        if (answerSetQuestionCount is > 0 and < 6) warnings.Add("question-answer-set.json has fewer than 6 detected questions; continuing with the approved 6-scene enriched plan.");
 
         var enrichedPlan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(await File.ReadAllTextAsync(planPath, cancellationToken), JsonOptions)
             ?? throw new ArgumentException("Enriched question-driven scene plan could not be parsed.", nameof(request));
@@ -146,7 +146,7 @@ public sealed class QuestionDrivenVisualComposer(
     {
         var overlays = scene.QuestionType.ToLowerInvariant() switch
         {
-            "what" => new[] { "Venus & Jupiter", "Tonight after sunset" },
+            "what" => new[] { "Venus & Jupiter Tonight", "After sunset" },
             "where" => new[] { "W", "Venus", "Jupiter", "Western horizon" },
             "when" => new[] { "Sunset", "7:23 PM IST", "After-sunset window" },
             "how" => new[] { "1 Find Venus", "2 Look nearby for Jupiter", "3 Face west" },
@@ -191,7 +191,7 @@ public sealed class QuestionDrivenVisualComposer(
 
     private static QuestionDrivenProgrammaticOverlayPlan BuildOverlayPlan(QuestionDrivenVisualSpec spec) => spec.QuestionType.ToLowerInvariant() switch
     {
-        "what" => new("Venus & Jupiter", "Tonight after sunset", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], [], [], []),
+        "what" => new("Venus & Jupiter Tonight", "After sunset", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], [], [], []),
         "where" => new("Where to Look", "Face the western horizon", ["West", "Venus", "Jupiter", "Horizon"], ["western horizon altitude guide"], ["Venus", "Jupiter"], ["West"], [], []),
         "when" => new("Best Time Tonight", "After sunset", ["Sunset", "Viewing window"], [], [], [], ["7:23 PM IST"], []),
         "how" => new("How to Find It", "Use Venus as your anchor", ["Venus", "Jupiter", "West"], ["arrow from Venus to Jupiter", "arrow toward western horizon"], ["Venus", "Jupiter"], ["West"], [], ["Find Venus", "Look nearby for Jupiter", "Face west"]),
@@ -335,7 +335,7 @@ public sealed class QuestionDrivenVisualComposer(
                 DrawPlanetAsset(ctx, venusAsset, new PointF(1220, 360), 140, "venus"); DrawPlanetAsset(ctx, jupiterAsset, new PointF(1410, 410), 96, "jupiter");
                 DrawLeaderLabel(ctx, "Venus", new PointF(1220, 360), new PointF(1085, 300), labelFont, Color.ParseHex("#FFF2B8"));
                 DrawLeaderLabel(ctx, "Jupiter", new PointF(1410, 410), new PointF(1490, 345), labelFont, Color.ParseHex("#F0C88B"));
-                DrawText(ctx, "Venus & Jupiter", titleFont, 115, 110, Color.White, 650); DrawText(ctx, "tonight after sunset", subtitleFont, 122, 195, Color.ParseHex("#F6C177"), 520);
+                DrawText(ctx, "Venus & Jupiter Tonight", titleFont, 115, 110, Color.White, 760); DrawText(ctx, "after sunset", subtitleFont, 122, 195, Color.ParseHex("#F6C177"), 520);
                 break;
             case "where":
                 DrawSkyMap(ctx, smallFont); DrawWestMarker(ctx, new PointF(245, 760), labelFont); DrawPlanetAsset(ctx, venusAsset, new PointF(1060, 505), 92, "venus"); DrawPlanetAsset(ctx, jupiterAsset, new PointF(1255, 545), 68, "jupiter");
@@ -429,7 +429,24 @@ public sealed class QuestionDrivenVisualComposer(
 
     private static string BuildSrt(QuestionDrivenVisualSpec spec) { var end = TimeSpan.FromSeconds(Math.Max(4, spec.EstimatedDurationSeconds)); return string.Join(Environment.NewLine, new[] { "1", $"00:00:00,000 --> {FormatSrtTime(end)}", spec.CaptionText, string.Empty }); }
     private static string FormatSrtTime(TimeSpan value) => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
-    private static string? FindLocalAsset(string objectName) => new[] { Path.Combine("Backend", "src", "Astronomy.MediaFactory.Api", "assets", "celestial", objectName, "hero-transparent.png"), Path.Combine("assets", "celestial", objectName, "hero-transparent.png"), Path.Combine(AppContext.BaseDirectory, "assets", "celestial", objectName, "hero-transparent.png") }.FirstOrDefault(File.Exists);
+    private static string? FindLocalAsset(string objectName)
+    {
+        var relativeAssetPath = Path.Combine("assets", "celestial", objectName, "hero-transparent.png");
+        var candidates = new List<string>
+        {
+            Path.Combine("Backend", "src", "Astronomy.MediaFactory.Api", relativeAssetPath),
+            relativeAssetPath,
+            Path.Combine(AppContext.BaseDirectory, relativeAssetPath)
+        };
+
+        for (var directory = new DirectoryInfo(Directory.GetCurrentDirectory()); directory is not null; directory = directory.Parent)
+        {
+            candidates.Add(Path.Combine(directory.FullName, "Backend", "src", "Astronomy.MediaFactory.Api", relativeAssetPath));
+            candidates.Add(Path.Combine(directory.FullName, relativeAssetPath));
+        }
+
+        return candidates.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).FirstOrDefault(File.Exists);
+    }
     private static bool ContainsForbiddenTerm(string text) => ForbiddenViewerTerms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static bool ContainsAll(string value, params string[] terms) => terms.All(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static string Clean(string value) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();

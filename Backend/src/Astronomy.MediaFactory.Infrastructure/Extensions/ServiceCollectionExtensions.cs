@@ -500,8 +500,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IQuestionSceneIntentEnricher, QuestionSceneIntentEnricher>();
         services.AddScoped<IQuestionDrivenNarrationGenerator, QuestionDrivenNarrationGenerator>();
         services.AddScoped<IQuestionDrivenImagePromptGenerator, QuestionDrivenImagePromptGenerator>();
+        services.AddScoped<IAstronomyInfographicDesignSystem, AstronomyInfographicDesignSystem>();
         services.AddScoped<IQuestionDrivenVisualComposer, QuestionDrivenVisualComposer>();
-        services.AddScoped<IEditorialAstronomyInfographicComposer>(sp => (IEditorialAstronomyInfographicComposer)sp.GetRequiredService<IQuestionDrivenVisualComposer>());
+        services.AddScoped<IEditorialAstronomyInfographicComposer, EditorialAstronomyInfographicComposer>();
         services.AddScoped<IAstronomyVisualAssetStrategyService, AstronomyVisualAssetStrategyService>();
         services.AddScoped<INarrationPlanningService, NarrationPlanningService>();
         services.AddScoped<IDirectorNarrationService, DirectorNarrationService>();
