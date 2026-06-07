@@ -260,16 +260,20 @@ public sealed class ProductionVisualComposerService(
         {
             var path = ResolveLocalObjectAssetPath(objectName);
             if (path is null) continue;
+            LocalObjectAsset asset;
             try
             {
                 var image = Image.Load<Rgba32>(path);
                 image.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size(112, 112), Mode = ResizeMode.Max }));
-                yield return new LocalObjectAsset(objectName, image);
+                asset = new LocalObjectAsset(objectName, image);
             }
             catch
             {
                 // If a bundled object PNG cannot be decoded, the compositor still draws a clean marker.
+                continue;
             }
+
+            yield return asset;
         }
     }
 
