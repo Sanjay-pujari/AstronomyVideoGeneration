@@ -523,6 +523,19 @@ app.MapPost("/api/astronomy-intelligence/generate-render-capabilities", async (R
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/render-scenes", async (SceneRenderRequest request, ISceneRenderer renderer, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy scene rendering request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await renderer.RenderScenesAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
