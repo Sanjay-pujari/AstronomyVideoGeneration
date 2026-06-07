@@ -18,6 +18,8 @@ public sealed class DirectorTimelineService(
     private const string AudioManifestFileName = "tts-audio-manifest.json";
     private const string TimelineFileName = "director-timeline.json";
     private const string AiPromptMissingWarning = "AI image prompt exists but generated image is not available yet.";
+    private const string MissingStellariumCaptureWarning = "SSC script exists but captured PNG is missing.";
+    private const string ClosingFallbackQualityNote = "Fallback visual selected for closing scene.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     public async Task<DirectorTimelineResult> GenerateDirectorTimelinesAsync(DirectorTimelineRequest request, CancellationToken cancellationToken)
@@ -89,11 +91,26 @@ public sealed class DirectorTimelineService(
         if (requestedFormats is not null)
             query = query.Where(p => p.PlannedFormat != null && requestedFormats.Contains(p.PlannedFormat));
 
-        return await query
+        query = query.Where(p => p.AstronomyContentOpportunityId != null || p.AstronomyEventIntelligenceId != null);
+
+        var root = ResolveWorkingDirectoryRoot();
+        var plans = await query
             .OrderByDescending(p => p.ScheduledUtc ?? DateTimeOffset.MinValue)
             .ThenBy(p => p.Id)
-            .Take(request.MaxPlans ?? int.MaxValue)
             .ToListAsync(cancellationToken);
+
+        return plans
+            .Where(p => HasRequiredProductionAudio(root, p))
+            .Take(request.MaxPlans ?? int.MaxValue)
+            .ToList();
+    }
+
+    private static bool HasRequiredProductionAudio(string root, ContentGenerationPlan plan)
+    {
+        var planRoot = BuildPlanRoot(root, plan.RegionId, plan.Id);
+        return File.Exists(Path.Combine(planRoot, "tts", FinalPackageFileName))
+            && File.Exists(Path.Combine(planRoot, "tts", "audio", AudioManifestFileName))
+            && File.Exists(Path.Combine(planRoot, "tts", "audio", "narration-combined.wav"));
     }
 
     private async Task<DirectorTimelineDocument> BuildTimelineAsync(string root, ContentGenerationPlan plan, CancellationToken cancellationToken)
@@ -109,6 +126,17 @@ public sealed class DirectorTimelineService(
             .ThenBy(j => j.Priority)
             .ThenBy(j => j.AssetType)
             .ToListAsync(cancellationToken);
+        List<AstronomyAssetProductionJob> eventFallbackJobs = plan.AstronomyEventIntelligenceId is null
+            ? []
+            : await db.AstronomyAssetProductionJobs
+                .AsNoTracking()
+                .Where(j => j.ContentGenerationPlanId != plan.Id
+                    && j.AstronomyEventIntelligenceId == plan.AstronomyEventIntelligenceId
+                    && j.Status == AstronomyAssetProductionJobStatuses.Completed)
+                .OrderBy(j => j.SceneNumber)
+                .ThenBy(j => j.Priority)
+                .ThenBy(j => j.AssetType)
+                .ToListAsync(cancellationToken);
 
         var missingRequiredAssets = new List<string>();
         var warnings = new List<string>();
@@ -154,14 +182,23 @@ public sealed class DirectorTimelineService(
             cursor = sceneEnd + breathers.ElementAtOrDefault(i);
 
             var jobsForScene = assetJobs.Where(j => j.SceneNumber == segment.SceneNumber).ToList();
-            var selectedAssets = SelectVisualAssets(plan.ContentCategoryCode, segment.SceneNumber, lastSceneNumber, jobsForScene, warnings);
+            var selection = SelectVisualAssets(plan.ContentCategoryCode, segment.SceneNumber, lastSceneNumber, jobsForScene, assetJobs, eventFallbackJobs, warnings);
+            var selectedAssets = selection.RenderableAssets;
             var textOverlay = jobsForScene.FirstOrDefault(j => IsAssetType(j, "TextOverlayCard") && HasUsablePath(j));
             var qualityNotes = new List<string>();
+            if (selection.UsedClosingFallback)
+                qualityNotes.Add(ClosingFallbackQualityNote);
             if (selectedAssets.Count == 0)
             {
                 missingRequiredAssets.Add($"Scene {segment.SceneNumber} has no usable visual asset.");
                 qualityNotes.Add("No primary visual source is currently available for this scene.");
             }
+
+            var sceneAudioPath = manifestDurations.TryGetValue(segment.SceneNumber, out var manifestSegment) && !string.IsNullOrWhiteSpace(manifestSegment.AudioPath)
+                ? manifestSegment.AudioPath
+                : segment.OutputAudioPath;
+            if (string.IsNullOrWhiteSpace(sceneAudioPath))
+                missingRequiredAssets.Add($"Scene {segment.SceneNumber} has no audio path in the TTS audio manifest or final TTS package.");
 
             scenes.Add(new DirectorTimelineScene(
                 segment.SceneNumber,
@@ -170,9 +207,10 @@ public sealed class DirectorTimelineService(
                 sceneEnd,
                 Round(sceneEnd - sceneStart),
                 segment.Text,
-                manifestDurations.TryGetValue(segment.SceneNumber, out var manifestSegment) && !string.IsNullOrWhiteSpace(manifestSegment.AudioPath) ? manifestSegment.AudioPath : segment.OutputAudioPath,
+                sceneAudioPath,
                 selectedAssets.FirstOrDefault() ?? new DirectorTimelineAsset(string.Empty, string.Empty, string.Empty),
                 selectedAssets.Skip(1).Take(4).ToList(),
+                selection.TechnicalReferences,
                 new DirectorTimelineOverlayPlan(textOverlay?.OutputPath ?? string.Empty, "center-safe 80% width / 70% height; keep lower captions clear", true),
                 ResolveCameraMotion(plan.ContentCategoryCode, segment.SceneNumber, lastSceneNumber),
                 segment.SceneNumber == 1 ? "fade from black" : "soft crossfade",
@@ -203,6 +241,28 @@ public sealed class DirectorTimelineService(
             DateTimeOffset.UtcNow);
     }
 
+    private sealed record VisualAssetSelection(IReadOnlyList<DirectorTimelineAsset> RenderableAssets, IReadOnlyList<DirectorTimelineAsset> TechnicalReferences, bool UsedClosingFallback);
+    private sealed record ClassifiedTimelineAsset(DirectorTimelineAsset? Asset, VisualAssetKind Kind)
+    {
+        public static ClassifiedTimelineAsset Empty { get; } = new(null, VisualAssetKind.None);
+    }
+
+    private enum VisualAssetKind
+    {
+        None,
+        StellariumCapturePng,
+        AiImageActual,
+        AiCinematicActual,
+        AiImagePlanned,
+        AiCinematicPlanned,
+        AiHeroPlanned,
+        SkyMapCard,
+        ConstellationGuide,
+        TextOverlayCard,
+        NasaMetadata,
+        OtherRenderable
+    }
+
     private static double ResolveSceneDuration(TtsPackageSegment segment, IReadOnlyDictionary<int, TtsAudioManifestSegment> manifestDurations)
     {
         if (manifestDurations.TryGetValue(segment.SceneNumber, out var manifestSegment) && manifestSegment.DurationSeconds > 0)
@@ -220,60 +280,156 @@ public sealed class DirectorTimelineService(
         return Enumerable.Range(0, sceneCount).Select(i => i < gapCount ? Round(gap) : 0d).ToArray();
     }
 
-    private static List<DirectorTimelineAsset> SelectVisualAssets(string category, int sceneNumber, int lastSceneNumber, IReadOnlyList<AstronomyAssetProductionJob> jobs, List<string> warnings)
+    private static VisualAssetSelection SelectVisualAssets(string category, int sceneNumber, int lastSceneNumber, IReadOnlyList<AstronomyAssetProductionJob> jobs, IReadOnlyList<AstronomyAssetProductionJob> planJobs, IReadOnlyList<AstronomyAssetProductionJob> eventFallbackJobs, List<string> warnings)
     {
-        var orderedTypes = PreferredAssetTypes(sceneNumber, lastSceneNumber);
-        return jobs
-            .Where(IsVisualJob)
-            .Select(job => new { Job = job, Rank = Rank(job.AssetType, orderedTypes), Asset = ToTimelineAsset(job, warnings) })
-            .Where(x => x.Asset is not null)
-            .OrderBy(x => x.Rank)
-            .ThenBy(x => x.Job.Priority)
-            .Select(x => x.Asset!)
-            .ToList();
-    }
+        var renderable = SelectRenderableAssets(jobs, sceneNumber, lastSceneNumber, warnings).ToList();
+        var technicalReferences = SelectTechnicalReferences(jobs, warnings).ToList();
+        var usedClosingFallback = false;
 
-    private static IReadOnlyList<string> PreferredAssetTypes(int sceneNumber, int lastSceneNumber)
-    {
-        if (sceneNumber == 1)
-            return ["AiHeroImage", "AiCinematicImage", "AiImage", "StellariumCapture", "StellariumScreenshot", "SkyMapCard", "TextOverlayCard"];
-        if (sceneNumber == lastSceneNumber)
-            return ["AiCinematicImage", "AiHeroImage", "AiImage", "StellariumCapture", "StellariumScreenshot", "SkyMapCard", "TextOverlayCard"];
-        return ["StellariumCapture", "StellariumScreenshot", "SkyMapCard", "ConstellationGuide", "NasaAsset", "TextOverlayCard", "AiCinematicImage", "AiHeroImage", "AiImage"];
-    }
-
-    private static int Rank(string assetType, IReadOnlyList<string> preferredTypes)
-    {
-        var index = preferredTypes.ToList().FindIndex(t => string.Equals(t, assetType, StringComparison.OrdinalIgnoreCase));
-        return index >= 0 ? index : preferredTypes.Count + 1;
-    }
-
-    private static DirectorTimelineAsset? ToTimelineAsset(AstronomyAssetProductionJob job, List<string> warnings)
-    {
-        if (IsAiImageType(job.AssetType) && !HasActualGeneratedAiImage(job))
+        if (sceneNumber == lastSceneNumber && renderable.Count == 0)
         {
+            var samePlanFallback = SelectRenderableAssets(planJobs.Where(j => j.SceneNumber != sceneNumber).ToList(), sceneNumber, lastSceneNumber, warnings).ToList();
+            renderable.AddRange(samePlanFallback);
+            if (renderable.Count == 0 && eventFallbackJobs.Count > 0)
+                renderable.AddRange(SelectRenderableAssets(eventFallbackJobs, sceneNumber, lastSceneNumber, warnings));
+            usedClosingFallback = renderable.Count > 0;
+        }
+
+        return new VisualAssetSelection(
+            renderable.DistinctBy(a => $"{a.AssetType}|{a.Path}", StringComparer.OrdinalIgnoreCase).ToList(),
+            technicalReferences.DistinctBy(a => $"{a.AssetType}|{a.Path}", StringComparer.OrdinalIgnoreCase).ToList(),
+            usedClosingFallback);
+    }
+
+    private static IEnumerable<DirectorTimelineAsset> SelectRenderableAssets(IReadOnlyList<AstronomyAssetProductionJob> jobs, int sceneNumber, int lastSceneNumber, List<string> warnings)
+        => jobs
+            .Where(IsVisualJob)
+            .Select(job => new { Job = job, Classified = ToRenderableTimelineAsset(job, warnings) })
+            .Where(x => x.Classified.Asset is not null)
+            .OrderBy(x => RankRenderableAsset(x.Classified, sceneNumber == lastSceneNumber))
+            .ThenBy(x => x.Job.Priority)
+            .Select(x => x.Classified.Asset!);
+
+    private static IEnumerable<DirectorTimelineAsset> SelectTechnicalReferences(IReadOnlyList<AstronomyAssetProductionJob> jobs, List<string> warnings)
+        => jobs
+            .Select(job => ToTechnicalReference(job, warnings))
+            .Where(asset => asset is not null)
+            .Select(asset => asset!);
+
+    private static int RankRenderableAsset(ClassifiedTimelineAsset classified, bool isClosingScene)
+    {
+        if (isClosingScene)
+        {
+            return classified.Kind switch
+            {
+                VisualAssetKind.AiCinematicActual => 0,
+                VisualAssetKind.AiCinematicPlanned => 1,
+                VisualAssetKind.TextOverlayCard => 2,
+                VisualAssetKind.SkyMapCard => 3,
+                VisualAssetKind.StellariumCapturePng => 4,
+                VisualAssetKind.ConstellationGuide => 5,
+                VisualAssetKind.NasaMetadata => 6,
+                VisualAssetKind.AiHeroPlanned => 7,
+                _ => 8
+            };
+        }
+
+        return classified.Kind switch
+        {
+            VisualAssetKind.StellariumCapturePng => 0,
+            VisualAssetKind.AiImageActual => 1,
+            VisualAssetKind.SkyMapCard => 2,
+            VisualAssetKind.ConstellationGuide => 3,
+            VisualAssetKind.TextOverlayCard => 4,
+            VisualAssetKind.NasaMetadata => 5,
+            VisualAssetKind.AiImagePlanned => 6,
+            _ => 7
+        };
+    }
+
+    private static ClassifiedTimelineAsset ToRenderableTimelineAsset(AstronomyAssetProductionJob job, List<string> warnings)
+    {
+        if (IsStellariumJob(job))
+        {
+            var pngPath = FirstExistingPng(
+                job.OutputPath,
+                ExtractMetadataValue(job.MetadataJson, "CapturePath"),
+                ExtractMetadataValue(job.MetadataJson, "capturePath"),
+                ExtractMetadataValue(job.MetadataJson, "screenshotPath"),
+                ExtractMetadataValue(job.MetadataJson, "imagePath"),
+                ExtractMetadataValue(job.MetadataJson, "assetPath"),
+                ExtractMetadataValue(job.MetadataJson, "outputPath"));
+            if (!string.IsNullOrWhiteSpace(pngPath))
+                return new ClassifiedTimelineAsset(new DirectorTimelineAsset(job.AssetType, pngPath, BuildUsage(job)), VisualAssetKind.StellariumCapturePng);
+
+            if (HasSscReference(job))
+                warnings.Add(MissingStellariumCaptureWarning);
+            return ClassifiedTimelineAsset.Empty;
+        }
+
+        if (IsAiImageType(job.AssetType))
+        {
+            var actualPath = FirstNonJsonPath(ExtractMetadataValue(job.MetadataJson, "generatedImagePath"), ExtractMetadataValue(job.MetadataJson, "imagePath"), ExtractMetadataValue(job.MetadataJson, "assetPath"), job.OutputPath);
+            if (!string.IsNullOrWhiteSpace(actualPath))
+            {
+                return new ClassifiedTimelineAsset(
+                    new DirectorTimelineAsset(job.AssetType, actualPath, BuildUsage(job)),
+                    job.AssetType.Contains("Cinematic", StringComparison.OrdinalIgnoreCase) ? VisualAssetKind.AiCinematicActual : VisualAssetKind.AiImageActual);
+            }
+
             warnings.Add(AiPromptMissingWarning);
             var plannedPath = FirstNonBlank(job.OutputPath, job.PromptOrInstruction, ExtractMetadataValue(job.MetadataJson, "imagePrompt"), ExtractMetadataValue(job.MetadataJson, "prompt"));
-            return string.IsNullOrWhiteSpace(plannedPath)
-                ? null
-                : new DirectorTimelineAsset("PlannedVisual", plannedPath, BuildUsage(job));
+            if (string.IsNullOrWhiteSpace(plannedPath))
+                return ClassifiedTimelineAsset.Empty;
+
+            return new ClassifiedTimelineAsset(
+                new DirectorTimelineAsset("PlannedVisual", plannedPath, BuildUsage(job)),
+                job.AssetType.Contains("Cinematic", StringComparison.OrdinalIgnoreCase)
+                    ? VisualAssetKind.AiCinematicPlanned
+                    : job.AssetType.Contains("Hero", StringComparison.OrdinalIgnoreCase) ? VisualAssetKind.AiHeroPlanned : VisualAssetKind.AiImagePlanned);
         }
 
         var path = FirstNonBlank(job.OutputPath, ExtractMetadataValue(job.MetadataJson, "outputPath"), ExtractMetadataValue(job.MetadataJson, "assetPath"));
-        return string.IsNullOrWhiteSpace(path) ? null : new DirectorTimelineAsset(job.AssetType, path, BuildUsage(job));
+        if (string.IsNullOrWhiteSpace(path))
+            return ClassifiedTimelineAsset.Empty;
+
+        var kind = job.AssetType switch
+        {
+            var t when t.Equals("SkyMapCard", StringComparison.OrdinalIgnoreCase) => VisualAssetKind.SkyMapCard,
+            var t when t.Equals("ConstellationGuide", StringComparison.OrdinalIgnoreCase) => VisualAssetKind.ConstellationGuide,
+            var t when t.Equals("TextOverlayCard", StringComparison.OrdinalIgnoreCase) => VisualAssetKind.TextOverlayCard,
+            var t when t.Contains("Nasa", StringComparison.OrdinalIgnoreCase) => VisualAssetKind.NasaMetadata,
+            _ => VisualAssetKind.OtherRenderable
+        };
+        return new ClassifiedTimelineAsset(new DirectorTimelineAsset(job.AssetType, path, BuildUsage(job)), kind);
+    }
+
+    private static DirectorTimelineAsset? ToTechnicalReference(AstronomyAssetProductionJob job, List<string> warnings)
+    {
+        if (!HasSscReference(job))
+            return null;
+
+        var path = FirstNonBlank(job.OutputPath, ExtractMetadataValue(job.MetadataJson, "SscPath"), ExtractMetadataValue(job.MetadataJson, "sscPath"), ExtractMetadataValue(job.MetadataJson, "sscFile"));
+        if (string.IsNullOrWhiteSpace(path) || !path.EndsWith(".ssc", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (FirstExistingPng(job.OutputPath, ExtractMetadataValue(job.MetadataJson, "CapturePath"), ExtractMetadataValue(job.MetadataJson, "capturePath")) is null)
+            warnings.Add(MissingStellariumCaptureWarning);
+
+        return new DirectorTimelineAsset("StellariumScriptReference", path, "Source script used to produce or regenerate capture.");
     }
 
     private static bool IsVisualJob(AstronomyAssetProductionJob job)
-        => IsAiImageType(job.AssetType) || HasUsablePath(job) || !string.IsNullOrWhiteSpace(job.PromptOrInstruction);
+        => IsAiImageType(job.AssetType) || IsStellariumJob(job) || HasUsablePath(job) || !string.IsNullOrWhiteSpace(job.PromptOrInstruction);
 
     private static bool HasUsablePath(AstronomyAssetProductionJob job)
         => !string.IsNullOrWhiteSpace(job.OutputPath) || !string.IsNullOrWhiteSpace(ExtractMetadataValue(job.MetadataJson, "outputPath")) || !string.IsNullOrWhiteSpace(ExtractMetadataValue(job.MetadataJson, "assetPath"));
 
-    private static bool HasActualGeneratedAiImage(AstronomyAssetProductionJob job)
-    {
-        var path = FirstNonBlank(job.OutputPath, ExtractMetadataValue(job.MetadataJson, "generatedImagePath"), ExtractMetadataValue(job.MetadataJson, "imagePath"));
-        return !string.IsNullOrWhiteSpace(path) && File.Exists(path) && !Path.GetExtension(path).Equals(".json", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool HasSscReference(AstronomyAssetProductionJob job)
+        => FirstNonBlank(job.OutputPath, ExtractMetadataValue(job.MetadataJson, "SscPath"), ExtractMetadataValue(job.MetadataJson, "sscPath"), ExtractMetadataValue(job.MetadataJson, "sscFile"))?.EndsWith(".ssc", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsStellariumJob(AstronomyAssetProductionJob job)
+        => job.AssetType.Contains("Stellarium", StringComparison.OrdinalIgnoreCase) || HasSscReference(job);
 
     private static bool IsAiImageType(string assetType)
         => assetType.Contains("Ai", StringComparison.OrdinalIgnoreCase) && assetType.Contains("Image", StringComparison.OrdinalIgnoreCase);
@@ -361,6 +517,21 @@ public sealed class DirectorTimelineService(
             return null;
         }
     }
+
+    private static string? FirstExistingPng(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (string.IsNullOrWhiteSpace(value) || !value.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (File.Exists(value) || values[0] == value)
+                return value;
+        }
+        return null;
+    }
+
+    private static string? FirstNonJsonPath(params string?[] values)
+        => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v) && !Path.GetExtension(v).Equals(".json", StringComparison.OrdinalIgnoreCase));
 
     private static string FirstNonBlank(params string?[] values)
         => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;

@@ -89,6 +89,9 @@ public sealed class DirectorTimelineServiceTests : IDisposable
         await using var db = CreateDb();
         var plan = await SeedPlanAsync(db, "PlanetGrouping", "Short");
         await WriteTtsPackageAsync(plan.Id, "PlanetGrouping", "Short", [Segment(1, "Guide", "Follow the planets across the sky.", 8)]);
+        var expectedCombinedAudio = Path.Combine(PlanRoot(plan.Id), "tts", "audio", "narration-combined.wav");
+        Directory.CreateDirectory(Path.GetDirectoryName(expectedCombinedAudio)!);
+        await File.WriteAllBytesAsync(expectedCombinedAudio, [1]);
         await WriteManifestAsync(plan.Id, Path.Combine(PlanRoot(plan.Id), "tts", "audio", "missing-combined.wav"), [(1, "scene-01.wav", 8.0)], totalDuration: 8.0);
         await SeedAssetAsync(db, plan.Id, 1, "SkyMapCard", "/visuals/grouping.json");
         var service = CreateService(db);
@@ -99,6 +102,80 @@ public sealed class DirectorTimelineServiceTests : IDisposable
         Assert.False(timeline.RenderReadiness.ReadyForRender);
         Assert.Equal(1, result.NotReadyCount);
         Assert.Contains(timeline.RenderReadiness.MissingRequiredAssets, item => item.Contains("Missing required combined narration audio"));
+    }
+
+    [Fact]
+    public async Task GenerateDirectorTimelines_FiltersHistoricalPlansWithoutProductionAudio()
+    {
+        await using var db = CreateDb();
+        var historical = await SeedPlanAsync(db, "PlanetConjunction", "Short");
+        var production = await SeedPlanAsync(db, "PlanetConjunction", "Short");
+        await WriteTtsPackageAsync(historical.Id, "PlanetConjunction", "Short", [Segment(1, "Old", "Old plan without generated audio.", 4)]);
+        await WriteTtsPackageAsync(production.Id, "PlanetConjunction", "Short", [Segment(1, "Ready", "Ready plan with generated audio.", 4)]);
+        var combinedAudio = Path.Combine(PlanRoot(production.Id), "tts", "audio", "narration-combined.wav");
+        Directory.CreateDirectory(Path.GetDirectoryName(combinedAudio)!);
+        await File.WriteAllBytesAsync(combinedAudio, [1]);
+        await WriteManifestAsync(production.Id, combinedAudio, [(1, "scene-01.wav", 4.0)], totalDuration: 4.0);
+        await SeedAssetAsync(db, production.Id, 1, "SkyMapCard", "/visuals/ready.json");
+        var service = CreateService(db);
+
+        var result = await service.GenerateDirectorTimelinesAsync(new DirectorTimelineRequest(RegionId: RegionId, MaxPlans: 20, DryRun: true), CancellationToken.None);
+
+        Assert.Equal(1, result.PlanCount);
+        var timeline = Assert.Single(result.Timelines);
+        Assert.Equal(production.Id.ToString("D"), timeline.ContentGenerationPlanId);
+    }
+
+    [Fact]
+    public async Task GenerateDirectorTimelines_UsesCapturedPngPrimaryAndSscAsTechnicalReference()
+    {
+        await using var db = CreateDb();
+        var plan = await SeedPlanAsync(db, "PlanetConjunction", "Short");
+        await WriteTtsPackageAsync(plan.Id, "PlanetConjunction", "Short", [Segment(1, "Hook", "Find the conjunction.", 5)]);
+        var combinedAudio = Path.Combine(PlanRoot(plan.Id), "tts", "audio", "narration-combined.wav");
+        Directory.CreateDirectory(Path.GetDirectoryName(combinedAudio)!);
+        await File.WriteAllBytesAsync(combinedAudio, [1]);
+        await WriteManifestAsync(plan.Id, combinedAudio, [(1, "scene-01.wav", 5.0)], totalDuration: 5.0);
+        var sscPath = Path.Combine(PlanRoot(plan.Id), "stellarium", "scene-1.ssc");
+        var pngPath = Path.Combine(PlanRoot(plan.Id), "stellarium", "scene-1.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(sscPath)!);
+        await File.WriteAllTextAsync(sscPath, "// script");
+        await File.WriteAllBytesAsync(pngPath, [1]);
+        await SeedAssetAsync(db, plan.Id, 1, "StellariumScreenshot", sscPath, metadata: JsonSerializer.Serialize(new { CapturePath = pngPath }));
+        var service = CreateService(db);
+
+        var result = await service.GenerateDirectorTimelinesAsync(new DirectorTimelineRequest(RegionId: RegionId, DryRun: true), CancellationToken.None);
+
+        var scene = Assert.Single(Assert.Single(result.Timelines).Scenes);
+        Assert.Equal(pngPath, scene.PrimaryAsset.Path);
+        Assert.False(scene.PrimaryAsset.Path.EndsWith(".ssc", StringComparison.OrdinalIgnoreCase));
+        var technical = Assert.Single(scene.TechnicalReferences);
+        Assert.Equal("StellariumScriptReference", technical.AssetType);
+        Assert.Equal(sscPath, technical.Path);
+    }
+
+    [Fact]
+    public async Task GenerateDirectorTimelines_ClosingSceneFallsBackToSamePlanVisual()
+    {
+        await using var db = CreateDb();
+        var plan = await SeedPlanAsync(db, "RareEventAlert", "Short");
+        await WriteTtsPackageAsync(plan.Id, "RareEventAlert", "Short", [
+            Segment(1, "Hook", "A rare outburst is possible.", 4),
+            Segment(2, "Close", "Step outside and look up.", 4)
+        ]);
+        var combinedAudio = Path.Combine(PlanRoot(plan.Id), "tts", "audio", "narration-combined.wav");
+        Directory.CreateDirectory(Path.GetDirectoryName(combinedAudio)!);
+        await File.WriteAllBytesAsync(combinedAudio, [1]);
+        await WriteManifestAsync(plan.Id, combinedAudio, [(1, "scene-01.wav", 4.0), (2, "scene-02.wav", 4.0)], totalDuration: 8.0);
+        await SeedAssetAsync(db, plan.Id, 1, "TextOverlayCard", "/visuals/opening-overlay.json");
+        var service = CreateService(db);
+
+        var result = await service.GenerateDirectorTimelinesAsync(new DirectorTimelineRequest(RegionId: RegionId, DryRun: true), CancellationToken.None);
+
+        var closing = Assert.Single(result.Timelines).Scenes.Last();
+        Assert.Equal("/visuals/opening-overlay.json", closing.PrimaryAsset.Path);
+        Assert.Contains("Fallback visual selected for closing scene.", closing.QualityNotes);
+        Assert.Equal(1, result.ReadyForRenderCount);
     }
 
     [Fact]
@@ -140,14 +217,15 @@ public sealed class DirectorTimelineServiceTests : IDisposable
             RegionId = RegionId,
             PlannedFormat = format,
             Title = $"{category} title",
-            ScheduledUtc = DateTimeOffset.UtcNow
+            ScheduledUtc = DateTimeOffset.UtcNow,
+            AstronomyEventIntelligenceId = Guid.NewGuid()
         };
         db.ContentGenerationPlans.Add(plan);
         await db.SaveChangesAsync();
         return plan;
     }
 
-    private async Task SeedAssetAsync(MediaFactoryDbContext db, Guid planId, int scene, string type, string path, string? prompt = null)
+    private async Task SeedAssetAsync(MediaFactoryDbContext db, Guid planId, int scene, string type, string path, string? prompt = null, string? metadata = null)
     {
         db.AstronomyAssetProductionJobs.Add(new AstronomyAssetProductionJob
         {
@@ -160,7 +238,8 @@ public sealed class DirectorTimelineServiceTests : IDisposable
             Priority = 10,
             Status = AstronomyAssetProductionJobStatuses.Completed,
             OutputPath = path,
-            PromptOrInstruction = prompt
+            PromptOrInstruction = prompt,
+            MetadataJson = metadata
         });
         await db.SaveChangesAsync();
     }
