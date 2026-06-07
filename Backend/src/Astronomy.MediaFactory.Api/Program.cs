@@ -367,6 +367,19 @@ app.MapPost("/api/astronomy-intelligence/enrich-question-scene-plan", async (Que
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-question-driven-narration", async (QuestionDrivenNarrationRequest request, IQuestionDrivenNarrationGenerator narrationGenerator, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy question-driven narration generation request received for {RegionId}. EventId={EventId}; DryRun={DryRun}", request.RegionId, request.EventId, request.DryRun);
+    try
+    {
+        return Results.Ok(await narrationGenerator.GenerateQuestionDrivenNarrationAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-video-plans", async (AstronomyVideoPlanningRequest request, IAstronomyVideoPlanningService planning, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy video planning request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
