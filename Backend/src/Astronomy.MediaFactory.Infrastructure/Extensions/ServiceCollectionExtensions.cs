@@ -505,6 +505,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITtsAudioGenerationService, AzureTtsAudioGenerationService>();
         services.AddScoped<IDirectorTimelineService, DirectorTimelineService>();
         services.AddScoped<ISceneAssemblyPlanService, SceneAssemblyPlanService>();
+        services.AddScoped<IRenderRecipeGenerator, RenderRecipeGenerator>();
         services.AddScoped<IAstronomyAssetProductionJobService, AstronomyAssetProductionJobService>();
         services.AddScoped<IAstronomyProductionMonitoringService, AstronomyProductionMonitoringService>();
         services.AddScoped<IAssetExecutionService, AssetExecutionService>();
