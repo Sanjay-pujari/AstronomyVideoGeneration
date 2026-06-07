@@ -425,9 +425,21 @@ public sealed class FfmpegSceneRenderer(
 
     private static Font ResolveFont(float size, FontStyle style = FontStyle.Regular)
     {
-        var family = SystemFonts.Families.FirstOrDefault(f => f.Name.Contains("DejaVu Sans", StringComparison.OrdinalIgnoreCase))
-            ?? SystemFonts.Families.FirstOrDefault(f => f.Name.Contains("Arial", StringComparison.OrdinalIgnoreCase))
-            ?? SystemFonts.Families.First();
+        var families = SystemFonts.Collection.Families;
+        var family = families.FirstOrDefault(f => f.Name.Contains("DejaVu Sans", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(family.Name))
+        {
+            family = families.FirstOrDefault(f => f.Name.Contains("Arial", StringComparison.OrdinalIgnoreCase));
+        }
+        if (string.IsNullOrWhiteSpace(family.Name))
+        {
+            family = families.FirstOrDefault();
+        }
+        if (string.IsNullOrWhiteSpace(family.Name))
+        {
+            throw new InvalidOperationException("No system fonts available for C# overlay rendering.");
+        }
+
         return family.CreateFont(size, style);
     }
 
