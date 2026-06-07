@@ -27,7 +27,22 @@ public sealed class AstronomyQuestionEngine(
 
     private static readonly Regex GuidPattern = new("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}", RegexOptions.Compiled);
     private static readonly Regex FilePattern = new(@"\b[\w\-.]+\.(json|png|jpg|jpeg|mp3|wav|mp4|mov|webm|txt)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly string[] InternalTerms = ["json", "guid", "filename", "file name", "internal id", "event id", "plan id", "utc"];
+    private static readonly (string Term, Regex Pattern)[] InternalTermPatterns =
+    [
+        ("GUID", ExactTermPattern("GUID")),
+        ("Json", ExactTermPattern("Json")),
+        ("MetadataJson", ExactTermPattern("MetadataJson")),
+        ("file", ExactTermPattern("file")),
+        ("path", ExactTermPattern("path")),
+        ("sourcePath", ExactTermPattern("sourcePath")),
+        ("assetType", ExactTermPattern("assetType")),
+        ("TextOverlayCard", ExactTermPattern("TextOverlayCard")),
+        ("SkyMapCard", ExactTermPattern("SkyMapCard")),
+        ("PlannedVisual", ExactTermPattern("PlannedVisual")),
+        ("prompt", ExactTermPattern("prompt")),
+        ("database", ExactTermPattern("database")),
+        ("internal id", new Regex(@"(?<![A-Za-z0-9])internal\s+id(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled))
+    ];
 
     public async Task<QuestionAnswerGenerationResponse> GenerateQuestionAnswersAsync(QuestionAnswerGenerationRequest request, CancellationToken cancellationToken)
     {
@@ -56,9 +71,17 @@ public sealed class AstronomyQuestionEngine(
             }
 
             var setDto = BuildQuestionSet(evt, request.RegionId, request.Language, warnings);
-            ValidateQuestionSet(setDto);
-            generatedFiles.Add(await WriteQuestionSetFileAsync(setDto, cancellationToken));
+            var validationIssues = ValidateQuestionSet(setDto);
             questionSets.Add(setDto);
+
+            if (validationIssues.Count > 0)
+            {
+                warnings.AddRange(validationIssues);
+                warnings.Add($"Question answers for '{SafeTitle(evt)}' failed validation and were not persisted or written to disk.");
+                continue;
+            }
+
+            generatedFiles.Add(await WriteQuestionSetFileAsync(setDto, cancellationToken));
 
             if (!request.DryRun)
             {
@@ -193,21 +216,68 @@ public sealed class AstronomyQuestionEngine(
 
     private static QuestionAnswerDto Answer(string type, string question, string title, string answer, int order) => new(null, type, question, title, Clean(answer), order);
 
-    private static void ValidateQuestionSet(QuestionAnswerSetDto set)
+    private IReadOnlyList<string> ValidateQuestionSet(QuestionAnswerSetDto set)
     {
+        var issues = new List<string>();
+
         foreach (var type in RequiredQuestionTypes)
         {
             var answer = set.Answers.FirstOrDefault(a => string.Equals(a.QuestionType, type, StringComparison.OrdinalIgnoreCase));
             if (answer is null || string.IsNullOrWhiteSpace(answer.AnswerText))
-                throw new InvalidOperationException($"Question answer '{type}' must be non-empty.");
+                issues.Add($"Question answer '{type}' must be non-empty.");
         }
 
         foreach (var answer in set.Answers)
         {
-            if (GuidPattern.IsMatch(answer.AnswerText) || FilePattern.IsMatch(answer.AnswerText) || InternalTerms.Any(t => answer.AnswerText.Contains(t, StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidOperationException($"Question answer '{answer.QuestionType}' contains internal wording.");
+            if (TryMatchForbiddenTerm(answer.AnswerText, out var forbiddenTerm, out _))
+            {
+                logger.LogWarning(
+                    "Question answer validation failed. QuestionType={QuestionType}; ForbiddenTerm={ForbiddenTerm}; AnswerText={AnswerText}",
+                    answer.QuestionType,
+                    forbiddenTerm,
+                    answer.AnswerText);
+                issues.Add($"Question answer '{answer.QuestionType}' contains internal wording: matched forbidden term '{forbiddenTerm}' in answer text '{answer.AnswerText}'.");
+            }
         }
+
+        return issues;
     }
+
+    private static bool TryMatchForbiddenTerm(string answerText, out string forbiddenTerm, out string matchedText)
+    {
+        var guidMatch = GuidPattern.Match(answerText);
+        if (guidMatch.Success)
+        {
+            forbiddenTerm = "GUID";
+            matchedText = guidMatch.Value;
+            return true;
+        }
+
+        var fileMatch = FilePattern.Match(answerText);
+        if (fileMatch.Success)
+        {
+            forbiddenTerm = "file";
+            matchedText = fileMatch.Value;
+            return true;
+        }
+
+        foreach (var (term, pattern) in InternalTermPatterns)
+        {
+            var match = pattern.Match(answerText);
+            if (!match.Success) continue;
+
+            forbiddenTerm = term;
+            matchedText = match.Value;
+            return true;
+        }
+
+        forbiddenTerm = string.Empty;
+        matchedText = string.Empty;
+        return false;
+    }
+
+    private static Regex ExactTermPattern(string term)
+        => new($"(?<![A-Za-z0-9]){Regex.Escape(term)}(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private async Task<string> WriteQuestionSetFileAsync(QuestionAnswerSetDto set, CancellationToken cancellationToken)
     {
