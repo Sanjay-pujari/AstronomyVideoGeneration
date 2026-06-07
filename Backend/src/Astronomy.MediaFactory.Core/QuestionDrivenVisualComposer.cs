@@ -92,6 +92,43 @@ public sealed record QuestionDrivenVisualSpec(
     IReadOnlyList<string> AccessibilityCues,
     DateTimeOffset GeneratedUtc);
 
+
+public sealed record AstronomyInfographicDesignRequest(
+    string EventId,
+    string RegionId,
+    string Language,
+    int SceneNumber,
+    string QuestionType,
+    string ScenePurpose,
+    string ViewerQuestion,
+    string ViewerTakeaway,
+    string NarrationText,
+    string CaptionText,
+    int EstimatedDurationSeconds,
+    string VisualIntent,
+    string ImagePromptIntent,
+    string OverlayIntent,
+    string AccessibilityIntent,
+    bool VenusAssetAvailable,
+    bool JupiterAssetAvailable);
+
+public sealed record AstronomyInfographicDesignTemplate(
+    string LayoutKey,
+    string TemplateName,
+    string ProfessionalInfographicIntent,
+    double MaximumTextCoverage,
+    double MinimumVisualInformationCoverage,
+    IReadOnlyList<string> RequiredVisualAnswers,
+    IReadOnlyList<string> ForbiddenPatterns,
+    QuestionDrivenProgrammaticOverlayPlan OverlayPlan,
+    IReadOnlyList<string> ProgrammaticLayers,
+    IReadOnlyList<string> AccessibilityCues);
+
+public interface IAstronomyInfographicDesignSystem
+{
+    AstronomyInfographicDesignTemplate CreateTemplate(AstronomyInfographicDesignRequest request);
+}
+
 public sealed record QuestionDrivenSceneReview(
     int SceneNumber,
     string QuestionType,
@@ -113,7 +150,8 @@ public sealed record EditorialAstronomyInfographicGenerationResponse(
     int FailedSceneCount,
     IReadOnlyList<QuestionDrivenPlannedScene> PlannedScenes,
     IReadOnlyList<string> GeneratedFiles,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<AstronomyInfographicDesignTemplate>? DesignSpecs = null);
 
 public interface IEditorialAstronomyInfographicComposer
 {
