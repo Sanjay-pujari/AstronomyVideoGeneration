@@ -77,6 +77,52 @@ public sealed class AstronomyQuestionEngineTests
         Assert.False(Directory.Exists(Path.Combine(workingDirectory, "assets")));
     }
 
+    [Fact]
+    public async Task GenerateQuestionAnswersAsync_UsesViewerFriendlyOverlayAnswersForClosePlanetPairing()
+    {
+        await using var db = CreateDb();
+        var workingDirectory = CreateWorkingDirectory();
+        var evt = SeedEvent(
+            db,
+            eventCode: "VENUS_JUPITER_CLOSE_PAIRING",
+            eventType: "PlanetConjunction",
+            objectName: "Venus",
+            metadataJson: """
+                {
+                  "direction": "west",
+                  "altitudeDegrees": 30,
+                  "angularSeparationDegrees": 1.63
+                }
+                """);
+        evt.LocationName = "Udaipur";
+        evt.TimeZone = "Asia/Kolkata";
+        evt.PeakUtc = DateTimeOffset.Parse("2026-06-07T13:53:00Z");
+        evt.Objects.Add(new AstronomyEventObject { ObjectName = "Jupiter", ObjectType = "Planet", Magnitude = -2.1m });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, workingDirectory);
+        var result = await service.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventIds: [evt.EventCode],
+            DryRun: true), CancellationToken.None);
+
+        var answers = result.QuestionSets.Single().Answers.ToDictionary(a => a.QuestionType, a => a.AnswerText);
+
+        Assert.Equal("Venus and Jupiter will appear close together in Udaipur’s evening sky.", answers[AstronomyQuestionTypes.What]);
+        Assert.Equal("Look toward the western sky, about one-third above the horizon.", answers[AstronomyQuestionTypes.Where]);
+        Assert.Equal("Best viewing is around 7:23 PM IST, shortly after sunset.", answers[AstronomyQuestionTypes.When]);
+        Assert.Equal("Find bright Venus first, then look slightly nearby for Jupiter.", answers[AstronomyQuestionTypes.How]);
+        Assert.Equal("They appear only 1.63° apart, creating a close and beautiful pairing.", answers[AstronomyQuestionTypes.Why]);
+        Assert.Equal("If skies are clear, step outside after sunset and enjoy the view.", answers[AstronomyQuestionTypes.Action]);
+
+        var combinedAnswers = string.Join(" ", answers.Values);
+        Assert.DoesNotContain("Overview:", combinedAnswers, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Closing mark:", combinedAnswers, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("local time", combinedAnswers, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sky window", combinedAnswers, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("magnitude", combinedAnswers, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static AstronomyQuestionEngine CreateService(MediaFactoryDbContext db, string workingDirectory)
         => new(db, Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<AstronomyQuestionEngine>.Instance);
 
