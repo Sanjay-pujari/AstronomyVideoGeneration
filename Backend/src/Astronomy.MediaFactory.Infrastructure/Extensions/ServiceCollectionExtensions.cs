@@ -502,6 +502,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IQuestionDrivenImagePromptGenerator, QuestionDrivenImagePromptGenerator>();
         services.AddScoped<IQuestionDrivenVisualComposer, QuestionDrivenVisualComposer>();
         services.AddScoped<IEditorialAstronomyInfographicComposer>(sp => (IEditorialAstronomyInfographicComposer)sp.GetRequiredService<IQuestionDrivenVisualComposer>());
+        services.AddScoped<IAstronomyVisualAssetStrategyService, AstronomyVisualAssetStrategyService>();
         services.AddScoped<INarrationPlanningService, NarrationPlanningService>();
         services.AddScoped<IDirectorNarrationService, DirectorNarrationService>();
         services.AddScoped<IFinalNarrationService, FinalNarrationService>();
