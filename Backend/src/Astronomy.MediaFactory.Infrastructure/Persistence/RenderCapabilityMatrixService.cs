@@ -220,7 +220,21 @@ public sealed class RenderCapabilityMatrixService(
     private static RenderCapabilityMotionHandler ResolveMotionHandler(RenderRecipeMotion motion, List<string> warnings)
     {
         var filterHint = string.IsNullOrWhiteSpace(motion.FilterHint) ? motion.Type : motion.FilterHint.Trim();
-        var handler = filterHint.ToLowerInvariant() switch
+        var handler = ResolveMotionHandlerName(filterHint);
+        if (handler.Equals("DefaultSubtleMotionRenderer", StringComparison.Ordinal)
+            && !string.Equals(motion.Type, filterHint, StringComparison.OrdinalIgnoreCase))
+        {
+            handler = ResolveMotionHandlerName(motion.Type);
+        }
+
+        if (handler.Equals("DefaultSubtleMotionRenderer", StringComparison.Ordinal))
+            warnings.Add("Unknown motion filter hint mapped to default subtle motion.");
+
+        return new RenderCapabilityMotionHandler(motion.Type, filterHint, handler, true);
+    }
+
+    private static string ResolveMotionHandlerName(string motionHint)
+        => motionHint.Trim().ToLowerInvariant() switch
         {
             "kenburns_zoom_in" => "KenBurnsMotionRenderer",
             "kenburns_zoom_in_focus" => "KenBurnsMotionRenderer",
@@ -229,15 +243,15 @@ public sealed class RenderCapabilityMatrixService(
             "parallax_soft" => "ParallaxSoftMotionRenderer",
             "static_hold" => "StaticHoldMotionRenderer",
             "fade_hold" => "FadeHoldMotionRenderer",
-            "montage_crossfade" => "MontageMotionRenderer",
+            "guided_pan_across_group_with_object_sequence_emphasis" => "GroupedObjectPanRenderer",
+            "pan_sequence" => "GroupedObjectPanRenderer",
+            "guided_pan_across_group" => "GroupedObjectPanRenderer",
+            "episode_montage_crossfade_with_night-by-night_progression" => "WeeklyMontageRenderer",
+            "montage_crossfade" => "WeeklyMontageRenderer",
+            "episode_montage" => "WeeklyMontageRenderer",
+            "weekly_montage" => "WeeklyMontageRenderer",
             _ => "DefaultSubtleMotionRenderer"
         };
-
-        if (handler.Equals("DefaultSubtleMotionRenderer", StringComparison.Ordinal))
-            warnings.Add("Unknown motion filter hint mapped to default subtle motion.");
-
-        return new RenderCapabilityMotionHandler(motion.Type, filterHint, handler, true);
-    }
 
     private static async Task<T?> ReadJsonAsync<T>(string path, CancellationToken cancellationToken)
     {
