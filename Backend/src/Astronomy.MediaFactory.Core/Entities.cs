@@ -647,6 +647,61 @@ public sealed class AstronomyEventIntelligence : EntityBase
     public ICollection<AstronomyContentOpportunity> ContentOpportunities { get; set; } = [];
     public ICollection<AstronomyReferenceSource> ReferenceSources { get; set; } = [];
     public ICollection<AstronomyEventValidation> Validations { get; set; } = [];
+    public ICollection<AstronomyQuestionAnswerSet> QuestionAnswerSets { get; set; } = [];
+}
+
+public sealed class AstronomyQuestionAnswerSet : EntityBase
+{
+    public Guid AstronomyEventIntelligenceId { get; set; }
+    public string RegionId { get; set; } = "";
+    public string Language { get; set; } = "en";
+    public string Version { get; set; } = "v1";
+    public string Status { get; set; } = AstronomyQuestionSetStatus.Generated;
+    public DateTimeOffset GeneratedUtc { get; set; }
+
+    public AstronomyEventIntelligence? AstronomyEventIntelligence { get; set; }
+    public ICollection<AstronomyQuestionAnswer> Answers { get; set; } = [];
+}
+
+public sealed class AstronomyQuestionAnswer : EntityBase
+{
+    public Guid QuestionAnswerSetId { get; set; }
+    public string QuestionType { get; set; } = "";
+    public string QuestionText { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string AnswerText { get; set; } = "";
+    public int DisplayOrder { get; set; }
+    public string? MetadataJson { get; set; }
+
+    public AstronomyQuestionAnswerSet? AstronomyQuestionAnswerSet { get; set; }
+}
+
+public sealed class AstronomyQuestionTemplate : EntityBase
+{
+    public string EventType { get; set; } = "";
+    public string QuestionType { get; set; } = "";
+    public string TemplateName { get; set; } = "";
+    public string TemplateText { get; set; } = "";
+    public string Language { get; set; } = "en";
+    public bool IsActive { get; set; } = true;
+}
+
+public static class AstronomyQuestionTypes
+{
+    public const string What = "What";
+    public const string Where = "Where";
+    public const string When = "When";
+    public const string How = "How";
+    public const string Why = "Why";
+    public const string Action = "Action";
+}
+
+public static class AstronomyQuestionSetStatus
+{
+    public const string Generated = "Generated";
+    public const string Approved = "Approved";
+    public const string Rejected = "Rejected";
+    public const string Superseded = "Superseded";
 }
 
 public sealed class AstronomyEventObject : EntityBase

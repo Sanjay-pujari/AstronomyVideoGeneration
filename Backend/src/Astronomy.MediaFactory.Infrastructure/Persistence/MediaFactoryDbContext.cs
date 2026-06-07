@@ -59,6 +59,9 @@ public sealed class MediaFactoryDbContext : DbContext
     public DbSet<AstronomyContentOpportunity> AstronomyContentOpportunities => Set<AstronomyContentOpportunity>();
     public DbSet<AstronomyReferenceSource> AstronomyReferenceSources => Set<AstronomyReferenceSource>();
     public DbSet<AstronomyEventValidation> AstronomyEventValidations => Set<AstronomyEventValidation>();
+    public DbSet<AstronomyQuestionAnswerSet> AstronomyQuestionAnswerSets => Set<AstronomyQuestionAnswerSet>();
+    public DbSet<AstronomyQuestionAnswer> AstronomyQuestionAnswers => Set<AstronomyQuestionAnswer>();
+    public DbSet<AstronomyQuestionTemplate> AstronomyQuestionTemplates => Set<AstronomyQuestionTemplate>();
     public DbSet<AstronomyAssetProductionJob> AstronomyAssetProductionJobs => Set<AstronomyAssetProductionJob>();
 
     private static readonly ValueComparer<string[]> StringArrayValueComparer = new(
@@ -97,6 +100,9 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.ApplyConfiguration(new AstronomyContentOpportunityConfiguration());
         modelBuilder.ApplyConfiguration(new AstronomyReferenceSourceConfiguration());
         modelBuilder.ApplyConfiguration(new AstronomyEventValidationConfiguration());
+        modelBuilder.ApplyConfiguration(new AstronomyQuestionAnswerSetConfiguration());
+        modelBuilder.ApplyConfiguration(new AstronomyQuestionAnswerConfiguration());
+        modelBuilder.ApplyConfiguration(new AstronomyQuestionTemplateConfiguration());
         modelBuilder.ApplyConfiguration(new AstronomyAssetProductionJobConfiguration());
 
         modelBuilder.Entity<PipelineRun>().ToTable("pipeline_runs").HasKey(x => x.Id);
