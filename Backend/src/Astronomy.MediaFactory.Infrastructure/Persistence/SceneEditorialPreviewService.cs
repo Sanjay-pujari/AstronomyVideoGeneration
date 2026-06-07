@@ -66,7 +66,8 @@ public sealed class SceneEditorialPreviewService(
             foreach (var draft in sceneDrafts)
             {
                 var sceneNumber = draft.Recipe.SceneNumber;
-                var cardPath = Path.Combine(workingFramesRoot, $"scene-{sceneNumber:000}-card.png");
+                var productionVisualPath = ResolveProductionVisualPath(planRoot, sceneNumber);
+                var cardPath = productionVisualPath ?? Path.Combine(workingFramesRoot, $"scene-{sceneNumber:000}-card.png");
                 var srtPath = Path.Combine(workingFramesRoot, $"scene-{sceneNumber:000}.srt");
                 var reviewPath = Path.Combine(workingFramesRoot, $"scene-{sceneNumber:000}-review.json");
                 var review = ValidateScene(draft, sceneDrafts);
@@ -89,7 +90,11 @@ public sealed class SceneEditorialPreviewService(
 
                 if (request.DryRun) continue;
                 Directory.CreateDirectory(workingFramesRoot);
-                if (File.Exists(cardPath) && !request.OverwriteExisting)
+                if (productionVisualPath is not null)
+                {
+                    generatedFiles.Add(productionVisualPath);
+                }
+                else if (File.Exists(cardPath) && !request.OverwriteExisting)
                 {
                     warnings.Add($"Skipped existing scene editorial card for plan {planId:D} scene {sceneNumber:000}. Set overwriteExisting=true to replace it.");
                 }
@@ -144,6 +149,12 @@ public sealed class SceneEditorialPreviewService(
         return plans.Where(id => Directory.Exists(Path.Combine(BuildPlanRoot(root, region, id.ToString("D")), RecipeDirectoryName)))
             .Take(request.MaxPlans ?? int.MaxValue)
             .ToArray();
+    }
+
+    private static string? ResolveProductionVisualPath(string planRoot, int sceneNumber)
+    {
+        var path = Path.Combine(planRoot, "production-visuals", $"scene-{sceneNumber:000}-final.png");
+        return File.Exists(path) && new FileInfo(path).Length > 1024 ? path : null;
     }
 
     private static async Task<IReadOnlyList<RenderRecipeDocument>> LoadRecipesAsync(string planRoot, CancellationToken cancellationToken)

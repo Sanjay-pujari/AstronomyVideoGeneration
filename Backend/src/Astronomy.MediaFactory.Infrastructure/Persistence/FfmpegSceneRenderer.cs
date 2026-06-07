@@ -173,6 +173,9 @@ public sealed class FfmpegSceneRenderer(
 
     private async Task<ResolvedVisual> ResolveVisualAsync(string planRoot, string frameDirectory, string recipePath, RenderRecipeDocument recipe, bool dryRun, List<string> warnings, CancellationToken cancellationToken)
     {
+        var productionVisual = Path.Combine(planRoot, "production-visuals", $"scene-{recipe.SceneNumber:000}-final.png");
+        if (IsUsableImage(productionVisual)) return new ResolvedVisual(productionVisual, productionVisual, "ProductionVisualComposer");
+
         var generatedVisual = Path.Combine(planRoot, "visual-assets", $"scene-{recipe.SceneNumber:000}-background.png");
         if (IsUsableImage(generatedVisual)) return new ResolvedVisual(generatedVisual, generatedVisual, "ProductionVisualAsset");
 
