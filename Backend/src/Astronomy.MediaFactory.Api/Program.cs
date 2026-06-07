@@ -485,6 +485,19 @@ app.MapPost("/api/astronomy-intelligence/polish-final-narration", async (Polishe
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/resolve-astronomy-visual-asset-strategy", async (AstronomyVisualAssetStrategyRequest request, IAstronomyVisualAssetStrategyService strategy, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy visual asset strategy request received for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await strategy.ResolveAstronomyVisualAssetStrategyAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-production-visuals", async (ProductionVisualGenerationRequest request, IProductionVisualComposerService composer, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy production visual generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
