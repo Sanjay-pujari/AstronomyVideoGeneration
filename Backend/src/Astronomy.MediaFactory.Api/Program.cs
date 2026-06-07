@@ -497,6 +497,19 @@ app.MapPost("/api/astronomy-intelligence/generate-scene-assembly-plans", async (
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-render-recipes", async (RenderRecipeRequest request, IRenderRecipeGenerator generator, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy render recipe generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await generator.GenerateRenderRecipesAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
