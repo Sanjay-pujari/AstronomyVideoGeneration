@@ -112,7 +112,7 @@ public sealed class AstronomyQuestionEngineTests
         Assert.Equal("Look toward the western sky, about one-third above the horizon.", answers[AstronomyQuestionTypes.Where]);
         Assert.Equal("Best viewing is around 7:23 PM IST, shortly after sunset.", answers[AstronomyQuestionTypes.When]);
         Assert.Equal("Find bright Venus first, then look slightly nearby for Jupiter.", answers[AstronomyQuestionTypes.How]);
-        Assert.Equal("They appear only 1.63° apart, creating a close and beautiful pairing.", answers[AstronomyQuestionTypes.Why]);
+        Assert.Equal("Venus and Jupiter appear only 1.63° apart, creating a striking planetary pairing.", answers[AstronomyQuestionTypes.Why]);
         Assert.Equal("If skies are clear, step outside after sunset and enjoy the view.", answers[AstronomyQuestionTypes.Action]);
 
         var combinedAnswers = string.Join(" ", answers.Values);
@@ -121,6 +121,41 @@ public sealed class AstronomyQuestionEngineTests
         Assert.DoesNotContain("local time", combinedAnswers, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("sky window", combinedAnswers, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("magnitude", combinedAnswers, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenerateQuestionAnswersAsync_UsesBrightPlanetPairingWhyWhenConjunctionSeparationIsMissing()
+    {
+        await using var db = CreateDb();
+        var workingDirectory = CreateWorkingDirectory();
+        var evt = SeedEvent(
+            db,
+            eventCode: "VENUS_JUPITER_NO_SEPARATION",
+            eventType: "PlanetConjunction",
+            objectName: "Venus",
+            metadataJson: """
+                {
+                  "direction": "west",
+                  "altitudeDegrees": 30
+                }
+                """);
+        evt.Objects.Add(new AstronomyEventObject { ObjectName = "Jupiter", ObjectType = "Planet", Magnitude = -2.1m });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, workingDirectory);
+        var result = await service.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventIds: [evt.EventCode],
+            DryRun: true), CancellationToken.None);
+
+        var whyAnswer = result.QuestionSets.Single().Answers.Single(a => a.QuestionType == AstronomyQuestionTypes.Why).AnswerText;
+
+        Assert.Equal("Venus and Jupiter are two bright planets appearing close together, making the pairing easy to notice.", whyAnswer);
+        Assert.DoesNotContain("easy to spot", whyAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("viewer-friendly", whyAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("easy to explain", whyAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("bright", whyAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("close", whyAnswer, StringComparison.OrdinalIgnoreCase);
     }
 
     private static AstronomyQuestionEngine CreateService(MediaFactoryDbContext db, string workingDirectory)

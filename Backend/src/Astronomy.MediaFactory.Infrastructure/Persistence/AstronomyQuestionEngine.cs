@@ -27,6 +27,26 @@ public sealed class AstronomyQuestionEngine(
 
     private static readonly Regex GuidPattern = new("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}", RegexOptions.Compiled);
     private static readonly Regex FilePattern = new(@"\b[\w\-.]+\.(json|png|jpg|jpeg|mp3|wav|mp4|mov|webm|txt)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly string[] GenericWhyPhrases =
+    [
+        "easy to spot",
+        "viewer-friendly",
+        "easy to explain"
+    ];
+    private static readonly string[] WhySignificanceTerms =
+    [
+        "°",
+        "angular separation",
+        "rarity",
+        "rare",
+        "uncommon",
+        "close pairing",
+        "planetary pairing",
+        "brightness",
+        "bright",
+        "event stands out",
+        "alignment"
+    ];
     private static readonly (string Term, Regex Pattern)[] InternalTermPatterns =
     [
         ("GUID", ExactTermPattern("GUID")),
@@ -219,7 +239,7 @@ public sealed class AstronomyQuestionEngine(
                 Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward the {skyDirection}, {FormatAltitude(altitude)} above the horizon.", 2),
                 Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is around {localPeak:h:mm tt} {timeZoneAbbreviation}, {timeOfNight}.", 3),
                 Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", FormatHowAnswer(objectNames, primaryObjects, constellation), 4),
-                Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", FormatWhyAnswer(separation, eventType), 5),
+                Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", FormatWhyAnswer(evt, objectNames, primaryObjects, separation, eventType), 5),
                 Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Step outside", FormatActionAnswer(localPeak), 6)
             ]);
     }
@@ -248,6 +268,17 @@ public sealed class AstronomyQuestionEngine(
                     answer.AnswerText);
                 issues.Add($"Question answer '{answer.QuestionType}' contains internal wording: matched forbidden term '{forbiddenTerm}' in answer text '{answer.AnswerText}'.");
             }
+        }
+
+        var whyAnswer = set.Answers.FirstOrDefault(a => string.Equals(a.QuestionType, AstronomyQuestionTypes.Why, StringComparison.OrdinalIgnoreCase));
+        if (whyAnswer is not null)
+        {
+            var includesSignificance = WhySignificanceTerms.Any(t => whyAnswer.AnswerText.Contains(t, StringComparison.OrdinalIgnoreCase));
+            if (GenericWhyPhrases.Any(p => whyAnswer.AnswerText.Contains(p, StringComparison.OrdinalIgnoreCase)) && !includesSignificance)
+                issues.Add($"Question answer '{AstronomyQuestionTypes.Why}' must explain event significance, not just generic viewing ease.");
+
+            if (!includesSignificance)
+                issues.Add($"Question answer '{AstronomyQuestionTypes.Why}' should include angular separation, rarity, close pairing, brightness, or event significance.");
         }
 
         return issues;
@@ -357,10 +388,33 @@ public sealed class AstronomyQuestionEngine(
         return $"Find {primaryObjects} first, then use {referencePoint} as your guide.";
     }
 
-    private static string FormatWhyAnswer(decimal? separation, string eventType)
-        => separation.HasValue
-            ? $"They appear only {separation.Value:0.##}° apart, creating a close and beautiful pairing."
-            : $"This {eventType} is special because the timing makes it easy to spot and enjoy.";
+    private static string FormatWhyAnswer(AstronomyEventIntelligence evt, IReadOnlyList<string> objectNames, string primaryObjects, decimal? separation, string eventType)
+    {
+        if (IsPlanetConjunction(evt.EventType))
+        {
+            if (separation.HasValue)
+                return $"{primaryObjects} appear only {separation.Value:0.##}° apart, creating a striking planetary pairing.";
+
+            if (objectNames.Count >= 2)
+                return $"{primaryObjects} are two bright planets appearing close together, making the pairing easy to notice.";
+
+            return $"{primaryObjects} form a close planetary pairing, so the event stands out as an apparent alignment in Earth’s sky.";
+        }
+
+        if (separation.HasValue)
+            return $"{primaryObjects} appear only {separation.Value:0.##}° apart, creating a striking close pairing.";
+
+        if (HasBrightObjects(evt))
+            return $"{primaryObjects} stand out because their brightness makes the event visually prominent in the sky.";
+
+        if (evt.RarityScore >= 7m)
+            return $"This {eventType} is special because it is an uncommon sky event worth watching near its peak.";
+
+        if (IsClosePairing(eventType))
+            return $"This {eventType} is special because the objects form a close pairing from our point of view on Earth.";
+
+        return $"This {eventType} is special because it highlights a notable change or alignment in the night sky.";
+    }
 
     private static string FormatActionAnswer(DateTimeOffset localPeak)
         => IsEvening(localPeak)
@@ -428,6 +482,14 @@ public sealed class AstronomyQuestionEngine(
         => eventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase)
             || eventType.Contains("close", StringComparison.OrdinalIgnoreCase)
             || eventType.Contains("pair", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPlanetConjunction(string eventType)
+        => eventType.Contains("PlanetConjunction", StringComparison.OrdinalIgnoreCase)
+            || (eventType.Contains("planet", StringComparison.OrdinalIgnoreCase)
+                && eventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasBrightObjects(AstronomyEventIntelligence evt)
+        => evt.Objects.Any(o => o.Magnitude.HasValue && o.Magnitude <= 1.5m) || evt.VisibilityScore >= 7m;
 
     private static string DirectionFromAzimuth(decimal? azimuth) => !azimuth.HasValue ? "clearest open horizon" : azimuth.Value switch
     {
