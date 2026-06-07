@@ -178,6 +178,153 @@ public sealed class DirectorTimelineServiceTests : IDisposable
         Assert.Equal(1, result.ReadyForRenderCount);
     }
 
+
+    [Fact]
+    public async Task GenerateDirectorTimelines_SceneWithOnlySscRecoversSamePlanFallbackWithoutPrimarySsc()
+    {
+        await using var db = CreateDb();
+        var plan = await SeedPlanAsync(db, "PlanetConjunction", "Short");
+        await WriteTtsPackageAsync(plan.Id, "PlanetConjunction", "Short", [
+            Segment(1, "Opening", "Use the finder card first.", 4),
+            Segment(2, "SSC only", "The Stellarium script is technical only.", 4)
+        ]);
+        var combinedAudio = Path.Combine(PlanRoot(plan.Id), "tts", "audio", "narration-combined.wav");
+        Directory.CreateDirectory(Path.GetDirectoryName(combinedAudio)!);
+        await File.WriteAllBytesAsync(combinedAudio, [1]);
+        await WriteManifestAsync(plan.Id, combinedAudio, [(1, "scene-01.wav", 4.0), (2, "scene-02.wav", 4.0)], totalDuration: 8.0);
+        await SeedAssetAsync(db, plan.Id, 1, "TextOverlayCard", "/visuals/opening-overlay.json");
+        await SeedAssetAsync(db, plan.Id, 2, "StellariumScreenshot", Path.Combine(PlanRoot(plan.Id), "stellarium", "scene-2.ssc"));
+        var service = CreateService(db);
+
+        var result = await service.GenerateDirectorTimelinesAsync(new DirectorTimelineRequest(RegionId: RegionId, DryRun: true), CancellationToken.None);
+
+        var timeline = Assert.Single(result.Timelines);
+        var recovered = timeline.Scenes.Single(scene => scene.SceneNumber == 2);
+        Assert.True(timeline.RenderReadiness.ReadyForRender);
+        Assert.Equal(1, result.ReadyForRenderCount);
+        Assert.Equal("/visuals/opening-overlay.json", recovered.PrimaryAsset.Path);
+        Assert.False(recovered.PrimaryAsset.Path.EndsWith(".ssc", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("Recovered fallback visual for render readiness.", recovered.QualityNotes);
+        Assert.Contains("Fallback reused from scene 1.", recovered.QualityNotes);
+        Assert.All(timeline.Scenes, scene => Assert.False(string.IsNullOrWhiteSpace(scene.PrimaryAsset.Path)));
+        Assert.All(timeline.Scenes, scene => Assert.False(scene.PrimaryAsset.Path.EndsWith(".ssc", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task GenerateDirectorTimelines_WeeklySkyForecastMissingScenesTwoAndFourRecoverUsableVisuals()
+    {
+        await using var db = CreateDb();
+        var plan = await SeedPlanAsync(db, "WeeklySkyForecast", "Long");
+        await WriteTtsPackageAsync(plan.Id, "WeeklySkyForecast", "Long", [
+            Segment(1, "Opening", "The weekly overview starts here.", 3),
+            Segment(2, "Missing two", "This night needs a recovered visual.", 3),
+            Segment(3, "Middle", "A thumbnail concept is available.", 3),
+            Segment(4, "Missing four", "The close also needs a recovered visual.", 3)
+        ]);
+        var combinedAudio = Path.Combine(PlanRoot(plan.Id), "tts", "audio", "narration-combined.wav");
+        Directory.CreateDirectory(Path.GetDirectoryName(combinedAudio)!);
+        await File.WriteAllBytesAsync(combinedAudio, [1]);
+        await WriteManifestAsync(plan.Id, combinedAudio, [(1, "scene-01.wav", 3.0), (2, "scene-02.wav", 3.0), (3, "scene-03.wav", 3.0), (4, "scene-04.wav", 3.0)], totalDuration: 12.0);
+        await SeedAssetAsync(db, plan.Id, 1, "SkyMapCard", "/visuals/week-overview.json");
+        await SeedAssetAsync(db, plan.Id, 3, "ThumbnailConcept", "/visuals/week-thumbnail.json");
+        var service = CreateService(db);
+
+        var result = await service.GenerateDirectorTimelinesAsync(new DirectorTimelineRequest(RegionId: RegionId, DryRun: true), CancellationToken.None);
+
+        var timeline = Assert.Single(result.Timelines);
+        Assert.True(timeline.RenderReadiness.ReadyForRender);
+        Assert.Equal(1, result.ReadyForRenderCount);
+        Assert.Equal(0, result.NotReadyCount);
+        var scene2 = timeline.Scenes.Single(scene => scene.SceneNumber == 2);
+        var scene4 = timeline.Scenes.Single(scene => scene.SceneNumber == 4);
+        Assert.False(string.IsNullOrWhiteSpace(scene2.PrimaryAsset.Path));
+        Assert.False(string.IsNullOrWhiteSpace(scene4.PrimaryAsset.Path));
+        Assert.Contains("Recovered fallback visual for render readiness.", scene2.QualityNotes);
+        Assert.Contains("Recovered fallback visual for render readiness.", scene4.QualityNotes);
+        Assert.All(timeline.Scenes, scene => Assert.False(scene.PrimaryAsset.Path.EndsWith(".ssc", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task GenerateDirectorTimelines_PlanetGroupingSceneThreeRecoversAiPromptPlannedVisual()
+    {
+        await using var db = CreateDb();
+        var plan = await SeedPlanAsync(db, "PlanetGrouping", "Short");
+        await WriteTtsPackageAsync(plan.Id, "PlanetGrouping", "Short", [
+            Segment(1, "Opening", "Start with the grouping card.", 3),
+            Segment(2, "Finder", "Use the finder map.", 3),
+            Segment(3, "Missing", "This scene should reuse an AI prompt.", 3)
+        ]);
+        var combinedAudio = Path.Combine(PlanRoot(plan.Id), "tts", "audio", "narration-combined.wav");
+        Directory.CreateDirectory(Path.GetDirectoryName(combinedAudio)!);
+        await File.WriteAllBytesAsync(combinedAudio, [1]);
+        await WriteManifestAsync(plan.Id, combinedAudio, [(1, "scene-01.wav", 3.0), (2, "scene-02.wav", 3.0), (3, "scene-03.wav", 3.0)], totalDuration: 9.0);
+        await SeedAssetAsync(db, plan.Id, 1, "AiImagePrompt", string.Empty, prompt: "wide field planet grouping over Udaipur");
+        var service = CreateService(db);
+
+        var result = await service.GenerateDirectorTimelinesAsync(new DirectorTimelineRequest(RegionId: RegionId, DryRun: true), CancellationToken.None);
+
+        var timeline = Assert.Single(result.Timelines);
+        var scene3 = timeline.Scenes.Single(scene => scene.SceneNumber == 3);
+        Assert.True(timeline.RenderReadiness.ReadyForRender);
+        Assert.Equal("PlannedVisual", scene3.PrimaryAsset.AssetType);
+        Assert.Equal("wide field planet grouping over Udaipur", scene3.PrimaryAsset.Path);
+        Assert.Contains("Recovered fallback visual for render readiness.", scene3.QualityNotes);
+        Assert.All(timeline.Scenes, scene => Assert.False(string.IsNullOrWhiteSpace(scene.PrimaryAsset.Path)));
+        Assert.All(timeline.Scenes, scene => Assert.False(scene.PrimaryAsset.Path.EndsWith(".ssc", StringComparison.OrdinalIgnoreCase)));
+    }
+
+
+    [Fact]
+    public async Task GenerateDirectorTimelines_RecoversEightProductionTimelinesReadyForRender()
+    {
+        await using var db = CreateDb();
+        var categories = new[]
+        {
+            "WeeklySkyForecast",
+            "PlanetGrouping",
+            "PlanetConjunction",
+            "RareEventAlert",
+            "WeeklySkyForecast",
+            "PlanetGrouping",
+            "PlanetConjunction",
+            "RareEventAlert"
+        };
+
+        foreach (var category in categories)
+        {
+            var plan = await SeedPlanAsync(db, category, category == "WeeklySkyForecast" ? "Long" : "Short");
+            await WriteTtsPackageAsync(plan.Id, category, plan.PlannedFormat!, [
+                Segment(1, "Opening", "A production-ready visual is available.", 3),
+                Segment(2, "Recovered", "This scene recovers a fallback visual.", 3)
+            ]);
+            var combinedAudio = Path.Combine(PlanRoot(plan.Id), "tts", "audio", "narration-combined.wav");
+            Directory.CreateDirectory(Path.GetDirectoryName(combinedAudio)!);
+            await File.WriteAllBytesAsync(combinedAudio, [1]);
+            await WriteManifestAsync(plan.Id, combinedAudio, [(1, "scene-01.wav", 3.0), (2, "scene-02.wav", 3.0)], totalDuration: 6.0);
+            await SeedAssetAsync(db, plan.Id, 1, "SkyMapCard", $"/visuals/{plan.Id:D}-scene-1.json");
+            await SeedAssetAsync(db, plan.Id, 2, "StellariumScreenshot", Path.Combine(PlanRoot(plan.Id), "stellarium", "scene-2.ssc"));
+        }
+
+        var service = CreateService(db);
+
+        var result = await service.GenerateDirectorTimelinesAsync(new DirectorTimelineRequest(RegionId: RegionId, MaxPlans: 20, DryRun: true), CancellationToken.None);
+
+        Assert.Equal(8, result.PlanCount);
+        Assert.Equal(8, result.GeneratedCount);
+        Assert.Equal(8, result.ReadyForRenderCount);
+        Assert.Equal(0, result.NotReadyCount);
+        Assert.All(result.Timelines, timeline =>
+        {
+            Assert.True(timeline.RenderReadiness.ReadyForRender);
+            Assert.All(timeline.Scenes, scene =>
+            {
+                Assert.False(string.IsNullOrWhiteSpace(scene.PrimaryAsset.AssetType));
+                Assert.False(string.IsNullOrWhiteSpace(scene.PrimaryAsset.Path));
+                Assert.False(scene.PrimaryAsset.Path.EndsWith(".ssc", StringComparison.OrdinalIgnoreCase));
+            });
+        });
+    }
+
     [Fact]
     public async Task GenerateDirectorTimelines_DryRunDoesNotWriteOrRenderVideo()
     {
