@@ -41,6 +41,11 @@ public sealed class AstronomyQuestionEngine(
         ("PlannedVisual", ExactTermPattern("PlannedVisual")),
         ("prompt", ExactTermPattern("prompt")),
         ("database", ExactTermPattern("database")),
+        ("Overview:", new Regex(@"(?<![A-Za-z0-9])Overview\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("Closing mark:", new Regex(@"(?<![A-Za-z0-9])Closing\s+mark\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("local time", new Regex(@"(?<![A-Za-z0-9])local\s+time(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("sky window", new Regex(@"(?<![A-Za-z0-9])sky\s+window(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("magnitude", ExactTermPattern("magnitude")),
         ("internal id", new Regex(@"(?<![A-Za-z0-9])internal\s+id(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled))
     ];
 
@@ -180,18 +185,23 @@ public sealed class AstronomyQuestionEngine(
     {
         var timezone = ResolveTimezone(evt, regionId, warnings);
         var localPeak = ToLocal(evt.PeakUtc ?? evt.StartUtc, timezone);
-        var localStart = ToLocal(evt.StartUtc, timezone);
-        var localEnd = evt.EndUtc.HasValue ? ToLocal(evt.EndUtc.Value, timezone) : localPeak.AddHours(2);
-        var objectNames = evt.Objects.Select(o => o.ObjectName).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var objectNames = evt.Objects
+            .Where(o => !string.IsNullOrWhiteSpace(o.ObjectName))
+            .OrderBy(o => o.Magnitude ?? decimal.MaxValue)
+            .ThenBy(o => o.ObjectName)
+            .Select(o => o.ObjectName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var primaryObjects = objectNames.Length == 0 ? "the main sky target" : JoinNatural(objectNames.Take(3).ToArray());
         var direction = FirstMetadataValue(evt, "direction", "viewingDirection", "azimuthDirection") ?? DirectionFromAzimuth(FirstDecimal(evt, "azimuth", "azimuthDegrees", "bestViewingAzimuthDegrees"));
         var altitude = FirstDecimal(evt, "altitude", "altitudeDegrees", "maxAltitudeDegrees");
-        var magnitude = evt.Objects.Select(o => o.Magnitude).FirstOrDefault(m => m.HasValue);
-        var constellation = FirstMetadataValue(evt, "constellation", "referenceConstellation", "referenceObject") ?? "near a familiar bright reference point";
+        var constellation = FirstMetadataValue(evt, "constellation", "referenceConstellation", "referenceObject") ?? "a familiar bright reference point";
         var separation = FirstDecimal(evt, "angularSeparation", "angularSeparationDegrees", "separationDegrees");
-        var location = !string.IsNullOrWhiteSpace(evt.LocationName) ? evt.LocationName! : regionId;
+        var location = !string.IsNullOrWhiteSpace(evt.LocationName) ? evt.LocationName! : HumanizeLocation(regionId);
         var eventType = Humanize(evt.EventType);
-        var bestWindow = FormatWindow(localPeak, localStart, localEnd);
+        var skyDirection = FormatSkyDirection(direction);
+        var timeOfNight = DescribeViewingTime(localPeak);
+        var timeZoneAbbreviation = FormatTimeZoneAbbreviation(timezone, localPeak);
 
         return new QuestionAnswerSetDto(
             null,
@@ -205,12 +215,12 @@ public sealed class AstronomyQuestionEngine(
             AstronomyQuestionSetStatus.Generated,
             DateTimeOffset.UtcNow,
             [
-                Answer(AstronomyQuestionTypes.What, "What is happening?", "Opening overview", $"Overview: {eventType} featuring {primaryObjects}, a clean sky story for tonight.", 1),
-                Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look {direction} from {location}; aim {FormatAltitude(altitude)} above the horizon.", 2),
-                Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best view is around {localPeak:h:mm tt} local time, within the {bestWindow} sky window.", 3),
-                Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", $"Start with {primaryObjects}; {FormatBrightness(magnitude)} and use {constellation} as your guide.", 4),
-                Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", $"This {eventType.ToLowerInvariant()} stands out because {FormatSeparation(separation)} and makes the sky easy to explain visually.", 5),
-                Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Closing mark", $"Closing mark: If clouds stay away, step outside, face {direction}, and watch for {primaryObjects}.", 6)
+                Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", FormatWhatAnswer(eventType, primaryObjects, location), 1),
+                Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", $"Look toward the {skyDirection}, {FormatAltitude(altitude)} above the horizon.", 2),
+                Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", $"Best viewing is around {localPeak:h:mm tt} {timeZoneAbbreviation}, {timeOfNight}.", 3),
+                Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", FormatHowAnswer(objectNames, primaryObjects, constellation), 4),
+                Answer(AstronomyQuestionTypes.Why, "Why is it special?", "Why it matters", FormatWhyAnswer(separation, eventType), 5),
+                Answer(AstronomyQuestionTypes.Action, "What should I do now?", "Step outside", FormatActionAnswer(localPeak), 6)
             ]);
     }
 
@@ -334,17 +344,92 @@ public sealed class AstronomyQuestionEngine(
     private static DateTimeOffset ToLocal(DateTimeOffset utc, string timeZoneId)
         => TimeZoneInfo.ConvertTime(utc, TimeZoneInfo.FindSystemTimeZoneById(timeZoneId));
 
-    private static string FormatWindow(DateTimeOffset peak, DateTimeOffset start, DateTimeOffset end)
+    private static string FormatWhatAnswer(string eventType, string primaryObjects, string location)
+        => IsClosePairing(eventType)
+            ? $"{primaryObjects} will appear close together in {location}’s evening sky."
+            : $"{primaryObjects} will be the highlight in {location}’s sky.";
+
+    private static string FormatHowAnswer(IReadOnlyList<string> objectNames, string primaryObjects, string referencePoint)
     {
-        var windowStart = start.Date == peak.Date ? start : peak.AddHours(-1);
-        var windowEnd = end > windowStart ? end : peak.AddHours(1);
-        return $"{windowStart:h:mm tt} to {windowEnd:h:mm tt}";
+        if (objectNames.Count >= 2)
+            return $"Find bright {objectNames[0]} first, then look slightly nearby for {objectNames[1]}.";
+
+        return $"Find {primaryObjects} first, then use {referencePoint} as your guide.";
     }
 
-    private static string FormatAltitude(decimal? altitude) => altitude.HasValue ? $"about {Math.Round(altitude.Value)}°" : "comfortably";
-    private static string FormatBrightness(decimal? magnitude) => magnitude.HasValue ? $"it is around magnitude {magnitude.Value:0.#}" : "choose the clearest part of the sky";
-    private static string FormatSeparation(decimal? separation) => separation.HasValue ? $"the objects sit about {separation.Value:0.#}° apart" : "the timing and arrangement are viewer-friendly";
-    private static string DirectionFromAzimuth(decimal? azimuth) => !azimuth.HasValue ? "toward the clearest open horizon" : azimuth.Value switch
+    private static string FormatWhyAnswer(decimal? separation, string eventType)
+        => separation.HasValue
+            ? $"They appear only {separation.Value:0.##}° apart, creating a close and beautiful pairing."
+            : $"This {eventType} is special because the timing makes it easy to spot and enjoy.";
+
+    private static string FormatActionAnswer(DateTimeOffset localPeak)
+        => IsEvening(localPeak)
+            ? "If skies are clear, step outside after sunset and enjoy the view."
+            : "If skies are clear, step outside at the best time and enjoy the view.";
+
+    private static string FormatAltitude(decimal? altitude)
+    {
+        if (!altitude.HasValue) return "comfortably";
+
+        var rounded = Math.Round(altitude.Value);
+        return rounded switch
+        {
+            >= 25 and <= 35 => "about one-third",
+            >= 15 and < 25 => "not far",
+            > 35 and <= 55 => "about halfway",
+            > 55 => "high",
+            _ => "low"
+        };
+    }
+
+    private static string FormatSkyDirection(string? direction)
+    {
+        if (string.IsNullOrWhiteSpace(direction)) return "clearest open sky";
+
+        var normalized = direction.Trim().ToLowerInvariant()
+            .Replace(" direction", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace(" sky", string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        return normalized switch
+        {
+            "north" => "northern sky",
+            "northeast" or "north-east" => "northeastern sky",
+            "east" => "eastern sky",
+            "southeast" or "south-east" => "southeastern sky",
+            "south" => "southern sky",
+            "southwest" or "south-west" => "southwestern sky",
+            "west" => "western sky",
+            "northwest" or "north-west" => "northwestern sky",
+            _ => normalized
+        };
+    }
+
+    private static string DescribeViewingTime(DateTimeOffset localPeak)
+    {
+        if (IsEvening(localPeak)) return "shortly after sunset";
+        if (localPeak.Hour is >= 0 and < 4) return "after midnight";
+        if (localPeak.Hour is >= 4 and < 6) return "before sunrise";
+        return "near the peak of the event";
+    }
+
+    private static bool IsEvening(DateTimeOffset localPeak) => localPeak.Hour is >= 17 and <= 21;
+
+    private static string FormatTimeZoneAbbreviation(string timeZoneId, DateTimeOffset localTime)
+        => timeZoneId switch
+        {
+            "Asia/Kolkata" => "IST",
+            "Etc/UTC" or "UTC" => "UTC",
+            _ => TimeZoneInfo.FindSystemTimeZoneById(timeZoneId).IsDaylightSavingTime(localTime)
+                ? TimeZoneInfo.FindSystemTimeZoneById(timeZoneId).DaylightName
+                : TimeZoneInfo.FindSystemTimeZoneById(timeZoneId).StandardName
+        };
+
+    private static bool IsClosePairing(string eventType)
+        => eventType.Contains("conjunction", StringComparison.OrdinalIgnoreCase)
+            || eventType.Contains("close", StringComparison.OrdinalIgnoreCase)
+            || eventType.Contains("pair", StringComparison.OrdinalIgnoreCase);
+
+    private static string DirectionFromAzimuth(decimal? azimuth) => !azimuth.HasValue ? "clearest open horizon" : azimuth.Value switch
     {
         >= 337.5m or < 22.5m => "north",
         < 67.5m => "northeast",
@@ -422,8 +507,24 @@ public sealed class AstronomyQuestionEngine(
     };
 
     private static string Humanize(string value) => string.IsNullOrWhiteSpace(value) ? "astronomy event" : value.Replace('_', ' ').Replace('-', ' ').ToLowerInvariant();
+
+    private static string HumanizeLocation(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "your area";
+
+        var lastSegment = value.Split('-', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        if (string.IsNullOrWhiteSpace(lastSegment)) return value;
+
+        return string.Join(' ', lastSegment.Split('_', StringSplitOptions.RemoveEmptyEntries))
+            .ToLowerInvariant() switch
+            {
+                var location when location.Length > 0 => char.ToUpperInvariant(location[0]) + location[1..],
+                _ => value
+            };
+    }
+
     private static string SafeTitle(AstronomyEventIntelligence evt) => string.IsNullOrWhiteSpace(evt.Title) ? Humanize(evt.EventType) : evt.Title;
-    private static string Clean(string text) => Regex.Replace(text.Replace(" UTC", " local time", StringComparison.OrdinalIgnoreCase), "\\s+", " ").Trim();
+    private static string Clean(string text) => Regex.Replace(text, "\\s+", " ").Trim();
     private static string SanitizePathSegment(string value) => string.Join('-', value.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim().Replace(' ', '-');
 
     private static void ValidateRequest(QuestionAnswerGenerationRequest request)
