@@ -394,6 +394,19 @@ app.MapPost("/api/astronomy-intelligence/generate-question-driven-visuals", asyn
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-editorial-astronomy-infographics", async (QuestionDrivenVisualGenerationRequest request, IEditorialAstronomyInfographicComposer composer, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Editorial astronomy infographic generation request received for {RegionId}. EventId={EventId}; DryRun={DryRun}", request.RegionId, request.EventId, request.DryRun);
+    try
+    {
+        return Results.Ok(await composer.GenerateEditorialAstronomyInfographicsAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-video-plans", async (AstronomyVideoPlanningRequest request, IAstronomyVideoPlanningService planning, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy video planning request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);

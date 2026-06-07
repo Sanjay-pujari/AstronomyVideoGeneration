@@ -103,6 +103,23 @@ public sealed record QuestionDrivenSceneReview(
     IReadOnlyList<string> Issues,
     IReadOnlyList<string> Recommendations);
 
+
+public sealed record EditorialAstronomyInfographicGenerationResponse(
+    string EventId,
+    int SceneCount,
+    int PlannedInfographicCount,
+    int FinalImageCount,
+    int ApprovedSceneCount,
+    int FailedSceneCount,
+    IReadOnlyList<QuestionDrivenPlannedScene> PlannedScenes,
+    IReadOnlyList<string> GeneratedFiles,
+    IReadOnlyList<string> Warnings);
+
+public interface IEditorialAstronomyInfographicComposer
+{
+    Task<EditorialAstronomyInfographicGenerationResponse> GenerateEditorialAstronomyInfographicsAsync(QuestionDrivenVisualGenerationRequest request, CancellationToken cancellationToken);
+}
+
 public interface IQuestionDrivenImagePromptGenerator
 {
     string GeneratePrompt(QuestionDrivenImagePromptRequest request);
