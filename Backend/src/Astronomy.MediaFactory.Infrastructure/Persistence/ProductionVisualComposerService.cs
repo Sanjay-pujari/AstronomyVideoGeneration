@@ -246,18 +246,53 @@ public sealed class ProductionVisualComposerService(
 
     private static void DrawInformationPanel(IImageProcessingContext ctx, SceneVisualSpec spec, Font titleFont, Font subtitleFont, Font labelFont, Font smallFont)
     {
-        ctx.Fill(Color.Black.WithAlpha(0.50f), new RectangleF(92, 82, 890, 290));
-        ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(0.32f), 2, new RectangleF(92, 82, 890, 290));
-        ctx.DrawText(new RichTextOptions(titleFont) { Origin = new PointF(126, 112), WrappingLength = 820 }, CleanOverlay(spec.EventTitle, 44), Color.White);
-        var subtitle = spec.SceneNumber == 1 ? "Look west after sunset" : FirstUseful(spec.OverlayText, spec.BestViewingTime, "Best after sunset");
-        ctx.DrawText(new RichTextOptions(subtitleFont) { Origin = new PointF(130, 236), WrappingLength = 790 }, CleanOverlay(subtitle, 64), Color.ParseHex("#F6C177"));
-        ctx.DrawText(new RichTextOptions(smallFont) { Origin = new PointF(132, 304), WrappingLength = 800 }, CleanOverlay(string.Join(" • ", spec.Objects.Take(3)), 84), Color.ParseHex("#CFE9FF"));
+        ctx.Fill(Color.Black.WithAlpha(0.54f), new RectangleF(92, 82, 940, 350));
+        ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(0.36f), 2, new RectangleF(92, 82, 940, 350));
 
-        ctx.Fill(Color.Black.WithAlpha(0.44f), new RectangleF(1210, 112, 570, 262));
-        ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(0.36f), 2, new RectangleF(1210, 112, 570, 262));
-        ctx.DrawText(new RichTextOptions(labelFont) { Origin = new PointF(1240, 140), WrappingLength = 500 }, "Viewing guide", Color.ParseHex("#FFE7B1"));
-        ctx.DrawText(new RichTextOptions(smallFont) { Origin = new PointF(1240, 198), WrappingLength = 500 }, CleanOverlay($"Where: {spec.Direction}\nWhen: {spec.BestViewingTime}\nWhy: bright planets close in the evening sky", 150), Color.White);
+        var lineY = 112f;
+        var overlayLines = spec.OverlayText.Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
+        for (var i = 0; i < overlayLines.Length; i++)
+        {
+            var font = i == 0 ? titleFont : subtitleFont;
+            var color = i == 0 ? Color.White : Color.ParseHex("#F6C177");
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(126, lineY), WrappingLength = 860 }, CleanOverlay(overlayLines[i], 80), color);
+            lineY += i == 0 ? 108 : 66;
+        }
+
+        ctx.DrawText(new RichTextOptions(smallFont) { Origin = new PointF(132, 362), WrappingLength = 830 }, CleanOverlay(SceneActionHint(spec), 84), Color.ParseHex("#CFE9FF"));
+
+        ctx.Fill(Color.Black.WithAlpha(0.44f), new RectangleF(1210, 112, 570, 210));
+        ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(0.36f), 2, new RectangleF(1210, 112, 570, 210));
+        ctx.DrawText(new RichTextOptions(labelFont) { Origin = new PointF(1240, 140), WrappingLength = 500 }, DirectionMarkerTitle(spec), Color.ParseHex("#FFE7B1"));
+        ctx.DrawText(new RichTextOptions(smallFont) { Origin = new PointF(1240, 198), WrappingLength = 500 }, DirectionMarkerBody(spec), Color.White);
     }
+
+    private static string SceneActionHint(SceneVisualSpec spec) => spec.SceneNumber switch
+    {
+        1 => "Tonight’s target is easy to spot with a clear western view",
+        2 => "Identify Venus first, then look above it for Jupiter",
+        3 => "Use the horizon, wait for twilight, then scan upward",
+        4 => "Step outside after sunset if the sky is clear",
+        _ => string.Join(" • ", spec.Objects.Take(3))
+    };
+
+    private static string DirectionMarkerTitle(SceneVisualSpec spec) => spec.SceneNumber switch
+    {
+        1 => "Where to look",
+        2 => "Objects",
+        3 => "Action steps",
+        4 => "Reminder",
+        _ => "Viewing guide"
+    };
+
+    private static string DirectionMarkerBody(SceneVisualSpec spec) => spec.SceneNumber switch
+    {
+        1 => "Face west after sunset",
+        2 => $"Venus below Jupiter\n{spec.Direction}",
+        3 => "Clear horizon\nDark-adapted eyes",
+        4 => $"Clear skies over {CleanLocationName(spec.Location)}",
+        _ => $"{spec.Direction}\n{spec.BestViewingTime}"
+    };
 
 
     private static IEnumerable<LocalObjectAsset> LoadLocalObjectAssets(SceneVisualSpec spec)
@@ -389,43 +424,67 @@ public sealed class ProductionVisualComposerService(
     private static SceneVisualSpec BuildVisualSpec(int sceneNumber, ContentGenerationPlan plan, EventContext evt, SceneHint scene)
     {
         var purpose = ResolvePurpose(sceneNumber, scene.Purpose);
-        var eventTitle = evt.Objects.Any(o => o.Contains("venus", StringComparison.OrdinalIgnoreCase)) && evt.Objects.Any(o => o.Contains("jupiter", StringComparison.OrdinalIgnoreCase))
+        var objects = EnsureVenusJupiterObjects(evt.Objects);
+        var eventTitle = objects.Any(o => o.Contains("venus", StringComparison.OrdinalIgnoreCase)) && objects.Any(o => o.Contains("jupiter", StringComparison.OrdinalIgnoreCase))
             ? "Venus and Jupiter Tonight"
             : evt.EventTitle;
-        var subtitle = sceneNumber switch
-        {
-            1 => $"Look {evt.Direction} {evt.BestViewingTime}",
-            2 => $"Best viewing: {evt.BestViewingTime}",
-            3 => $"1. Find the horizon  2. Face {evt.Direction}  3. Let eyes adjust",
-            4 => "Clear skies reminder",
-            _ => evt.Notes
-        };
+        var direction = NormalizeViewerDirection(evt.Direction);
+        var bestViewingTime = FirstNonEmpty(evt.BestViewingTime, "after sunset");
+        var overlay = BuildSceneOverlay(sceneNumber, evt.Location, direction, bestViewingTime);
         var style = sceneNumber switch
         {
-            2 => "accurate astronomy infographic sky-map visual",
-            3 => "educational step-by-step astronomy viewing guide",
-            4 => "emotional cinematic closing astronomy scene",
-            _ => "dramatic cinematic documentary poster astronomy scene"
+            2 => "identification-focused astronomy layout with clear object placement",
+            3 => "educational step-by-step western horizon viewing guide",
+            4 => "warm cinematic closing reminder astronomy scene",
+            _ => "high-impact twilight astronomy hook scene"
         };
-        var objectsText = evt.Objects.Count > 0 ? string.Join(" and ", evt.Objects.Take(4)) : "the featured celestial objects";
-        var sceneIntent = ScenePromptIntent(sceneNumber);
-        var prompt = $"Production-quality viewer-facing astronomy scene for {eventTitle}. Show {objectsText} in the {evt.Direction} near the horizon at {evt.BestViewingTime} for viewers in {evt.Location}. {purpose} scene. {sceneIntent}. Cinematic realistic night-sky background, warm horizon glow, accurate uncluttered composition, no text, no UI, no cards, no debug metadata.";
-        var localAssets = evt.Objects.Where(HasLikelyLocalAsset).ToArray();
+        var prompt = BuildSceneImagePrompt(sceneNumber, eventTitle, evt.Location, direction, bestViewingTime);
+        var localAssets = objects.Where(HasLikelyLocalAsset).ToArray();
         return new SceneVisualSpec(
             sceneNumber,
             purpose,
             CleanOverlay(eventTitle, 80),
-            evt.Objects.Count > 0 ? evt.Objects : ["Venus", "Jupiter"],
+            objects,
             evt.Location,
-            evt.Direction,
-            evt.BestViewingTime,
+            direction,
+            bestViewingTime,
             style,
             prompt,
-            [CleanOverlay(subtitle, 120), CleanOverlay(evt.Notes, 120)],
+            overlay,
             localAssets,
             true,
             true,
             true);
+    }
+
+    private static IReadOnlyList<string> EnsureVenusJupiterObjects(IReadOnlyList<string> source)
+    {
+        var result = source.Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!result.Any(o => o.Contains("venus", StringComparison.OrdinalIgnoreCase))) result.Insert(0, "Venus");
+        if (!result.Any(o => o.Contains("jupiter", StringComparison.OrdinalIgnoreCase))) result.Add("Jupiter");
+        return result;
+    }
+
+    private static IReadOnlyList<string> BuildSceneOverlay(int sceneNumber, string location, string direction, string bestViewingTime) => sceneNumber switch
+    {
+        1 => ["Venus & Jupiter Tonight", "Look West After Sunset"],
+        2 => ["Venus below Jupiter", $"Best {NormalizeBestViewingLine(bestViewingTime)}", NormalizeWesternSkyLine(direction)],
+        3 => ["Find a clear western horizon", "Wait after sunset", "Let your eyes adjust"],
+        4 => ["Don’t miss this pairing", $"Clear skies over {CleanLocationName(location)}"],
+        _ => ["Look west after sunset"]
+    };
+
+    private static string BuildSceneImagePrompt(int sceneNumber, string eventTitle, string location, string direction, string bestViewingTime)
+    {
+        const string backgroundOnly = "AI background only: provide twilight sky and horizon mood, no planets, no labels, no arrows, no text, no UI cards.";
+        return sceneNumber switch
+        {
+            1 => $"Hook scene for {eventTitle}: attention-grabbing western twilight over {location}, dramatic sunset glow, open sky for programmatic Venus and Jupiter assets. Purpose: make viewers instantly know a bright pairing is happening tonight. {backgroundOnly}",
+            2 => $"Identification scene for {eventTitle}: clean western-sky observing background over {location}, uncluttered horizon, space reserved for Venus below Jupiter and a {bestViewingTime} callout. Purpose: show which objects to watch and when. {backgroundOnly}",
+            3 => $"Viewing guide scene: practical clear {direction} horizon background after sunset, simple foreground silhouette, open space for arrows, direction marker, and three action steps. Purpose: teach viewers how to find the pairing. {backgroundOnly}",
+            4 => $"Payoff and CTA scene for {eventTitle}: peaceful clear evening sky over {location}, warm closing mood, open sky for final planet pairing reminder. Purpose: encourage viewers not to miss it. {backgroundOnly}",
+            _ => $"Viewer-facing astronomy background for {eventTitle} over {location}. {backgroundOnly}"
+        };
     }
 
     private static async Task<Dictionary<int, SceneHint>> LoadSceneHintsAsync(string planRoot, CancellationToken cancellationToken)
@@ -526,6 +585,37 @@ public sealed class ProductionVisualComposerService(
 
     private static string FirstUseful(IReadOnlyList<string> values, params string[] fallback) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? fallback.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
     private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
+
+    private static string NormalizeViewerDirection(string value)
+    {
+        var normalized = FirstNonEmpty(value, "western sky").ToLowerInvariant();
+        if (normalized.Contains("west", StringComparison.OrdinalIgnoreCase)) return "western sky";
+        if (normalized.Contains("east", StringComparison.OrdinalIgnoreCase)) return "eastern sky";
+        if (normalized.Contains("north", StringComparison.OrdinalIgnoreCase)) return "northern sky";
+        if (normalized.Contains("south", StringComparison.OrdinalIgnoreCase)) return "southern sky";
+        return CleanOverlay(value, 30);
+    }
+
+    private static string NormalizeWesternSkyLine(string direction)
+        => direction.Contains("west", StringComparison.OrdinalIgnoreCase) ? "Western sky" : CultureInfo.CurrentCulture.TextInfo.ToTitleCase(direction);
+
+    private static string NormalizeBestViewingLine(string bestViewingTime)
+    {
+        var clean = CleanOverlay(bestViewingTime, 60).TrimEnd('.');
+        if (clean.StartsWith("best ", StringComparison.OrdinalIgnoreCase)) clean = clean[5..].Trim();
+        if (clean.StartsWith("viewing:", StringComparison.OrdinalIgnoreCase)) clean = clean[8..].Trim();
+        if (clean.StartsWith("around ", StringComparison.OrdinalIgnoreCase)) return clean;
+        if (Regex.IsMatch(clean, @"^\d{1,2}:\d{2}\s*[AP]M\b", RegexOptions.IgnoreCase)) return "around " + clean;
+        return FirstNonEmpty(clean, "after sunset");
+    }
+
+    private static string CleanLocationName(string location)
+    {
+        var clean = FirstNonEmpty(location, "your city");
+        if (clean.Equals("IN-RJ-UDAIPUR", StringComparison.OrdinalIgnoreCase)) return "Udaipur";
+        if (clean.Contains('-')) return clean.Split('-', StringSplitOptions.RemoveEmptyEntries).Last();
+        return CleanOverlay(clean, 32).TrimEnd('.');
+    }
     private static string FormatViewingTime(DateTimeOffset? peakUtc, string? timeZone, string? regionId)
     {
         if (!peakUtc.HasValue) return string.Empty;
@@ -597,11 +687,11 @@ public sealed class ProductionVisualComposerService(
 
     private static string ScenePromptIntent(int sceneNumber) => sceneNumber switch
     {
-        1 => "Rare celestial event, dramatic twilight sky, attention-grabbing composition, Venus and Jupiter dominant, cinematic documentary poster",
-        2 => "Astronomy infographic, accurate sky map, western horizon, Venus and Jupiter labeled positions, viewer guidance visual",
-        3 => "Step-by-step observation guide, direction arrows, horizon reference, easy planet finding guide, educational astronomy visual",
-        4 => "Beautiful closing astronomy scene, emotional cinematic sky, Venus and Jupiter together, clear skies message, inspirational ending",
-        _ => "Distinct astronomy visual guidance scene"
+        1 => "Hook scene",
+        2 => "Identification scene",
+        3 => "Viewing guide scene",
+        4 => "Payoff and CTA scene",
+        _ => "Viewer-facing astronomy background"
     };
 
     private static IReadOnlyList<string> ValidateVisualSpec(SceneVisualSpec spec)

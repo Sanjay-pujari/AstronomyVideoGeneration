@@ -38,13 +38,17 @@ public sealed class ProductionVisualComposerServiceTests : IDisposable
             Assert.InRange(overlay.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length, 1, 15);
         });
 
-        Assert.Contains(result.PlannedVisuals.Single(v => v.SceneNumber == 1).OverlayText, text => text.Contains("7:23 PM IST", StringComparison.Ordinal));
-        Assert.Contains(overlays, text => text.Contains("Jupiter and Venus will appear only 1.63° apart.", StringComparison.Ordinal));
+        Assert.Equal(new[] { "Venus & Jupiter Tonight", "Look West After Sunset" }, result.PlannedVisuals.Single(v => v.SceneNumber == 1).OverlayText);
+        Assert.Equal(new[] { "Venus below Jupiter", "Best around 7:23 PM IST", "Western sky" }, result.PlannedVisuals.Single(v => v.SceneNumber == 2).OverlayText);
+        Assert.Equal(new[] { "Find a clear western horizon", "Wait after sunset", "Let your eyes adjust" }, result.PlannedVisuals.Single(v => v.SceneNumber == 3).OverlayText);
+        Assert.Equal(new[] { "Don’t miss this pairing", "Clear skies over Udaipur" }, result.PlannedVisuals.Single(v => v.SceneNumber == 4).OverlayText);
+        Assert.DoesNotContain(overlays, text => text.Contains("1.63°", StringComparison.Ordinal));
 
-        Assert.Contains("Rare celestial event", result.PlannedVisuals.Single(v => v.SceneNumber == 1).ImagePrompt, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("accurate sky map", result.PlannedVisuals.Single(v => v.SceneNumber == 2).ImagePrompt, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("step-by-step observation guide", result.PlannedVisuals.Single(v => v.SceneNumber == 3).ImagePrompt, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("beautiful closing astronomy scene", result.PlannedVisuals.Single(v => v.SceneNumber == 4).ImagePrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Hook scene", result.PlannedVisuals.Single(v => v.SceneNumber == 1).ImagePrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Identification scene", result.PlannedVisuals.Single(v => v.SceneNumber == 2).ImagePrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Viewing guide scene", result.PlannedVisuals.Single(v => v.SceneNumber == 3).ImagePrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Payoff and CTA scene", result.PlannedVisuals.Single(v => v.SceneNumber == 4).ImagePrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.All(result.PlannedVisuals, visual => Assert.Contains("AI background only", visual.ImagePrompt, StringComparison.OrdinalIgnoreCase));
         Assert.Equal(4, result.PlannedVisuals.Select(v => v.ImagePrompt).Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
 
