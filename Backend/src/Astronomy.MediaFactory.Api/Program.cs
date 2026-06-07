@@ -484,6 +484,19 @@ app.MapPost("/api/astronomy-intelligence/generate-director-timelines", async (Di
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-scene-assembly-plans", async (SceneAssemblyPlanRequest request, ISceneAssemblyPlanService assemblyPlans, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy scene assembly plan generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await assemblyPlans.GenerateSceneAssemblyPlansAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
