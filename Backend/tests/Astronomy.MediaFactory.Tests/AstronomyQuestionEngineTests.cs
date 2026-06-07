@@ -158,6 +158,83 @@ public sealed class AstronomyQuestionEngineTests
         Assert.Contains("close", whyAnswer, StringComparison.OrdinalIgnoreCase);
     }
 
+
+    [Fact]
+    public async Task ValidateQuestionAnswerSetAsync_ApprovesGoldenRareEventPlanetConjunctionPilot()
+    {
+        await using var db = CreateDb();
+        var workingDirectory = CreateWorkingDirectory();
+        var evt = SeedEvent(
+            db,
+            eventCode: "GOLDEN_RARE_EVENT_ALERT",
+            eventType: "PlanetConjunction",
+            objectName: "Venus",
+            metadataJson: """
+                {
+                  "direction": "west",
+                  "altitudeDegrees": 30,
+                  "angularSeparationDegrees": 1.63
+                }
+                """);
+        evt.LocationName = "Udaipur";
+        evt.TimeZone = "Asia/Kolkata";
+        evt.PeakUtc = DateTimeOffset.Parse("2026-06-07T13:53:00Z");
+        evt.Objects.Add(new AstronomyEventObject { ObjectName = "Jupiter", ObjectType = "Planet", Magnitude = -2.1m });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db, workingDirectory);
+        var result = await service.ValidateQuestionAnswerSetAsync(new QuestionAnswerValidationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventId: evt.Id.ToString("D"),
+            Language: "en"), CancellationToken.None);
+
+        Assert.True(result.IsApproved);
+        Assert.Equal(100, result.Score);
+        Assert.Empty(result.Warnings);
+        Assert.Equal(evt.Id.ToString("D"), result.EventId);
+        Assert.Equal(
+            [AstronomyQuestionTypes.What, AstronomyQuestionTypes.Where, AstronomyQuestionTypes.When, AstronomyQuestionTypes.How, AstronomyQuestionTypes.Why, AstronomyQuestionTypes.Action],
+            result.Checks.Select(c => c.QuestionType).ToArray());
+        Assert.All(result.Checks, check =>
+        {
+            Assert.True(check.Approved);
+            Assert.Empty(check.Issues);
+            Assert.Empty(check.Recommendations);
+        });
+        Assert.Empty(Directory.EnumerateFiles(workingDirectory, "*", SearchOption.AllDirectories));
+        Assert.Equal(0, await db.AstronomyQuestionAnswerSets.CountAsync());
+    }
+
+    [Fact]
+    public async Task ValidateQuestionAnswerSetAsync_RejectsInternalViewerLanguage()
+    {
+        await using var db = CreateDb();
+        var workingDirectory = CreateWorkingDirectory();
+        var evt = SeedEvent(
+            db,
+            eventCode: "INVALID_VALIDATION_INTERNAL_WORD",
+            eventType: "PlanetConjunction",
+            objectName: "sourcePath",
+            metadataJson: """
+                {
+                  "direction": "east",
+                  "altitudeDegrees": 22
+                }
+                """);
+
+        var service = CreateService(db, workingDirectory);
+        var result = await service.ValidateQuestionAnswerSetAsync(new QuestionAnswerValidationRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventId: evt.EventCode,
+            Language: "en"), CancellationToken.None);
+
+        Assert.False(result.IsApproved);
+        Assert.True(result.Score < 100);
+        Assert.Contains(result.Checks, c => !c.Approved && c.Issues.Any(i => i.Contains("sourcePath", StringComparison.OrdinalIgnoreCase)));
+        Assert.Empty(Directory.EnumerateFiles(workingDirectory, "*", SearchOption.AllDirectories));
+        Assert.Equal(0, await db.AstronomyQuestionAnswerSets.CountAsync());
+    }
+
     private static AstronomyQuestionEngine CreateService(MediaFactoryDbContext db, string workingDirectory)
         => new(db, Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<AstronomyQuestionEngine>.Instance);
 

@@ -9,6 +9,11 @@ public sealed record QuestionAnswerGenerationRequest(
     bool DryRun = true,
     bool OverwriteExisting = false);
 
+public sealed record QuestionAnswerValidationRequest(
+    string RegionId,
+    string EventId,
+    string Language = "en");
+
 public sealed record QuestionAnswerGenerationResponse(
     int EventCount,
     int QuestionSetCount,
@@ -37,7 +42,21 @@ public sealed record QuestionAnswerDto(
     string AnswerText,
     int DisplayOrder);
 
+public sealed record QuestionAnswerValidationResponse(
+    string EventId,
+    bool IsApproved,
+    int Score,
+    IReadOnlyList<QuestionAnswerValidationCheckDto> Checks,
+    IReadOnlyList<string> Warnings);
+
+public sealed record QuestionAnswerValidationCheckDto(
+    string QuestionType,
+    bool Approved,
+    IReadOnlyList<string> Issues,
+    IReadOnlyList<string> Recommendations);
+
 public interface IQuestionEngine
 {
     Task<QuestionAnswerGenerationResponse> GenerateQuestionAnswersAsync(QuestionAnswerGenerationRequest request, CancellationToken cancellationToken);
+    Task<QuestionAnswerValidationResponse> ValidateQuestionAnswerSetAsync(QuestionAnswerValidationRequest request, CancellationToken cancellationToken);
 }
