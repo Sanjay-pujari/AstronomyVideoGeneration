@@ -393,6 +393,19 @@ app.MapPost("/api/astronomy-intelligence/polish-final-narration", async (Polishe
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-production-visuals", async (ProductionVisualGenerationRequest request, IProductionVisualComposerService composer, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy production visual generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await composer.GenerateProductionVisualsAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-scene-editorial-preview", async (SceneEditorialPreviewRequest request, ISceneEditorialPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy scene editorial preview request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
