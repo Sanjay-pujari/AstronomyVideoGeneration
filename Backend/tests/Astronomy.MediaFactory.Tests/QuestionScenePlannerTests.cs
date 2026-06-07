@@ -53,7 +53,7 @@ public sealed class QuestionScenePlannerTests
     }
 
     [Fact]
-    public async Task GenerateQuestionScenePlanAsync_RequiresApprovedQuestionSet()
+    public async Task GenerateQuestionScenePlanAsync_AllowsGeneratedQuestionSetWhenValidationPasses()
     {
         await using var db = CreateDb();
         var workingDirectory = CreateWorkingDirectory();
@@ -61,12 +61,35 @@ public sealed class QuestionScenePlannerTests
         SeedGeneratedQuestionSet(db, evt.Id);
 
         var planner = CreatePlanner(db, workingDirectory);
+        var result = await planner.GenerateQuestionScenePlanAsync(new QuestionScenePlanRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            EventId: evt.Id.ToString("D"),
+            Language: "en",
+            DryRun: true,
+            OverwriteExisting: false), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(6, result.SceneCount);
+        Assert.Contains("QuestionAnswerSet status is Generated but passed validation.", result.Warnings);
+        Assert.Single(result.GeneratedFiles);
+        Assert.True(File.Exists(result.GeneratedFiles.Single()));
+    }
+
+    [Fact]
+    public async Task GenerateQuestionScenePlanAsync_RejectsLatestGeneratedQuestionSetWhenValidationFails()
+    {
+        await using var db = CreateDb();
+        var workingDirectory = CreateWorkingDirectory();
+        var evt = SeedEvent(db);
+        SeedQuestionSet(db, evt.Id, AstronomyQuestionSetStatus.Generated, "Use MetadataJson path /tmp/question-answer-set.json for this scene.");
+
+        var planner = CreatePlanner(db, workingDirectory);
 
         var ex = await Assert.ThrowsAsync<ArgumentException>(() => planner.GenerateQuestionScenePlanAsync(new QuestionScenePlanRequest(
             RegionId: "IN-RJ-UDAIPUR",
             EventId: evt.Id.ToString("D")), CancellationToken.None));
 
-        Assert.Contains("No approved question answer set", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Latest generated question answer set did not pass validation", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(Directory.EnumerateFiles(workingDirectory, "*", SearchOption.AllDirectories));
     }
 
@@ -117,7 +140,7 @@ public sealed class QuestionScenePlannerTests
     private static void SeedGeneratedQuestionSet(MediaFactoryDbContext db, Guid eventId)
         => SeedQuestionSet(db, eventId, AstronomyQuestionSetStatus.Generated);
 
-    private static void SeedQuestionSet(MediaFactoryDbContext db, Guid eventId, string status)
+    private static void SeedQuestionSet(MediaFactoryDbContext db, Guid eventId, string status, string? whatAnswerOverride = null)
     {
         db.AstronomyQuestionAnswerSets.Add(new AstronomyQuestionAnswerSet
         {
@@ -129,7 +152,7 @@ public sealed class QuestionScenePlannerTests
             GeneratedUtc = DateTimeOffset.Parse("2026-06-07T14:00:00Z"),
             Answers =
             [
-                Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", "Venus and Jupiter will appear close together in Udaipur’s evening sky.", 1),
+                Answer(AstronomyQuestionTypes.What, "What is happening?", "What you’ll see", whatAnswerOverride ?? "Venus and Jupiter will appear close together in Udaipur’s evening sky.", 1),
                 Answer(AstronomyQuestionTypes.Where, "Where should I look?", "Where to look", "Look toward the western sky, about one-third above the horizon.", 2),
                 Answer(AstronomyQuestionTypes.When, "When is the best time?", "Best viewing time", "Best viewing is around 7:23 PM IST, shortly after sunset.", 3),
                 Answer(AstronomyQuestionTypes.How, "How can I find it?", "How to observe", "Find bright Venus first, then look slightly nearby for Jupiter.", 4),
