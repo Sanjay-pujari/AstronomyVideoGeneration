@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Linq;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
@@ -54,18 +55,22 @@ public sealed class ProductionVisualComposerService(
             var sceneHints = await LoadSceneHintsAsync(planRoot, cancellationToken);
             var sidecarContext = await LoadSidecarContextAsync(planRoot, cancellationToken);
             var eventContext = BuildEventContext(plan, sceneHints, sidecarContext);
-            var sceneNumbers = await ResolveSceneNumbersAsync(planRoot, sceneHints, cancellationToken);
+            var sceneNumbers = (await ResolveSceneNumbersAsync(planRoot, sceneHints, cancellationToken)).OrderBy(x => x).Take(4).ToArray();
+            var planSpecs = sceneNumbers.ToDictionary(
+                sceneNumber => sceneNumber,
+                sceneNumber => BuildVisualSpec(sceneNumber, plan, eventContext, sceneHints.GetValueOrDefault(sceneNumber, SceneHint.Empty(sceneNumber))));
+            var promptValidationWarnings = ValidateScenePromptDiversity(planSpecs.Values.OrderBy(s => s.SceneNumber).ToArray());
+            warnings.AddRange(promptValidationWarnings.Select(w => $"Plan {plan.Id:D}: {w}"));
 
-            foreach (var sceneNumber in sceneNumbers.OrderBy(x => x).Take(4))
+            foreach (var sceneNumber in sceneNumbers)
             {
                 sceneCount++;
                 var outputDir = Path.Combine(planRoot, OutputDirectoryName);
                 var specPath = Path.Combine(outputDir, $"scene-{sceneNumber:000}-visual-spec.json");
                 var backgroundPath = Path.Combine(outputDir, $"scene-{sceneNumber:000}-background-ai.png");
                 var finalPath = Path.Combine(outputDir, $"scene-{sceneNumber:000}-final.png");
-                var scene = sceneHints.GetValueOrDefault(sceneNumber, SceneHint.Empty(sceneNumber));
-                var spec = BuildVisualSpec(sceneNumber, plan, eventContext, scene);
-                var itemWarnings = new List<string>();
+                var spec = planSpecs[sceneNumber];
+                var itemWarnings = ValidateVisualSpec(spec).ToList();
 
                 planned.Add(new ProductionVisualPlanItem(
                     plan.Id.ToString("D"),
@@ -91,6 +96,7 @@ public sealed class ProductionVisualComposerService(
 
                 try
                 {
+                    if (itemWarnings.Count > 0) throw new InvalidOperationException("Production visual spec failed viewer-facing validation: " + string.Join("; ", itemWarnings));
                     await File.WriteAllTextAsync(specPath, JsonSerializer.Serialize(spec, JsonOptions), cancellationToken);
                     generatedFiles.Add(specPath);
 
@@ -374,8 +380,9 @@ public sealed class ProductionVisualComposerService(
         var eventTitle = FirstNonEmpty(plan.Title, intelligence?.Title, plan.AstronomyContentOpportunity?.Title, string.Join(" and ", objects), "Tonight's sky event");
         var location = FirstNonEmpty(intelligence?.LocationName, intelligence?.RegionId, plan.RegionId);
         var direction = FirstNonEmpty(FindJsonString(intelligence?.RawDataJson, ["direction", "observationDirection", "lookDirection", "azimuthDirection"]), sidecar.Direction, FindDirection(eventTitle + " " + intelligence?.Summary + " " + sidecar.SearchText), "western sky");
-        var bestTime = FirstNonEmpty(FindJsonString(intelligence?.RawDataJson, ["bestViewingTime", "bestTime", "viewingTime", "localViewingTime"]), sidecar.BestViewingTime, FormatViewingTime(intelligence?.PeakUtc, intelligence?.TimeZone), "after sunset");
-        var notes = FirstNonEmpty(intelligence?.Summary, intelligence?.Description, sidecar.VisibilityNotes, plan.PlanningReason, "A bright, easy-to-find evening sky event.");
+        var rawBestTime = FirstNonEmpty(FindJsonString(intelligence?.RawDataJson, ["bestViewingTime", "bestTime", "viewingTime", "localViewingTime"]), sidecar.BestViewingTime, FormatViewingTime(intelligence?.PeakUtc, intelligence?.TimeZone, plan.RegionId), "after sunset");
+        var bestTime = NormalizeViewingTime(rawBestTime, intelligence?.PeakUtc, intelligence?.TimeZone, plan.RegionId);
+        var notes = BuildViewerFacingNotes(intelligence?.Summary, intelligence?.Description, sidecar.VisibilityNotes, plan.PlanningReason, location, objects);
         return new EventContext(FirstNonEmpty(intelligence?.EventType, plan.PrimaryAstronomyEventTypeCode, "Sky event"), eventTitle, objects, location, direction, bestTime, notes);
     }
 
@@ -393,9 +400,16 @@ public sealed class ProductionVisualComposerService(
             4 => "Clear skies reminder",
             _ => evt.Notes
         };
-        var style = sceneNumber is 2 or 3 ? "cinematic astronomy infographic with clean sky-map overlay" : "cinematic astronomy infographic";
+        var style = sceneNumber switch
+        {
+            2 => "accurate astronomy infographic sky-map visual",
+            3 => "educational step-by-step astronomy viewing guide",
+            4 => "emotional cinematic closing astronomy scene",
+            _ => "dramatic cinematic documentary poster astronomy scene"
+        };
         var objectsText = evt.Objects.Count > 0 ? string.Join(" and ", evt.Objects.Take(4)) : "the featured celestial objects";
-        var prompt = $"Production-quality viewer-facing astronomy scene for {eventTitle}. Show {objectsText} in the {evt.Direction} near the horizon at {evt.BestViewingTime} for viewers in {evt.Location}. {purpose} scene. Cinematic realistic night-sky background, warm horizon glow, accurate uncluttered composition, no text, no UI, no cards, no debug metadata.";
+        var sceneIntent = ScenePromptIntent(sceneNumber);
+        var prompt = $"Production-quality viewer-facing astronomy scene for {eventTitle}. Show {objectsText} in the {evt.Direction} near the horizon at {evt.BestViewingTime} for viewers in {evt.Location}. {purpose} scene. {sceneIntent}. Cinematic realistic night-sky background, warm horizon glow, accurate uncluttered composition, no text, no UI, no cards, no debug metadata.";
         var localAssets = evt.Objects.Where(HasLikelyLocalAsset).ToArray();
         return new SceneVisualSpec(
             sceneNumber,
@@ -485,10 +499,144 @@ public sealed class ProductionVisualComposerService(
     private static bool IsUsableImage(string path) => File.Exists(path) && new FileInfo(path).Length > 1024;
     private static string ResolvePurpose(int sceneNumber, string? hint) => !string.IsNullOrWhiteSpace(hint) && !ContainsInternal(hint) ? hint : sceneNumber switch { 1 => "Hook", 2 => "WhatToWatch", 3 => "ViewingGuide", 4 => "Close", _ => "WhatToWatch" };
     private static bool ContainsInternal(string value) => ForbiddenImageTerms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase)) || Regex.IsMatch(value, "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", RegexOptions.IgnoreCase);
-    private static string CleanOverlay(string? value, int max) { var clean = Regex.Replace(value ?? string.Empty, "\\s+", " ").Trim(); return clean.Length <= max ? clean : clean[..Math.Max(0, max - 1)].TrimEnd() + "…"; }
+    private static string CleanOverlay(string? value, int max)
+    {
+        var clean = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
+        clean = clean.Replace("…", string.Empty).Replace("...", string.Empty).Trim();
+        clean = PartialDateRegex.Replace(clean, string.Empty).Trim();
+        if (clean.Length <= max) return clean;
+
+        var sentence = Regex.Match(clean, @"^(.{1," + max.ToString(CultureInfo.InvariantCulture) + @"}?[.!?])(?:\s|$)");
+        if (sentence.Success) return sentence.Groups[1].Value.Trim();
+
+        var words = clean.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var selected = new List<string>();
+        var length = 0;
+        foreach (var word in words)
+        {
+            var nextLength = length + (selected.Count == 0 ? 0 : 1) + word.Length;
+            if (nextLength > max || selected.Count >= 15) break;
+            selected.Add(word);
+            length = nextLength;
+        }
+
+        var result = string.Join(' ', selected).TrimEnd(',', ';', ':', '-');
+        return result.EndsWith('.') || result.EndsWith('!') || result.EndsWith('?') ? result : result + ".";
+    }
+
     private static string FirstUseful(IReadOnlyList<string> values, params string[] fallback) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? fallback.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
     private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
-    private static string FormatViewingTime(DateTimeOffset? peakUtc, string? timeZone) => peakUtc.HasValue ? $"around {peakUtc.Value:HH:mm} UTC" : string.Empty;
+    private static string FormatViewingTime(DateTimeOffset? peakUtc, string? timeZone, string? regionId)
+    {
+        if (!peakUtc.HasValue) return string.Empty;
+        var local = TimeZoneInfo.ConvertTime(peakUtc.Value, ResolveViewerTimeZone(timeZone, regionId));
+        return $"around {local:h:mm tt} {ResolveTimeZoneAbbreviation(local, timeZone, regionId)}";
+    }
+
+    private static readonly Regex PartialDateRegex = new(@"\b\d{4}-\d{2}[\u2026.]+", RegexOptions.Compiled);
+    private static readonly Regex UtcTimeRegex = new(@"(?:(?<date>\d{4}-\d{2}-\d{2})[ T])?(?<hour>\d{1,2}):(?<minute>\d{2})\s*UTC\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static string NormalizeViewingTime(string rawViewingTime, DateTimeOffset? peakUtc, string? timeZone, string? regionId)
+    {
+        if (string.IsNullOrWhiteSpace(rawViewingTime)) return FormatViewingTime(peakUtc, timeZone, regionId);
+
+        var zone = ResolveViewerTimeZone(timeZone, regionId);
+        var normalized = UtcTimeRegex.Replace(rawViewingTime, match =>
+        {
+            DateTimeOffset utc;
+            if (!string.IsNullOrWhiteSpace(match.Groups["date"].Value)
+                && DateTimeOffset.TryParse($"{match.Groups["date"].Value}T{match.Groups["hour"].Value.PadLeft(2, '0')}:{match.Groups["minute"].Value}:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
+            {
+                utc = parsed;
+            }
+            else if (peakUtc.HasValue)
+            {
+                utc = new DateTimeOffset(peakUtc.Value.UtcDateTime.Date
+                    .AddHours(int.Parse(match.Groups["hour"].Value, CultureInfo.InvariantCulture))
+                    .AddMinutes(int.Parse(match.Groups["minute"].Value, CultureInfo.InvariantCulture)), TimeSpan.Zero);
+            }
+            else
+            {
+                return FormatViewingTime(peakUtc, timeZone, regionId);
+            }
+
+            var local = TimeZoneInfo.ConvertTime(utc, zone);
+            return $"{local:h:mm tt} {ResolveTimeZoneAbbreviation(local, timeZone, regionId)}";
+        });
+
+        return normalized.Contains("UTC", StringComparison.OrdinalIgnoreCase)
+            ? FirstNonEmpty(FormatViewingTime(peakUtc, timeZone, regionId), "after sunset")
+            : normalized;
+    }
+
+    private static TimeZoneInfo ResolveViewerTimeZone(string? timeZone, string? regionId)
+    {
+        var zoneId = FirstNonEmpty(timeZone, RegionTimeZone(regionId), "UTC");
+        try { return TimeZoneInfo.FindSystemTimeZoneById(zoneId); }
+        catch { return TimeZoneInfo.Utc; }
+    }
+
+    private static string RegionTimeZone(string? regionId)
+        => regionId?.Equals("IN-RJ-UDAIPUR", StringComparison.OrdinalIgnoreCase) == true ? "Asia/Kolkata" : string.Empty;
+
+    private static string ResolveTimeZoneAbbreviation(DateTimeOffset local, string? timeZone, string? regionId)
+    {
+        var zoneId = FirstNonEmpty(timeZone, RegionTimeZone(regionId));
+        if (zoneId.Equals("Asia/Kolkata", StringComparison.OrdinalIgnoreCase) || regionId?.StartsWith("IN-", StringComparison.OrdinalIgnoreCase) == true) return "IST";
+        return "local time";
+    }
+
+    private static string BuildViewerFacingNotes(string? summary, string? description, string? sidecarNotes, string? planningReason, string location, IReadOnlyList<string> objects)
+    {
+        var source = FirstNonEmpty(summary, description, sidecarNotes, planningReason);
+        var separation = Regex.Match(source, @"(?:(?:minimum|separation)[^0-9]{0,24})?(?<sep>\d+(?:\.\d+)?)\s*°", RegexOptions.IgnoreCase);
+        if (separation.Success && objects.Any(o => o.Contains("jupiter", StringComparison.OrdinalIgnoreCase)) && objects.Any(o => o.Contains("venus", StringComparison.OrdinalIgnoreCase)))
+            return $"Jupiter and Venus will appear only {separation.Groups["sep"].Value}° apart. Best viewing after sunset from {location}.";
+        return FirstNonEmpty(source, "A bright, easy-to-find evening sky event.");
+    }
+
+    private static string ScenePromptIntent(int sceneNumber) => sceneNumber switch
+    {
+        1 => "Rare celestial event, dramatic twilight sky, attention-grabbing composition, Venus and Jupiter dominant, cinematic documentary poster",
+        2 => "Astronomy infographic, accurate sky map, western horizon, Venus and Jupiter labeled positions, viewer guidance visual",
+        3 => "Step-by-step observation guide, direction arrows, horizon reference, easy planet finding guide, educational astronomy visual",
+        4 => "Beautiful closing astronomy scene, emotional cinematic sky, Venus and Jupiter together, clear skies message, inspirational ending",
+        _ => "Distinct astronomy visual guidance scene"
+    };
+
+    private static IReadOnlyList<string> ValidateVisualSpec(SceneVisualSpec spec)
+    {
+        var warnings = new List<string>();
+        var overlay = string.Join(" ", spec.OverlayText);
+        if (overlay.Contains("UTC", StringComparison.OrdinalIgnoreCase)) warnings.Add("Overlay text contains UTC instead of local region time.");
+        if (overlay.Contains('…') || overlay.Contains("...", StringComparison.Ordinal)) warnings.Add("Overlay text contains ellipsis truncation.");
+        if (PartialDateRegex.IsMatch(overlay)) warnings.Add("Overlay text contains a partial date.");
+        if (spec.OverlayText.Any(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 15)) warnings.Add("Overlay text exceeds 15 words on one line.");
+        return warnings;
+    }
+
+    private static IReadOnlyList<string> ValidateScenePromptDiversity(IReadOnlyList<SceneVisualSpec> specs)
+    {
+        if (specs.Count < 4) return [];
+        var missingIntent = specs.Where(s => !s.ImagePrompt.Contains(ScenePromptIntent(s.SceneNumber).Split(',')[0], StringComparison.OrdinalIgnoreCase)).Select(s => $"Scene {s.SceneNumber} prompt is missing scene-specific visual intent.").ToArray();
+        if (missingIntent.Length > 0) return missingIntent;
+
+        var normalized = specs.Select(s => string.Join(' ', Regex.Matches(s.ImagePrompt.ToLowerInvariant(), @"[a-z]+")
+            .Select(m => m.Value)
+            .Where(w => w.Length > 3)
+            .Distinct())).ToArray();
+        for (var i = 0; i < normalized.Length; i++)
+        for (var j = i + 1; j < normalized.Length; j++)
+        {
+            var a = normalized[i].Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
+            var b = normalized[j].Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
+            var shared = a.Intersect(b).Count();
+            var union = a.Union(b).Count();
+            if (union > 0 && shared / (double)union > 0.78) return ["Scene 1-4 prompts are substantially identical."];
+        }
+        return [];
+    }
+
     private static string FindDirection(string text) => Regex.Match(text ?? string.Empty, "\\b(west(?:ern)?|east(?:ern)?|south(?:ern)?|north(?:ern)?)\\b", RegexOptions.IgnoreCase) is { Success: true } m ? m.Value + " sky" : string.Empty;
     private static IEnumerable<string> ExtractKnownObjects(string text) => new[] { "Venus", "Jupiter", "Mars", "Saturn", "Moon", "Mercury" }.Where(o => text.Contains(o, StringComparison.OrdinalIgnoreCase));
     private static bool HasLikelyLocalAsset(string objectName) => ExtractKnownObjects(objectName).Any();
