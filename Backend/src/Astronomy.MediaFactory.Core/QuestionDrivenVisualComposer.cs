@@ -15,7 +15,54 @@ public sealed record QuestionDrivenVisualGenerationResponse(
     int ApprovedSceneCount,
     int FailedSceneCount,
     IReadOnlyList<string> GeneratedFiles,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    int PlannedImageCount = 0,
+    int PlannedSrtCount = 0,
+    int PlannedReviewCount = 0,
+    IReadOnlyList<QuestionDrivenPlannedScene>? PlannedScenes = null);
+
+public sealed record QuestionDrivenPlannedScene(
+    int SceneNumber,
+    string QuestionType,
+    string ScenePurpose,
+    string ViewerQuestion,
+    string ViewerTakeaway,
+    string NarrationText,
+    string CaptionText,
+    string VisualIntent,
+    string ImagePromptIntent,
+    string OverlayIntent,
+    string AccessibilityIntent,
+    string AiBackgroundPrompt,
+    QuestionDrivenProgrammaticOverlayPlan ProgrammaticOverlayPlan,
+    QuestionDrivenPlannedOutputs PlannedOutputs,
+    QuestionDrivenValidationPreview ValidationPreview);
+
+public sealed record QuestionDrivenProgrammaticOverlayPlan(
+    string Title,
+    string Subtitle,
+    IReadOnlyList<string> Labels,
+    IReadOnlyList<string> Arrows,
+    IReadOnlyList<string> LocalAssetObjects,
+    IReadOnlyList<string> DirectionMarkers,
+    IReadOnlyList<string> TimingMarkers,
+    IReadOnlyList<string> Steps);
+
+public sealed record QuestionDrivenPlannedOutputs(
+    string FinalImagePath,
+    string SrtPath,
+    string NarrationTextPath,
+    string VisualSpecPath,
+    string ImagePromptPath,
+    string ReviewPath);
+
+public sealed record QuestionDrivenValidationPreview(
+    bool ImageSceneSpecific,
+    bool NarrationAligned,
+    bool SrtReady,
+    bool AccessibilityReady,
+    IReadOnlyList<string> Issues,
+    IReadOnlyList<string> Recommendations);
 
 public sealed record QuestionDrivenImagePromptRequest(
     string EventId,
