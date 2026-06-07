@@ -328,6 +328,19 @@ app.MapPost("/api/astronomy-intelligence/generate-question-answers", async (Ques
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/validate-question-answer-set", async (QuestionAnswerValidationRequest request, IQuestionEngine questionEngine, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy question answer validation request received for {RegionId}. EventId={EventId}; Language={Language}", request.RegionId, request.EventId, request.Language);
+    try
+    {
+        return Results.Ok(await questionEngine.ValidateQuestionAnswerSetAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-video-plans", async (AstronomyVideoPlanningRequest request, IAstronomyVideoPlanningService planning, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy video planning request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
