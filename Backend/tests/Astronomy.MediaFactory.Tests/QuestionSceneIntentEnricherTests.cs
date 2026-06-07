@@ -34,6 +34,13 @@ public sealed class QuestionSceneIntentEnricherTests
         Assert.Empty(result.Warnings);
         Assert.False(File.Exists(BuildPlanPath(workingDirectory, "question-driven-scene-plan.enriched.json")));
         Assert.True(result.EnrichedScenePlan.IsValid);
+        Assert.Equal("CasualSkyWatcher", result.EnrichedScenePlan.ViewerPersona);
+        Assert.Equal("Beginner", result.EnrichedScenePlan.KnowledgeLevel);
+        Assert.All(result.EnrichedScenePlan.Scenes, scene =>
+        {
+            Assert.Equal("CasualSkyWatcher", scene.ViewerPersona);
+            Assert.Equal("Beginner", scene.KnowledgeLevel);
+        });
         Assert.Equal(AstronomyQuestionTypes.What, result.EnrichedScenePlan.Scenes.First().QuestionType);
         Assert.Equal(AstronomyQuestionTypes.Action, result.EnrichedScenePlan.Scenes.Last().QuestionType);
 
@@ -71,8 +78,65 @@ public sealed class QuestionSceneIntentEnricherTests
         var savedJson = await File.ReadAllTextAsync(result.GeneratedFiles.Single());
         using var document = JsonDocument.Parse(savedJson);
         Assert.True(document.RootElement.GetProperty("isValid").GetBoolean());
+        Assert.Equal("CasualSkyWatcher", document.RootElement.GetProperty("viewerPersona").GetString());
+        Assert.Equal("Beginner", document.RootElement.GetProperty("knowledgeLevel").GetString());
         Assert.Equal(6, document.RootElement.GetProperty("scenes").GetArrayLength());
+        Assert.Equal("CasualSkyWatcher", document.RootElement.GetProperty("scenes")[0].GetProperty("viewerPersona").GetString());
+        Assert.Equal("Beginner", document.RootElement.GetProperty("scenes")[0].GetProperty("knowledgeLevel").GetString());
         Assert.Equal("Generate a clean sky-location infographic background with horizon space.", document.RootElement.GetProperty("scenes")[1].GetProperty("imagePromptIntent").GetString());
+    }
+
+    [Fact]
+    public async Task EnrichQuestionScenePlanAsync_AppliesRequestedAudienceContextToRootAndScenes()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteQuestionDrivenScenePlanAsync(workingDirectory, BuildSourcePlan());
+        var enricher = CreateEnricher(workingDirectory);
+
+        var result = await enricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(
+            EventId,
+            RegionId,
+            "en",
+            "AstroPhotographyBeginner",
+            "Intermediate",
+            DryRun: true,
+            OverwriteExisting: false), CancellationToken.None);
+
+        Assert.True(result.IsValid);
+        Assert.Equal("AstroPhotographyBeginner", result.EnrichedScenePlan.ViewerPersona);
+        Assert.Equal("Intermediate", result.EnrichedScenePlan.KnowledgeLevel);
+        Assert.All(result.EnrichedScenePlan.Scenes, scene =>
+        {
+            Assert.Equal("AstroPhotographyBeginner", scene.ViewerPersona);
+            Assert.Equal("Intermediate", scene.KnowledgeLevel);
+        });
+        Assert.Equal(AstronomyQuestionTypes.What, result.EnrichedScenePlan.Scenes.First().QuestionType);
+        Assert.Equal(AstronomyQuestionTypes.Action, result.EnrichedScenePlan.Scenes.Last().QuestionType);
+    }
+
+    [Fact]
+    public async Task EnrichQuestionScenePlanAsync_ReportsValidationWarningsForInvalidAudienceContext()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteQuestionDrivenScenePlanAsync(workingDirectory, BuildSourcePlan());
+        var enricher = CreateEnricher(workingDirectory);
+
+        var result = await enricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(
+            EventId,
+            RegionId,
+            "en",
+            "DeepSpaceProfessional",
+            "Expert",
+            DryRun: true,
+            OverwriteExisting: false), CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.False(result.EnrichedScenePlan.IsValid);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.Contains("Root viewerPersona 'DeepSpaceProfessional' is not supported.", result.Warnings);
+        Assert.Contains("Root knowledgeLevel 'Expert' is not supported.", result.Warnings);
+        Assert.Contains("Scene 1 viewerPersona 'DeepSpaceProfessional' is not supported.", result.Warnings);
+        Assert.Contains("Scene 1 knowledgeLevel 'Expert' is not supported.", result.Warnings);
     }
 
     [Fact]

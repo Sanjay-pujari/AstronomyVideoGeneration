@@ -14,6 +14,21 @@ public sealed class QuestionSceneIntentEnricher(
     private const string OutputFileName = "question-driven-scene-plan.enriched.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
+    private static readonly HashSet<string> SupportedViewerPersonas = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CasualSkyWatcher",
+        "AstroPhotographyBeginner",
+        "AstronomyEnthusiast",
+        "AdvancedObserver"
+    };
+
+    private static readonly HashSet<string> SupportedKnowledgeLevels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Beginner",
+        "Intermediate",
+        "Advanced"
+    };
+
     private static readonly IReadOnlyDictionary<string, IntentTemplate> Templates = new Dictionary<string, IntentTemplate>(StringComparer.OrdinalIgnoreCase)
     {
         [AstronomyQuestionTypes.What] = new(
@@ -122,6 +137,8 @@ public sealed class QuestionSceneIntentEnricher(
                 Clean(scene.ScenePurpose),
                 Clean(scene.ViewerQuestion),
                 Clean(scene.SourceAnswer),
+                NormalizeSupportedValue(request.ViewerPersona, SupportedViewerPersonas),
+                NormalizeSupportedValue(request.KnowledgeLevel, SupportedKnowledgeLevels),
                 template.ViewerTakeaway,
                 template.NarrationIntent,
                 template.VisualIntent,
@@ -135,6 +152,8 @@ public sealed class QuestionSceneIntentEnricher(
             Clean(sourcePlan.EventId) == string.Empty ? Clean(request.EventId) : Clean(sourcePlan.EventId),
             Clean(sourcePlan.RegionId) == string.Empty ? Clean(request.RegionId) : Clean(sourcePlan.RegionId),
             string.IsNullOrWhiteSpace(sourcePlan.Language) ? request.Language : sourcePlan.Language,
+            NormalizeSupportedValue(request.ViewerPersona, SupportedViewerPersonas),
+            NormalizeSupportedValue(request.KnowledgeLevel, SupportedKnowledgeLevels),
             scenes,
             true,
             DateTimeOffset.UtcNow);
@@ -149,8 +168,13 @@ public sealed class QuestionSceneIntentEnricher(
             return issues;
         }
 
+        ValidateAudienceContext("Root", "viewerPersona", plan.ViewerPersona, SupportedViewerPersonas, issues);
+        ValidateAudienceContext("Root", "knowledgeLevel", plan.KnowledgeLevel, SupportedKnowledgeLevels, issues);
+
         foreach (var scene in plan.Scenes)
         {
+            ValidateAudienceContext($"Scene {scene.SceneNumber}", "viewerPersona", scene.ViewerPersona, SupportedViewerPersonas, issues);
+            ValidateAudienceContext($"Scene {scene.SceneNumber}", "knowledgeLevel", scene.KnowledgeLevel, SupportedKnowledgeLevels, issues);
             ValidateSceneIntentNotSourceAnswer(scene.SceneNumber, "viewerTakeaway", scene.ViewerTakeaway, scene.SourceAnswer, issues);
             ValidateSceneIntentNotSourceAnswer(scene.SceneNumber, "narrationIntent", scene.NarrationIntent, scene.SourceAnswer, issues);
             ValidateSceneIntentNotSourceAnswer(scene.SceneNumber, "visualIntent", scene.VisualIntent, scene.SourceAnswer, issues);
@@ -174,6 +198,18 @@ public sealed class QuestionSceneIntentEnricher(
         return issues;
     }
 
+    private static void ValidateAudienceContext(string owner, string fieldName, string value, HashSet<string> supportedValues, List<string> issues)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            issues.Add($"{owner} {fieldName} is required.");
+            return;
+        }
+
+        if (!supportedValues.Contains(value))
+            issues.Add($"{owner} {fieldName} '{value}' is not supported.");
+    }
+
     private static void ValidateSceneIntentNotSourceAnswer(int sceneNumber, string fieldName, string value, string sourceAnswer, List<string> issues)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -194,6 +230,15 @@ public sealed class QuestionSceneIntentEnricher(
             throw new ArgumentException("regionId is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Language))
             throw new ArgumentException("language is required.", nameof(request));
+    }
+
+    private static string NormalizeSupportedValue(string value, HashSet<string> supportedValues)
+    {
+        var cleaned = Clean(value);
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return cleaned;
+
+        return supportedValues.FirstOrDefault(supported => string.Equals(supported, cleaned, StringComparison.OrdinalIgnoreCase)) ?? cleaned;
     }
 
     private string BuildPlanPath(string eventId, string regionId, string fileName)

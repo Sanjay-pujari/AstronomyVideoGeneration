@@ -118,6 +118,8 @@ public sealed class QuestionDrivenVisualComposerTests
         EventId,
         RegionId,
         "en",
+        "CasualSkyWatcher",
+        "Beginner",
         [
             BuildScene(1, AstronomyQuestionTypes.What, "OpeningOverview", "What is happening?", "Venus and Jupiter appear close together tonight."),
             BuildScene(2, AstronomyQuestionTypes.Where, "LocationGuide", "Where should I look?", "Look west above the horizon for Venus and Jupiter."),
@@ -136,6 +138,8 @@ public sealed class QuestionDrivenVisualComposerTests
             scenePurpose,
             viewerQuestion,
             sourceAnswer,
+            "CasualSkyWatcher",
+            "Beginner",
             sourceAnswer,
             $"Narration intent for {questionType}.",
             $"Visual intent for {questionType}.",

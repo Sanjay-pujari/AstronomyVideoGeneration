@@ -97,6 +97,8 @@ public sealed class QuestionDrivenNarrationGeneratorTests
         EventId,
         RegionId,
         "en",
+        "CasualSkyWatcher",
+        "Beginner",
         [
             BuildScene(1, AstronomyQuestionTypes.What, "OpeningOverview", "What is happening?", "Venus and Jupiter will appear close together in Udaipur’s evening sky."),
             BuildScene(2, AstronomyQuestionTypes.Where, "LocationGuide", "Where should I look?", "Look toward the western sky, about one-third above the horizon."),
@@ -115,6 +117,8 @@ public sealed class QuestionDrivenNarrationGeneratorTests
             scenePurpose,
             viewerQuestion,
             sourceAnswer,
+            "CasualSkyWatcher",
+            "Beginner",
             $"Viewer takeaway for {questionType}.",
             $"Narration intent for {questionType}.",
             $"Visual intent for {questionType}.",

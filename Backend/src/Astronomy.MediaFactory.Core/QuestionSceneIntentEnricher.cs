@@ -4,6 +4,8 @@ public sealed record QuestionSceneIntentEnrichmentRequest(
     string EventId,
     string RegionId,
     string Language = "en",
+    string ViewerPersona = "CasualSkyWatcher",
+    string KnowledgeLevel = "Beginner",
     bool DryRun = true,
     bool OverwriteExisting = false);
 
@@ -19,6 +21,8 @@ public sealed record EnrichedQuestionScenePlanDto(
     string EventId,
     string RegionId,
     string Language,
+    string ViewerPersona,
+    string KnowledgeLevel,
     IReadOnlyList<EnrichedQuestionSceneDto> Scenes,
     bool IsValid,
     DateTimeOffset GeneratedUtc);
@@ -29,6 +33,8 @@ public sealed record EnrichedQuestionSceneDto(
     string ScenePurpose,
     string ViewerQuestion,
     string SourceAnswer,
+    string ViewerPersona,
+    string KnowledgeLevel,
     string ViewerTakeaway,
     string NarrationIntent,
     string VisualIntent,
