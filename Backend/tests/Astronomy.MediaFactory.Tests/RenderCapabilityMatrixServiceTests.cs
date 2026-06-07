@@ -95,6 +95,32 @@ public sealed class RenderCapabilityMatrixServiceTests : IDisposable
         Assert.Equal("SceneTransitionPlanner", capability.TransitionHandler.Handler);
     }
 
+    [Theory]
+    [InlineData("guided_pan_across_group_with_object_sequence_emphasis", "GroupedObjectPanRenderer")]
+    [InlineData("pan_sequence", "GroupedObjectPanRenderer")]
+    [InlineData("guided_pan_across_group", "GroupedObjectPanRenderer")]
+    [InlineData("episode_montage_crossfade_with_night-by-night_progression", "WeeklyMontageRenderer")]
+    [InlineData("montage_crossfade", "WeeklyMontageRenderer")]
+    [InlineData("episode_montage", "WeeklyMontageRenderer")]
+    [InlineData("weekly_montage", "WeeklyMontageRenderer")]
+    public async Task GenerateRenderCapabilities_KnownCinematicMotionHintsUseDedicatedHandlersWithoutWarnings(string motionHint, string expectedHandler)
+    {
+        await using var db = CreateDb();
+        var category = expectedHandler == "GroupedObjectPanRenderer" ? "PlanetGrouping" : "WeeklySkyForecast";
+        var plan = await SeedPlanAsync(db, category, "Short");
+        await WriteRecipeAsync(plan.Id, Recipe(plan, 1, "Known cinematic motion", [Input("visual", "Image", "/visuals/scene.png", "image", "background")], motionHint));
+        var service = CreateService(db);
+
+        var result = await service.GenerateRenderCapabilitiesAsync(new RenderCapabilityMatrixRequest(RegionId: RegionId, DryRun: true), CancellationToken.None);
+
+        var capability = Assert.Single(result.Capabilities);
+        Assert.True(capability.ExecutionPlan.CanExecute);
+        Assert.Equal(expectedHandler, capability.MotionHandler.Handler);
+        Assert.Equal(motionHint, capability.MotionHandler.MotionType);
+        Assert.Equal(motionHint, capability.MotionHandler.FilterHint);
+        Assert.DoesNotContain("Unknown motion filter hint mapped to default subtle motion.", capability.ExecutionPlan.Warnings);
+    }
+
     [Fact]
     public async Task GenerateRenderCapabilities_UnknownMotionUsesDefaultHandlerAndWarning()
     {
