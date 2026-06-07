@@ -510,6 +510,19 @@ app.MapPost("/api/astronomy-intelligence/generate-render-recipes", async (Render
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-render-capabilities", async (RenderCapabilityMatrixRequest request, IRenderCapabilityMatrixService matrix, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Astronomy render capability matrix generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await matrix.GenerateRenderCapabilitiesAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/create-asset-production-jobs", async (AstronomyAssetProductionJobRequest request, IAstronomyAssetProductionJobService jobs, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy asset production job DTO request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
