@@ -48,6 +48,7 @@ public sealed record DirectorTimelineScene(
     string AudioPath,
     DirectorTimelineAsset PrimaryAsset,
     IReadOnlyList<DirectorTimelineAsset> SecondaryAssets,
+    IReadOnlyList<DirectorTimelineAsset> TechnicalReferences,
     DirectorTimelineOverlayPlan OverlayPlan,
     string CameraMotion,
     string TransitionIn,
