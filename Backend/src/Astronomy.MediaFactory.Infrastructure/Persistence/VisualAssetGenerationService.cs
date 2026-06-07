@@ -25,7 +25,26 @@ public sealed class VisualAssetGenerationService(
     private const string OutputDirectoryName = "visual-assets";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".webp"];
-    private static readonly string[] ForbiddenTerms = ["TextOverlayCard", "SkyMapCard", "PlannedVisual", "Objects: scene", "prompt"];
+    private const string StellariumCaptureType = "StellariumCapture";
+    private const string AiPromptVisualType = "AiPromptVisual";
+    private const string SkyMapVisualType = "SkyMapVisual";
+    private const string ConstellationGuideVisualType = "ConstellationGuideVisual";
+    private const string NasaMetadataVisualType = "NasaMetadataVisual";
+    private const string TextOverlayVisualType = "TextOverlayVisual";
+    private static readonly string[] ForbiddenTerms =
+    [
+        "internal asset IDs",
+        "internal asset ID",
+        "TextOverlayCard",
+        "SkyMapCard",
+        "PlannedVisual",
+        "Objects: scene",
+        "file name",
+        "asset ids",
+        "asset id",
+        "prompt",
+        "GUID"
+    ];
 
     public async Task<VisualAssetGenerationResponse> GenerateVisualAssetsAsync(VisualAssetGenerationRequest request, CancellationToken cancellationToken)
     {
@@ -61,10 +80,11 @@ public sealed class VisualAssetGenerationService(
                 var backgroundPath = Path.Combine(outputDir, $"scene-{scene.SceneNumber:000}-background.png");
                 var overlayPath = Path.Combine(outputDir, $"scene-{scene.SceneNumber:000}-overlay.png");
                 var manifestPath = Path.Combine(outputDir, $"scene-{scene.SceneNumber:000}-visual-manifest.json");
-                var source = SelectPrimarySource(planRoot, scene, package);
+                var source = SelectPrimarySource(planRoot, assembly, scene, package);
                 var overlaySource = SelectOverlaySource(planRoot, scene, package);
                 var objects = ExtractObjects(scene, source.Path).ToArray();
-                var issues = ValidatePlannedText(scene, source, objects).ToList();
+                var availability = DiscoverVisualAvailability(planRoot, scene, package);
+                var issues = await ValidateVisualApprovalAsync(assembly, scene, source, objects, availability, cancellationToken);
 
                 planned.Add(new VisualAssetGenerationPlanItem(
                     assembly.ContentGenerationPlanId,
@@ -168,31 +188,64 @@ public sealed class VisualAssetGenerationService(
         return Directory.Exists(path) ? Directory.EnumerateFiles(path, "*.*", SearchOption.AllDirectories) : [];
     }
 
-    private static VisualSource SelectPrimarySource(string planRoot, SceneAssemblyScene scene, PackageFiles package)
+    private static VisualSource SelectPrimarySource(string planRoot, SceneAssemblyPlanDocument assembly, SceneAssemblyScene scene, PackageFiles package)
+    {
+        var stellarium = PickStellariumSource(planRoot, scene, package);
+        if (stellarium is not null) return new(StellariumCaptureType, stellarium);
+
+        var ai = PickAiPromptSource(planRoot, scene, package);
+        var sky = PickByLayerOrPackage(planRoot, scene, ["SkyMapVisual", "SkyMapCard"], package.SkyMapCards, scene.SceneNumber);
+        var guide = PickByLayerOrPackage(planRoot, scene, ["ConstellationGuideVisual", "ConstellationGuide"], package.ConstellationGuides, scene.SceneNumber);
+
+        if (ShouldPreferFinderMap(assembly, scene))
+        {
+            if (sky is not null) return new(SkyMapVisualType, sky);
+            if (guide is not null) return new(ConstellationGuideVisualType, guide);
+        }
+
+        if (ai is not null) return new(AiPromptVisualType, ai);
+        if (sky is not null) return new(SkyMapVisualType, sky);
+        if (guide is not null) return new(ConstellationGuideVisualType, guide);
+
+        var nasa = PickByLayerOrPackage(planRoot, scene, ["NasaMetadataVisual", "NasaAsset"], package.NasaAssets, scene.SceneNumber);
+        if (nasa is not null) return new(NasaMetadataVisualType, nasa);
+        var text = PickByLayerOrPackage(planRoot, scene, ["TextOverlayVisual", "TextOverlayCard"], package.TextCards, scene.SceneNumber);
+        if (text is not null) return new(TextOverlayVisualType, text);
+        return new(AiPromptVisualType, string.Empty);
+    }
+
+    private static bool ShouldPreferFinderMap(SceneAssemblyPlanDocument assembly, SceneAssemblyScene scene)
+    {
+        if (!assembly.ContentCategory.Equals("RareEventAlert", StringComparison.OrdinalIgnoreCase)) return false;
+        if (scene.SceneNumber is 2 or 3) return true;
+        var name = scene.SceneName;
+        return name.Contains("watch", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("viewing", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("guidance", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("finder", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? PickStellariumSource(string planRoot, SceneAssemblyScene scene, PackageFiles package)
     {
         var layerImages = scene.Layers.Select(l => ResolveAssetPath(planRoot, l.AssetPath)).Where(IsImage).ToArray();
-        var stellarium = PickSceneFile(package.StellariumImages.Concat(layerImages.Where(p => p.Contains("stellarium", StringComparison.OrdinalIgnoreCase))), scene.SceneNumber);
-        if (stellarium is not null) return new("StellariumCapture", stellarium);
+        return PickSceneFile(package.StellariumImages.Concat(layerImages.Where(p => p.Contains("stellarium", StringComparison.OrdinalIgnoreCase))), scene.SceneNumber);
+    }
 
-        var ai = PickByLayerOrPackage(planRoot, scene, ["AiHeroImage", "AiCinematicImage"], package.AiPrompts, scene.SceneNumber);
-        if (ai is not null) return new("AiPromptVisual", ai);
-        var sky = PickByLayerOrPackage(planRoot, scene, ["SkyMapCard"], package.SkyMapCards, scene.SceneNumber);
-        if (sky is not null) return new("SkyMapVisual", sky);
-        var guide = PickByLayerOrPackage(planRoot, scene, ["ConstellationGuide"], package.ConstellationGuides, scene.SceneNumber);
-        if (guide is not null) return new("ConstellationGuideVisual", guide);
-        var nasa = PickByLayerOrPackage(planRoot, scene, ["NasaAsset"], package.NasaAssets, scene.SceneNumber);
-        if (nasa is not null) return new("NasaMetadataVisual", nasa);
-        var text = PickByLayerOrPackage(planRoot, scene, ["TextOverlayCard"], package.TextCards, scene.SceneNumber);
-        if (text is not null) return new("TextOverlayVisual", text);
-        return new("AiPromptVisual", string.Empty);
+    private static string? PickAiPromptSource(string planRoot, SceneAssemblyScene scene, PackageFiles package)
+    {
+        var layerJson = scene.Layers
+            .Where(l => new[] { "AiPromptVisual", "AiHeroImage", "AiCinematicImage", "PlannedVisual" }.Contains(l.AssetType, StringComparer.OrdinalIgnoreCase))
+            .Select(l => ResolveAssetPath(planRoot, l.AssetPath))
+            .Where(path => IsJson(path) && File.Exists(path));
+        return PickSceneFile(layerJson.Concat(package.AiPrompts.Where(path => IsJson(path) && File.Exists(path))), scene.SceneNumber);
     }
 
     private static VisualSource? SelectOverlaySource(string planRoot, SceneAssemblyScene scene, PackageFiles package)
     {
         var layer = scene.Layers.FirstOrDefault(l => l.LayerType.Equals("Overlay", StringComparison.OrdinalIgnoreCase));
-        if (layer is not null) return new("TextOverlayVisual", ResolveAssetPath(planRoot, layer.AssetPath));
+        if (layer is not null) return new(TextOverlayVisualType, ResolveAssetPath(planRoot, layer.AssetPath));
         var text = PickSceneFile(package.TextCards, scene.SceneNumber);
-        return text is null ? null : new VisualSource("TextOverlayVisual", text);
+        return text is null ? null : new VisualSource(TextOverlayVisualType, text);
     }
 
     private static string? PickByLayerOrPackage(string planRoot, SceneAssemblyScene scene, string[] assetTypes, IReadOnlyList<string> packageFiles, int sceneNumber)
@@ -227,11 +280,11 @@ public sealed class VisualAssetGenerationService(
         image.Mutate(ctx =>
         {
             DrawSpaceBackground(ctx, 1920, 1080, scene.SceneNumber);
-            if (source.Type == "SkyMapVisual") DrawSkyMap(ctx, objects);
-            else if (source.Type == "ConstellationGuideVisual") DrawConstellation(ctx, objects);
-            else if (source.Type == "NasaMetadataVisual") DrawNasaInfo(ctx, title, fact);
+            if (source.Type == SkyMapVisualType) DrawSkyMap(ctx, objects);
+            else if (source.Type == ConstellationGuideVisualType) DrawConstellation(ctx, objects);
+            else if (source.Type == NasaMetadataVisualType) DrawNasaInfo(ctx, title, fact);
             else DrawPlanetaryPoster(ctx, objects);
-            DrawTitleBlock(ctx, title, subtitle, source.Type == "NasaMetadataVisual" ? FindString(doc, "credit", "credits", "source") : null);
+            DrawTitleBlock(ctx, title, subtitle, source.Type == NasaMetadataVisualType ? FindString(doc, "credit", "credits", "source") : null);
             DrawVignette(ctx, 1920, 1080);
         });
         await image.SaveAsPngAsync(outputPath, new PngEncoder(), ct);
@@ -332,12 +385,45 @@ public sealed class VisualAssetGenerationService(
         return found.Distinct(StringComparer.OrdinalIgnoreCase).Take(6).ToArray();
     }
 
-    private static IEnumerable<string> ValidatePlannedText(SceneAssemblyScene scene, VisualSource source, IReadOnlyList<string> objects)
+    private static VisualAvailability DiscoverVisualAvailability(string planRoot, SceneAssemblyScene scene, PackageFiles package)
+        => new(
+            PickStellariumSource(planRoot, scene, package) is not null,
+            PickAiPromptSource(planRoot, scene, package) is not null,
+            PickByLayerOrPackage(planRoot, scene, ["SkyMapVisual", "SkyMapCard"], package.SkyMapCards, scene.SceneNumber) is not null,
+            PickByLayerOrPackage(planRoot, scene, ["ConstellationGuideVisual", "ConstellationGuide"], package.ConstellationGuides, scene.SceneNumber) is not null,
+            PickByLayerOrPackage(planRoot, scene, ["NasaMetadataVisual", "NasaAsset"], package.NasaAssets, scene.SceneNumber) is not null);
+
+    private static async Task<IReadOnlyList<string>> ValidateVisualApprovalAsync(SceneAssemblyPlanDocument assembly, SceneAssemblyScene scene, VisualSource source, IReadOnlyList<string> objects, VisualAvailability availability, CancellationToken ct)
     {
-        var text = string.Join(' ', scene.SceneName, source.Type, string.Join(' ', objects));
-        if (Regex.IsMatch(text, "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) yield return "Source metadata contains GUID-like text; it will not be rendered into the PNG.";
-        foreach (var term in ForbiddenTerms) if (text.Contains(term, StringComparison.OrdinalIgnoreCase)) yield return $"Source metadata contains forbidden review term '{term}'; it will not be rendered into the PNG.";
-        if (text.Contains('{') && text.Contains('}')) yield return "Source metadata contains JSON-like debug text; it will not be rendered into the PNG.";
+        var issues = new List<string>();
+        if (source.Type == TextOverlayVisualType && availability.HasAstronomyVisual)
+            issues.Add("TextOverlayVisual cannot be the primary background while AiPromptVisual, SkyMapVisual, ConstellationGuideVisual, NasaMetadataVisual, or StellariumCapture is available.");
+
+        if (source.Type == AiPromptVisualType)
+        {
+            if (string.IsNullOrWhiteSpace(source.Path)) issues.Add("AiPromptVisual sourcePath is required and must point to the AI prompt JSON.");
+            else if (!IsJson(source.Path)) issues.Add("AiPromptVisual sourcePath must point to the AI prompt JSON, not a rendered image or other asset.");
+        }
+
+        var doc = await TryReadJsonAsync(source.Path, ct);
+        var renderText = new[]
+        {
+            CleanText(FindString(doc, "title", "titleText", "headline", "sceneTitle") ?? scene.SceneName, scene.SceneName),
+            CleanText(FindString(doc, "subtitle", "subtitleText", "shortFact", "description", "instruction") ?? CinematicSubtitle(source.Type, objects), CinematicSubtitle(source.Type, objects)),
+            CleanText(FindString(doc, "fact", "keyMessage", "summary", "caption") ?? assembly.Title, assembly.Title),
+            source.Type == NasaMetadataVisualType ? CleanText(FindString(doc, "credit", "credits", "source"), string.Empty) : string.Empty
+        };
+
+        foreach (var text in renderText.Where(t => !string.IsNullOrWhiteSpace(t)))
+        {
+            if (Regex.IsMatch(text, "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))
+                issues.Add("Generated image text contains GUID-like text after sanitization.");
+            foreach (var term in ForbiddenTerms)
+                if (text.Contains(term, StringComparison.OrdinalIgnoreCase)) issues.Add($"Generated image text contains forbidden review term '{term}'.");
+            if (text.Contains('{') && text.Contains('}')) issues.Add("Generated image text contains JSON-like debug text after sanitization.");
+        }
+
+        return issues.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static async Task<JsonDocument?> TryReadJsonAsync(string path, CancellationToken ct)
@@ -379,17 +465,17 @@ public sealed class VisualAssetGenerationService(
     {
         var text = string.IsNullOrWhiteSpace(value) ? fallback : Regex.Replace(value, "\\s+", " ").Trim();
         text = Regex.Replace(text, "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", string.Empty);
-        foreach (var term in ForbiddenTerms.Concat(["GUID", "asset id", "file name"])) text = Regex.Replace(text, Regex.Escape(term), string.Empty, RegexOptions.IgnoreCase);
+        foreach (var term in ForbiddenTerms) text = Regex.Replace(text, Regex.Escape(term), string.Empty, RegexOptions.IgnoreCase);
         text = text.Replace('{', ' ').Replace('}', ' ').Replace('[', ' ').Replace(']', ' ');
         return string.IsNullOrWhiteSpace(text) ? fallback : text.Length > 130 ? text[..130].Trim() : text;
     }
 
     private static string CinematicSubtitle(string sourceType, IReadOnlyList<string> objects) => sourceType switch
     {
-        "SkyMapVisual" => "A clean sky map for the best viewing window.",
-        "ConstellationGuideVisual" => "Guide lines show how the scene relates to nearby stars.",
-        "NasaMetadataVisual" => "A space-science context card for the featured sky event.",
-        "TextOverlayVisual" => "Key viewing guidance for tonight's sky.",
+        SkyMapVisualType => "A clean sky map for the best viewing window.",
+        ConstellationGuideVisualType => "Guide lines show how the scene relates to nearby stars.",
+        NasaMetadataVisualType => "A space-science context card for the featured sky event.",
+        TextOverlayVisualType => "Key viewing guidance for tonight's sky.",
         _ => $"A cinematic view featuring {string.Join(" and ", objects.Take(2))}."
     };
 
@@ -416,5 +502,9 @@ public sealed class VisualAssetGenerationService(
     }
 
     private sealed record VisualSource(string Type, string Path);
+    private sealed record VisualAvailability(bool HasStellariumCapture, bool HasAiPromptVisual, bool HasSkyMapVisual, bool HasConstellationGuideVisual, bool HasNasaMetadataVisual)
+    {
+        public bool HasAstronomyVisual => HasStellariumCapture || HasAiPromptVisual || HasSkyMapVisual || HasConstellationGuideVisual || HasNasaMetadataVisual;
+    }
     private sealed record PackageFiles(IReadOnlyList<string> StellariumImages, IReadOnlyList<string> AiPrompts, IReadOnlyList<string> SkyMapCards, IReadOnlyList<string> ConstellationGuides, IReadOnlyList<string> TextCards, IReadOnlyList<string> NasaAssets);
 }
