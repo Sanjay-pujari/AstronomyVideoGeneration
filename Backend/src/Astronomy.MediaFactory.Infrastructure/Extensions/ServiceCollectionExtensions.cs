@@ -508,6 +508,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRenderRecipeGenerator, RenderRecipeGenerator>();
         services.AddScoped<IRenderCapabilityMatrixService, RenderCapabilityMatrixService>();
         services.AddScoped<ISceneRenderer, FfmpegSceneRenderer>();
+        services.AddScoped<ISceneEditorialPreviewService, SceneEditorialPreviewService>();
         services.AddScoped<IAstronomyAssetProductionJobService, AstronomyAssetProductionJobService>();
         services.AddScoped<IAstronomyProductionMonitoringService, AstronomyProductionMonitoringService>();
         services.AddScoped<IAssetExecutionService, AssetExecutionService>();
