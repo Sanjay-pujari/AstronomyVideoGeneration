@@ -498,6 +498,19 @@ app.MapPost("/api/astronomy-intelligence/resolve-astronomy-visual-asset-strategy
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-infographic-layout-blueprint", async (InfographicLayoutBlueprintRequest request, IInfographicLayoutBlueprintGenerator generator, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Infographic layout blueprint request received for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
+    try
+    {
+        return Results.Ok(await generator.GenerateInfographicLayoutBlueprintAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/generate-production-visuals", async (ProductionVisualGenerationRequest request, IProductionVisualComposerService composer, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy production visual generation request received for {RegionId}. DryRun={DryRun}", request.RegionId, request.DryRun);
