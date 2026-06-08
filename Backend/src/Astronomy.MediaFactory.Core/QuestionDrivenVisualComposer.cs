@@ -23,7 +23,12 @@ public sealed record QuestionDrivenVisualGenerationResponse(
     int PlannedImageCount = 0,
     int PlannedSrtCount = 0,
     int PlannedReviewCount = 0,
-    IReadOnlyList<QuestionDrivenPlannedScene>? PlannedScenes = null);
+    IReadOnlyList<QuestionDrivenPlannedScene>? PlannedScenes = null,
+    int QuestionIsolationScore = 100,
+    bool CrossSceneLeakageDetected = false,
+    IReadOnlyList<SceneQuestionIsolationValidation>? SceneValidation = null,
+    string AstronomySceneEngineV1Status = "FROZEN",
+    string SharedAstronomyVisualComposerStatus = "FROZEN");
 
 public sealed record QuestionDrivenPlannedScene(
     int SceneNumber,

@@ -49,7 +49,12 @@ public sealed class QuestionDrivenVisualComposer(
             PlannedImageCount: response.PlannedInfographicCount,
             PlannedSrtCount: response.PlannedInfographicCount,
             PlannedReviewCount: response.PlannedInfographicCount,
-            PlannedScenes: response.PlannedScenes);
+            PlannedScenes: response.PlannedScenes,
+            QuestionIsolationScore: response.QuestionIsolationScore,
+            CrossSceneLeakageDetected: response.CrossSceneLeakageDetected,
+            SceneValidation: response.SceneValidation,
+            AstronomySceneEngineV1Status: response.AstronomySceneEngineV1Status,
+            SharedAstronomyVisualComposerStatus: response.SharedAstronomyVisualComposerStatus);
     }
 
     public async Task<EditorialAstronomyInfographicGenerationResponse> GenerateEditorialAstronomyInfographicsAsync(QuestionDrivenVisualGenerationRequest request, CancellationToken cancellationToken)
