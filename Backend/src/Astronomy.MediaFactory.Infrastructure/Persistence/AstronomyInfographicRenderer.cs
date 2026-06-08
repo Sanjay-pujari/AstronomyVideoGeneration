@@ -42,105 +42,189 @@ public sealed class AstronomyInfographicRenderer(
 
 public sealed class AstronomyBackgroundLayerRenderer
 {
+    private const int CanvasWidth = 1920;
+    private const int CanvasHeight = 1080;
+
     public void Render(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec)
     {
         var sceneNumber = spec.SceneNumber;
-        var palette = sceneNumber switch
-        {
-            1 => (Top: "#06101F", Middle: "#273C63", Bottom: "#F28D45"),
-            2 => (Top: "#06182E", Middle: "#13324D", Bottom: "#293A3B"),
-            3 => (Top: "#142042", Middle: "#615179", Bottom: "#FF9F52"),
-            4 => (Top: "#041827", Middle: "#12364D", Bottom: "#35433E"),
-            5 => (Top: "#01050E", Middle: "#07183C", Bottom: "#101E34"),
-            6 => (Top: "#030A1A", Middle: "#243154", Bottom: "#ED7B45"),
-            _ => (Top: "#061124", Middle: "#163158", Bottom: "#293C3F")
-        };
-
-        for (var y = 0; y < 1080; y += 4)
-        {
-            var t = y / 1080f;
-            var color = t < .68f ? Blend(Color.ParseHex(palette.Top), Color.ParseHex(palette.Middle), t / .68f) : Blend(Color.ParseHex(palette.Middle), Color.ParseHex(palette.Bottom), (t - .68f) / .32f);
-            ctx.Fill(color, new RectangleF(0, y, 1920, 5));
-        }
-
-        RenderSceneAtmosphere(ctx, sceneNumber);
+        RenderSmoothSky(ctx, sceneNumber);
         RenderStars(ctx, sceneNumber);
         RenderLandscape(ctx, sceneNumber);
     }
 
     public void RenderVignette(IImageProcessingContext ctx)
     {
-        // Natural edge falloff built from soft bands, not decorative circles or template helper shapes.
-        ctx.Fill(Color.Black.WithAlpha(.09f), new RectangleF(0, 0, 1920, 80));
-        ctx.Fill(Color.Black.WithAlpha(.06f), new RectangleF(0, 80, 1920, 80));
-        ctx.Fill(Color.Black.WithAlpha(.08f), new RectangleF(0, 0, 90, 1080));
-        ctx.Fill(Color.Black.WithAlpha(.08f), new RectangleF(1830, 0, 90, 1080));
-        ctx.Fill(Color.Black.WithAlpha(.11f), new RectangleF(0, 1010, 1920, 70));
-    }
-
-    private static void RenderSceneAtmosphere(IImageProcessingContext ctx, int sceneNumber)
-    {
-        switch (sceneNumber)
+        using var vignette = new Image<Rgba32>(CanvasWidth, CanvasHeight, Color.Transparent);
+        vignette.ProcessPixelRows(accessor =>
         {
-            case 1:
-                DrawHazeBand(ctx, 690, 260, "#F6C177", .28f);
-                DrawHazeBand(ctx, 790, 210, "#FF8A3D", .22f);
-                DrawHazeBand(ctx, 585, 170, "#B7E0FF", .045f);
-                DrawFineSkyTexture(ctx, 1);
-                break;
-            case 2:
-                DrawHazeBand(ctx, 470, 120, "#8FD2FF", .04f);
-                ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.18f), 1, new PathBuilder().AddLine(new PointF(420, 250), new PointF(1540, 760)).Build());
-                DrawFineSkyTexture(ctx, 2);
-                break;
-            case 3:
-                DrawHazeBand(ctx, 690, 165, "#FFAA5D", .18f);
-                DrawHazeBand(ctx, 520, 130, "#8FD2FF", .05f);
-                DrawFineSkyTexture(ctx, 3);
-                break;
-            case 4:
-                DrawHazeBand(ctx, 445, 130, "#8FD2FF", .05f);
-                ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.14f), 2, new PathBuilder().AddLine(new PointF(790, 585), new PointF(1425, 315)).Build());
-                DrawFineSkyTexture(ctx, 4);
-                break;
-            case 5:
-                DrawHazeBand(ctx, 420, 150, "#FFF2B8", .055f);
-                DrawHazeBand(ctx, 310, 110, "#8FD2FF", .03f);
-                DrawFineSkyTexture(ctx, 5);
-                break;
-            case 6:
-                DrawHazeBand(ctx, 685, 285, "#F6C177", .25f);
-                DrawHazeBand(ctx, 820, 225, "#FF8A3D", .19f);
-                DrawHazeBand(ctx, 490, 170, "#8FD2FF", .045f);
-                DrawFineSkyTexture(ctx, 6);
-                break;
-        }
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                var vertical = SmoothStep(0f, 0.10f, y / (float)(CanvasHeight - 1));
+                var bottom = 1f - SmoothStep(0.90f, 1f, y / (float)(CanvasHeight - 1));
+
+                for (var x = 0; x < row.Length; x++)
+                {
+                    var horizontal = SmoothStep(0f, 0.08f, x / (float)(CanvasWidth - 1));
+                    var right = 1f - SmoothStep(0.92f, 1f, x / (float)(CanvasWidth - 1));
+                    var edge = MathF.Max(MathF.Max(1f - vertical, 1f - bottom), MathF.Max(1f - horizontal, 1f - right));
+                    var alpha = (byte)Math.Clamp(edge * 30f, 0f, 30f);
+                    row[x] = new Rgba32(0, 0, 0, alpha);
+                }
+            }
+        });
+        ctx.DrawImage(vignette, 1f);
     }
 
-
-    private static void DrawHazeBand(IImageProcessingContext ctx, float centerY, float height, string color, float maxAlpha)
+    private static void RenderSmoothSky(IImageProcessingContext ctx, int sceneNumber)
     {
-        for (var i = 0; i < 8; i++)
+        var stops = GetSkyStops(sceneNumber);
+        var random = new Random(18400 + sceneNumber);
+        var horizonHazeColor = Color.ParseHex("#FFF1C4").ToPixel<Rgba32>();
+        var upperHazeColor = Color.ParseHex("#8FD2FF").ToPixel<Rgba32>();
+        var glowColor = Color.ParseHex(sceneNumber is 1 or 3 or 6 ? "#FF9A45" : "#B7E0FF").ToPixel<Rgba32>();
+        using var sky = new Image<Rgba32>(CanvasWidth, CanvasHeight);
+
+        sky.ProcessPixelRows(accessor =>
         {
-            var t = i / 7f;
-            var alpha = maxAlpha * (1f - t * .72f);
-            var bandHeight = height + i * 34f;
-            ctx.Fill(Color.ParseHex(color).WithAlpha(alpha), new RectangleF(0, centerY - bandHeight / 2f, 1920, bandHeight));
-        }
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var yRatio = y / (float)(CanvasHeight - 1);
+                var baseColor = InterpolateStops(stops, yRatio).ToPixel<Rgba32>();
+                var horizonLift = SmoothStep(0.58f, 0.92f, yRatio) * (1f - SmoothStep(0.92f, 1f, yRatio));
+                var coolUpperHaze = 1f - SmoothStep(0.18f, 0.72f, Math.Abs(yRatio - 0.44f));
+                var warmHorizon = sceneNumber is 1 or 3 or 6 ? 1f : 0.35f;
+                var row = accessor.GetRowSpan(y);
+
+                for (var x = 0; x < row.Length; x++)
+                {
+                    var xRatio = x / (float)(CanvasWidth - 1);
+                    var color = baseColor;
+                    color = Composite(color, horizonHazeColor, horizonLift * warmHorizon * 0.10f);
+                    color = Composite(color, upperHazeColor, coolUpperHaze * 0.018f);
+
+                    var glowFalloff = 1f - Math.Clamp(MathF.Abs(xRatio - 0.52f) / 0.58f, 0f, 1f);
+                    var glow = horizonLift * SmoothStep(0f, 1f, glowFalloff) * (sceneNumber is 1 or 3 or 6 ? 0.11f : 0.032f);
+                    color = Composite(color, glowColor, glow);
+
+                    var dither = random.Next(-4, 5);
+                    row[x] = new Rgba32(
+                        ClampByte(color.R + dither),
+                        ClampByte(color.G + dither),
+                        ClampByte(color.B + dither),
+                        255);
+                }
+            }
+        });
+
+        ctx.DrawImage(sky, 1f);
     }
 
-    private static void DrawFineSkyTexture(IImageProcessingContext ctx, int sceneNumber)
+    private static SkyColorStop[] GetSkyStops(int sceneNumber) => sceneNumber switch
     {
-        var random = new Random(8400 + sceneNumber);
-        for (var i = 0; i < 130; i++)
+        1 =>
+        [
+            new(0f, Color.ParseHex("#06101F")),
+            new(.42f, Color.ParseHex("#172A4D")),
+            new(.70f, Color.ParseHex("#4D4F6A")),
+            new(.88f, Color.ParseHex("#D87848")),
+            new(1f, Color.ParseHex("#F28D45"))
+        ],
+        2 =>
+        [
+            new(0f, Color.ParseHex("#06182E")),
+            new(.54f, Color.ParseHex("#102B48")),
+            new(.82f, Color.ParseHex("#203B47")),
+            new(1f, Color.ParseHex("#293A3B"))
+        ],
+        3 =>
+        [
+            new(0f, Color.ParseHex("#142042")),
+            new(.40f, Color.ParseHex("#3A3B64")),
+            new(.67f, Color.ParseHex("#756080")),
+            new(.86f, Color.ParseHex("#D67B55")),
+            new(1f, Color.ParseHex("#FF9F52"))
+        ],
+        4 =>
+        [
+            new(0f, Color.ParseHex("#041827")),
+            new(.55f, Color.ParseHex("#12364D")),
+            new(.82f, Color.ParseHex("#24434A")),
+            new(1f, Color.ParseHex("#35433E"))
+        ],
+        5 =>
+        [
+            new(0f, Color.ParseHex("#01050E")),
+            new(.48f, Color.ParseHex("#07183C")),
+            new(.78f, Color.ParseHex("#0B1C3B")),
+            new(1f, Color.ParseHex("#101E34"))
+        ],
+        6 =>
+        [
+            new(0f, Color.ParseHex("#030A1A")),
+            new(.36f, Color.ParseHex("#151F3E")),
+            new(.64f, Color.ParseHex("#414469")),
+            new(.84f, Color.ParseHex("#BE644C")),
+            new(1f, Color.ParseHex("#ED7B45"))
+        ],
+        _ =>
+        [
+            new(0f, Color.ParseHex("#061124")),
+            new(.58f, Color.ParseHex("#163158")),
+            new(.84f, Color.ParseHex("#223A48")),
+            new(1f, Color.ParseHex("#293C3F"))
+        ]
+    };
+
+    private static Rgba32 InterpolateStops(IReadOnlyList<SkyColorStop> stops, float position)
+    {
+        if (position <= stops[0].Position) return stops[0].Color.ToPixel<Rgba32>();
+        for (var i = 1; i < stops.Count; i++)
         {
-            var y = random.Next(60, 820);
-            var width = random.Next(120, 420);
-            var x = random.Next(-80, 1920);
-            var alpha = sceneNumber is 1 or 6 ? .024f : .014f;
-            ctx.Fill(Color.White.WithAlpha(alpha), new RectangleF(x, y, width, 1));
+            if (position > stops[i].Position) continue;
+            var previous = stops[i - 1];
+            var next = stops[i];
+            var local = SmoothStep(0f, 1f, (position - previous.Position) / (next.Position - previous.Position));
+            return Blend(previous.Color, next.Color, local).ToPixel<Rgba32>();
         }
+
+        return stops[^1].Color.ToPixel<Rgba32>();
     }
+
+    private static Rgba32 Composite(Rgba32 destination, Rgba32 source, float alpha)
+    {
+        alpha = Math.Clamp(alpha, 0f, 1f);
+        return new Rgba32(
+            ClampByte(destination.R + (source.R - destination.R) * alpha),
+            ClampByte(destination.G + (source.G - destination.G) * alpha),
+            ClampByte(destination.B + (source.B - destination.B) * alpha),
+            255);
+    }
+
+    private static void DrawSoftHorizonGlow(IImageProcessingContext ctx, float centerY, float height, string color, float maxAlpha)
+    {
+        using var glow = new Image<Rgba32>(CanvasWidth, CanvasHeight, Color.Transparent);
+        var glowColor = Color.ParseHex(color).ToPixel<Rgba32>();
+        glow.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var dy = (y - centerY) / Math.Max(1f, height * 0.5f);
+                var vertical = MathF.Exp(-dy * dy * 2.2f);
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < row.Length; x++)
+                {
+                    var xRatio = x / (float)(CanvasWidth - 1);
+                    var horizontal = 0.72f + 0.28f * (1f - Math.Clamp(MathF.Abs(xRatio - 0.52f) / 0.58f, 0f, 1f));
+                    row[x] = new Rgba32(glowColor.R, glowColor.G, glowColor.B, (byte)Math.Clamp(maxAlpha * vertical * horizontal * 255f, 0f, 255f));
+                }
+            }
+        });
+        ctx.DrawImage(glow, 1f);
+    }
+
+
     private static void RenderStars(IImageProcessingContext ctx, int sceneNumber)
     {
         var stars = sceneNumber switch
@@ -158,45 +242,47 @@ public sealed class AstronomyBackgroundLayerRenderer
         switch (sceneNumber)
         {
             case 1:
+                DrawSoftHorizonGlow(ctx, 830, 180, "#FF9A45", .16f);
                 DrawDunes(ctx, 812, "#111318", "#1B171A");
-                ctx.Fill(Color.ParseHex("#FF9A45").WithAlpha(.16f), new RectangleF(0, 785, 1920, 92));
-                ctx.Fill(Color.Black.WithAlpha(.38f), new RectangleF(0, 914, 1920, 166));
+                ctx.Fill(Color.Black.WithAlpha(.38f), new RectangleF(0, 914, CanvasWidth, 166));
                 break;
             case 2:
-                ctx.Fill(Color.ParseHex("#14202A").WithAlpha(.92f), new RectangleF(0, 810, 1920, 270));
+                ctx.Fill(Color.ParseHex("#14202A").WithAlpha(.92f), new RectangleF(0, 810, CanvasWidth, 270));
                 ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.64f), 4, new PathBuilder().AddLine(new PointF(360, 760), new PointF(1600, 760)).Build());
                 ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(.45f), 3, new PathBuilder().AddLine(new PointF(360, 810), new PointF(1600, 810)).Build());
                 break;
             case 3:
-                ctx.Fill(Color.ParseHex("#1A222A").WithAlpha(.90f), new RectangleF(0, 852, 1920, 228));
+                DrawSoftHorizonGlow(ctx, 830, 145, "#FFAA5D", .12f);
+                ctx.Fill(Color.ParseHex("#1A222A").WithAlpha(.90f), new RectangleF(0, 852, CanvasWidth, 228));
                 ctx.Draw(Color.ParseHex("#FFAA5D").WithAlpha(.50f), 3, new PathBuilder().AddLine(new PointF(0, 832), new PointF(1920, 832)).Build());
                 break;
             case 4:
+                DrawSoftHorizonGlow(ctx, 800, 120, "#F6C177", .10f);
                 DrawLowHorizon(ctx, 804, "#0D1A1E");
                 ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(.50f), 3, new PathBuilder().AddLine(new PointF(0, 804), new PointF(1920, 804)).Build());
                 break;
             case 5:
-                ctx.Fill(Color.ParseHex("#0A101A").WithAlpha(.90f), new RectangleF(0, 930, 1920, 150));
+                ctx.Fill(Color.ParseHex("#0A101A").WithAlpha(.90f), new RectangleF(0, 930, CanvasWidth, 150));
                 break;
             case 6:
+                DrawSoftHorizonGlow(ctx, 830, 210, "#FF8A3D", .14f);
+                DrawSoftHorizonGlow(ctx, 900, 180, "#F6C177", .12f);
                 DrawDunes(ctx, 835, "#10151C", "#161820");
-                ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.18f), new RectangleF(0, 868, 1920, 110));
-                ctx.Fill(Color.ParseHex("#FF8A3D").WithAlpha(.10f), new RectangleF(0, 820, 1920, 90));
-                ctx.Fill(Color.Black.WithAlpha(.42f), new RectangleF(0, 968, 1920, 112));
+                ctx.Fill(Color.Black.WithAlpha(.42f), new RectangleF(0, 968, CanvasWidth, 112));
                 break;
         }
     }
 
     private static void DrawDunes(IImageProcessingContext ctx, float horizon, string nearColor, string farColor)
     {
-        var far = new PathBuilder().AddLine(new PointF(0, horizon + 40), new PointF(270, horizon + 5)).AddLine(new PointF(270, horizon + 5), new PointF(615, horizon + 58)).AddLine(new PointF(615, horizon + 58), new PointF(1025, horizon - 10)).AddLine(new PointF(1025, horizon - 10), new PointF(1415, horizon + 34)).AddLine(new PointF(1415, horizon + 34), new PointF(1920, horizon - 5)).AddLine(new PointF(1920, horizon - 5), new PointF(1920, 1080)).AddLine(new PointF(1920, 1080), new PointF(0, 1080)).CloseFigure().Build();
+        var far = new PathBuilder().AddLine(new PointF(0, horizon + 40), new PointF(270, horizon + 5)).AddLine(new PointF(270, horizon + 5), new PointF(615, horizon + 58)).AddLine(new PointF(615, horizon + 58), new PointF(1025, horizon - 10)).AddLine(new PointF(1025, horizon - 10), new PointF(1415, horizon + 34)).AddLine(new PointF(1415, horizon + 34), new PointF(CanvasWidth, horizon - 5)).AddLine(new PointF(CanvasWidth, horizon - 5), new PointF(CanvasWidth, CanvasHeight)).AddLine(new PointF(CanvasWidth, CanvasHeight), new PointF(0, CanvasHeight)).CloseFigure().Build();
         ctx.Fill(Color.ParseHex(farColor).WithAlpha(.94f), far);
         DrawLowHorizon(ctx, horizon + 88, nearColor);
     }
 
     private static void DrawLowHorizon(IImageProcessingContext ctx, float horizon, string color)
     {
-        var path = new PathBuilder().AddLine(new PointF(0, horizon), new PointF(320, horizon + 24)).AddLine(new PointF(320, horizon + 24), new PointF(720, horizon - 12)).AddLine(new PointF(720, horizon - 12), new PointF(1190, horizon + 18)).AddLine(new PointF(1190, horizon + 18), new PointF(1920, horizon - 8)).AddLine(new PointF(1920, horizon - 8), new PointF(1920, 1080)).AddLine(new PointF(1920, 1080), new PointF(0, 1080)).CloseFigure().Build();
+        var path = new PathBuilder().AddLine(new PointF(0, horizon), new PointF(320, horizon + 24)).AddLine(new PointF(320, horizon + 24), new PointF(720, horizon - 12)).AddLine(new PointF(720, horizon - 12), new PointF(1190, horizon + 18)).AddLine(new PointF(1190, horizon + 18), new PointF(CanvasWidth, horizon - 8)).AddLine(new PointF(CanvasWidth, horizon - 8), new PointF(CanvasWidth, CanvasHeight)).AddLine(new PointF(CanvasWidth, CanvasHeight), new PointF(0, CanvasHeight)).CloseFigure().Build();
         ctx.Fill(Color.ParseHex(color).WithAlpha(.96f), path);
     }
 
@@ -205,8 +291,18 @@ public sealed class AstronomyBackgroundLayerRenderer
         amount = Math.Clamp(amount, 0, 1);
         var ap = a.ToPixel<Rgba32>();
         var bp = b.ToPixel<Rgba32>();
-        return Color.FromRgb((byte)(ap.R + (bp.R - ap.R) * amount), (byte)(ap.G + (bp.G - ap.G) * amount), (byte)(ap.B + (bp.B - ap.B) * amount));
+        return Color.FromRgb(ClampByte(ap.R + (bp.R - ap.R) * amount), ClampByte(ap.G + (bp.G - ap.G) * amount), ClampByte(ap.B + (bp.B - ap.B) * amount));
     }
+
+    private static float SmoothStep(float edge0, float edge1, float value)
+    {
+        var x = Math.Clamp((value - edge0) / (edge1 - edge0), 0f, 1f);
+        return x * x * (3f - 2f * x);
+    }
+
+    private static byte ClampByte(float value) => (byte)Math.Clamp(MathF.Round(value), 0f, 255f);
+
+    private readonly record struct SkyColorStop(float Position, Color Color);
 }
 
 public sealed class CelestialObjectLayerRenderer
