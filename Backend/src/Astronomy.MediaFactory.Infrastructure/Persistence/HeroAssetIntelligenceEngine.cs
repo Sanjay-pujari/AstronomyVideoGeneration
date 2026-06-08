@@ -1,4 +1,7 @@
 using System.Text.Json;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.PixelFormats;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Logging;
@@ -31,9 +34,19 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroAssetStoryFileName = "hero-asset-story.json";
     private const string HeroAssetBlueprintFileName = "hero-asset-blueprint.json";
     private const string HeroAssetReviewFileName = "hero-review.json";
+    private const string HeroLandscapeFileName = "hero-landscape.png";
+    private const string HeroSquareFileName = "hero-square.png";
+    private const string HeroPortraitFileName = "hero-portrait.png";
     private const string PlatformIntent = "ScrollStoppingHeroAsset";
     private const string SelectedHeroHook = "LOOK WEST TONIGHT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly HeroImageSpec[] HeroImageSpecs =
+    [
+        new("Landscape", HeroLandscapeFileName, 1280, 720),
+        new("Square", HeroSquareFileName, 1080, 1080),
+        new("Portrait", HeroPortraitFileName, 1080, 1920)
+    ];
+
     private static readonly string[] ApprovedSceneFileNames =
     [
         "scene-001-final.png",
@@ -145,6 +158,7 @@ public sealed class HeroAssetStoryGenerator(
 
         var hookValidationIssues = ValidateHookSelection(selectedHook, alternativeHooks, hookScores);
         warnings.AddRange(hookValidationIssues);
+        var phaseExecuted = IsStoryPhase(request.Phase) ? "Story" : "HookSelection";
 
         return new HeroAssetGenerationResponse(
             storyResponse.EventId,
@@ -157,7 +171,12 @@ public sealed class HeroAssetStoryGenerator(
             [],
             BuildEmptyReviewScores(),
             warnings,
-            storyResponse.GeneratedFiles);
+            storyResponse.GeneratedFiles,
+            request.Phase,
+            phaseExecuted,
+            true,
+            false,
+            false);
     }
 
     private async Task<HeroAssetGenerationResponse> GenerateHeroBlueprintAsync(
@@ -194,7 +213,7 @@ public sealed class HeroAssetStoryGenerator(
         warnings.AddRange(blueprintValidationIssues);
         var isValid = storyValidationIssues.Count == 0 && blueprintValidationIssues.Count == 0;
         if (!isValid)
-            return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, []);
+            return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, [], request.Phase, "Blueprint", true, true, false);
 
         if (!request.DryRun)
         {
@@ -205,7 +224,7 @@ public sealed class HeroAssetStoryGenerator(
             generatedFiles.Add(NormalizePath(blueprintPath));
         }
 
-        return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles);
+        return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "Blueprint", true, true, false);
     }
 
     private async Task<HeroAssetGenerationResponse> GenerateHeroImagesAsync(
@@ -248,16 +267,25 @@ public sealed class HeroAssetStoryGenerator(
 
         var isValid = storyValidationIssues.Count == 0 && blueprintValidationIssues.Count == 0;
         if (!isValid)
-            return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, []);
+            return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, [], request.Phase, "Images", true, true, false);
 
         if (!request.DryRun)
         {
             Directory.CreateDirectory(heroAssetsRoot);
+            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, heroStory, blueprint, cancellationToken))
+                generatedFiles.Add(imagePath);
+
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(reviewScores, JsonOptions), cancellationToken);
-            generatedFiles.Add(NormalizePath(reviewPath));
         }
 
-        return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles);
+        var imageGenerationExecuted = !request.DryRun && generatedFiles.Count > 0;
+        if (!request.DryRun && !imageGenerationExecuted)
+        {
+            warnings.Add("Hero asset image generation failed validation: no image files were generated.");
+            isValid = false;
+        }
+
+        return new HeroAssetGenerationResponse(request.EventId, isValid, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "Images", true, true, imageGenerationExecuted);
     }
 
     private async Task<HeroAssetGenerationResponse> GenerateFullHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
@@ -283,7 +311,103 @@ public sealed class HeroAssetStoryGenerator(
             last.PlatformVariants,
             last.ReviewScores,
             responses.SelectMany(response => response.Warnings).Distinct().ToArray(),
-            responses.SelectMany(response => response.GeneratedFiles).Distinct().ToArray());
+            responses.SelectMany(response => response.GeneratedFiles).Distinct().ToArray(),
+            responses.First().PhaseRequested,
+            "Full",
+            responses.Any(response => response.StoryExecuted),
+            responses.Any(response => response.BlueprintExecuted),
+            responses.Any(response => response.ImageGenerationExecuted));
+    }
+
+
+    private static bool IsStoryPhase(string? phase)
+        => string.Equals(phase?.Trim(), "Story", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task<IReadOnlyList<string>> GenerateHeroImageFilesAsync(
+        string heroAssetsRoot,
+        HeroAssetStoryDto heroStory,
+        HeroAssetBlueprintDto blueprint,
+        CancellationToken cancellationToken)
+    {
+        var generatedFiles = new List<string>();
+        foreach (var spec in HeroImageSpecs)
+        {
+            var variant = blueprint.PlatformVariants.FirstOrDefault(platformVariant => string.Equals(platformVariant.Variant, spec.Variant, StringComparison.OrdinalIgnoreCase));
+            var outputPath = Path.Combine(heroAssetsRoot, spec.FileName);
+            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, heroStory, variant, cancellationToken);
+            generatedFiles.Add(NormalizePath(outputPath));
+        }
+
+        return generatedFiles;
+    }
+
+    private static async Task WriteHeroImageAsync(
+        string outputPath,
+        int width,
+        int height,
+        HeroAssetStoryDto heroStory,
+        HeroPlatformVariantDto? variant,
+        CancellationToken cancellationToken)
+    {
+        using var image = new Image<Rgba32>(width, height);
+        var horizonHeight = Math.Max(24, height / 10);
+        var planetRadius = Math.Max(8, width / 100);
+        var primaryX = width / 2 - planetRadius * 4;
+        var secondaryX = width / 2 + planetRadius * 4;
+        var planetY = Math.Max(height / 5, height / 2 - planetRadius * 2);
+        var markerWidth = Math.Max(6, width / 120);
+        var markerHeight = Math.Max(36, height / 12);
+        var markerX = width - markerWidth * 8;
+        var markerY = height - horizonHeight - markerHeight;
+
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                var vertical = accessor.Height <= 1 ? 0f : (float)y / (accessor.Height - 1);
+                for (var x = 0; x < row.Length; x++)
+                {
+                    if (y >= height - horizonHeight)
+                    {
+                        row[x] = new Rgba32(12, 8, 20, 255);
+                        continue;
+                    }
+
+                    if (IsInsideCircle(x, y, primaryX + planetRadius, planetY + planetRadius, planetRadius) ||
+                        IsInsideCircle(x, y, secondaryX + planetRadius, planetY + planetRadius * 2, planetRadius))
+                    {
+                        row[x] = x < width / 2 ? new Rgba32(255, 244, 188, 255) : new Rgba32(224, 235, 255, 255);
+                        continue;
+                    }
+
+                    if (x >= markerX && x < markerX + markerWidth && y >= markerY && y < markerY + markerHeight)
+                    {
+                        row[x] = new Rgba32(255, 215, 64, 255);
+                        continue;
+                    }
+
+                    var horizontal = row.Length <= 1 ? 0f : (float)x / (row.Length - 1);
+                    var twilight = MathF.Min(1f, vertical * 1.25f);
+                    row[x] = new Rgba32(
+                        (byte)(4 + twilight * 32 + horizontal * 8),
+                        (byte)(8 + twilight * 22),
+                        (byte)(24 + (1f - twilight) * 54),
+                        255);
+                }
+            }
+        });
+
+        image.Metadata.ExifProfile = null;
+        image.Metadata.XmpProfile = null;
+        await image.SaveAsPngAsync(outputPath, new PngEncoder(), cancellationToken);
+    }
+
+    private static bool IsInsideCircle(int x, int y, int centerX, int centerY, int radius)
+    {
+        var dx = x - centerX;
+        var dy = y - centerY;
+        return dx * dx + dy * dy <= radius * radius;
     }
 
     private async Task<HeroAssetStoryDto> LoadHeroAssetStoryAsync(string storyPath, HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
@@ -315,6 +439,8 @@ public sealed class HeroAssetStoryGenerator(
         return document.RootElement.Deserialize<HeroAssetBlueprintDto>(JsonOptions)
             ?? throw new ArgumentException("Hero asset blueprint could not be parsed.", nameof(request));
     }
+
+    private sealed record HeroImageSpec(string Variant, string FileName, int Width, int Height);
 
     private static HeroAssetStoryDto WithSelectedHook(HeroAssetStoryDto heroStory, string selectedHook)
         => string.Equals(heroStory.HeroHook, selectedHook, StringComparison.Ordinal)

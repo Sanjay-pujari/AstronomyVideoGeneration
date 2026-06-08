@@ -65,7 +65,12 @@ public sealed record HeroAssetGenerationResponse(
     IReadOnlyList<HeroPlatformVariantDto> PlatformVariants,
     HeroAssetReviewScoresDto ReviewScores,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> GeneratedFiles);
+    IReadOnlyList<string> GeneratedFiles,
+    string PhaseRequested,
+    string PhaseExecuted,
+    bool StoryExecuted,
+    bool BlueprintExecuted,
+    bool ImageGenerationExecuted);
 
 public sealed record HeroAssetStoryDto(
     string EventId,
