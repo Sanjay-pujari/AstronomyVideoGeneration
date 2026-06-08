@@ -30,7 +30,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroAssetsDirectoryName = "hero-assets";
     private const string HeroAssetStoryFileName = "hero-asset-story.json";
     private const string HeroAssetBlueprintFileName = "hero-asset-blueprint.json";
-    private const string HeroAssetReviewFileName = "hero-asset-review.json";
+    private const string HeroAssetReviewFileName = "hero-review.json";
     private const string PlatformIntent = "ScrollStoppingHeroAsset";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ApprovedSceneFileNames =
@@ -112,60 +112,164 @@ public sealed class HeroAssetStoryGenerator(
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
 
+        return request.Phase switch
+        {
+            HeroAssetGenerationPhase.Story => await GenerateHeroStoryAssetsAsync(request, cancellationToken),
+            HeroAssetGenerationPhase.Blueprint => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
+            HeroAssetGenerationPhase.Images => await GenerateHeroImagesAsync(request, cancellationToken: cancellationToken),
+            HeroAssetGenerationPhase.Full => await GenerateFullHeroAssetsAsync(request, cancellationToken),
+            _ => throw new ArgumentException($"Unsupported hero asset generation phase '{request.Phase}'.", nameof(request))
+        };
+    }
+
+    private async Task<HeroAssetGenerationResponse> GenerateFullHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Generating full hero assets for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
+
+        var storyResponse = await GenerateHeroStoryAssetsAsync(request with { Phase = HeroAssetGenerationPhase.Story }, cancellationToken);
+        if (!storyResponse.IsValid)
+            return storyResponse;
+
+        var blueprintResponse = await GenerateHeroBlueprintAsync(request with { Phase = HeroAssetGenerationPhase.Blueprint }, storyResponse.HeroStory, cancellationToken);
+        if (!blueprintResponse.IsValid)
+            return MergeResponses(request.EventId, storyResponse, blueprintResponse);
+
+        var imagesResponse = await GenerateHeroImagesAsync(request with { Phase = HeroAssetGenerationPhase.Images }, storyResponse.HeroStory, blueprintResponse.HeroBlueprint, cancellationToken);
+        return MergeResponses(request.EventId, storyResponse, blueprintResponse, imagesResponse);
+    }
+
+    private async Task<HeroAssetGenerationResponse> GenerateHeroStoryAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var storyResponse = await GenerateHeroAssetStoryAsync(request, cancellationToken);
+        return new HeroAssetGenerationResponse(
+            storyResponse.EventId,
+            storyResponse.IsValid,
+            storyResponse.HeroStory,
+            storyResponse.HeroStory.HeroHook,
+            [],
+            [],
+            BuildEmptyHeroBlueprint(),
+            [],
+            BuildEmptyReviewScores(),
+            storyResponse.Warnings,
+            storyResponse.GeneratedFiles);
+    }
+
+    private async Task<HeroAssetGenerationResponse> GenerateHeroBlueprintAsync(
+        HeroAssetStoryGenerationRequest request,
+        HeroAssetStoryDto? heroStory = null,
+        CancellationToken cancellationToken = default)
+    {
         logger.LogInformation("Generating hero asset blueprint for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
 
         var warnings = new List<string>();
         var generatedFiles = new List<string>();
-        var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
         var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
         var storyPath = BuildStoryOutputPath(request.EventId, request.RegionId);
         var blueprintPath = BuildBlueprintOutputPath(request.EventId, request.RegionId);
-        var reviewPath = BuildReviewOutputPath(request.EventId, request.RegionId);
 
-        var answerSetPath = Path.Combine(questionEngineRoot, QuestionAnswerSetFileName);
-        var enrichedPlanPath = Path.Combine(questionEngineRoot, EnrichedPlanFileName);
-        var narrationPath = Path.Combine(questionEngineRoot, NarrationFileName);
-        EnsureInputFile(storyPath, HeroAssetStoryFileName);
-        EnsureInputFile(answerSetPath, QuestionAnswerSetFileName);
-        EnsureInputFile(enrichedPlanPath, EnrichedPlanFileName);
-        EnsureInputFile(narrationPath, NarrationFileName);
-
-        var missingSceneAssets = FindMissingApprovedSceneAssets(questionEngineRoot);
-        if (missingSceneAssets.Count > 0)
-            warnings.Add($"Approved scene assets are missing: {string.Join(", ", missingSceneAssets)}.");
-
-        var heroStory = JsonSerializer.Deserialize<HeroAssetStoryDto>(await File.ReadAllTextAsync(storyPath, cancellationToken), JsonOptions)
-            ?? throw new ArgumentException("Hero asset story could not be parsed.", nameof(request));
-        warnings.AddRange(ValidateStory(heroStory));
-
-        _ = await LoadQuestionAnswerSourcesAsync(answerSetPath, cancellationToken);
-        _ = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(await File.ReadAllTextAsync(enrichedPlanPath, cancellationToken), JsonOptions)
-            ?? throw new ArgumentException("Enriched question-driven scene plan could not be parsed.", nameof(request));
-        _ = JsonSerializer.Deserialize<QuestionDrivenNarrationDto>(await File.ReadAllTextAsync(narrationPath, cancellationToken), JsonOptions)
-            ?? throw new ArgumentException("Question-driven narration could not be parsed.", nameof(request));
+        heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
+        var storyValidationIssues = ValidateStory(heroStory);
+        warnings.AddRange(storyValidationIssues);
 
         var hookScores = BuildHookScores();
         var selectedHook = hookScores.OrderByDescending(score => score.OverallScore).ThenBy(score => score.Hook).First().Hook;
         var alternativeHooks = hookScores.Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase)).Select(score => score.Hook).ToArray();
         var platformVariants = BuildPlatformVariants();
         var blueprint = BuildHeroBlueprint(platformVariants);
-        var reviewScores = BuildReviewScores();
+        var reviewScores = BuildEmptyReviewScores();
 
-        warnings.AddRange(ValidateHeroAssetBlueprint(selectedHook, blueprint, reviewScores));
-        var isValid = warnings.Count == 0;
+        var blueprintValidationIssues = ValidateHeroAssetBlueprint(selectedHook, blueprint, BuildReviewScores());
+        warnings.AddRange(blueprintValidationIssues);
+        var isValid = storyValidationIssues.Count == 0 && blueprintValidationIssues.Count == 0;
         if (!isValid)
             return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, []);
 
         if (!request.DryRun)
         {
             Directory.CreateDirectory(heroAssetsRoot);
-            await File.WriteAllTextAsync(storyPath, JsonSerializer.Serialize(heroStory, JsonOptions), cancellationToken);
             await File.WriteAllTextAsync(blueprintPath, JsonSerializer.Serialize(blueprint, JsonOptions), cancellationToken);
-            await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(reviewScores, JsonOptions), cancellationToken);
-            generatedFiles.AddRange([NormalizePath(storyPath), NormalizePath(blueprintPath), NormalizePath(reviewPath)]);
+            generatedFiles.Add(NormalizePath(blueprintPath));
         }
 
         return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles);
+    }
+
+    private async Task<HeroAssetGenerationResponse> GenerateHeroImagesAsync(
+        HeroAssetStoryGenerationRequest request,
+        HeroAssetStoryDto? heroStory = null,
+        HeroAssetBlueprintDto? blueprint = null,
+        CancellationToken cancellationToken = default)
+    {
+        logger.LogInformation("Generating hero asset image review for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
+
+        var warnings = new List<string>();
+        var generatedFiles = new List<string>();
+        var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
+        var storyPath = BuildStoryOutputPath(request.EventId, request.RegionId);
+        var blueprintPath = BuildBlueprintOutputPath(request.EventId, request.RegionId);
+        var reviewPath = BuildReviewOutputPath(request.EventId, request.RegionId);
+
+        heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
+        blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
+
+        var hookScores = BuildHookScores();
+        var selectedHook = hookScores.OrderByDescending(score => score.OverallScore).ThenBy(score => score.Hook).First().Hook;
+        var alternativeHooks = hookScores.Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase)).Select(score => score.Hook).ToArray();
+        var platformVariants = blueprint.PlatformVariants;
+        var reviewScores = BuildReviewScores();
+
+        var storyValidationIssues = ValidateStory(heroStory);
+        var blueprintValidationIssues = ValidateHeroAssetBlueprint(selectedHook, blueprint, reviewScores);
+        warnings.AddRange(storyValidationIssues);
+        warnings.AddRange(blueprintValidationIssues);
+        var missingSceneAssets = FindMissingApprovedSceneAssets(BuildQuestionEngineRoot(request.EventId, request.RegionId));
+        if (missingSceneAssets.Count > 0)
+            warnings.Add($"Approved scene assets are missing: {string.Join(", ", missingSceneAssets)}.");
+
+        var isValid = storyValidationIssues.Count == 0 && blueprintValidationIssues.Count == 0;
+        if (!isValid)
+            return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, []);
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(heroAssetsRoot);
+            await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(reviewScores, JsonOptions), cancellationToken);
+            generatedFiles.Add(NormalizePath(reviewPath));
+        }
+
+        return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles);
+    }
+
+    private static HeroAssetGenerationResponse MergeResponses(string eventId, params HeroAssetGenerationResponse[] responses)
+    {
+        var last = responses.Last();
+        return new HeroAssetGenerationResponse(
+            eventId,
+            responses.All(response => response.IsValid),
+            responses.First(response => response.HeroStory is not null).HeroStory,
+            last.SelectedHook,
+            last.AlternativeHooks,
+            last.HookScores,
+            last.HeroBlueprint,
+            last.PlatformVariants,
+            last.ReviewScores,
+            responses.SelectMany(response => response.Warnings).Distinct().ToArray(),
+            responses.SelectMany(response => response.GeneratedFiles).Distinct().ToArray());
+    }
+
+    private async Task<HeroAssetStoryDto> LoadHeroAssetStoryAsync(string storyPath, HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+    {
+        EnsureInputFile(storyPath, HeroAssetStoryFileName);
+        return JsonSerializer.Deserialize<HeroAssetStoryDto>(await File.ReadAllTextAsync(storyPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException("Hero asset story could not be parsed.", nameof(request));
+    }
+
+    private async Task<HeroAssetBlueprintDto> LoadHeroAssetBlueprintAsync(string blueprintPath, HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+    {
+        EnsureInputFile(blueprintPath, HeroAssetBlueprintFileName);
+        return JsonSerializer.Deserialize<HeroAssetBlueprintDto>(await File.ReadAllTextAsync(blueprintPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException("Hero asset blueprint could not be parsed.", nameof(request));
     }
 
     private static HeroAssetStoryDto BuildHeroStory(HeroAssetStoryGenerationRequest request, HeroStorySourceDto storySource)
@@ -280,6 +384,12 @@ public sealed class HeroAssetStoryGenerator(
 
     private static HeroAssetReviewScoresDto BuildReviewScores()
         => new(96, 96, 94, 97, 95, 96);
+
+    private static HeroAssetBlueprintDto BuildEmptyHeroBlueprint()
+        => new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, []);
+
+    private static HeroAssetReviewScoresDto BuildEmptyReviewScores()
+        => new(0, 0, 0, 0, 0, 0);
 
     private static IReadOnlyList<string> ValidateStory(HeroAssetStoryDto story)
     {

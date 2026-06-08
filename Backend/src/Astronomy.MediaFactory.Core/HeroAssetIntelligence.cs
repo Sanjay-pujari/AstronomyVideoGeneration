@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Astronomy.MediaFactory.Core;
 
 public sealed record HeroAssetStoryGenerationRequest(
@@ -5,7 +7,17 @@ public sealed record HeroAssetStoryGenerationRequest(
     string RegionId,
     string Language = "en",
     bool DryRun = true,
-    bool OverwriteExisting = false);
+    bool OverwriteExisting = false,
+    HeroAssetGenerationPhase Phase = HeroAssetGenerationPhase.Full);
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum HeroAssetGenerationPhase
+{
+    Story,
+    Blueprint,
+    Images,
+    Full
+}
 
 public sealed record HeroAssetStoryGenerationResponse(
     string EventId,
