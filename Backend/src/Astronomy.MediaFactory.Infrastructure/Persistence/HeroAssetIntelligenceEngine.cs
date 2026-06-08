@@ -114,7 +114,7 @@ public sealed class HeroAssetStoryGenerator(
 
         return request.Phase switch
         {
-            HeroAssetGenerationPhase.Story => await GenerateHeroStoryAssetsAsync(request, cancellationToken),
+            HeroAssetGenerationPhase.Story => await GenerateHeroHookSelectionAsync(request, cancellationToken),
             HeroAssetGenerationPhase.HookSelection => await GenerateHeroHookSelectionAsync(request, cancellationToken),
             HeroAssetGenerationPhase.Blueprint => await GenerateHeroHookSelectionAsync(request, cancellationToken),
             HeroAssetGenerationPhase.Images => await GenerateHeroHookSelectionAsync(request, cancellationToken),
@@ -152,23 +152,6 @@ public sealed class HeroAssetStoryGenerator(
             [],
             BuildEmptyReviewScores(),
             warnings,
-            storyResponse.GeneratedFiles);
-    }
-
-    private async Task<HeroAssetGenerationResponse> GenerateHeroStoryAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
-    {
-        var storyResponse = await GenerateHeroAssetStoryAsync(request, cancellationToken);
-        return new HeroAssetGenerationResponse(
-            storyResponse.EventId,
-            storyResponse.IsValid,
-            storyResponse.HeroStory,
-            storyResponse.HeroStory.HeroHook,
-            [],
-            [],
-            BuildEmptyHeroBlueprint(),
-            [],
-            BuildEmptyReviewScores(),
-            storyResponse.Warnings,
             storyResponse.GeneratedFiles);
     }
 
