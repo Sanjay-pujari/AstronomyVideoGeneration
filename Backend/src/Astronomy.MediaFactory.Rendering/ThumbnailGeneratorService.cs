@@ -72,7 +72,8 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
             mood: "WarmTwilightThumbnail",
             starDensity: 520,
             showReferenceOverlays: true,
-            backgroundImagePath: sourcePath);
+            backgroundImagePath: sourcePath,
+            compositionMode: AstronomyVisualCompositionMode.Thumbnail);
 
         await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
     }

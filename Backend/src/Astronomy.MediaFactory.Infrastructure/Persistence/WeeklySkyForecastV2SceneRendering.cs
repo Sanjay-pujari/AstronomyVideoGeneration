@@ -363,7 +363,8 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             mood: scene.Contains("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) ? "WarmTwilightWide" : "WarmTwilightScene",
             starDensity: 620,
             showReferenceOverlays: true,
-            labels: [new AstronomyVisualLabel(plan.LayoutType, 0.02f, 0.92f, Color.ParseHex("#8FD2FF"), 0.74f)]);
+            labels: [new AstronomyVisualLabel(plan.LayoutType, 0.02f, 0.92f, Color.ParseHex("#8FD2FF"), 0.74f)],
+            compositionMode: AstronomyVisualCompositionMode.SocialAsset);
 
         await AstronomyVisualCompositionEngine.ComposePngAsync(request, path, ct);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate generated scene frame '{path}'.");
@@ -474,7 +475,8 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
             mood: "WarmTwilightThumbnail",
             starDensity: 680,
             showReferenceOverlays: true,
-            labels: [new AstronomyVisualLabel("Look west after sunset", 0.02f, 0.82f, Color.ParseHex("#FFD48A"), 0.88f)]);
+            labels: [new AstronomyVisualLabel("Look west after sunset", 0.02f, 0.82f, Color.ParseHex("#FFD48A"), 0.88f)],
+            compositionMode: AstronomyVisualCompositionMode.Thumbnail);
 
         await AstronomyVisualCompositionEngine.ComposeJpegAsync(request, path, ct, 92);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate thumbnail image '{path}'.");

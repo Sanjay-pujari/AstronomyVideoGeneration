@@ -16,6 +16,10 @@ public sealed record QuestionDrivenVisualGenerationResponse(
     int FailedSceneCount,
     IReadOnlyList<string> GeneratedFiles,
     IReadOnlyList<string> Warnings,
+    string CompositionMode = "SceneInfographic",
+    bool UsesSharedAstronomyVisualComposer = true,
+    bool HeroAssetRulesApplied = false,
+    bool DuplicateObjectRenderingDetected = false,
     int PlannedImageCount = 0,
     int PlannedSrtCount = 0,
     int PlannedReviewCount = 0,
@@ -193,7 +197,11 @@ public sealed record EditorialAstronomyInfographicGenerationResponse(
     IReadOnlyList<QuestionDrivenPlannedScene> PlannedScenes,
     IReadOnlyList<string> GeneratedFiles,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<AstronomyInfographicDesignTemplate>? DesignSpecs = null);
+    IReadOnlyList<AstronomyInfographicDesignTemplate>? DesignSpecs = null,
+    string CompositionMode = "SceneInfographic",
+    bool UsesSharedAstronomyVisualComposer = true,
+    bool HeroAssetRulesApplied = false,
+    bool DuplicateObjectRenderingDetected = false);
 
 public interface IEditorialAstronomyInfographicComposer
 {

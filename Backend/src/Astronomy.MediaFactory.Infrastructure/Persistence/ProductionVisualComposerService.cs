@@ -185,7 +185,8 @@ public sealed class ProductionVisualComposerService(
             starDensity: 720,
             showReferenceOverlays: true,
             labels: overlayLines.Skip(2).Select((line, index) => new AstronomyVisualLabel(CleanOverlay(line, 80), 0.02f, 0.74f + index * 0.07f, Color.ParseHex("#FFD48A"), 0.86f)).ToArray(),
-            backgroundImagePath: IsUsableImage(backgroundPath) ? backgroundPath : null);
+            backgroundImagePath: IsUsableImage(backgroundPath) ? backgroundPath : null,
+            compositionMode: AstronomyVisualCompositionMode.SocialAsset);
 
         await AstronomyVisualCompositionEngine.ComposePngAsync(request, finalPath, cancellationToken);
     }

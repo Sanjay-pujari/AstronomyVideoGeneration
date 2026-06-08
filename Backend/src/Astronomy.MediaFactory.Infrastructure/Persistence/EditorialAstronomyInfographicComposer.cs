@@ -51,6 +51,10 @@ public sealed class EditorialAstronomyInfographicComposer(
             plannedScenes,
             response.GeneratedFiles,
             response.Warnings,
-            designSpecs);
+            designSpecs,
+            response.CompositionMode,
+            response.UsesSharedAstronomyVisualComposer,
+            response.HeroAssetRulesApplied,
+            response.DuplicateObjectRenderingDetected);
     }
 }
