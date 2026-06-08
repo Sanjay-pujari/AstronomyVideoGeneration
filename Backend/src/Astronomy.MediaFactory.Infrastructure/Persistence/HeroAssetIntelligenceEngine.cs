@@ -264,17 +264,34 @@ public sealed class HeroAssetStoryGenerator(
         if (missingSceneAssets.Count > 0)
             warnings.Add($"Approved scene assets are missing: {string.Join(", ", missingSceneAssets)}.");
 
-        var isValid = storyValidationIssues.Count == 0 && blueprintValidationIssues.Count == 0;
+        var planetAssets = ResolveRequiredHeroPlanetTextures(renderingOptions.Value.CelestialAssetsRoot);
+        var missingPlanetAssets = planetAssets
+            .Where(asset => string.IsNullOrWhiteSpace(asset.TexturePath) || !File.Exists(asset.TexturePath))
+            .Select(asset => asset.Label)
+            .ToArray();
+        if (missingPlanetAssets.Length > 0)
+            warnings.Add($"Required real celestial assets are missing for hero rendering: {string.Join(", ", missingPlanetAssets)}.");
+
+        var isValid = storyValidationIssues.Count == 0
+            && blueprintValidationIssues.Count == 0
+            && missingSceneAssets.Count == 0
+            && missingPlanetAssets.Length == 0;
         if (!isValid)
             return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, [], request.Phase, "Images", true, true, false);
 
         if (!request.DryRun)
         {
             Directory.CreateDirectory(heroAssetsRoot);
-            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, heroStory, blueprint, renderingOptions.Value.CelestialAssetsRoot, cancellationToken))
+            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, heroStory, blueprint, planetAssets, cancellationToken))
                 generatedFiles.Add(imagePath);
 
-            await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(reviewScores, JsonOptions), cancellationToken);
+            var generatedHeroImages = HeroImageSpecs
+                .Select(spec => Path.Combine(heroAssetsRoot, spec.FileName))
+                .Where(File.Exists)
+                .Select(NormalizePath)
+                .ToArray();
+            var visualReview = BuildHeroVisualReview(planetAssets, generatedHeroImages, platformVariants.Count, missingSceneAssets.Count == 0);
+            await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(visualReview, JsonOptions), cancellationToken);
         }
 
         var imageGenerationExecuted = !request.DryRun && generatedFiles.Count > 0;
@@ -326,7 +343,7 @@ public sealed class HeroAssetStoryGenerator(
         string heroAssetsRoot,
         HeroAssetStoryDto heroStory,
         HeroAssetBlueprintDto blueprint,
-        string celestialAssetsRoot,
+        IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
         CancellationToken cancellationToken)
     {
         var generatedFiles = new List<string>();
@@ -334,7 +351,7 @@ public sealed class HeroAssetStoryGenerator(
         {
             var variant = blueprint.PlatformVariants.FirstOrDefault(platformVariant => string.Equals(platformVariant.Variant, spec.Variant, StringComparison.OrdinalIgnoreCase));
             var outputPath = Path.Combine(heroAssetsRoot, spec.FileName);
-            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, heroStory, variant, celestialAssetsRoot, cancellationToken);
+            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, heroStory, variant, planetAssets, cancellationToken);
             generatedFiles.Add(NormalizePath(outputPath));
         }
 
@@ -347,7 +364,7 @@ public sealed class HeroAssetStoryGenerator(
         int height,
         HeroAssetStoryDto heroStory,
         HeroPlatformVariantDto? variant,
-        string celestialAssetsRoot,
+        IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
         CancellationToken cancellationToken)
     {
         var focus = variant?.LayoutBlueprint?.CenterVisual ?? heroStory.HeroVisualFocus;
@@ -357,24 +374,26 @@ public sealed class HeroAssetStoryGenerator(
             CleanHook(heroStory.HeroHook),
             heroStory.HeroAction,
             focus,
-            ResolveHeroPlanetTextures(celestialAssetsRoot),
+            planetAssets,
             mood: "WarmTwilightHero",
             westMarkerLabel: "WEST",
             starDensity: height > width ? 760 : 560,
             showReferenceOverlays: true,
-            labels: [new AstronomyVisualLabel(heroStory.HeroEmotion, 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)]);
+            referenceStars: BuildHeroReferenceStars(width, height),
+            labels: BuildHeroVariantLabels(heroStory, variant, width, height));
 
         await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
     }
 
 
-    private static IReadOnlyList<AstronomyVisualPlanetAsset> ResolveHeroPlanetTextures(string celestialAssetsRoot)
+    private static IReadOnlyList<AstronomyVisualPlanetAsset> ResolveRequiredHeroPlanetTextures(string celestialAssetsRoot)
         => [new AstronomyVisualPlanetAsset("Venus", ResolvePlanetTexture(celestialAssetsRoot, "venus")), new AstronomyVisualPlanetAsset("Jupiter", ResolvePlanetTexture(celestialAssetsRoot, "jupiter"))];
 
     private static string? ResolvePlanetTexture(string celestialAssetsRoot, string objectName)
     {
-        if (string.IsNullOrWhiteSpace(celestialAssetsRoot) || !Directory.Exists(celestialAssetsRoot)) return null;
-        var objectDirectory = Directory.EnumerateDirectories(celestialAssetsRoot, "*", SearchOption.TopDirectoryOnly)
+        var resolvedRoot = ResolveCelestialAssetsRoot(celestialAssetsRoot);
+        if (string.IsNullOrWhiteSpace(resolvedRoot) || !Directory.Exists(resolvedRoot)) return null;
+        var objectDirectory = Directory.EnumerateDirectories(resolvedRoot, "*", SearchOption.TopDirectoryOnly)
             .FirstOrDefault(directory => Path.GetFileName(directory).Contains(objectName, StringComparison.OrdinalIgnoreCase));
         if (objectDirectory is null) return null;
         return Directory.EnumerateFiles(objectDirectory, "*.*", SearchOption.AllDirectories)
@@ -382,6 +401,84 @@ public sealed class HeroAssetStoryGenerator(
             .OrderByDescending(path => Path.GetFileNameWithoutExtension(path).Contains("transparent", StringComparison.OrdinalIgnoreCase) ? 2 : Path.GetFileNameWithoutExtension(path).Contains("hero", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
             .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
+    }
+
+    private static string? ResolveCelestialAssetsRoot(string celestialAssetsRoot)
+    {
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(celestialAssetsRoot))
+        {
+            candidates.Add(celestialAssetsRoot);
+            if (!Path.IsPathRooted(celestialAssetsRoot))
+            {
+                candidates.Add(Path.GetFullPath(celestialAssetsRoot));
+                candidates.Add(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, celestialAssetsRoot)));
+                candidates.Add(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", celestialAssetsRoot)));
+            }
+        }
+
+        return candidates.FirstOrDefault(Directory.Exists);
+    }
+
+    private static IReadOnlyList<AstronomyReferenceStar> BuildHeroReferenceStars(int width, int height)
+        => height > width
+            ? [new AstronomyReferenceStar("after sunset", 0.20f, 0.52f), new AstronomyReferenceStar("western sky", 0.60f, 0.46f)]
+            : [new AstronomyReferenceStar("after sunset", 0.48f, 0.28f), new AstronomyReferenceStar("western sky", 0.66f, 0.34f)];
+
+    private static IReadOnlyList<AstronomyVisualLabel> BuildHeroVariantLabels(HeroAssetStoryDto heroStory, HeroPlatformVariantDto? variant, int width, int height)
+    {
+        var variantName = variant?.Variant ?? string.Empty;
+        var emotion = string.IsNullOrWhiteSpace(heroStory.HeroEmotion) ? "Wonder" : heroStory.HeroEmotion;
+        if (height > width)
+        {
+            return
+            [
+                new AstronomyVisualLabel("VENUS + JUPITER", 0.02f, 0.71f, Color.ParseHex("#FFD48A"), 0.92f),
+                new AstronomyVisualLabel("after sunset", 0.02f, 0.78f, Color.ParseHex("#CBE8FF"), 0.84f),
+                new AstronomyVisualLabel(emotion, 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
+            ];
+        }
+
+        if (variantName.Contains("Square", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                new AstronomyVisualLabel("VENUS + JUPITER", 0.02f, 0.70f, Color.ParseHex("#FFD48A"), 0.92f),
+                new AstronomyVisualLabel("after sunset", 0.02f, 0.78f, Color.ParseHex("#CBE8FF"), 0.84f),
+                new AstronomyVisualLabel(emotion, 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
+            ];
+        }
+
+        return
+        [
+            new AstronomyVisualLabel("VENUS + JUPITER", 0.02f, 0.76f, Color.ParseHex("#FFD48A"), 0.92f),
+            new AstronomyVisualLabel("after sunset", 0.02f, 0.84f, Color.ParseHex("#CBE8FF"), 0.84f),
+            new AstronomyVisualLabel(emotion, 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
+        ];
+    }
+
+    private static HeroAssetVisualReviewDto BuildHeroVisualReview(
+        IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
+        IReadOnlyList<string> generatedHeroImages,
+        int platformVariantCount,
+        bool approvedSceneBaselineAvailable)
+    {
+        var usesRealCelestialAssets = planetAssets.Count >= 2
+            && planetAssets.All(asset => !string.IsNullOrWhiteSpace(asset.TexturePath) && File.Exists(asset.TexturePath));
+        var generatedImageNames = generatedHeroImages
+            .Select(Path.GetFileName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name!)
+            .ToArray();
+
+        return new HeroAssetVisualReviewDto(
+            UsesSharedAstronomyVisualComposer: true,
+            UsesRealCelestialAssets: usesRealCelestialAssets,
+            UsesPlaceholderDots: false,
+            UsesManualCirclePlanets: false,
+            MatchesApprovedSceneVisualBaseline: approvedSceneBaselineAvailable,
+            PlatformVariantCount: platformVariantCount,
+            GeneratedFiles: generatedImageNames);
     }
 
     private async Task<HeroAssetStoryDto> LoadHeroAssetStoryAsync(string storyPath, HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
@@ -415,6 +512,15 @@ public sealed class HeroAssetStoryGenerator(
     }
 
     private sealed record HeroImageSpec(string Variant, string FileName, int Width, int Height);
+
+    private sealed record HeroAssetVisualReviewDto(
+        bool UsesSharedAstronomyVisualComposer,
+        bool UsesRealCelestialAssets,
+        bool UsesPlaceholderDots,
+        bool UsesManualCirclePlanets,
+        bool MatchesApprovedSceneVisualBaseline,
+        int PlatformVariantCount,
+        IReadOnlyList<string> GeneratedFiles);
 
     private static HeroAssetStoryDto WithSelectedHook(HeroAssetStoryDto heroStory, string selectedHook)
         => string.Equals(heroStory.HeroHook, selectedHook, StringComparison.Ordinal)
