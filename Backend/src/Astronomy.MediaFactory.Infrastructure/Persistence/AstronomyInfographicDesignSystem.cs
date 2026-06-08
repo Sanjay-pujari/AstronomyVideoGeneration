@@ -7,9 +7,11 @@ public sealed class AstronomyInfographicDesignSystem : IAstronomyInfographicDesi
     private static readonly string[] CommonForbiddenPatterns =
     [
         "PowerPoint slide layout",
-        "card or title-slide composition",
+        "card/panel/large bounding rectangle composition",
+        "helper layout box",
         "large text box",
         "fake circle planets",
+        "solid dark planet backing circles",
         "debug/internal/path/GUID text",
         "text-dominant image"
     ];
@@ -24,24 +26,24 @@ public sealed class AstronomyInfographicDesignSystem : IAstronomyInfographicDesi
             "what" => new(
                 "magazine-cover-cinematic-twilight",
                 "WHAT — Astronomy Magazine Cover",
-                "Cinematic twilight-sky astronomy magazine cover where Venus and Jupiter are the visual focus and text remains a small editorial accent.",
+                "Golden twilight astronomy magazine cover with an orange western horizon glow where Venus and Jupiter are the visual focus and text remains a small editorial accent.",
                 0.25,
                 0.75,
-                ["cinematic twilight sky", "Venus/Jupiter visual focus", "small title", "no instructional clutter"],
+                ["golden twilight", "orange western horizon glow", "premium astronomy magazine cover", "Venus/Jupiter visual focus", "small floating title", "no grid or chart background"],
                 CommonForbiddenPatterns,
                 new("Venus & Jupiter Tonight", "After sunset", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], [], [], []),
-                ["background:cinematic twilight sky", "horizon:silhouette landscape", "celestial:local transparent Venus and Jupiter assets", "annotation:small magazine title", "layout:asymmetric cover composition"],
+                ["background:golden twilight western sky", "horizon:orange western horizon glow", "celestial:local transparent Venus and Jupiter assets integrated with subtle glow", "annotation:floating magazine title", "layout:asymmetric cover composition"],
                 [request.AccessibilityIntent, "Small labels identify Venus and Jupiter without covering the sky."]),
             "where" => new(
                 "western-horizon-observation-chart",
                 "WHERE — Observation Chart",
-                "Observation chart answering where to look with a western horizon line, West marker, altitude cue, and plotted Venus/Jupiter positions.",
+                "Clean educational observation chart answering where to look with a western horizon line, subtle sky grid, Leo/Regulus reference-star guide, West marker, altitude cue, and plotted Venus/Jupiter positions.",
                 0.25,
                 0.75,
-                ["western horizon", "horizon line", "West marker", "Venus/Jupiter positions", "altitude hint"],
+                ["western horizon", "horizon line", "West marker", "Venus/Jupiter positions", "altitude hint", "subtle sky grid", "Leo/Regulus reference-star guide"],
                 CommonForbiddenPatterns,
-                new("Where to Look", "Western horizon", ["West", "Venus", "Jupiter", "Horizon", "Altitude"], ["western horizon altitude guide"], ["Venus", "Jupiter"], ["West"], [], []),
-                ["background:western observation chart", "horizon:measured western horizon line", "celestial:local Venus/Jupiter plotted positions", "reference:subtle sky-guide grid", "direction:West marker", "annotation:integrated altitude hint"],
+                new("Where to Look", "Western horizon", ["West", "Venus", "Jupiter", "Horizon", "Leo / Regulus reference stars"], ["western horizon altitude guide"], ["Venus", "Jupiter"], ["West"], [], []),
+                ["background:clean western observation chart", "horizon:measured western horizon line", "celestial:local Venus/Jupiter plotted positions", "reference:subtle sky grid", "reference:Leo Regulus constellation-star guide", "direction:West marker", "annotation:floating altitude hint"],
                 [request.AccessibilityIntent, "West marker and horizon line provide orientation for Udaipur viewers."]),
             "when" => new(
                 "twilight-viewing-window-timeline",
@@ -63,7 +65,7 @@ public sealed class AstronomyInfographicDesignSystem : IAstronomyInfographicDesi
                 ["Step 1 Find Venus", "Step 2 Look nearby for Jupiter", "Step 3 Face west", "arrows from Venus to Jupiter", "West marker"],
                 CommonForbiddenPatterns,
                 new("How to Find It", "Use Venus as your anchor", ["Venus", "Jupiter", "West"], ["arrow from Venus to Jupiter", "arrow toward western horizon"], ["Venus", "Jupiter"], ["West"], [], ["Find Venus", "Look nearby for Jupiter", "Face west"]),
-                ["background:observation step guide sky", "horizon:west reference", "celestial:local Venus/Jupiter assets", "direction:arrow from Venus to Jupiter", "steps:three small integrated labels", "layout:diagonal field guide"],
+                ["background:clean observer-friendly western sky", "horizon:west reference", "celestial:local Venus/Jupiter assets integrated with subtle glow", "reference:subtle reference-star hint", "direction:arrow from Venus to Jupiter", "steps:three floating labels", "layout:diagonal field guide"],
                 [request.AccessibilityIntent, "Numbered steps and arrows encode the observing path."]),
             "why" => new(
                 "close-pair-significance-bracket",
@@ -74,7 +76,7 @@ public sealed class AstronomyInfographicDesignSystem : IAstronomyInfographicDesi
                 ["Venus/Jupiter close pairing", "closeness bracket", "short significance line", "visual comparison/brightness feel"],
                 CommonForbiddenPatterns,
                 new("Why It Matters", "Close bright pairing", ["Venus", "Jupiter"], ["closeness bracket"], ["Venus", "Jupiter"], [], [], []),
-                ["background:deep significance sky", "celestial:close local Venus/Jupiter pairing", "comparison:brightness feel", "direction:closeness bracket", "annotation:short significance line", "layout:center comparison graphic"],
+                ["background:deep editorial sky with subtle astronomy texture", "celestial:close local Venus/Jupiter pairing", "comparison:brightness feel", "direction:closeness bracket", "annotation:floating significance line", "layout:center comparison graphic"],
                 [request.AccessibilityIntent, "Bracket shows the planets' apparent closeness."]),
             "action" => new(
                 "minimal-closing-astronomy-poster",
@@ -85,7 +87,7 @@ public sealed class AstronomyInfographicDesignSystem : IAstronomyInfographicDesi
                 ["beautiful closing sky", "Venus/Jupiter together", "minimal CTA"],
                 CommonForbiddenPatterns,
                 new("Step Outside Tonight", "Look west", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], ["West"], [], []),
-                ["background:beautiful closing evening sky", "horizon:quiet landscape", "celestial:local Venus and Jupiter together", "annotation:minimal CTA", "layout:minimal astronomy poster"],
+                ["background:beautiful emotional twilight poster sky", "horizon:warm peaceful western horizon", "celestial:local Venus and Jupiter together integrated with subtle glow", "annotation:minimal floating CTA", "layout:minimal astronomy poster"],
                 [request.AccessibilityIntent, "Minimal CTA and west cue keep the planet pair dominant."]),
             _ => throw new ArgumentException($"Unsupported astronomy infographic question type '{request.QuestionType}'.", nameof(request))
         };
