@@ -9,6 +9,14 @@ using SixLabors.ImageSharp.Processing;
 
 namespace Astronomy.MediaFactory.Rendering;
 
+public enum AstronomyVisualCompositionMode
+{
+    SceneInfographic,
+    HeroAsset,
+    Thumbnail,
+    SocialAsset
+}
+
 public static class AstronomyVisualCompositionEngine
 {
     public static readonly IReadOnlyDictionary<string, Size> PlatformAspectRatios = new Dictionary<string, Size>(StringComparer.OrdinalIgnoreCase)
@@ -55,14 +63,52 @@ public static class AstronomyVisualCompositionEngine
             DrawStars(ctx, request.Width, request.Height, request.StarDensity);
             DrawConstellationAndReferenceStarOverlay(ctx, request.Width, request.Height, request.ReferenceStars, request.ShowReferenceOverlays);
             DrawHorizonAndLandscape(ctx, request.Width, request.Height, request.Mood);
-            DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets);
+            DrawVisualModeLayers(ctx, request);
             DrawWestMarker(ctx, request.Width, request.Height, request.WestMarkerLabel);
             DrawSafeMarginGuide(ctx, request.Width, request.Height, request.ShowSafeMarginGuide);
-            DrawLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.MetadataLine, request.Labels);
             DrawFinishingGrade(ctx, request.Width, request.Height);
         });
 
         return image;
+    }
+
+    private static void DrawVisualModeLayers(IImageProcessingContext ctx, AstronomyVisualCompositionRequest request)
+    {
+        switch (request.CompositionMode)
+        {
+            case AstronomyVisualCompositionMode.SceneInfographic:
+                DrawSceneInfographicMode(ctx, request);
+                break;
+            case AstronomyVisualCompositionMode.HeroAsset:
+                DrawHeroAssetMode(ctx, request);
+                break;
+            case AstronomyVisualCompositionMode.Thumbnail:
+            case AstronomyVisualCompositionMode.SocialAsset:
+                DrawPosterAssetMode(ctx, request);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(request), $"Unsupported astronomy visual composition mode '{request.CompositionMode}'.");
+        }
+    }
+
+    private static void DrawSceneInfographicMode(IImageProcessingContext ctx, AstronomyVisualCompositionRequest request)
+    {
+        // Scene infographics own their celestial-object and editorial overlay layers.
+        // Keep the shared composer to base sky/reference-safe-margin work only so
+        // hero foreground planets, hooks, labels, and poster scaling cannot pollute
+        // the approved What/Where/When/How/Why/Action scene layouts.
+    }
+
+    private static void DrawHeroAssetMode(IImageProcessingContext ctx, AstronomyVisualCompositionRequest request)
+    {
+        DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: true);
+        DrawLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.MetadataLine, request.Labels);
+    }
+
+    private static void DrawPosterAssetMode(IImageProcessingContext ctx, AstronomyVisualCompositionRequest request)
+    {
+        DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: false);
+        DrawLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.MetadataLine, request.Labels);
     }
 
     private static async Task<Image<Rgba32>> BuildBaseImageAsync(AstronomyVisualCompositionRequest request, CancellationToken cancellationToken)
@@ -156,10 +202,12 @@ public static class AstronomyVisualCompositionEngine
         ctx.Fill(Color.ParseHex("#040309").WithAlpha(0.96f), ground);
     }
 
-    private static void DrawPlanetTextures(IImageProcessingContext ctx, int width, int height, IReadOnlyList<AstronomyVisualPlanetAsset> assets)
+    private static void DrawPlanetTextures(IImageProcessingContext ctx, int width, int height, IReadOnlyList<AstronomyVisualPlanetAsset> assets, bool allowDefaultHeroObjects)
     {
-        var placements = BuildPlanetPlacements(width, height, Math.Max(assets.Count, 2));
-        var count = assets.Count == 0 ? 2 : assets.Count;
+        var count = assets.Count == 0 && allowDefaultHeroObjects ? 2 : assets.Count;
+        if (count == 0) return;
+
+        var placements = BuildPlanetPlacements(width, height, count);
         for (var i = 0; i < count && i < placements.Count; i++)
         {
             var placement = placements[i];
@@ -335,14 +383,15 @@ public sealed record AstronomyVisualCompositionRequest
         string subtitle,
         string metadataLine,
         IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
-        string mood = "WarmTwilightHero",
+        string mood = "WarmTwilightScene",
         string westMarkerLabel = "WEST",
         int starDensity = 460,
         bool showReferenceOverlays = true,
         bool showSafeMarginGuide = false,
         IReadOnlyList<AstronomyReferenceStar>? referenceStars = null,
         IReadOnlyList<AstronomyVisualLabel>? labels = null,
-        string? backgroundImagePath = null)
+        string? backgroundImagePath = null,
+        AstronomyVisualCompositionMode compositionMode = AstronomyVisualCompositionMode.SceneInfographic)
     {
         Width = width;
         Height = height;
@@ -358,6 +407,7 @@ public sealed record AstronomyVisualCompositionRequest
         ReferenceStars = referenceStars ?? [];
         Labels = labels ?? [];
         BackgroundImagePath = backgroundImagePath;
+        CompositionMode = compositionMode;
     }
 
     public int Width { get; init; }
@@ -374,6 +424,7 @@ public sealed record AstronomyVisualCompositionRequest
     public IReadOnlyList<AstronomyReferenceStar> ReferenceStars { get; init; }
     public IReadOnlyList<AstronomyVisualLabel> Labels { get; init; }
     public string? BackgroundImagePath { get; init; }
+    public AstronomyVisualCompositionMode CompositionMode { get; init; }
 }
 
 public sealed record AstronomyVisualPlanetAsset(string Label, string? TexturePath);

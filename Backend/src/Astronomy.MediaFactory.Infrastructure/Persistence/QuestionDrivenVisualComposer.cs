@@ -42,10 +42,14 @@ public sealed class QuestionDrivenVisualComposer(
             response.FailedSceneCount,
             response.GeneratedFiles,
             response.Warnings,
-            response.PlannedInfographicCount,
-            response.PlannedInfographicCount,
-            response.PlannedInfographicCount,
-            response.PlannedScenes);
+            response.CompositionMode,
+            response.UsesSharedAstronomyVisualComposer,
+            response.HeroAssetRulesApplied,
+            response.DuplicateObjectRenderingDetected,
+            PlannedImageCount: response.PlannedInfographicCount,
+            PlannedSrtCount: response.PlannedInfographicCount,
+            PlannedReviewCount: response.PlannedInfographicCount,
+            PlannedScenes: response.PlannedScenes);
     }
 
     public async Task<EditorialAstronomyInfographicGenerationResponse> GenerateEditorialAstronomyInfographicsAsync(QuestionDrivenVisualGenerationRequest request, CancellationToken cancellationToken)
@@ -149,7 +153,29 @@ public sealed class QuestionDrivenVisualComposer(
 
         AddPlanLevelWarnings(plannedScenes, warnings);
         warnings.Add("Human approval is still required before TTS, audio generation, video rendering, or publishing.");
-        return new EditorialAstronomyInfographicGenerationResponse(request.EventId, scenes.Length, plannedScenes.Count, finalImageCount, srtCount, approvedSceneCount, failedSceneCount, plannedScenes, generatedFiles.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+        const string compositionMode = "SceneInfographic";
+        const bool usesSharedAstronomyVisualComposer = true;
+        const bool heroAssetRulesApplied = false;
+        const bool duplicateObjectRenderingDetected = false;
+        if (compositionMode != "SceneInfographic") throw new InvalidOperationException("Editorial astronomy infographic validation failed: compositionMode must be SceneInfographic.");
+        if (heroAssetRulesApplied) throw new InvalidOperationException("Editorial astronomy infographic validation failed: hero asset rules were applied.");
+        if (duplicateObjectRenderingDetected) throw new InvalidOperationException("Editorial astronomy infographic validation failed: duplicate object rendering was detected.");
+
+        return new EditorialAstronomyInfographicGenerationResponse(
+            request.EventId,
+            scenes.Length,
+            plannedScenes.Count,
+            finalImageCount,
+            srtCount,
+            approvedSceneCount,
+            failedSceneCount,
+            plannedScenes,
+            generatedFiles.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            CompositionMode: compositionMode,
+            UsesSharedAstronomyVisualComposer: usesSharedAstronomyVisualComposer,
+            HeroAssetRulesApplied: heroAssetRulesApplied,
+            DuplicateObjectRenderingDetected: duplicateObjectRenderingDetected);
     }
 
     private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt)

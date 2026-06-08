@@ -380,7 +380,8 @@ public sealed class HeroAssetStoryGenerator(
             starDensity: height > width ? 760 : 560,
             showReferenceOverlays: true,
             referenceStars: BuildHeroReferenceStars(width, height),
-            labels: BuildHeroVariantLabels(heroStory, variant, width, height));
+            labels: BuildHeroVariantLabels(heroStory, variant, width, height),
+            compositionMode: AstronomyVisualCompositionMode.HeroAsset);
 
         await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
     }

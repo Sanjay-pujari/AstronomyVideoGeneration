@@ -34,7 +34,8 @@ public sealed class AstronomyInfographicRenderer(
             mood: "WarmTwilightQuestionScene",
             westMarkerLabel: "WEST",
             starDensity: 720,
-            showReferenceOverlays: true), cancellationToken);
+            showReferenceOverlays: true,
+            compositionMode: AstronomyVisualCompositionMode.SceneInfographic), cancellationToken);
         var fonts = EditorialFonts.Create();
         image.Mutate(ctx =>
         {
