@@ -75,26 +75,35 @@ public sealed record HeroHookScoreDto(
     int UnderstandabilityScore,
     int TotalScore);
 
+public sealed record HeroAssetBlueprintFileDto(
+    string EventId,
+    string SelectedHook,
+    HeroAssetBlueprintDto HeroBlueprint);
+
 public sealed record HeroAssetBlueprintDto(
+    string HeroEmotion,
     string LayoutStyle,
     string VisualFocus,
-    string TitlePlacement,
-    string SubtitlePlacement,
-    string DirectionCue,
-    string Emotion,
+    string VisualNarrative,
     IReadOnlyList<HeroPlatformVariantDto> PlatformVariants);
 
 public sealed record HeroPlatformVariantDto(
     string Variant,
     string Size,
-    string Purpose);
+    string Purpose,
+    HeroLayoutBlueprintDto LayoutBlueprint);
+
+public sealed record HeroLayoutBlueprintDto(
+    string PrimaryTextPlacement,
+    string CenterVisual,
+    string SupportingTextPlacement,
+    string Atmosphere);
 
 public sealed record HeroAssetReviewScoresDto(
     int ScrollStoppingScore,
     int ClickabilityScore,
     int ShareabilityScore,
     int UnderstandabilityScore,
-    int EmotionStrengthScore,
     int HeroAssetReadinessScore);
 
 public interface IHeroAssetStoryGenerator

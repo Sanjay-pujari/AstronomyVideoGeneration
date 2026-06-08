@@ -116,9 +116,9 @@ public sealed class HeroAssetStoryGenerator(
         {
             HeroAssetGenerationPhase.Story => await GenerateHeroHookSelectionAsync(request, cancellationToken),
             HeroAssetGenerationPhase.HookSelection => await GenerateHeroHookSelectionAsync(request, cancellationToken),
-            HeroAssetGenerationPhase.Blueprint => await GenerateHeroHookSelectionAsync(request, cancellationToken),
-            HeroAssetGenerationPhase.Images => await GenerateHeroHookSelectionAsync(request, cancellationToken),
-            HeroAssetGenerationPhase.Full => await GenerateHeroHookSelectionAsync(request, cancellationToken),
+            HeroAssetGenerationPhase.Blueprint => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
+            HeroAssetGenerationPhase.Images => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
+            HeroAssetGenerationPhase.Full => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
             _ => throw new ArgumentException($"Unsupported hero asset generation phase '{request.Phase}'.", nameof(request))
         };
     }
@@ -173,13 +173,19 @@ public sealed class HeroAssetStoryGenerator(
         warnings.AddRange(storyValidationIssues);
 
         var hookScores = BuildHookScores(heroStory);
-        var selectedHook = hookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).First().Hook;
-        var alternativeHooks = hookScores.Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase)).Select(score => score.Hook).ToArray();
-        var platformVariants = BuildPlatformVariants();
+        var selectedHook = SelectTopHook(hookScores);
+        var alternativeHooks = hookScores
+            .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(score => score.TotalScore)
+            .ThenBy(score => score.Hook)
+            .Select(score => score.Hook)
+            .ToArray();
+        heroStory = WithSelectedHook(heroStory, selectedHook);
+        var platformVariants = BuildPlatformVariants(selectedHook);
         var blueprint = BuildHeroBlueprint(platformVariants);
-        var reviewScores = BuildEmptyReviewScores();
+        var reviewScores = BuildReviewScores();
 
-        var blueprintValidationIssues = ValidateHeroAssetBlueprint(selectedHook, blueprint, BuildReviewScores());
+        var blueprintValidationIssues = ValidateHeroAssetBlueprint(selectedHook, blueprint, reviewScores);
         warnings.AddRange(blueprintValidationIssues);
         var isValid = storyValidationIssues.Count == 0 && blueprintValidationIssues.Count == 0;
         if (!isValid)
@@ -188,7 +194,9 @@ public sealed class HeroAssetStoryGenerator(
         if (!request.DryRun)
         {
             Directory.CreateDirectory(heroAssetsRoot);
-            await File.WriteAllTextAsync(blueprintPath, JsonSerializer.Serialize(blueprint, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(storyPath, JsonSerializer.Serialize(heroStory, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(blueprintPath, JsonSerializer.Serialize(new HeroAssetBlueprintFileDto(request.EventId, selectedHook, blueprint), JsonOptions), cancellationToken);
+            generatedFiles.Add(NormalizePath(storyPath));
             generatedFiles.Add(NormalizePath(blueprintPath));
         }
 
@@ -214,8 +222,14 @@ public sealed class HeroAssetStoryGenerator(
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
 
         var hookScores = BuildHookScores(heroStory);
-        var selectedHook = hookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).First().Hook;
-        var alternativeHooks = hookScores.Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase)).Select(score => score.Hook).ToArray();
+        var selectedHook = SelectTopHook(hookScores);
+        var alternativeHooks = hookScores
+            .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(score => score.TotalScore)
+            .ThenBy(score => score.Hook)
+            .Select(score => score.Hook)
+            .ToArray();
+        heroStory = WithSelectedHook(heroStory, selectedHook);
         var platformVariants = blueprint.PlatformVariants;
         var reviewScores = BuildReviewScores();
 
@@ -268,9 +282,21 @@ public sealed class HeroAssetStoryGenerator(
     private async Task<HeroAssetBlueprintDto> LoadHeroAssetBlueprintAsync(string blueprintPath, HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
     {
         EnsureInputFile(blueprintPath, HeroAssetBlueprintFileName);
-        return JsonSerializer.Deserialize<HeroAssetBlueprintDto>(await File.ReadAllTextAsync(blueprintPath, cancellationToken), JsonOptions)
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(blueprintPath, cancellationToken));
+        if (document.RootElement.TryGetProperty("heroBlueprint", out var wrappedBlueprint))
+        {
+            return wrappedBlueprint.Deserialize<HeroAssetBlueprintDto>(JsonOptions)
+                ?? throw new ArgumentException("Hero asset blueprint could not be parsed.", nameof(request));
+        }
+
+        return document.RootElement.Deserialize<HeroAssetBlueprintDto>(JsonOptions)
             ?? throw new ArgumentException("Hero asset blueprint could not be parsed.", nameof(request));
     }
+
+    private static HeroAssetStoryDto WithSelectedHook(HeroAssetStoryDto heroStory, string selectedHook)
+        => string.Equals(heroStory.HeroHook, selectedHook, StringComparison.Ordinal)
+            ? heroStory
+            : heroStory with { HeroHook = selectedHook };
 
     private static HeroAssetStoryDto BuildHeroStory(HeroAssetStoryGenerationRequest request, HeroStorySourceDto storySource)
     {
@@ -287,7 +313,7 @@ public sealed class HeroAssetStoryGenerator(
             request.EventId,
             request.RegionId,
             request.Language,
-            "TWO BRIGHT PLANETS TOGETHER",
+            "LOOK WEST TONIGHT",
             "Venus and Jupiter will appear close together after sunset in Udaipur’s western sky.",
             "Look west shortly after sunset.",
             "Venus and Jupiter above the western horizon.",
@@ -466,32 +492,54 @@ public sealed class HeroAssetStoryGenerator(
     private static string CleanHook(string value)
         => Clean(value).Trim('.', '!', '?').ToUpperInvariant();
 
-    private static IReadOnlyList<HeroPlatformVariantDto> BuildPlatformVariants()
+    private static IReadOnlyList<HeroPlatformVariantDto> BuildPlatformVariants(string selectedHook)
         =>
         [
-            new("Landscape", "1280x720", "YouTube"),
-            new("Square", "1080x1080", "Facebook/Instagram"),
-            new("Portrait", "1080x1920", "Reels/Stories/Shorts")
+            new(
+                "Landscape",
+                "1280x720",
+                "YouTube",
+                new HeroLayoutBlueprintDto(
+                    $"Top-left: {selectedHook}",
+                    "Center: Venus + Jupiter",
+                    "Bottom-right: West marker",
+                    "Twilight")),
+            new(
+                "Square",
+                "1080x1080",
+                "Facebook/Instagram",
+                new HeroLayoutBlueprintDto(
+                    $"Top: {selectedHook}",
+                    "Center: Venus + Jupiter",
+                    "Bottom: After Sunset",
+                    "Twilight")),
+            new(
+                "Portrait",
+                "1080x1920",
+                "Stories/Reels/Shorts",
+                new HeroLayoutBlueprintDto(
+                    $"Top: {selectedHook}",
+                    "Center: Venus + Jupiter",
+                    "Bottom: Look West After Sunset",
+                    "Twilight"))
         ];
 
     private static HeroAssetBlueprintDto BuildHeroBlueprint(IReadOnlyList<HeroPlatformVariantDto> platformVariants)
         => new(
-            "AstronomyPoster",
-            "Venus and Jupiter above the western horizon with dramatic twilight sky, clear westward orientation, subtle emotional significance cue, and polished poster atmosphere from the approved scene set.",
-            "Large bold hook in the upper third with safe margins for landscape, square, and portrait crops.",
-            "Short explanatory subtitle near the lower third, separated from the planet pair and horizon glow.",
-            "West-facing horizon cue with a subtle WEST marker and post-sunset viewing prompt.",
             "Wonder",
+            "AstronomyPoster",
+            "Venus and Jupiter above the western horizon during twilight.",
+            "Two bright planets together after sunset. Look west to see the pairing.",
             platformVariants);
 
     private static HeroAssetReviewScoresDto BuildReviewScores()
-        => new(96, 96, 94, 97, 95, 96);
+        => new(96, 96, 94, 97, 96);
 
     private static HeroAssetBlueprintDto BuildEmptyHeroBlueprint()
-        => new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, []);
+        => new(string.Empty, string.Empty, string.Empty, string.Empty, []);
 
     private static HeroAssetReviewScoresDto BuildEmptyReviewScores()
-        => new(0, 0, 0, 0, 0, 0);
+        => new(0, 0, 0, 0, 0);
 
     private static IReadOnlyList<string> ValidateStory(HeroAssetStoryDto story)
     {
@@ -510,7 +558,9 @@ public sealed class HeroAssetStoryGenerator(
         var issues = new List<string>();
         if (string.IsNullOrWhiteSpace(selectedHook)) issues.Add("selectedHook is required.");
         if (string.IsNullOrWhiteSpace(blueprint.VisualFocus)) issues.Add("visualFocus is required.");
-        if (string.IsNullOrWhiteSpace(blueprint.Emotion)) issues.Add("emotion is required.");
+        if (string.IsNullOrWhiteSpace(blueprint.VisualNarrative)) issues.Add("visualNarrative is required.");
+        if (string.IsNullOrWhiteSpace(blueprint.HeroEmotion)) issues.Add("heroEmotion is required.");
+        if (blueprint.PlatformVariants.Count == 0) issues.Add("platformVariants is required.");
         if (reviewScores.HeroAssetReadinessScore < 90) issues.Add("heroAssetReadinessScore must be at least 90.");
         return issues;
     }

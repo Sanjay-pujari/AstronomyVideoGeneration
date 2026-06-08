@@ -32,7 +32,7 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Empty(result.GeneratedFiles);
         Assert.Empty(result.Warnings);
         Assert.False(File.Exists(BuildOutputPath(workingDirectory)));
-        Assert.Equal("TWO BRIGHT PLANETS TOGETHER", result.HeroStory.HeroHook);
+        Assert.Equal("LOOK WEST TONIGHT", result.HeroStory.HeroHook);
         Assert.Equal("Venus and Jupiter will appear close together after sunset in Udaipur’s western sky.", result.HeroStory.HeroMessage);
         Assert.Equal("Look west shortly after sunset.", result.HeroStory.HeroAction);
         Assert.Equal("Venus and Jupiter above the western horizon.", result.HeroStory.HeroVisualFocus);
@@ -99,7 +99,7 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.True(result.IsValid);
         Assert.Empty(result.GeneratedFiles);
         Assert.Empty(result.Warnings);
-        Assert.Equal("TWO BRIGHT PLANETS TOGETHER", result.HeroStory.HeroHook);
+        Assert.Equal("LOOK WEST TONIGHT", result.HeroStory.HeroHook);
         Assert.Equal(result.HookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).First().Hook, result.SelectedHook);
         Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
         Assert.True(result.HookScores.Count >= 5);
@@ -217,6 +217,104 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-square.png")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-portrait.png")));
 
+    }
+
+    [Fact]
+    public async Task GenerateHeroAssetsAsync_BlueprintDryRunReturnsBlueprintWithoutGeneratingImages()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteInputFilesAsync(workingDirectory);
+        var generator = CreateGenerator(workingDirectory);
+        await generator.GenerateHeroAssetStoryAsync(new HeroAssetStoryGenerationRequest(EventId, RegionId, "en", DryRun: false, OverwriteExisting: false), CancellationToken.None);
+
+        var result = await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: false,
+            Phase: HeroAssetGenerationPhase.Blueprint), CancellationToken.None);
+
+        var heroAssetsRoot = Path.GetDirectoryName(BuildOutputPath(workingDirectory))!;
+        Assert.True(result.IsValid);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.Empty(result.Warnings);
+        Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
+        Assert.Equal("LOOK WEST TONIGHT", result.HeroStory.HeroHook);
+        Assert.Equal("Wonder", result.HeroBlueprint.HeroEmotion);
+        Assert.Equal("AstronomyPoster", result.HeroBlueprint.LayoutStyle);
+        Assert.Equal("Venus and Jupiter above the western horizon during twilight.", result.HeroBlueprint.VisualFocus);
+        Assert.Equal("Two bright planets together after sunset. Look west to see the pairing.", result.HeroBlueprint.VisualNarrative);
+        Assert.Equal(3, result.PlatformVariants.Count);
+        Assert.Equal(result.PlatformVariants, result.HeroBlueprint.PlatformVariants);
+        Assert.All(result.PlatformVariants, variant => Assert.Equal("Twilight", variant.LayoutBlueprint.Atmosphere));
+        Assert.Equal("Landscape", result.PlatformVariants[0].Variant);
+        Assert.Equal("1280x720", result.PlatformVariants[0].Size);
+        Assert.Equal("YouTube", result.PlatformVariants[0].Purpose);
+        Assert.Equal("Top-left: LOOK WEST TONIGHT", result.PlatformVariants[0].LayoutBlueprint.PrimaryTextPlacement);
+        Assert.Equal("Center: Venus + Jupiter", result.PlatformVariants[0].LayoutBlueprint.CenterVisual);
+        Assert.Equal("Bottom-right: West marker", result.PlatformVariants[0].LayoutBlueprint.SupportingTextPlacement);
+        Assert.Equal("Square", result.PlatformVariants[1].Variant);
+        Assert.Equal("1080x1080", result.PlatformVariants[1].Size);
+        Assert.Equal("Facebook/Instagram", result.PlatformVariants[1].Purpose);
+        Assert.Equal("Top: LOOK WEST TONIGHT", result.PlatformVariants[1].LayoutBlueprint.PrimaryTextPlacement);
+        Assert.Equal("Bottom: After Sunset", result.PlatformVariants[1].LayoutBlueprint.SupportingTextPlacement);
+        Assert.Equal("Portrait", result.PlatformVariants[2].Variant);
+        Assert.Equal("1080x1920", result.PlatformVariants[2].Size);
+        Assert.Equal("Stories/Reels/Shorts", result.PlatformVariants[2].Purpose);
+        Assert.Equal("Top: LOOK WEST TONIGHT", result.PlatformVariants[2].LayoutBlueprint.PrimaryTextPlacement);
+        Assert.Equal("Bottom: Look West After Sunset", result.PlatformVariants[2].LayoutBlueprint.SupportingTextPlacement);
+        Assert.InRange(result.ReviewScores.ScrollStoppingScore, 90, 100);
+        Assert.InRange(result.ReviewScores.ClickabilityScore, 90, 100);
+        Assert.InRange(result.ReviewScores.ShareabilityScore, 90, 100);
+        Assert.InRange(result.ReviewScores.UnderstandabilityScore, 90, 100);
+        Assert.InRange(result.ReviewScores.HeroAssetReadinessScore, 90, 100);
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-asset-blueprint.json")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-landscape.png")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-square.png")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-portrait.png")));
+    }
+
+    [Fact]
+    public async Task GenerateHeroAssetsAsync_BlueprintSaveModeWritesBlueprintJsonOnlyAndUpdatesHeroStoryHook()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteInputFilesAsync(workingDirectory);
+        var generator = CreateGenerator(workingDirectory);
+        await generator.GenerateHeroAssetStoryAsync(new HeroAssetStoryGenerationRequest(EventId, RegionId, "en", DryRun: false, OverwriteExisting: false), CancellationToken.None);
+
+        var result = await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            Phase: HeroAssetGenerationPhase.Blueprint), CancellationToken.None);
+
+        var heroAssetsRoot = Path.GetDirectoryName(BuildOutputPath(workingDirectory))!;
+        var storyPath = BuildOutputPath(workingDirectory);
+        var blueprintPath = Path.Combine(heroAssetsRoot, "hero-asset-blueprint.json");
+        Assert.True(result.IsValid);
+        Assert.Contains(storyPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.Contains(blueprintPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.True(File.Exists(storyPath));
+        Assert.True(File.Exists(blueprintPath));
+
+        using var blueprintDocument = JsonDocument.Parse(await File.ReadAllTextAsync(blueprintPath));
+        Assert.Equal(EventId, blueprintDocument.RootElement.GetProperty("eventId").GetString());
+        Assert.Equal("LOOK WEST TONIGHT", blueprintDocument.RootElement.GetProperty("selectedHook").GetString());
+        var heroBlueprint = blueprintDocument.RootElement.GetProperty("heroBlueprint");
+        Assert.Equal("AstronomyPoster", heroBlueprint.GetProperty("layoutStyle").GetString());
+        Assert.Equal("Venus and Jupiter above the western horizon during twilight.", heroBlueprint.GetProperty("visualFocus").GetString());
+        Assert.Equal("Two bright planets together after sunset. Look west to see the pairing.", heroBlueprint.GetProperty("visualNarrative").GetString());
+        Assert.Equal(3, heroBlueprint.GetProperty("platformVariants").GetArrayLength());
+
+        var savedStory = JsonSerializer.Deserialize<HeroAssetStoryDto>(await File.ReadAllTextAsync(storyPath), JsonOptions);
+        Assert.NotNull(savedStory);
+        Assert.Equal("LOOK WEST TONIGHT", savedStory!.HeroHook);
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-landscape.png")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-square.png")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-portrait.png")));
     }
 
     private static void AssertRequiredHookCandidates(IReadOnlyList<HeroHookScoreDto> hookScores)
