@@ -11,6 +11,9 @@ public sealed class AstronomyInfographicDesignSystem : IAstronomyInfographicDesi
         "helper layout box",
         "large text box",
         "fake circle planets",
+        "decorative translucent circles",
+        "Canva-style background circles",
+        "template helper circles",
         "solid dark planet backing circles",
         "debug/internal/path/GUID text",
         "text-dominant image"
@@ -26,13 +29,13 @@ public sealed class AstronomyInfographicDesignSystem : IAstronomyInfographicDesi
             "what" => new(
                 "magazine-cover-cinematic-twilight",
                 "WHAT — Astronomy Magazine Cover",
-                "Golden twilight astronomy magazine cover with an orange western horizon glow where Venus and Jupiter are the visual focus and text remains a small editorial accent.",
+                "YouTube-quality astronomy thumbnail with golden western twilight, dramatic horizon glow, large Venus/Jupiter focal point, and premium title typography.",
                 0.25,
                 0.75,
-                ["golden twilight", "orange western horizon glow", "premium astronomy magazine cover", "Venus/Jupiter visual focus", "small floating title", "no grid or chart background"],
+                ["golden western twilight", "dramatic horizon glow", "large Venus/Jupiter focal point", "premium typography", "title Venus & Jupiter", "subtitle After sunset", "no grid or chart background"],
                 CommonForbiddenPatterns,
-                new("Venus & Jupiter Tonight", "After sunset", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], [], [], []),
-                ["background:golden twilight western sky", "horizon:orange western horizon glow", "celestial:local transparent Venus and Jupiter assets integrated with subtle glow", "annotation:floating magazine title", "layout:asymmetric cover composition"],
+                new("Venus & Jupiter", "After sunset", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], [], [], []),
+                ["background:golden western twilight atmospheric gradient", "horizon:dramatic warm western horizon glow", "texture:twilight haze and subtle sky grain", "vignette:natural edge falloff", "celestial:large local transparent Venus and Jupiter focal point integrated with subtle glow", "typography:premium thumbnail title Venus & Jupiter subtitle After sunset"],
                 [request.AccessibilityIntent, "Small labels identify Venus and Jupiter without covering the sky."]),
             "where" => new(
                 "western-horizon-observation-chart",
@@ -70,13 +73,13 @@ public sealed class AstronomyInfographicDesignSystem : IAstronomyInfographicDesi
             "why" => new(
                 "close-pair-significance-bracket",
                 "WHY — Significance Graphic",
-                "Significance graphic emphasizing the close Venus/Jupiter pairing with a closeness bracket and brightness comparison feel.",
+                "Human-interest significance visual: two of the brightest worlds sharing the evening sky, emphasizing brightness, closeness, shared sky, and emotional meaning.",
                 0.25,
                 0.75,
-                ["Venus/Jupiter close pairing", "closeness bracket", "short significance line", "visual comparison/brightness feel"],
+                ["two of the brightest worlds sharing the evening sky", "brightness", "closeness", "shared sky", "emotional significance"],
                 CommonForbiddenPatterns,
-                new("Why It Matters", "Close bright pairing", ["Venus", "Jupiter"], ["closeness bracket"], ["Venus", "Jupiter"], [], [], []),
-                ["background:deep editorial sky with subtle astronomy texture", "celestial:close local Venus/Jupiter pairing", "comparison:brightness feel", "direction:closeness bracket", "annotation:floating significance line", "layout:center comparison graphic"],
+                new("Why It Matters", "Two of the brightest worlds sharing the evening sky", ["Venus", "Jupiter", "brightness", "closeness", "shared sky"], ["closeness bracket", "brightness comparison"], ["Venus", "Jupiter"], [], [], []),
+                ["background:deep editorial shared-sky atmospheric texture", "celestial:two of the brightest worlds sharing evening sky integrated with subtle glow", "significance:brightness closeness shared sky emotional significance", "comparison:brightness feel", "direction:closeness bracket", "annotation:floating human-interest significance line"],
                 [request.AccessibilityIntent, "Bracket shows the planets' apparent closeness."]),
             "action" => new(
                 "minimal-closing-astronomy-poster",
@@ -84,10 +87,10 @@ public sealed class AstronomyInfographicDesignSystem : IAstronomyInfographicDesi
                 "Beautiful closing astronomy poster with Venus/Jupiter together and only a minimal call to action.",
                 0.25,
                 0.75,
-                ["beautiful closing sky", "Venus/Jupiter together", "minimal CTA"],
+                ["beautiful emotional twilight", "warm horizon", "Venus/Jupiter naturally integrated", "minimal CTA Step Outside Tonight Look west", "poster quality"],
                 CommonForbiddenPatterns,
                 new("Step Outside Tonight", "Look west", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], ["West"], [], []),
-                ["background:beautiful emotional twilight poster sky", "horizon:warm peaceful western horizon", "celestial:local Venus and Jupiter together integrated with subtle glow", "annotation:minimal floating CTA", "layout:minimal astronomy poster"],
+                ["background:beautiful emotional twilight poster atmospheric gradient", "horizon:warm peaceful western horizon", "celestial:local Venus and Jupiter naturally integrated with subtle glow", "typography:minimal CTA Step Outside Tonight Look west", "layout:minimal astronomy poster"],
                 [request.AccessibilityIntent, "Minimal CTA and west cue keep the planet pair dominant."]),
             _ => throw new ArgumentException($"Unsupported astronomy infographic question type '{request.QuestionType}'.", nameof(request))
         };

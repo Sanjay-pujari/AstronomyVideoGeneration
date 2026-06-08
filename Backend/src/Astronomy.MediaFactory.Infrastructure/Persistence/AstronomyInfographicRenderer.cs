@@ -70,11 +70,12 @@ public sealed class AstronomyBackgroundLayerRenderer
 
     public void RenderVignette(IImageProcessingContext ctx)
     {
-        // Soft edge falloff without drawing a visible bounding rectangle or panel frame.
-        ctx.Fill(Color.Black.WithAlpha(.10f), new EllipsePolygon(-80, -80, 360));
-        ctx.Fill(Color.Black.WithAlpha(.10f), new EllipsePolygon(2000, -80, 360));
-        ctx.Fill(Color.Black.WithAlpha(.12f), new EllipsePolygon(-80, 1160, 420));
-        ctx.Fill(Color.Black.WithAlpha(.12f), new EllipsePolygon(2000, 1160, 420));
+        // Natural edge falloff built from soft bands, not decorative circles or template helper shapes.
+        ctx.Fill(Color.Black.WithAlpha(.09f), new RectangleF(0, 0, 1920, 80));
+        ctx.Fill(Color.Black.WithAlpha(.06f), new RectangleF(0, 80, 1920, 80));
+        ctx.Fill(Color.Black.WithAlpha(.08f), new RectangleF(0, 0, 90, 1080));
+        ctx.Fill(Color.Black.WithAlpha(.08f), new RectangleF(1830, 0, 90, 1080));
+        ctx.Fill(Color.Black.WithAlpha(.11f), new RectangleF(0, 1010, 1920, 70));
     }
 
     private static void RenderSceneAtmosphere(IImageProcessingContext ctx, int sceneNumber)
@@ -82,33 +83,62 @@ public sealed class AstronomyBackgroundLayerRenderer
         switch (sceneNumber)
         {
             case 1:
-                ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.22f), new EllipsePolygon(1480, 730, 390));
-                ctx.Fill(Color.ParseHex("#FF8A3D").WithAlpha(.13f), new EllipsePolygon(1680, 790, 520));
-                ctx.Fill(Color.White.WithAlpha(.05f), new EllipsePolygon(1130, 355, 520));
+                DrawHazeBand(ctx, 655, 210, "#F6C177", .18f);
+                DrawHazeBand(ctx, 760, 165, "#FF8A3D", .13f);
+                DrawFineSkyTexture(ctx, 1);
                 break;
             case 2:
-                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.045f), new EllipsePolygon(960, 480, 720));
+                DrawHazeBand(ctx, 470, 120, "#8FD2FF", .04f);
                 ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.18f), 1, new PathBuilder().AddLine(new PointF(420, 250), new PointF(1540, 760)).Build());
+                DrawFineSkyTexture(ctx, 2);
                 break;
             case 3:
-                ctx.Fill(Color.ParseHex("#FFAA5D").WithAlpha(.20f), new EllipsePolygon(350, 720, 220));
-                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.07f), new EllipsePolygon(890, 558, 690));
+                DrawHazeBand(ctx, 690, 165, "#FFAA5D", .18f);
+                DrawHazeBand(ctx, 520, 130, "#8FD2FF", .05f);
+                DrawFineSkyTexture(ctx, 3);
                 break;
             case 4:
-                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.055f), new EllipsePolygon(1105, 430, 520));
+                DrawHazeBand(ctx, 445, 130, "#8FD2FF", .05f);
                 ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.14f), 2, new PathBuilder().AddLine(new PointF(790, 585), new PointF(1425, 315)).Build());
+                DrawFineSkyTexture(ctx, 4);
                 break;
             case 5:
-                ctx.Fill(Color.ParseHex("#FFF2B8").WithAlpha(.08f), new EllipsePolygon(960, 440, 520));
-                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.035f), new EllipsePolygon(1180, 300, 620));
+                DrawHazeBand(ctx, 420, 150, "#FFF2B8", .055f);
+                DrawHazeBand(ctx, 310, 110, "#8FD2FF", .03f);
+                DrawFineSkyTexture(ctx, 5);
                 break;
             case 6:
-                ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.20f), new EllipsePolygon(1510, 720, 430));
-                ctx.Fill(Color.ParseHex("#FFAA5D").WithAlpha(.12f), new EllipsePolygon(1010, 820, 760));
+                DrawHazeBand(ctx, 710, 220, "#F6C177", .17f);
+                DrawHazeBand(ctx, 820, 180, "#FFAA5D", .12f);
+                DrawFineSkyTexture(ctx, 6);
                 break;
         }
     }
 
+
+    private static void DrawHazeBand(IImageProcessingContext ctx, float centerY, float height, string color, float maxAlpha)
+    {
+        for (var i = 0; i < 8; i++)
+        {
+            var t = i / 7f;
+            var alpha = maxAlpha * (1f - t * .72f);
+            var bandHeight = height + i * 34f;
+            ctx.Fill(Color.ParseHex(color).WithAlpha(alpha), new RectangleF(0, centerY - bandHeight / 2f, 1920, bandHeight));
+        }
+    }
+
+    private static void DrawFineSkyTexture(IImageProcessingContext ctx, int sceneNumber)
+    {
+        var random = new Random(8400 + sceneNumber);
+        for (var i = 0; i < 90; i++)
+        {
+            var y = random.Next(60, 820);
+            var width = random.Next(120, 420);
+            var x = random.Next(-80, 1920);
+            var alpha = sceneNumber is 1 or 6 ? .018f : .012f;
+            ctx.Fill(Color.White.WithAlpha(alpha), new RectangleF(x, y, width, 1));
+        }
+    }
     private static void RenderStars(IImageProcessingContext ctx, int sceneNumber)
     {
         var stars = sceneNumber switch
@@ -322,7 +352,7 @@ public sealed class EducationalLayerRenderer
         ctx.Draw(Color.ParseHex("#B7E0FF"), 6, new PathBuilder().AddLine(new PointF(start, y), new PointF(end, y)).Build());
         ctx.Fill(Color.ParseHex("#F6C177"), new EllipsePolygon(385, y, 18));
         ctx.Fill(Color.ParseHex("#FFF2B8"), new EllipsePolygon(1110, y, 28));
-        ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.10f), new EllipsePolygon(860, 552, 455));
+        ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.08f), new RectangleF(385, 538, 725, 28));
         Text(ctx, "Sunset", smallFont, 330, y + 40, Color.White, 190);
         Text(ctx, "7:23 PM IST", subtitleFont, 990, y + 42, Color.ParseHex("#F6C177"), 350);
         Text(ctx, "after-sunset viewing window", smallFont, 650, 455, Color.ParseHex("#B7E0FF"), 460);
@@ -344,9 +374,9 @@ public sealed class EducationalLayerRenderer
         // Scene 5 significance layer: the visual relationship is the hero; text remains short and separated.
         ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(.72f), 5, new PathBuilder().AddLine(new PointF(970, 438), new PointF(1026, 446)).Build());
         ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.88f), new EllipsePolygon(998, 442, 7));
-        Text(ctx, "Two bright planets close together", font, 690, 595, Color.White, 520);
+        Text(ctx, "Two of the brightest worlds sharing the evening sky", font, 610, 595, Color.White, 760);
 
-        ctx.Fill(Color.ParseHex("#FFF2B8").WithAlpha(.055f), new EllipsePolygon(735, 805, 530));
+        ctx.Fill(Color.ParseHex("#FFF2B8").WithAlpha(.045f), new RectangleF(275, 760, 720, 88));
         ctx.Draw(Color.ParseHex("#FFF2B8"), 7, new PathBuilder().AddLine(new PointF(330, 804), new PointF(430, 804)).Build());
         ctx.Draw(Color.ParseHex("#F0C88B"), 5, new PathBuilder().AddLine(new PointF(695, 804), new PointF(760, 804)).Build());
         Text(ctx, "Venus: very bright", font, 455, 778, Color.White, 260);
@@ -376,7 +406,7 @@ public sealed class AnnotationLayerRenderer
                 DrawPlanetLabels(ctx, text, spec.QuestionType, fonts.LabelFont, Color.White, Color.White);
                 break;
             case "why":
-                DrawTitleStack(text, "Why this view matters", "Bright + close + easy to compare", fonts, new RectangleF(145, 72, 860, 168));
+                DrawTitleStack(text, "Why this view matters", "Two bright worlds, one evening sky", fonts, new RectangleF(145, 72, 900, 168));
                 break;
             case "action":
                 DrawTitleStack(text, "Step Outside Tonight", "Look west", fonts, new RectangleF(345, 864, 860, 92));

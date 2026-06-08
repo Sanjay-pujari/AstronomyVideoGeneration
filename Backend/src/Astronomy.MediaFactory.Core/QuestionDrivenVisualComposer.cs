@@ -155,6 +155,14 @@ public sealed record QuestionDrivenSceneReview(
     bool PlanetAssetsIntegratedIntoSky,
     bool ConstellationLayerRendered,
     bool ReferenceStarLayerRendered,
+    string SceneMood,
+    bool ThumbnailQuality,
+    bool PosterQuality,
+    int VisualUniquenessScore,
+    int HumanInterestScore,
+    bool DecorativeCircleDetected,
+    bool AtmosphericBackgroundUsed,
+    bool LargeTemplateShapeDetected,
     IReadOnlyList<string> Issues,
     IReadOnlyList<string> Recommendations);
 
