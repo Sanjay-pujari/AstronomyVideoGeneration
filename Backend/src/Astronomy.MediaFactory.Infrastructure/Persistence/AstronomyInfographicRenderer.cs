@@ -47,12 +47,12 @@ public sealed class AstronomyBackgroundLayerRenderer
         var sceneNumber = spec.SceneNumber;
         var palette = sceneNumber switch
         {
-            1 => (Top: "#041126", Middle: "#152D5A", Bottom: "#E8894F"),
-            2 => (Top: "#071D3A", Middle: "#102F4F", Bottom: "#233447"),
-            3 => (Top: "#17254A", Middle: "#56538A", Bottom: "#FFAA5D"),
-            4 => (Top: "#041827", Middle: "#0B3750", Bottom: "#314348"),
-            5 => (Top: "#020813", Middle: "#081F49", Bottom: "#16243A"),
-            6 => (Top: "#041026", Middle: "#172D58", Bottom: "#D56F4C"),
+            1 => (Top: "#06101F", Middle: "#273C63", Bottom: "#F28D45"),
+            2 => (Top: "#06182E", Middle: "#13324D", Bottom: "#293A3B"),
+            3 => (Top: "#142042", Middle: "#615179", Bottom: "#FF9F52"),
+            4 => (Top: "#041827", Middle: "#12364D", Bottom: "#35433E"),
+            5 => (Top: "#01050E", Middle: "#07183C", Bottom: "#101E34"),
+            6 => (Top: "#030A1A", Middle: "#243154", Bottom: "#ED7B45"),
             _ => (Top: "#061124", Middle: "#163158", Bottom: "#293C3F")
         };
 
@@ -83,8 +83,9 @@ public sealed class AstronomyBackgroundLayerRenderer
         switch (sceneNumber)
         {
             case 1:
-                DrawHazeBand(ctx, 655, 210, "#F6C177", .18f);
-                DrawHazeBand(ctx, 760, 165, "#FF8A3D", .13f);
+                DrawHazeBand(ctx, 690, 260, "#F6C177", .28f);
+                DrawHazeBand(ctx, 790, 210, "#FF8A3D", .22f);
+                DrawHazeBand(ctx, 585, 170, "#B7E0FF", .045f);
                 DrawFineSkyTexture(ctx, 1);
                 break;
             case 2:
@@ -108,8 +109,9 @@ public sealed class AstronomyBackgroundLayerRenderer
                 DrawFineSkyTexture(ctx, 5);
                 break;
             case 6:
-                DrawHazeBand(ctx, 710, 220, "#F6C177", .17f);
-                DrawHazeBand(ctx, 820, 180, "#FFAA5D", .12f);
+                DrawHazeBand(ctx, 685, 285, "#F6C177", .25f);
+                DrawHazeBand(ctx, 820, 225, "#FF8A3D", .19f);
+                DrawHazeBand(ctx, 490, 170, "#8FD2FF", .045f);
                 DrawFineSkyTexture(ctx, 6);
                 break;
         }
@@ -130,12 +132,12 @@ public sealed class AstronomyBackgroundLayerRenderer
     private static void DrawFineSkyTexture(IImageProcessingContext ctx, int sceneNumber)
     {
         var random = new Random(8400 + sceneNumber);
-        for (var i = 0; i < 90; i++)
+        for (var i = 0; i < 130; i++)
         {
             var y = random.Next(60, 820);
             var width = random.Next(120, 420);
             var x = random.Next(-80, 1920);
-            var alpha = sceneNumber is 1 or 6 ? .018f : .012f;
+            var alpha = sceneNumber is 1 or 6 ? .024f : .014f;
             ctx.Fill(Color.White.WithAlpha(alpha), new RectangleF(x, y, width, 1));
         }
     }
@@ -157,6 +159,7 @@ public sealed class AstronomyBackgroundLayerRenderer
         {
             case 1:
                 DrawDunes(ctx, 812, "#111318", "#1B171A");
+                ctx.Fill(Color.ParseHex("#FF9A45").WithAlpha(.16f), new RectangleF(0, 785, 1920, 92));
                 ctx.Fill(Color.Black.WithAlpha(.38f), new RectangleF(0, 914, 1920, 166));
                 break;
             case 2:
@@ -177,7 +180,8 @@ public sealed class AstronomyBackgroundLayerRenderer
                 break;
             case 6:
                 DrawDunes(ctx, 835, "#10151C", "#161820");
-                ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.12f), new RectangleF(0, 900, 1920, 80));
+                ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.18f), new RectangleF(0, 868, 1920, 110));
+                ctx.Fill(Color.ParseHex("#FF8A3D").WithAlpha(.10f), new RectangleF(0, 820, 1920, 90));
                 ctx.Fill(Color.Black.WithAlpha(.42f), new RectangleF(0, 968, 1920, 112));
                 break;
         }
@@ -218,11 +222,11 @@ public sealed class CelestialObjectLayerRenderer
     private static void DrawAsset(IImageProcessingContext ctx, string assetPath, PointF center, int diameter, string glowColor)
     {
         // Soft alpha glow only. Do not paint an opaque or dark circular backing behind the transparent asset.
-        ctx.Fill(Color.ParseHex(glowColor).WithAlpha(.045f), new EllipsePolygon(center.X, center.Y, diameter * .66f));
-        ctx.Fill(Color.ParseHex(glowColor).WithAlpha(.075f), new EllipsePolygon(center.X, center.Y, diameter * .52f));
+        ctx.Fill(Color.ParseHex(glowColor).WithAlpha(.030f), new EllipsePolygon(center.X, center.Y, diameter * .82f));
+        ctx.Fill(Color.ParseHex(glowColor).WithAlpha(.052f), new EllipsePolygon(center.X, center.Y, diameter * .58f));
         using var asset = Image.Load<Rgba32>(assetPath);
         asset.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(diameter, diameter), Mode = ResizeMode.Max }));
-        ctx.DrawImage(asset, new Point((int)(center.X - asset.Width / 2f), (int)(center.Y - asset.Height / 2f)), .96f);
+        ctx.DrawImage(asset, new Point((int)(center.X - asset.Width / 2f), (int)(center.Y - asset.Height / 2f)), .86f);
     }
 }
 
@@ -230,11 +234,11 @@ internal static class PlanetLayout
 {
     public static PlanetPairPlacement GetPlacements(string questionType) => questionType.ToLowerInvariant() switch
     {
-        "what" => new(new(new PointF(1220, 360), 140), new(new PointF(1410, 410), 96)),
-        "where" => new(new(new PointF(1060, 505), 92), new(new PointF(1255, 545), 68)),
-        "how" => new(new(new PointF(950, 430), 112), new(new PointF(1195, 470), 76)),
-        "why" => new(new(new PointF(890, 430), 128), new(new PointF(1105, 455), 98)),
-        "action" => new(new(new PointF(1010, 390), 110), new(new PointF(1165, 430), 78)),
+        "what" => new(new(new PointF(1220, 360), 91), new(new PointF(1410, 410), 62)),
+        "where" => new(new(new PointF(1060, 505), 60), new(new PointF(1255, 545), 44)),
+        "how" => new(new(new PointF(950, 430), 73), new(new PointF(1195, 470), 49)),
+        "why" => new(new(new PointF(890, 430), 83), new(new PointF(1105, 455), 64)),
+        "action" => new(new(new PointF(1010, 390), 72), new(new PointF(1165, 430), 51)),
         _ => new(new(new PointF(-100, -100), 1), new(new PointF(-100, -100), 1))
     };
 }

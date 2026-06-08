@@ -10,12 +10,12 @@ public sealed class QuestionDrivenImagePromptGenerator : IQuestionDrivenImagePro
 
         var sceneMood = request.QuestionType.ToLowerInvariant() switch
         {
-            "what" => "golden twilight western sky over Udaipur with orange horizon glow, premium astronomy magazine cover mood, no grid or chart background",
-            "where" => "clean educational western-horizon observation chart sky over Rajasthan, subtle sky grid, lightweight Leo and Regulus reference-star constellation guide, not cinematic",
-            "when" => "sunset-to-night twilight gradient, warm western horizon glow, open negative space for a hero 7:23 PM IST viewing timeline",
-            "how" => "clean observer-friendly western sky, low horizon reference, minimal distractions, subtle reference-star hint only, room for arrow path and three floating observing steps",
-            "why" => "deep editorial sky with subtle astronomy texture, visual space for a significance infographic comparing brightness and closeness",
-            "action" => "most beautiful emotional twilight astronomy poster over Udaipur, peaceful warm western horizon, minimal call-to-action mood",
+            "what" => "professional astronomy magazine cover, western twilight over Rajasthan, natural atmospheric glow, golden-orange horizon, documentary style, stronger horizon glow and focal contrast for a clickable astronomy thumbnail",
+            "where" => "observation chart sky over Rajasthan with a subtle real western horizon, astronomy guide aesthetic, delicate altitude grid, lightweight Leo and Regulus reference-star constellation guide, documentary not graphic design",
+            "when" => "real twilight transition from warm sunset colors into early night, natural western horizon glow, open negative space for a hero 7:23 PM IST viewing timeline",
+            "how" => "observer-friendly western sky with natural atmospheric depth, low real horizon reference, minimal distractions, subtle reference-star hint only, room for arrow path and three floating observing steps",
+            "why" => "deep astronomy sky, premium editorial background, emotional shared-evening-sky atmosphere, visually communicates two of the brightest worlds sharing the evening sky",
+            "action" => "most beautiful poster-quality twilight over Udaipur, cinematic warm western horizon, premium astronomy artwork composition, shareable minimal call-to-action mood",
             _ => "clean astronomy documentary twilight background over a western horizon"
         };
 
@@ -25,12 +25,12 @@ public sealed class QuestionDrivenImagePromptGenerator : IQuestionDrivenImagePro
 
         return string.Join(' ', new[]
         {
-            "Professional 16:9 astronomy production background only.",
+            "Professional 16:9 astronomy photography art-direction background only.",
             sceneMood + ".",
             "Include sky, horizon, atmosphere, and landscape only.",
             "No text, no planets, no labels, no arrows, no diagrams, no title cards, no card containers, no panel outlines, no helper layout boxes, no watermarks, no UI, no filenames, no debug markings.",
             planetInstruction,
-            "Leave clean space for floating annotations, subtle leader lines, and soft glow callouts. High-quality, polished, non-generic, scene-specific mood."
+            "Leave clean space for floating annotations, subtle leader lines, and soft glow callouts. High-quality, polished, realistic astronomy photography style, non-generic, scene-specific mood."
         });
     }
 }
