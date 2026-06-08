@@ -62,6 +62,7 @@ public sealed class QuestionDrivenVisualComposer(
         var warnings = new List<string>();
         var generatedFiles = new List<string>();
         var plannedScenes = new List<QuestionDrivenPlannedScene>();
+        var sceneValidation = new List<SceneQuestionIsolationValidation>();
         var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
         var outputRoot = Path.Combine(questionEngineRoot, OutputDirectoryName);
 
@@ -122,9 +123,12 @@ public sealed class QuestionDrivenVisualComposer(
             var reviewPath = Path.Combine(outputRoot, $"{numberPrefix}-review.json");
             var plannedOutputs = new QuestionDrivenPlannedOutputs(NormalizePath(finalPath), NormalizePath(srtPath), NormalizePath(narrationTextPath), NormalizePath(specPath), string.Empty, NormalizePath(reviewPath));
             var validationPreview = BuildValidationPreview(spec, srt, review, overlayPlan, plannedOutputs);
+            var isolationValidation = ValidateSceneQuestionIsolation(spec, overlayPlan);
+            sceneValidation.Add(isolationValidation);
             plannedScenes.Add(new QuestionDrivenPlannedScene(scene.SceneNumber, scene.QuestionType, scene.ScenePurpose, scene.ViewerQuestion, scene.ViewerTakeaway, narrationScene.NarrationText, narrationScene.CaptionText, scene.VisualIntent, scene.ImagePromptIntent, scene.OverlayIntent, scene.AccessibilityIntent, prompt, overlayPlan, plannedOutputs, validationPreview));
 
             if (validationPreview.Issues.Count > 0) warnings.AddRange(validationPreview.Issues.Select(issue => $"Scene {sceneNumber:000}: {issue}"));
+            if (isolationValidation.LeakageWarnings.Count > 0) warnings.AddRange(isolationValidation.LeakageWarnings.Select(issue => $"Scene {sceneNumber:000}: {issue}"));
             if (request.DryRun) continue;
 
             if (!request.OverwriteExisting && new[] { finalPath, srtPath, narrationTextPath, specPath, reviewPath }.Any(File.Exists))
@@ -152,6 +156,8 @@ public sealed class QuestionDrivenVisualComposer(
         }
 
         AddPlanLevelWarnings(plannedScenes, warnings);
+        var crossSceneLeakageDetected = sceneValidation.Any(scene => scene.LeakageWarnings.Count > 0);
+        var questionIsolationScore = sceneValidation.Count == 0 ? 0 : (int)Math.Round(sceneValidation.Average(scene => scene.IsolationScore));
         warnings.Add("Human approval is still required before TTS, audio generation, video rendering, or publishing.");
         const string compositionMode = "SceneInfographic";
         const bool usesSharedAstronomyVisualComposer = true;
@@ -174,6 +180,11 @@ public sealed class QuestionDrivenVisualComposer(
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             CompositionMode: compositionMode,
             UsesSharedAstronomyVisualComposer: usesSharedAstronomyVisualComposer,
+            QuestionIsolationScore: questionIsolationScore,
+            CrossSceneLeakageDetected: crossSceneLeakageDetected,
+            SceneValidation: sceneValidation,
+            AstronomySceneEngineV1Status: "FROZEN",
+            SharedAstronomyVisualComposerStatus: "FROZEN",
             HeroAssetRulesApplied: heroAssetRulesApplied,
             DuplicateObjectRenderingDetected: duplicateObjectRenderingDetected);
     }
@@ -196,7 +207,7 @@ public sealed class QuestionDrivenVisualComposer(
             "what" => new[] { "mood:Dramatic", "background:professional astronomy magazine cover western twilight over Rajasthan with richer twilight colors, natural atmospheric glow, and smooth sky gradient", "horizon:stronger golden-orange western horizon glow with subtle atmospheric haze", "texture:documentary sky grain, twilight haze, natural density variation starfield, magnitude variation, brightness variation", "composition:strong focal contrast clickable thumbnail composition with slightly brighter focal region around Venus/Jupiter", "vignette:soft natural edge falloff", "celestial:reduced-scale Venus/Jupiter sky targets integrated with atmospheric blending and subtle shared glow", "typography:premium thumbnail title Venus & Jupiter subtitle After sunset" },
             "where" => new[] { "mood:Educational", "background:observation-chart sky with astronomy guide aesthetic and subtle atmospheric realism", "horizon:subtle real western horizon", "guide:delicate altitude guide", "celestial:Venus/Jupiter plotted positions integrated with subtle glow", "reference:subtle sky grid", "reference:Leo Regulus constellation-star guide", "direction:West marker", "annotation:floating labels and leader lines" },
             "when" => new[] { "mood:Informational", "background:real twilight transition with warm sunset colors and natural atmospheric haze", "horizon:natural warm western horizon glow", "time:sunset marker", "time:7:23 PM IST marker", "direction:after-sunset viewing window", "layout:timeline hero", "annotation:floating timeline labels" },
-            "how" => new[] { "mood:Instructional", "background:observer-friendly western sky with natural atmospheric depth", "horizon:subtle west reference", "celestial:Venus/Jupiter assets integrated with glow", "reference:subtle reference-star hint", "direction:arrow path from Venus to Jupiter", "steps:Find Venus; Look nearby for Jupiter; Face west" },
+            "how" => new[] { "mood:Instructional", "background:observer-friendly western sky with natural atmospheric depth", "celestial:Venus/Jupiter assets integrated with glow", "direction:observation arrow from Venus to Jupiter", "steps:Find Venus; Look nearby for Jupiter; Face west" },
             "why" => new[] { "mood:Meaningful", "background:deep astronomy sky premium editorial background with atmospheric starfield depth, smooth sky gradient, natural density variation, magnitude variation, brightness variation", "celestial:two of the brightest worlds sharing the evening sky as reduced-scale sky targets integrated with atmospheric blending and subtle shared glow region", "significance:shared sky brightness emotional significance for human interest and memorable astronomy storytelling", "relationship:visual relationship between planets with slight emphasis on closeness", "comparison:brightness scale", "direction:closeness bracket", "annotation:floating human-interest significance note" },
             "action" => new[] { "mood:Inspirational", "background:most beautiful poster-quality cinematic twilight premium astronomy artwork with atmospheric depth and smooth sky gradient", "horizon:warmer peaceful stronger golden-orange western horizon with subtle haze", "composition:premium shareable poster composition", "landscape:stronger landscape silhouette", "celestial:Venus and Jupiter reduced-scale sky targets naturally integrated with atmospheric blending and subtle glow", "starfield:natural density variation, magnitude variation, brightness variation", "twilight:cinematic warm western glow with richer twilight", "typography:minimal poster CTA Step Outside Tonight Look west" },
             _ => new[] { "background:sky", "programmatic:overlays" }
@@ -342,17 +353,105 @@ public sealed class QuestionDrivenVisualComposer(
         "what" => new("Venus & Jupiter", "After sunset", ["Venus", "Jupiter"], ["leader lines from labels to planets"], ["Venus", "Jupiter"], [], [], []),
         "where" => new("Where to Look", "Face the western horizon", ["West", "Venus", "Jupiter", "Horizon", "Leo / Regulus reference stars"], ["western horizon altitude guide"], ["Venus", "Jupiter"], ["West"], [], []),
         "when" => new("Best Time Tonight", "After sunset", ["Sunset", "Viewing window"], [], [], [], ["7:23 PM IST"], []),
-        "how" => new("How to Find It", "Use Venus as your anchor", ["Venus", "Jupiter", "West", "reference stars"], ["arrow from Venus to Jupiter", "arrow toward western horizon"], ["Venus", "Jupiter"], ["West"], [], ["Find Venus", "Look nearby for Jupiter", "Face west"]),
+        "how" => new("How to Find It", "Use Venus as your anchor", ["Venus", "Jupiter"], ["observation arrow from Venus to Jupiter"], ["Venus", "Jupiter"], [], [], ["Find Venus", "Look nearby for Jupiter", "Face west"]),
         "why" => new("Why It Matters", "Two of the brightest worlds sharing the evening sky", ["Venus", "Jupiter", "brightness", "closeness", "shared sky"], ["closeness bracket", "brightness comparison"], ["Venus", "Jupiter"], [], [], []),
-        "action" => new("Step Outside Tonight", "Look west", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], ["West"], [], []),
+        "action" => new("Step Outside Tonight", "Look west tonight", [], [], [], [], [], []),
         _ => new(spec.ViewerTakeaway, string.Empty, [], [], [], [], [], [])
     };
+
+
+    private static SceneQuestionIsolationValidation ValidateSceneQuestionIsolation(QuestionDrivenVisualSpec spec, QuestionDrivenProgrammaticOverlayPlan overlayPlan)
+    {
+        var expectedQuestion = NormalizeQuestionType(spec.QuestionType);
+        var warnings = new List<string>();
+        var title = overlayPlan.Title ?? string.Empty;
+        var subtitle = overlayPlan.Subtitle ?? string.Empty;
+        var labels = overlayPlan.Labels ?? Array.Empty<string>();
+        var arrows = overlayPlan.Arrows ?? Array.Empty<string>();
+        var localAssets = overlayPlan.LocalAssetObjects ?? Array.Empty<string>();
+        var directionMarkers = overlayPlan.DirectionMarkers ?? Array.Empty<string>();
+        var timingMarkers = overlayPlan.TimingMarkers ?? Array.Empty<string>();
+        var steps = overlayPlan.Steps ?? Array.Empty<string>();
+        var overlayText = spec.OverlayText ?? Array.Empty<string>();
+        var layers = spec.ProgrammaticLayers ?? Array.Empty<string>();
+        var combinedOverlayText = JoinQuestionIsolationText([title, subtitle], labels, arrows, localAssets, directionMarkers, timingMarkers, steps, overlayText, layers);
+
+        switch (expectedQuestion.ToLowerInvariant())
+        {
+            case "what":
+                AddIfAny(warnings, "Where content leaked into What scene.", combinedOverlayText, "west marker", "direction:west", "altitude guide", "western horizon altitude", "sky grid", "leo", "regulus", "reference stars");
+                AddIfAny(warnings, "When content leaked into What scene.", combinedOverlayText, "viewing window", "best viewing", "7:23", "timeline", "sunset marker");
+                AddIfAny(warnings, "How content leaked into What scene.", combinedOverlayText, "step 1", "1 find", "2 look", "3 face", "observation arrow", "arrow from");
+                AddIfAny(warnings, "Why content leaked into What scene.", combinedOverlayText, "why it matters", "brightest worlds", "brightness comparison", "closeness bracket", "significance");
+                AddIfAny(warnings, "Action content leaked into What scene.", combinedOverlayText, "step outside", "look west tonight", "cta");
+                break;
+            case "where":
+                AddIfAny(warnings, "When content leaked into Where scene.", combinedOverlayText, "viewing window", "best viewing", "7:23", "timeline", "sunset marker");
+                AddIfAny(warnings, "Action content leaked into Where scene.", combinedOverlayText, "step outside", "look west tonight", "cta");
+                AddIfAny(warnings, "Why content leaked into Where scene.", combinedOverlayText, "why it matters", "brightest worlds", "brightness comparison", "significance");
+                AddIfAny(warnings, "How content leaked into Where scene.", combinedOverlayText, "1 find", "2 look nearby", "3 face", "step 1", "step 2", "step 3");
+                break;
+            case "when":
+                AddIfAny(warnings, "Where content leaked into When scene.", combinedOverlayText, "altitude guide", "leo", "regulus", "reference stars", "west marker", "western horizon altitude");
+                AddIfAny(warnings, "Planet labels leaked into When scene.", labels, "Venus", "Jupiter");
+                AddIfAny(warnings, "How content leaked into When scene.", combinedOverlayText, "1 find", "2 look nearby", "3 face", "step 1", "observation arrow", "arrow from");
+                AddIfAny(warnings, "Why content leaked into When scene.", combinedOverlayText, "why it matters", "brightest worlds", "brightness comparison", "significance");
+                break;
+            case "how":
+                AddIfAny(warnings, "When content leaked into How scene.", combinedOverlayText, "viewing window", "best viewing", "7:23", "timeline", "sunset marker");
+                AddIfAny(warnings, "Why content leaked into How scene.", combinedOverlayText, "why it matters", "brightest worlds", "brightness comparison", "significance");
+                AddIfAny(warnings, "Action content leaked into How scene.", combinedOverlayText, "step outside", "look west tonight", "cta");
+                AddIfAny(warnings, "Where-only marker leaked into How scene.", directionMarkers, "West");
+                break;
+            case "why":
+                AddIfAny(warnings, "How content leaked into Why scene.", combinedOverlayText, "1 find", "2 look nearby", "3 face", "step 1", "observation arrow", "face west");
+                AddIfAny(warnings, "When content leaked into Why scene.", combinedOverlayText, "viewing window", "best viewing", "7:23", "timeline", "sunset marker");
+                AddIfAny(warnings, "Action content leaked into Why scene.", combinedOverlayText, "step outside", "look west tonight", "cta");
+                break;
+            case "action":
+                AddIfAny(warnings, "Where content leaked into Action scene.", combinedOverlayText, "altitude guide", "sky grid", "leo", "regulus", "reference stars", "west marker", "western horizon altitude");
+                AddIfAny(warnings, "Why content leaked into Action scene.", combinedOverlayText, "why it matters", "brightest worlds", "brightness comparison", "closeness bracket", "significance");
+                AddIfAny(warnings, "When content leaked into Action scene.", combinedOverlayText, "viewing window", "best viewing", "7:23", "timeline", "sunset marker");
+                AddIfAny(warnings, "How content leaked into Action scene.", combinedOverlayText, "1 find", "2 look nearby", "3 face", "step 1", "observation arrow", "arrow from", "face west");
+                break;
+            default:
+                warnings.Add($"Unknown expected question '{spec.QuestionType}'.");
+                break;
+        }
+
+        var isolationScore = Math.Clamp(100 - warnings.Count * 20, 0, 100);
+        return new SceneQuestionIsolationValidation(spec.SceneNumber, expectedQuestion, isolationScore, warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static string NormalizeQuestionType(string questionType) => questionType.ToLowerInvariant() switch
+    {
+        "what" => AstronomyQuestionTypes.What,
+        "where" => AstronomyQuestionTypes.Where,
+        "when" => AstronomyQuestionTypes.When,
+        "how" => AstronomyQuestionTypes.How,
+        "why" => AstronomyQuestionTypes.Why,
+        "action" => AstronomyQuestionTypes.Action,
+        _ => questionType
+    };
+
+    private static string JoinQuestionIsolationText(IReadOnlyList<string> fixedText, params IReadOnlyList<string>[] groups)
+        => Clean(string.Join(' ', fixedText.Concat(groups.SelectMany(group => group ?? Array.Empty<string>()))));
+
+    private static void AddIfAny(List<string> warnings, string warning, string value, params string[] terms)
+    {
+        if (terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase))) warnings.Add(warning);
+    }
+
+    private static void AddIfAny(List<string> warnings, string warning, IReadOnlyList<string> values, params string[] terms)
+    {
+        if (values.Any(value => terms.Any(term => value.Equals(term, StringComparison.OrdinalIgnoreCase)))) warnings.Add(warning);
+    }
 
     private static QuestionDrivenValidationPreview BuildValidationPreview(QuestionDrivenVisualSpec spec, string srt, QuestionDrivenSceneReview review, QuestionDrivenProgrammaticOverlayPlan overlayPlan, QuestionDrivenPlannedOutputs plannedOutputs)
     {
         var issues = new List<string>(review.Issues);
         var srtReady = !string.IsNullOrWhiteSpace(spec.CaptionText) && srt.Contains(" --> ", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(plannedOutputs.SrtPath);
-        var accessibilityReady = spec.AccessibilityCues.Any(cue => !string.IsNullOrWhiteSpace(cue)) && (overlayPlan.Labels.Count > 0 || overlayPlan.Steps.Count > 0 || overlayPlan.TimingMarkers.Count > 0) && !string.IsNullOrWhiteSpace(spec.CaptionText);
+        var accessibilityReady = spec.AccessibilityCues.Any(cue => !string.IsNullOrWhiteSpace(cue)) && (overlayPlan.Labels.Count > 0 || overlayPlan.Steps.Count > 0 || overlayPlan.TimingMarkers.Count > 0 || !string.IsNullOrWhiteSpace(overlayPlan.Title)) && !string.IsNullOrWhiteSpace(spec.CaptionText);
         if (string.IsNullOrWhiteSpace(spec.NarrationText)) issues.Add("scene lacks narrationText.");
         if (string.IsNullOrWhiteSpace(spec.BackgroundPrompt)) issues.Add("scene lacks AI background prompt.");
         if (string.IsNullOrWhiteSpace(plannedOutputs.FinalImagePath)) issues.Add("scene lacks finalImagePath.");

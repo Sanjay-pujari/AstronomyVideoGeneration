@@ -200,8 +200,19 @@ public sealed record EditorialAstronomyInfographicGenerationResponse(
     IReadOnlyList<AstronomyInfographicDesignTemplate>? DesignSpecs = null,
     string CompositionMode = "SceneInfographic",
     bool UsesSharedAstronomyVisualComposer = true,
+    int QuestionIsolationScore = 100,
+    bool CrossSceneLeakageDetected = false,
+    IReadOnlyList<SceneQuestionIsolationValidation>? SceneValidation = null,
+    string AstronomySceneEngineV1Status = "FROZEN",
+    string SharedAstronomyVisualComposerStatus = "FROZEN",
     bool HeroAssetRulesApplied = false,
     bool DuplicateObjectRenderingDetected = false);
+
+public sealed record SceneQuestionIsolationValidation(
+    int SceneNumber,
+    string ExpectedQuestion,
+    int IsolationScore,
+    IReadOnlyList<string> LeakageWarnings);
 
 public interface IEditorialAstronomyInfographicComposer
 {
