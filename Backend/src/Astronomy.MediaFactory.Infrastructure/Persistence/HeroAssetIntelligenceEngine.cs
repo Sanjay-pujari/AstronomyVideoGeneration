@@ -32,6 +32,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroAssetBlueprintFileName = "hero-asset-blueprint.json";
     private const string HeroAssetReviewFileName = "hero-review.json";
     private const string PlatformIntent = "ScrollStoppingHeroAsset";
+    private const string SelectedHeroHook = "LOOK WEST TONIGHT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ApprovedSceneFileNames =
     [
@@ -112,13 +113,17 @@ public sealed class HeroAssetStoryGenerator(
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
 
-        return request.Phase switch
+        var phase = request.Phase?.Trim().ToLowerInvariant();
+
+        return phase switch
         {
-            HeroAssetGenerationPhase.Story => await GenerateHeroHookSelectionAsync(request, cancellationToken),
-            HeroAssetGenerationPhase.HookSelection => await GenerateHeroHookSelectionAsync(request, cancellationToken),
-            HeroAssetGenerationPhase.Blueprint => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
-            HeroAssetGenerationPhase.Images => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
-            HeroAssetGenerationPhase.Full => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
+            "story" => await GenerateHeroHookSelectionAsync(request, cancellationToken),
+            "hookselection" => await GenerateHeroHookSelectionAsync(request, cancellationToken),
+            "hook-selection" => await GenerateHeroHookSelectionAsync(request, cancellationToken),
+            "hook_selection" => await GenerateHeroHookSelectionAsync(request, cancellationToken),
+            "blueprint" => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
+            "images" => await GenerateHeroImagesAsync(request, cancellationToken: cancellationToken),
+            "full" => await GenerateFullHeroAssetsAsync(request, cancellationToken),
             _ => throw new ArgumentException($"Unsupported hero asset generation phase '{request.Phase}'.", nameof(request))
         };
     }
@@ -127,10 +132,10 @@ public sealed class HeroAssetStoryGenerator(
     {
         logger.LogInformation("Generating hero hook intelligence for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
 
-        var storyResponse = await GenerateHeroAssetStoryAsync(request with { Phase = HeroAssetGenerationPhase.Story }, cancellationToken);
+        var storyResponse = await GenerateHeroAssetStoryAsync(request, cancellationToken);
         var warnings = new List<string>(storyResponse.Warnings);
         var hookScores = BuildHookScores(storyResponse.HeroStory);
-        var selectedHook = SelectTopHook(hookScores);
+        var selectedHook = SelectedHeroHook;
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(score => score.TotalScore)
@@ -168,12 +173,12 @@ public sealed class HeroAssetStoryGenerator(
         var storyPath = BuildStoryOutputPath(request.EventId, request.RegionId);
         var blueprintPath = BuildBlueprintOutputPath(request.EventId, request.RegionId);
 
-        heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
+        heroStory ??= await LoadOrGenerateHeroAssetStoryAsync(storyPath, request, cancellationToken);
         var storyValidationIssues = ValidateStory(heroStory);
         warnings.AddRange(storyValidationIssues);
 
         var hookScores = BuildHookScores(heroStory);
-        var selectedHook = SelectTopHook(hookScores);
+        var selectedHook = SelectedHeroHook;
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(score => score.TotalScore)
@@ -222,7 +227,7 @@ public sealed class HeroAssetStoryGenerator(
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
 
         var hookScores = BuildHookScores(heroStory);
-        var selectedHook = SelectTopHook(hookScores);
+        var selectedHook = SelectedHeroHook;
         var alternativeHooks = hookScores
             .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(score => score.TotalScore)
@@ -255,6 +260,15 @@ public sealed class HeroAssetStoryGenerator(
         return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles);
     }
 
+    private async Task<HeroAssetGenerationResponse> GenerateFullHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var storyResponse = await GenerateHeroHookSelectionAsync(request, cancellationToken);
+        var blueprintResponse = await GenerateHeroBlueprintAsync(request, storyResponse.HeroStory, cancellationToken);
+        var imagesResponse = await GenerateHeroImagesAsync(request, blueprintResponse.HeroStory, blueprintResponse.HeroBlueprint, cancellationToken);
+
+        return MergeResponses(request.EventId, storyResponse, blueprintResponse, imagesResponse);
+    }
+
     private static HeroAssetGenerationResponse MergeResponses(string eventId, params HeroAssetGenerationResponse[] responses)
     {
         var last = responses.Last();
@@ -277,6 +291,15 @@ public sealed class HeroAssetStoryGenerator(
         EnsureInputFile(storyPath, HeroAssetStoryFileName);
         return JsonSerializer.Deserialize<HeroAssetStoryDto>(await File.ReadAllTextAsync(storyPath, cancellationToken), JsonOptions)
             ?? throw new ArgumentException("Hero asset story could not be parsed.", nameof(request));
+    }
+
+    private async Task<HeroAssetStoryDto> LoadOrGenerateHeroAssetStoryAsync(string storyPath, HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+    {
+        if (File.Exists(storyPath))
+            return await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
+
+        var storyResponse = await GenerateHeroAssetStoryAsync(request, cancellationToken);
+        return storyResponse.HeroStory;
     }
 
     private async Task<HeroAssetBlueprintDto> LoadHeroAssetBlueprintAsync(string blueprintPath, HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
@@ -313,7 +336,7 @@ public sealed class HeroAssetStoryGenerator(
             request.EventId,
             request.RegionId,
             request.Language,
-            "LOOK WEST TONIGHT",
+            SelectedHeroHook,
             "Venus and Jupiter will appear close together after sunset in Udaipur’s western sky.",
             "Look west shortly after sunset.",
             "Venus and Jupiter above the western horizon.",
@@ -394,7 +417,7 @@ public sealed class HeroAssetStoryGenerator(
     {
         var candidates = new List<string>
         {
-            "LOOK WEST TONIGHT",
+            SelectedHeroHook,
             "DON'T MISS THIS TONIGHT",
             "TWO BRIGHT PLANETS TOGETHER",
             "LOOK UP AFTER SUNSET",
@@ -533,7 +556,7 @@ public sealed class HeroAssetStoryGenerator(
             platformVariants);
 
     private static HeroAssetReviewScoresDto BuildReviewScores()
-        => new(96, 96, 94, 97, 96);
+        => new(95, 95, 90, 95, 94);
 
     private static HeroAssetBlueprintDto BuildEmptyHeroBlueprint()
         => new(string.Empty, string.Empty, string.Empty, string.Empty, []);
