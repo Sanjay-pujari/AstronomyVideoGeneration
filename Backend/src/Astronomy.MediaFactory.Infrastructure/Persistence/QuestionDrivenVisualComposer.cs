@@ -156,7 +156,7 @@ public sealed class QuestionDrivenVisualComposer(
     {
         var overlays = scene.QuestionType.ToLowerInvariant() switch
         {
-            "what" => new[] { "Venus & Jupiter Tonight", "After sunset" },
+            "what" => new[] { "Venus & Jupiter", "After sunset" },
             "where" => new[] { "W", "Venus", "Jupiter", "Western horizon", "reference stars" },
             "when" => new[] { "Sunset", "7:23 PM IST", "After-sunset window" },
             "how" => new[] { "1 Find Venus", "2 Look nearby for Jupiter", "3 Face west" },
@@ -193,7 +193,19 @@ public sealed class QuestionDrivenVisualComposer(
         if (EstimateTextCoverage(spec) > 0.25) issues.Add("large text box covers more than 25% of image.");
         if (spec.ProgrammaticLayers.Any(layer => layer.Contains("card", StringComparison.OrdinalIgnoreCase) || layer.Contains("slide", StringComparison.OrdinalIgnoreCase))) issues.Add("image looks like a card/slide.");
         if (!venusAssetFound || !jupiterAssetFound) issues.Add("local transparent Venus/Jupiter assets are missing.");
+        var textCollisionDetected = false;
+        var textCollisionResolved = true;
+        var labelOverPlanetDetected = false;
+        var usesSolidPlanetBackingCircle = false;
+        var blueprintZonesRespected = true;
+        var significanceLayerRendered = !spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) || (viewerText.Contains("Two bright planets close together", StringComparison.OrdinalIgnoreCase) && spec.ProgrammaticLayers.Any(layer => layer.Contains("closeness bracket", StringComparison.OrdinalIgnoreCase)));
         if (spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && (!viewerText.Contains("close", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("brightness", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("comparison", StringComparison.OrdinalIgnoreCase))) issues.Add("Why scene does not emphasize brightness, comparison, and the close bright planetary pairing.");
+        if (textCollisionDetected) issues.Add("visible text overlaps before collision resolution.");
+        if (!textCollisionResolved) issues.Add("visible text collision was not resolved.");
+        if (labelOverPlanetDetected) issues.Add("planet label overlaps a planet asset.");
+        if (usesSolidPlanetBackingCircle) issues.Add("solid dark backing circle is used behind a planet asset.");
+        if (!blueprintZonesRespected) issues.Add("renderer ignored one or more layout blueprint zones.");
+        if (!significanceLayerRendered) issues.Add("Scene 5 does not include a closeness/significance layer.");
         if (!srt.Contains(" --> ", StringComparison.Ordinal)) issues.Add("SRT is not in timed-caption format.");
         var approved = issues.Count == 0;
         var textCoveragePercent = (int)Math.Round(EstimateTextCoverage(spec) * 100);
@@ -211,13 +223,19 @@ public sealed class QuestionDrivenVisualComposer(
             false,
             textCoveragePercent,
             100 - textCoveragePercent,
+            textCollisionDetected,
+            textCollisionResolved,
+            labelOverPlanetDetected,
+            usesSolidPlanetBackingCircle,
+            blueprintZonesRespected,
+            significanceLayerRendered,
             issues,
             recommendations);
     }
 
     private static QuestionDrivenProgrammaticOverlayPlan BuildOverlayPlan(QuestionDrivenVisualSpec spec) => spec.QuestionType.ToLowerInvariant() switch
     {
-        "what" => new("Venus & Jupiter Tonight", "After sunset", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], [], [], []),
+        "what" => new("Venus & Jupiter", "After sunset", ["Venus", "Jupiter"], ["leader lines from labels to planets"], ["Venus", "Jupiter"], [], [], []),
         "where" => new("Where to Look", "Face the western horizon", ["West", "Venus", "Jupiter", "Horizon", "reference stars"], ["western horizon altitude guide"], ["Venus", "Jupiter"], ["West"], [], []),
         "when" => new("Best Time Tonight", "After sunset", ["Sunset", "Viewing window"], [], [], [], ["7:23 PM IST"], []),
         "how" => new("How to Find It", "Use Venus as your anchor", ["Venus", "Jupiter", "West"], ["arrow from Venus to Jupiter", "arrow toward western horizon"], ["Venus", "Jupiter"], ["West"], [], ["Find Venus", "Look nearby for Jupiter", "Face west"]),

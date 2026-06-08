@@ -143,6 +143,12 @@ public sealed record QuestionDrivenSceneReview(
     bool UsesCardLayout,
     int TextCoveragePercent,
     int VisualCoveragePercent,
+    bool TextCollisionDetected,
+    bool TextCollisionResolved,
+    bool LabelOverPlanetDetected,
+    bool UsesSolidPlanetBackingCircle,
+    bool BlueprintZonesRespected,
+    bool SignificanceLayerRendered,
     IReadOnlyList<string> Issues,
     IReadOnlyList<string> Recommendations);
 

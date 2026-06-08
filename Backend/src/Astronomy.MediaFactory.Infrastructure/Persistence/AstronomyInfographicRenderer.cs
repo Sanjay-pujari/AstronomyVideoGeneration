@@ -173,31 +173,42 @@ public sealed class CelestialObjectLayerRenderer
 {
     public void Render(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath)
     {
-        var positions = spec.QuestionType.ToLowerInvariant() switch
-        {
-            "what" => (Venus: new PlanetPlacement(new PointF(1220, 360), 140), Jupiter: new PlanetPlacement(new PointF(1410, 410), 96)),
-            "where" => (Venus: new PlanetPlacement(new PointF(1060, 505), 92), Jupiter: new PlanetPlacement(new PointF(1255, 545), 68)),
-            "how" => (Venus: new PlanetPlacement(new PointF(950, 430), 112), Jupiter: new PlanetPlacement(new PointF(1195, 470), 76)),
-            "why" => (Venus: new PlanetPlacement(new PointF(900, 420), 128), Jupiter: new PlanetPlacement(new PointF(1060, 445), 98)),
-            "action" => (Venus: new PlanetPlacement(new PointF(1010, 390), 110), Jupiter: new PlanetPlacement(new PointF(1165, 430), 78)),
-            _ => (Venus: new PlanetPlacement(new PointF(-100, -100), 1), Jupiter: new PlanetPlacement(new PointF(-100, -100), 1))
-        };
-
         if (spec.QuestionType.Equals("when", StringComparison.OrdinalIgnoreCase)) return;
+        var positions = PlanetLayout.GetPlacements(spec.QuestionType);
         DrawAsset(ctx, venusAssetPath, positions.Venus.Center, positions.Venus.Diameter, "#FFF2B8");
         DrawAsset(ctx, jupiterAssetPath, positions.Jupiter.Center, positions.Jupiter.Diameter, "#E5C18D");
     }
 
     private static void DrawAsset(IImageProcessingContext ctx, string assetPath, PointF center, int diameter, string glowColor)
     {
-        ctx.Fill(Color.ParseHex(glowColor).WithAlpha(.10f), new EllipsePolygon(center.X, center.Y, diameter * .46f));
+        // Soft alpha glow only. Do not paint an opaque or dark circular backing behind the transparent asset.
+        ctx.Fill(Color.ParseHex(glowColor).WithAlpha(.045f), new EllipsePolygon(center.X, center.Y, diameter * .66f));
+        ctx.Fill(Color.ParseHex(glowColor).WithAlpha(.075f), new EllipsePolygon(center.X, center.Y, diameter * .52f));
         using var asset = Image.Load<Rgba32>(assetPath);
         asset.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(diameter, diameter), Mode = ResizeMode.Max }));
-        ctx.DrawImage(asset, new Point((int)(center.X - asset.Width / 2f), (int)(center.Y - asset.Height / 2f)), 1f);
+        ctx.DrawImage(asset, new Point((int)(center.X - asset.Width / 2f), (int)(center.Y - asset.Height / 2f)), .96f);
     }
-
-    private readonly record struct PlanetPlacement(PointF Center, int Diameter);
 }
+
+internal static class PlanetLayout
+{
+    public static PlanetPairPlacement GetPlacements(string questionType) => questionType.ToLowerInvariant() switch
+    {
+        "what" => new(new(new PointF(1220, 360), 140), new(new PointF(1410, 410), 96)),
+        "where" => new(new(new PointF(1060, 505), 92), new(new PointF(1255, 545), 68)),
+        "how" => new(new(new PointF(950, 430), 112), new(new PointF(1195, 470), 76)),
+        "why" => new(new(new PointF(890, 430), 128), new(new PointF(1105, 455), 98)),
+        "action" => new(new(new PointF(1010, 390), 110), new(new PointF(1165, 430), 78)),
+        _ => new(new(new PointF(-100, -100), 1), new(new PointF(-100, -100), 1))
+    };
+}
+
+internal readonly record struct PlanetPlacement(PointF Center, int Diameter)
+{
+    public RectangleF Bounds => new(Center.X - Diameter / 2f, Center.Y - Diameter / 2f, Diameter, Diameter);
+}
+
+internal readonly record struct PlanetPairPlacement(PlanetPlacement Venus, PlanetPlacement Jupiter);
 
 public sealed class SkyGuidanceLayerRenderer
 {
@@ -217,7 +228,7 @@ public sealed class SkyGuidanceLayerRenderer
                 DrawArrow(ctx, new PointF(1015, 440), new PointF(1150, 465), Color.ParseHex("#8FD2FF"));
                 break;
             case "why":
-                DrawClosenessBracket(ctx, new PointF(810, 330), new PointF(1140, 540), fonts.SmallFont);
+                DrawClosenessBracket(ctx, PlanetLayout.GetPlacements(spec.QuestionType), fonts.SmallFont);
                 break;
         }
     }
@@ -254,11 +265,18 @@ public sealed class SkyGuidanceLayerRenderer
         ctx.Fill(color, new EllipsePolygon(to.X, to.Y, 9));
     }
 
-    private static void DrawClosenessBracket(IImageProcessingContext ctx, PointF a, PointF b, Font font)
+    private static void DrawClosenessBracket(IImageProcessingContext ctx, PlanetPairPlacement planets, Font font)
     {
-        ctx.Draw(Color.ParseHex("#F6C177"), 4, new RectangleF(a.X, a.Y, b.X - a.X, b.Y - a.Y));
-        Text(ctx, "close pairing", font, a.X + 95, a.Y - 42, Color.ParseHex("#F6C177"), 220);
-        Text(ctx, "small angular gap", font, a.X + 72, b.Y + 18, Color.ParseHex("#B7E0FF"), 260);
+        var leftEdge = planets.Venus.Center.X + planets.Venus.Diameter / 2f + 18;
+        var rightEdge = planets.Jupiter.Center.X - planets.Jupiter.Diameter / 2f - 18;
+        var y = Math.Min(planets.Venus.Center.Y, planets.Jupiter.Center.Y) - 88;
+        var bracket = new PathBuilder()
+            .AddLine(new PointF(leftEdge, y + 24), new PointF(leftEdge, y))
+            .AddLine(new PointF(leftEdge, y), new PointF(rightEdge, y))
+            .AddLine(new PointF(rightEdge, y), new PointF(rightEdge, y + 24))
+            .Build();
+        ctx.Draw(Color.ParseHex("#F6C177"), 4, bracket);
+        Text(ctx, "close together", font, leftEdge + 18, y - 36, Color.ParseHex("#F6C177"), 240);
     }
 
     private static void Text(IImageProcessingContext ctx, string text, Font font, float x, float y, Color color, float wrap) => ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(x, y), WrappingLength = wrap }, text, color);
@@ -310,15 +328,17 @@ public sealed class EducationalLayerRenderer
 
     private static void DrawComparisonStrip(IImageProcessingContext ctx, Font font)
     {
-        ctx.Fill(Color.Black.WithAlpha(.24f), new RectangleF(145, 720, 1050, 190));
-        ctx.Draw(Color.White.WithAlpha(.24f), 2, new PathBuilder().AddLine(new PointF(205, 842), new PointF(1040, 842)).Build());
-        ctx.Draw(Color.ParseHex("#FFF2B8"), 7, new PathBuilder().AddLine(new PointF(245, 792), new PointF(345, 792)).Build());
-        ctx.Draw(Color.ParseHex("#F0C88B"), 5, new PathBuilder().AddLine(new PointF(535, 792), new PointF(595, 792)).Build());
-        ctx.Draw(Color.ParseHex("#8FD2FF"), 4, new PathBuilder().AddLine(new PointF(780, 792), new PointF(1040, 792)).Build());
-        Text(ctx, "brightness", font, 210, 728, Color.ParseHex("#F6C177"), 180);
-        Text(ctx, "Venus: very bright", font, 360, 768, Color.White, 230);
-        Text(ctx, "Jupiter: bright", font, 610, 768, Color.White, 220);
-        Text(ctx, "close in the same western view", font, 770, 862, Color.ParseHex("#B7E0FF"), 370);
+        // Scene 5 significance layer: the visual relationship is the hero; text remains short and separated.
+        ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(.72f), 5, new PathBuilder().AddLine(new PointF(970, 438), new PointF(1026, 446)).Build());
+        ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.88f), new EllipsePolygon(998, 442, 7));
+        Text(ctx, "Two bright planets close together", font, 690, 595, Color.White, 520);
+
+        ctx.Fill(Color.Black.WithAlpha(.16f), new RectangleF(250, 735, 980, 142));
+        ctx.Draw(Color.White.WithAlpha(.18f), 2, new RectangleF(250, 735, 980, 142));
+        ctx.Draw(Color.ParseHex("#FFF2B8"), 7, new PathBuilder().AddLine(new PointF(330, 804), new PointF(430, 804)).Build());
+        ctx.Draw(Color.ParseHex("#F0C88B"), 5, new PathBuilder().AddLine(new PointF(695, 804), new PointF(760, 804)).Build());
+        Text(ctx, "Venus: very bright", font, 455, 778, Color.White, 260);
+        Text(ctx, "Jupiter: bright nearby", font, 785, 778, Color.White, 330);
     }
 
     private static void Text(IImageProcessingContext ctx, string text, Font font, float x, float y, Color color, float wrap) => ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(x, y), WrappingLength = wrap }, text, color);
@@ -326,42 +346,132 @@ public sealed class EducationalLayerRenderer
 
 public sealed class AnnotationLayerRenderer
 {
+    private const float PlanetLabelPadding = 12f;
+
     public void Render(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, EditorialFonts fonts)
     {
+        var text = new CollisionAwareTextPainter(ctx);
         switch (spec.QuestionType.ToLowerInvariant())
         {
             case "what":
-                Leader(ctx, "Venus", new PointF(1220, 360), new PointF(1085, 300), fonts.LabelFont, Color.ParseHex("#FFF2B8"));
-                Leader(ctx, "Jupiter", new PointF(1410, 410), new PointF(1490, 345), fonts.LabelFont, Color.ParseHex("#F0C88B"));
-                Text(ctx, "Venus & Jupiter Tonight", fonts.TitleFont, 115, 98, Color.White, 705);
-                Text(ctx, "After sunset", fonts.SubtitleFont, 122, 205, Color.ParseHex("#F6C177"), 520);
+                DrawPlanetLabels(ctx, text, spec.QuestionType, fonts.LabelFont, Color.ParseHex("#FFF2B8"), Color.ParseHex("#F0C88B"));
+                DrawTitleStack(text, "Venus & Jupiter", "After sunset", fonts, new RectangleF(115, 44, 760, 158));
                 break;
             case "where":
-                Leader(ctx, "Venus", new PointF(1060, 505), new PointF(940, 445), fonts.LabelFont, Color.White);
-                Leader(ctx, "Jupiter", new PointF(1255, 545), new PointF(1320, 492), fonts.LabelFont, Color.White);
+                DrawPlanetLabels(ctx, text, spec.QuestionType, fonts.LabelFont, Color.White, Color.White);
                 break;
             case "how":
-                Leader(ctx, "Venus", new PointF(950, 430), new PointF(820, 365), fonts.LabelFont, Color.White);
-                Leader(ctx, "Jupiter", new PointF(1195, 470), new PointF(1260, 415), fonts.LabelFont, Color.White);
+                DrawPlanetLabels(ctx, text, spec.QuestionType, fonts.LabelFont, Color.White, Color.White);
                 break;
             case "why":
-                Text(ctx, "Why this view matters", fonts.TitleFont, 145, 115, Color.White, 720);
-                Text(ctx, "Bright + close + easy to compare", fonts.SubtitleFont, 150, 205, Color.ParseHex("#F6C177"), 820);
+                DrawTitleStack(text, "Why this view matters", "Bright + close + easy to compare", fonts, new RectangleF(145, 72, 860, 168));
                 break;
             case "action":
-                Text(ctx, "Step Outside Tonight", fonts.TitleFont, 135, 150, Color.White, 740);
-                Text(ctx, "Look west", fonts.SubtitleFont, 145, 235, Color.ParseHex("#F6C177"), 320);
+                DrawTitleStack(text, "Step Outside Tonight", "Look west", fonts, new RectangleF(345, 864, 860, 92));
                 break;
         }
     }
 
-    private static void Leader(IImageProcessingContext ctx, string text, PointF from, PointF label, Font font, Color color)
+    private static void DrawTitleStack(CollisionAwareTextPainter text, string title, string subtitle, EditorialFonts fonts, RectangleF zone)
     {
-        ctx.Draw(color.WithAlpha(.72f), 2, new PathBuilder().AddLine(from, label).Build());
-        Text(ctx, text, font, label.X, label.Y, color, 220);
+        var titleFont = fonts.TitleFont;
+        var subtitleFont = fonts.SubtitleFont;
+        var titleBox = text.Draw(title, titleFont, new PointF(zone.X, zone.Y), Color.White, zone.Width, zone);
+        var subtitleY = titleBox.Bottom + 14;
+        var subtitleZone = new RectangleF(zone.X, subtitleY, zone.Width, Math.Max(0, zone.Bottom - subtitleY));
+        if (subtitleZone.Height < 30) subtitleFont = fonts.SmallFont;
+        var subtitleBox = text.Measure(subtitle, subtitleFont, new PointF(zone.X + 4, subtitleY), Math.Min(560, zone.Width - 8));
+        if (subtitleBox.IntersectsWith(titleBox))
+        {
+            subtitleY = titleBox.Bottom + 18;
+            subtitleBox = text.Measure(subtitle, subtitleFont, new PointF(zone.X + 4, subtitleY), Math.Min(560, zone.Width - 8));
+        }
+        if (subtitleBox.Bottom <= zone.Bottom)
+            text.Draw(subtitle, subtitleFont, new PointF(zone.X + 4, subtitleY), Color.ParseHex("#F6C177"), Math.Min(560, zone.Width - 8), zone);
     }
 
-    private static void Text(IImageProcessingContext ctx, string text, Font font, float x, float y, Color color, float wrap) => ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(x, y), WrappingLength = wrap }, text, color);
+    private static void DrawPlanetLabels(IImageProcessingContext ctx, CollisionAwareTextPainter text, string questionType, Font font, Color venusColor, Color jupiterColor)
+    {
+        var planets = PlanetLayout.GetPlacements(questionType);
+        var venusLabel = PlaceLabelOutsidePlanet(text, "Venus", font, planets.Venus, preferLeft: true);
+        var jupiterLabel = PlaceLabelOutsidePlanet(text, "Jupiter", font, planets.Jupiter, preferLeft: false);
+        if (venusLabel.IntersectsWith(jupiterLabel))
+            jupiterLabel = PlaceLabelOutsidePlanet(text, "Jupiter", font, planets.Jupiter, preferLeft: true);
+
+        Leader(ctx, text, "Venus", planets.Venus, venusLabel, font, venusColor);
+        Leader(ctx, text, "Jupiter", planets.Jupiter, jupiterLabel, font, jupiterColor);
+    }
+
+    private static RectangleF PlaceLabelOutsidePlanet(CollisionAwareTextPainter text, string label, Font font, PlanetPlacement planet, bool preferLeft)
+    {
+        var wrap = 220f;
+        var y = planet.Center.Y - planet.Diameter / 2f - 34f;
+        var measured = text.Measure(label, font, new PointF(0, y), wrap);
+        var x = preferLeft
+            ? planet.Center.X - planet.Diameter / 2f - PlanetLabelPadding - measured.Width - 44f
+            : planet.Center.X + planet.Diameter / 2f + PlanetLabelPadding + 44f;
+        var box = text.Measure(label, font, new PointF(x, y), wrap);
+        if (box.IntersectsWith(Inflate(planet.Bounds, PlanetLabelPadding)))
+        {
+            x = preferLeft
+                ? planet.Center.X + planet.Diameter / 2f + PlanetLabelPadding + 44f
+                : planet.Center.X - planet.Diameter / 2f - PlanetLabelPadding - measured.Width - 44f;
+            box = text.Measure(label, font, new PointF(x, y), wrap);
+        }
+        return ClampToCanvas(box);
+    }
+
+    private static void Leader(IImageProcessingContext ctx, CollisionAwareTextPainter text, string label, PlanetPlacement planet, RectangleF labelBox, Font font, Color color)
+    {
+        var target = new PointF(labelBox.X + (labelBox.X < planet.Center.X ? labelBox.Width : 0), labelBox.Y + labelBox.Height / 2f);
+        var edge = PointOnPlanetEdge(planet, target, PlanetLabelPadding);
+        ctx.Draw(color.WithAlpha(.72f), 2, new PathBuilder().AddLine(edge, target).Build());
+        text.Draw(label, font, new PointF(labelBox.X, labelBox.Y), color, 220, new RectangleF(0, 0, 1920, 1080));
+    }
+
+    private static PointF PointOnPlanetEdge(PlanetPlacement planet, PointF toward, float padding)
+    {
+        var dx = toward.X - planet.Center.X;
+        var dy = toward.Y - planet.Center.Y;
+        var length = MathF.Max(1f, MathF.Sqrt(dx * dx + dy * dy));
+        var radius = planet.Diameter / 2f + padding;
+        return new PointF(planet.Center.X + dx / length * radius, planet.Center.Y + dy / length * radius);
+    }
+
+    private static RectangleF Inflate(RectangleF rect, float amount) => new(rect.X - amount, rect.Y - amount, rect.Width + amount * 2, rect.Height + amount * 2);
+    private static RectangleF ClampToCanvas(RectangleF rect) => new(Math.Clamp(rect.X, 48, 1820 - rect.Width), Math.Clamp(rect.Y, 44, 1010 - rect.Height), rect.Width, rect.Height);
+}
+
+internal sealed class CollisionAwareTextPainter(IImageProcessingContext ctx)
+{
+    private readonly List<RectangleF> _occupied = [];
+
+    public RectangleF Draw(string text, Font font, PointF origin, Color color, float wrap, RectangleF zone)
+    {
+        var currentFont = font;
+        var box = Measure(text, currentFont, origin, wrap);
+        for (var i = 0; i < 3 && (Collides(box) || !Contains(zone, box)); i++)
+        {
+            currentFont = new Font(currentFont.Family, Math.Max(18, currentFont.Size - 4), currentFont.Style);
+            box = Measure(text, currentFont, new PointF(box.X, Math.Min(box.Y + 10, zone.Bottom - box.Height)), wrap);
+        }
+        if (!Contains(zone, box)) box = new RectangleF(zone.X, Math.Min(zone.Y, zone.Bottom - box.Height), Math.Min(box.Width, zone.Width), box.Height);
+        ctx.DrawText(new RichTextOptions(currentFont) { Origin = new PointF(box.X, box.Y), WrappingLength = wrap }, text, color);
+        _occupied.Add(box);
+        return box;
+    }
+
+    public RectangleF Measure(string text, Font font, PointF origin, float wrap)
+    {
+        var avg = font.Size * .58f;
+        var charsPerLine = Math.Max(1, (int)(wrap / Math.Max(1, avg)));
+        var lines = Math.Max(1, (int)Math.Ceiling(text.Length / (double)charsPerLine));
+        var width = Math.Min(wrap, Math.Max(font.Size * 2, text.Length * avg));
+        return new RectangleF(origin.X, origin.Y, width, lines * font.Size * 1.22f);
+    }
+
+    private bool Collides(RectangleF box) => _occupied.Any(existing => existing.IntersectsWith(box));
+    private static bool Contains(RectangleF zone, RectangleF box) => box.X >= zone.X && box.Y >= zone.Y && box.Right <= zone.Right + 1 && box.Bottom <= zone.Bottom + 1;
 }
 
 public sealed record EditorialFonts(Font TitleFont, Font SubtitleFont, Font LabelFont, Font SmallFont)
