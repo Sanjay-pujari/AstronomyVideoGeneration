@@ -47,7 +47,26 @@ public sealed class HeroAssetSceneSelector : IHeroAssetSceneSelector
         },
         ["where", "when", "west", "horizon", "time", "context", "orientation", "location", "guide", "support"]);
 
+    public Task<HeroSceneManifestDto> SelectHeroScenesAsync(
+        HeroAssetStoryGenerationRequest request,
+        HeroAssetStoryDto heroStory,
+        HeroAssetBlueprintDto heroBlueprint,
+        IReadOnlyList<ApprovedHeroSceneCandidate> approvedScenes,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(SelectHeroScenesCore(request.EventId, heroStory, heroBlueprint, approvedScenes));
+    }
+
     public HeroSceneManifestDto SelectHeroScenes(
+        HeroAssetStoryDto heroStory,
+        HeroAssetBlueprintDto heroBlueprint,
+        IReadOnlyList<ApprovedHeroSceneCandidate> approvedScenes)
+        => SelectHeroScenesCore(heroStory.EventId, heroStory, heroBlueprint, approvedScenes);
+
+    private static HeroSceneManifestDto SelectHeroScenesCore(
+        string eventId,
         HeroAssetStoryDto heroStory,
         HeroAssetBlueprintDto heroBlueprint,
         IReadOnlyList<ApprovedHeroSceneCandidate> approvedScenes)
@@ -72,7 +91,26 @@ public sealed class HeroAssetSceneSelector : IHeroAssetSceneSelector
         var secondary = SelectBest(candidates, new HashSet<string>([primary.SceneId], StringComparer.OrdinalIgnoreCase), SecondaryProfile, storyTokens);
         var support = SelectBest(candidates, new HashSet<string>([primary.SceneId, secondary.SceneId], StringComparer.OrdinalIgnoreCase), SupportProfile, storyTokens);
 
-        return new HeroSceneManifestDto(primary.SceneId, secondary.SceneId, support.SceneId);
+        return new HeroSceneManifestDto(
+            eventId,
+            BuildManifestEntry(primary, "PrimaryVisual"),
+            BuildManifestEntry(secondary, "CallToAction"),
+            BuildManifestEntry(support, "DirectionCue"),
+            "Use What scene as visual anchor, Action scene for CTA, and Where scene for direction cue.");
+    }
+
+
+    private static HeroSceneManifestEntryDto BuildManifestEntry(ApprovedHeroSceneCandidate scene, string role)
+    {
+        var sceneNumber = ParseSceneNumber(scene.SceneId);
+        if (sceneNumber == int.MaxValue)
+            throw new ArgumentException($"Approved hero scene id '{scene.SceneId}' does not include a parseable scene number.");
+
+        return new HeroSceneManifestEntryDto(
+            sceneNumber,
+            string.IsNullOrWhiteSpace(scene.QuestionType) ? scene.SceneId : scene.QuestionType,
+            scene.AssetPath ?? string.Empty,
+            role);
     }
 
     private static ApprovedHeroSceneCandidate SelectBest(

@@ -387,6 +387,7 @@ public sealed class HeroAssetStoryGeneratorTests
         var squarePath = Path.Combine(heroAssetsRoot, "hero-square.png");
         var portraitPath = Path.Combine(heroAssetsRoot, "hero-portrait.png");
         var reviewPath = Path.Combine(heroAssetsRoot, "hero-review.json");
+        var sceneManifestPath = Path.Combine(heroAssetsRoot, "hero-scene-manifest.json");
 
         Assert.True(result.IsValid);
         Assert.Equal("Images", result.PhaseRequested);
@@ -394,11 +395,19 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.True(result.StoryExecuted);
         Assert.True(result.BlueprintExecuted);
         Assert.True(result.ImageGenerationExecuted);
-        Assert.Equal(3, result.GeneratedFiles.Count);
+        Assert.True(result.HeroSceneSelectorExecuted);
+        Assert.True(result.HeroSceneManifestGenerated);
+        Assert.Equal(sceneManifestPath.Replace('\\', '/'), result.HeroSceneManifestPath);
+        Assert.Equal("scene-001", result.PrimaryScene);
+        Assert.Equal("scene-006", result.SecondaryScene);
+        Assert.Equal("scene-002", result.SupportScene);
+        Assert.Equal(4, result.GeneratedFiles.Count);
+        Assert.Contains(sceneManifestPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(landscapePath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(squarePath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(portraitPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.DoesNotContain(reviewPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.True(File.Exists(sceneManifestPath));
         Assert.True(File.Exists(landscapePath));
         Assert.True(File.Exists(squarePath));
         Assert.True(File.Exists(portraitPath));
@@ -452,9 +461,9 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Single(result.GeneratedFiles);
         Assert.Equal(sceneManifestPath.Replace('\\', '/'), result.GeneratedFiles.Single());
         Assert.NotNull(result.HeroSceneManifest);
-        Assert.Equal("scene-001", result.HeroSceneManifest!.PrimaryScene);
-        Assert.Equal("scene-006", result.HeroSceneManifest.SecondaryScene);
-        Assert.Equal("scene-002", result.HeroSceneManifest.SupportScene);
+        Assert.Equal("scene-001", result.HeroSceneManifest!.PrimaryScene.SceneId);
+        Assert.Equal("scene-006", result.HeroSceneManifest.SecondaryScene.SceneId);
+        Assert.Equal("scene-002", result.HeroSceneManifest.SupportScene.SceneId);
         Assert.True(File.Exists(sceneManifestPath));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-landscape.png")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-square.png")));
@@ -462,9 +471,18 @@ public sealed class HeroAssetStoryGeneratorTests
 
         using var manifestDocument = JsonDocument.Parse(await File.ReadAllTextAsync(sceneManifestPath));
         var manifest = manifestDocument.RootElement;
-        Assert.Equal("scene-001", manifest.GetProperty("primaryScene").GetString());
-        Assert.Equal("scene-006", manifest.GetProperty("secondaryScene").GetString());
-        Assert.Equal("scene-002", manifest.GetProperty("supportScene").GetString());
+        Assert.Equal(EventId, manifest.GetProperty("eventId").GetString());
+        Assert.Equal(1, manifest.GetProperty("primaryScene").GetProperty("sceneNumber").GetInt32());
+        Assert.Equal("What", manifest.GetProperty("primaryScene").GetProperty("sceneKey").GetString());
+        Assert.Equal("PrimaryVisual", manifest.GetProperty("primaryScene").GetProperty("role").GetString());
+        Assert.EndsWith("scene-001-final.png", manifest.GetProperty("primaryScene").GetProperty("imagePath").GetString());
+        Assert.Equal(6, manifest.GetProperty("secondaryScene").GetProperty("sceneNumber").GetInt32());
+        Assert.Equal("Action", manifest.GetProperty("secondaryScene").GetProperty("sceneKey").GetString());
+        Assert.Equal("CallToAction", manifest.GetProperty("secondaryScene").GetProperty("role").GetString());
+        Assert.Equal(2, manifest.GetProperty("supportScene").GetProperty("sceneNumber").GetInt32());
+        Assert.Equal("Where", manifest.GetProperty("supportScene").GetProperty("sceneKey").GetString());
+        Assert.Equal("DirectionCue", manifest.GetProperty("supportScene").GetProperty("role").GetString());
+        Assert.Equal("Use What scene as visual anchor, Action scene for CTA, and Where scene for direction cue.", manifest.GetProperty("selectionReason").GetString());
     }
 
     [Fact]
@@ -499,9 +517,9 @@ public sealed class HeroAssetStoryGeneratorTests
             new ApprovedHeroSceneCandidate("scene-006", AstronomyQuestionTypes.Action, "Call the viewer to action.", "Closing action scene: step outside tonight and look west.", "Step outside tonight and look west for Venus and Jupiter.", "/approved/scene-006-final.png")
         ]);
 
-        Assert.Equal("scene-001", manifest.PrimaryScene);
-        Assert.Equal("scene-006", manifest.SecondaryScene);
-        Assert.Equal("scene-002", manifest.SupportScene);
+        Assert.Equal("scene-001", manifest.PrimaryScene.SceneId);
+        Assert.Equal("scene-006", manifest.SecondaryScene.SceneId);
+        Assert.Equal("scene-002", manifest.SupportScene.SceneId);
     }
 
     private static void AssertRequiredHookCandidates(IReadOnlyList<HeroHookScoreDto> hookScores)
