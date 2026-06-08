@@ -388,6 +388,7 @@ public sealed class HeroAssetStoryGeneratorTests
         var portraitPath = Path.Combine(heroAssetsRoot, "hero-portrait.png");
         var reviewPath = Path.Combine(heroAssetsRoot, "hero-review.json");
         var sceneManifestPath = Path.Combine(heroAssetsRoot, "hero-scene-manifest.json");
+        var compositionModelPath = Path.Combine(heroAssetsRoot, "hero-composition-model.json");
 
         Assert.True(result.IsValid);
         Assert.Equal("Images", result.PhaseRequested);
@@ -401,17 +402,32 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal("scene-001", result.PrimaryScene);
         Assert.Equal("scene-006", result.SecondaryScene);
         Assert.Equal("scene-002", result.SupportScene);
-        Assert.Equal(4, result.GeneratedFiles.Count);
+        Assert.Equal(5, result.GeneratedFiles.Count);
         Assert.Contains(sceneManifestPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.Contains(compositionModelPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(landscapePath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(squarePath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(portraitPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.DoesNotContain(reviewPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.True(File.Exists(sceneManifestPath));
+        Assert.True(File.Exists(compositionModelPath));
         Assert.True(File.Exists(landscapePath));
         Assert.True(File.Exists(squarePath));
         Assert.True(File.Exists(portraitPath));
         Assert.True(File.Exists(reviewPath));
+        using var compositionDocument = JsonDocument.Parse(await File.ReadAllTextAsync(compositionModelPath));
+        var composition = compositionDocument.RootElement;
+        Assert.Equal("LOOK WEST TONIGHT", composition.GetProperty("hookBlock").GetProperty("text").GetString());
+        Assert.Equal("scene-001", composition.GetProperty("visualBlock").GetProperty("sourceScene").GetString());
+        Assert.Equal("WEST", composition.GetProperty("directionBlock").GetProperty("text").GetString());
+        Assert.Equal("7:23 PM IST", composition.GetProperty("timingBlock").GetProperty("text").GetString());
+        Assert.Equal("STEP OUTSIDE TONIGHT", composition.GetProperty("ctaBlock").GetProperty("text").GetString());
+        Assert.True(composition.GetProperty("validation").GetProperty("hookPresent").GetBoolean());
+        Assert.True(composition.GetProperty("validation").GetProperty("visualPresent").GetBoolean());
+        Assert.True(composition.GetProperty("validation").GetProperty("directionPresent").GetBoolean());
+        Assert.True(composition.GetProperty("validation").GetProperty("timingPresent").GetBoolean());
+        Assert.True(composition.GetProperty("validation").GetProperty("ctaPresent").GetBoolean());
+        Assert.Equal(100, composition.GetProperty("validation").GetProperty("compositionCompletenessScore").GetInt32());
         using var reviewDocument = JsonDocument.Parse(await File.ReadAllTextAsync(reviewPath));
         var review = reviewDocument.RootElement;
         Assert.True(review.GetProperty("usesSharedAstronomyVisualComposer").GetBoolean());
@@ -565,7 +581,7 @@ public sealed class HeroAssetStoryGeneratorTests
         {
             WorkingDirectory = workingDirectory,
             CelestialAssetsRoot = Path.Combine(workingDirectory, "assets", "celestial")
-        }), NullLogger<HeroAssetStoryGenerator>.Instance, new HeroAssetSceneSelector());
+        }), NullLogger<HeroAssetStoryGenerator>.Instance, new HeroAssetSceneSelector(), new HeroCompositionEngine());
 
     private static async Task WriteInputFilesAsync(string workingDirectory)
     {
@@ -577,8 +593,9 @@ public sealed class HeroAssetStoryGeneratorTests
 
         var sceneApprovalRoot = Path.Combine(questionEngineRoot, "scene-approval-v3");
         Directory.CreateDirectory(sceneApprovalRoot);
+        var approvedScenePng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
         for (var sceneNumber = 1; sceneNumber <= 6; sceneNumber++)
-            await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, $"scene-{sceneNumber:000}-final.png"), [137, 80, 78, 71]);
+            await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, $"scene-{sceneNumber:000}-final.png"), approvedScenePng);
 
         await WriteCelestialTestAssetAsync(workingDirectory, "venus");
         await WriteCelestialTestAssetAsync(workingDirectory, "jupiter");

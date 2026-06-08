@@ -21,7 +21,8 @@ public sealed class HeroAssetIntelligenceEngine(IHeroAssetStoryGenerator storyGe
 public sealed class HeroAssetStoryGenerator(
     IOptions<RenderingOptions> renderingOptions,
     ILogger<HeroAssetStoryGenerator> logger,
-    IHeroAssetSceneSelector sceneSelector) : IHeroAssetStoryGenerator
+    IHeroAssetSceneSelector sceneSelector,
+    IHeroCompositionEngine compositionEngine) : IHeroAssetStoryGenerator
 {
     private const string GoldenEventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
     private const string GoldenRegionId = "IN-RJ-UDAIPUR";
@@ -35,6 +36,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroAssetBlueprintFileName = "hero-asset-blueprint.json";
     private const string HeroAssetReviewFileName = "hero-review.json";
     private const string HeroSceneManifestFileName = "hero-scene-manifest.json";
+    private const string HeroCompositionModelFileName = "hero-composition-model.json";
     private const string HeroLandscapeFileName = "hero-landscape.png";
     private const string HeroSquareFileName = "hero-square.png";
     private const string HeroPortraitFileName = "hero-portrait.png";
@@ -313,6 +315,7 @@ public sealed class HeroAssetStoryGenerator(
         var blueprintPath = BuildBlueprintOutputPath(request.EventId, request.RegionId);
         var reviewPath = BuildReviewOutputPath(request.EventId, request.RegionId);
         var sceneManifestPath = BuildSceneManifestOutputPath(request.EventId, request.RegionId);
+        var compositionModelPath = BuildCompositionModelOutputPath(request.EventId, request.RegionId);
 
         heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
@@ -356,6 +359,19 @@ public sealed class HeroAssetStoryGenerator(
         if (selectedSceneManifest is null)
             warnings.Add("Hero scene manifest selection did not produce a manifest; image generation cannot run.");
 
+        HeroCompositionModelDto? compositionModel = null;
+        if (selectedSceneManifest is not null)
+        {
+            try
+            {
+                compositionModel = compositionEngine.ComposeHeroComposition(heroStory, selectedHook, blueprint, selectedSceneManifest, approvedSceneOutputs);
+            }
+            catch (InvalidOperationException ex)
+            {
+                warnings.Add(ex.Message);
+            }
+        }
+
         var planetAssets = ResolveRequiredHeroPlanetTextures(renderingOptions.Value.CelestialAssetsRoot);
         var missingPlanetAssets = planetAssets
             .Where(asset => string.IsNullOrWhiteSpace(asset.TexturePath) || !File.Exists(asset.TexturePath))
@@ -369,6 +385,7 @@ public sealed class HeroAssetStoryGenerator(
             && missingSceneAssets.Count == 0
             && approvedSceneOutputs.Count >= 3
             && selectedSceneManifest is not null
+            && compositionModel is not null
             && heroSceneSelectorExecuted
             && missingPlanetAssets.Length == 0;
         if (!isValid)
@@ -391,7 +408,12 @@ public sealed class HeroAssetStoryGenerator(
                 throw new InvalidOperationException($"Hero scene manifest was not generated at '{NormalizePath(sceneManifestPath)}'; aborting image generation.");
             generatedFiles.Add(NormalizePath(sceneManifestPath));
 
-            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, heroStory, blueprint, selectedSceneManifest, planetAssets, cancellationToken))
+            await File.WriteAllTextAsync(compositionModelPath, JsonSerializer.Serialize(compositionModel, JsonOptions), cancellationToken);
+            if (!File.Exists(compositionModelPath))
+                throw new InvalidOperationException($"Hero composition model was not generated at '{NormalizePath(compositionModelPath)}'; aborting image generation.");
+            generatedFiles.Add(NormalizePath(compositionModelPath));
+
+            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, selectedSceneManifest, compositionModel!, planetAssets, cancellationToken))
                 generatedFiles.Add(imagePath);
 
             var generatedHeroImages = HeroImageSpecs
@@ -404,16 +426,17 @@ public sealed class HeroAssetStoryGenerator(
         }
 
         var heroSceneManifestGenerated = request.DryRun || File.Exists(sceneManifestPath);
-        var imageGenerationExecuted = !request.DryRun && heroSceneManifestGenerated && generatedFiles.Count > 1;
+        var heroCompositionModelGenerated = request.DryRun || File.Exists(compositionModelPath);
+        var imageGenerationExecuted = !request.DryRun && heroSceneManifestGenerated && heroCompositionModelGenerated && generatedFiles.Count > 2;
         if (!request.DryRun && !imageGenerationExecuted)
         {
             warnings.Add("Hero asset image generation failed validation: no image files were generated.");
             isValid = false;
         }
 
-        if (!heroSceneSelectorExecuted || !heroSceneManifestGenerated)
+        if (!heroSceneSelectorExecuted || !heroSceneManifestGenerated || !heroCompositionModelGenerated)
         {
-            warnings.Add("Hero asset image generation failed validation: selected scene manifest is required before image generation.");
+            warnings.Add("Hero asset image generation failed validation: selected scene manifest and composition model are required before image generation.");
             isValid = false;
         }
 
@@ -476,9 +499,9 @@ public sealed class HeroAssetStoryGenerator(
 
     private static async Task<IReadOnlyList<string>> GenerateHeroImageFilesAsync(
         string heroAssetsRoot,
-        HeroAssetStoryDto heroStory,
         HeroAssetBlueprintDto blueprint,
         HeroSceneManifestDto sceneManifest,
+        HeroCompositionModelDto compositionModel,
         IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
         CancellationToken cancellationToken)
     {
@@ -487,7 +510,7 @@ public sealed class HeroAssetStoryGenerator(
         {
             var variant = blueprint.PlatformVariants.FirstOrDefault(platformVariant => string.Equals(platformVariant.Variant, spec.Variant, StringComparison.OrdinalIgnoreCase));
             var outputPath = Path.Combine(heroAssetsRoot, spec.FileName);
-            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, heroStory, variant, sceneManifest, planetAssets, cancellationToken);
+            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, variant, sceneManifest, compositionModel, planetAssets, cancellationToken);
             generatedFiles.Add(NormalizePath(outputPath));
         }
 
@@ -498,26 +521,26 @@ public sealed class HeroAssetStoryGenerator(
         string outputPath,
         int width,
         int height,
-        HeroAssetStoryDto heroStory,
         HeroPlatformVariantDto? variant,
         HeroSceneManifestDto sceneManifest,
+        HeroCompositionModelDto compositionModel,
         IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
         CancellationToken cancellationToken)
     {
-        var focus = variant?.LayoutBlueprint?.CenterVisual ?? heroStory.HeroVisualFocus;
         var request = new AstronomyVisualCompositionRequest(
             width,
             height,
-            CleanHook(heroStory.HeroHook),
-            heroStory.HeroAction,
-            focus,
+            compositionModel.HookBlock.Text,
+            compositionModel.CtaBlock.Text,
+            compositionModel.TimingBlock.Text,
             planetAssets,
             mood: "WarmTwilightHero",
-            westMarkerLabel: "WEST",
+            westMarkerLabel: compositionModel.DirectionBlock.Text,
             starDensity: height > width ? 760 : 560,
             showReferenceOverlays: true,
             referenceStars: BuildHeroReferenceStars(width, height),
-            labels: BuildHeroVariantLabels(heroStory, variant, sceneManifest, width, height),
+            labels: BuildHeroVariantLabels(compositionModel, variant, width, height),
+            backgroundImagePath: sceneManifest.PrimaryScene.ImagePath,
             compositionMode: AstronomyVisualCompositionMode.HeroAsset);
 
         await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
@@ -563,18 +586,16 @@ public sealed class HeroAssetStoryGenerator(
             ? [new AstronomyReferenceStar("after sunset", 0.20f, 0.52f), new AstronomyReferenceStar("western sky", 0.60f, 0.46f)]
             : [new AstronomyReferenceStar("after sunset", 0.48f, 0.28f), new AstronomyReferenceStar("western sky", 0.66f, 0.34f)];
 
-    private static IReadOnlyList<AstronomyVisualLabel> BuildHeroVariantLabels(HeroAssetStoryDto heroStory, HeroPlatformVariantDto? variant, HeroSceneManifestDto sceneManifest, int width, int height)
+    private static IReadOnlyList<AstronomyVisualLabel> BuildHeroVariantLabels(HeroCompositionModelDto compositionModel, HeroPlatformVariantDto? variant, int width, int height)
     {
         var variantName = variant?.Variant ?? string.Empty;
-        var emotion = string.IsNullOrWhiteSpace(heroStory.HeroEmotion) ? "Wonder" : heroStory.HeroEmotion;
-        var supportCue = string.IsNullOrWhiteSpace(sceneManifest.SupportScene.SceneKey) ? "Where" : sceneManifest.SupportScene.SceneKey;
         if (height > width)
         {
             return
             [
-                new AstronomyVisualLabel("VENUS + JUPITER", 0.02f, 0.71f, Color.ParseHex("#FFD48A"), 0.92f),
-                new AstronomyVisualLabel("after sunset", 0.02f, 0.78f, Color.ParseHex("#CBE8FF"), 0.84f),
-                new AstronomyVisualLabel($"{emotion} • {supportCue}", 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
+                new AstronomyVisualLabel(compositionModel.TimingBlock.Text, 0.02f, 0.64f, Color.ParseHex("#CBE8FF"), 0.90f),
+                new AstronomyVisualLabel(compositionModel.DirectionBlock.Text, 0.02f, 0.72f, Color.ParseHex("#FFD48A"), 0.92f),
+                new AstronomyVisualLabel(compositionModel.CtaBlock.Text, 0.02f, 0.87f, Color.ParseHex("#8FD2FF"), 0.88f)
             ];
         }
 
@@ -582,17 +603,17 @@ public sealed class HeroAssetStoryGenerator(
         {
             return
             [
-                new AstronomyVisualLabel("VENUS + JUPITER", 0.02f, 0.70f, Color.ParseHex("#FFD48A"), 0.92f),
-                new AstronomyVisualLabel("after sunset", 0.02f, 0.78f, Color.ParseHex("#CBE8FF"), 0.84f),
-                new AstronomyVisualLabel($"{emotion} • {supportCue}", 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
+                new AstronomyVisualLabel(compositionModel.TimingBlock.Text, 0.02f, 0.70f, Color.ParseHex("#CBE8FF"), 0.90f),
+                new AstronomyVisualLabel(compositionModel.DirectionBlock.Text, 0.42f, 0.70f, Color.ParseHex("#FFD48A"), 0.92f),
+                new AstronomyVisualLabel(compositionModel.CtaBlock.Text, 0.02f, 0.86f, Color.ParseHex("#8FD2FF"), 0.88f)
             ];
         }
 
         return
         [
-            new AstronomyVisualLabel("VENUS + JUPITER", 0.02f, 0.76f, Color.ParseHex("#FFD48A"), 0.92f),
-            new AstronomyVisualLabel("after sunset", 0.02f, 0.84f, Color.ParseHex("#CBE8FF"), 0.84f),
-            new AstronomyVisualLabel($"{emotion} • {supportCue}", 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
+            new AstronomyVisualLabel(compositionModel.TimingBlock.Text, 0.02f, 0.82f, Color.ParseHex("#CBE8FF"), 0.90f),
+            new AstronomyVisualLabel(compositionModel.DirectionBlock.Text, 0.74f, 0.82f, Color.ParseHex("#FFD48A"), 0.92f),
+            new AstronomyVisualLabel(compositionModel.CtaBlock.Text, 0.38f, 0.90f, Color.ParseHex("#8FD2FF"), 0.88f)
         ];
     }
 
@@ -1042,6 +1063,9 @@ public sealed class HeroAssetStoryGenerator(
 
     private string BuildSceneManifestOutputPath(string eventId, string regionId)
         => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroSceneManifestFileName);
+
+    private string BuildCompositionModelOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroCompositionModelFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
