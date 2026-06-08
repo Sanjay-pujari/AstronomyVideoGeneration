@@ -62,20 +62,26 @@ public sealed class ThumbnailGeneratorService : IThumbnailGeneratorService
 
     private async Task RenderAsync(string sourcePath, string outputPath, string text, CancellationToken cancellationToken)
     {
-        using var image = await Image.LoadAsync<Rgba32>(sourcePath, cancellationToken);
-        image.Mutate(ctx =>
-        {
-            ctx.Resize(new ResizeOptions { Size = new Size(_options.Width, _options.Height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center });
-            ctx.Fill(new LinearGradientBrush(new PointF(0, _options.Height * 0.5f), new PointF(0, _options.Height), GradientRepetitionMode.None,
-                new ColorStop(0, Color.Transparent), new ColorStop(1, Color.Black.WithAlpha(0.75f))), new RectangleF(0, _options.Height * 0.45f, _options.Width, _options.Height * 0.55f));
+        var request = new AstronomyVisualCompositionRequest(
+            _options.Width,
+            _options.Height,
+            text,
+            "Look west after sunset",
+            "Tonight's sky guide",
+            ResolvePlanetAssetsFromImage(sourcePath),
+            mood: "WarmTwilightThumbnail",
+            starDensity: 520,
+            showReferenceOverlays: true,
+            backgroundImagePath: sourcePath);
 
-            var font = SystemFonts.CreateFont("Arial", 86, FontStyle.Bold);
-            var origin = new PointF(64, _options.Height - 160);
-            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(origin.X + 4, origin.Y + 4) }, text, Color.Black.WithAlpha(0.85f));
-            ctx.DrawText(new RichTextOptions(font) { Origin = origin }, text, Color.White);
-        });
+        await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
+    }
 
-        await image.SaveAsPngAsync(outputPath, cancellationToken);
+    private static IReadOnlyList<AstronomyVisualPlanetAsset> ResolvePlanetAssetsFromImage(string sourcePath)
+    {
+        var label = System.IO.Path.GetFileNameWithoutExtension(sourcePath);
+        if (string.IsNullOrWhiteSpace(label)) label = "Featured planet";
+        return [new AstronomyVisualPlanetAsset(ToSafeWords(label), sourcePath)];
     }
 
     private static (SceneObservationContext? scene, string objectName) SelectBaseScene(IReadOnlyCollection<SceneObservationContext> scenes)

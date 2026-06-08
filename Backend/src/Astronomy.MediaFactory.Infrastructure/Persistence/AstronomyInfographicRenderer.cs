@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Rendering;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing;
@@ -23,11 +24,20 @@ public sealed class AstronomyInfographicRenderer(
         if (!File.Exists(venusAssetPath)) throw new ArgumentException($"Required local Venus asset was not found at '{venusAssetPath}'.", nameof(venusAssetPath));
         if (!File.Exists(jupiterAssetPath)) throw new ArgumentException($"Required local Jupiter asset was not found at '{jupiterAssetPath}'.", nameof(jupiterAssetPath));
 
-        using var image = new Image<Rgba32>(1920, 1080, Color.ParseHex("#061124"));
+        using var image = await AstronomyVisualCompositionEngine.ComposeAsync(new AstronomyVisualCompositionRequest(
+            1920,
+            1080,
+            spec.ViewerQuestion,
+            spec.ViewerTakeaway,
+            spec.QuestionType,
+            [new AstronomyVisualPlanetAsset("Venus", venusAssetPath), new AstronomyVisualPlanetAsset("Jupiter", jupiterAssetPath)],
+            mood: "WarmTwilightQuestionScene",
+            westMarkerLabel: "WEST",
+            starDensity: 720,
+            showReferenceOverlays: true), cancellationToken);
         var fonts = EditorialFonts.Create();
         image.Mutate(ctx =>
         {
-            backgroundLayer.Render(ctx, spec);
             skyGuidanceLayer.Render(ctx, spec, fonts);
             celestialObjectLayer.Render(ctx, spec, venusAssetPath, jupiterAssetPath);
             educationalLayer.Render(ctx, spec, fonts);

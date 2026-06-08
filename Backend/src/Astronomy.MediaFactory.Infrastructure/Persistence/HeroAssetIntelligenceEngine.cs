@@ -1,9 +1,8 @@
 using System.Text.Json;
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.PixelFormats;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Path = System.IO.Path;
@@ -272,7 +271,7 @@ public sealed class HeroAssetStoryGenerator(
         if (!request.DryRun)
         {
             Directory.CreateDirectory(heroAssetsRoot);
-            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, heroStory, blueprint, cancellationToken))
+            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, heroStory, blueprint, renderingOptions.Value.CelestialAssetsRoot, cancellationToken))
                 generatedFiles.Add(imagePath);
 
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(reviewScores, JsonOptions), cancellationToken);
@@ -327,6 +326,7 @@ public sealed class HeroAssetStoryGenerator(
         string heroAssetsRoot,
         HeroAssetStoryDto heroStory,
         HeroAssetBlueprintDto blueprint,
+        string celestialAssetsRoot,
         CancellationToken cancellationToken)
     {
         var generatedFiles = new List<string>();
@@ -334,7 +334,7 @@ public sealed class HeroAssetStoryGenerator(
         {
             var variant = blueprint.PlatformVariants.FirstOrDefault(platformVariant => string.Equals(platformVariant.Variant, spec.Variant, StringComparison.OrdinalIgnoreCase));
             var outputPath = Path.Combine(heroAssetsRoot, spec.FileName);
-            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, heroStory, variant, cancellationToken);
+            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, heroStory, variant, celestialAssetsRoot, cancellationToken);
             generatedFiles.Add(NormalizePath(outputPath));
         }
 
@@ -347,67 +347,41 @@ public sealed class HeroAssetStoryGenerator(
         int height,
         HeroAssetStoryDto heroStory,
         HeroPlatformVariantDto? variant,
+        string celestialAssetsRoot,
         CancellationToken cancellationToken)
     {
-        using var image = new Image<Rgba32>(width, height);
-        var horizonHeight = Math.Max(24, height / 10);
-        var planetRadius = Math.Max(8, width / 100);
-        var primaryX = width / 2 - planetRadius * 4;
-        var secondaryX = width / 2 + planetRadius * 4;
-        var planetY = Math.Max(height / 5, height / 2 - planetRadius * 2);
-        var markerWidth = Math.Max(6, width / 120);
-        var markerHeight = Math.Max(36, height / 12);
-        var markerX = width - markerWidth * 8;
-        var markerY = height - horizonHeight - markerHeight;
+        var focus = variant?.LayoutBlueprint?.CenterVisual ?? heroStory.HeroVisualFocus;
+        var request = new AstronomyVisualCompositionRequest(
+            width,
+            height,
+            CleanHook(heroStory.HeroHook),
+            heroStory.HeroAction,
+            focus,
+            ResolveHeroPlanetTextures(celestialAssetsRoot),
+            mood: "WarmTwilightHero",
+            westMarkerLabel: "WEST",
+            starDensity: height > width ? 760 : 560,
+            showReferenceOverlays: true,
+            labels: [new AstronomyVisualLabel(heroStory.HeroEmotion, 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)]);
 
-        image.ProcessPixelRows(accessor =>
-        {
-            for (var y = 0; y < accessor.Height; y++)
-            {
-                var row = accessor.GetRowSpan(y);
-                var vertical = accessor.Height <= 1 ? 0f : (float)y / (accessor.Height - 1);
-                for (var x = 0; x < row.Length; x++)
-                {
-                    if (y >= height - horizonHeight)
-                    {
-                        row[x] = new Rgba32(12, 8, 20, 255);
-                        continue;
-                    }
-
-                    if (IsInsideCircle(x, y, primaryX + planetRadius, planetY + planetRadius, planetRadius) ||
-                        IsInsideCircle(x, y, secondaryX + planetRadius, planetY + planetRadius * 2, planetRadius))
-                    {
-                        row[x] = x < width / 2 ? new Rgba32(255, 244, 188, 255) : new Rgba32(224, 235, 255, 255);
-                        continue;
-                    }
-
-                    if (x >= markerX && x < markerX + markerWidth && y >= markerY && y < markerY + markerHeight)
-                    {
-                        row[x] = new Rgba32(255, 215, 64, 255);
-                        continue;
-                    }
-
-                    var horizontal = row.Length <= 1 ? 0f : (float)x / (row.Length - 1);
-                    var twilight = MathF.Min(1f, vertical * 1.25f);
-                    row[x] = new Rgba32(
-                        (byte)(4 + twilight * 32 + horizontal * 8),
-                        (byte)(8 + twilight * 22),
-                        (byte)(24 + (1f - twilight) * 54),
-                        255);
-                }
-            }
-        });
-
-        image.Metadata.ExifProfile = null;
-        image.Metadata.XmpProfile = null;
-        await image.SaveAsPngAsync(outputPath, new PngEncoder(), cancellationToken);
+        await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
     }
 
-    private static bool IsInsideCircle(int x, int y, int centerX, int centerY, int radius)
+
+    private static IReadOnlyList<AstronomyVisualPlanetAsset> ResolveHeroPlanetTextures(string celestialAssetsRoot)
+        => [new AstronomyVisualPlanetAsset("Venus", ResolvePlanetTexture(celestialAssetsRoot, "venus")), new AstronomyVisualPlanetAsset("Jupiter", ResolvePlanetTexture(celestialAssetsRoot, "jupiter"))];
+
+    private static string? ResolvePlanetTexture(string celestialAssetsRoot, string objectName)
     {
-        var dx = x - centerX;
-        var dy = y - centerY;
-        return dx * dx + dy * dy <= radius * radius;
+        if (string.IsNullOrWhiteSpace(celestialAssetsRoot) || !Directory.Exists(celestialAssetsRoot)) return null;
+        var objectDirectory = Directory.EnumerateDirectories(celestialAssetsRoot, "*", SearchOption.TopDirectoryOnly)
+            .FirstOrDefault(directory => Path.GetFileName(directory).Contains(objectName, StringComparison.OrdinalIgnoreCase));
+        if (objectDirectory is null) return null;
+        return Directory.EnumerateFiles(objectDirectory, "*.*", SearchOption.AllDirectories)
+            .Where(path => new[] { ".png", ".jpg", ".jpeg", ".webp" }.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+            .OrderByDescending(path => Path.GetFileNameWithoutExtension(path).Contains("transparent", StringComparison.OrdinalIgnoreCase) ? 2 : Path.GetFileNameWithoutExtension(path).Contains("hero", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
     }
 
     private async Task<HeroAssetStoryDto> LoadHeroAssetStoryAsync(string storyPath, HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
