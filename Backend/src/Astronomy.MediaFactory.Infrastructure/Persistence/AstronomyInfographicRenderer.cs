@@ -32,9 +32,9 @@ public sealed class AstronomyInfographicRenderer(
             spec.QuestionType,
             [new AstronomyVisualPlanetAsset("Venus", venusAssetPath), new AstronomyVisualPlanetAsset("Jupiter", jupiterAssetPath)],
             mood: "WarmTwilightQuestionScene",
-            westMarkerLabel: "WEST",
+            westMarkerLabel: string.Empty,
             starDensity: 720,
-            showReferenceOverlays: true,
+            showReferenceOverlays: false,
             compositionMode: AstronomyVisualCompositionMode.SceneInfographic), cancellationToken);
         var fonts = EditorialFonts.Create();
         image.Mutate(ctx =>
@@ -490,8 +490,6 @@ public sealed class SkyGuidanceLayerRenderer
                 Text(ctx, "altitude guide", fonts.SmallFont, 450, 304, Color.ParseHex("#B7E0FF"), 240);
                 break;
             case "how":
-                DrawReferenceConstellation(ctx, fonts.SmallFont, subtle: true);
-                DrawWestMarker(ctx, new PointF(230, 780), fonts.LabelFont);
                 DrawArrow(ctx, new PointF(1015, 440), new PointF(1150, 465), Color.ParseHex("#8FD2FF"));
                 break;
             case "why":
@@ -639,7 +637,7 @@ public sealed class AnnotationLayerRenderer
                 DrawTitleStack(text, "Why this view matters", "Two bright worlds, one evening sky", fonts, new RectangleF(145, 72, 900, 168));
                 break;
             case "action":
-                DrawTitleStack(text, "Step Outside Tonight", "Look west", fonts, new RectangleF(345, 864, 860, 92));
+                DrawTitleStack(text, "STEP OUTSIDE TONIGHT", "LOOK WEST TONIGHT", fonts, new RectangleF(345, 844, 1000, 118));
                 break;
         }
     }
