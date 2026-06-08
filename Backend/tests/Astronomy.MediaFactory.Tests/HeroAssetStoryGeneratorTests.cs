@@ -389,6 +389,7 @@ public sealed class HeroAssetStoryGeneratorTests
         var reviewPath = Path.Combine(heroAssetsRoot, "hero-review.json");
         var sceneManifestPath = Path.Combine(heroAssetsRoot, "hero-scene-manifest.json");
         var compositionModelPath = Path.Combine(heroAssetsRoot, "hero-composition-model.json");
+        var layoutValidationPath = Path.Combine(heroAssetsRoot, "hero-layout-validation.json");
 
         Assert.True(result.IsValid);
         Assert.Equal("Images", result.PhaseRequested);
@@ -402,15 +403,22 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal("scene-001", result.PrimaryScene);
         Assert.Equal("scene-006", result.SecondaryScene);
         Assert.Equal("scene-002", result.SupportScene);
-        Assert.Equal(5, result.GeneratedFiles.Count);
+        Assert.Equal(6, result.GeneratedFiles.Count);
+        Assert.True(result.HeroCompositionModelGenerated);
+        Assert.True(result.LayoutValidationGenerated);
+        Assert.False(result.DuplicateBlocksDetected);
+        Assert.False(result.TextOverlapDetected);
+        Assert.True(result.ObjectsVisible);
         Assert.Contains(sceneManifestPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(compositionModelPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.Contains(layoutValidationPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(landscapePath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(squarePath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(portraitPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.DoesNotContain(reviewPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.True(File.Exists(sceneManifestPath));
         Assert.True(File.Exists(compositionModelPath));
+        Assert.True(File.Exists(layoutValidationPath));
         Assert.True(File.Exists(landscapePath));
         Assert.True(File.Exists(squarePath));
         Assert.True(File.Exists(portraitPath));
@@ -428,6 +436,12 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.True(composition.GetProperty("validation").GetProperty("timingPresent").GetBoolean());
         Assert.True(composition.GetProperty("validation").GetProperty("ctaPresent").GetBoolean());
         Assert.Equal(100, composition.GetProperty("validation").GetProperty("compositionCompletenessScore").GetInt32());
+        using var validationDocument = JsonDocument.Parse(await File.ReadAllTextAsync(layoutValidationPath));
+        var layoutValidation = validationDocument.RootElement;
+        Assert.False(layoutValidation.GetProperty("duplicateBlocksDetected").GetBoolean());
+        Assert.False(layoutValidation.GetProperty("textOverlapDetected").GetBoolean());
+        Assert.True(layoutValidation.GetProperty("objectsVisible").GetBoolean());
+        Assert.Equal(5, layoutValidation.GetProperty("renderedBlocks").GetArrayLength());
         using var reviewDocument = JsonDocument.Parse(await File.ReadAllTextAsync(reviewPath));
         var review = reviewDocument.RootElement;
         Assert.True(review.GetProperty("usesSharedAstronomyVisualComposer").GetBoolean());

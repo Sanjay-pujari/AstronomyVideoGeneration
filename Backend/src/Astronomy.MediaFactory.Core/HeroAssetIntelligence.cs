@@ -86,7 +86,41 @@ public sealed record HeroAssetGenerationResponse(
     public string? SecondaryScene { get; init; }
 
     public string? SupportScene { get; init; }
+
+    public bool HeroCompositionModelGenerated { get; init; }
+
+    public bool LayoutValidationGenerated { get; init; }
+
+    public bool DuplicateBlocksDetected { get; init; }
+
+    public bool TextOverlapDetected { get; init; }
+
+    public bool ObjectsVisible { get; init; }
 }
+
+public sealed record HeroLayoutValidationDto(
+    IReadOnlyList<string> RenderedBlocks,
+    bool DuplicateBlocksDetected,
+    bool TextOverlapDetected,
+    IReadOnlyList<string> OverlapWarnings,
+    bool ObjectsVisible,
+    IReadOnlyList<HeroObjectVisibilityDto> ObjectVisibility,
+    IReadOnlyList<HeroVariantLayoutValidationDto> Variants);
+
+public sealed record HeroObjectVisibilityDto(string Object, bool Visible, bool Cropped);
+
+public sealed record HeroVariantLayoutValidationDto(
+    string Variant,
+    int Width,
+    int Height,
+    int MarginX,
+    int MarginY,
+    IReadOnlyList<string> RenderedBlocks,
+    bool DuplicateBlocksDetected,
+    bool TextOverlapDetected,
+    IReadOnlyList<string> OverlapWarnings,
+    bool ObjectsVisible,
+    IReadOnlyList<HeroObjectVisibilityDto> ObjectVisibility);
 
 public sealed record HeroAssetStoryDto(
     string EventId,
