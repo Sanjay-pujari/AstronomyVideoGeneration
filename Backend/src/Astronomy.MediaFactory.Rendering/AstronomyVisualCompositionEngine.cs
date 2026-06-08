@@ -172,19 +172,26 @@ public static class AstronomyVisualCompositionEngine
         var horizon = warmHorizon ? Color.ParseHex("#C97845") : Color.ParseHex("#6A4E8E");
         ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, height), GradientRepetitionMode.None,
             new ColorStop(0f, top.WithAlpha(0.98f)),
-            new ColorStop(0.46f, mid.WithAlpha(0.90f)),
-            new ColorStop(0.77f, horizon.WithAlpha(0.46f)),
+            new ColorStop(0.34f, Color.ParseHex("#08112C").WithAlpha(0.94f)),
+            new ColorStop(0.58f, mid.WithAlpha(0.86f)),
+            new ColorStop(0.78f, horizon.WithAlpha(0.50f)),
             new ColorStop(1f, Color.ParseHex("#100D18").WithAlpha(0.95f))),
             new RectangleF(0, 0, width, height));
 
         DrawGlow(ctx, new PointF(width * 0.31f, height * 0.80f), width * 0.70f, height * 0.16f, Color.ParseHex("#F0A45D"), 0.045f, 14);
         DrawGlow(ctx, new PointF(width * 0.70f, height * 0.36f), width * 0.44f, height * 0.24f, Color.ParseHex("#83B7FF"), 0.026f, 10);
         DrawGlow(ctx, new PointF(width * 0.52f, height * 0.86f), width * 0.86f, height * 0.055f, Color.ParseHex("#F6C177"), 0.038f, 12);
+        DrawGlow(ctx, new PointF(width * 0.50f, height * 0.74f), width * 0.78f, height * 0.105f, Color.ParseHex("#FFB36D"), 0.030f, 14);
+        ctx.Fill(new LinearGradientBrush(new PointF(0, height * 0.52f), new PointF(0, height * 0.88f), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Transparent),
+            new ColorStop(0.72f, Color.ParseHex("#D88955").WithAlpha(0.055f)),
+            new ColorStop(1f, Color.ParseHex("#F1B06A").WithAlpha(0.075f))),
+            new RectangleF(0, height * 0.52f, width, height * 0.36f));
     }
 
     private static void DrawStars(IImageProcessingContext ctx, int width, int height, int requestedCount)
     {
-        var count = Math.Clamp(requestedCount, 80, 900);
+        var count = Math.Clamp(requestedCount, 80, 820);
         var random = new Random(1387 + width + height + count);
         for (var i = 0; i < count; i++)
         {
@@ -192,7 +199,7 @@ public static class AstronomyVisualCompositionEngine
             var y = random.NextSingle() * height * 0.76f;
             var altitudeFade = Math.Clamp(1f - y / (height * 0.84f), 0.12f, 1f);
             var radius = random.NextSingle() > 0.972f ? 2.4f + random.NextSingle() * 1.8f : 0.55f + random.NextSingle() * 1.15f;
-            var alpha = (0.20f + random.NextSingle() * 0.65f) * altitudeFade;
+            var alpha = (0.16f + random.NextSingle() * 0.54f) * altitudeFade;
             ctx.Fill(Color.White.WithAlpha(alpha), new EllipsePolygon(x, y, radius));
         }
     }
@@ -269,11 +276,11 @@ public static class AstronomyVisualCompositionEngine
                 DrawProceduralPlanet(ctx, placement, asset.Label);
             }
 
-            var labelScale = height > width ? 0.042f : width == height ? 0.036f : 0.047f;
-            var font = ResolveFont(Math.Max(28f, Math.Min(width, height) * labelScale), FontStyle.Regular);
+            var labelScale = height > width ? 0.0315f : width == height ? 0.027f : 0.035f;
+            var font = ResolveFont(Math.Max(21f, Math.Min(width, height) * labelScale), FontStyle.Regular);
             var labelOrigin = new PointF(placement.X + placement.Width * 0.08f, placement.Bottom + Math.Max(10f, height * 0.008f));
-            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(labelOrigin.X + 2, labelOrigin.Y + 2), WrappingLength = Math.Max(150, placement.Width * 2.3f) }, asset.Label, Color.Black.WithAlpha(0.48f));
-            ctx.DrawText(new RichTextOptions(font) { Origin = labelOrigin, WrappingLength = Math.Max(150, placement.Width * 2.3f) }, asset.Label, Color.ParseHex("#F5E7C6").WithAlpha(0.76f));
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(labelOrigin.X + 2, labelOrigin.Y + 2), WrappingLength = Math.Max(150, placement.Width * 2.3f) }, asset.Label, Color.Black.WithAlpha(0.34f));
+            ctx.DrawText(new RichTextOptions(font) { Origin = labelOrigin, WrappingLength = Math.Max(150, placement.Width * 2.3f) }, asset.Label, Color.ParseHex("#F5E7C6").WithAlpha(0.62f));
         }
     }
 
@@ -282,9 +289,9 @@ public static class AstronomyVisualCompositionEngine
         if (height > width)
         {
             return [
-                CenteredPlanet(width * 0.42f, height * 0.36f, width * 0.22f),
-                CenteredPlanet(width * 0.59f, height * 0.43f, width * 0.16f),
-                CenteredPlanet(width * 0.52f, height * 0.28f, width * 0.10f)
+                CenteredPlanet(width * 0.40f, height * 0.412f, width * 0.22f),
+                CenteredPlanet(width * 0.592f, height * 0.482f, width * 0.16f),
+                CenteredPlanet(width * 0.52f, height * 0.33f, width * 0.10f)
             ];
         }
 
@@ -293,7 +300,7 @@ public static class AstronomyVisualCompositionEngine
             return count switch
             {
                 1 => [CenteredPlanet(width * 0.52f, height * 0.43f, width * 0.18f)],
-                2 => [CenteredPlanet(width * 0.48f, height * 0.42f, width * 0.16f), CenteredPlanet(width * 0.64f, height * 0.49f, width * 0.12f)],
+                2 => [CenteredPlanet(width * 0.47f, height * 0.42f, width * 0.16f), CenteredPlanet(width * 0.65f, height * 0.49f, width * 0.12f)],
                 _ => [CenteredPlanet(width * 0.44f, height * 0.42f, width * 0.15f), CenteredPlanet(width * 0.60f, height * 0.49f, width * 0.11f), CenteredPlanet(width * 0.73f, height * 0.42f, width * 0.07f)]
             };
         }
@@ -301,7 +308,7 @@ public static class AstronomyVisualCompositionEngine
         return count switch
         {
             1 => [CenteredPlanet(width * 0.70f, height * 0.42f, width * 0.155f)],
-            2 => [CenteredPlanet(width * 0.66f, height * 0.43f, width * 0.115f), CenteredPlanet(width * 0.74f, height * 0.405f, width * 0.080f)],
+            2 => [CenteredPlanet(width * 0.648f, height * 0.458f, width * 0.115f), CenteredPlanet(width * 0.738f, height * 0.435f, width * 0.080f)],
             _ => [CenteredPlanet(width * 0.64f, height * 0.43f, width * 0.115f), CenteredPlanet(width * 0.73f, height * 0.405f, width * 0.084f), CenteredPlanet(width * 0.80f, height * 0.39f, width * 0.048f)]
         };
     }
@@ -365,7 +372,9 @@ public static class AstronomyVisualCompositionEngine
         var titleFont = ResolveFont(isPortrait ? 76f : isSquare ? 64f : 56f, FontStyle.Bold);
         var subtitleFont = ResolveFont(isPortrait ? 30f : 26f, FontStyle.Regular);
         var bodyFont = ResolveFont(isPortrait ? 50f : isSquare ? 42f : 36f, FontStyle.Bold);
-        var landscapeCtaFont = ResolveFont(36f, FontStyle.Bold);
+        var portraitCtaFont = ResolveFont(54f, FontStyle.Bold);
+        var squareCtaFont = ResolveFont(46f, FontStyle.Bold);
+        var landscapeCtaFont = ResolveFont(40f, FontStyle.Bold);
         var landscapeDirectionFont = ResolveFont(40f, FontStyle.Bold);
         var landscapeTimingFont = ResolveFont(38f, FontStyle.Bold);
 
@@ -376,7 +385,9 @@ public static class AstronomyVisualCompositionEngine
             {
                 "Hook" => titleFont,
                 "Subtitle" => subtitleFont,
-                "CTA" when !isPortrait && !isSquare => landscapeCtaFont,
+                "CTA" when isPortrait => portraitCtaFont,
+                "CTA" when isSquare => squareCtaFont,
+                "CTA" => landscapeCtaFont,
                 "Direction" when !isPortrait && !isSquare => landscapeDirectionFont,
                 "Timing" when !isPortrait && !isSquare => landscapeTimingFont,
                 _ => bodyFont
@@ -391,6 +402,10 @@ public static class AstronomyVisualCompositionEngine
                 _ => Color.ParseHex("#CBE8FF")
             };
             DrawHeroTextBackdrop(ctx, block.Bounds, block.Name);
+            if (block.Name == "CTA")
+                DrawHeroCtaAccent(ctx, block.Bounds, width, height);
+            if (block.Name == "Direction")
+                DrawHeroDirectionCueAccent(ctx, block.Bounds, width);
             var options = new RichTextOptions(font) { Origin = new PointF(block.Bounds.X, block.Bounds.Y), WrappingLength = block.Bounds.Width };
             ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(block.Bounds.X + 3, block.Bounds.Y + 3) }, block.Text, Color.Black.WithAlpha(0.72f));
             ctx.DrawText(options, block.Text, color);
@@ -411,7 +426,25 @@ public static class AstronomyVisualCompositionEngine
         };
         DrawGlow(ctx, center, radiusX, radiusY, Color.Black, alpha, 8);
         if (blockName is "Hook" or "CTA")
-            DrawGlow(ctx, new PointF(center.X, center.Y + radiusY * 0.18f), radiusX * 0.72f, radiusY * 0.44f, Color.ParseHex("#8FD2FF"), 0.028f, 6);
+            DrawGlow(ctx, new PointF(center.X, center.Y + radiusY * 0.18f), radiusX * 0.72f, radiusY * 0.44f, Color.ParseHex("#8FD2FF"), blockName == "CTA" ? 0.042f : 0.028f, 6);
+    }
+
+    private static void DrawHeroCtaAccent(IImageProcessingContext ctx, RectangleF textBounds, int width, int height)
+    {
+        var underlineY = textBounds.Y + textBounds.Height * 0.86f;
+        var underlineWidth = Math.Min(textBounds.Width * 0.58f, width * 0.36f);
+        var start = new PointF(textBounds.X + textBounds.Width * 0.015f, underlineY);
+        var end = new PointF(start.X + underlineWidth, underlineY);
+        ctx.DrawLine(Color.ParseHex("#8FD2FF").WithAlpha(0.62f), Math.Max(2f, width * 0.0024f), start, end);
+        DrawGlow(ctx, new PointF(start.X + underlineWidth * 0.50f, underlineY), underlineWidth * 0.58f, Math.Max(8f, height * 0.006f), Color.ParseHex("#8FD2FF"), 0.050f, 6);
+    }
+
+    private static void DrawHeroDirectionCueAccent(IImageProcessingContext ctx, RectangleF textBounds, int width)
+    {
+        var y = textBounds.Y + textBounds.Height * 0.72f;
+        var startX = textBounds.X + textBounds.Width * 0.06f;
+        var endX = startX + Math.Min(textBounds.Width * 0.56f, width * 0.13f);
+        ctx.DrawLine(Color.ParseHex("#FFD48A").WithAlpha(0.34f), Math.Max(1.6f, width * 0.0018f), new PointF(startX, y), new PointF(endX, y));
     }
 
     private static IReadOnlyList<(string Name, string Text, RectangleF Bounds)> BuildHeroTemplateTextBlocks(int width, int height, string title, string subtitle, IReadOnlyList<AstronomyVisualLabel> labels)
@@ -440,8 +473,8 @@ public static class AstronomyVisualCompositionEngine
             (1280, 720, "Hook") => new RectangleF(80, 54, 690, 82),
             (1280, 720, "Subtitle") => new RectangleF(80, 142, 520, 34),
             (1280, 720, "Timing") => new RectangleF(80, 552, 305, 48),
-            (1280, 720, "CTA") => new RectangleF(420, 568, 500, 52),
-            (1280, 720, "Direction") => new RectangleF(980, 540, 240, 54),
+            (1280, 720, "CTA") => new RectangleF(400, 566, 540, 58),
+            (1280, 720, "Direction") => new RectangleF(972, 538, 250, 56),
             (1080, 1080, "Hook") => new RectangleF(70, 82, 760, 84),
             (1080, 1080, "Subtitle") => new RectangleF(70, 178, 700, 38),
             (1080, 1080, "Timing") => new RectangleF(70, 790, 315, 52),
@@ -451,7 +484,7 @@ public static class AstronomyVisualCompositionEngine
             (1080, 1920, "Subtitle") => new RectangleF(70, 252, 820, 44),
             (1080, 1920, "Timing") => new RectangleF(70, 1300, 350, 64),
             (1080, 1920, "Direction") => new RectangleF(620, 1300, 300, 64),
-            (1080, 1920, "CTA") => new RectangleF(70, 1608, 880, 70),
+            (1080, 1920, "CTA") => new RectangleF(70, 1602, 900, 76),
             _ => RectangleF.Empty
         };
 
