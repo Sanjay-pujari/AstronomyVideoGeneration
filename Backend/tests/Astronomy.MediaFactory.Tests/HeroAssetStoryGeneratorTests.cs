@@ -403,6 +403,14 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.True(File.Exists(squarePath));
         Assert.True(File.Exists(portraitPath));
         Assert.True(File.Exists(reviewPath));
+        using var reviewDocument = JsonDocument.Parse(await File.ReadAllTextAsync(reviewPath));
+        var review = reviewDocument.RootElement;
+        Assert.True(review.GetProperty("usesSharedAstronomyVisualComposer").GetBoolean());
+        Assert.True(review.GetProperty("usesRealCelestialAssets").GetBoolean());
+        Assert.False(review.GetProperty("usesPlaceholderDots").GetBoolean());
+        Assert.False(review.GetProperty("usesManualCirclePlanets").GetBoolean());
+        Assert.True(review.GetProperty("matchesApprovedSceneVisualBaseline").GetBoolean());
+        Assert.Equal(3, review.GetProperty("platformVariantCount").GetInt32());
         Assert.True(new FileInfo(landscapePath).Length > 0);
         Assert.True(new FileInfo(squarePath).Length > 0);
         Assert.True(new FileInfo(portraitPath).Length > 0);
@@ -447,7 +455,11 @@ public sealed class HeroAssetStoryGeneratorTests
             MidpointRounding.AwayFromZero);
 
     private static HeroAssetStoryGenerator CreateGenerator(string workingDirectory)
-        => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<HeroAssetStoryGenerator>.Instance);
+        => new(Options.Create(new RenderingOptions
+        {
+            WorkingDirectory = workingDirectory,
+            CelestialAssetsRoot = Path.Combine(workingDirectory, "assets", "celestial")
+        }), NullLogger<HeroAssetStoryGenerator>.Instance);
 
     private static async Task WriteInputFilesAsync(string workingDirectory)
     {
@@ -461,6 +473,17 @@ public sealed class HeroAssetStoryGeneratorTests
         Directory.CreateDirectory(sceneApprovalRoot);
         for (var sceneNumber = 1; sceneNumber <= 6; sceneNumber++)
             await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, $"scene-{sceneNumber:000}-final.png"), [137, 80, 78, 71]);
+
+        await WriteCelestialTestAssetAsync(workingDirectory, "venus");
+        await WriteCelestialTestAssetAsync(workingDirectory, "jupiter");
+    }
+
+    private static async Task WriteCelestialTestAssetAsync(string workingDirectory, string objectName)
+    {
+        var assetDirectory = Path.Combine(workingDirectory, "assets", "celestial", objectName);
+        Directory.CreateDirectory(assetDirectory);
+        var transparentOnePixelPng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
+        await File.WriteAllBytesAsync(Path.Combine(assetDirectory, "hero-transparent.png"), transparentOnePixelPng);
     }
 
     private static QuestionAnswerSetDto BuildQuestionAnswerSet() => new(
