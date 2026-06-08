@@ -103,11 +103,11 @@ public sealed class CelestialObjectLayerRenderer
         var positions = spec.QuestionType.ToLowerInvariant() switch
         {
             "what" => (Venus: new PlanetPlacement(new PointF(1220, 360), 140), Jupiter: new PlanetPlacement(new PointF(1410, 410), 96)),
-            "where" => (new PlanetPlacement(new PointF(1060, 505), 92), new PlanetPlacement(new PointF(1255, 545), 68)),
-            "how" => (new PlanetPlacement(new PointF(950, 430), 112), new PlanetPlacement(new PointF(1195, 470), 76)),
-            "why" => (new PlanetPlacement(new PointF(900, 420), 128), new PlanetPlacement(new PointF(1060, 445), 98)),
-            "action" => (new PlanetPlacement(new PointF(1010, 390), 110), new PlanetPlacement(new PointF(1165, 430), 78)),
-            _ => (new PlanetPlacement(new PointF(-100, -100), 1), new PlanetPlacement(new PointF(-100, -100), 1))
+            "where" => (Venus: new PlanetPlacement(new PointF(1060, 505), 92), Jupiter: new PlanetPlacement(new PointF(1255, 545), 68)),
+            "how" => (Venus: new PlanetPlacement(new PointF(950, 430), 112), Jupiter: new PlanetPlacement(new PointF(1195, 470), 76)),
+            "why" => (Venus: new PlanetPlacement(new PointF(900, 420), 128), Jupiter: new PlanetPlacement(new PointF(1060, 445), 98)),
+            "action" => (Venus: new PlanetPlacement(new PointF(1010, 390), 110), Jupiter: new PlanetPlacement(new PointF(1165, 430), 78)),
+            _ => (Venus: new PlanetPlacement(new PointF(-100, -100), 1), Jupiter: new PlanetPlacement(new PointF(-100, -100), 1))
         };
 
         if (spec.QuestionType.Equals("when", StringComparison.OrdinalIgnoreCase)) return;
