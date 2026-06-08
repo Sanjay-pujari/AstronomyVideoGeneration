@@ -132,13 +132,24 @@ public interface IAstronomyInfographicDesignSystem
 public sealed record QuestionDrivenSceneReview(
     int SceneNumber,
     string QuestionType,
+    string LayoutTemplate,
     bool ImageApproved,
     bool NarrationApproved,
     bool SrtApproved,
     bool AlignmentApproved,
     bool AccessibilityApproved,
+    bool UsesLocalPlanetAssets,
+    bool UsesFakeCirclePlanets,
+    bool UsesCardLayout,
+    int TextCoveragePercent,
+    int VisualCoveragePercent,
     IReadOnlyList<string> Issues,
     IReadOnlyList<string> Recommendations);
+
+public interface IAstronomyInfographicRenderer
+{
+    Task RenderAsync(string finalPath, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken);
+}
 
 
 public sealed record EditorialAstronomyInfographicGenerationResponse(
@@ -146,6 +157,7 @@ public sealed record EditorialAstronomyInfographicGenerationResponse(
     int SceneCount,
     int PlannedInfographicCount,
     int FinalImageCount,
+    int SrtCount,
     int ApprovedSceneCount,
     int FailedSceneCount,
     IReadOnlyList<QuestionDrivenPlannedScene> PlannedScenes,

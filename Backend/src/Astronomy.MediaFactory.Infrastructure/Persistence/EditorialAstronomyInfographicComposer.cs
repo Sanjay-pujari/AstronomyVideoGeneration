@@ -45,6 +45,7 @@ public sealed class EditorialAstronomyInfographicComposer(
             response.SceneCount,
             response.PlannedImageCount,
             response.FinalImageCount,
+            response.SrtCount,
             response.ApprovedSceneCount,
             response.FailedSceneCount,
             plannedScenes,

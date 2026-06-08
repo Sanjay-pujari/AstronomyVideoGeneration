@@ -20,15 +20,15 @@ public sealed class QuestionDrivenImagePromptGenerator : IQuestionDrivenImagePro
         };
 
         var planetInstruction = request.LocalPlanetAssetsAvailable
-            ? "Do not paint Venus, Jupiter, dots, stars, labels, arrows, captions, title cards, or any readable text; those will be added with local assets and programmatic overlays."
-            : "Do not add labels, arrows, captions, title cards, UI, metadata, or any readable text. Keep any natural sky objects subtle and non-specific.";
+            ? "No text, no planets, no labels, no arrows, no diagrams, no title cards; Venus and Jupiter will be added with local transparent assets and programmatic overlays."
+            : "No text, no planets, no labels, no arrows, no diagrams, no title cards; keep the background to sky, horizon, atmosphere, and landscape only.";
 
         return string.Join(' ', new[]
         {
             "Professional 16:9 astronomy production background only.",
             sceneMood + ".",
             "Include sky, horizon, atmosphere, and landscape only.",
-            "No text, no labels, no watermarks, no UI, no diagrams, no filenames, no debug markings.",
+            "No text, no planets, no labels, no arrows, no diagrams, no title cards, no watermarks, no UI, no filenames, no debug markings.",
             planetInstruction,
             "Leave clean space for foreground educational overlays. High-quality, polished, non-generic, scene-specific mood."
         });
