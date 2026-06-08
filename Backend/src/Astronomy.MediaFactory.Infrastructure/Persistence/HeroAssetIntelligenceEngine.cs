@@ -675,11 +675,11 @@ public sealed class HeroAssetStoryGenerator(
     private static RectangleF BuildHeroTextBox(HeroImageSpec spec, string blockName)
         => (spec.Width, spec.Height, blockName) switch
         {
-            (1280, 720, "Hook") => new RectangleF(80, 55, 520, 72),
+            (1280, 720, "Hook") => new RectangleF(80, 55, 660, 74),
             (1280, 720, "Subtitle") => new RectangleF(80, 130, 520, 34),
-            (1280, 720, "Timing") => new RectangleF(80, 570, 270, 42),
-            (1280, 720, "CTA") => new RectangleF(420, 610, 500, 48),
-            (1280, 720, "Direction") => new RectangleF(980, 555, 220, 48),
+            (1280, 720, "Timing") => new RectangleF(80, 560, 270, 42),
+            (1280, 720, "CTA") => new RectangleF(395, 574, 490, 50),
+            (1280, 720, "Direction") => new RectangleF(990, 545, 220, 50),
             (1080, 1080, "Hook") => new RectangleF(70, 80, 700, 78),
             (1080, 1080, "Subtitle") => new RectangleF(70, 165, 700, 38),
             (1080, 1080, "Timing") => new RectangleF(70, 780, 280, 48),
@@ -709,8 +709,11 @@ public sealed class HeroAssetStoryGenerator(
             return [("Venus", new RectangleF(marginX + safeWidth * 0.18f, spec.Height * 0.31f, spec.Width * 0.22f, spec.Width * 0.22f)), ("Jupiter", new RectangleF(marginX + safeWidth * 0.58f, spec.Height * 0.40f, spec.Width * 0.16f, spec.Width * 0.16f))];
         if (spec.Width == spec.Height)
             return [("Venus", new RectangleF(marginX + safeWidth * 0.33f, spec.Height * 0.40f, spec.Width * 0.16f, spec.Width * 0.16f)), ("Jupiter", new RectangleF(marginX + safeWidth * 0.56f, spec.Height * 0.47f, spec.Width * 0.12f, spec.Width * 0.12f))];
-        return [("Venus", new RectangleF(spec.Width * 0.52f, spec.Height * 0.31f, spec.Width * 0.13f, spec.Width * 0.13f)), ("Jupiter", new RectangleF(spec.Width * 0.68f, spec.Height * 0.40f, spec.Width * 0.09f, spec.Width * 0.09f))];
+        return [("Venus", CenteredHeroObject(spec.Width * 0.61f, spec.Height * 0.42f, spec.Width * 0.12f)), ("Jupiter", CenteredHeroObject(spec.Width * 0.72f, spec.Height * 0.45f, spec.Width * 0.083f))];
     }
+
+    private static RectangleF CenteredHeroObject(float centerX, float centerY, float size)
+        => new(centerX - size / 2f, centerY - size / 2f, size, size);
 
     private static bool Intersects(RectangleF a, RectangleF b)
         => a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
