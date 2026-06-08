@@ -2,13 +2,40 @@ using System.Text.Json.Serialization;
 
 namespace Astronomy.MediaFactory.Core;
 
-public sealed record HeroAssetStoryGenerationRequest(
-    string EventId,
-    string RegionId,
-    string Language = "en",
-    bool DryRun = true,
-    bool OverwriteExisting = false,
-    HeroAssetGenerationPhase Phase = HeroAssetGenerationPhase.HookSelection);
+public sealed class HeroAssetStoryGenerationRequest
+{
+    public HeroAssetStoryGenerationRequest()
+    {
+    }
+
+    public HeroAssetStoryGenerationRequest(
+        string EventId,
+        string RegionId,
+        string Language = "en",
+        bool DryRun = true,
+        bool OverwriteExisting = false,
+        HeroAssetGenerationPhase Phase = HeroAssetGenerationPhase.HookSelection)
+    {
+        this.EventId = EventId;
+        this.RegionId = RegionId;
+        this.Language = Language;
+        this.DryRun = DryRun;
+        this.OverwriteExisting = OverwriteExisting;
+        this.Phase = Phase.ToString();
+    }
+
+    public string EventId { get; set; } = string.Empty;
+
+    public string RegionId { get; set; } = string.Empty;
+
+    public string Language { get; set; } = "en";
+
+    public bool DryRun { get; set; } = true;
+
+    public bool OverwriteExisting { get; set; }
+
+    public string Phase { get; set; } = HeroAssetGenerationPhase.HookSelection.ToString();
+}
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum HeroAssetGenerationPhase

@@ -264,12 +264,54 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal("Stories/Reels/Shorts", result.PlatformVariants[2].Purpose);
         Assert.Equal("Top: LOOK WEST TONIGHT", result.PlatformVariants[2].LayoutBlueprint.PrimaryTextPlacement);
         Assert.Equal("Bottom: Look West After Sunset", result.PlatformVariants[2].LayoutBlueprint.SupportingTextPlacement);
-        Assert.InRange(result.ReviewScores.ScrollStoppingScore, 90, 100);
-        Assert.InRange(result.ReviewScores.ClickabilityScore, 90, 100);
-        Assert.InRange(result.ReviewScores.ShareabilityScore, 90, 100);
-        Assert.InRange(result.ReviewScores.UnderstandabilityScore, 90, 100);
-        Assert.InRange(result.ReviewScores.HeroAssetReadinessScore, 90, 100);
+        Assert.Equal(95, result.ReviewScores.ScrollStoppingScore);
+        Assert.Equal(95, result.ReviewScores.ClickabilityScore);
+        Assert.Equal(90, result.ReviewScores.ShareabilityScore);
+        Assert.Equal(95, result.ReviewScores.UnderstandabilityScore);
+        Assert.Equal(94, result.ReviewScores.HeroAssetReadinessScore);
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-asset-blueprint.json")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-landscape.png")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-square.png")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-portrait.png")));
+    }
+
+    [Fact]
+    public async Task GenerateHeroAssetsAsync_BlueprintStringPhaseTrimsNormalizesAndGeneratesStoryWhenMissing()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteInputFilesAsync(workingDirectory);
+        var generator = CreateGenerator(workingDirectory);
+
+        var result = await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: false)
+        {
+            Phase = " Blueprint "
+        }, CancellationToken.None);
+
+        var heroAssetsRoot = Path.GetDirectoryName(BuildOutputPath(workingDirectory))!;
+        Assert.True(result.IsValid);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.Empty(result.Warnings);
+        Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
+        Assert.Equal("LOOK WEST TONIGHT", result.HeroStory.HeroHook);
+        Assert.Equal("Wonder", result.HeroBlueprint.HeroEmotion);
+        Assert.Equal("AstronomyPoster", result.HeroBlueprint.LayoutStyle);
+        Assert.Equal("Venus and Jupiter above the western horizon during twilight.", result.HeroBlueprint.VisualFocus);
+        Assert.Equal("Two bright planets together after sunset. Look west to see the pairing.", result.HeroBlueprint.VisualNarrative);
+        Assert.Equal(3, result.PlatformVariants.Count);
+        Assert.Equal(result.PlatformVariants, result.HeroBlueprint.PlatformVariants);
+        Assert.Equal(95, result.ReviewScores.ScrollStoppingScore);
+        Assert.Equal(95, result.ReviewScores.ClickabilityScore);
+        Assert.Equal(90, result.ReviewScores.ShareabilityScore);
+        Assert.Equal(95, result.ReviewScores.UnderstandabilityScore);
+        Assert.Equal(94, result.ReviewScores.HeroAssetReadinessScore);
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-asset-story.json")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-asset-blueprint.json")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-review.json")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-landscape.png")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-square.png")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-portrait.png")));
