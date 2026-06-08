@@ -58,8 +58,8 @@ public sealed class QuestionDrivenVisualComposerTests
 
         var what = result.PlannedScenes[0];
         Assert.Equal(AstronomyQuestionTypes.What, what.QuestionType);
-        Assert.Contains("hero opening sky", what.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("Venus & Jupiter Tonight", what.ProgrammaticOverlayPlan.Title);
+        Assert.Contains("golden twilight western sky", what.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Venus & Jupiter", what.ProgrammaticOverlayPlan.Title);
         Assert.Contains("Venus", what.ProgrammaticOverlayPlan.LocalAssetObjects);
         Assert.Contains("Jupiter", what.ProgrammaticOverlayPlan.LocalAssetObjects);
         Assert.Empty(what.ProgrammaticOverlayPlan.TimingMarkers);
@@ -67,7 +67,7 @@ public sealed class QuestionDrivenVisualComposerTests
 
         var where = result.PlannedScenes[1];
         Assert.Equal(AstronomyQuestionTypes.Where, where.QuestionType);
-        Assert.Contains("western horizon location guide", where.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("observation chart", where.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("West", where.ProgrammaticOverlayPlan.Labels);
         Assert.Contains("Venus", where.ProgrammaticOverlayPlan.Labels);
         Assert.Contains("Jupiter", where.ProgrammaticOverlayPlan.Labels);
@@ -76,7 +76,7 @@ public sealed class QuestionDrivenVisualComposerTests
 
         var when = result.PlannedScenes[2];
         Assert.Equal(AstronomyQuestionTypes.When, when.QuestionType);
-        Assert.Contains("sunset-to-viewing-time timeline", when.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sunset-to-night twilight gradient", when.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("7:23 PM IST", when.ProgrammaticOverlayPlan.TimingMarkers);
         Assert.Contains("Time", when.ProgrammaticOverlayPlan.Title);
 
@@ -87,14 +87,14 @@ public sealed class QuestionDrivenVisualComposerTests
 
         var why = result.PlannedScenes[4];
         Assert.Equal(AstronomyQuestionTypes.Why, why.QuestionType);
-        Assert.Contains("close bright pairing", why.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("significance infographic", why.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("Why It Matters", why.ProgrammaticOverlayPlan.Title);
         Assert.Contains("Venus", why.ProgrammaticOverlayPlan.Labels);
         Assert.Contains("Jupiter", why.ProgrammaticOverlayPlan.Labels);
 
         var action = result.PlannedScenes[5];
         Assert.Equal(AstronomyQuestionTypes.Action, action.QuestionType);
-        Assert.Contains("emotional closing sky", action.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("emotional twilight astronomy poster", action.AiBackgroundPrompt, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("Step Outside Tonight", action.ProgrammaticOverlayPlan.Title);
         Assert.Empty(action.ProgrammaticOverlayPlan.Steps);
     }

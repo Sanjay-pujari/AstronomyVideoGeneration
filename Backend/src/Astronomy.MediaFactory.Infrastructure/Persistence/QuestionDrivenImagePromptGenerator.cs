@@ -10,12 +10,12 @@ public sealed class QuestionDrivenImagePromptGenerator : IQuestionDrivenImagePro
 
         var sceneMood = request.QuestionType.ToLowerInvariant() switch
         {
-            "what" => "hero opening sky over Udaipur with a cinematic western twilight glow, elegant astronomy documentary poster mood, distinct desert-dune silhouette",
-            "where" => "western horizon location guide at dusk over Rajasthan, observation-chart background with measured horizon, subtle sky grid, optional reference-star constellation placeholder, open negative space for a compass, West marker, and planet labels",
-            "when" => "sunset-to-viewing-time timeline background, fading into early evening blue, warm horizon glow with room for a 7:23 PM IST marker",
-            "how" => "practical stargazing how-to guide atmosphere, unobstructed western sky, polished spotting-frame layout, low horizon reference, room for arrows and three observing steps",
-            "why" => "poetic close bright pairing and astronomy significance mood, deepening blue sky, visual space for brightness scale, comparison strip, and closeness indicator",
-            "action" => "emotional cinematic closing astronomy poster over Udaipur, peaceful western horizon, warm inviting atmosphere for a minimal call to action",
+            "what" => "golden twilight western sky over Udaipur with orange horizon glow, premium astronomy magazine cover mood, no grid or chart background",
+            "where" => "clean educational western-horizon observation chart sky over Rajasthan, subtle sky grid, lightweight Leo and Regulus reference-star constellation guide, not cinematic",
+            "when" => "sunset-to-night twilight gradient, warm western horizon glow, open negative space for a hero 7:23 PM IST viewing timeline",
+            "how" => "clean observer-friendly western sky, low horizon reference, minimal distractions, subtle reference-star hint only, room for arrow path and three floating observing steps",
+            "why" => "deep editorial sky with subtle astronomy texture, visual space for a significance infographic comparing brightness and closeness",
+            "action" => "most beautiful emotional twilight astronomy poster over Udaipur, peaceful warm western horizon, minimal call-to-action mood",
             _ => "clean astronomy documentary twilight background over a western horizon"
         };
 
@@ -28,9 +28,9 @@ public sealed class QuestionDrivenImagePromptGenerator : IQuestionDrivenImagePro
             "Professional 16:9 astronomy production background only.",
             sceneMood + ".",
             "Include sky, horizon, atmosphere, and landscape only.",
-            "No text, no planets, no labels, no arrows, no diagrams, no title cards, no watermarks, no UI, no filenames, no debug markings.",
+            "No text, no planets, no labels, no arrows, no diagrams, no title cards, no card containers, no panel outlines, no helper layout boxes, no watermarks, no UI, no filenames, no debug markings.",
             planetInstruction,
-            "Leave clean space for foreground educational overlays. High-quality, polished, non-generic, scene-specific mood."
+            "Leave clean space for floating annotations, subtle leader lines, and soft glow callouts. High-quality, polished, non-generic, scene-specific mood."
         });
     }
 }

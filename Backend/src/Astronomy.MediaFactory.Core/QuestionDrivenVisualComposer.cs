@@ -149,6 +149,12 @@ public sealed record QuestionDrivenSceneReview(
     bool UsesSolidPlanetBackingCircle,
     bool BlueprintZonesRespected,
     bool SignificanceLayerRendered,
+    bool EnvironmentalBackgroundDistinct,
+    bool UsesCardOrPanelBox,
+    bool UsesHelperLayoutBox,
+    bool PlanetAssetsIntegratedIntoSky,
+    bool ConstellationLayerRendered,
+    bool ReferenceStarLayerRendered,
     IReadOnlyList<string> Issues,
     IReadOnlyList<string> Recommendations);
 

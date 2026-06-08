@@ -68,37 +68,43 @@ public sealed class AstronomyBackgroundLayerRenderer
         RenderLandscape(ctx, sceneNumber);
     }
 
-    public void RenderVignette(IImageProcessingContext ctx) => ctx.Draw(Color.Black.WithAlpha(.26f), 64, new RectangleF(28, 28, 1864, 1024));
+    public void RenderVignette(IImageProcessingContext ctx)
+    {
+        // Soft edge falloff without drawing a visible bounding rectangle or panel frame.
+        ctx.Fill(Color.Black.WithAlpha(.10f), new EllipsePolygon(-80, -80, 360));
+        ctx.Fill(Color.Black.WithAlpha(.10f), new EllipsePolygon(2000, -80, 360));
+        ctx.Fill(Color.Black.WithAlpha(.12f), new EllipsePolygon(-80, 1160, 420));
+        ctx.Fill(Color.Black.WithAlpha(.12f), new EllipsePolygon(2000, 1160, 420));
+    }
 
     private static void RenderSceneAtmosphere(IImageProcessingContext ctx, int sceneNumber)
     {
         switch (sceneNumber)
         {
             case 1:
-                ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.18f), new EllipsePolygon(1460, 720, 360));
-                ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(.20f), 3, new RectangleF(92, 82, 1728, 868));
+                ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.22f), new EllipsePolygon(1480, 730, 390));
+                ctx.Fill(Color.ParseHex("#FF8A3D").WithAlpha(.13f), new EllipsePolygon(1680, 790, 520));
                 ctx.Fill(Color.White.WithAlpha(.05f), new EllipsePolygon(1130, 355, 520));
                 break;
             case 2:
-                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.10f), new RectangleF(360, 200, 1240, 610));
-                ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.28f), 2, new RectangleF(360, 200, 1240, 610));
+                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.045f), new EllipsePolygon(960, 480, 720));
+                ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.18f), 1, new PathBuilder().AddLine(new PointF(420, 250), new PointF(1540, 760)).Build());
                 break;
             case 3:
                 ctx.Fill(Color.ParseHex("#FFAA5D").WithAlpha(.20f), new EllipsePolygon(350, 720, 220));
-                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.07f), new RectangleF(210, 468, 1360, 180));
+                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.07f), new EllipsePolygon(890, 558, 690));
                 break;
             case 4:
-                ctx.Fill(Color.Black.WithAlpha(.16f), new RectangleF(104, 96, 590, 430));
-                ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(.35f), 2, new RectangleF(104, 96, 590, 430));
-                ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.18f), 3, new RectangleF(760, 260, 690, 360));
+                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.055f), new EllipsePolygon(1105, 430, 520));
+                ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.14f), 2, new PathBuilder().AddLine(new PointF(790, 585), new PointF(1425, 315)).Build());
                 break;
             case 5:
                 ctx.Fill(Color.ParseHex("#FFF2B8").WithAlpha(.08f), new EllipsePolygon(960, 440, 520));
-                ctx.Draw(Color.ParseHex("#F6C177").WithAlpha(.18f), 2, new RectangleF(135, 720, 1065, 185));
+                ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.035f), new EllipsePolygon(1180, 300, 620));
                 break;
             case 6:
-                ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.16f), new EllipsePolygon(1510, 720, 390));
-                ctx.Draw(Color.ParseHex("#FFFFFF").WithAlpha(.20f), 2, new RectangleF(115, 96, 1690, 870));
+                ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.20f), new EllipsePolygon(1510, 720, 430));
+                ctx.Fill(Color.ParseHex("#FFAA5D").WithAlpha(.12f), new EllipsePolygon(1010, 820, 760));
                 break;
         }
     }
@@ -218,12 +224,13 @@ public sealed class SkyGuidanceLayerRenderer
         {
             case "where":
                 DrawSkyGrid(ctx);
-                DrawReferenceConstellation(ctx, fonts.SmallFont);
+                DrawReferenceConstellation(ctx, fonts.SmallFont, subtle: false);
                 DrawWestMarker(ctx, new PointF(245, 760), fonts.LabelFont);
                 Text(ctx, "Western horizon", fonts.SmallFont, 820, 785, Color.ParseHex("#B7E0FF"), 300);
                 Text(ctx, "altitude guide", fonts.SmallFont, 450, 304, Color.ParseHex("#B7E0FF"), 240);
                 break;
             case "how":
+                DrawReferenceConstellation(ctx, fonts.SmallFont, subtle: true);
                 DrawWestMarker(ctx, new PointF(230, 780), fonts.LabelFont);
                 DrawArrow(ctx, new PointF(1015, 440), new PointF(1150, 465), Color.ParseHex("#8FD2FF"));
                 break;
@@ -241,15 +248,21 @@ public sealed class SkyGuidanceLayerRenderer
         ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.35f), 2, new PathBuilder().AddLine(new PointF(420, 760), new PointF(420, 250)).Build());
     }
 
-    private static void DrawReferenceConstellation(IImageProcessingContext ctx, Font font)
+    private static void DrawReferenceConstellation(IImageProcessingContext ctx, Font font, bool subtle)
     {
-        var points = new[] { new PointF(555, 330), new PointF(665, 382), new PointF(780, 345), new PointF(910, 425), new PointF(1045, 365) };
+        var points = subtle
+            ? new[] { new PointF(1360, 235), new PointF(1450, 282), new PointF(1532, 252), new PointF(1610, 315) }
+            : new[] { new PointF(555, 330), new PointF(665, 382), new PointF(780, 345), new PointF(910, 425), new PointF(1045, 365) };
+        var starAlpha = subtle ? .36f : .72f;
+        var lineAlpha = subtle ? .10f : .18f;
         for (var i = 0; i < points.Length; i++)
         {
-            ctx.Fill(Color.White.WithAlpha(.72f), new EllipsePolygon(points[i].X, points[i].Y, 4));
-            if (i > 0) ctx.Draw(Color.White.WithAlpha(.18f), 2, new PathBuilder().AddLine(points[i - 1], points[i]).Build());
+            ctx.Fill(Color.White.WithAlpha(starAlpha), new EllipsePolygon(points[i].X, points[i].Y, subtle ? 2.4f : 4f));
+            if (i > 0) ctx.Draw(Color.White.WithAlpha(lineAlpha), subtle ? 1 : 2, new PathBuilder().AddLine(points[i - 1], points[i]).Build());
         }
-        Text(ctx, "reference stars", font, 585, 410, Color.White.WithAlpha(.58f), 250);
+        var label = subtle ? "guide stars" : "Leo / Regulus guide";
+        var p = subtle ? new PointF(1350, 336) : new PointF(585, 410);
+        Text(ctx, label, font, p.X, p.Y, Color.White.WithAlpha(subtle ? .36f : .58f), 280);
     }
 
     private static void DrawWestMarker(IImageProcessingContext ctx, PointF p, Font font)
@@ -309,7 +322,7 @@ public sealed class EducationalLayerRenderer
         ctx.Draw(Color.ParseHex("#B7E0FF"), 6, new PathBuilder().AddLine(new PointF(start, y), new PointF(end, y)).Build());
         ctx.Fill(Color.ParseHex("#F6C177"), new EllipsePolygon(385, y, 18));
         ctx.Fill(Color.ParseHex("#FFF2B8"), new EllipsePolygon(1110, y, 28));
-        ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.18f), new RectangleF(430, 500, 860, 105));
+        ctx.Fill(Color.ParseHex("#8FD2FF").WithAlpha(.10f), new EllipsePolygon(860, 552, 455));
         Text(ctx, "Sunset", smallFont, 330, y + 40, Color.White, 190);
         Text(ctx, "7:23 PM IST", subtitleFont, 990, y + 42, Color.ParseHex("#F6C177"), 350);
         Text(ctx, "after-sunset viewing window", smallFont, 650, 455, Color.ParseHex("#B7E0FF"), 460);
@@ -333,8 +346,7 @@ public sealed class EducationalLayerRenderer
         ctx.Fill(Color.ParseHex("#F6C177").WithAlpha(.88f), new EllipsePolygon(998, 442, 7));
         Text(ctx, "Two bright planets close together", font, 690, 595, Color.White, 520);
 
-        ctx.Fill(Color.Black.WithAlpha(.16f), new RectangleF(250, 735, 980, 142));
-        ctx.Draw(Color.White.WithAlpha(.18f), 2, new RectangleF(250, 735, 980, 142));
+        ctx.Fill(Color.ParseHex("#FFF2B8").WithAlpha(.055f), new EllipsePolygon(735, 805, 530));
         ctx.Draw(Color.ParseHex("#FFF2B8"), 7, new PathBuilder().AddLine(new PointF(330, 804), new PointF(430, 804)).Build());
         ctx.Draw(Color.ParseHex("#F0C88B"), 5, new PathBuilder().AddLine(new PointF(695, 804), new PointF(760, 804)).Build());
         Text(ctx, "Venus: very bright", font, 455, 778, Color.White, 260);
