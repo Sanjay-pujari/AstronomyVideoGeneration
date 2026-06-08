@@ -452,7 +452,7 @@ internal sealed class CollisionAwareTextPainter(IImageProcessingContext ctx)
         var box = Measure(text, currentFont, origin, wrap);
         for (var i = 0; i < 3 && (Collides(box) || !Contains(zone, box)); i++)
         {
-            currentFont = new Font(currentFont.Family, Math.Max(18, currentFont.Size - 4), currentFont.Style);
+            currentFont = new Font(currentFont, Math.Max(18, currentFont.Size - 4));
             box = Measure(text, currentFont, new PointF(box.X, Math.Min(box.Y + 10, zone.Bottom - box.Height)), wrap);
         }
         if (!Contains(zone, box)) box = new RectangleF(zone.X, Math.Min(zone.Y, zone.Bottom - box.Height), Math.Min(box.Width, zone.Width), box.Height);
