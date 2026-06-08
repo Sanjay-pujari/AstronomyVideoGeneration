@@ -678,8 +678,8 @@ public sealed class HeroAssetStoryGenerator(
             (1280, 720, "Hook") => new RectangleF(80, 55, 660, 74),
             (1280, 720, "Subtitle") => new RectangleF(80, 130, 520, 34),
             (1280, 720, "Timing") => new RectangleF(80, 560, 270, 42),
-            (1280, 720, "CTA") => new RectangleF(395, 574, 490, 50),
-            (1280, 720, "Direction") => new RectangleF(990, 545, 220, 50),
+            (1280, 720, "CTA") => new RectangleF(400, 566, 540, 58),
+            (1280, 720, "Direction") => new RectangleF(972, 538, 250, 56),
             (1080, 1080, "Hook") => new RectangleF(70, 80, 700, 78),
             (1080, 1080, "Subtitle") => new RectangleF(70, 165, 700, 38),
             (1080, 1080, "Timing") => new RectangleF(70, 780, 280, 48),
@@ -689,7 +689,7 @@ public sealed class HeroAssetStoryGenerator(
             (1080, 1920, "Subtitle") => new RectangleF(70, 210, 820, 44),
             (1080, 1920, "Timing") => new RectangleF(70, 1250, 300, 58),
             (1080, 1920, "Direction") => new RectangleF(650, 1250, 260, 58),
-            (1080, 1920, "CTA") => new RectangleF(70, 1550, 850, 64),
+            (1080, 1920, "CTA") => new RectangleF(70, 1602, 900, 76),
             _ => blockName switch
             {
                 "Hook" => new RectangleF(Math.Max(36, spec.Width * 0.06f), Math.Max(36, spec.Height * 0.06f), spec.Width - Math.Max(36, spec.Width * 0.06f) * 2, 80),
@@ -706,10 +706,10 @@ public sealed class HeroAssetStoryGenerator(
         var safeWidth = spec.Width - marginX * 2;
         var safeHeight = spec.Height - marginY * 2;
         if (spec.Height > spec.Width)
-            return [("Venus", new RectangleF(marginX + safeWidth * 0.18f, spec.Height * 0.31f, spec.Width * 0.22f, spec.Width * 0.22f)), ("Jupiter", new RectangleF(marginX + safeWidth * 0.58f, spec.Height * 0.40f, spec.Width * 0.16f, spec.Width * 0.16f))];
+            return [("Venus", CenteredHeroObject(spec.Width * 0.40f, spec.Height * 0.412f, spec.Width * 0.22f)), ("Jupiter", CenteredHeroObject(spec.Width * 0.592f, spec.Height * 0.482f, spec.Width * 0.16f))];
         if (spec.Width == spec.Height)
-            return [("Venus", new RectangleF(marginX + safeWidth * 0.33f, spec.Height * 0.40f, spec.Width * 0.16f, spec.Width * 0.16f)), ("Jupiter", new RectangleF(marginX + safeWidth * 0.56f, spec.Height * 0.47f, spec.Width * 0.12f, spec.Width * 0.12f))];
-        return [("Venus", CenteredHeroObject(spec.Width * 0.61f, spec.Height * 0.42f, spec.Width * 0.12f)), ("Jupiter", CenteredHeroObject(spec.Width * 0.72f, spec.Height * 0.45f, spec.Width * 0.083f))];
+            return [("Venus", CenteredHeroObject(spec.Width * 0.47f, spec.Height * 0.42f, spec.Width * 0.16f)), ("Jupiter", CenteredHeroObject(spec.Width * 0.65f, spec.Height * 0.49f, spec.Width * 0.12f))];
+        return [("Venus", CenteredHeroObject(spec.Width * 0.648f, spec.Height * 0.458f, spec.Width * 0.115f)), ("Jupiter", CenteredHeroObject(spec.Width * 0.738f, spec.Height * 0.435f, spec.Width * 0.080f))];
     }
 
     private static RectangleF CenteredHeroObject(float centerX, float centerY, float size)
@@ -769,7 +769,7 @@ public sealed class HeroAssetStoryGenerator(
             planetAssets,
             mood: "WarmTwilightHero",
             westMarkerLabel: FormatHeroDirection(compositionModel.DirectionBlock.Text),
-            starDensity: height > width ? 760 : 560,
+            starDensity: height > width ? 620 : 455,
             showReferenceOverlays: false,
             referenceStars: [],
             labels: BuildHeroVariantLabels(compositionModel, variant, width, height),
