@@ -65,8 +65,13 @@ public sealed class AiImagePromptExecutionServiceTests : IDisposable
         Assert.Contains("foreground", document.RootElement.GetProperty("professionalPrompt").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("clean upper and lower caption-safe zones", document.RootElement.GetProperty("professionalPrompt").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("fake UI", document.RootElement.GetProperty("professionalPrompt").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("smooth continuous sky gradient", document.RootElement.GetProperty("professionalPrompt").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("visible horizontal bands", document.RootElement.GetProperty("professionalPrompt").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("blurry", document.RootElement.GetProperty("negativePrompt").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("wrong number of planets", document.RootElement.GetProperty("negativePrompt").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("visible horizontal banding", document.RootElement.GetProperty("negativePrompt").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("visibleHorizontalBanding=false", document.RootElement.GetProperty("lightingGuide").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("naturalSkyGradient=true", document.RootElement.GetProperty("qualityChecklist")[7].GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("high-retention", document.RootElement.GetProperty("qualityChecklist")[5].GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal("Phase8F.1", document.RootElement.GetProperty("generationSource").GetString());
         Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("generatedUtc").GetString()));

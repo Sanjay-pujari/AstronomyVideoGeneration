@@ -538,36 +538,71 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     }
     private static void DrawNebulaCloud(IImageProcessingContext ctx, int width, int height)
     {
-        var bandTop = new RectangleF(0, height * 0.08f, width, height * 0.24f);
-        var bandMid = new RectangleF(0, height * 0.32f, width, height * 0.30f);
-        var bandBottom = new RectangleF(0, height * 0.62f, width, height * 0.28f);
-        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.02f, bandTop.Top), new PointF(width * 0.88f, bandTop.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#0E2348").WithAlpha(0.0f)), new ColorStop(0.48f, Color.ParseHex("#2B4C7A").WithAlpha(0.15f)), new ColorStop(1, Color.ParseHex("#6D3E8F").WithAlpha(0.09f))]), bandTop);
-        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.12f, bandMid.Top), new PointF(width * 0.94f, bandMid.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#17386A").WithAlpha(0.02f)), new ColorStop(0.55f, Color.ParseHex("#3A5B9E").WithAlpha(0.13f)), new ColorStop(1, Color.ParseHex("#7E479E").WithAlpha(0.10f))]), bandMid);
-        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.01f, bandBottom.Top), new PointF(width * 0.96f, bandBottom.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#0A1A36").WithAlpha(0.0f)), new ColorStop(0.56f, Color.ParseHex("#295E88").WithAlpha(0.11f)), new ColorStop(1, Color.ParseHex("#C6864E").WithAlpha(0.08f))]), bandBottom);
-        ctx.GaussianBlur(22f);
+        // Paint one continuous sky field with diagonal, feathered atmospheric wisps. Avoid
+        // stacked rectangular gradient regions because they can read as horizontal bands.
+        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.04f, height * 0.10f), new PointF(width * 0.96f, height * 0.92f), GradientRepetitionMode.None,
+            [
+                new ColorStop(0f, Color.ParseHex("#0E2348").WithAlpha(0.0f)),
+                new ColorStop(0.38f, Color.ParseHex("#2B4C7A").WithAlpha(0.10f)),
+                new ColorStop(0.72f, Color.ParseHex("#6D3E8F").WithAlpha(0.08f)),
+                new ColorStop(1f, Color.ParseHex("#C6864E").WithAlpha(0.04f))
+            ]), new RectangleF(0, 0, width, height));
+
+        DrawSoftAtmosphericGlow(ctx, width, height, new PointF(width * 0.23f, height * 0.23f), width * 0.52f, height * 0.18f, Color.ParseHex("#2B4C7A"), 0.045f, 10);
+        DrawSoftAtmosphericGlow(ctx, width, height, new PointF(width * 0.68f, height * 0.46f), width * 0.46f, height * 0.24f, Color.ParseHex("#7E479E"), 0.040f, 10);
+        DrawSoftAtmosphericGlow(ctx, width, height, new PointF(width * 0.34f, height * 0.76f), width * 0.58f, height * 0.20f, Color.ParseHex("#C6864E"), 0.032f, 10);
+        ctx.GaussianBlur(24f);
     }
     private static void DrawDepthLayerStack(IImageProcessingContext ctx, int width, int height)
     {
         DrawStars(ctx, width, height, 520);
         DrawNebulaCloud(ctx, width, height);
         DrawStars(ctx, width, height, 240);
-        ctx.Fill(Color.ParseHex("#7AB3FF").WithAlpha(0.025f), new RectangleF(0, 0, width, height * 0.42f));
-        ctx.Fill(Color.ParseHex("#B896FF").WithAlpha(0.022f), new RectangleF(width * 0.28f, height * 0.18f, width * 0.62f, height * 0.48f));
-        ctx.Fill(Color.ParseHex("#FFB26A").WithAlpha(0.02f), new RectangleF(0, height * 0.55f, width * 0.56f, height * 0.45f));
+        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.08f, 0), new PointF(width * 0.92f, height), GradientRepetitionMode.None,
+            [
+                new ColorStop(0f, Color.ParseHex("#7AB3FF").WithAlpha(0.018f)),
+                new ColorStop(0.47f, Color.ParseHex("#B896FF").WithAlpha(0.014f)),
+                new ColorStop(1f, Color.ParseHex("#FFB26A").WithAlpha(0.015f))
+            ]), new RectangleF(0, 0, width, height));
+        DrawSoftAtmosphericGlow(ctx, width, height, new PointF(width * 0.63f, height * 0.38f), width * 0.42f, height * 0.30f, Color.ParseHex("#B896FF"), 0.018f, 8);
         DrawStars(ctx, width, height, 110);
     }
     private static void DrawAtmosphericHaze(IImageProcessingContext ctx, int width, int height)
     {
-        var hazeBand = new RectangleF(0, height * 0.50f, width, height * 0.45f);
-        ctx.Fill(new LinearGradientBrush(new PointF(0, hazeBand.Top), new PointF(width, hazeBand.Bottom), GradientRepetitionMode.None, [new ColorStop(0, Color.ParseHex("#7CA6FF").WithAlpha(0.0f)), new ColorStop(0.6f, Color.ParseHex("#6CB9D8").WithAlpha(0.05f)), new ColorStop(1f, Color.ParseHex("#E1A35E").WithAlpha(0.08f))]), hazeBand);
-        ctx.GaussianBlur(12f);
+        ctx.Fill(new LinearGradientBrush(new PointF(width * 0.08f, height * 0.42f), new PointF(width * 0.94f, height), GradientRepetitionMode.None,
+            [
+                new ColorStop(0f, Color.ParseHex("#7CA6FF").WithAlpha(0.0f)),
+                new ColorStop(0.55f, Color.ParseHex("#6CB9D8").WithAlpha(0.038f)),
+                new ColorStop(1f, Color.ParseHex("#E1A35E").WithAlpha(0.062f))
+            ]), new RectangleF(0, 0, width, height));
+        DrawSoftAtmosphericGlow(ctx, width, height, new PointF(width * 0.50f, height * 0.82f), width * 0.72f, height * 0.18f, Color.ParseHex("#E1A35E"), 0.026f, 9);
+        ctx.GaussianBlur(14f);
     }
     private static void DrawVignette(IImageProcessingContext ctx, int width, int height)
     {
-        ctx.Fill(Color.Black.WithAlpha(0.35f), new RectangleF(0, 0, width, 84));
-        ctx.Fill(Color.Black.WithAlpha(0.46f), new RectangleF(0, height - 102, width, 102));
-        ctx.Fill(Color.Black.WithAlpha(0.2f), new RectangleF(0, 0, 96, height));
-        ctx.Fill(Color.Black.WithAlpha(0.16f), new RectangleF(width - 88, 0, 88, height));
+        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, height), GradientRepetitionMode.None,
+            [
+                new ColorStop(0f, Color.Black.WithAlpha(0.35f)),
+                new ColorStop(0.18f, Color.Black.WithAlpha(0.04f)),
+                new ColorStop(0.78f, Color.Black.WithAlpha(0.02f)),
+                new ColorStop(1f, Color.Black.WithAlpha(0.46f))
+            ]), new RectangleF(0, 0, width, height));
+        ctx.Fill(new LinearGradientBrush(new PointF(0, height * 0.18f), new PointF(width, height * 0.82f), GradientRepetitionMode.None,
+            [
+                new ColorStop(0f, Color.Black.WithAlpha(0.20f)),
+                new ColorStop(0.14f, Color.Black.WithAlpha(0.025f)),
+                new ColorStop(0.86f, Color.Black.WithAlpha(0.02f)),
+                new ColorStop(1f, Color.Black.WithAlpha(0.16f))
+            ]), new RectangleF(0, 0, width, height));
+    }
+    private static void DrawSoftAtmosphericGlow(IImageProcessingContext ctx, int width, int height, PointF center, float radiusX, float radiusY, Color color, float maxAlpha, int rings)
+    {
+        for (var i = rings; i >= 1; i--)
+        {
+            var t = i / (float)rings;
+            var alpha = maxAlpha * MathF.Pow(1f - t * 0.74f, 1.55f);
+            ctx.Fill(color.WithAlpha(alpha), new EllipsePolygon(center.X, center.Y, radiusX * t, radiusY * t));
+        }
     }
     private static List<RectangleF> BuildDynamicPlacements(string scene, int width, int height, IReadOnlyList<string> assets)
     {
