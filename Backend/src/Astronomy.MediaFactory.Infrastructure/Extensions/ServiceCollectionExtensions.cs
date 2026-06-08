@@ -496,6 +496,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAstronomyVideoPlanningService, AstronomyVideoPlanningService>();
         services.AddScoped<IAstronomyAssetPlanningService, AstronomyAssetPlanningService>();
         services.AddScoped<IQuestionEngine, AstronomyQuestionEngine>();
+        services.AddScoped<IHeroAssetIntelligenceEngine, HeroAssetIntelligenceEngine>();
+        services.AddScoped<IHeroAssetStoryGenerator, HeroAssetStoryGenerator>();
         services.AddScoped<IQuestionScenePlanner, QuestionScenePlanner>();
         services.AddScoped<IQuestionSceneIntentEnricher, QuestionSceneIntentEnricher>();
         services.AddScoped<IQuestionDrivenNarrationGenerator, QuestionDrivenNarrationGenerator>();

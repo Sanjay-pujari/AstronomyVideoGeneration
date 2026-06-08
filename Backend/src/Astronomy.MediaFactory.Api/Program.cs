@@ -381,6 +381,20 @@ app.MapPost("/api/astronomy-intelligence/generate-question-driven-narration", as
 });
 
 
+app.MapPost("/api/astronomy-intelligence/generate-hero-asset-story", async (HeroAssetStoryGenerationRequest request, IHeroAssetIntelligenceEngine heroAssetEngine, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Hero asset story generation request received for {RegionId}. EventId={EventId}; DryRun={DryRun}", request.RegionId, request.EventId, request.DryRun);
+    try
+    {
+        return Results.Ok(await heroAssetEngine.GenerateHeroAssetStoryAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
+
 app.MapPost("/api/astronomy-intelligence/generate-question-driven-visuals", async (QuestionDrivenVisualGenerationRequest request, IQuestionDrivenVisualComposer composer, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Astronomy question-driven visual generation request received for {RegionId}. EventId={EventId}; DryRun={DryRun}", request.RegionId, request.EventId, request.DryRun);
