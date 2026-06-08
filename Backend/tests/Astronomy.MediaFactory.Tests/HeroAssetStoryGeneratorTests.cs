@@ -416,6 +416,94 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.True(new FileInfo(portraitPath).Length > 0);
     }
 
+
+    [Fact]
+    public async Task GenerateHeroAssetsAsync_SceneSelectionNonDryRunWritesHeroSceneManifestOnly()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteInputFilesAsync(workingDirectory);
+        var generator = CreateGenerator(workingDirectory);
+
+        await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            Phase: HeroAssetGenerationPhase.Blueprint), CancellationToken.None);
+
+        var result = await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            Phase: HeroAssetGenerationPhase.SceneSelection), CancellationToken.None);
+
+        var heroAssetsRoot = Path.GetDirectoryName(BuildOutputPath(workingDirectory))!;
+        var sceneManifestPath = Path.Combine(heroAssetsRoot, "hero-scene-manifest.json");
+
+        Assert.True(result.IsValid);
+        Assert.Equal("SceneSelection", result.PhaseRequested);
+        Assert.Equal("SceneSelection", result.PhaseExecuted);
+        Assert.True(result.StoryExecuted);
+        Assert.True(result.BlueprintExecuted);
+        Assert.False(result.ImageGenerationExecuted);
+        Assert.Single(result.GeneratedFiles);
+        Assert.Equal(sceneManifestPath.Replace('\\', '/'), result.GeneratedFiles.Single());
+        Assert.NotNull(result.HeroSceneManifest);
+        Assert.Equal("scene-001", result.HeroSceneManifest!.PrimaryScene);
+        Assert.Equal("scene-006", result.HeroSceneManifest.SecondaryScene);
+        Assert.Equal("scene-002", result.HeroSceneManifest.SupportScene);
+        Assert.True(File.Exists(sceneManifestPath));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-landscape.png")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-square.png")));
+        Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-portrait.png")));
+
+        using var manifestDocument = JsonDocument.Parse(await File.ReadAllTextAsync(sceneManifestPath));
+        var manifest = manifestDocument.RootElement;
+        Assert.Equal("scene-001", manifest.GetProperty("primaryScene").GetString());
+        Assert.Equal("scene-006", manifest.GetProperty("secondaryScene").GetString());
+        Assert.Equal("scene-002", manifest.GetProperty("supportScene").GetString());
+    }
+
+    [Fact]
+    public void HeroAssetSceneSelector_SelectHeroScenesUsesReusableRoleScoring()
+    {
+        var selector = new HeroAssetSceneSelector();
+        var story = new HeroAssetStoryDto(
+            EventId,
+            RegionId,
+            "en",
+            "LOOK WEST TONIGHT",
+            "Venus and Jupiter will appear close together after sunset in Udaipur’s western sky.",
+            "Look west shortly after sunset.",
+            "Venus and Jupiter above the western horizon.",
+            "Wonder",
+            "ScrollStoppingHeroAsset",
+            new HeroStorySourceDto("what", "where", "when", "why"),
+            new HeroAssetStoryScoresDto(95, 95, 90, 95),
+            95,
+            DateTimeOffset.Parse("2026-06-07T14:05:00Z"));
+        var blueprint = new HeroAssetBlueprintDto(
+            "Wonder",
+            "AstronomyPoster",
+            "Venus and Jupiter above the western horizon during twilight.",
+            "Two bright planets together after sunset. Look west to see the pairing.",
+            []);
+
+        var manifest = selector.SelectHeroScenes(story, blueprint,
+        [
+            new ApprovedHeroSceneCandidate("scene-001", AstronomyQuestionTypes.What, "Introduce the event.", "Hero visual of two bright planets together.", "Venus and Jupiter appear close together tonight.", "/approved/scene-001-final.png"),
+            new ApprovedHeroSceneCandidate("scene-002", AstronomyQuestionTypes.Where, "Orient the viewer.", "Show west horizon and where to look.", "Look west above the horizon for Venus and Jupiter.", "/approved/scene-002-final.png"),
+            new ApprovedHeroSceneCandidate("scene-006", AstronomyQuestionTypes.Action, "Call the viewer to action.", "Closing action scene: step outside tonight and look west.", "Step outside tonight and look west for Venus and Jupiter.", "/approved/scene-006-final.png")
+        ]);
+
+        Assert.Equal("scene-001", manifest.PrimaryScene);
+        Assert.Equal("scene-006", manifest.SecondaryScene);
+        Assert.Equal("scene-002", manifest.SupportScene);
+    }
+
     private static void AssertRequiredHookCandidates(IReadOnlyList<HeroHookScoreDto> hookScores)
     {
         var hooks = hookScores.Select(score => score.Hook).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -459,7 +547,7 @@ public sealed class HeroAssetStoryGeneratorTests
         {
             WorkingDirectory = workingDirectory,
             CelestialAssetsRoot = Path.Combine(workingDirectory, "assets", "celestial")
-        }), NullLogger<HeroAssetStoryGenerator>.Instance);
+        }), NullLogger<HeroAssetStoryGenerator>.Instance, new HeroAssetSceneSelector());
 
     private static async Task WriteInputFilesAsync(string workingDirectory)
     {
