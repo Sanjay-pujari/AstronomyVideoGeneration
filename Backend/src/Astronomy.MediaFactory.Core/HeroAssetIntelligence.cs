@@ -14,6 +14,19 @@ public sealed record HeroAssetStoryGenerationResponse(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> GeneratedFiles);
 
+public sealed record HeroAssetGenerationResponse(
+    string EventId,
+    bool IsValid,
+    HeroAssetStoryDto HeroStory,
+    string SelectedHook,
+    IReadOnlyList<string> AlternativeHooks,
+    IReadOnlyList<HeroHookScoreDto> HookScores,
+    HeroAssetBlueprintDto HeroBlueprint,
+    IReadOnlyList<HeroPlatformVariantDto> PlatformVariants,
+    HeroAssetReviewScoresDto ReviewScores,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> GeneratedFiles);
+
 public sealed record HeroAssetStoryDto(
     string EventId,
     string RegionId,
@@ -41,12 +54,46 @@ public sealed record HeroAssetStoryScoresDto(
     int ShareabilityScore,
     int UnderstandabilityScore);
 
+public sealed record HeroHookScoreDto(
+    string Hook,
+    int ScrollStoppingScore,
+    int ClickabilityScore,
+    int ShareabilityScore,
+    int UnderstandabilityScore,
+    int OverallScore);
+
+public sealed record HeroAssetBlueprintDto(
+    string LayoutStyle,
+    string VisualFocus,
+    string TitlePlacement,
+    string SubtitlePlacement,
+    string DirectionCue,
+    string Emotion,
+    IReadOnlyList<HeroPlatformVariantDto> PlatformVariants);
+
+public sealed record HeroPlatformVariantDto(
+    string Variant,
+    string Size,
+    string Purpose);
+
+public sealed record HeroAssetReviewScoresDto(
+    int ScrollStoppingScore,
+    int ClickabilityScore,
+    int ShareabilityScore,
+    int UnderstandabilityScore,
+    int EmotionStrengthScore,
+    int HeroAssetReadinessScore);
+
 public interface IHeroAssetStoryGenerator
 {
     Task<HeroAssetStoryGenerationResponse> GenerateHeroAssetStoryAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken);
+
+    Task<HeroAssetGenerationResponse> GenerateHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken);
 }
 
 public interface IHeroAssetIntelligenceEngine
 {
     Task<HeroAssetStoryGenerationResponse> GenerateHeroAssetStoryAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken);
+
+    Task<HeroAssetGenerationResponse> GenerateHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken);
 }

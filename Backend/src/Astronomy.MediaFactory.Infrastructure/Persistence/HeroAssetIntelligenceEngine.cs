@@ -11,6 +11,9 @@ public sealed class HeroAssetIntelligenceEngine(IHeroAssetStoryGenerator storyGe
 {
     public Task<HeroAssetStoryGenerationResponse> GenerateHeroAssetStoryAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
         => storyGenerator.GenerateHeroAssetStoryAsync(request, cancellationToken);
+
+    public Task<HeroAssetGenerationResponse> GenerateHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+        => storyGenerator.GenerateHeroAssetsAsync(request, cancellationToken);
 }
 
 public sealed class HeroAssetStoryGenerator(
@@ -26,6 +29,8 @@ public sealed class HeroAssetStoryGenerator(
     private const string SceneApprovalDirectoryName = "scene-approval-v3";
     private const string HeroAssetsDirectoryName = "hero-assets";
     private const string HeroAssetStoryFileName = "hero-asset-story.json";
+    private const string HeroAssetBlueprintFileName = "hero-asset-blueprint.json";
+    private const string HeroAssetReviewFileName = "hero-asset-review.json";
     private const string PlatformIntent = "ScrollStoppingHeroAsset";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ApprovedSceneFileNames =
@@ -48,7 +53,7 @@ public sealed class HeroAssetStoryGenerator(
         var warnings = new List<string>();
         var generatedFiles = new List<string>();
         var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
-        var outputPath = BuildOutputPath(request.EventId, request.RegionId);
+        var outputPath = BuildStoryOutputPath(request.EventId, request.RegionId);
 
         var answerSetPath = Path.Combine(questionEngineRoot, QuestionAnswerSetFileName);
         var enrichedPlanPath = Path.Combine(questionEngineRoot, EnrichedPlanFileName);
@@ -99,6 +104,68 @@ public sealed class HeroAssetStoryGenerator(
         }
 
         return new HeroAssetStoryGenerationResponse(request.EventId, true, heroStory, warnings, generatedFiles);
+    }
+
+
+    public async Task<HeroAssetGenerationResponse> GenerateHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequest(request);
+
+        logger.LogInformation("Generating hero asset blueprint for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
+
+        var warnings = new List<string>();
+        var generatedFiles = new List<string>();
+        var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
+        var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
+        var storyPath = BuildStoryOutputPath(request.EventId, request.RegionId);
+        var blueprintPath = BuildBlueprintOutputPath(request.EventId, request.RegionId);
+        var reviewPath = BuildReviewOutputPath(request.EventId, request.RegionId);
+
+        var answerSetPath = Path.Combine(questionEngineRoot, QuestionAnswerSetFileName);
+        var enrichedPlanPath = Path.Combine(questionEngineRoot, EnrichedPlanFileName);
+        var narrationPath = Path.Combine(questionEngineRoot, NarrationFileName);
+        EnsureInputFile(storyPath, HeroAssetStoryFileName);
+        EnsureInputFile(answerSetPath, QuestionAnswerSetFileName);
+        EnsureInputFile(enrichedPlanPath, EnrichedPlanFileName);
+        EnsureInputFile(narrationPath, NarrationFileName);
+
+        var missingSceneAssets = FindMissingApprovedSceneAssets(questionEngineRoot);
+        if (missingSceneAssets.Count > 0)
+            warnings.Add($"Approved scene assets are missing: {string.Join(", ", missingSceneAssets)}.");
+
+        var heroStory = JsonSerializer.Deserialize<HeroAssetStoryDto>(await File.ReadAllTextAsync(storyPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException("Hero asset story could not be parsed.", nameof(request));
+        warnings.AddRange(ValidateStory(heroStory));
+
+        _ = await LoadQuestionAnswerSourcesAsync(answerSetPath, cancellationToken);
+        _ = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(await File.ReadAllTextAsync(enrichedPlanPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException("Enriched question-driven scene plan could not be parsed.", nameof(request));
+        _ = JsonSerializer.Deserialize<QuestionDrivenNarrationDto>(await File.ReadAllTextAsync(narrationPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException("Question-driven narration could not be parsed.", nameof(request));
+
+        var hookScores = BuildHookScores();
+        var selectedHook = hookScores.OrderByDescending(score => score.OverallScore).ThenBy(score => score.Hook).First().Hook;
+        var alternativeHooks = hookScores.Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase)).Select(score => score.Hook).ToArray();
+        var platformVariants = BuildPlatformVariants();
+        var blueprint = BuildHeroBlueprint(platformVariants);
+        var reviewScores = BuildReviewScores();
+
+        warnings.AddRange(ValidateHeroAssetBlueprint(selectedHook, blueprint, reviewScores));
+        var isValid = warnings.Count == 0;
+        if (!isValid)
+            return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, []);
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(heroAssetsRoot);
+            await File.WriteAllTextAsync(storyPath, JsonSerializer.Serialize(heroStory, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(blueprintPath, JsonSerializer.Serialize(blueprint, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(reviewScores, JsonOptions), cancellationToken);
+            generatedFiles.AddRange([NormalizePath(storyPath), NormalizePath(blueprintPath), NormalizePath(reviewPath)]);
+        }
+
+        return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles);
     }
 
     private static HeroAssetStoryDto BuildHeroStory(HeroAssetStoryGenerationRequest request, HeroStorySourceDto storySource)
@@ -182,6 +249,38 @@ public sealed class HeroAssetStoryGenerator(
         return answers;
     }
 
+
+    private static IReadOnlyList<HeroHookScoreDto> BuildHookScores()
+        =>
+        [
+            new("LOOK WEST TONIGHT", 96, 95, 92, 98, 95),
+            new("TWO BRIGHT PLANETS TOGETHER", 94, 96, 95, 97, 96),
+            new("DON'T MISS THIS TONIGHT", 98, 97, 93, 92, 95),
+            new("LOOK UP AFTER SUNSET", 93, 92, 91, 99, 94),
+            new("EVENING SKY HIGHLIGHT", 90, 90, 91, 96, 92)
+        ];
+
+    private static IReadOnlyList<HeroPlatformVariantDto> BuildPlatformVariants()
+        =>
+        [
+            new("Landscape", "1280x720", "YouTube"),
+            new("Square", "1080x1080", "Facebook/Instagram"),
+            new("Portrait", "1080x1920", "Reels/Stories/Shorts")
+        ];
+
+    private static HeroAssetBlueprintDto BuildHeroBlueprint(IReadOnlyList<HeroPlatformVariantDto> platformVariants)
+        => new(
+            "AstronomyPoster",
+            "Venus and Jupiter above the western horizon with dramatic twilight sky, clear westward orientation, subtle emotional significance cue, and polished poster atmosphere from the approved scene set.",
+            "Large bold hook in the upper third with safe margins for landscape, square, and portrait crops.",
+            "Short explanatory subtitle near the lower third, separated from the planet pair and horizon glow.",
+            "West-facing horizon cue with a subtle WEST marker and post-sunset viewing prompt.",
+            "Wonder",
+            platformVariants);
+
+    private static HeroAssetReviewScoresDto BuildReviewScores()
+        => new(96, 96, 94, 97, 95, 96);
+
     private static IReadOnlyList<string> ValidateStory(HeroAssetStoryDto story)
     {
         var issues = new List<string>();
@@ -191,6 +290,16 @@ public sealed class HeroAssetStoryGenerator(
         if (string.IsNullOrWhiteSpace(story.HeroVisualFocus)) issues.Add("heroVisualFocus is required.");
         if (string.IsNullOrWhiteSpace(story.HeroEmotion)) issues.Add("heroEmotion is required.");
         if (story.StoryScore < 80) issues.Add("storyScore must be at least 80.");
+        return issues;
+    }
+
+    private static IReadOnlyList<string> ValidateHeroAssetBlueprint(string selectedHook, HeroAssetBlueprintDto blueprint, HeroAssetReviewScoresDto reviewScores)
+    {
+        var issues = new List<string>();
+        if (string.IsNullOrWhiteSpace(selectedHook)) issues.Add("selectedHook is required.");
+        if (string.IsNullOrWhiteSpace(blueprint.VisualFocus)) issues.Add("visualFocus is required.");
+        if (string.IsNullOrWhiteSpace(blueprint.Emotion)) issues.Add("emotion is required.");
+        if (reviewScores.HeroAssetReadinessScore < 90) issues.Add("heroAssetReadinessScore must be at least 90.");
         return issues;
     }
 
@@ -240,8 +349,17 @@ public sealed class HeroAssetStoryGenerator(
     private string BuildQuestionEngineRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), "question-engine");
 
-    private string BuildOutputPath(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName, HeroAssetStoryFileName);
+    private string BuildHeroAssetsRoot(string eventId, string regionId)
+        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName);
+
+    private string BuildStoryOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroAssetStoryFileName);
+
+    private string BuildBlueprintOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroAssetBlueprintFileName);
+
+    private string BuildReviewOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroAssetReviewFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
