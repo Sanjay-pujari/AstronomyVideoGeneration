@@ -10,12 +10,12 @@ public sealed class QuestionDrivenImagePromptGenerator : IQuestionDrivenImagePro
 
         var sceneMood = request.QuestionType.ToLowerInvariant() switch
         {
-            "what" => "professional astronomy magazine cover, western twilight over Rajasthan, natural atmospheric glow, golden-orange horizon, documentary style, stronger horizon glow and focal contrast for a clickable astronomy thumbnail",
+            "what" => "professional astronomy magazine cover, richer western twilight over Rajasthan, natural atmospheric glow, stronger golden-orange horizon, subtle atmospheric haze, soft vignette feel, slightly denser natural starfield, documentary style, stronger horizon glow and focal contrast for a clickable astronomy thumbnail",
             "where" => "observation chart sky over Rajasthan with a subtle real western horizon, astronomy guide aesthetic, delicate altitude grid, lightweight Leo and Regulus reference-star constellation guide, documentary not graphic design",
             "when" => "real twilight transition from warm sunset colors into early night, natural western horizon glow, open negative space for a hero 7:23 PM IST viewing timeline",
             "how" => "observer-friendly western sky with natural atmospheric depth, low real horizon reference, minimal distractions, subtle reference-star hint only, room for arrow path and three floating observing steps",
-            "why" => "deep astronomy sky, premium editorial background, emotional shared-evening-sky atmosphere, visually communicates two of the brightest worlds sharing the evening sky",
-            "action" => "most beautiful poster-quality twilight over Udaipur, cinematic warm western horizon, premium astronomy artwork composition, shareable minimal call-to-action mood",
+            "why" => "deep astronomy sky, premium editorial background, natural starfield variation, emotional shared-evening-sky atmosphere, subtle shared glow region, visual relationship and closeness between the two brightest worlds sharing the evening sky",
+            "action" => "most beautiful poster-quality twilight over Udaipur, richer cinematic warm western horizon, subtle haze, atmospheric depth, stronger landscape silhouette, premium astronomy artwork composition, shareable minimal call-to-action mood",
             _ => "clean astronomy documentary twilight background over a western horizon"
         };
 
