@@ -43,6 +43,7 @@ public enum HeroAssetGenerationPhase
     Story,
     HookSelection,
     Blueprint,
+    SceneSelection,
     Images,
     Full
 }
@@ -70,7 +71,10 @@ public sealed record HeroAssetGenerationResponse(
     string PhaseExecuted,
     bool StoryExecuted,
     bool BlueprintExecuted,
-    bool ImageGenerationExecuted);
+    bool ImageGenerationExecuted)
+{
+    public HeroSceneManifestDto? HeroSceneManifest { get; init; }
+}
 
 public sealed record HeroAssetStoryDto(
     string EventId,

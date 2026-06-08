@@ -20,7 +20,8 @@ public sealed class HeroAssetIntelligenceEngine(IHeroAssetStoryGenerator storyGe
 
 public sealed class HeroAssetStoryGenerator(
     IOptions<RenderingOptions> renderingOptions,
-    ILogger<HeroAssetStoryGenerator> logger) : IHeroAssetStoryGenerator
+    ILogger<HeroAssetStoryGenerator> logger,
+    IHeroAssetSceneSelector sceneSelector) : IHeroAssetStoryGenerator
 {
     private const string GoldenEventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
     private const string GoldenRegionId = "IN-RJ-UDAIPUR";
@@ -33,6 +34,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroAssetStoryFileName = "hero-asset-story.json";
     private const string HeroAssetBlueprintFileName = "hero-asset-blueprint.json";
     private const string HeroAssetReviewFileName = "hero-review.json";
+    private const string HeroSceneManifestFileName = "hero-scene-manifest.json";
     private const string HeroLandscapeFileName = "hero-landscape.png";
     private const string HeroSquareFileName = "hero-square.png";
     private const string HeroPortraitFileName = "hero-portrait.png";
@@ -134,6 +136,10 @@ public sealed class HeroAssetStoryGenerator(
             "hook-selection" => await GenerateHeroHookSelectionAsync(request, cancellationToken),
             "hook_selection" => await GenerateHeroHookSelectionAsync(request, cancellationToken),
             "blueprint" => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
+            "sceneselection" => await GenerateHeroSceneManifestAsync(request, cancellationToken),
+            "scene-selection" => await GenerateHeroSceneManifestAsync(request, cancellationToken),
+            "scene_selection" => await GenerateHeroSceneManifestAsync(request, cancellationToken),
+            "scenes" => await GenerateHeroSceneManifestAsync(request, cancellationToken),
             "images" => await GenerateHeroImagesAsync(request, cancellationToken: cancellationToken),
             "full" => await GenerateFullHeroAssetsAsync(request, cancellationToken),
             _ => throw new ArgumentException($"Unsupported hero asset generation phase '{request.Phase}'.", nameof(request))
@@ -226,6 +232,64 @@ public sealed class HeroAssetStoryGenerator(
         return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "Blueprint", true, true, false);
     }
 
+
+    private async Task<HeroAssetGenerationResponse> GenerateHeroSceneManifestAsync(
+        HeroAssetStoryGenerationRequest request,
+        HeroAssetStoryDto? heroStory = null,
+        HeroAssetBlueprintDto? blueprint = null,
+        CancellationToken cancellationToken = default)
+    {
+        logger.LogInformation("Selecting hero asset scenes for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
+
+        var warnings = new List<string>();
+        var generatedFiles = new List<string>();
+        var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
+        var storyPath = BuildStoryOutputPath(request.EventId, request.RegionId);
+        var blueprintPath = BuildBlueprintOutputPath(request.EventId, request.RegionId);
+        var sceneManifestPath = BuildSceneManifestOutputPath(request.EventId, request.RegionId);
+
+        heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
+        blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
+
+        var hookScores = BuildHookScores(heroStory);
+        var selectedHook = SelectedHeroHook;
+        var alternativeHooks = hookScores
+            .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(score => score.TotalScore)
+            .ThenBy(score => score.Hook)
+            .Select(score => score.Hook)
+            .ToArray();
+        heroStory = WithSelectedHook(heroStory, selectedHook);
+        var platformVariants = blueprint.PlatformVariants;
+        var reviewScores = BuildReviewScores();
+
+        var storyValidationIssues = ValidateStory(heroStory);
+        var blueprintValidationIssues = ValidateHeroAssetBlueprint(selectedHook, blueprint, reviewScores);
+        warnings.AddRange(storyValidationIssues);
+        warnings.AddRange(blueprintValidationIssues);
+
+        var approvedScenes = await LoadApprovedSceneCandidatesAsync(BuildQuestionEngineRoot(request.EventId, request.RegionId), cancellationToken);
+        if (approvedScenes.Count < 3)
+            warnings.Add("Hero scene selection requires at least three approved scene outputs.");
+
+        var isValid = storyValidationIssues.Count == 0 && blueprintValidationIssues.Count == 0 && approvedScenes.Count >= 3;
+        if (!isValid)
+            return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, [], request.Phase, "SceneSelection", true, true, false);
+
+        var sceneManifest = sceneSelector.SelectHeroScenes(heroStory, blueprint, approvedScenes);
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(heroAssetsRoot);
+            await File.WriteAllTextAsync(sceneManifestPath, JsonSerializer.Serialize(sceneManifest, JsonOptions), cancellationToken);
+            generatedFiles.Add(NormalizePath(sceneManifestPath));
+        }
+
+        return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "SceneSelection", true, true, false)
+        {
+            HeroSceneManifest = sceneManifest
+        };
+    }
+
     private async Task<HeroAssetGenerationResponse> GenerateHeroImagesAsync(
         HeroAssetStoryGenerationRequest request,
         HeroAssetStoryDto? heroStory = null,
@@ -308,9 +372,10 @@ public sealed class HeroAssetStoryGenerator(
     {
         var storyResponse = await GenerateHeroHookSelectionAsync(request, cancellationToken);
         var blueprintResponse = await GenerateHeroBlueprintAsync(request, storyResponse.HeroStory, cancellationToken);
+        var sceneSelectionResponse = await GenerateHeroSceneManifestAsync(request, blueprintResponse.HeroStory, blueprintResponse.HeroBlueprint, cancellationToken);
         var imagesResponse = await GenerateHeroImagesAsync(request, blueprintResponse.HeroStory, blueprintResponse.HeroBlueprint, cancellationToken);
 
-        return MergeResponses(request.EventId, storyResponse, blueprintResponse, imagesResponse);
+        return MergeResponses(request.EventId, storyResponse, blueprintResponse, sceneSelectionResponse, imagesResponse);
     }
 
     private static HeroAssetGenerationResponse MergeResponses(string eventId, params HeroAssetGenerationResponse[] responses)
@@ -332,7 +397,10 @@ public sealed class HeroAssetStoryGenerator(
             "Full",
             responses.Any(response => response.StoryExecuted),
             responses.Any(response => response.BlueprintExecuted),
-            responses.Any(response => response.ImageGenerationExecuted));
+            responses.Any(response => response.ImageGenerationExecuted))
+        {
+            HeroSceneManifest = responses.LastOrDefault(response => response.HeroSceneManifest is not null)?.HeroSceneManifest
+        };
     }
 
 
@@ -511,6 +579,44 @@ public sealed class HeroAssetStoryGenerator(
         return document.RootElement.Deserialize<HeroAssetBlueprintDto>(JsonOptions)
             ?? throw new ArgumentException("Hero asset blueprint could not be parsed.", nameof(request));
     }
+
+
+    private async Task<IReadOnlyList<ApprovedHeroSceneCandidate>> LoadApprovedSceneCandidatesAsync(string questionEngineRoot, CancellationToken cancellationToken)
+    {
+        var sceneApprovalRoot = Path.Combine(questionEngineRoot, SceneApprovalDirectoryName);
+        if (!Directory.Exists(sceneApprovalRoot))
+            return [];
+
+        var approvedSceneFiles = Directory.EnumerateFiles(sceneApprovalRoot, "scene-*-final.png")
+            .Select(path => new { Path = path, SceneId = (Path.GetFileNameWithoutExtension(path) ?? string.Empty).Replace("-final", string.Empty, StringComparison.OrdinalIgnoreCase) })
+            .Where(file => !string.IsNullOrWhiteSpace(file.SceneId))
+            .ToDictionary(file => file.SceneId, file => NormalizePath(file.Path), StringComparer.OrdinalIgnoreCase);
+
+        if (approvedSceneFiles.Count == 0)
+            return [];
+
+        var enrichedPlanPath = Path.Combine(questionEngineRoot, EnrichedPlanFileName);
+        EnrichedQuestionScenePlanDto? enrichedPlan = null;
+        if (File.Exists(enrichedPlanPath))
+            enrichedPlan = JsonSerializer.Deserialize<EnrichedQuestionScenePlanDto>(await File.ReadAllTextAsync(enrichedPlanPath, cancellationToken), JsonOptions);
+
+        return approvedSceneFiles
+            .Select(file =>
+            {
+                var scene = enrichedPlan?.Scenes?.FirstOrDefault(candidate => string.Equals(FormatSceneId(candidate.SceneNumber), file.Key, StringComparison.OrdinalIgnoreCase));
+                return new ApprovedHeroSceneCandidate(
+                    file.Key,
+                    scene?.QuestionType,
+                    scene?.NarrationIntent,
+                    scene?.VisualIntent,
+                    scene?.SourceAnswer,
+                    file.Value);
+            })
+            .OrderBy(scene => scene.SceneId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string FormatSceneId(int sceneNumber) => $"scene-{sceneNumber:000}";
 
     private sealed record HeroImageSpec(string Variant, string FileName, int Width, int Height);
 
@@ -863,6 +969,9 @@ public sealed class HeroAssetStoryGenerator(
 
     private string BuildReviewOutputPath(string eventId, string regionId)
         => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroAssetReviewFileName);
+
+    private string BuildSceneManifestOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroSceneManifestFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
