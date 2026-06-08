@@ -5,6 +5,7 @@ using System.Linq;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
+using Astronomy.MediaFactory.Rendering;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -171,29 +172,33 @@ public sealed class ProductionVisualComposerService(
 
     private static async Task ComposeFinalFrameAsync(string backgroundPath, string finalPath, SceneVisualSpec spec, CancellationToken cancellationToken)
     {
-        using var image = IsUsableImage(backgroundPath)
-            ? await Image.LoadAsync<Rgba32>(backgroundPath, cancellationToken)
-            : new Image<Rgba32>(1920, 1080, Color.ParseHex("#061124"));
-        image.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size(1920, 1080), Mode = ResizeMode.Crop }));
+        var overlayLines = spec.OverlayText.Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
+        var request = new AstronomyVisualCompositionRequest(
+            1920,
+            1080,
+            overlayLines.FirstOrDefault() ?? spec.EventTitle,
+            overlayLines.Skip(1).FirstOrDefault() ?? SceneActionHint(spec),
+            DirectionMarkerBody(spec).Replace("\n", " • ", StringComparison.Ordinal),
+            ResolveVisualPlanetAssets(spec),
+            mood: "WarmTwilightProductionScene",
+            westMarkerLabel: string.IsNullOrWhiteSpace(spec.Direction) ? "WEST" : spec.Direction.ToUpperInvariant(),
+            starDensity: 720,
+            showReferenceOverlays: true,
+            labels: overlayLines.Skip(2).Select((line, index) => new AstronomyVisualLabel(CleanOverlay(line, 80), 0.02f, 0.74f + index * 0.07f, Color.ParseHex("#FFD48A"), 0.86f)).ToArray(),
+            backgroundImagePath: IsUsableImage(backgroundPath) ? backgroundPath : null);
 
-        var titleFont = ResolveFont(66, FontStyle.Bold);
-        var subtitleFont = ResolveFont(38, FontStyle.Bold);
-        var labelFont = ResolveFont(30, FontStyle.Bold);
-        var smallFont = ResolveFont(26, FontStyle.Regular);
-        var localObjectAssets = LoadLocalObjectAssets(spec).ToArray();
-
-        image.Mutate(ctx =>
-        {
-            DrawSkyOverlay(ctx, spec);
-            DrawObjectOverlay(ctx, spec, localObjectAssets);
-            DrawInformationPanel(ctx, spec, titleFont, subtitleFont, labelFont, smallFont);
-            DrawVignette(ctx);
-        });
-
-        foreach (var asset in localObjectAssets) asset.Image.Dispose();
-        Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
-        await image.SaveAsPngAsync(finalPath, new PngEncoder(), cancellationToken);
+        await AstronomyVisualCompositionEngine.ComposePngAsync(request, finalPath, cancellationToken);
     }
+
+
+    private static IReadOnlyList<AstronomyVisualPlanetAsset> ResolveVisualPlanetAssets(SceneVisualSpec spec)
+        => spec.Objects
+            .Select(NormalizeObjectAssetName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(name => new AstronomyVisualPlanetAsset(name, ResolveLocalObjectAssetPath(name)))
+            .Take(4)
+            .ToArray();
 
     private static void DrawSkyOverlay(IImageProcessingContext ctx, SceneVisualSpec spec)
     {

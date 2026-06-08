@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using Microsoft.Extensions.Options;
@@ -351,29 +352,50 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
     private static async Task RenderSceneFrameAsync(string path, string label, int width, int height, IReadOnlyList<string> objectAssets, CinematicVisualPlan plan, CancellationToken ct)
     {
         var scene = string.IsNullOrWhiteSpace(label) ? "weekly_sky_scene" : label;
-        var titleFont = ResolveFont(Math.Max(30f, width * 0.03f));
-        var bodyFont = ResolveFont(Math.Max(18f, width * 0.017f));
-        using var image = new Image<Rgba32>(width, height, new Rgba32(7, 10, 25));
-        image.Mutate(ctx =>
-        {
-            DrawCinematicBackground(ctx, width, height, scene.Contains("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) ? "sunset-horizon" : "deep-space-blue");
-            DrawDepthLayerStack(ctx, width, height);
+        var (title, subtitle) = ResolveSceneTypography(scene);
+        var request = new AstronomyVisualCompositionRequest(
+            width,
+            height,
+            title,
+            subtitle,
+            "One sky story • one perfect viewing moment",
+            ToVisualPlanetAssets(objectAssets),
+            mood: scene.Contains("best_night_wide_scene", StringComparison.OrdinalIgnoreCase) ? "WarmTwilightWide" : "WarmTwilightScene",
+            starDensity: 620,
+            showReferenceOverlays: true,
+            labels: [new AstronomyVisualLabel(plan.LayoutType, 0.02f, 0.92f, Color.ParseHex("#8FD2FF"), 0.74f)]);
 
-            var placements = BuildDynamicPlacements(scene, width, height, objectAssets);
-            for (var i = 0; i < placements.Count; i++)
-            {
-                var pathAsset = i < objectAssets.Count ? objectAssets[i] : string.Empty;
-                DrawCelestialBody(ctx, pathAsset, placements[i], Path.GetFileNameWithoutExtension(pathAsset), titleFont, scene);
-            }
-
-            DrawVignette(ctx, width, height);
-            DrawAtmosphericHaze(ctx, width, height);
-            DrawSceneOverlay(ctx, scene, width, height, titleFont, bodyFont);
-        });
-        await image.SaveAsPngAsync(path, ct);
+        await AstronomyVisualCompositionEngine.ComposePngAsync(request, path, ct);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate generated scene frame '{path}'.");
         if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid generated scene frame '{path}'.");
     }
+
+    private static (string Title, string Subtitle) ResolveSceneTypography(string scene)
+        => scene switch
+        {
+            "hero_western_grouping_scene" => ("Look west after sunset", "Venus and Jupiter guide the evening sky"),
+            "best_night_wide_scene" => ("Best night after dusk", "Choose the clearest western horizon"),
+            "moon_jupiter_hero_scene" => ("Moon meets Jupiter", "A bright pairing for casual skywatchers"),
+            "viewing_tip_wide_scene" => ("Give your eyes time", "Binoculars help after twilight fades"),
+            _ => ("Weekly Sky Forecast", "Your practical evening sky guide")
+        };
+
+    private static IReadOnlyList<AstronomyVisualPlanetAsset> ToVisualPlanetAssets(IReadOnlyList<string> objectAssets)
+        => objectAssets
+            .Where(File.Exists)
+            .Select(path => new AstronomyVisualPlanetAsset(ToObjectLabel(path), path))
+            .Take(4)
+            .ToArray();
+
+    private static string ToObjectLabel(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path).Replace('_', ' ').Replace('-', ' ');
+        foreach (var token in new[] { "transparent", "hero", "main", "poster", "cutout", "asset" })
+            name = name.Replace(token, string.Empty, StringComparison.OrdinalIgnoreCase);
+        name = string.Join(' ', name.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return string.IsNullOrWhiteSpace(name) ? "Planet" : name;
+    }
+
     private static CelestialObjectVisualPlan ResolveVisualPlan(SceneRenderRequest req, RenderPreparationPackage prep, CelestialAssetResolver resolver, out SceneVisualAssetDiagnostics diagnostics)
     {
         var requiredObjects = ResolveRequiredObjects(req).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -442,33 +464,19 @@ public sealed class WeeklySkyForecastSceneRenderingOrchestrator(
 
     private static async Task RenderThumbnailImageAsync(string path, string label, int width, int height, IReadOnlyList<string> objectAssets, string? regionName, CancellationToken ct)
     {
-        var titleFont = ResolveFont(Math.Max(44f, width * 0.056f));
-        var subtitleFont = ResolveFont(Math.Max(22f, width * 0.025f));
-        using var image = new Image<Rgba32>(width, height, new Rgba32(6, 8, 16));
-        image.Mutate(ctx =>
-        {
-            DrawCinematicBackground(ctx, width, height, "nebula-purple");
-            DrawDepthLayerStack(ctx, width, height);
+        var request = new AstronomyVisualCompositionRequest(
+            width,
+            height,
+            WeeklyThumbnailHeadline,
+            "Moon Meets Jupiter",
+            $"{(regionName ?? "Udaipur")} • May 23–30",
+            ToVisualPlanetAssets(objectAssets),
+            mood: "WarmTwilightThumbnail",
+            starDensity: 680,
+            showReferenceOverlays: true,
+            labels: [new AstronomyVisualLabel("Look west after sunset", 0.02f, 0.82f, Color.ParseHex("#FFD48A"), 0.88f)]);
 
-            var placements = BuildDynamicPlacements("hero_western_grouping_scene", width, height, objectAssets);
-            for (var i = 0; i < placements.Count; i++)
-            {
-                var pathAsset = i < objectAssets.Count ? objectAssets[i] : string.Empty;
-                DrawCelestialBody(ctx, pathAsset, placements[i], Path.GetFileNameWithoutExtension(pathAsset), subtitleFont, "hero_western_grouping_scene");
-            }
-
-            DrawVignette(ctx, width, height);
-            DrawAtmosphericHaze(ctx, width, height);
-            var headline = WeeklyThumbnailHeadline;
-            var subtitle = "Moon Meets Jupiter";
-            var metadataLine = $"{(regionName ?? "Udaipur")} • May 23–30";
-            var titleOptions = new RichTextOptions(titleFont) { Origin = new PointF(72, 62), WrappingLength = width * 0.58f };
-            ctx.DrawText(new RichTextOptions(titleOptions) { Origin = new PointF(74, 62) }, headline, Color.Black.WithAlpha(0.88f));
-            ctx.DrawText(titleOptions, headline, Color.White);
-            ctx.DrawText(new RichTextOptions(subtitleFont) { Origin = new PointF(76, 154), WrappingLength = width * 0.52f }, subtitle, Color.ParseHex("#F9B24E"));
-            ctx.DrawText(new RichTextOptions(subtitleFont) { Origin = new PointF(76, 192), WrappingLength = width * 0.52f }, metadataLine, Color.ParseHex("#CBE3FF").WithAlpha(0.92f));
-        });
-        await image.SaveAsJpegAsync(path, new JpegEncoder { Quality = 92 }, ct);
+        await AstronomyVisualCompositionEngine.ComposeJpegAsync(request, path, ct, 92);
         var info = Image.Identify(path) ?? throw new InvalidOperationException($"Failed to validate thumbnail image '{path}'.");
         if (info.Width <= 0 || info.Height <= 0) throw new InvalidOperationException($"Invalid thumbnail image '{path}'.");
     }
