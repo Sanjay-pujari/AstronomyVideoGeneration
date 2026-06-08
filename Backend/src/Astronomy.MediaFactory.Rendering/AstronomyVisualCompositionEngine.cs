@@ -31,10 +31,18 @@ public static class AstronomyVisualCompositionEngine
 
     public static RectangleF SafeContentBounds(int width, int height)
     {
-        var marginX = Math.Max(36, width * 0.06f);
-        var marginY = Math.Max(36, height * 0.06f);
+        var (marginX, marginY) = ResolveSafeMargins(width, height);
         return new RectangleF(marginX, marginY, width - marginX * 2, height - marginY * 2);
     }
+
+    private static (float MarginX, float MarginY) ResolveSafeMargins(int width, int height)
+        => (width, height) switch
+        {
+            (1280, 720) => (80f, 50f),
+            (1080, 1080) => (70f, 70f),
+            (1080, 1920) => (70f, 100f),
+            _ => (Math.Max(36, width * 0.06f), Math.Max(36, height * 0.06f))
+        };
 
     public static async Task ComposePngAsync(AstronomyVisualCompositionRequest request, string outputPath, CancellationToken cancellationToken)
     {
@@ -70,7 +78,8 @@ public static class AstronomyVisualCompositionEngine
             }
 
             DrawVisualModeLayers(ctx, request);
-            DrawWestMarker(ctx, request.Width, request.Height, request.WestMarkerLabel);
+            if (request.CompositionMode != AstronomyVisualCompositionMode.HeroAsset)
+                DrawWestMarker(ctx, request.Width, request.Height, request.WestMarkerLabel);
             DrawSafeMarginGuide(ctx, request.Width, request.Height, request.ShowSafeMarginGuide);
             DrawFinishingGrade(ctx, request.Width, request.Height);
         });
@@ -109,7 +118,7 @@ public static class AstronomyVisualCompositionEngine
     {
         if (string.IsNullOrWhiteSpace(request.BackgroundImagePath))
             DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: true);
-        DrawLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.MetadataLine, request.Labels);
+        DrawHeroLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.Labels);
     }
 
     private static void DrawPosterAssetMode(IImageProcessingContext ctx, AstronomyVisualCompositionRequest request)
@@ -123,11 +132,37 @@ public static class AstronomyVisualCompositionEngine
         if (!string.IsNullOrWhiteSpace(request.BackgroundImagePath) && File.Exists(request.BackgroundImagePath))
         {
             using var source = await Image.LoadAsync<Rgba32>(request.BackgroundImagePath, cancellationToken);
+            if (request.CompositionMode == AstronomyVisualCompositionMode.HeroAsset)
+                return BuildHeroContainFitBackground(source, request.Width, request.Height);
+
             source.Mutate(ctx => ctx.Resize(new ResizeOptions { Size = new Size(request.Width, request.Height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center }).Brightness(0.66f).Saturate(0.88f));
             return source.Clone();
         }
 
         return new Image<Rgba32>(request.Width, request.Height, Color.ParseHex("#050817"));
+    }
+
+
+    private static Image<Rgba32> BuildHeroContainFitBackground(Image<Rgba32> source, int width, int height)
+    {
+        var canvas = new Image<Rgba32>(width, height, Color.ParseHex("#050817"));
+        using var backdrop = source.Clone(ctx => ctx
+            .Resize(new ResizeOptions { Size = new Size(width, height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center })
+            .GaussianBlur(Math.Max(8f, Math.Min(width, height) * 0.018f))
+            .Brightness(0.46f)
+            .Saturate(0.72f));
+        canvas.Mutate(ctx => ctx.DrawImage(backdrop, new Point(0, 0), 1f));
+
+        var fitScale = Math.Min(width / (float)source.Width, height / (float)source.Height);
+        var fitWidth = Math.Max(1, (int)MathF.Round(source.Width * fitScale));
+        var fitHeight = Math.Max(1, (int)MathF.Round(source.Height * fitScale));
+        using var foreground = source.Clone(ctx => ctx
+            .Resize(new ResizeOptions { Size = new Size(fitWidth, fitHeight), Mode = ResizeMode.Max, Position = AnchorPositionMode.Center })
+            .Brightness(0.78f)
+            .Saturate(0.92f));
+        var origin = new Point((width - foreground.Width) / 2, (height - foreground.Height) / 2);
+        canvas.Mutate(ctx => ctx.DrawImage(foreground, origin, 0.96f));
+        return canvas;
     }
 
     private static void DrawSmoothTwilightSky(IImageProcessingContext ctx, int width, int height, string mood)
@@ -250,11 +285,21 @@ public static class AstronomyVisualCompositionEngine
             ];
         }
 
+        if (width == height)
+        {
+            return count switch
+            {
+                1 => [new RectangleF(safe.X + safe.Width * 0.42f, height * 0.40f, width * 0.18f, width * 0.18f)],
+                2 => [new RectangleF(safe.X + safe.Width * 0.33f, height * 0.40f, width * 0.16f, width * 0.16f), new RectangleF(safe.X + safe.Width * 0.56f, height * 0.47f, width * 0.12f, width * 0.12f)],
+                _ => [new RectangleF(safe.X + safe.Width * 0.28f, height * 0.39f, width * 0.15f, width * 0.15f), new RectangleF(safe.X + safe.Width * 0.52f, height * 0.47f, width * 0.11f, width * 0.11f), new RectangleF(safe.X + safe.Width * 0.70f, height * 0.40f, width * 0.07f, width * 0.07f)]
+            };
+        }
+
         return count switch
         {
-            1 => [new RectangleF(width * 0.50f, height * 0.29f, width * 0.18f, width * 0.18f)],
-            2 => [new RectangleF(width * 0.48f, height * 0.34f, width * 0.13f, width * 0.13f), new RectangleF(width * 0.64f, height * 0.42f, width * 0.09f, width * 0.09f)],
-            _ => [new RectangleF(width * 0.43f, height * 0.36f, width * 0.13f, width * 0.13f), new RectangleF(width * 0.59f, height * 0.43f, width * 0.095f, width * 0.095f), new RectangleF(width * 0.73f, height * 0.34f, width * 0.055f, width * 0.055f)]
+            1 => [new RectangleF(width * 0.56f, height * 0.30f, width * 0.18f, width * 0.18f)],
+            2 => [new RectangleF(width * 0.52f, height * 0.31f, width * 0.13f, width * 0.13f), new RectangleF(width * 0.68f, height * 0.40f, width * 0.09f, width * 0.09f)],
+            _ => [new RectangleF(width * 0.48f, height * 0.32f, width * 0.13f, width * 0.13f), new RectangleF(width * 0.64f, height * 0.41f, width * 0.095f, width * 0.095f), new RectangleF(width * 0.78f, height * 0.34f, width * 0.055f, width * 0.055f)]
         };
     }
 
@@ -292,6 +337,47 @@ public static class AstronomyVisualCompositionEngine
     {
         if (!showSafeMarginGuide) return;
         ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(0.18f), 1f, SafeContentBounds(width, height));
+    }
+
+
+    private static void DrawHeroLabelsAndTypography(IImageProcessingContext ctx, int width, int height, string title, string subtitle, IReadOnlyList<AstronomyVisualLabel> labels)
+    {
+        var safe = SafeContentBounds(width, height);
+        var isPortrait = height > width;
+        var isSquare = width == height;
+        var minDimension = Math.Min(width, height);
+        var titleSize = isPortrait ? 72f : isSquare ? 60f : 52f;
+        var subtitleSize = isPortrait ? 30f : isSquare ? 26f : 0f;
+        var bodySize = isPortrait ? 34f : isSquare ? 28f : 25f;
+        var titleFont = ResolveFont(Math.Max(38f, titleSize), FontStyle.Bold);
+        var subtitleFont = ResolveFont(Math.Max(20f, subtitleSize), FontStyle.Bold);
+        var bodyFont = ResolveFont(Math.Max(18f, Math.Min(bodySize, minDimension * 0.035f)), FontStyle.Bold);
+
+        var titleOrigin = isPortrait
+            ? new PointF(safe.X, safe.Y)
+            : isSquare
+                ? new PointF(safe.X, safe.Y)
+                : new PointF(safe.X, safe.Y * 0.95f);
+        var titleWrap = isPortrait ? safe.Width : isSquare ? safe.Width * 0.86f : safe.Width * 0.42f;
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            var options = new RichTextOptions(titleFont) { Origin = titleOrigin, WrappingLength = titleWrap };
+            ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(titleOrigin.X + 4, titleOrigin.Y + 4) }, title, Color.Black.WithAlpha(0.76f));
+            ctx.DrawText(options, title, Color.White);
+        }
+
+        if (!string.IsNullOrWhiteSpace(subtitle) && !(!isPortrait && !isSquare))
+        {
+            var subtitleOrigin = new PointF(safe.X + (isSquare ? safe.Width * 0.02f : 0), titleOrigin.Y + titleFont.Size * 1.55f);
+            ctx.DrawText(new RichTextOptions(subtitleFont) { Origin = subtitleOrigin, WrappingLength = safe.Width * 0.88f }, subtitle, Color.ParseHex("#FFD48A"));
+        }
+
+        foreach (var label in labels)
+        {
+            var origin = new PointF(safe.X + safe.Width * Math.Clamp(label.X, 0, 1), safe.Y + safe.Height * Math.Clamp(label.Y, 0, 1));
+            ctx.DrawText(new RichTextOptions(bodyFont) { Origin = new PointF(origin.X + 3, origin.Y + 3), WrappingLength = Math.Max(190, safe.Width * 0.34f) }, label.Text, Color.Black.WithAlpha(0.70f));
+            ctx.DrawText(new RichTextOptions(bodyFont) { Origin = origin, WrappingLength = Math.Max(190, safe.Width * 0.34f) }, label.Text, label.Color.WithAlpha(label.Opacity));
+        }
     }
 
     private static void DrawLabelsAndTypography(IImageProcessingContext ctx, int width, int height, string title, string subtitle, string metadataLine, IReadOnlyList<AstronomyVisualLabel> labels)

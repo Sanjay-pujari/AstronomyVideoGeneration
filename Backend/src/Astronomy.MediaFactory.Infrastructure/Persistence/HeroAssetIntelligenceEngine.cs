@@ -37,6 +37,7 @@ public sealed class HeroAssetStoryGenerator(
     private const string HeroAssetReviewFileName = "hero-review.json";
     private const string HeroSceneManifestFileName = "hero-scene-manifest.json";
     private const string HeroCompositionModelFileName = "hero-composition-model.json";
+    private const string HeroLayoutValidationFileName = "hero-layout-validation.json";
     private const string HeroLandscapeFileName = "hero-landscape.png";
     private const string HeroSquareFileName = "hero-square.png";
     private const string HeroPortraitFileName = "hero-portrait.png";
@@ -316,6 +317,7 @@ public sealed class HeroAssetStoryGenerator(
         var reviewPath = BuildReviewOutputPath(request.EventId, request.RegionId);
         var sceneManifestPath = BuildSceneManifestOutputPath(request.EventId, request.RegionId);
         var compositionModelPath = BuildCompositionModelOutputPath(request.EventId, request.RegionId);
+        var layoutValidationPath = BuildLayoutValidationOutputPath(request.EventId, request.RegionId);
 
         heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
@@ -380,12 +382,24 @@ public sealed class HeroAssetStoryGenerator(
         if (missingPlanetAssets.Length > 0)
             warnings.Add($"Required real celestial assets are missing for hero rendering: {string.Join(", ", missingPlanetAssets)}.");
 
+        var layoutValidation = compositionModel is null ? null : BuildHeroLayoutValidation(compositionModel);
+        if (layoutValidation?.DuplicateBlocksDetected == true)
+            warnings.Add("Hero layout validation failed: duplicate composition block rendering was detected.");
+        if (layoutValidation?.TextOverlapDetected == true)
+            warnings.Add($"Hero layout validation failed: text overlap detected ({string.Join("; ", layoutValidation.OverlapWarnings)}).");
+        if (layoutValidation?.ObjectsVisible == false)
+            warnings.Add("Hero layout validation failed: Venus and Jupiter must remain fully visible in every hero variant.");
+
         var isValid = storyValidationIssues.Count == 0
             && blueprintValidationIssues.Count == 0
             && missingSceneAssets.Count == 0
             && approvedSceneOutputs.Count >= 3
             && selectedSceneManifest is not null
             && compositionModel is not null
+            && layoutValidation is not null
+            && !layoutValidation.DuplicateBlocksDetected
+            && !layoutValidation.TextOverlapDetected
+            && layoutValidation.ObjectsVisible
             && heroSceneSelectorExecuted
             && missingPlanetAssets.Length == 0;
         if (!isValid)
@@ -413,6 +427,11 @@ public sealed class HeroAssetStoryGenerator(
                 throw new InvalidOperationException($"Hero composition model was not generated at '{NormalizePath(compositionModelPath)}'; aborting image generation.");
             generatedFiles.Add(NormalizePath(compositionModelPath));
 
+            await File.WriteAllTextAsync(layoutValidationPath, JsonSerializer.Serialize(layoutValidation, JsonOptions), cancellationToken);
+            if (!File.Exists(layoutValidationPath))
+                throw new InvalidOperationException($"Hero layout validation was not generated at '{NormalizePath(layoutValidationPath)}'; aborting image generation.");
+            generatedFiles.Add(NormalizePath(layoutValidationPath));
+
             foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, blueprint, selectedSceneManifest, compositionModel!, planetAssets, cancellationToken))
                 generatedFiles.Add(imagePath);
 
@@ -427,16 +446,17 @@ public sealed class HeroAssetStoryGenerator(
 
         var heroSceneManifestGenerated = request.DryRun || File.Exists(sceneManifestPath);
         var heroCompositionModelGenerated = request.DryRun || File.Exists(compositionModelPath);
-        var imageGenerationExecuted = !request.DryRun && heroSceneManifestGenerated && heroCompositionModelGenerated && generatedFiles.Count > 2;
+        var layoutValidationGenerated = request.DryRun || File.Exists(layoutValidationPath);
+        var imageGenerationExecuted = !request.DryRun && heroSceneManifestGenerated && heroCompositionModelGenerated && layoutValidationGenerated && generatedFiles.Count > 3;
         if (!request.DryRun && !imageGenerationExecuted)
         {
             warnings.Add("Hero asset image generation failed validation: no image files were generated.");
             isValid = false;
         }
 
-        if (!heroSceneSelectorExecuted || !heroSceneManifestGenerated || !heroCompositionModelGenerated)
+        if (!heroSceneSelectorExecuted || !heroSceneManifestGenerated || !heroCompositionModelGenerated || !layoutValidationGenerated)
         {
-            warnings.Add("Hero asset image generation failed validation: selected scene manifest and composition model are required before image generation.");
+            warnings.Add("Hero asset image generation failed validation: selected scene manifest, composition model, and layout validation are required before image generation.");
             isValid = false;
         }
 
@@ -448,7 +468,12 @@ public sealed class HeroAssetStoryGenerator(
             HeroSceneManifestPath = NormalizePath(sceneManifestPath),
             PrimaryScene = selectedSceneManifest?.PrimaryScene.SceneId,
             SecondaryScene = selectedSceneManifest?.SecondaryScene.SceneId,
-            SupportScene = selectedSceneManifest?.SupportScene.SceneId
+            SupportScene = selectedSceneManifest?.SupportScene.SceneId,
+            HeroCompositionModelGenerated = heroCompositionModelGenerated,
+            LayoutValidationGenerated = layoutValidationGenerated,
+            DuplicateBlocksDetected = layoutValidation?.DuplicateBlocksDetected ?? false,
+            TextOverlapDetected = layoutValidation?.TextOverlapDetected ?? false,
+            ObjectsVisible = layoutValidation?.ObjectsVisible ?? false
         };
     }
 
@@ -489,13 +514,141 @@ public sealed class HeroAssetStoryGenerator(
             HeroSceneManifestPath = responses.LastOrDefault(response => !string.IsNullOrWhiteSpace(response.HeroSceneManifestPath))?.HeroSceneManifestPath,
             PrimaryScene = responses.LastOrDefault(response => !string.IsNullOrWhiteSpace(response.PrimaryScene))?.PrimaryScene,
             SecondaryScene = responses.LastOrDefault(response => !string.IsNullOrWhiteSpace(response.SecondaryScene))?.SecondaryScene,
-            SupportScene = responses.LastOrDefault(response => !string.IsNullOrWhiteSpace(response.SupportScene))?.SupportScene
+            SupportScene = responses.LastOrDefault(response => !string.IsNullOrWhiteSpace(response.SupportScene))?.SupportScene,
+            HeroCompositionModelGenerated = responses.Any(response => response.HeroCompositionModelGenerated),
+            LayoutValidationGenerated = responses.Any(response => response.LayoutValidationGenerated),
+            DuplicateBlocksDetected = responses.Any(response => response.DuplicateBlocksDetected),
+            TextOverlapDetected = responses.Any(response => response.TextOverlapDetected),
+            ObjectsVisible = responses.Any(response => response.ObjectsVisible)
         };
     }
 
 
     private static bool IsStoryPhase(string? phase)
         => string.Equals(phase?.Trim(), "Story", StringComparison.OrdinalIgnoreCase);
+
+    private static HeroLayoutValidationDto BuildHeroLayoutValidation(HeroCompositionModelDto compositionModel)
+    {
+        var variants = HeroImageSpecs
+            .Select(spec => BuildHeroVariantLayoutValidation(spec, compositionModel))
+            .ToArray();
+        var renderedBlocks = new[] { "Hook", "Visual", "Timing", "Direction", "CTA" };
+        var duplicateBlocksDetected = variants.Any(variant => variant.DuplicateBlocksDetected);
+        var textOverlapDetected = variants.Any(variant => variant.TextOverlapDetected);
+        var objectsVisible = variants.All(variant => variant.ObjectsVisible);
+        return new HeroLayoutValidationDto(
+            renderedBlocks,
+            duplicateBlocksDetected,
+            textOverlapDetected,
+            variants.SelectMany(variant => variant.OverlapWarnings).ToArray(),
+            objectsVisible,
+            BuildObjectVisibility(objectsVisible),
+            variants);
+    }
+
+    private static HeroVariantLayoutValidationDto BuildHeroVariantLayoutValidation(HeroImageSpec spec, HeroCompositionModelDto compositionModel)
+    {
+        var (marginX, marginY) = ResolveHeroSafeMargins(spec.Width, spec.Height);
+        var renderedBlocks = new[] { "Hook", "Visual", "Timing", "Direction", "CTA" };
+        var duplicateBlocksDetected = renderedBlocks.GroupBy(block => block, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1);
+        var boxes = BuildHeroTextBoxes(spec, marginX, marginY, compositionModel);
+        var overlapWarnings = new List<string>();
+        for (var i = 0; i < boxes.Count; i++)
+        {
+            for (var j = i + 1; j < boxes.Count; j++)
+            {
+                if (Intersects(boxes[i].Bounds, boxes[j].Bounds))
+                    overlapWarnings.Add($"{spec.Variant}: {boxes[i].Name} overlaps {boxes[j].Name}.");
+            }
+        }
+
+        var objectBoxes = BuildHeroObjectBoxes(spec, marginX, marginY);
+        var visibility = objectBoxes
+            .Select(box => new HeroObjectVisibilityDto(box.Name, IsInsideSafeCanvas(box.Bounds, spec.Width, spec.Height, marginX, marginY), !IsInsideSafeCanvas(box.Bounds, spec.Width, spec.Height, marginX, marginY)))
+            .ToArray();
+        var objectsVisible = visibility.All(item => item.Visible && !item.Cropped);
+        return new HeroVariantLayoutValidationDto(
+            spec.Variant,
+            spec.Width,
+            spec.Height,
+            (int)marginX,
+            (int)marginY,
+            renderedBlocks,
+            duplicateBlocksDetected,
+            overlapWarnings.Count > 0,
+            overlapWarnings,
+            objectsVisible,
+            visibility);
+    }
+
+    private static IReadOnlyList<HeroObjectVisibilityDto> BuildObjectVisibility(bool visible)
+        => [new HeroObjectVisibilityDto("Venus", visible, !visible), new HeroObjectVisibilityDto("Jupiter", visible, !visible)];
+
+    private static IReadOnlyList<(string Name, RectangleF Bounds)> BuildHeroTextBoxes(HeroImageSpec spec, float marginX, float marginY, HeroCompositionModelDto compositionModel)
+    {
+        var safeWidth = spec.Width - marginX * 2;
+        var safeHeight = spec.Height - marginY * 2;
+        var isPortrait = spec.Height > spec.Width;
+        var isSquare = spec.Width == spec.Height;
+        var hookHeight = isPortrait ? 150f : isSquare ? 130f : 115f;
+        var subtitleText = BuildHeroSubtitle(spec.Width, spec.Height);
+        var subtitleHeight = string.IsNullOrWhiteSpace(subtitleText) ? 0f : isPortrait ? 42f : 34f;
+        var cta = ResolveHeroImageCta(compositionModel.CtaBlock.Text);
+        var boxes = new List<(string Name, RectangleF Bounds)>
+        {
+            ("Hook", new RectangleF(marginX, marginY, isPortrait ? safeWidth : isSquare ? safeWidth * 0.86f : safeWidth * 0.42f, hookHeight))
+        };
+        if (subtitleHeight > 0)
+            boxes.Add(("Subtitle", new RectangleF(marginX + (isSquare ? safeWidth * 0.02f : 0), marginY + (isPortrait ? 112f : 92f), safeWidth * 0.88f, subtitleHeight)));
+
+        if (isPortrait)
+        {
+            boxes.Add(("Timing", new RectangleF(marginX + safeWidth * 0.02f, marginY + safeHeight * 0.66f, 300, 52)));
+            boxes.Add(("Direction", new RectangleF(marginX + safeWidth * 0.58f, marginY + safeHeight * 0.66f, 230, 52)));
+            boxes.Add(("CTA", new RectangleF(marginX + safeWidth * 0.10f, marginY + safeHeight * 0.88f, 520, 58)));
+        }
+        else if (isSquare)
+        {
+            boxes.Add(("Timing", new RectangleF(marginX + safeWidth * 0.02f, marginY + safeHeight * 0.72f, 260, 44)));
+            boxes.Add(("Direction", new RectangleF(marginX + safeWidth * 0.68f, marginY + safeHeight * 0.72f, 210, 44)));
+            boxes.Add(("CTA", new RectangleF(marginX + safeWidth * 0.26f, marginY + safeHeight * 0.90f, 430, 46)));
+        }
+        else
+        {
+            boxes.Add(("Timing", new RectangleF(marginX + safeWidth * 0.00f, marginY + safeHeight * 0.82f, 255, 40)));
+            boxes.Add(("Direction", new RectangleF(marginX + safeWidth * 0.76f, marginY + safeHeight * 0.82f, 210, 40)));
+            boxes.Add(("CTA", new RectangleF(marginX + safeWidth * 0.38f, marginY + safeHeight * 0.90f, Math.Max(360, cta.Length * 17), 42)));
+        }
+
+        boxes.AddRange(BuildHeroObjectBoxes(spec, marginX, marginY).Select(box => ($"Planet label: {box.Name}", new RectangleF(box.Bounds.X, box.Bounds.Bottom + 8, 180, 34))));
+        return boxes;
+    }
+
+    private static IReadOnlyList<(string Name, RectangleF Bounds)> BuildHeroObjectBoxes(HeroImageSpec spec, float marginX, float marginY)
+    {
+        var safeWidth = spec.Width - marginX * 2;
+        var safeHeight = spec.Height - marginY * 2;
+        if (spec.Height > spec.Width)
+            return [("Venus", new RectangleF(marginX + safeWidth * 0.18f, spec.Height * 0.31f, spec.Width * 0.22f, spec.Width * 0.22f)), ("Jupiter", new RectangleF(marginX + safeWidth * 0.58f, spec.Height * 0.40f, spec.Width * 0.16f, spec.Width * 0.16f))];
+        if (spec.Width == spec.Height)
+            return [("Venus", new RectangleF(marginX + safeWidth * 0.33f, spec.Height * 0.40f, spec.Width * 0.16f, spec.Width * 0.16f)), ("Jupiter", new RectangleF(marginX + safeWidth * 0.56f, spec.Height * 0.47f, spec.Width * 0.12f, spec.Width * 0.12f))];
+        return [("Venus", new RectangleF(spec.Width * 0.52f, spec.Height * 0.31f, spec.Width * 0.13f, spec.Width * 0.13f)), ("Jupiter", new RectangleF(spec.Width * 0.68f, spec.Height * 0.40f, spec.Width * 0.09f, spec.Width * 0.09f))];
+    }
+
+    private static bool Intersects(RectangleF a, RectangleF b)
+        => a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
+
+    private static bool IsInsideSafeCanvas(RectangleF bounds, int width, int height, float marginX, float marginY)
+        => bounds.Left >= marginX && bounds.Top >= marginY && bounds.Right <= width - marginX && bounds.Bottom <= height - marginY;
+
+    private static (float MarginX, float MarginY) ResolveHeroSafeMargins(int width, int height)
+        => (width, height) switch
+        {
+            (1280, 720) => (80f, 50f),
+            (1080, 1080) => (70f, 70f),
+            (1080, 1920) => (70f, 100f),
+            _ => (Math.Max(36, width * 0.06f), Math.Max(36, height * 0.06f))
+        };
 
     private static async Task<IReadOnlyList<string>> GenerateHeroImageFilesAsync(
         string heroAssetsRoot,
@@ -531,11 +684,11 @@ public sealed class HeroAssetStoryGenerator(
             width,
             height,
             compositionModel.HookBlock.Text,
-            compositionModel.CtaBlock.Text,
-            compositionModel.TimingBlock.Text,
+            BuildHeroSubtitle(width, height),
+            string.Empty,
             planetAssets,
             mood: "WarmTwilightHero",
-            westMarkerLabel: compositionModel.DirectionBlock.Text,
+            westMarkerLabel: FormatHeroDirection(compositionModel.DirectionBlock.Text),
             starDensity: height > width ? 760 : 560,
             showReferenceOverlays: true,
             referenceStars: BuildHeroReferenceStars(width, height),
@@ -589,32 +742,54 @@ public sealed class HeroAssetStoryGenerator(
     private static IReadOnlyList<AstronomyVisualLabel> BuildHeroVariantLabels(HeroCompositionModelDto compositionModel, HeroPlatformVariantDto? variant, int width, int height)
     {
         var variantName = variant?.Variant ?? string.Empty;
+        var timing = compositionModel.TimingBlock.Text;
+        var direction = FormatHeroDirection(compositionModel.DirectionBlock.Text);
+        var cta = ResolveHeroImageCta(compositionModel.CtaBlock.Text);
         if (height > width)
         {
             return
             [
-                new AstronomyVisualLabel(compositionModel.TimingBlock.Text, 0.02f, 0.64f, Color.ParseHex("#CBE8FF"), 0.90f),
-                new AstronomyVisualLabel(compositionModel.DirectionBlock.Text, 0.02f, 0.72f, Color.ParseHex("#FFD48A"), 0.92f),
-                new AstronomyVisualLabel(compositionModel.CtaBlock.Text, 0.02f, 0.87f, Color.ParseHex("#8FD2FF"), 0.88f)
+                new AstronomyVisualLabel(timing, 0.02f, 0.66f, Color.ParseHex("#CBE8FF"), 0.94f),
+                new AstronomyVisualLabel(direction, 0.58f, 0.66f, Color.ParseHex("#FFD48A"), 0.96f),
+                new AstronomyVisualLabel(cta, 0.10f, 0.88f, Color.ParseHex("#8FD2FF"), 0.94f)
             ];
         }
 
-        if (variantName.Contains("Square", StringComparison.OrdinalIgnoreCase))
+        if (variantName.Contains("Square", StringComparison.OrdinalIgnoreCase) || width == height)
         {
             return
             [
-                new AstronomyVisualLabel(compositionModel.TimingBlock.Text, 0.02f, 0.70f, Color.ParseHex("#CBE8FF"), 0.90f),
-                new AstronomyVisualLabel(compositionModel.DirectionBlock.Text, 0.42f, 0.70f, Color.ParseHex("#FFD48A"), 0.92f),
-                new AstronomyVisualLabel(compositionModel.CtaBlock.Text, 0.02f, 0.86f, Color.ParseHex("#8FD2FF"), 0.88f)
+                new AstronomyVisualLabel(timing, 0.02f, 0.72f, Color.ParseHex("#CBE8FF"), 0.94f),
+                new AstronomyVisualLabel(direction, 0.68f, 0.72f, Color.ParseHex("#FFD48A"), 0.96f),
+                new AstronomyVisualLabel(cta, 0.26f, 0.90f, Color.ParseHex("#8FD2FF"), 0.94f)
             ];
         }
 
         return
         [
-            new AstronomyVisualLabel(compositionModel.TimingBlock.Text, 0.02f, 0.82f, Color.ParseHex("#CBE8FF"), 0.90f),
-            new AstronomyVisualLabel(compositionModel.DirectionBlock.Text, 0.74f, 0.82f, Color.ParseHex("#FFD48A"), 0.92f),
-            new AstronomyVisualLabel(compositionModel.CtaBlock.Text, 0.38f, 0.90f, Color.ParseHex("#8FD2FF"), 0.88f)
+            new AstronomyVisualLabel(timing, 0.00f, 0.82f, Color.ParseHex("#CBE8FF"), 0.94f),
+            new AstronomyVisualLabel(direction, 0.76f, 0.82f, Color.ParseHex("#FFD48A"), 0.96f),
+            new AstronomyVisualLabel(cta, 0.38f, 0.90f, Color.ParseHex("#8FD2FF"), 0.94f)
         ];
+    }
+
+    private static string BuildHeroSubtitle(int width, int height)
+        => height >= width ? "Venus & Jupiter after sunset" : string.Empty;
+
+    private static string ResolveHeroImageCta(string ctaText)
+    {
+        var cleaned = Clean(ctaText);
+        if (cleaned.Contains("look west", StringComparison.OrdinalIgnoreCase))
+            return "LOOK WEST AFTER SUNSET";
+        return "STEP OUTSIDE TONIGHT";
+    }
+
+    private static string FormatHeroDirection(string directionText)
+    {
+        var cleaned = Clean(directionText).ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(cleaned) || cleaned.Contains("WEST", StringComparison.OrdinalIgnoreCase))
+            return "← WEST";
+        return cleaned.StartsWith('←') ? cleaned : $"← {cleaned}";
     }
 
     private static HeroAssetVisualReviewDto BuildHeroVisualReview(
@@ -1066,6 +1241,9 @@ public sealed class HeroAssetStoryGenerator(
 
     private string BuildCompositionModelOutputPath(string eventId, string regionId)
         => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroCompositionModelFileName);
+
+    private string BuildLayoutValidationOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildHeroAssetsRoot(eventId, regionId), HeroLayoutValidationFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;

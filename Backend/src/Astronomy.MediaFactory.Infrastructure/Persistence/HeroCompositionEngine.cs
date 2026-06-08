@@ -98,8 +98,8 @@ public sealed class HeroCompositionEngine : IHeroCompositionEngine
     {
         var cleaned = Clean(value);
         if (cleaned.Contains("step outside tonight", StringComparison.OrdinalIgnoreCase)) return "STEP OUTSIDE TONIGHT";
-        if (cleaned.Contains("look west", StringComparison.OrdinalIgnoreCase)) return "LOOK WEST TONIGHT";
-        return cleaned.ToUpperInvariant();
+        if (cleaned.Contains("look west", StringComparison.OrdinalIgnoreCase)) return "LOOK WEST AFTER SUNSET";
+        return cleaned.Length > 28 ? "STEP OUTSIDE TONIGHT" : cleaned.ToUpperInvariant();
     }
 
     private static string Clean(string value) => string.Join(' ', (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();

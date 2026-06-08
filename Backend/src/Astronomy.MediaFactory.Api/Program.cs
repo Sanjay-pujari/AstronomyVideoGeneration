@@ -402,6 +402,13 @@ app.MapPost("/api/astronomy-intelligence/generate-hero-assets", async (HeroAsset
             response.StoryExecuted,
             response.BlueprintExecuted,
             response.ImageGenerationExecuted,
+            heroSceneSelectorExecuted = response.HeroSceneSelectorExecuted,
+            heroSceneManifestGenerated = response.HeroSceneManifestGenerated,
+            heroCompositionModelGenerated = response.HeroCompositionModelGenerated,
+            layoutValidationGenerated = response.LayoutValidationGenerated,
+            duplicateBlocksDetected = response.DuplicateBlocksDetected,
+            textOverlapDetected = response.TextOverlapDetected,
+            objectsVisible = response.ObjectsVisible,
             response.GeneratedFiles
         });
     }
