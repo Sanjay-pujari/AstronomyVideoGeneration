@@ -276,7 +276,7 @@ public sealed class HeroAssetStoryGenerator(
         if (!isValid)
             return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, [], request.Phase, "SceneSelection", true, true, false);
 
-        var sceneManifest = sceneSelector.SelectHeroScenes(heroStory, blueprint, approvedScenes);
+        var sceneManifest = await sceneSelector.SelectHeroScenesAsync(request, heroStory, blueprint, approvedScenes, cancellationToken);
         if (!request.DryRun)
         {
             Directory.CreateDirectory(heroAssetsRoot);
@@ -284,9 +284,16 @@ public sealed class HeroAssetStoryGenerator(
             generatedFiles.Add(NormalizePath(sceneManifestPath));
         }
 
-        return new HeroAssetGenerationResponse(request.EventId, true, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "SceneSelection", true, true, false)
+        var sceneManifestGenerated = request.DryRun || File.Exists(sceneManifestPath);
+        return new HeroAssetGenerationResponse(request.EventId, sceneManifestGenerated, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "SceneSelection", true, true, false)
         {
-            HeroSceneManifest = sceneManifest
+            HeroSceneManifest = sceneManifest,
+            HeroSceneSelectorExecuted = true,
+            HeroSceneManifestGenerated = sceneManifestGenerated,
+            HeroSceneManifestPath = NormalizePath(sceneManifestPath),
+            PrimaryScene = sceneManifest.PrimaryScene.SceneId,
+            SecondaryScene = sceneManifest.SecondaryScene.SceneId,
+            SupportScene = sceneManifest.SupportScene.SceneId
         };
     }
 
@@ -294,6 +301,7 @@ public sealed class HeroAssetStoryGenerator(
         HeroAssetStoryGenerationRequest request,
         HeroAssetStoryDto? heroStory = null,
         HeroAssetBlueprintDto? blueprint = null,
+        HeroSceneManifestDto? selectedSceneManifest = null,
         CancellationToken cancellationToken = default)
     {
         logger.LogInformation("Generating hero asset image review for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
@@ -304,6 +312,7 @@ public sealed class HeroAssetStoryGenerator(
         var storyPath = BuildStoryOutputPath(request.EventId, request.RegionId);
         var blueprintPath = BuildBlueprintOutputPath(request.EventId, request.RegionId);
         var reviewPath = BuildReviewOutputPath(request.EventId, request.RegionId);
+        var sceneManifestPath = BuildSceneManifestOutputPath(request.EventId, request.RegionId);
 
         heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
@@ -324,9 +333,28 @@ public sealed class HeroAssetStoryGenerator(
         var blueprintValidationIssues = ValidateHeroAssetBlueprint(selectedHook, blueprint, reviewScores);
         warnings.AddRange(storyValidationIssues);
         warnings.AddRange(blueprintValidationIssues);
-        var missingSceneAssets = FindMissingApprovedSceneAssets(BuildQuestionEngineRoot(request.EventId, request.RegionId));
+        var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
+        var missingSceneAssets = FindMissingApprovedSceneAssets(questionEngineRoot);
         if (missingSceneAssets.Count > 0)
             warnings.Add($"Approved scene assets are missing: {string.Join(", ", missingSceneAssets)}.");
+
+        var approvedSceneOutputs = await LoadApprovedSceneCandidatesAsync(questionEngineRoot, cancellationToken);
+        if (approvedSceneOutputs.Count < 3)
+            warnings.Add("Hero scene selection requires at least three approved scene outputs before image generation.");
+
+        var heroSceneSelectorExecuted = false;
+        if (selectedSceneManifest is null && approvedSceneOutputs.Count >= 3)
+        {
+            selectedSceneManifest = await sceneSelector.SelectHeroScenesAsync(request, heroStory, blueprint, approvedSceneOutputs, cancellationToken);
+            heroSceneSelectorExecuted = true;
+        }
+        else
+        {
+            heroSceneSelectorExecuted = selectedSceneManifest is not null;
+        }
+
+        if (selectedSceneManifest is null)
+            warnings.Add("Hero scene manifest selection did not produce a manifest; image generation cannot run.");
 
         var planetAssets = ResolveRequiredHeroPlanetTextures(renderingOptions.Value.CelestialAssetsRoot);
         var missingPlanetAssets = planetAssets
@@ -339,14 +367,31 @@ public sealed class HeroAssetStoryGenerator(
         var isValid = storyValidationIssues.Count == 0
             && blueprintValidationIssues.Count == 0
             && missingSceneAssets.Count == 0
+            && approvedSceneOutputs.Count >= 3
+            && selectedSceneManifest is not null
+            && heroSceneSelectorExecuted
             && missingPlanetAssets.Length == 0;
         if (!isValid)
-            return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, [], request.Phase, "Images", true, true, false);
+            return new HeroAssetGenerationResponse(request.EventId, false, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, [], request.Phase, "Images", true, true, false)
+            {
+                HeroSceneManifest = selectedSceneManifest,
+                HeroSceneSelectorExecuted = heroSceneSelectorExecuted,
+                HeroSceneManifestGenerated = false,
+                HeroSceneManifestPath = NormalizePath(sceneManifestPath),
+                PrimaryScene = selectedSceneManifest?.PrimaryScene.SceneId,
+                SecondaryScene = selectedSceneManifest?.SecondaryScene.SceneId,
+                SupportScene = selectedSceneManifest?.SupportScene.SceneId
+            };
 
         if (!request.DryRun)
         {
             Directory.CreateDirectory(heroAssetsRoot);
-            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, heroStory, blueprint, planetAssets, cancellationToken))
+            await File.WriteAllTextAsync(sceneManifestPath, JsonSerializer.Serialize(selectedSceneManifest, JsonOptions), cancellationToken);
+            if (!File.Exists(sceneManifestPath))
+                throw new InvalidOperationException($"Hero scene manifest was not generated at '{NormalizePath(sceneManifestPath)}'; aborting image generation.");
+            generatedFiles.Add(NormalizePath(sceneManifestPath));
+
+            foreach (var imagePath in await GenerateHeroImageFilesAsync(heroAssetsRoot, heroStory, blueprint, selectedSceneManifest, planetAssets, cancellationToken))
                 generatedFiles.Add(imagePath);
 
             var generatedHeroImages = HeroImageSpecs
@@ -358,14 +403,30 @@ public sealed class HeroAssetStoryGenerator(
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(visualReview, JsonOptions), cancellationToken);
         }
 
-        var imageGenerationExecuted = !request.DryRun && generatedFiles.Count > 0;
+        var heroSceneManifestGenerated = request.DryRun || File.Exists(sceneManifestPath);
+        var imageGenerationExecuted = !request.DryRun && heroSceneManifestGenerated && generatedFiles.Count > 1;
         if (!request.DryRun && !imageGenerationExecuted)
         {
             warnings.Add("Hero asset image generation failed validation: no image files were generated.");
             isValid = false;
         }
 
-        return new HeroAssetGenerationResponse(request.EventId, isValid, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "Images", true, true, imageGenerationExecuted);
+        if (!heroSceneSelectorExecuted || !heroSceneManifestGenerated)
+        {
+            warnings.Add("Hero asset image generation failed validation: selected scene manifest is required before image generation.");
+            isValid = false;
+        }
+
+        return new HeroAssetGenerationResponse(request.EventId, isValid, heroStory, selectedHook, alternativeHooks, hookScores, blueprint, platformVariants, reviewScores, warnings, generatedFiles, request.Phase, "Images", true, true, imageGenerationExecuted)
+        {
+            HeroSceneManifest = selectedSceneManifest,
+            HeroSceneSelectorExecuted = heroSceneSelectorExecuted,
+            HeroSceneManifestGenerated = heroSceneManifestGenerated,
+            HeroSceneManifestPath = NormalizePath(sceneManifestPath),
+            PrimaryScene = selectedSceneManifest?.PrimaryScene.SceneId,
+            SecondaryScene = selectedSceneManifest?.SecondaryScene.SceneId,
+            SupportScene = selectedSceneManifest?.SupportScene.SceneId
+        };
     }
 
     private async Task<HeroAssetGenerationResponse> GenerateFullHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
@@ -373,7 +434,7 @@ public sealed class HeroAssetStoryGenerator(
         var storyResponse = await GenerateHeroHookSelectionAsync(request, cancellationToken);
         var blueprintResponse = await GenerateHeroBlueprintAsync(request, storyResponse.HeroStory, cancellationToken);
         var sceneSelectionResponse = await GenerateHeroSceneManifestAsync(request, blueprintResponse.HeroStory, blueprintResponse.HeroBlueprint, cancellationToken);
-        var imagesResponse = await GenerateHeroImagesAsync(request, blueprintResponse.HeroStory, blueprintResponse.HeroBlueprint, cancellationToken);
+        var imagesResponse = await GenerateHeroImagesAsync(request, blueprintResponse.HeroStory, blueprintResponse.HeroBlueprint, sceneSelectionResponse.HeroSceneManifest, cancellationToken);
 
         return MergeResponses(request.EventId, storyResponse, blueprintResponse, sceneSelectionResponse, imagesResponse);
     }
@@ -399,7 +460,13 @@ public sealed class HeroAssetStoryGenerator(
             responses.Any(response => response.BlueprintExecuted),
             responses.Any(response => response.ImageGenerationExecuted))
         {
-            HeroSceneManifest = responses.LastOrDefault(response => response.HeroSceneManifest is not null)?.HeroSceneManifest
+            HeroSceneManifest = responses.LastOrDefault(response => response.HeroSceneManifest is not null)?.HeroSceneManifest,
+            HeroSceneSelectorExecuted = responses.Any(response => response.HeroSceneSelectorExecuted),
+            HeroSceneManifestGenerated = responses.Any(response => response.HeroSceneManifestGenerated),
+            HeroSceneManifestPath = responses.LastOrDefault(response => !string.IsNullOrWhiteSpace(response.HeroSceneManifestPath))?.HeroSceneManifestPath,
+            PrimaryScene = responses.LastOrDefault(response => !string.IsNullOrWhiteSpace(response.PrimaryScene))?.PrimaryScene,
+            SecondaryScene = responses.LastOrDefault(response => !string.IsNullOrWhiteSpace(response.SecondaryScene))?.SecondaryScene,
+            SupportScene = responses.LastOrDefault(response => !string.IsNullOrWhiteSpace(response.SupportScene))?.SupportScene
         };
     }
 
@@ -411,6 +478,7 @@ public sealed class HeroAssetStoryGenerator(
         string heroAssetsRoot,
         HeroAssetStoryDto heroStory,
         HeroAssetBlueprintDto blueprint,
+        HeroSceneManifestDto sceneManifest,
         IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
         CancellationToken cancellationToken)
     {
@@ -419,7 +487,7 @@ public sealed class HeroAssetStoryGenerator(
         {
             var variant = blueprint.PlatformVariants.FirstOrDefault(platformVariant => string.Equals(platformVariant.Variant, spec.Variant, StringComparison.OrdinalIgnoreCase));
             var outputPath = Path.Combine(heroAssetsRoot, spec.FileName);
-            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, heroStory, variant, planetAssets, cancellationToken);
+            await WriteHeroImageAsync(outputPath, spec.Width, spec.Height, heroStory, variant, sceneManifest, planetAssets, cancellationToken);
             generatedFiles.Add(NormalizePath(outputPath));
         }
 
@@ -432,6 +500,7 @@ public sealed class HeroAssetStoryGenerator(
         int height,
         HeroAssetStoryDto heroStory,
         HeroPlatformVariantDto? variant,
+        HeroSceneManifestDto sceneManifest,
         IReadOnlyList<AstronomyVisualPlanetAsset> planetAssets,
         CancellationToken cancellationToken)
     {
@@ -448,7 +517,7 @@ public sealed class HeroAssetStoryGenerator(
             starDensity: height > width ? 760 : 560,
             showReferenceOverlays: true,
             referenceStars: BuildHeroReferenceStars(width, height),
-            labels: BuildHeroVariantLabels(heroStory, variant, width, height),
+            labels: BuildHeroVariantLabels(heroStory, variant, sceneManifest, width, height),
             compositionMode: AstronomyVisualCompositionMode.HeroAsset);
 
         await AstronomyVisualCompositionEngine.ComposePngAsync(request, outputPath, cancellationToken);
@@ -494,17 +563,18 @@ public sealed class HeroAssetStoryGenerator(
             ? [new AstronomyReferenceStar("after sunset", 0.20f, 0.52f), new AstronomyReferenceStar("western sky", 0.60f, 0.46f)]
             : [new AstronomyReferenceStar("after sunset", 0.48f, 0.28f), new AstronomyReferenceStar("western sky", 0.66f, 0.34f)];
 
-    private static IReadOnlyList<AstronomyVisualLabel> BuildHeroVariantLabels(HeroAssetStoryDto heroStory, HeroPlatformVariantDto? variant, int width, int height)
+    private static IReadOnlyList<AstronomyVisualLabel> BuildHeroVariantLabels(HeroAssetStoryDto heroStory, HeroPlatformVariantDto? variant, HeroSceneManifestDto sceneManifest, int width, int height)
     {
         var variantName = variant?.Variant ?? string.Empty;
         var emotion = string.IsNullOrWhiteSpace(heroStory.HeroEmotion) ? "Wonder" : heroStory.HeroEmotion;
+        var supportCue = string.IsNullOrWhiteSpace(sceneManifest.SupportScene.SceneKey) ? "Where" : sceneManifest.SupportScene.SceneKey;
         if (height > width)
         {
             return
             [
                 new AstronomyVisualLabel("VENUS + JUPITER", 0.02f, 0.71f, Color.ParseHex("#FFD48A"), 0.92f),
                 new AstronomyVisualLabel("after sunset", 0.02f, 0.78f, Color.ParseHex("#CBE8FF"), 0.84f),
-                new AstronomyVisualLabel(emotion, 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
+                new AstronomyVisualLabel($"{emotion} • {supportCue}", 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
             ];
         }
 
@@ -514,7 +584,7 @@ public sealed class HeroAssetStoryGenerator(
             [
                 new AstronomyVisualLabel("VENUS + JUPITER", 0.02f, 0.70f, Color.ParseHex("#FFD48A"), 0.92f),
                 new AstronomyVisualLabel("after sunset", 0.02f, 0.78f, Color.ParseHex("#CBE8FF"), 0.84f),
-                new AstronomyVisualLabel(emotion, 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
+                new AstronomyVisualLabel($"{emotion} • {supportCue}", 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
             ];
         }
 
@@ -522,7 +592,7 @@ public sealed class HeroAssetStoryGenerator(
         [
             new AstronomyVisualLabel("VENUS + JUPITER", 0.02f, 0.76f, Color.ParseHex("#FFD48A"), 0.92f),
             new AstronomyVisualLabel("after sunset", 0.02f, 0.84f, Color.ParseHex("#CBE8FF"), 0.84f),
-            new AstronomyVisualLabel(emotion, 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
+            new AstronomyVisualLabel($"{emotion} • {supportCue}", 0.02f, 0.90f, Color.ParseHex("#8FD2FF"), 0.76f)
         ];
     }
 

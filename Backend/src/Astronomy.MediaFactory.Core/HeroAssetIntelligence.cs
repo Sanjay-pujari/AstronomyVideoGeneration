@@ -74,6 +74,18 @@ public sealed record HeroAssetGenerationResponse(
     bool ImageGenerationExecuted)
 {
     public HeroSceneManifestDto? HeroSceneManifest { get; init; }
+
+    public bool HeroSceneSelectorExecuted { get; init; }
+
+    public bool HeroSceneManifestGenerated { get; init; }
+
+    public string? HeroSceneManifestPath { get; init; }
+
+    public string? PrimaryScene { get; init; }
+
+    public string? SecondaryScene { get; init; }
+
+    public string? SupportScene { get; init; }
 }
 
 public sealed record HeroAssetStoryDto(
