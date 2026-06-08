@@ -8,12 +8,13 @@ public sealed record HeroAssetStoryGenerationRequest(
     string Language = "en",
     bool DryRun = true,
     bool OverwriteExisting = false,
-    HeroAssetGenerationPhase Phase = HeroAssetGenerationPhase.Full);
+    HeroAssetGenerationPhase Phase = HeroAssetGenerationPhase.HookSelection);
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum HeroAssetGenerationPhase
 {
     Story,
+    HookSelection,
     Blueprint,
     Images,
     Full
@@ -72,7 +73,7 @@ public sealed record HeroHookScoreDto(
     int ClickabilityScore,
     int ShareabilityScore,
     int UnderstandabilityScore,
-    int OverallScore);
+    int TotalScore);
 
 public sealed record HeroAssetBlueprintDto(
     string LayoutStyle,

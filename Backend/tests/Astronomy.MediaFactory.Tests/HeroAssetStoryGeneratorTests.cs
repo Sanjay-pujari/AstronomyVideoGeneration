@@ -131,7 +131,7 @@ public sealed class HeroAssetStoryGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateHeroAssetsAsync_BlueprintDryRunReturnsBlueprintWithoutGeneratingImages()
+    public async Task GenerateHeroAssetsAsync_HookSelectionDryRunReturnsHooksWithoutGeneratingBlueprintOrImages()
     {
         var workingDirectory = CreateWorkingDirectory();
         await WriteInputFilesAsync(workingDirectory);
@@ -144,22 +144,18 @@ public sealed class HeroAssetStoryGeneratorTests
             "en",
             DryRun: true,
             OverwriteExisting: false,
-            Phase: HeroAssetGenerationPhase.Blueprint), CancellationToken.None);
+            Phase: HeroAssetGenerationPhase.HookSelection), CancellationToken.None);
 
         var heroAssetsRoot = Path.GetDirectoryName(BuildOutputPath(workingDirectory))!;
         Assert.True(result.IsValid);
         Assert.Empty(result.GeneratedFiles);
         Assert.Empty(result.Warnings);
-        Assert.Equal("TWO BRIGHT PLANETS TOGETHER", result.SelectedHook);
-        Assert.Contains("LOOK WEST TONIGHT", result.AlternativeHooks);
-        Assert.Equal(5, result.HookScores.Count);
-        Assert.Equal("AstronomyPoster", result.HeroBlueprint.LayoutStyle);
-        Assert.Contains("western horizon", result.HeroBlueprint.VisualFocus);
-        Assert.Equal("Wonder", result.HeroBlueprint.Emotion);
-        Assert.Equal(3, result.PlatformVariants.Count);
-        Assert.Equal("Landscape", result.PlatformVariants[0].Variant);
-        Assert.Equal("1280x720", result.PlatformVariants[0].Size);
-        Assert.Equal("YouTube", result.PlatformVariants[0].Purpose);
+        Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
+        Assert.Contains("DON'T MISS THIS TONIGHT", result.AlternativeHooks);
+        Assert.True(result.HookScores.Count >= 5);
+        Assert.All(result.HookScores, score => Assert.True(score.TotalScore > 0));
+        Assert.Equal("", result.HeroBlueprint.LayoutStyle);
+        Assert.Empty(result.PlatformVariants);
         Assert.Equal(0, result.ReviewScores.HeroAssetReadinessScore);
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-asset-blueprint.json")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-review.json")));
@@ -169,7 +165,7 @@ public sealed class HeroAssetStoryGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateHeroAssetsAsync_BlueprintNonDryRunWritesBlueprintOnly()
+    public async Task GenerateHeroAssetsAsync_HookSelectionNonDryRunDoesNotWriteBlueprintOrImages()
     {
         var workingDirectory = CreateWorkingDirectory();
         await WriteInputFilesAsync(workingDirectory);
@@ -182,7 +178,7 @@ public sealed class HeroAssetStoryGeneratorTests
             "en",
             DryRun: false,
             OverwriteExisting: false,
-            Phase: HeroAssetGenerationPhase.Blueprint), CancellationToken.None);
+            Phase: HeroAssetGenerationPhase.HookSelection), CancellationToken.None);
 
         var heroAssetsRoot = Path.GetDirectoryName(BuildOutputPath(workingDirectory))!;
         var storyPath = BuildOutputPath(workingDirectory);
@@ -190,17 +186,14 @@ public sealed class HeroAssetStoryGeneratorTests
         var reviewPath = Path.Combine(heroAssetsRoot, "hero-review.json");
         Assert.True(result.IsValid);
         Assert.Single(result.GeneratedFiles);
-        Assert.Contains(blueprintPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.Contains(storyPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.True(File.Exists(storyPath));
-        Assert.True(File.Exists(blueprintPath));
+        Assert.False(File.Exists(blueprintPath));
         Assert.False(File.Exists(reviewPath));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-landscape.png")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-square.png")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-portrait.png")));
 
-        var savedBlueprint = JsonSerializer.Deserialize<HeroAssetBlueprintDto>(await File.ReadAllTextAsync(blueprintPath), JsonOptions);
-        Assert.NotNull(savedBlueprint);
-        Assert.Equal("AstronomyPoster", savedBlueprint!.LayoutStyle);
     }
 
     private static HeroAssetStoryGenerator CreateGenerator(string workingDirectory)

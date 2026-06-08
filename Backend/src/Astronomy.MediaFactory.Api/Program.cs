@@ -383,10 +383,18 @@ app.MapPost("/api/astronomy-intelligence/generate-question-driven-narration", as
 
 app.MapPost("/api/astronomy-intelligence/generate-hero-assets", async (HeroAssetStoryGenerationRequest request, IHeroAssetIntelligenceEngine heroAssetEngine, ILogger<Program> logger, CancellationToken ct) =>
 {
-    logger.LogInformation("Hero asset blueprint generation request received for {RegionId}. EventId={EventId}; DryRun={DryRun}", request.RegionId, request.EventId, request.DryRun);
+    logger.LogInformation("Hero hook intelligence generation request received for {RegionId}. EventId={EventId}; DryRun={DryRun}", request.RegionId, request.EventId, request.DryRun);
     try
     {
-        return Results.Ok(await heroAssetEngine.GenerateHeroAssetsAsync(request, ct));
+        var response = await heroAssetEngine.GenerateHeroAssetsAsync(request, ct);
+        return Results.Ok(new
+        {
+            response.SelectedHook,
+            response.AlternativeHooks,
+            response.HookScores,
+            response.HeroStory,
+            response.Warnings
+        });
     }
     catch (ArgumentException ex)
     {

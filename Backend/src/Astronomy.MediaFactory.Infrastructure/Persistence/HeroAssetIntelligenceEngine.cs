@@ -115,27 +115,44 @@ public sealed class HeroAssetStoryGenerator(
         return request.Phase switch
         {
             HeroAssetGenerationPhase.Story => await GenerateHeroStoryAssetsAsync(request, cancellationToken),
-            HeroAssetGenerationPhase.Blueprint => await GenerateHeroBlueprintAsync(request, cancellationToken: cancellationToken),
-            HeroAssetGenerationPhase.Images => await GenerateHeroImagesAsync(request, cancellationToken: cancellationToken),
-            HeroAssetGenerationPhase.Full => await GenerateFullHeroAssetsAsync(request, cancellationToken),
+            HeroAssetGenerationPhase.HookSelection => await GenerateHeroHookSelectionAsync(request, cancellationToken),
+            HeroAssetGenerationPhase.Blueprint => await GenerateHeroHookSelectionAsync(request, cancellationToken),
+            HeroAssetGenerationPhase.Images => await GenerateHeroHookSelectionAsync(request, cancellationToken),
+            HeroAssetGenerationPhase.Full => await GenerateHeroHookSelectionAsync(request, cancellationToken),
             _ => throw new ArgumentException($"Unsupported hero asset generation phase '{request.Phase}'.", nameof(request))
         };
     }
 
-    private async Task<HeroAssetGenerationResponse> GenerateFullHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
+    private async Task<HeroAssetGenerationResponse> GenerateHeroHookSelectionAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Generating full hero assets for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
+        logger.LogInformation("Generating hero hook intelligence for EventId={EventId}, RegionId={RegionId}, DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
 
-        var storyResponse = await GenerateHeroStoryAssetsAsync(request with { Phase = HeroAssetGenerationPhase.Story }, cancellationToken);
-        if (!storyResponse.IsValid)
-            return storyResponse;
+        var storyResponse = await GenerateHeroAssetStoryAsync(request with { Phase = HeroAssetGenerationPhase.Story }, cancellationToken);
+        var warnings = new List<string>(storyResponse.Warnings);
+        var hookScores = BuildHookScores(storyResponse.HeroStory);
+        var selectedHook = SelectTopHook(hookScores);
+        var alternativeHooks = hookScores
+            .Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(score => score.TotalScore)
+            .ThenBy(score => score.Hook)
+            .Select(score => score.Hook)
+            .ToArray();
 
-        var blueprintResponse = await GenerateHeroBlueprintAsync(request with { Phase = HeroAssetGenerationPhase.Blueprint }, storyResponse.HeroStory, cancellationToken);
-        if (!blueprintResponse.IsValid)
-            return MergeResponses(request.EventId, storyResponse, blueprintResponse);
+        var hookValidationIssues = ValidateHookSelection(selectedHook, alternativeHooks, hookScores);
+        warnings.AddRange(hookValidationIssues);
 
-        var imagesResponse = await GenerateHeroImagesAsync(request with { Phase = HeroAssetGenerationPhase.Images }, storyResponse.HeroStory, blueprintResponse.HeroBlueprint, cancellationToken);
-        return MergeResponses(request.EventId, storyResponse, blueprintResponse, imagesResponse);
+        return new HeroAssetGenerationResponse(
+            storyResponse.EventId,
+            storyResponse.IsValid && hookValidationIssues.Count == 0,
+            storyResponse.HeroStory,
+            selectedHook,
+            alternativeHooks,
+            hookScores,
+            BuildEmptyHeroBlueprint(),
+            [],
+            BuildEmptyReviewScores(),
+            warnings,
+            storyResponse.GeneratedFiles);
     }
 
     private async Task<HeroAssetGenerationResponse> GenerateHeroStoryAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken)
@@ -172,8 +189,8 @@ public sealed class HeroAssetStoryGenerator(
         var storyValidationIssues = ValidateStory(heroStory);
         warnings.AddRange(storyValidationIssues);
 
-        var hookScores = BuildHookScores();
-        var selectedHook = hookScores.OrderByDescending(score => score.OverallScore).ThenBy(score => score.Hook).First().Hook;
+        var hookScores = BuildHookScores(heroStory);
+        var selectedHook = hookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).First().Hook;
         var alternativeHooks = hookScores.Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase)).Select(score => score.Hook).ToArray();
         var platformVariants = BuildPlatformVariants();
         var blueprint = BuildHeroBlueprint(platformVariants);
@@ -213,8 +230,8 @@ public sealed class HeroAssetStoryGenerator(
         heroStory ??= await LoadHeroAssetStoryAsync(storyPath, request, cancellationToken);
         blueprint ??= await LoadHeroAssetBlueprintAsync(blueprintPath, request, cancellationToken);
 
-        var hookScores = BuildHookScores();
-        var selectedHook = hookScores.OrderByDescending(score => score.OverallScore).ThenBy(score => score.Hook).First().Hook;
+        var hookScores = BuildHookScores(heroStory);
+        var selectedHook = hookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).First().Hook;
         var alternativeHooks = hookScores.Where(score => !string.Equals(score.Hook, selectedHook, StringComparison.OrdinalIgnoreCase)).Select(score => score.Hook).ToArray();
         var platformVariants = blueprint.PlatformVariants;
         var reviewScores = BuildReviewScores();
@@ -354,15 +371,117 @@ public sealed class HeroAssetStoryGenerator(
     }
 
 
-    private static IReadOnlyList<HeroHookScoreDto> BuildHookScores()
-        =>
-        [
-            new("LOOK WEST TONIGHT", 96, 95, 92, 98, 95),
-            new("TWO BRIGHT PLANETS TOGETHER", 94, 96, 95, 97, 96),
-            new("DON'T MISS THIS TONIGHT", 98, 97, 93, 92, 95),
-            new("LOOK UP AFTER SUNSET", 93, 92, 91, 99, 94),
-            new("EVENING SKY HIGHLIGHT", 90, 90, 91, 96, 92)
-        ];
+    private static IReadOnlyList<HeroHookScoreDto> BuildHookScores(HeroAssetStoryDto heroStory)
+    {
+        var candidates = BuildHookCandidates(heroStory);
+        return candidates
+            .Select(ScoreHook)
+            .OrderByDescending(score => score.TotalScore)
+            .ThenBy(score => score.Hook)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> BuildHookCandidates(HeroAssetStoryDto heroStory)
+    {
+        var candidates = new List<string>
+        {
+            "LOOK WEST TONIGHT",
+            "DON'T MISS THIS TONIGHT",
+            "TWO BRIGHT PLANETS TOGETHER",
+            "LOOK UP AFTER SUNSET",
+            "EVENING SKY HIGHLIGHT"
+        };
+
+        if (!string.IsNullOrWhiteSpace(heroStory.HeroHook))
+            candidates.Add(heroStory.HeroHook.ToUpperInvariant());
+        if (!string.IsNullOrWhiteSpace(heroStory.HeroAction) && heroStory.HeroAction.Contains("west", StringComparison.OrdinalIgnoreCase))
+            candidates.Add("FACE WEST AFTER SUNSET");
+        if (!string.IsNullOrWhiteSpace(heroStory.HeroVisualFocus) && heroStory.HeroVisualFocus.Contains("Venus", StringComparison.OrdinalIgnoreCase) && heroStory.HeroVisualFocus.Contains("Jupiter", StringComparison.OrdinalIgnoreCase))
+            candidates.Add("VENUS AND JUPITER TONIGHT");
+
+        return candidates
+            .Select(CleanHook)
+            .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static HeroHookScoreDto ScoreHook(string hook)
+    {
+        var scrollStoppingScore = 84;
+        var clickabilityScore = 82;
+        var shareabilityScore = 78;
+        var understandabilityScore = 84;
+
+        if (hook.Contains("TONIGHT", StringComparison.OrdinalIgnoreCase))
+        {
+            scrollStoppingScore += 9;
+            clickabilityScore += 10;
+            shareabilityScore += 5;
+        }
+
+        if (hook.Contains("LOOK", StringComparison.OrdinalIgnoreCase) || hook.Contains("FACE", StringComparison.OrdinalIgnoreCase))
+        {
+            scrollStoppingScore += 5;
+            understandabilityScore += 8;
+        }
+
+        if (hook.Contains("WEST", StringComparison.OrdinalIgnoreCase) || hook.Contains("SUNSET", StringComparison.OrdinalIgnoreCase))
+        {
+            clickabilityScore += 4;
+            understandabilityScore += 7;
+            shareabilityScore += 3;
+        }
+
+        if (hook.Contains("DON'T MISS", StringComparison.OrdinalIgnoreCase))
+        {
+            scrollStoppingScore += 8;
+            clickabilityScore += 7;
+            understandabilityScore -= 6;
+        }
+
+        if (hook.Contains("TWO", StringComparison.OrdinalIgnoreCase) || hook.Contains("VENUS", StringComparison.OrdinalIgnoreCase) || hook.Contains("JUPITER", StringComparison.OrdinalIgnoreCase) || hook.Contains("PLANETS", StringComparison.OrdinalIgnoreCase))
+        {
+            clickabilityScore += 4;
+            shareabilityScore += 9;
+            understandabilityScore += 8;
+        }
+
+        if (hook.Contains("BRIGHT", StringComparison.OrdinalIgnoreCase) || hook.Contains("HIGHLIGHT", StringComparison.OrdinalIgnoreCase))
+        {
+            scrollStoppingScore += 3;
+            shareabilityScore += 4;
+        }
+
+        if (hook.Length <= 22)
+            understandabilityScore += 2;
+        if (hook.Length > 32)
+            understandabilityScore -= 4;
+
+        scrollStoppingScore = ClampScore(scrollStoppingScore);
+        clickabilityScore = ClampScore(clickabilityScore);
+        shareabilityScore = ClampScore(shareabilityScore);
+        understandabilityScore = ClampScore(understandabilityScore);
+        var totalScore = CalculateTotalScore(scrollStoppingScore, clickabilityScore, shareabilityScore, understandabilityScore);
+
+        return new HeroHookScoreDto(hook, scrollStoppingScore, clickabilityScore, shareabilityScore, understandabilityScore, totalScore);
+    }
+
+    private static int CalculateTotalScore(int scrollStoppingScore, int clickabilityScore, int shareabilityScore, int understandabilityScore)
+        => ClampScore((int)Math.Round(
+            (scrollStoppingScore * 0.35)
+            + (clickabilityScore * 0.35)
+            + (shareabilityScore * 0.15)
+            + (understandabilityScore * 0.15),
+            MidpointRounding.AwayFromZero));
+
+    private static string SelectTopHook(IReadOnlyList<HeroHookScoreDto> hookScores)
+        => hookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).FirstOrDefault()?.Hook ?? string.Empty;
+
+    private static int ClampScore(int score) => Math.Clamp(score, 0, 100);
+
+    private static string CleanHook(string value)
+        => Clean(value).Trim('.', '!', '?').ToUpperInvariant();
 
     private static IReadOnlyList<HeroPlatformVariantDto> BuildPlatformVariants()
         =>
@@ -410,6 +529,17 @@ public sealed class HeroAssetStoryGenerator(
         if (string.IsNullOrWhiteSpace(blueprint.VisualFocus)) issues.Add("visualFocus is required.");
         if (string.IsNullOrWhiteSpace(blueprint.Emotion)) issues.Add("emotion is required.");
         if (reviewScores.HeroAssetReadinessScore < 90) issues.Add("heroAssetReadinessScore must be at least 90.");
+        return issues;
+    }
+
+    private static IReadOnlyList<string> ValidateHookSelection(string selectedHook, IReadOnlyList<string> alternativeHooks, IReadOnlyList<HeroHookScoreDto> hookScores)
+    {
+        var issues = new List<string>();
+        if (string.IsNullOrWhiteSpace(selectedHook)) issues.Add("selectedHook is required.");
+        if (alternativeHooks.Count == 0) issues.Add("alternativeHooks is required.");
+        if (hookScores.Count == 0) issues.Add("hookScores is required.");
+        if (hookScores.Count < 5) issues.Add("At least 5 hooks must be generated.");
+        if (hookScores.Any(score => score.TotalScore <= 0)) issues.Add("Each hook score must include a positive totalScore.");
         return issues;
     }
 
