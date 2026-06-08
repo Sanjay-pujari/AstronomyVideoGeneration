@@ -91,7 +91,7 @@ public sealed class AstronomyBackgroundLayerRenderer
             for (var y = 0; y < accessor.Height; y++)
             {
                 var yRatio = y / (float)(CanvasHeight - 1);
-                var baseColor = InterpolateStops(stops, yRatio).ToPixel<Rgba32>();
+                var baseColor = InterpolateStops(stops, yRatio);
                 var horizonLift = SmoothStep(0.58f, 0.92f, yRatio) * (1f - SmoothStep(0.92f, 1f, yRatio));
                 var coolUpperHaze = 1f - SmoothStep(0.18f, 0.72f, Math.Abs(yRatio - 0.44f));
                 var warmHorizon = sceneNumber is 1 or 3 or 6 ? 1f : 0.35f;
