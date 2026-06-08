@@ -501,6 +501,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IQuestionDrivenNarrationGenerator, QuestionDrivenNarrationGenerator>();
         services.AddScoped<IQuestionDrivenImagePromptGenerator, QuestionDrivenImagePromptGenerator>();
         services.AddScoped<IAstronomyInfographicDesignSystem, AstronomyInfographicDesignSystem>();
+        services.AddScoped<AstronomyBackgroundLayerRenderer>();
+        services.AddScoped<CelestialObjectLayerRenderer>();
+        services.AddScoped<SkyGuidanceLayerRenderer>();
+        services.AddScoped<EducationalLayerRenderer>();
+        services.AddScoped<AnnotationLayerRenderer>();
+        services.AddScoped<IAstronomyInfographicRenderer, AstronomyInfographicRenderer>();
         services.AddScoped<IQuestionDrivenVisualComposer, QuestionDrivenVisualComposer>();
         services.AddScoped<IEditorialAstronomyInfographicComposer, EditorialAstronomyInfographicComposer>();
         services.AddScoped<IAstronomyVisualAssetStrategyService, AstronomyVisualAssetStrategyService>();
