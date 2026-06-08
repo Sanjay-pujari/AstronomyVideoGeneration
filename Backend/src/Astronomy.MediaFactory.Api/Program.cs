@@ -396,7 +396,13 @@ app.MapPost("/api/astronomy-intelligence/generate-hero-assets", async (HeroAsset
             response.HeroBlueprint,
             response.PlatformVariants,
             response.ReviewScores,
-            response.Warnings
+            response.Warnings,
+            response.PhaseRequested,
+            response.PhaseExecuted,
+            response.StoryExecuted,
+            response.BlueprintExecuted,
+            response.ImageGenerationExecuted,
+            response.GeneratedFiles
         });
     }
     catch (ArgumentException ex)

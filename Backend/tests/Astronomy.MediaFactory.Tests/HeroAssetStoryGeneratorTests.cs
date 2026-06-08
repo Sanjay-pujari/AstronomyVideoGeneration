@@ -359,6 +359,55 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-portrait.png")));
     }
 
+    [Fact]
+    public async Task GenerateHeroAssetsAsync_ImagesNonDryRunLoadsStoryAndBlueprintGeneratesImagesAndReviewDiagnostics()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteInputFilesAsync(workingDirectory);
+        var generator = CreateGenerator(workingDirectory);
+
+        await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            Phase: HeroAssetGenerationPhase.Blueprint), CancellationToken.None);
+
+        var result = await generator.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: true,
+            Phase: HeroAssetGenerationPhase.Images), CancellationToken.None);
+
+        var heroAssetsRoot = Path.GetDirectoryName(BuildOutputPath(workingDirectory))!;
+        var landscapePath = Path.Combine(heroAssetsRoot, "hero-landscape.png");
+        var squarePath = Path.Combine(heroAssetsRoot, "hero-square.png");
+        var portraitPath = Path.Combine(heroAssetsRoot, "hero-portrait.png");
+        var reviewPath = Path.Combine(heroAssetsRoot, "hero-review.json");
+
+        Assert.True(result.IsValid);
+        Assert.Equal("Images", result.PhaseRequested);
+        Assert.Equal("Images", result.PhaseExecuted);
+        Assert.True(result.StoryExecuted);
+        Assert.True(result.BlueprintExecuted);
+        Assert.True(result.ImageGenerationExecuted);
+        Assert.Equal(3, result.GeneratedFiles.Count);
+        Assert.Contains(landscapePath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.Contains(squarePath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.Contains(portraitPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.DoesNotContain(reviewPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.True(File.Exists(landscapePath));
+        Assert.True(File.Exists(squarePath));
+        Assert.True(File.Exists(portraitPath));
+        Assert.True(File.Exists(reviewPath));
+        Assert.True(new FileInfo(landscapePath).Length > 0);
+        Assert.True(new FileInfo(squarePath).Length > 0);
+        Assert.True(new FileInfo(portraitPath).Length > 0);
+    }
+
     private static void AssertRequiredHookCandidates(IReadOnlyList<HeroHookScoreDto> hookScores)
     {
         var hooks = hookScores.Select(score => score.Hook).ToHashSet(StringComparer.OrdinalIgnoreCase);
