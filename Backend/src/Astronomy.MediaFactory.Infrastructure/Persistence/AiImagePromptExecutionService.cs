@@ -203,7 +203,7 @@ public sealed class AiImagePromptExecutionService(
             ["style"] = style,
             ["basePrompt"] = basePrompt,
             ["professionalPrompt"] = professionalPrompt,
-            ["negativePrompt"] = "blurry, low resolution, cartoonish, overexposed, distorted planets, fake text, watermark, extra moons, wrong number of planets, cluttered composition",
+            ["negativePrompt"] = "blurry, low resolution, cartoonish, overexposed, distorted planets, fake text, watermark, extra moons, wrong number of planets, cluttered composition, visible horizontal banding, layered strip gradients, stacked rectangular gradient regions",
             ["compositionGuide"] = BuildCompositionGuide(job.AssetType, aspectRatio),
             ["lightingGuide"] = BuildLightingGuide(job.AssetType, objectNameList),
             ["qualityChecklist"] = BuildQualityChecklist(job.AssetType, aspectRatio),
@@ -233,6 +233,8 @@ public sealed class AiImagePromptExecutionService(
             "Compose with clear foreground, midground, and background layers, a strong visual hierarchy, and premium cinematic depth rather than a screenshot or slideshow frame.",
             "Keep celestial bodies at realistic apparent scale; if enlarged for storytelling, make it a cinematic artistic interpretation that remains scientifically honest and not misleading.",
             safeZones,
+            "Use a smooth continuous sky gradient with atmospheric scattering, subtle twilight haze, and natural sky blending.",
+            "Do not create visible horizontal bands, layered strip gradients, or stacked rectangular gradient regions.",
             "Do not include fake UI, labels, watermarks, logos, or unreadable text inside the image.").Trim();
     }
 
@@ -253,7 +255,7 @@ public sealed class AiImagePromptExecutionService(
             ? "dramatic twilight or predawn rim light, premium contrast, controlled glow"
             : "soft documentary twilight, natural atmospheric gradients, restrained glow";
         var objects = objectNames.Count > 0 ? string.Join(", ", objectNames) : "the celestial objects";
-        return $"Use {mood}; keep {objects} legible without overexposure, with realistic atmospheric scattering and a natural night-sky color palette.";
+        return $"Use {mood}; keep {objects} legible without overexposure, with realistic atmospheric scattering, subtle twilight haze, smooth continuous gradients, and a natural night-sky color palette; visibleHorizontalBanding=false and naturalSkyGradient=true.";
     }
 
     private static JsonArray BuildQualityChecklist(string assetType, string aspectRatio) => new()
@@ -264,7 +266,8 @@ public sealed class AiImagePromptExecutionService(
         "Visual hierarchy reads instantly on mobile and thumbnail surfaces.",
         aspectRatio == "9:16" ? "Upper and lower safe zones are clean for captions." : "Wide 16:9 frame includes clean negative space for text.",
         assetType.Equals(AiHeroImage, StringComparison.OrdinalIgnoreCase) ? "Hero image has a strong high-retention focal point." : "Cinematic image is calm, educational, and documentary-grade.",
-        "No fake UI, no fake text, no watermark, and no unreadable lettering."
+        "No fake UI, no fake text, no watermark, and no unreadable lettering.",
+        "Sky rendering validation: visibleHorizontalBanding=false and naturalSkyGradient=true."
     };
 
     private static JsonArray BuildSafetyNotes(string assetType) => new()
