@@ -116,8 +116,7 @@ public static class AstronomyVisualCompositionEngine
 
     private static void DrawHeroAssetMode(IImageProcessingContext ctx, AstronomyVisualCompositionRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.BackgroundImagePath))
-            DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: true);
+        DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: true);
         DrawHeroLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.Labels);
     }
 
@@ -260,7 +259,7 @@ public static class AstronomyVisualCompositionEngine
             {
                 using var planet = Image.Load<Rgba32>(asset.TexturePath);
                 MakeNearBlackTransparent(planet, 16);
-                planet.Mutate(x => x.Resize(new ResizeOptions { Size = new Size((int)placement.Width, (int)placement.Height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center }).Saturate(1.05f).Contrast(1.04f));
+                planet.Mutate(x => x.Resize(new ResizeOptions { Size = new Size((int)placement.Width, (int)placement.Height), Mode = ResizeMode.Max, Position = AnchorPositionMode.Center }).Saturate(1.05f).Contrast(1.04f));
                 ctx.DrawImage(planet, new Point((int)placement.X, (int)placement.Y), 0.96f);
             }
             else
@@ -342,43 +341,70 @@ public static class AstronomyVisualCompositionEngine
 
     private static void DrawHeroLabelsAndTypography(IImageProcessingContext ctx, int width, int height, string title, string subtitle, IReadOnlyList<AstronomyVisualLabel> labels)
     {
-        var safe = SafeContentBounds(width, height);
         var isPortrait = height > width;
         var isSquare = width == height;
-        var minDimension = Math.Min(width, height);
-        var titleSize = isPortrait ? 72f : isSquare ? 60f : 52f;
-        var subtitleSize = isPortrait ? 30f : isSquare ? 26f : 0f;
-        var bodySize = isPortrait ? 34f : isSquare ? 28f : 25f;
-        var titleFont = ResolveFont(Math.Max(38f, titleSize), FontStyle.Bold);
-        var subtitleFont = ResolveFont(Math.Max(20f, subtitleSize), FontStyle.Bold);
-        var bodyFont = ResolveFont(Math.Max(18f, Math.Min(bodySize, minDimension * 0.035f)), FontStyle.Bold);
+        var titleFont = ResolveFont(isPortrait ? 72f : isSquare ? 60f : 52f, FontStyle.Bold);
+        var subtitleFont = ResolveFont(isPortrait ? 30f : 26f, FontStyle.Bold);
+        var bodyFont = ResolveFont(isPortrait ? 34f : isSquare ? 28f : 25f, FontStyle.Bold);
 
-        var titleOrigin = isPortrait
-            ? new PointF(safe.X, safe.Y)
-            : isSquare
-                ? new PointF(safe.X, safe.Y)
-                : new PointF(safe.X, safe.Y * 0.95f);
-        var titleWrap = isPortrait ? safe.Width : isSquare ? safe.Width * 0.86f : safe.Width * 0.42f;
-        if (!string.IsNullOrWhiteSpace(title))
+        var textBlocks = BuildHeroTemplateTextBlocks(width, height, title, subtitle, labels);
+        foreach (var block in textBlocks)
         {
-            var options = new RichTextOptions(titleFont) { Origin = titleOrigin, WrappingLength = titleWrap };
-            ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(titleOrigin.X + 4, titleOrigin.Y + 4) }, title, Color.Black.WithAlpha(0.76f));
-            ctx.DrawText(options, title, Color.White);
-        }
-
-        if (!string.IsNullOrWhiteSpace(subtitle) && !(!isPortrait && !isSquare))
-        {
-            var subtitleOrigin = new PointF(safe.X + (isSquare ? safe.Width * 0.02f : 0), titleOrigin.Y + titleFont.Size * 1.55f);
-            ctx.DrawText(new RichTextOptions(subtitleFont) { Origin = subtitleOrigin, WrappingLength = safe.Width * 0.88f }, subtitle, Color.ParseHex("#FFD48A"));
-        }
-
-        foreach (var label in labels)
-        {
-            var origin = new PointF(safe.X + safe.Width * Math.Clamp(label.X, 0, 1), safe.Y + safe.Height * Math.Clamp(label.Y, 0, 1));
-            ctx.DrawText(new RichTextOptions(bodyFont) { Origin = new PointF(origin.X + 3, origin.Y + 3), WrappingLength = Math.Max(190, safe.Width * 0.34f) }, label.Text, Color.Black.WithAlpha(0.70f));
-            ctx.DrawText(new RichTextOptions(bodyFont) { Origin = origin, WrappingLength = Math.Max(190, safe.Width * 0.34f) }, label.Text, label.Color.WithAlpha(label.Opacity));
+            var font = block.Name is "Hook" ? titleFont : block.Name is "Subtitle" ? subtitleFont : bodyFont;
+            var color = block.Name switch
+            {
+                "Hook" => Color.White,
+                "Subtitle" => Color.ParseHex("#FFD48A"),
+                "Direction" => Color.ParseHex("#FFD48A"),
+                "CTA" => Color.ParseHex("#8FD2FF"),
+                _ => Color.ParseHex("#CBE8FF")
+            };
+            var options = new RichTextOptions(font) { Origin = new PointF(block.Bounds.X, block.Bounds.Y), WrappingLength = block.Bounds.Width };
+            ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(block.Bounds.X + 3, block.Bounds.Y + 3) }, block.Text, Color.Black.WithAlpha(0.72f));
+            ctx.DrawText(options, block.Text, color);
         }
     }
+
+    private static IReadOnlyList<(string Name, string Text, RectangleF Bounds)> BuildHeroTemplateTextBlocks(int width, int height, string title, string subtitle, IReadOnlyList<AstronomyVisualLabel> labels)
+    {
+        var timing = labels.Count > 0 ? labels[0].Text : string.Empty;
+        var direction = labels.Count > 1 ? labels[1].Text : string.Empty;
+        var cta = labels.Count > 2 ? labels[2].Text : string.Empty;
+        var blocks = new List<(string Name, string Text, RectangleF Bounds)>();
+        AddBlock(blocks, "Hook", title, HeroTemplateBounds(width, height, "Hook"));
+        AddBlock(blocks, "Subtitle", subtitle, HeroTemplateBounds(width, height, "Subtitle"));
+        AddBlock(blocks, "Timing", timing, HeroTemplateBounds(width, height, "Timing"));
+        AddBlock(blocks, "Direction", direction, HeroTemplateBounds(width, height, "Direction"));
+        AddBlock(blocks, "CTA", cta, HeroTemplateBounds(width, height, "CTA"));
+        return blocks;
+    }
+
+    private static void AddBlock(List<(string Name, string Text, RectangleF Bounds)> blocks, string name, string text, RectangleF bounds)
+    {
+        if (!string.IsNullOrWhiteSpace(text))
+            blocks.Add((name, text, bounds));
+    }
+
+    private static RectangleF HeroTemplateBounds(int width, int height, string blockName)
+        => (width, height, blockName) switch
+        {
+            (1280, 720, "Hook") => new RectangleF(80, 55, 520, 72),
+            (1280, 720, "Subtitle") => new RectangleF(80, 130, 520, 34),
+            (1280, 720, "Timing") => new RectangleF(80, 570, 270, 42),
+            (1280, 720, "CTA") => new RectangleF(420, 610, 500, 48),
+            (1280, 720, "Direction") => new RectangleF(980, 555, 220, 48),
+            (1080, 1080, "Hook") => new RectangleF(70, 80, 700, 78),
+            (1080, 1080, "Subtitle") => new RectangleF(70, 165, 700, 38),
+            (1080, 1080, "Timing") => new RectangleF(70, 780, 280, 48),
+            (1080, 1080, "Direction") => new RectangleF(720, 780, 240, 48),
+            (1080, 1080, "CTA") => new RectangleF(70, 900, 800, 54),
+            (1080, 1920, "Hook") => new RectangleF(70, 110, 820, 94),
+            (1080, 1920, "Subtitle") => new RectangleF(70, 210, 820, 44),
+            (1080, 1920, "Timing") => new RectangleF(70, 1250, 300, 58),
+            (1080, 1920, "Direction") => new RectangleF(650, 1250, 260, 58),
+            (1080, 1920, "CTA") => new RectangleF(70, 1550, 850, 64),
+            _ => RectangleF.Empty
+        };
 
     private static void DrawLabelsAndTypography(IImageProcessingContext ctx, int width, int height, string title, string subtitle, string metadataLine, IReadOnlyList<AstronomyVisualLabel> labels)
     {

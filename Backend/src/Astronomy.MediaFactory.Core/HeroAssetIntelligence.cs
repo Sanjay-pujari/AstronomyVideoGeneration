@@ -105,7 +105,10 @@ public sealed record HeroLayoutValidationDto(
     IReadOnlyList<string> OverlapWarnings,
     bool ObjectsVisible,
     IReadOnlyList<HeroObjectVisibilityDto> ObjectVisibility,
-    IReadOnlyList<HeroVariantLayoutValidationDto> Variants);
+    IReadOnlyList<HeroVariantLayoutValidationDto> Variants,
+    bool IsValid,
+    IReadOnlyList<HeroVariantLayoutValidationDto> VariantResults,
+    IReadOnlyList<string> Errors);
 
 public sealed record HeroObjectVisibilityDto(string Object, bool Visible, bool Cropped);
 
