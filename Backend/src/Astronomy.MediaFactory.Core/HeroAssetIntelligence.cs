@@ -167,3 +167,35 @@ public interface IHeroAssetIntelligenceEngine
 
     Task<HeroAssetGenerationResponse> GenerateHeroAssetsAsync(HeroAssetStoryGenerationRequest request, CancellationToken cancellationToken);
 }
+
+public sealed record HeroCompositionModelDto(
+    HeroCompositionHookBlockDto HookBlock,
+    HeroCompositionSceneBlockDto VisualBlock,
+    HeroCompositionTextBlockDto DirectionBlock,
+    HeroCompositionTextBlockDto TimingBlock,
+    HeroCompositionTextBlockDto CtaBlock,
+    HeroCompositionValidationDto Validation);
+
+public sealed record HeroCompositionHookBlockDto(string Text);
+
+public sealed record HeroCompositionSceneBlockDto(string SourceScene);
+
+public sealed record HeroCompositionTextBlockDto(string SourceScene, string Text);
+
+public sealed record HeroCompositionValidationDto(
+    bool HookPresent,
+    bool VisualPresent,
+    bool DirectionPresent,
+    bool TimingPresent,
+    bool CtaPresent,
+    int CompositionCompletenessScore);
+
+public interface IHeroCompositionEngine
+{
+    HeroCompositionModelDto ComposeHeroComposition(
+        HeroAssetStoryDto heroStory,
+        string selectedHook,
+        HeroAssetBlueprintDto heroBlueprint,
+        HeroSceneManifestDto sceneManifest,
+        IReadOnlyList<ApprovedHeroSceneCandidate> approvedScenes);
+}

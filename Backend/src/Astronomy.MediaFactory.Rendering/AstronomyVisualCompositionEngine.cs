@@ -59,10 +59,16 @@ public static class AstronomyVisualCompositionEngine
         var image = await BuildBaseImageAsync(request, cancellationToken);
         image.Mutate(ctx =>
         {
-            DrawSmoothTwilightSky(ctx, request.Width, request.Height, request.Mood);
-            DrawStars(ctx, request.Width, request.Height, request.StarDensity);
-            DrawConstellationAndReferenceStarOverlay(ctx, request.Width, request.Height, request.ReferenceStars, request.ShowReferenceOverlays);
-            DrawHorizonAndLandscape(ctx, request.Width, request.Height, request.Mood);
+            var usesApprovedHeroSceneBackground = request.CompositionMode == AstronomyVisualCompositionMode.HeroAsset
+                && !string.IsNullOrWhiteSpace(request.BackgroundImagePath);
+            if (!usesApprovedHeroSceneBackground)
+            {
+                DrawSmoothTwilightSky(ctx, request.Width, request.Height, request.Mood);
+                DrawStars(ctx, request.Width, request.Height, request.StarDensity);
+                DrawConstellationAndReferenceStarOverlay(ctx, request.Width, request.Height, request.ReferenceStars, request.ShowReferenceOverlays);
+                DrawHorizonAndLandscape(ctx, request.Width, request.Height, request.Mood);
+            }
+
             DrawVisualModeLayers(ctx, request);
             DrawWestMarker(ctx, request.Width, request.Height, request.WestMarkerLabel);
             DrawSafeMarginGuide(ctx, request.Width, request.Height, request.ShowSafeMarginGuide);
@@ -101,7 +107,8 @@ public static class AstronomyVisualCompositionEngine
 
     private static void DrawHeroAssetMode(IImageProcessingContext ctx, AstronomyVisualCompositionRequest request)
     {
-        DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: true);
+        if (string.IsNullOrWhiteSpace(request.BackgroundImagePath))
+            DrawPlanetTextures(ctx, request.Width, request.Height, request.PlanetAssets, allowDefaultHeroObjects: true);
         DrawLabelsAndTypography(ctx, request.Width, request.Height, request.Title, request.Subtitle, request.MetadataLine, request.Labels);
     }
 
