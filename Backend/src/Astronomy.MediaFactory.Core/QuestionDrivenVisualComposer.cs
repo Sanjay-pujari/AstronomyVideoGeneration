@@ -160,6 +160,8 @@ public sealed record QuestionDrivenSceneReview(
     bool PosterQuality,
     int VisualUniquenessScore,
     int HumanInterestScore,
+    int BackgroundRealismScore,
+    int AstronomyPhotographyScore,
     bool DecorativeCircleDetected,
     bool AtmosphericBackgroundUsed,
     bool LargeTemplateShapeDetected,
