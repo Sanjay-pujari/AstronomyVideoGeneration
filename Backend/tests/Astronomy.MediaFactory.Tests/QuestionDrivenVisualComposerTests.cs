@@ -103,6 +103,12 @@ public sealed class QuestionDrivenVisualComposerTests
         => new(
             Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
             new QuestionDrivenImagePromptGenerator(),
+            new AstronomyInfographicRenderer(
+                new AstronomyBackgroundLayerRenderer(),
+                new CelestialObjectLayerRenderer(),
+                new SkyGuidanceLayerRenderer(),
+                new EducationalLayerRenderer(),
+                new AnnotationLayerRenderer()),
             NullLogger<QuestionDrivenVisualComposer>.Instance);
 
     private static async Task WriteInputFilesAsync(string workingDirectory)
@@ -188,7 +194,7 @@ public sealed class QuestionDrivenVisualComposerTests
         => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine");
 
     private static string BuildSceneApprovalPath(string workingDirectory)
-        => Path.Combine(BuildQuestionEnginePath(workingDirectory), "scene-approval");
+        => Path.Combine(BuildQuestionEnginePath(workingDirectory), "scene-approval-v3");
 
     private static string CreateWorkingDirectory()
     {

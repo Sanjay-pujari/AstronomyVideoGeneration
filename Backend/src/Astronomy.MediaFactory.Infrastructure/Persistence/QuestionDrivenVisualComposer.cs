@@ -157,22 +157,22 @@ public sealed class QuestionDrivenVisualComposer(
         var overlays = scene.QuestionType.ToLowerInvariant() switch
         {
             "what" => new[] { "Venus & Jupiter Tonight", "After sunset" },
-            "where" => new[] { "W", "Venus", "Jupiter", "Western horizon" },
+            "where" => new[] { "W", "Venus", "Jupiter", "Western horizon", "reference stars" },
             "when" => new[] { "Sunset", "7:23 PM IST", "After-sunset window" },
             "how" => new[] { "1 Find Venus", "2 Look nearby for Jupiter", "3 Face west" },
-            "why" => new[] { "Two bright planets close together", "Venus", "Jupiter" },
+            "why" => new[] { "Two bright planets close together", "brightness", "comparison", "close in same view", "Venus", "Jupiter" },
             "action" => new[] { "Step outside tonight", "Look west" },
             _ => new[] { scene.ViewerTakeaway }
         };
 
         var layers = scene.QuestionType.ToLowerInvariant() switch
         {
-            "what" => new[] { "background:cinematic twilight sky", "horizon:silhouette landscape", "celestial:local transparent Venus and Jupiter assets", "annotation:minimal magazine title", "review:metadata saved separately" },
-            "where" => new[] { "background:western sky map gradient", "horizon:measured western horizon line", "celestial:Venus/Jupiter plotted positions", "reference:subtle star grid", "direction:west marker", "annotation:integrated labels" },
-            "when" => new[] { "background:twilight-to-night gradient", "horizon:sunset band", "time:sunset marker", "time:7:23 PM IST marker", "direction:after-sunset viewing window", "annotation:small timeline labels" },
-            "how" => new[] { "background:observation guide sky", "horizon:west reference", "celestial:Venus/Jupiter assets", "direction:arrows Venus to Jupiter", "steps:three small integrated step labels" },
-            "why" => new[] { "background:deep significance sky", "celestial:close bright planetary pairing", "comparison:Venus/Jupiter size-brightness comparison", "direction:closeness bracket", "annotation:short significance note" },
-            "action" => new[] { "background:peaceful evening sky poster", "horizon:quiet landscape", "celestial:Venus and Jupiter together", "annotation:minimal closing CTA" },
+            "what" => new[] { "background:cinematic twilight poster sky", "horizon:desert dunes silhouette", "celestial:local transparent Venus and Jupiter assets", "annotation:minimal magazine title", "twilight:golden western glow", "review:metadata saved separately" },
+            "where" => new[] { "background:western observation chart gradient", "horizon:measured western horizon line", "celestial:Venus/Jupiter plotted positions", "reference:subtle star grid", "reference:constellation placeholder", "direction:west marker", "annotation:integrated labels" },
+            "when" => new[] { "background:twilight-to-night timeline gradient", "horizon:sunset band", "time:sunset marker", "time:7:23 PM IST marker", "direction:after-sunset viewing window", "annotation:small timeline labels" },
+            "how" => new[] { "background:polished observation guide sky", "horizon:west reference", "celestial:Venus/Jupiter assets", "direction:arrows Venus to Jupiter", "steps:three small integrated step labels", "layout:clean spotting-frame guide" },
+            "why" => new[] { "background:deep significance sky", "celestial:close bright planetary pairing", "comparison:brightness scale", "comparison:Venus/Jupiter comparison", "direction:closeness bracket", "annotation:short significance note" },
+            "action" => new[] { "background:cinematic closing poster sky", "horizon:quiet desert landscape", "celestial:Venus and Jupiter together", "twilight:golden western glow", "annotation:minimal closing CTA" },
             _ => new[] { "background:sky", "programmatic:overlays" }
         };
 
@@ -193,7 +193,7 @@ public sealed class QuestionDrivenVisualComposer(
         if (EstimateTextCoverage(spec) > 0.25) issues.Add("large text box covers more than 25% of image.");
         if (spec.ProgrammaticLayers.Any(layer => layer.Contains("card", StringComparison.OrdinalIgnoreCase) || layer.Contains("slide", StringComparison.OrdinalIgnoreCase))) issues.Add("image looks like a card/slide.");
         if (!venusAssetFound || !jupiterAssetFound) issues.Add("local transparent Venus/Jupiter assets are missing.");
-        if (spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && !viewerText.Contains("close", StringComparison.OrdinalIgnoreCase)) issues.Add("Why scene does not emphasize the close bright planetary pairing.");
+        if (spec.QuestionType.Equals("Why", StringComparison.OrdinalIgnoreCase) && (!viewerText.Contains("close", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("brightness", StringComparison.OrdinalIgnoreCase) || !viewerText.Contains("comparison", StringComparison.OrdinalIgnoreCase))) issues.Add("Why scene does not emphasize brightness, comparison, and the close bright planetary pairing.");
         if (!srt.Contains(" --> ", StringComparison.Ordinal)) issues.Add("SRT is not in timed-caption format.");
         var approved = issues.Count == 0;
         var textCoveragePercent = (int)Math.Round(EstimateTextCoverage(spec) * 100);
@@ -218,10 +218,10 @@ public sealed class QuestionDrivenVisualComposer(
     private static QuestionDrivenProgrammaticOverlayPlan BuildOverlayPlan(QuestionDrivenVisualSpec spec) => spec.QuestionType.ToLowerInvariant() switch
     {
         "what" => new("Venus & Jupiter Tonight", "After sunset", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], [], [], []),
-        "where" => new("Where to Look", "Face the western horizon", ["West", "Venus", "Jupiter", "Horizon"], ["western horizon altitude guide"], ["Venus", "Jupiter"], ["West"], [], []),
+        "where" => new("Where to Look", "Face the western horizon", ["West", "Venus", "Jupiter", "Horizon", "reference stars"], ["western horizon altitude guide"], ["Venus", "Jupiter"], ["West"], [], []),
         "when" => new("Best Time Tonight", "After sunset", ["Sunset", "Viewing window"], [], [], [], ["7:23 PM IST"], []),
         "how" => new("How to Find It", "Use Venus as your anchor", ["Venus", "Jupiter", "West"], ["arrow from Venus to Jupiter", "arrow toward western horizon"], ["Venus", "Jupiter"], ["West"], [], ["Find Venus", "Look nearby for Jupiter", "Face west"]),
-        "why" => new("Why It Matters", "Two bright planets close together", ["Venus", "Jupiter"], ["closeness bracket"], ["Venus", "Jupiter"], [], [], []),
+        "why" => new("Why It Matters", "Two bright planets close together", ["Venus", "Jupiter", "brightness", "comparison", "close"], ["closeness bracket", "brightness comparison"], ["Venus", "Jupiter"], [], [], []),
         "action" => new("Step Outside Tonight", "Look west", ["Venus", "Jupiter"], [], ["Venus", "Jupiter"], ["West"], [], []),
         _ => new(spec.ViewerTakeaway, string.Empty, [], [], [], [], [], [])
     };
