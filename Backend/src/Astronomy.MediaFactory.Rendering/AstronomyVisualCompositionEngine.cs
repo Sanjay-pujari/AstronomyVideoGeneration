@@ -167,18 +167,19 @@ public static class AstronomyVisualCompositionEngine
     private static void DrawSmoothTwilightSky(IImageProcessingContext ctx, int width, int height, string mood)
     {
         var warmHorizon = mood.Contains("warm", StringComparison.OrdinalIgnoreCase) || mood.Contains("hero", StringComparison.OrdinalIgnoreCase);
-        var top = warmHorizon ? Color.ParseHex("#030616") : Color.ParseHex("#020615");
-        var mid = warmHorizon ? Color.ParseHex("#18224A") : Color.ParseHex("#0B1A3B");
-        var horizon = warmHorizon ? Color.ParseHex("#D9864A") : Color.ParseHex("#6A4E8E");
+        var top = warmHorizon ? Color.ParseHex("#020515") : Color.ParseHex("#020615");
+        var mid = warmHorizon ? Color.ParseHex("#141F45") : Color.ParseHex("#0B1A3B");
+        var horizon = warmHorizon ? Color.ParseHex("#C97845") : Color.ParseHex("#6A4E8E");
         ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, height), GradientRepetitionMode.None,
-            new ColorStop(0f, top.WithAlpha(0.96f)),
-            new ColorStop(0.50f, mid.WithAlpha(0.88f)),
-            new ColorStop(0.82f, horizon.WithAlpha(0.55f)),
-            new ColorStop(1f, Color.ParseHex("#15101B").WithAlpha(0.92f))),
+            new ColorStop(0f, top.WithAlpha(0.98f)),
+            new ColorStop(0.46f, mid.WithAlpha(0.90f)),
+            new ColorStop(0.77f, horizon.WithAlpha(0.46f)),
+            new ColorStop(1f, Color.ParseHex("#100D18").WithAlpha(0.95f))),
             new RectangleF(0, 0, width, height));
 
-        DrawGlow(ctx, new PointF(width * 0.25f, height * 0.78f), width * 0.55f, height * 0.18f, Color.ParseHex("#F6A45F"), 0.055f, 12);
-        DrawGlow(ctx, new PointF(width * 0.72f, height * 0.36f), width * 0.44f, height * 0.24f, Color.ParseHex("#83B7FF"), 0.030f, 10);
+        DrawGlow(ctx, new PointF(width * 0.31f, height * 0.80f), width * 0.70f, height * 0.16f, Color.ParseHex("#F0A45D"), 0.045f, 14);
+        DrawGlow(ctx, new PointF(width * 0.70f, height * 0.36f), width * 0.44f, height * 0.24f, Color.ParseHex("#83B7FF"), 0.026f, 10);
+        DrawGlow(ctx, new PointF(width * 0.52f, height * 0.86f), width * 0.86f, height * 0.055f, Color.ParseHex("#F6C177"), 0.038f, 12);
     }
 
     private static void DrawStars(IImageProcessingContext ctx, int width, int height, int requestedCount)
@@ -249,6 +250,7 @@ public static class AstronomyVisualCompositionEngine
         if (count == 0) return;
 
         var placements = BuildPlanetPlacements(width, height, count);
+        DrawPlanetGroupAtmosphere(ctx, placements.Take(Math.Min(count, placements.Count)).ToArray());
         for (var i = 0; i < count && i < placements.Count; i++)
         {
             var placement = placements[i];
@@ -267,20 +269,22 @@ public static class AstronomyVisualCompositionEngine
                 DrawProceduralPlanet(ctx, placement, asset.Label);
             }
 
-            var font = ResolveFont(Math.Max(14f, width * 0.014f), FontStyle.Bold);
-            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(placement.X, placement.Bottom + 8), WrappingLength = Math.Max(140, placement.Width * 2.2f) }, asset.Label, Color.ParseHex("#F5E7C6").WithAlpha(0.88f));
+            var labelScale = height > width ? 0.042f : width == height ? 0.036f : 0.047f;
+            var font = ResolveFont(Math.Max(28f, Math.Min(width, height) * labelScale), FontStyle.Regular);
+            var labelOrigin = new PointF(placement.X + placement.Width * 0.08f, placement.Bottom + Math.Max(10f, height * 0.008f));
+            ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(labelOrigin.X + 2, labelOrigin.Y + 2), WrappingLength = Math.Max(150, placement.Width * 2.3f) }, asset.Label, Color.Black.WithAlpha(0.48f));
+            ctx.DrawText(new RichTextOptions(font) { Origin = labelOrigin, WrappingLength = Math.Max(150, placement.Width * 2.3f) }, asset.Label, Color.ParseHex("#F5E7C6").WithAlpha(0.76f));
         }
     }
 
     private static List<RectangleF> BuildPlanetPlacements(int width, int height, int count)
     {
-        var safe = SafeContentBounds(width, height);
         if (height > width)
         {
             return [
-                new RectangleF(safe.X + safe.Width * 0.18f, height * 0.31f, width * 0.22f, width * 0.22f),
-                new RectangleF(safe.X + safe.Width * 0.58f, height * 0.40f, width * 0.16f, width * 0.16f),
-                new RectangleF(safe.X + safe.Width * 0.45f, height * 0.23f, width * 0.10f, width * 0.10f)
+                CenteredPlanet(width * 0.42f, height * 0.36f, width * 0.22f),
+                CenteredPlanet(width * 0.59f, height * 0.43f, width * 0.16f),
+                CenteredPlanet(width * 0.52f, height * 0.28f, width * 0.10f)
             ];
         }
 
@@ -288,22 +292,34 @@ public static class AstronomyVisualCompositionEngine
         {
             return count switch
             {
-                1 => [new RectangleF(safe.X + safe.Width * 0.42f, height * 0.40f, width * 0.18f, width * 0.18f)],
-                2 => [new RectangleF(safe.X + safe.Width * 0.33f, height * 0.40f, width * 0.16f, width * 0.16f), new RectangleF(safe.X + safe.Width * 0.56f, height * 0.47f, width * 0.12f, width * 0.12f)],
-                _ => [new RectangleF(safe.X + safe.Width * 0.28f, height * 0.39f, width * 0.15f, width * 0.15f), new RectangleF(safe.X + safe.Width * 0.52f, height * 0.47f, width * 0.11f, width * 0.11f), new RectangleF(safe.X + safe.Width * 0.70f, height * 0.40f, width * 0.07f, width * 0.07f)]
+                1 => [CenteredPlanet(width * 0.52f, height * 0.43f, width * 0.18f)],
+                2 => [CenteredPlanet(width * 0.48f, height * 0.42f, width * 0.16f), CenteredPlanet(width * 0.64f, height * 0.49f, width * 0.12f)],
+                _ => [CenteredPlanet(width * 0.44f, height * 0.42f, width * 0.15f), CenteredPlanet(width * 0.60f, height * 0.49f, width * 0.11f), CenteredPlanet(width * 0.73f, height * 0.42f, width * 0.07f)]
             };
         }
 
         return count switch
         {
-            1 => [CenteredPlanet(width * 0.62f, height * 0.42f, width * 0.165f)],
-            2 => [CenteredPlanet(width * 0.61f, height * 0.42f, width * 0.12f), CenteredPlanet(width * 0.72f, height * 0.45f, width * 0.083f)],
-            _ => [CenteredPlanet(width * 0.59f, height * 0.42f, width * 0.12f), CenteredPlanet(width * 0.72f, height * 0.45f, width * 0.087f), CenteredPlanet(width * 0.79f, height * 0.40f, width * 0.050f)]
+            1 => [CenteredPlanet(width * 0.70f, height * 0.42f, width * 0.155f)],
+            2 => [CenteredPlanet(width * 0.66f, height * 0.43f, width * 0.115f), CenteredPlanet(width * 0.74f, height * 0.405f, width * 0.080f)],
+            _ => [CenteredPlanet(width * 0.64f, height * 0.43f, width * 0.115f), CenteredPlanet(width * 0.73f, height * 0.405f, width * 0.084f), CenteredPlanet(width * 0.80f, height * 0.39f, width * 0.048f)]
         };
     }
 
     private static RectangleF CenteredPlanet(float centerX, float centerY, float size)
         => new(centerX - size / 2f, centerY - size / 2f, size, size);
+
+    private static void DrawPlanetGroupAtmosphere(IImageProcessingContext ctx, IReadOnlyList<RectangleF> placements)
+    {
+        if (placements.Count == 0) return;
+        var left = placements.Min(p => p.Left);
+        var right = placements.Max(p => p.Right);
+        var top = placements.Min(p => p.Top);
+        var bottom = placements.Max(p => p.Bottom);
+        var center = new PointF((left + right) / 2f, (top + bottom) / 2f);
+        DrawGlow(ctx, center, Math.Max(90f, (right - left) * 0.82f), Math.Max(70f, (bottom - top) * 1.10f), Color.ParseHex("#CFE7FF"), 0.070f, 12);
+        DrawGlow(ctx, new PointF(center.X, center.Y + (bottom - top) * 0.16f), Math.Max(80f, (right - left) * 0.68f), Math.Max(54f, (bottom - top) * 0.72f), Color.ParseHex("#FFE2A7"), 0.035f, 10);
+    }
 
     private static void DrawProceduralPlanet(IImageProcessingContext ctx, RectangleF bounds, string label)
     {
@@ -346,12 +362,12 @@ public static class AstronomyVisualCompositionEngine
     {
         var isPortrait = height > width;
         var isSquare = width == height;
-        var titleFont = ResolveFont(isPortrait ? 72f : isSquare ? 60f : 52f, FontStyle.Bold);
-        var subtitleFont = ResolveFont(isPortrait ? 30f : 26f, FontStyle.Bold);
-        var bodyFont = ResolveFont(isPortrait ? 34f : isSquare ? 28f : 25f, FontStyle.Bold);
-        var landscapeCtaFont = ResolveFont(31f, FontStyle.Bold);
-        var landscapeDirectionFont = ResolveFont(31f, FontStyle.Bold);
-        var landscapeTimingFont = ResolveFont(23f, FontStyle.Bold);
+        var titleFont = ResolveFont(isPortrait ? 76f : isSquare ? 64f : 56f, FontStyle.Bold);
+        var subtitleFont = ResolveFont(isPortrait ? 30f : 26f, FontStyle.Regular);
+        var bodyFont = ResolveFont(isPortrait ? 50f : isSquare ? 42f : 36f, FontStyle.Bold);
+        var landscapeCtaFont = ResolveFont(36f, FontStyle.Bold);
+        var landscapeDirectionFont = ResolveFont(40f, FontStyle.Bold);
+        var landscapeTimingFont = ResolveFont(38f, FontStyle.Bold);
 
         var textBlocks = BuildHeroTemplateTextBlocks(width, height, title, subtitle, labels);
         foreach (var block in textBlocks)
@@ -370,6 +386,7 @@ public static class AstronomyVisualCompositionEngine
                 "Hook" => Color.White,
                 "Subtitle" => Color.ParseHex("#FFD48A"),
                 "Direction" => Color.ParseHex("#FFD48A"),
+                "Timing" => Color.ParseHex("#BFE6FF"),
                 "CTA" => Color.ParseHex("#8FD2FF"),
                 _ => Color.ParseHex("#CBE8FF")
             };
@@ -382,17 +399,19 @@ public static class AstronomyVisualCompositionEngine
 
     private static void DrawHeroTextBackdrop(IImageProcessingContext ctx, RectangleF textBounds, string blockName)
     {
-        var padX = blockName is "Hook" ? 18f : 14f;
-        var padY = blockName is "Hook" ? 10f : 8f;
-        var backdrop = new RectangularPolygon(textBounds.X - padX, textBounds.Y - padY, textBounds.Width + padX * 2f, textBounds.Height + padY * 2f);
+        var center = new PointF(textBounds.X + textBounds.Width * 0.46f, textBounds.Y + textBounds.Height * 0.58f);
+        var radiusX = Math.Max(120f, textBounds.Width * (blockName is "Hook" ? 0.54f : 0.46f));
+        var radiusY = Math.Max(34f, textBounds.Height * (blockName is "Hook" ? 0.90f : 0.82f));
         var alpha = blockName switch
         {
-            "Hook" => 0.30f,
-            "CTA" => 0.34f,
-            "Direction" => 0.30f,
-            _ => 0.24f
+            "Hook" => 0.145f,
+            "CTA" => 0.135f,
+            "Direction" => 0.120f,
+            _ => 0.105f
         };
-        ctx.Fill(Color.Black.WithAlpha(alpha), backdrop);
+        DrawGlow(ctx, center, radiusX, radiusY, Color.Black, alpha, 8);
+        if (blockName is "Hook" or "CTA")
+            DrawGlow(ctx, new PointF(center.X, center.Y + radiusY * 0.18f), radiusX * 0.72f, radiusY * 0.44f, Color.ParseHex("#8FD2FF"), 0.028f, 6);
     }
 
     private static IReadOnlyList<(string Name, string Text, RectangleF Bounds)> BuildHeroTemplateTextBlocks(int width, int height, string title, string subtitle, IReadOnlyList<AstronomyVisualLabel> labels)
@@ -418,21 +437,21 @@ public static class AstronomyVisualCompositionEngine
     private static RectangleF HeroTemplateBounds(int width, int height, string blockName)
         => (width, height, blockName) switch
         {
-            (1280, 720, "Hook") => new RectangleF(80, 55, 660, 74),
-            (1280, 720, "Subtitle") => new RectangleF(80, 130, 520, 34),
-            (1280, 720, "Timing") => new RectangleF(80, 560, 270, 42),
-            (1280, 720, "CTA") => new RectangleF(395, 574, 490, 50),
-            (1280, 720, "Direction") => new RectangleF(990, 545, 220, 50),
-            (1080, 1080, "Hook") => new RectangleF(70, 80, 700, 78),
-            (1080, 1080, "Subtitle") => new RectangleF(70, 165, 700, 38),
-            (1080, 1080, "Timing") => new RectangleF(70, 780, 280, 48),
-            (1080, 1080, "Direction") => new RectangleF(720, 780, 240, 48),
-            (1080, 1080, "CTA") => new RectangleF(70, 900, 800, 54),
-            (1080, 1920, "Hook") => new RectangleF(70, 110, 820, 94),
-            (1080, 1920, "Subtitle") => new RectangleF(70, 210, 820, 44),
-            (1080, 1920, "Timing") => new RectangleF(70, 1250, 300, 58),
-            (1080, 1920, "Direction") => new RectangleF(650, 1250, 260, 58),
-            (1080, 1920, "CTA") => new RectangleF(70, 1550, 850, 64),
+            (1280, 720, "Hook") => new RectangleF(80, 54, 690, 82),
+            (1280, 720, "Subtitle") => new RectangleF(80, 142, 520, 34),
+            (1280, 720, "Timing") => new RectangleF(80, 552, 305, 48),
+            (1280, 720, "CTA") => new RectangleF(420, 568, 500, 52),
+            (1280, 720, "Direction") => new RectangleF(980, 540, 240, 54),
+            (1080, 1080, "Hook") => new RectangleF(70, 82, 760, 84),
+            (1080, 1080, "Subtitle") => new RectangleF(70, 178, 700, 38),
+            (1080, 1080, "Timing") => new RectangleF(70, 790, 315, 52),
+            (1080, 1080, "Direction") => new RectangleF(700, 790, 270, 52),
+            (1080, 1080, "CTA") => new RectangleF(70, 908, 840, 58),
+            (1080, 1920, "Hook") => new RectangleF(70, 130, 860, 100),
+            (1080, 1920, "Subtitle") => new RectangleF(70, 252, 820, 44),
+            (1080, 1920, "Timing") => new RectangleF(70, 1300, 350, 64),
+            (1080, 1920, "Direction") => new RectangleF(620, 1300, 300, 64),
+            (1080, 1920, "CTA") => new RectangleF(70, 1608, 880, 70),
             _ => RectangleF.Empty
         };
 
