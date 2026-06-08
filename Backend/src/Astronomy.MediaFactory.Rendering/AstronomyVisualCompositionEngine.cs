@@ -296,11 +296,14 @@ public static class AstronomyVisualCompositionEngine
 
         return count switch
         {
-            1 => [new RectangleF(width * 0.56f, height * 0.30f, width * 0.18f, width * 0.18f)],
-            2 => [new RectangleF(width * 0.52f, height * 0.31f, width * 0.13f, width * 0.13f), new RectangleF(width * 0.68f, height * 0.40f, width * 0.09f, width * 0.09f)],
-            _ => [new RectangleF(width * 0.48f, height * 0.32f, width * 0.13f, width * 0.13f), new RectangleF(width * 0.64f, height * 0.41f, width * 0.095f, width * 0.095f), new RectangleF(width * 0.78f, height * 0.34f, width * 0.055f, width * 0.055f)]
+            1 => [CenteredPlanet(width * 0.62f, height * 0.42f, width * 0.165f)],
+            2 => [CenteredPlanet(width * 0.61f, height * 0.42f, width * 0.12f), CenteredPlanet(width * 0.72f, height * 0.45f, width * 0.083f)],
+            _ => [CenteredPlanet(width * 0.59f, height * 0.42f, width * 0.12f), CenteredPlanet(width * 0.72f, height * 0.45f, width * 0.087f), CenteredPlanet(width * 0.79f, height * 0.40f, width * 0.050f)]
         };
     }
+
+    private static RectangleF CenteredPlanet(float centerX, float centerY, float size)
+        => new(centerX - size / 2f, centerY - size / 2f, size, size);
 
     private static void DrawProceduralPlanet(IImageProcessingContext ctx, RectangleF bounds, string label)
     {
@@ -346,11 +349,22 @@ public static class AstronomyVisualCompositionEngine
         var titleFont = ResolveFont(isPortrait ? 72f : isSquare ? 60f : 52f, FontStyle.Bold);
         var subtitleFont = ResolveFont(isPortrait ? 30f : 26f, FontStyle.Bold);
         var bodyFont = ResolveFont(isPortrait ? 34f : isSquare ? 28f : 25f, FontStyle.Bold);
+        var landscapeCtaFont = ResolveFont(31f, FontStyle.Bold);
+        var landscapeDirectionFont = ResolveFont(31f, FontStyle.Bold);
+        var landscapeTimingFont = ResolveFont(23f, FontStyle.Bold);
 
         var textBlocks = BuildHeroTemplateTextBlocks(width, height, title, subtitle, labels);
         foreach (var block in textBlocks)
         {
-            var font = block.Name is "Hook" ? titleFont : block.Name is "Subtitle" ? subtitleFont : bodyFont;
+            var font = block.Name switch
+            {
+                "Hook" => titleFont,
+                "Subtitle" => subtitleFont,
+                "CTA" when !isPortrait && !isSquare => landscapeCtaFont,
+                "Direction" when !isPortrait && !isSquare => landscapeDirectionFont,
+                "Timing" when !isPortrait && !isSquare => landscapeTimingFont,
+                _ => bodyFont
+            };
             var color = block.Name switch
             {
                 "Hook" => Color.White,
@@ -359,10 +373,26 @@ public static class AstronomyVisualCompositionEngine
                 "CTA" => Color.ParseHex("#8FD2FF"),
                 _ => Color.ParseHex("#CBE8FF")
             };
+            DrawHeroTextBackdrop(ctx, block.Bounds, block.Name);
             var options = new RichTextOptions(font) { Origin = new PointF(block.Bounds.X, block.Bounds.Y), WrappingLength = block.Bounds.Width };
             ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(block.Bounds.X + 3, block.Bounds.Y + 3) }, block.Text, Color.Black.WithAlpha(0.72f));
             ctx.DrawText(options, block.Text, color);
         }
+    }
+
+    private static void DrawHeroTextBackdrop(IImageProcessingContext ctx, RectangleF textBounds, string blockName)
+    {
+        var padX = blockName is "Hook" ? 18f : 14f;
+        var padY = blockName is "Hook" ? 10f : 8f;
+        var backdrop = new RectangularPolygon(textBounds.X - padX, textBounds.Y - padY, textBounds.Width + padX * 2f, textBounds.Height + padY * 2f);
+        var alpha = blockName switch
+        {
+            "Hook" => 0.30f,
+            "CTA" => 0.34f,
+            "Direction" => 0.30f,
+            _ => 0.24f
+        };
+        ctx.Fill(Color.Black.WithAlpha(alpha), backdrop);
     }
 
     private static IReadOnlyList<(string Name, string Text, RectangleF Bounds)> BuildHeroTemplateTextBlocks(int width, int height, string title, string subtitle, IReadOnlyList<AstronomyVisualLabel> labels)
@@ -388,11 +418,11 @@ public static class AstronomyVisualCompositionEngine
     private static RectangleF HeroTemplateBounds(int width, int height, string blockName)
         => (width, height, blockName) switch
         {
-            (1280, 720, "Hook") => new RectangleF(80, 55, 520, 72),
+            (1280, 720, "Hook") => new RectangleF(80, 55, 660, 74),
             (1280, 720, "Subtitle") => new RectangleF(80, 130, 520, 34),
-            (1280, 720, "Timing") => new RectangleF(80, 570, 270, 42),
-            (1280, 720, "CTA") => new RectangleF(420, 610, 500, 48),
-            (1280, 720, "Direction") => new RectangleF(980, 555, 220, 48),
+            (1280, 720, "Timing") => new RectangleF(80, 560, 270, 42),
+            (1280, 720, "CTA") => new RectangleF(395, 574, 490, 50),
+            (1280, 720, "Direction") => new RectangleF(990, 545, 220, 50),
             (1080, 1080, "Hook") => new RectangleF(70, 80, 700, 78),
             (1080, 1080, "Subtitle") => new RectangleF(70, 165, 700, 38),
             (1080, 1080, "Timing") => new RectangleF(70, 780, 280, 48),
