@@ -100,6 +100,17 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Empty(result.GeneratedFiles);
         Assert.Empty(result.Warnings);
         Assert.Equal("TWO BRIGHT PLANETS TOGETHER", result.HeroStory.HeroHook);
+        Assert.Equal(result.HookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).First().Hook, result.SelectedHook);
+        Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
+        Assert.True(result.HookScores.Count >= 5);
+        Assert.NotEmpty(result.AlternativeHooks);
+        Assert.Equal(result.HookScores.Count - 1, result.AlternativeHooks.Count);
+        AssertRequiredHookCandidates(result.HookScores);
+        AssertHookScoresAreValidAndSorted(result.HookScores);
+        Assert.DoesNotContain(result.SelectedHook, result.AlternativeHooks);
+        Assert.Equal(
+            result.HookScores.Skip(1).Select(score => score.Hook),
+            result.AlternativeHooks);
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-asset-story.json")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-asset-blueprint.json")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-review.json")));
@@ -126,6 +137,11 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Single(result.GeneratedFiles);
         Assert.Contains(storyPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.True(File.Exists(storyPath));
+        Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
+        Assert.True(result.HookScores.Count >= 5);
+        Assert.NotEmpty(result.AlternativeHooks);
+        AssertRequiredHookCandidates(result.HookScores);
+        AssertHookScoresAreValidAndSorted(result.HookScores);
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-asset-blueprint.json")));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-review.json")));
     }
@@ -153,7 +169,9 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
         Assert.Contains("DON'T MISS THIS TONIGHT", result.AlternativeHooks);
         Assert.True(result.HookScores.Count >= 5);
-        Assert.All(result.HookScores, score => Assert.True(score.TotalScore > 0));
+        Assert.NotEmpty(result.AlternativeHooks);
+        AssertRequiredHookCandidates(result.HookScores);
+        AssertHookScoresAreValidAndSorted(result.HookScores);
         Assert.Equal("", result.HeroBlueprint.LayoutStyle);
         Assert.Empty(result.PlatformVariants);
         Assert.Equal(0, result.ReviewScores.HeroAssetReadinessScore);
@@ -188,6 +206,11 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.Single(result.GeneratedFiles);
         Assert.Contains(storyPath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.True(File.Exists(storyPath));
+        Assert.Equal("LOOK WEST TONIGHT", result.SelectedHook);
+        Assert.True(result.HookScores.Count >= 5);
+        Assert.NotEmpty(result.AlternativeHooks);
+        AssertRequiredHookCandidates(result.HookScores);
+        AssertHookScoresAreValidAndSorted(result.HookScores);
         Assert.False(File.Exists(blueprintPath));
         Assert.False(File.Exists(reviewPath));
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-landscape.png")));
@@ -195,6 +218,44 @@ public sealed class HeroAssetStoryGeneratorTests
         Assert.False(File.Exists(Path.Combine(heroAssetsRoot, "hero-portrait.png")));
 
     }
+
+    private static void AssertRequiredHookCandidates(IReadOnlyList<HeroHookScoreDto> hookScores)
+    {
+        var hooks = hookScores.Select(score => score.Hook).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("LOOK WEST TONIGHT", hooks);
+        Assert.Contains("DON'T MISS THIS TONIGHT", hooks);
+        Assert.Contains("TWO BRIGHT PLANETS TOGETHER", hooks);
+        Assert.Contains("LOOK UP AFTER SUNSET", hooks);
+        Assert.Contains("EVENING SKY HIGHLIGHT", hooks);
+    }
+
+    private static void AssertHookScoresAreValidAndSorted(IReadOnlyList<HeroHookScoreDto> hookScores)
+    {
+        Assert.All(hookScores, score =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(score.Hook));
+            Assert.InRange(score.ScrollStoppingScore, 0, 100);
+            Assert.InRange(score.ClickabilityScore, 0, 100);
+            Assert.InRange(score.ShareabilityScore, 0, 100);
+            Assert.InRange(score.UnderstandabilityScore, 0, 100);
+            Assert.True(score.TotalScore > 0);
+            Assert.Equal(
+                CalculateExpectedTotalScore(score.ScrollStoppingScore, score.ClickabilityScore, score.ShareabilityScore, score.UnderstandabilityScore),
+                score.TotalScore);
+        });
+
+        Assert.Equal(
+            hookScores.OrderByDescending(score => score.TotalScore).ThenBy(score => score.Hook).Select(score => score.Hook),
+            hookScores.Select(score => score.Hook));
+    }
+
+    private static int CalculateExpectedTotalScore(int scrollStoppingScore, int clickabilityScore, int shareabilityScore, int understandabilityScore)
+        => (int)Math.Round(
+            (scrollStoppingScore * 0.35)
+            + (clickabilityScore * 0.35)
+            + (shareabilityScore * 0.15)
+            + (understandabilityScore * 0.15),
+            MidpointRounding.AwayFromZero);
 
     private static HeroAssetStoryGenerator CreateGenerator(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }), NullLogger<HeroAssetStoryGenerator>.Instance);
