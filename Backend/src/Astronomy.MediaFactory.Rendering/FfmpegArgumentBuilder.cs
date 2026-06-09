@@ -14,7 +14,7 @@ public sealed class FfmpegArgumentBuilder
             ? $"scale={width}:{height}:flags={preset.ScaleFlags}:force_original_aspect_ratio=increase,crop={width}:{height},pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
             : $"scale={width}:{height}:flags={preset.ScaleFlags}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2";
         var hasMusic = !string.IsNullOrWhiteSpace(options.BackgroundMusicPath) && File.Exists(options.BackgroundMusicPath);
-        var audioFilter = hasMusic ? "-filter_complex \"[2:a]volume=0.2[music];[1:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]\" -map 0:v:0 -map \"[aout]\"" : string.Empty;
+        var audioFilter = hasMusic ? "-filter_complex \"[2:a]volume=0.20[music];[1:a][music]amix=inputs=2:duration=first:normalize=0[aout]\" -map 0:v:0 -map \"[aout]\"" : string.Empty;
 
         return string.Join(' ',
             "-y",

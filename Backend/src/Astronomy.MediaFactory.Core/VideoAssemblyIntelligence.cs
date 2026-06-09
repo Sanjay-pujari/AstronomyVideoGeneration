@@ -31,7 +31,7 @@ public sealed class VideoAssemblyGenerationRequest
 
     public string MusicMood { get; set; } = "WonderCuriosity";
 
-    public int MusicLevelPercent { get; set; } = 12;
+    public int MusicLevelPercent { get; set; } = 0;
 
     public bool DuckMusicUnderNarration { get; set; } = true;
 
@@ -89,7 +89,12 @@ public sealed record VideoAssemblyGenerationResponse(
     int MusicLevelPercent = 0,
     bool BackgroundMusicRequested = false,
     string BackgroundMusicSourcePath = "",
-    bool DuckMusicUnderNarration = false);
+    bool DuckMusicUnderNarration = false,
+    int RequestedMusicLevelPercent = 0,
+    int EffectiveMusicLevelPercent = 0,
+    double MusicVolumeMultiplier = 0,
+    string FfmpegAudioFilter = "",
+    bool MusicMixApplied = false);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -305,4 +310,9 @@ public sealed record VideoRenderValidationDto(
     bool FinalAudioContainsMusic = false,
     bool RenderSucceeded = false,
     string BackgroundMusicSourcePath = "",
+    int RequestedMusicLevelPercent = 0,
+    int EffectiveMusicLevelPercent = 0,
+    double MusicVolumeMultiplier = 0,
+    string FfmpegAudioFilter = "",
+    bool MusicMixApplied = false,
     IReadOnlyList<string>? Warnings = null);

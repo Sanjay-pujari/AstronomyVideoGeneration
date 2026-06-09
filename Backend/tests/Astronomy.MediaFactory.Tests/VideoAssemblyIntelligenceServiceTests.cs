@@ -434,8 +434,8 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             Phase = "Render",
             DryRun = true,
             BackgroundMusic = true,
-            MusicLevelPercent = 50,
-            DuckMusicUnderNarration = true
+            MusicLevelPercent = 30,
+            DuckMusicUnderNarration = false
         }, CancellationToken.None);
 
         Assert.Equal("Render", result.PhaseExecuted);
@@ -446,6 +446,12 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-render-validation.json").Replace('\\', '/'), result.VideoRenderValidationPath);
         Assert.True(result.RenderPolishScore >= 90);
         Assert.True(result.VideoFinalReadinessScore >= 95);
+        Assert.Equal(30, result.RequestedMusicLevelPercent);
+        Assert.Equal(30, result.EffectiveMusicLevelPercent);
+        Assert.Equal(0.30, result.MusicVolumeMultiplier);
+        Assert.False(result.DuckMusicUnderNarration);
+        Assert.Equal("[2:a]volume=0.30[music];[1:a][music]amix=inputs=2:duration=first:normalize=0[aout]", result.FfmpegAudioFilter);
+        Assert.False(result.MusicMixApplied);
         Assert.Empty(result.GeneratedFiles);
         Assert.False(File.Exists(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-render-validation.json")));
     }
