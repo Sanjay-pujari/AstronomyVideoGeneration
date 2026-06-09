@@ -18,11 +18,56 @@ public sealed class ThumbnailAssetGenerationRequest
 public sealed record ThumbnailAssetGenerationResponse(
     string PhaseRequested,
     string PhaseExecuted,
-    bool ThumbnailIntelligenceGenerated,
-    string ThumbnailIntelligencePath,
-    string SelectedThumbnailHook,
-    int ThumbnailReadinessScore,
-    IReadOnlyList<string> GeneratedFiles);
+    bool ThumbnailCompositionGenerated,
+    string ThumbnailCompositionPath,
+    int ThumbnailCompositionReadinessScore,
+    IReadOnlyList<string> GeneratedFiles,
+    bool ThumbnailIntelligenceGenerated = false,
+    string ThumbnailIntelligencePath = "",
+    string SelectedThumbnailHook = "",
+    int ThumbnailReadinessScore = 0);
+
+
+public sealed record ThumbnailCompositionModelDto(
+    string EventId,
+    string RegionId,
+    string Language,
+    string PrimaryHook,
+    string SecondaryText,
+    string MicroText,
+    string Emotion,
+    string ClickIntent,
+    string LayoutStyle,
+    string VisualFocus,
+    ThumbnailCompositionBlocksDto CompositionBlocks,
+    IReadOnlyList<ThumbnailCompositionPlatformVariantDto> PlatformVariants,
+    ThumbnailCompositionValidationDto Validation,
+    DateTimeOffset GeneratedUtc);
+
+public sealed record ThumbnailCompositionBlocksDto(
+    ThumbnailCompositionTextBlockDto HookBlock,
+    ThumbnailCompositionVisualBlockDto VisualBlock,
+    ThumbnailCompositionTextBlockDto SecondaryTextBlock,
+    ThumbnailCompositionTextBlockDto MicroTextBlock);
+
+public sealed record ThumbnailCompositionTextBlockDto(
+    string Text,
+    int Priority);
+
+public sealed record ThumbnailCompositionVisualBlockDto(
+    string Source,
+    int Priority);
+
+public sealed record ThumbnailCompositionPlatformVariantDto(
+    string Variant,
+    string Size,
+    string Purpose);
+
+public sealed record ThumbnailCompositionValidationDto(
+    bool HookPresent,
+    bool VisualFocusPresent,
+    int TextElementCount,
+    int ThumbnailCompositionReadinessScore);
 
 public sealed record ThumbnailIntelligenceDto(
     string EventId,

@@ -13,11 +13,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string GoldenLanguage = "en";
     private const string HeroAssetsDirectoryName = "hero-assets";
     private const string ThumbnailAssetsDirectoryName = "thumbnail-assets";
+    private const string QuestionEngineDirectoryName = "question-engine";
+    private const string SceneApprovalDirectoryName = "scene-approval-v3";
     private const string HeroAssetStoryFileName = "hero-asset-story.json";
     private const string LegacyHeroStoryFileName = "hero-story.json";
     private const string HeroSceneManifestFileName = "hero-scene-manifest.json";
     private const string HeroCompositionModelFileName = "hero-composition-model.json";
     private const string ThumbnailIntelligenceFileName = "thumbnail-intelligence.json";
+    private const string ThumbnailCompositionModelFileName = "thumbnail-composition-model.json";
     private const string SelectedThumbnailHook = "DON'T MISS THIS TONIGHT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -26,12 +29,48 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
 
+        if (string.Equals(request.Phase, "Composition", StringComparison.OrdinalIgnoreCase))
+            return await GenerateThumbnailCompositionModelAsync(request, cancellationToken);
+
+        return await GenerateThumbnailIntelligenceAsync(request, cancellationToken);
+    }
+
+    private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailCompositionModelAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var outputPath = BuildThumbnailCompositionOutputPath(request.EventId, request.RegionId);
+        if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
+        {
+            var existing = JsonSerializer.Deserialize<ThumbnailCompositionModelDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
+                ?? throw new InvalidOperationException("Existing thumbnail composition model could not be parsed.");
+            return new ThumbnailAssetGenerationResponse(request.Phase, "Composition", true, NormalizePath(outputPath), existing.Validation.ThumbnailCompositionReadinessScore, []);
+        }
+
+        var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
+        var thumbnailIntelligence = await LoadThumbnailIntelligenceAsync(BuildThumbnailIntelligenceOutputPath(request.EventId, request.RegionId), cancellationToken);
+        var sceneManifest = await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
+        await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroCompositionModelFileName), HeroCompositionModelFileName, cancellationToken);
+        EnsureApprovedSceneOutputs(request.EventId, request.RegionId, sceneManifest);
+
+        var model = BuildThumbnailCompositionModel(request, thumbnailIntelligence);
+        ValidateThumbnailCompositionModel(model);
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
+            await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(model, JsonOptions), cancellationToken);
+        }
+
+        return new ThumbnailAssetGenerationResponse(request.Phase, "Composition", true, NormalizePath(outputPath), model.Validation.ThumbnailCompositionReadinessScore, []);
+    }
+
+    private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailIntelligenceAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
+    {
         var outputPath = BuildThumbnailIntelligenceOutputPath(request.EventId, request.RegionId);
         if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
         {
             var existing = JsonSerializer.Deserialize<ThumbnailIntelligenceDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing thumbnail intelligence could not be parsed.");
-            return new ThumbnailAssetGenerationResponse(request.Phase, "Intelligence", true, NormalizePath(outputPath), existing.SelectedThumbnailHook, existing.Scores.ThumbnailReadinessScore, []);
+            return new ThumbnailAssetGenerationResponse(request.Phase, "Intelligence", false, string.Empty, 0, [], true, NormalizePath(outputPath), existing.SelectedThumbnailHook, existing.Scores.ThumbnailReadinessScore);
         }
 
         var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
@@ -88,7 +127,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
         }
 
-        return new ThumbnailAssetGenerationResponse(request.Phase, "Intelligence", true, NormalizePath(outputPath), selectedHook, scores.ThumbnailReadinessScore, []);
+        return new ThumbnailAssetGenerationResponse(request.Phase, "Intelligence", false, string.Empty, 0, [], true, NormalizePath(outputPath), selectedHook, scores.ThumbnailReadinessScore);
     }
 
     private async Task<HeroAssetStoryDto> LoadHeroStoryAsync(string heroAssetsRoot, CancellationToken cancellationToken)
@@ -103,12 +142,108 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ?? throw new ArgumentException("Hero story input could not be parsed.");
     }
 
+    private async Task<ThumbnailIntelligenceDto> LoadThumbnailIntelligenceAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
+            throw new ArgumentException($"Required thumbnail composition input '{ThumbnailIntelligenceFileName}' was not found at '{NormalizePath(path)}'.");
+
+        return JsonSerializer.Deserialize<ThumbnailIntelligenceDto>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException("Thumbnail intelligence input could not be parsed.");
+    }
+
     private static async Task<JsonDocument> EnsureJsonInputAsync(string path, string fileName, CancellationToken cancellationToken)
     {
         if (!File.Exists(path))
             throw new ArgumentException($"Required thumbnail intelligence input '{fileName}' was not found at '{NormalizePath(path)}'.");
 
         return JsonDocument.Parse(await File.ReadAllTextAsync(path, cancellationToken));
+    }
+
+    private ThumbnailCompositionModelDto BuildThumbnailCompositionModel(ThumbnailAssetGenerationRequest request, ThumbnailIntelligenceDto intelligence)
+    {
+        var primaryHook = SelectedThumbnailHook;
+        var secondaryText = "Venus + Jupiter";
+        var microText = "After Sunset";
+        var visualFocus = CleanTextElement(intelligence.VisualFocus, "Large Venus and Jupiter close together above twilight horizon.");
+        var textElementCount = new[] { primaryHook, secondaryText, microText }.Count(text => !string.IsNullOrWhiteSpace(text));
+        var readinessScore = ClampScore(intelligence.Scores.ThumbnailReadinessScore);
+
+        return new ThumbnailCompositionModelDto(
+            request.EventId,
+            request.RegionId,
+            request.Language,
+            primaryHook,
+            secondaryText,
+            microText,
+            "Curiosity",
+            "High",
+            "ScrollStoppingAstronomyThumbnail",
+            visualFocus,
+            new ThumbnailCompositionBlocksDto(
+                new ThumbnailCompositionTextBlockDto(primaryHook, 1),
+                new ThumbnailCompositionVisualBlockDto("HeroCompositionModel + PrimaryScene", 2),
+                new ThumbnailCompositionTextBlockDto(secondaryText, 3),
+                new ThumbnailCompositionTextBlockDto(microText, 4)),
+            [
+                new ThumbnailCompositionPlatformVariantDto("Landscape", "1280x720", "YouTubeThumbnail"),
+                new ThumbnailCompositionPlatformVariantDto("Square", "1080x1080", "InstagramFacebookPost"),
+                new ThumbnailCompositionPlatformVariantDto("Portrait", "1080x1920", "ShortsReelsCover")
+            ],
+            new ThumbnailCompositionValidationDto(!string.IsNullOrWhiteSpace(primaryHook), !string.IsNullOrWhiteSpace(visualFocus), textElementCount, readinessScore),
+            DateTimeOffset.UtcNow);
+    }
+
+    private void EnsureApprovedSceneOutputs(string eventId, string regionId, JsonDocument sceneManifest)
+    {
+        var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(eventId, regionId), SceneApprovalDirectoryName);
+        var sceneIds = ResolveManifestSceneIds(sceneManifest).DefaultIfEmpty("scene-001").ToArray();
+        var missingSceneOutputs = sceneIds
+            .Select(sceneId => Path.Combine(sceneApprovalRoot, $"{sceneId}-final.png"))
+            .Where(path => !File.Exists(path))
+            .Select(NormalizePath)
+            .ToArray();
+
+        if (missingSceneOutputs.Length > 0)
+            throw new ArgumentException($"Required thumbnail composition approved scene output(s) were not found: {string.Join(", ", missingSceneOutputs)}.");
+    }
+
+    private static IReadOnlyList<string> ResolveManifestSceneIds(JsonDocument sceneManifest)
+    {
+        var root = sceneManifest.RootElement;
+        var sceneIds = new List<string>();
+        AddManifestSceneId(root, "primaryScene", sceneIds);
+        AddManifestSceneId(root, "secondaryScene", sceneIds);
+        AddManifestSceneId(root, "supportScene", sceneIds);
+        return sceneIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static void AddManifestSceneId(JsonElement root, string propertyName, ICollection<string> sceneIds)
+    {
+        if (!root.TryGetProperty(propertyName, out var sceneElement))
+            return;
+
+        var sceneId = sceneElement.ValueKind switch
+        {
+            JsonValueKind.String => sceneElement.GetString(),
+            JsonValueKind.Object when sceneElement.TryGetProperty("sceneNumber", out var sceneNumber) && sceneNumber.TryGetInt32(out var number) => $"scene-{number:000}",
+            JsonValueKind.Object when sceneElement.TryGetProperty("sceneId", out var sceneIdElement) => sceneIdElement.GetString(),
+            _ => null
+        };
+
+        if (!string.IsNullOrWhiteSpace(sceneId))
+            sceneIds.Add(sceneId!);
+    }
+
+    private static void ValidateThumbnailCompositionModel(ThumbnailCompositionModelDto model)
+    {
+        if (string.IsNullOrWhiteSpace(model.PrimaryHook))
+            throw new ArgumentException("Thumbnail composition validation failed: primaryHook is required.");
+        if (string.IsNullOrWhiteSpace(model.VisualFocus))
+            throw new ArgumentException("Thumbnail composition validation failed: visualFocus is required.");
+        if (model.Validation.TextElementCount > 3)
+            throw new ArgumentException("Thumbnail composition validation failed: textElementCount must be 3 or fewer.");
+        if (model.Validation.ThumbnailCompositionReadinessScore < 90)
+            throw new ArgumentException("Thumbnail composition validation failed: thumbnailCompositionReadinessScore must be at least 90.");
     }
 
     private static IReadOnlyList<ThumbnailHookScoreDto> BuildThumbnailHookScores(HeroAssetStoryDto heroStory)
@@ -244,19 +379,26 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new ArgumentException("regionId is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Language))
             throw new ArgumentException("language is required.", nameof(request));
-        if (!string.Equals(request.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only thumbnail asset phase 'Intelligence' is supported in this endpoint version.", nameof(request));
+        if (!string.Equals(request.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(request.Phase, "Composition", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Only thumbnail asset phases 'Intelligence' and 'Composition' are supported in this endpoint version.", nameof(request));
         if (!string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Thumbnail intelligence generation is enabled only for the approved golden pilot event e7013ee4-55c6-4f01-b1d0-7c500f26f98b / IN-RJ-UDAIPUR / en.", nameof(request));
     }
 
+    private string BuildQuestionEngineRoot(string eventId, string regionId)
+        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
+
     private string BuildHeroAssetsRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName);
 
     private string BuildThumbnailIntelligenceOutputPath(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName, ThumbnailIntelligenceFileName);
+
+    private string BuildThumbnailCompositionOutputPath(string eventId, string regionId)
+        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName, ThumbnailCompositionModelFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
@@ -270,6 +412,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private static string CleanHook(string value)
         => (value ?? string.Empty).Trim().Trim('.', '!', '?').ToUpperInvariant();
+
+    private static string CleanTextElement(string? value, string fallback)
+        => string.Join(' ', (string.IsNullOrWhiteSpace(value) ? fallback : value).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
 
     private static int ClampScore(int score) => Math.Clamp(score, 0, 100);
 
