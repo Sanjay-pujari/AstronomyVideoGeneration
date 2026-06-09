@@ -141,6 +141,57 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
     }
 
     [Fact]
+    public async Task GenerateThumbnailAssetsAsync_SceneSelectionWritesThumbnailSceneManifestOnly()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteHeroInputFilesAsync(workingDirectory);
+        await WriteThumbnailIntelligenceInputAsync(workingDirectory);
+        await WriteThumbnailCompositionInputAsync(workingDirectory);
+        await WriteApprovedSceneOutputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+
+        var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "SceneSelection",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
+        var outputPath = Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json");
+        Assert.True(result.ThumbnailSceneManifestGenerated);
+        Assert.Equal("SceneSelection", result.PhaseRequested);
+        Assert.Equal("SceneSelection", result.PhaseExecuted);
+        Assert.Equal(outputPath.Replace('\\', '/'), result.ThumbnailSceneManifestPath);
+        Assert.Equal("scene-001", result.PrimaryScene);
+        Assert.Equal("scene-005", result.SecondaryScene);
+        Assert.Equal("scene-006", result.SupportScene);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.True(File.Exists(outputPath));
+        Assert.DoesNotContain(Directory.GetFiles(thumbnailRoot), path => Path.GetExtension(path).Equals(".png", StringComparison.OrdinalIgnoreCase));
+
+        var saved = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(outputPath), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.Equal(EventId, saved!.EventId);
+        Assert.Equal(1, saved.PrimaryScene.SceneNumber);
+        Assert.Equal("What", saved.PrimaryScene.SceneKey);
+        Assert.EndsWith("scene-001-final.png", saved.PrimaryScene.ImagePath);
+        Assert.Equal("PrimaryVisual", saved.PrimaryScene.Role);
+        Assert.Equal(5, saved.SecondaryScene.SceneNumber);
+        Assert.Equal("Why", saved.SecondaryScene.SceneKey);
+        Assert.EndsWith("scene-005-final.png", saved.SecondaryScene.ImagePath);
+        Assert.Equal("EmotionalSignificance", saved.SecondaryScene.Role);
+        Assert.Equal(6, saved.SupportScene.SceneNumber);
+        Assert.Equal("Action", saved.SupportScene.SceneKey);
+        Assert.EndsWith("scene-006-final.png", saved.SupportScene.ImagePath);
+        Assert.Equal("UrgencyCue", saved.SupportScene.Role);
+        Assert.Equal("Use What scene for visual focus, Why scene for emotional pull, and Action scene for urgency.", saved.SelectionReason);
+    }
+
+    [Fact]
     public async Task GenerateThumbnailAssetsAsync_RejectsUnsupportedPhase()
     {
         var workingDirectory = CreateWorkingDirectory();
@@ -157,7 +208,7 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
             OverwriteExisting = true
         }, CancellationToken.None));
 
-        Assert.Contains("Composition", error.Message);
+        Assert.Contains("SceneSelection", error.Message);
     }
 
     private static ThumbnailAssetIntelligenceService CreateService(string workingDirectory)
@@ -195,8 +246,15 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
             new HeroCompositionTextBlockDto("scene-001", "LOOK WEST"),
             new HeroCompositionValidationDto(true, true, true, true, true, 100));
 
+        var sceneManifest = new HeroSceneManifestDto(
+            EventId,
+            new HeroSceneManifestEntryDto(1, "What", BuildApprovedScenePath(workingDirectory, "scene-001"), "PrimaryVisual"),
+            new HeroSceneManifestEntryDto(6, "Action", BuildApprovedScenePath(workingDirectory, "scene-006"), "CallToAction"),
+            new HeroSceneManifestEntryDto(2, "Where", BuildApprovedScenePath(workingDirectory, "scene-002"), "DirectionCue"),
+            "Use What scene as visual anchor, Action scene for CTA, and Where scene for direction cue.");
+
         await File.WriteAllTextAsync(Path.Combine(heroAssetsRoot, "hero-asset-story.json"), JsonSerializer.Serialize(heroStory, JsonOptions));
-        await File.WriteAllTextAsync(Path.Combine(heroAssetsRoot, "hero-scene-manifest.json"), "{\"primaryScene\":\"scene-001\"}");
+        await File.WriteAllTextAsync(Path.Combine(heroAssetsRoot, "hero-scene-manifest.json"), JsonSerializer.Serialize(sceneManifest, JsonOptions));
         await File.WriteAllTextAsync(Path.Combine(heroAssetsRoot, "hero-composition-model.json"), JsonSerializer.Serialize(compositionModel, JsonOptions));
     }
 
@@ -233,6 +291,34 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-intelligence.json"), JsonSerializer.Serialize(intelligence, JsonOptions));
     }
 
+    private static async Task WriteThumbnailCompositionInputAsync(string workingDirectory)
+    {
+        var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
+        Directory.CreateDirectory(thumbnailRoot);
+
+        var model = new ThumbnailCompositionModelDto(
+            EventId,
+            RegionId,
+            "en",
+            "DON'T MISS THIS TONIGHT",
+            "Venus + Jupiter",
+            "After Sunset",
+            "Curiosity",
+            "High",
+            "ScrollStoppingAstronomyThumbnail",
+            "Large Venus and Jupiter close together above twilight horizon.",
+            new ThumbnailCompositionBlocksDto(
+                new ThumbnailCompositionTextBlockDto("DON'T MISS THIS TONIGHT", 1),
+                new ThumbnailCompositionVisualBlockDto("HeroCompositionModel + PrimaryScene", 2),
+                new ThumbnailCompositionTextBlockDto("Venus + Jupiter", 3),
+                new ThumbnailCompositionTextBlockDto("After Sunset", 4)),
+            [new ThumbnailCompositionPlatformVariantDto("Landscape", "1280x720", "YouTubeThumbnail")],
+            new ThumbnailCompositionValidationDto(true, true, 3, 94),
+            DateTimeOffset.UtcNow);
+
+        await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, "thumbnail-composition-model.json"), JsonSerializer.Serialize(model, JsonOptions));
+    }
+
     private static async Task WriteApprovedSceneOutputsAsync(string workingDirectory)
     {
         var sceneApprovalRoot = Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3");
@@ -240,7 +326,12 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, "scene-001-final.png"), [0x89, 0x50, 0x4e, 0x47]);
         await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, "scene-002-final.png"), [0x89, 0x50, 0x4e, 0x47]);
         await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, "scene-003-final.png"), [0x89, 0x50, 0x4e, 0x47]);
+        await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, "scene-005-final.png"), [0x89, 0x50, 0x4e, 0x47]);
+        await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, "scene-006-final.png"), [0x89, 0x50, 0x4e, 0x47]);
     }
+
+    private static string BuildApprovedScenePath(string workingDirectory, string sceneId)
+        => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3", $"{sceneId}-final.png").Replace('\\', '/');
 
     private static string BuildHeroAssetsRoot(string workingDirectory)
         => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "hero-assets");

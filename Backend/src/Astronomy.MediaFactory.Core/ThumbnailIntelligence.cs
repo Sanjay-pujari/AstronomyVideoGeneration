@@ -25,8 +25,29 @@ public sealed record ThumbnailAssetGenerationResponse(
     bool ThumbnailIntelligenceGenerated = false,
     string ThumbnailIntelligencePath = "",
     string SelectedThumbnailHook = "",
-    int ThumbnailReadinessScore = 0);
+    int ThumbnailReadinessScore = 0,
+    bool ThumbnailSceneManifestGenerated = false,
+    string ThumbnailSceneManifestPath = "",
+    string PrimaryScene = "",
+    string SecondaryScene = "",
+    string SupportScene = "");
 
+public sealed record ThumbnailSceneManifestDto(
+    string EventId,
+    ThumbnailSceneManifestEntryDto PrimaryScene,
+    ThumbnailSceneManifestEntryDto SecondaryScene,
+    ThumbnailSceneManifestEntryDto SupportScene,
+    string SelectionReason);
+
+public sealed record ThumbnailSceneManifestEntryDto(
+    int SceneNumber,
+    string SceneKey,
+    string ImagePath,
+    string Role)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string SceneId => $"scene-{SceneNumber:000}";
+}
 
 public sealed record ThumbnailCompositionModelDto(
     string EventId,
