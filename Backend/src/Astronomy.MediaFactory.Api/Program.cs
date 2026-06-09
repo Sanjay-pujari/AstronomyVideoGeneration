@@ -423,7 +423,22 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
     logger.LogInformation("Video assembly generation request received for {RegionId}. EventId={EventId}; Phase={Phase}; DryRun={DryRun}", request.RegionId, request.EventId, request.Phase, request.DryRun);
     try
     {
-        return Results.Ok(await videoAssembly.GenerateVideoAssemblyAsync(request, ct));
+        var response = await videoAssembly.GenerateVideoAssemblyAsync(request, ct);
+        if (string.Equals(response.PhaseExecuted, "Script", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Ok(new
+            {
+                response.PhaseRequested,
+                response.PhaseExecuted,
+                response.VideoNarrationScriptGenerated,
+                response.VideoNarrationScriptPath,
+                response.TotalEstimatedDurationSeconds,
+                response.TtsReady,
+                response.GeneratedFiles
+            });
+        }
+
+        return Results.Ok(response);
     }
     catch (ArgumentException ex)
     {

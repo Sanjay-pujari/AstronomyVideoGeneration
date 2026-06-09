@@ -62,6 +62,67 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Empty(saved.Warnings);
     }
 
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_ScriptNonDryRunWritesNarrationScriptOnly()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Intelligence",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Script",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var outputPath = Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-narration-script.json");
+        Assert.Equal("Script", result.PhaseRequested);
+        Assert.Equal("Script", result.PhaseExecuted);
+        Assert.True(result.VideoNarrationScriptGenerated);
+        Assert.Equal(outputPath.Replace('\\', '/'), result.VideoNarrationScriptPath);
+        Assert.Equal(20.0, result.TotalEstimatedDurationSeconds);
+        Assert.True(result.TtsReady);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.True(File.Exists(outputPath));
+        Assert.DoesNotContain(Directory.GetFiles(BuildVideoAssemblyRoot(workingDirectory)), path => Path.GetExtension(path).Equals(".mp3", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(Directory.GetFiles(BuildVideoAssemblyRoot(workingDirectory)), path => Path.GetExtension(path).Equals(".mp4", StringComparison.OrdinalIgnoreCase));
+
+        var saved = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(outputPath), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.Equal(EventId, saved!.EventId);
+        Assert.Equal(RegionId, saved.RegionId);
+        Assert.Equal("en", saved.Language);
+        Assert.Equal("YouTubeShort", saved.Platform);
+        Assert.Equal(20.0, saved.TotalEstimatedDurationSeconds);
+        Assert.Equal("Excited but clear", saved.ScriptStyle.Tone);
+        Assert.Equal(new[] { "Hook", "What", "Why", "Where", "When", "Action" }, saved.SceneScripts.Select(scene => scene.SceneKey));
+        Assert.Equal("Don't miss this tonight.", saved.SceneScripts[0].Narration);
+        Assert.Equal("Step outside tonight and look west.", saved.SceneScripts[^1].Narration);
+        Assert.Equal("Don't miss this tonight. Venus and Jupiter will shine close together after sunset. Two of the brightest worlds will share the evening sky. Look toward the western sky. The best time is shortly after sunset. Step outside tonight and look west.", saved.FullNarrationText);
+        Assert.True(saved.TtsPlan.TtsRequired);
+        Assert.Equal("NeutralEnergetic", saved.TtsPlan.RecommendedVoice);
+        Assert.Equal("video-tts-audio.mp3", saved.TtsPlan.OutputFileName);
+        Assert.True(saved.Scores.TtsReadinessScore >= 90);
+        Assert.Empty(saved.Warnings);
+    }
+
     [Fact]
     public async Task GenerateVideoAssemblyAsync_DryRunReturnsPreviewPathWithoutWriting()
     {
@@ -105,7 +166,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             OverwriteExisting = true
         }, CancellationToken.None));
 
-        Assert.Contains("Only video assembly phase 'Intelligence'", error.Message);
+        Assert.Contains("Only video assembly phases 'Intelligence' and 'Script'", error.Message);
     }
 
     private static VideoAssemblyIntelligenceService CreateService(string workingDirectory)
