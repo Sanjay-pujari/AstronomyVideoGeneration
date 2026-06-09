@@ -41,7 +41,6 @@ internal static class PhotoCinematicThumbnailRenderer
                 DrawPlanetsAndLabels(ctx, spec);
                 DrawTypography(ctx, spec);
                 DrawCinematicFinish(ctx, spec);
-                DrawVerificationWatermark(ctx, spec);
             });
 
             image.Metadata.ExifProfile = null;
@@ -127,35 +126,56 @@ internal static class PhotoCinematicThumbnailRenderer
 
     private static void DrawVenusStarPoint(IImageProcessingContext ctx, PointF center, float scale)
     {
-        DrawGlow(ctx, center, 34f * scale, 34f * scale, Color.ParseHex("#FFF6C2"), 0.20f, 14);
-        DrawGlow(ctx, center, 16f * scale, 16f * scale, Color.White, 0.32f, 8);
-        ctx.DrawLine(Color.ParseHex("#FFF8C8").WithAlpha(0.72f), Math.Max(2f, 3f * scale), new PointF(center.X - 24f * scale, center.Y), new PointF(center.X + 24f * scale, center.Y));
-        ctx.DrawLine(Color.ParseHex("#FFF8C8").WithAlpha(0.62f), Math.Max(2f, 3f * scale), new PointF(center.X, center.Y - 24f * scale), new PointF(center.X, center.Y + 24f * scale));
-        ctx.Fill(Color.White, new EllipsePolygon(center.X, center.Y, 5.2f * scale));
-        ctx.Fill(Color.ParseHex("#FFF1A8"), new EllipsePolygon(center.X, center.Y, 2.8f * scale));
+        var glowScale = MathF.Sqrt(scale);
+        DrawGlow(ctx, center, 22f * glowScale, 22f * glowScale, Color.ParseHex("#FFF3AA"), 0.16f, 12);
+        DrawGlow(ctx, center, 9f * glowScale, 9f * glowScale, Color.White, 0.28f, 7);
+        ctx.Fill(Color.White.WithAlpha(0.96f), new EllipsePolygon(center.X, center.Y, 3.6f * glowScale));
+        ctx.Fill(Color.ParseHex("#FFF2A5"), new EllipsePolygon(center.X, center.Y, 1.9f * glowScale));
     }
 
     private static void DrawJupiterPlanet(IImageProcessingContext ctx, PointF center, float scale)
     {
-        var radius = 34f * scale;
-        DrawGlow(ctx, center, radius * 2.0f, radius * 1.65f, Color.ParseHex("#DDB47A"), 0.11f, 10);
-        ctx.Fill(Color.ParseHex("#D6AD78"), new EllipsePolygon(center.X, center.Y, radius, radius * 0.86f));
-        for (var i = 0; i < 6; i++)
-        {
-            var y = center.Y - radius * 0.52f + i * radius * 0.20f;
-            var band = i % 2 == 0 ? Color.ParseHex("#8B593D") : Color.ParseHex("#F0D0A2");
-            ctx.DrawLine(band.WithAlpha(0.44f), Math.Max(2f, radius * 0.12f), new PointF(center.X - radius * 0.78f, y), new PointF(center.X + radius * 0.78f, y + radius * 0.035f));
-        }
-        ctx.Fill(Color.White.WithAlpha(0.22f), new EllipsePolygon(center.X - radius * 0.25f, center.Y - radius * 0.25f, radius * 0.22f, radius * 0.12f));
-        ctx.Draw(Color.White.WithAlpha(0.38f), Math.Max(1.2f, radius * 0.055f), new EllipsePolygon(center.X, center.Y, radius, radius * 0.86f));
+        var radius = 26f * scale;
+        var radiusY = radius * 0.84f;
+        DrawGlow(ctx, center, radius * 1.72f, radius * 1.30f, Color.ParseHex("#D9B077"), 0.09f, 10);
+        ctx.Fill(Color.ParseHex("#D7B07A"), new EllipsePolygon(center.X, center.Y, radius, radiusY));
+
+        DrawJupiterBand(ctx, center, radius, radiusY, -0.48f, 0.62f, Color.ParseHex("#F2D6A8"), 0.30f);
+        DrawJupiterBand(ctx, center, radius, radiusY, -0.30f, 0.80f, Color.ParseHex("#9E6844"), 0.30f);
+        DrawJupiterBand(ctx, center, radius, radiusY, -0.13f, 0.93f, Color.ParseHex("#E9C492"), 0.34f);
+        DrawJupiterBand(ctx, center, radius, radiusY, 0.02f, 0.97f, Color.ParseHex("#A46B45"), 0.24f);
+        DrawJupiterBand(ctx, center, radius, radiusY, 0.22f, 0.85f, Color.ParseHex("#F0D2A2"), 0.30f);
+        DrawJupiterBand(ctx, center, radius, radiusY, 0.40f, 0.68f, Color.ParseHex("#8E5B3E"), 0.22f);
+
+        ctx.Fill(Color.ParseHex("#B65F42").WithAlpha(0.46f), new EllipsePolygon(center.X + radius * 0.35f, center.Y + radiusY * 0.18f, radius * 0.15f, radiusY * 0.075f));
+        ctx.Fill(Color.White.WithAlpha(0.19f), new EllipsePolygon(center.X - radius * 0.27f, center.Y - radiusY * 0.34f, radius * 0.24f, radiusY * 0.12f));
+        ctx.Fill(Color.Black.WithAlpha(0.09f), new EllipsePolygon(center.X + radius * 0.22f, center.Y + radiusY * 0.05f, radius * 0.76f, radiusY * 0.86f));
+        ctx.Draw(Color.White.WithAlpha(0.34f), Math.Max(1.1f, radius * 0.045f), new EllipsePolygon(center.X, center.Y, radius, radiusY));
+    }
+
+    private static void DrawJupiterBand(IImageProcessingContext ctx, PointF center, float radius, float radiusY, float offset, float widthFactor, Color color, float alpha)
+    {
+        var y = center.Y + radiusY * offset;
+        var bandWidth = radius * widthFactor * MathF.Sqrt(Math.Clamp(1f - offset * offset, 0.12f, 1f));
+        ctx.Fill(color.WithAlpha(alpha), new EllipsePolygon(center.X, y, bandWidth, Math.Max(1.2f, radiusY * 0.045f)));
     }
 
     private static void DrawCleanLabel(IImageProcessingContext ctx, string label, Font font, PointF origin, PointF target, Color color)
     {
-        var elbow = new PointF(target.X + (origin.X < target.X ? -34f : 34f), target.Y + (origin.Y < target.Y ? -22f : 22f));
-        ctx.DrawLine(Color.White.WithAlpha(0.76f), 2.5f, origin, elbow, target);
-        ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(origin.X + 2f, origin.Y + 2f) }, label, Color.Black.WithAlpha(0.64f));
+        var elbow = new PointF(target.X + (origin.X < target.X ? -32f : 32f), target.Y + (origin.Y < target.Y ? -20f : 20f));
+        var lineEnd = ShortenToward(target, elbow, 14f);
+        ctx.DrawLine(Color.White.WithAlpha(0.68f), 1.6f, origin, elbow, lineEnd);
+        ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(origin.X + 1.5f, origin.Y + 1.5f) }, label, Color.Black.WithAlpha(0.58f));
         ctx.DrawText(new RichTextOptions(font) { Origin = origin }, label, color);
+    }
+
+    private static PointF ShortenToward(PointF target, PointF from, float distance)
+    {
+        var dx = from.X - target.X;
+        var dy = from.Y - target.Y;
+        var length = MathF.Sqrt(dx * dx + dy * dy);
+        if (length <= 0.001f) return target;
+        return new PointF(target.X + dx / length * distance, target.Y + dy / length * distance);
     }
 
     private static void DrawTypography(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec)
@@ -188,21 +208,6 @@ internal static class PhotoCinematicThumbnailRenderer
             new ColorStop(1f, Color.Black.WithAlpha(0.32f))), new RectangleF(0, 0, spec.Width, spec.Height));
     }
 
-
-    private static void DrawVerificationWatermark(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec)
-    {
-        const string watermark = "PHOTO CINEMATIC RENDERER";
-        var font = ResolveFont(spec.IsPortrait ? 24f : spec.IsSquare ? 20f : 18f, FontStyle.Bold);
-        var size = TextMeasurer.MeasureSize(watermark, new TextOptions(font));
-        var paddingX = spec.IsPortrait ? 26f : 20f;
-        var paddingY = spec.IsPortrait ? 34f : 24f;
-        var origin = new PointF(spec.Width - size.Width - paddingX, spec.Height - size.Height - paddingY);
-        var background = new RectangleF(origin.X - 12f, origin.Y - 8f, size.Width + 24f, size.Height + 16f);
-
-        ctx.Fill(Color.Black.WithAlpha(0.58f), background);
-        ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(origin.X + 1.5f, origin.Y + 1.5f) }, watermark, Color.Black.WithAlpha(0.85f));
-        ctx.DrawText(new RichTextOptions(font) { Origin = origin }, watermark, Color.ParseHex("#FFE66D"));
-    }
 
     private static void DrawGlow(IImageProcessingContext ctx, PointF center, float radiusX, float radiusY, Color color, float alpha, int rings)
     {
@@ -240,13 +245,13 @@ internal static class PhotoCinematicThumbnailRenderer
         public float HookFontSize => IsPortrait ? 116f : IsSquare ? 88f : 82f;
         public float SecondaryFontSize => IsPortrait ? 58f : IsSquare ? 44f : 40f;
         public float MicroFontSize => IsPortrait ? 42f : IsSquare ? 34f : 28f;
-        public float LabelFontSize => IsPortrait ? 32f : IsSquare ? 27f : 24f;
+        public float LabelFontSize => IsPortrait ? 28f : IsSquare ? 24f : 21f;
         public PointF HookOrigin => IsPortrait ? new PointF(70, 100) : IsSquare ? new PointF(62, 70) : new PointF(58, 56);
         public PointF SecondaryOrigin => IsPortrait ? new PointF(76, 360) : IsSquare ? new PointF(72, 250) : new PointF(72, 250);
         public PointF MicroOrigin => IsPortrait ? new PointF(80, 430) : IsSquare ? new PointF(76, 306) : new PointF(76, 302);
         public PointF VenusCenter => IsPortrait ? new PointF(Width * 0.40f, Height * 0.43f) : IsSquare ? new PointF(Width * 0.57f, Height * 0.43f) : new PointF(Width * 0.70f, Height * 0.40f);
         public PointF JupiterCenter => IsPortrait ? new PointF(Width * 0.63f, Height * 0.50f) : IsSquare ? new PointF(Width * 0.76f, Height * 0.49f) : new PointF(Width * 0.84f, Height * 0.48f);
         public PointF VenusLabelOrigin => IsPortrait ? new PointF(Width * 0.19f, Height * 0.48f) : IsSquare ? new PointF(Width * 0.39f, Height * 0.36f) : new PointF(Width * 0.58f, Height * 0.32f);
-        public PointF JupiterLabelOrigin => IsPortrait ? new PointF(Width * 0.70f, Height * 0.55f) : IsSquare ? new PointF(Width * 0.74f, Height * 0.57f) : new PointF(Width * 0.80f, Height * 0.57f);
+        public PointF JupiterLabelOrigin => IsPortrait ? new PointF(Width * 0.68f, Height * 0.55f) : IsSquare ? new PointF(Width * 0.69f, Height * 0.57f) : new PointF(Width * 0.74f, Height * 0.57f);
     }
 }
