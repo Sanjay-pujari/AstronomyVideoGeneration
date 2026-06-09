@@ -185,9 +185,37 @@ public sealed record QuestionDrivenSceneReview(
     IReadOnlyList<string> Issues,
     IReadOnlyList<string> Recommendations);
 
+public sealed record AstronomyInfographicRenderVariant(
+    string VariantName,
+    int Width,
+    int Height,
+    float TextScale,
+    float InformationDensity,
+    string SafeAreaIntent,
+    string VisualEmphasisIntent)
+{
+    public static AstronomyInfographicRenderVariant LongForm { get; } = new(
+        "LongForm",
+        1920,
+        1080,
+        1.0f,
+        1.0f,
+        "16:9 editorial safe area with horizon/planet labels separated from frame edges",
+        "approved landscape editorial infographic composition");
+
+    public static AstronomyInfographicRenderVariant ShortForm { get; } = new(
+        "ShortForm",
+        1080,
+        1920,
+        1.22f,
+        0.72f,
+        "9:16 short-form safe area with top/bottom platform UI margins and centered astronomy action",
+        "vertical emphasis on the same question answer, planets, timing, direction, and viewer takeaway");
+}
+
 public interface IAstronomyInfographicRenderer
 {
-    Task RenderAsync(string finalPath, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken);
+    Task RenderAsync(string finalPath, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken, AstronomyInfographicRenderVariant? variant = null);
 }
 
 
@@ -211,7 +239,8 @@ public sealed record EditorialAstronomyInfographicGenerationResponse(
     string AstronomySceneEngineV1Status = "FROZEN",
     string SharedAstronomyVisualComposerStatus = "FROZEN",
     bool HeroAssetRulesApplied = false,
-    bool DuplicateObjectRenderingDetected = false);
+    bool DuplicateObjectRenderingDetected = false,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? SceneVariantFinalImages = null);
 
 public sealed record SceneQuestionIsolationValidation(
     int SceneNumber,

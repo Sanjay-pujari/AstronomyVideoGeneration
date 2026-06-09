@@ -100,6 +100,48 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.Empty(action.ProgrammaticOverlayPlan.Steps);
     }
 
+
+    [Fact]
+    public async Task GenerateEditorialAstronomyInfographicsAsync_DryRunPlansLongAndShortSceneApprovalVariants()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteInputFilesAsync(workingDirectory);
+        var composer = CreateComposer(workingDirectory);
+
+        var result = await composer.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: true,
+            OverwriteExisting: false), CancellationToken.None);
+
+        Assert.Equal(EventId, result.EventId);
+        Assert.Equal(6, result.SceneCount);
+        Assert.Equal(12, result.PlannedInfographicCount);
+        Assert.Equal(0, result.FinalImageCount);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.NotNull(result.SceneVariantFinalImages);
+        Assert.Equal(6, result.SceneVariantFinalImages!.Count);
+
+        foreach (var sceneNumber in Enumerable.Range(1, 6))
+        {
+            var key = $"scene-{sceneNumber:000}";
+            Assert.True(result.SceneVariantFinalImages.ContainsKey(key));
+            Assert.Contains($"scene-approval-v3/long/{key}-final.png", result.SceneVariantFinalImages[key][0]);
+            Assert.Contains($"scene-approval-v3/short/{key}-final.png", result.SceneVariantFinalImages[key][1]);
+        }
+
+        Assert.All(result.PlannedScenes, scene =>
+        {
+            Assert.Contains("scene-approval-v3/long/", scene.PlannedOutputs.FinalImagePath);
+            Assert.False(string.IsNullOrWhiteSpace(scene.NarrationText));
+            Assert.False(string.IsNullOrWhiteSpace(scene.CaptionText));
+            Assert.True(scene.ValidationPreview.ImageSceneSpecific);
+            Assert.True(scene.ValidationPreview.NarrationAligned);
+            Assert.Empty(scene.ValidationPreview.Issues);
+        });
+    }
+
     private static QuestionDrivenVisualComposer CreateComposer(string workingDirectory)
         => new(
             Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
