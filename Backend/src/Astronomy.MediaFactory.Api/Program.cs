@@ -420,7 +420,7 @@ app.MapPost("/api/astronomy-intelligence/generate-hero-assets", async (HeroAsset
 
 app.MapPost("/api/astronomy-intelligence/generate-thumbnail-assets", async (ThumbnailAssetGenerationRequest request, IThumbnailAssetIntelligenceService thumbnailAssets, ILogger<Program> logger, CancellationToken ct) =>
 {
-    logger.LogInformation("Thumbnail intelligence generation request received for {RegionId}. EventId={EventId}; Phase={Phase}; DryRun={DryRun}", request.RegionId, request.EventId, request.Phase, request.DryRun);
+    logger.LogInformation("Thumbnail asset generation request received for {RegionId}. EventId={EventId}; Phase={Phase}; DryRun={DryRun}", request.RegionId, request.EventId, request.Phase, request.DryRun);
     try
     {
         var response = await thumbnailAssets.GenerateThumbnailAssetsAsync(request, ct);
@@ -428,10 +428,9 @@ app.MapPost("/api/astronomy-intelligence/generate-thumbnail-assets", async (Thum
         {
             response.PhaseRequested,
             response.PhaseExecuted,
-            response.ThumbnailIntelligenceGenerated,
-            response.ThumbnailIntelligencePath,
-            response.SelectedThumbnailHook,
-            response.ThumbnailReadinessScore,
+            response.ThumbnailCompositionGenerated,
+            response.ThumbnailCompositionPath,
+            response.ThumbnailCompositionReadinessScore,
             response.GeneratedFiles
         });
     }
