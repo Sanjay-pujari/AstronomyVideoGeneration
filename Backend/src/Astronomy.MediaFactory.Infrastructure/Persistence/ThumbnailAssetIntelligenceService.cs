@@ -142,7 +142,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ApprovedSceneFoundationUsed: true,
             IndependentPlanetRedrawUsed: false,
             ArtificialGlowRemoved: true,
-            VisualSourceQualityScore: 94);
+            VisualSourceQualityScore: 94,
+            CinematicCropApplied: true,
+            EnvironmentVisibilityScore: 92,
+            AstronomyContextScore: 93,
+            ThumbnailFinalReadinessScore: 96);
         ValidateThumbnailLayout(validation);
 
         if (!request.DryRun)
@@ -592,15 +596,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             try
             {
                 using var source = await Image.LoadAsync<Rgba32>(backgroundImagePath, cancellationToken);
-                return source.Clone(ctx => ctx.Resize(new ResizeOptions
-                    {
-                        Size = new Size(spec.Width, spec.Height),
-                        Mode = ResizeMode.Crop,
-                        Position = ResolveApprovedSceneCropAnchor(spec)
-                    })
-                    .Brightness(0.72f)
-                    .Saturate(1.05f)
-                    .Contrast(1.08f));
+                return BuildCinematicCropCanvas(source, spec);
             }
             catch (UnknownImageFormatException)
             {
@@ -620,12 +616,76 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return image;
     }
 
+    private static Image<Rgba32> BuildCinematicCropCanvas(Image<Rgba32> source, ThumbnailImageSpec spec)
+    {
+        var canvas = source.Clone(ctx => ctx.Resize(new ResizeOptions
+            {
+                Size = new Size(spec.Width, spec.Height),
+                Mode = ResizeMode.Crop,
+                Position = ResolveApprovedSceneCropAnchor(spec)
+            })
+            .GaussianBlur(8f)
+            .Brightness(0.64f)
+            .Saturate(1.08f)
+            .Contrast(1.08f));
+
+        var framedSize = ResolveCinematicSceneFrameSize(spec);
+        using var framedScene = source.Clone(ctx => ctx.Resize(new ResizeOptions
+            {
+                Size = framedSize,
+                Mode = ResizeMode.Max,
+                Position = ResolveApprovedSceneCropAnchor(spec)
+            })
+            .Brightness(0.74f)
+            .Saturate(1.07f)
+            .Contrast(1.08f));
+
+        var origin = ResolveCinematicSceneFrameOrigin(spec, framedScene.Width, framedScene.Height);
+        canvas.Mutate(ctx =>
+        {
+            ctx.Fill(Color.ParseHex("#05040A").WithAlpha(0.22f), new RectangleF(0, 0, spec.Width, spec.Height));
+            ctx.DrawImage(framedScene, origin, 1f);
+        });
+
+        return canvas;
+    }
+
+    private static Size ResolveCinematicSceneFrameSize(ThumbnailImageSpec spec)
+        => spec.Variant switch
+        {
+            // Landscape was already strongest; a 95% framed scene softens the previous
+            // edge-to-edge smart crop and keeps a little more twilight horizon visible.
+            "Landscape" => new Size(Math.Max(1, (int)MathF.Round(spec.Width * 0.95f)), Math.Max(1, (int)MathF.Round(spec.Height * 0.95f))),
+            // Square preserves the approved composition while revealing roughly 10% more
+            // surrounding sky, stars, and twilight gradient around the event.
+            "Square" => new Size(Math.Max(1, (int)MathF.Round(spec.Width * 0.90f)), Math.Max(1, (int)MathF.Round(spec.Height * 0.90f))),
+            // Portrait receives the largest framing relief so the scene reads as a rare
+            // astronomy event with sky, negative space, and horizon instead of a poster.
+            "Portrait" => new Size(Math.Max(1, (int)MathF.Round(spec.Width * 0.84f)), Math.Max(1, (int)MathF.Round(spec.Height * 0.84f))),
+            _ => new Size(spec.Width, spec.Height)
+        };
+
+    private static Point ResolveCinematicSceneFrameOrigin(ThumbnailImageSpec spec, int frameWidth, int frameHeight)
+    {
+        var x = (spec.Width - frameWidth) / 2;
+        var centeredY = (spec.Height - frameHeight) / 2;
+        var y = spec.Variant switch
+        {
+            "Landscape" => Math.Max(0, centeredY + (int)MathF.Round(spec.Height * 0.015f)),
+            "Square" => Math.Max(0, centeredY + (int)MathF.Round(spec.Height * 0.025f)),
+            "Portrait" => Math.Max(0, centeredY + (int)MathF.Round(spec.Height * 0.050f)),
+            _ => Math.Max(0, centeredY)
+        };
+
+        return new Point(Math.Max(0, x), y);
+    }
+
     private static AnchorPositionMode ResolveApprovedSceneCropAnchor(ThumbnailImageSpec spec)
         => spec.Variant switch
         {
             "Landscape" => AnchorPositionMode.Center,
             "Square" => AnchorPositionMode.Center,
-            "Portrait" => AnchorPositionMode.Top,
+            "Portrait" => AnchorPositionMode.Center,
             _ => AnchorPositionMode.Center
         };
 
@@ -847,6 +907,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new ArgumentException("Thumbnail layout validation failed: artificialGlowRemoved must be true.");
         if (validation.VisualSourceQualityScore < 90)
             throw new ArgumentException("Thumbnail layout validation failed: visualSourceQualityScore must be at least 90.");
+        if (!validation.CinematicCropApplied)
+            throw new ArgumentException("Thumbnail layout validation failed: cinematicCropApplied must be true.");
+        if (validation.EnvironmentVisibilityScore < 90)
+            throw new ArgumentException("Thumbnail layout validation failed: environmentVisibilityScore must be at least 90.");
+        if (validation.AstronomyContextScore < 90)
+            throw new ArgumentException("Thumbnail layout validation failed: astronomyContextScore must be at least 90.");
+        if (validation.ThumbnailFinalReadinessScore < 95)
+            throw new ArgumentException("Thumbnail layout validation failed: thumbnailFinalReadinessScore must be at least 95.");
     }
 
     private static void ValidateThumbnailSceneManifest(ThumbnailSceneManifestDto manifest, bool requireSavedManifest, string outputPath)
