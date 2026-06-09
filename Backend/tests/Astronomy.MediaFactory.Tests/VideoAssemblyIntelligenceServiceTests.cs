@@ -326,7 +326,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal("mp4", saved.RenderSettings.Format);
         Assert.Equal("h264", saved.RenderSettings.Codec);
         Assert.Equal("aac", saved.RenderSettings.AudioCodec);
-        Assert.Equal("SmoothFade", saved.Style.TransitionStyle);
+        Assert.Equal("CrossFade", saved.Style.TransitionStyle);
         Assert.Equal("SubtleKenBurns", saved.Style.MotionStyle);
         Assert.Equal("UseExistingSceneTextOnly", saved.Style.TextOverlayStyle);
         Assert.False(saved.Style.BackgroundMusic);
@@ -343,8 +343,8 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.EndsWith("thumbnail-landscape.png", saved.Segments[0].VisualAssetPath);
         Assert.Equal("Don't miss this tonight.", saved.Segments[0].Narration);
         Assert.Equal("None", saved.Segments[0].TransitionIn);
-        Assert.Equal("SmoothFade", saved.Segments[0].TransitionOut);
-        Assert.Equal("SubtleZoomIn", saved.Segments[0].Motion);
+        Assert.Equal("CrossFade", saved.Segments[0].TransitionOut);
+        Assert.Equal("HookThumbnailZoomIn100To105", saved.Segments[0].Motion);
         Assert.EndsWith("scene-005-final.png", saved.Segments[2].VisualAssetPath);
         Assert.Equal(18.238, saved.Segments[5].StartSeconds);
         Assert.Equal(21.456, saved.Segments[5].EndSeconds);
@@ -374,6 +374,46 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Contains("Required video assembly visual asset", error.Message);
         Assert.Contains("scene-006-final.png", error.Message);
         Assert.False(File.Exists(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-assembly-plan.json")));
+    }
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_RenderDryRunReportsRenderPolishValidation()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        await WriteAssemblyPhaseInputsAsync(workingDirectory, service);
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Assembly",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Render",
+            DryRun = true,
+            BackgroundMusic = true,
+            MusicLevelPercent = 50,
+            DuckMusicUnderNarration = true
+        }, CancellationToken.None);
+
+        Assert.Equal("Render", result.PhaseExecuted);
+        Assert.True(result.RenderSucceeded);
+        Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-render-validation.json").Replace('\\', '/'), result.VideoRenderValidationPath);
+        Assert.True(result.RenderPolishScore >= 90);
+        Assert.True(result.VideoFinalReadinessScore >= 95);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.False(File.Exists(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-render-validation.json")));
     }
 
     [Fact]
