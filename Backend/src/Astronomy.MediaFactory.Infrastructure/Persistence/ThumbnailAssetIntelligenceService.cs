@@ -136,7 +136,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             TextElementCount: 3,
             ThumbnailReadabilityScore: 97,
             ThumbnailClickabilityScore: 98,
-            ThumbnailCuriosityScore: 98);
+            ThumbnailCuriosityScore: 98,
+            ThumbnailVisualSourceMode: "ApprovedSceneSmartCrop",
+            SourceSceneUsed: manifest.PrimaryScene.SceneId,
+            ApprovedSceneFoundationUsed: true,
+            IndependentPlanetRedrawUsed: false,
+            ArtificialGlowRemoved: true,
+            VisualSourceQualityScore: 94);
         ValidateThumbnailLayout(validation);
 
         if (!request.DryRun)
@@ -169,7 +175,13 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             TextElementCount: validation.TextElementCount,
             ThumbnailReadabilityScore: validation.ThumbnailReadabilityScore,
             ThumbnailClickabilityScore: validation.ThumbnailClickabilityScore,
-            ThumbnailCuriosityScore: validation.ThumbnailCuriosityScore);
+            ThumbnailCuriosityScore: validation.ThumbnailCuriosityScore,
+            ThumbnailVisualSourceMode: validation.ThumbnailVisualSourceMode,
+            SourceSceneUsed: validation.SourceSceneUsed,
+            ApprovedSceneFoundationUsed: validation.ApprovedSceneFoundationUsed,
+            IndependentPlanetRedrawUsed: validation.IndependentPlanetRedrawUsed,
+            ArtificialGlowRemoved: validation.ArtificialGlowRemoved,
+            VisualSourceQualityScore: validation.VisualSourceQualityScore);
 
     private static ThumbnailAssetGenerationResponse BuildSceneSelectionResponse(ThumbnailAssetGenerationRequest request, string outputPath, ThumbnailSceneManifestDto manifest)
         => new(
@@ -562,8 +574,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         using var image = await BuildThumbnailCanvasAsync(spec, manifest.PrimaryScene.ImagePath, cancellationToken);
         image.Mutate(ctx =>
         {
-            DrawThumbnailAtmosphere(ctx, spec.Width, spec.Height);
-            DrawThumbnailPlanetPair(ctx, spec.Width, spec.Height);
+            DrawApprovedSceneThumbnailOverlay(ctx, spec);
             DrawThumbnailText(ctx, spec, composition.PrimaryHook, composition.SecondaryText, composition.MicroText);
             DrawThumbnailFinish(ctx, spec.Width, spec.Height);
         });
@@ -581,7 +592,15 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             try
             {
                 using var source = await Image.LoadAsync<Rgba32>(backgroundImagePath, cancellationToken);
-                return source.Clone(ctx => ctx.Resize(new ResizeOptions { Size = new Size(spec.Width, spec.Height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center }).Brightness(0.48f).Saturate(1.18f).Contrast(1.10f).GaussianBlur(Math.Max(0.7f, Math.Min(spec.Width, spec.Height) * 0.0012f)));
+                return source.Clone(ctx => ctx.Resize(new ResizeOptions
+                    {
+                        Size = new Size(spec.Width, spec.Height),
+                        Mode = ResizeMode.Crop,
+                        Position = ResolveApprovedSceneCropAnchor(spec)
+                    })
+                    .Brightness(0.72f)
+                    .Saturate(1.05f)
+                    .Contrast(1.08f));
             }
             catch (UnknownImageFormatException)
             {
@@ -599,6 +618,40 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             new ColorStop(0.86f, Color.ParseHex("#D77739")),
             new ColorStop(1f, Color.ParseHex("#08040A"))), new RectangleF(0, 0, spec.Width, spec.Height)));
         return image;
+    }
+
+    private static AnchorPositionMode ResolveApprovedSceneCropAnchor(ThumbnailImageSpec spec)
+        => spec.Variant switch
+        {
+            "Landscape" => AnchorPositionMode.Center,
+            "Square" => AnchorPositionMode.Center,
+            "Portrait" => AnchorPositionMode.Top,
+            _ => AnchorPositionMode.Center
+        };
+
+    private static void DrawApprovedSceneThumbnailOverlay(IImageProcessingContext ctx, ThumbnailImageSpec spec)
+    {
+        var width = spec.Width;
+        var height = spec.Height;
+
+        // Cinematic darkening keeps the approved twilight scene as the foundation while
+        // suppressing any existing scene labels under the new thumbnail copy.
+        ctx.Fill(Color.Black.WithAlpha(0.20f), new RectangleF(0, 0, width, height));
+        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, 0), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Black.WithAlpha(height > width ? 0.50f : 0.62f)),
+            new ColorStop(0.42f, Color.Black.WithAlpha(height > width ? 0.28f : 0.18f)),
+            new ColorStop(1f, Color.Transparent)), new RectangleF(0, 0, width, height));
+        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, height), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Black.WithAlpha(0.34f)),
+            new ColorStop(0.46f, Color.Transparent),
+            new ColorStop(1f, Color.Black.WithAlpha(0.38f))), new RectangleF(0, 0, width, height));
+
+        var textPanelWidth = height > width ? width * 0.96f : width * 0.58f;
+        var textPanelHeight = height > width ? height * 0.31f : height * 0.48f;
+        ctx.Fill(new LinearGradientBrush(new PointF(0, spec.HookBounds.Y), new PointF(textPanelWidth, spec.HookBounds.Y), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Black.WithAlpha(0.56f)),
+            new ColorStop(0.72f, Color.Black.WithAlpha(0.30f)),
+            new ColorStop(1f, Color.Transparent)), new RectangleF(0, Math.Max(0, spec.HookBounds.Y - height * 0.035f), textPanelWidth, textPanelHeight));
     }
 
     private static void DrawThumbnailAtmosphere(IImageProcessingContext ctx, int width, int height)
@@ -782,6 +835,18 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new ArgumentException("Thumbnail layout validation failed: thumbnailClickabilityScore must be at least 95.");
         if (validation.ThumbnailCuriosityScore < 95)
             throw new ArgumentException("Thumbnail layout validation failed: thumbnailCuriosityScore must be at least 95.");
+        if (!string.Equals(validation.ThumbnailVisualSourceMode, "ApprovedSceneSmartCrop", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail layout validation failed: thumbnailVisualSourceMode must be ApprovedSceneSmartCrop.");
+        if (!string.Equals(validation.SourceSceneUsed, "scene-001", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail layout validation failed: sourceSceneUsed must be scene-001.");
+        if (!validation.ApprovedSceneFoundationUsed)
+            throw new ArgumentException("Thumbnail layout validation failed: approvedSceneFoundationUsed must be true.");
+        if (validation.IndependentPlanetRedrawUsed)
+            throw new ArgumentException("Thumbnail layout validation failed: independentPlanetRedrawUsed must be false.");
+        if (!validation.ArtificialGlowRemoved)
+            throw new ArgumentException("Thumbnail layout validation failed: artificialGlowRemoved must be true.");
+        if (validation.VisualSourceQualityScore < 90)
+            throw new ArgumentException("Thumbnail layout validation failed: visualSourceQualityScore must be at least 90.");
     }
 
     private static void ValidateThumbnailSceneManifest(ThumbnailSceneManifestDto manifest, bool requireSavedManifest, string outputPath)

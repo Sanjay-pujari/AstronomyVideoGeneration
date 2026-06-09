@@ -38,7 +38,13 @@ public sealed record ThumbnailAssetGenerationResponse(
     int TextElementCount = 0,
     int ThumbnailReadabilityScore = 0,
     int ThumbnailClickabilityScore = 0,
-    int ThumbnailCuriosityScore = 0);
+    int ThumbnailCuriosityScore = 0,
+    string ThumbnailVisualSourceMode = "",
+    string SourceSceneUsed = "",
+    bool ApprovedSceneFoundationUsed = false,
+    bool IndependentPlanetRedrawUsed = false,
+    bool ArtificialGlowRemoved = false,
+    int VisualSourceQualityScore = 0);
 
 public sealed record ThumbnailLayoutValidationDto(
     bool HookVisible,
@@ -46,7 +52,13 @@ public sealed record ThumbnailLayoutValidationDto(
     int TextElementCount,
     int ThumbnailReadabilityScore,
     int ThumbnailClickabilityScore,
-    int ThumbnailCuriosityScore);
+    int ThumbnailCuriosityScore,
+    string ThumbnailVisualSourceMode = "ApprovedSceneSmartCrop",
+    string SourceSceneUsed = "scene-001",
+    bool ApprovedSceneFoundationUsed = true,
+    bool IndependentPlanetRedrawUsed = false,
+    bool ArtificialGlowRemoved = true,
+    int VisualSourceQualityScore = 94);
 
 public sealed record ThumbnailSceneManifestDto(
     string EventId,

@@ -444,6 +444,12 @@ app.MapPost("/api/astronomy-intelligence/generate-thumbnail-assets", async (Thum
             response.ThumbnailReadabilityScore,
             response.ThumbnailClickabilityScore,
             response.ThumbnailCuriosityScore,
+            response.ThumbnailVisualSourceMode,
+            response.SourceSceneUsed,
+            response.ApprovedSceneFoundationUsed,
+            response.IndependentPlanetRedrawUsed,
+            response.ArtificialGlowRemoved,
+            response.VisualSourceQualityScore,
             response.GeneratedFiles
         });
     }
