@@ -317,6 +317,11 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(RegionId, saved.RegionId);
         Assert.Equal("en", saved.Language);
         Assert.Equal("YouTubeShort", saved.Platform);
+        Assert.Equal(ScenePresentationProfile.ShortForm, saved.ScenePresentationProfile);
+        Assert.EndsWith("/scene-approval-v3/short/", saved.SceneImageBaseDirectory);
+        Assert.Equal(6, saved.SceneCount);
+        Assert.Equal(6, saved.SceneImages.Count);
+        Assert.All(saved.SceneImages, path => Assert.Contains("/scene-approval-v3/short/", path));
         Assert.Equal(21.456, saved.TotalDurationSeconds);
         Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-tts-audio.mp3").Replace('\\', '/'), saved.AudioFilePath);
         Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "final-video.mp4").Replace('\\', '/'), saved.RenderOutputPath);
@@ -340,12 +345,13 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(0.0, saved.Segments[0].StartSeconds);
         Assert.Equal(3.218, saved.Segments[0].EndSeconds);
         Assert.Equal(3.218, saved.Segments[0].DurationSeconds);
-        Assert.EndsWith("thumbnail-landscape.png", saved.Segments[0].VisualAssetPath);
+        Assert.EndsWith("scene-001-final.png", saved.Segments[0].VisualAssetPath);
+        Assert.Contains("/scene-approval-v3/short/", saved.Segments[0].VisualAssetPath);
         Assert.Equal("Don't miss this tonight.", saved.Segments[0].Narration);
         Assert.Equal("None", saved.Segments[0].TransitionIn);
         Assert.Equal("CrossFade", saved.Segments[0].TransitionOut);
         Assert.Equal("HookThumbnailZoomIn100To105", saved.Segments[0].Motion);
-        Assert.EndsWith("scene-005-final.png", saved.Segments[2].VisualAssetPath);
+        Assert.EndsWith("scene-003-final.png", saved.Segments[2].VisualAssetPath);
         Assert.Equal(18.238, saved.Segments[5].StartSeconds);
         Assert.Equal(21.456, saved.Segments[5].EndSeconds);
         Assert.Equal("None", saved.Segments[5].TransitionOut);
@@ -358,7 +364,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         await WriteRequiredInputsAsync(workingDirectory);
         var service = CreateService(workingDirectory);
         await WriteAssemblyPhaseInputsAsync(workingDirectory, service);
-        File.Delete(Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3", "scene-006-final.png"));
+        File.Delete(Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3", "short", "scene-006-final.png"));
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
         {
@@ -409,6 +415,9 @@ public sealed class VideoAssemblyIntelligenceServiceTests
 
         Assert.Equal("Render", result.PhaseExecuted);
         Assert.True(result.RenderSucceeded);
+        Assert.Equal(ScenePresentationProfile.ShortForm, result.ScenePresentationProfileUsed);
+        Assert.True(result.RenderUsedShortScenes);
+        Assert.Equal(6, result.ShortFormSceneCount);
         Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-render-validation.json").Replace('\\', '/'), result.VideoRenderValidationPath);
         Assert.True(result.RenderPolishScore >= 90);
         Assert.True(result.VideoFinalReadinessScore >= 95);
@@ -591,15 +600,15 @@ public sealed class VideoAssemblyIntelligenceServiceTests
 
     private static async Task WriteApprovedSceneOutputsAsync(string workingDirectory)
     {
-        var sceneApprovalRoot = Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3");
+        var sceneApprovalRoot = Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3", "short");
         Directory.CreateDirectory(sceneApprovalRoot);
         var pngBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
-        foreach (var sceneId in new[] { "scene-001", "scene-002", "scene-003", "scene-005", "scene-006" })
+        foreach (var sceneId in new[] { "scene-001", "scene-002", "scene-003", "scene-004", "scene-005", "scene-006" })
             await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, $"{sceneId}-final.png"), pngBytes);
     }
 
     private static string BuildApprovedScenePath(string workingDirectory, string sceneId)
-        => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3", $"{sceneId}-final.png").Replace('\\', '/');
+        => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3", "short", $"{sceneId}-final.png").Replace('\\', '/');
 
     private static string BuildHeroAssetsRoot(string workingDirectory)
         => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "hero-assets");

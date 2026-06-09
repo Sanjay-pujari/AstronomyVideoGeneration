@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
@@ -46,18 +47,39 @@ public sealed class VideoAssemblyIntelligenceService(
     private const long MinimumMp3FileSizeBytes = 1024;
     private const double SilencePeakThresholdDb = -55.0;
     private const double SilenceRmsThresholdDb = -60.0;
-    private static readonly string[] RequiredApprovedSceneIds = ["scene-001", "scene-002", "scene-003", "scene-005", "scene-006"];
+    private static readonly string[] RequiredApprovedSceneIds = ["scene-001", "scene-002", "scene-003", "scene-004", "scene-005", "scene-006"];
     private static readonly string[] RequiredAssemblySceneOrder = ["Hook", "What", "Why", "Where", "When", "Action"];
     private static readonly IReadOnlyDictionary<string, string> AssemblySceneVisualMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["Hook"] = ThumbnailLandscapeFileName,
-        ["What"] = "scene-001-final.png",
-        ["Why"] = "scene-005-final.png",
-        ["Where"] = "scene-002-final.png",
-        ["When"] = "scene-003-final.png",
+        ["Hook"] = "scene-001-final.png",
+        ["What"] = "scene-002-final.png",
+        ["Why"] = "scene-003-final.png",
+        ["Where"] = "scene-004-final.png",
+        ["When"] = "scene-005-final.png",
         ["Action"] = "scene-006-final.png"
     };
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+        options.Converters.Add(new JsonStringEnumConverter());
+        return options;
+    }
+
+    private static ScenePresentationProfile ResolveScenePresentationProfile(string platform)
+        => platform switch
+        {
+            var value when string.Equals(value, "YouTubeShort", StringComparison.OrdinalIgnoreCase) => ScenePresentationProfile.ShortForm,
+            var value when string.Equals(value, "InstagramReel", StringComparison.OrdinalIgnoreCase) => ScenePresentationProfile.ShortForm,
+            var value when string.Equals(value, "FacebookReel", StringComparison.OrdinalIgnoreCase) => ScenePresentationProfile.ShortForm,
+            var value when string.Equals(value, "YouTubeLong", StringComparison.OrdinalIgnoreCase) => ScenePresentationProfile.LongForm,
+            _ => ScenePresentationProfile.LongForm
+        };
+
+    private static string ResolveSceneApprovalProfileDirectoryName(ScenePresentationProfile presentationProfile)
+        => presentationProfile == ScenePresentationProfile.ShortForm ? "short" : "long";
 
     public async Task<VideoAssemblyGenerationResponse> GenerateVideoAssemblyAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
     {
@@ -88,7 +110,7 @@ public sealed class VideoAssemblyIntelligenceService(
             return BuildResponse(request.Phase, existing, outputPath);
         }
 
-        await EnsureRequiredInputsAsync(request.EventId, request.RegionId, cancellationToken);
+        await EnsureRequiredInputsAsync(request.EventId, request.RegionId, request.Platform, cancellationToken);
         var intelligence = BuildVideoAssemblyIntelligence(request);
         ValidateVideoAssemblyIntelligence(intelligence);
 
@@ -195,7 +217,7 @@ public sealed class VideoAssemblyIntelligenceService(
             return BuildAssemblyResponse(request.Phase, existing, outputPath, []);
         }
 
-        var inputs = await EnsureRequiredAssemblyInputsAsync(request.EventId, request.RegionId, cancellationToken);
+        var inputs = await EnsureRequiredAssemblyInputsAsync(request.EventId, request.RegionId, request.Platform, cancellationToken);
         var plan = BuildVideoAssemblyPlan(request, inputs);
         ValidateVideoAssemblyPlan(plan);
 
@@ -236,6 +258,7 @@ public sealed class VideoAssemblyIntelligenceService(
         {
             var existingValidation = await ValidateRenderedVideoAsync(outputPath, plan.AudioFilePath, plan, cancellationToken);
             var existingRenderPolish = await WriteVideoRenderValidationAsync(plan, request, validationPath, cancellationToken);
+            EnsureShortFormRenderValidationPassed(existingRenderPolish);
             var existingGeneratedFiles = File.Exists(validationPath) ? new[] { NormalizePath(validationPath) } : Array.Empty<string>();
             return BuildRenderResponse(request, outputPath, existingValidation.FinalVideoDurationSeconds, existingValidation.OutputResolution, existingValidation.AudioTrackPresent, existingValidation.RenderSucceeded, existingGeneratedFiles, validationPath, existingRenderPolish);
         }
@@ -261,6 +284,7 @@ public sealed class VideoAssemblyIntelligenceService(
         var renderPolish = request.DryRun
             ? BuildVideoRenderValidation(plan, request)
             : await WriteVideoRenderValidationAsync(plan, request, validationPath, cancellationToken);
+        EnsureShortFormRenderValidationPassed(renderPolish);
         var generatedFiles = request.DryRun ? Array.Empty<string>() : new[] { outputPath, NormalizePath(validationPath) };
         return BuildRenderResponse(request, outputPath, validation.FinalVideoDurationSeconds, validation.OutputResolution, validation.AudioTrackPresent, validation.RenderSucceeded, generatedFiles, validationPath, renderPolish);
     }
@@ -291,12 +315,12 @@ public sealed class VideoAssemblyIntelligenceService(
         var heroRoot = BuildHeroAssetsRoot(eventId, regionId);
         await EnsureHeroStoryInputAsync(heroRoot, cancellationToken);
         using var heroSceneManifest = await EnsureJsonInputAsync(Path.Combine(heroRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
-        EnsureApprovedSceneImages(eventId, regionId, heroSceneManifest);
+        EnsureApprovedSceneImages(eventId, regionId, ResolveScenePresentationProfile(intelligence.Platform), heroSceneManifest);
 
         return intelligence;
     }
 
-    private async Task EnsureRequiredInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
+    private async Task EnsureRequiredInputsAsync(string eventId, string regionId, string platform, CancellationToken cancellationToken)
     {
         var heroRoot = BuildHeroAssetsRoot(eventId, regionId);
         var thumbnailRoot = BuildThumbnailAssetsRoot(eventId, regionId);
@@ -308,7 +332,7 @@ public sealed class VideoAssemblyIntelligenceService(
         using var thumbnailIntelligence = await EnsureJsonInputAsync(Path.Combine(thumbnailRoot, ThumbnailIntelligenceFileName), ThumbnailIntelligenceFileName, cancellationToken);
         using var thumbnailCompositionModel = await EnsureJsonInputAsync(Path.Combine(thumbnailRoot, ThumbnailCompositionModelFileName), ThumbnailCompositionModelFileName, cancellationToken);
 
-        EnsureApprovedSceneImages(eventId, regionId, heroSceneManifest, thumbnailSceneManifest);
+        EnsureApprovedSceneImages(eventId, regionId, ResolveScenePresentationProfile(platform), heroSceneManifest, thumbnailSceneManifest);
     }
 
     private static async Task<JsonDocument> EnsureJsonInputAsync(string path, string fileName, CancellationToken cancellationToken)
@@ -330,9 +354,9 @@ public sealed class VideoAssemblyIntelligenceService(
         using var _ = JsonDocument.Parse(await File.ReadAllTextAsync(storyPath, cancellationToken));
     }
 
-    private void EnsureApprovedSceneImages(string eventId, string regionId, params JsonDocument[] manifests)
+    private void EnsureApprovedSceneImages(string eventId, string regionId, ScenePresentationProfile presentationProfile, params JsonDocument[] manifests)
     {
-        var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(eventId, regionId), SceneApprovalDirectoryName);
+        var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(eventId, regionId), SceneApprovalDirectoryName, ResolveSceneApprovalProfileDirectoryName(presentationProfile));
         var sceneIds = RequiredApprovedSceneIds
             .Concat(manifests.SelectMany(ResolveManifestSceneIds))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -726,14 +750,15 @@ public sealed class VideoAssemblyIntelligenceService(
     }
 
 
-    private async Task<AssemblyInputs> EnsureRequiredAssemblyInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
+    private async Task<AssemblyInputs> EnsureRequiredAssemblyInputsAsync(string eventId, string regionId, string platform, CancellationToken cancellationToken)
     {
         var intelligencePath = BuildVideoAssemblyIntelligenceOutputPath(eventId, regionId);
         var scriptPath = BuildVideoNarrationScriptOutputPath(eventId, regionId);
         var audioPath = BuildVideoTtsAudioOutputPath(eventId, regionId);
         var timingsPath = BuildVideoTtsTimingsOutputPath(eventId, regionId);
         var thumbnailPath = BuildThumbnailLandscapeOutputPath(eventId, regionId);
-        var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(eventId, regionId), SceneApprovalDirectoryName);
+        var presentationProfile = ResolveScenePresentationProfile(platform);
+        var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(eventId, regionId), SceneApprovalDirectoryName, ResolveSceneApprovalProfileDirectoryName(presentationProfile));
 
         if (!File.Exists(intelligencePath))
             throw new ArgumentException($"Required video assembly input '{VideoAssemblyIntelligenceFileName}' was not found at '{NormalizePath(intelligencePath)}'.");
@@ -743,9 +768,6 @@ public sealed class VideoAssemblyIntelligenceService(
             throw new ArgumentException($"Required video assembly input '{VideoTtsAudioFileName}' was not found at '{NormalizePath(audioPath)}'.");
         if (!File.Exists(timingsPath))
             throw new ArgumentException($"Required video assembly input '{VideoTtsTimingsFileName}' was not found at '{NormalizePath(timingsPath)}'.");
-        if (!File.Exists(thumbnailPath))
-            throw new ArgumentException($"Required video assembly visual asset '{ThumbnailLandscapeFileName}' was not found at '{NormalizePath(thumbnailPath)}'.");
-
         var intelligence = JsonSerializer.Deserialize<VideoAssemblyIntelligenceDto>(await File.ReadAllTextAsync(intelligencePath, cancellationToken), JsonOptions)
             ?? throw new ArgumentException($"Required video assembly input '{VideoAssemblyIntelligenceFileName}' could not be parsed.");
         var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(scriptPath, cancellationToken), JsonOptions)
@@ -769,7 +791,7 @@ public sealed class VideoAssemblyIntelligenceService(
         if (!durationMatchesAudio)
             throw new ArgumentException($"Video assembly validation failed: TTS scene timings end at {timings.SceneTimings[^1].EndSeconds:0.###} seconds, but actual TTS duration is {timings.ActualDurationSeconds:0.###} seconds.");
 
-        return new AssemblyInputs(intelligence, script, timings, NormalizePath(audioPath), NormalizePath(thumbnailPath), NormalizePath(sceneApprovalRoot), visualAssetPaths.Select(NormalizePath).ToArray());
+        return new AssemblyInputs(intelligence, script, timings, NormalizePath(audioPath), NormalizePath(thumbnailPath), NormalizeDirectoryPath(sceneApprovalRoot), presentationProfile, visualAssetPaths.Select(NormalizePath).ToArray());
     }
 
     private static VideoAssemblyPlanDto BuildVideoAssemblyPlan(VideoAssemblyGenerationRequest request, AssemblyInputs inputs)
@@ -791,7 +813,7 @@ public sealed class VideoAssemblyIntelligenceService(
                 ResolveSegmentMotion(timing.SceneKey));
         }).ToArray();
 
-        var renderSettings = string.Equals(request.Platform, "YouTubeShort", StringComparison.OrdinalIgnoreCase)
+        var renderSettings = inputs.ScenePresentationProfile == ScenePresentationProfile.ShortForm
             ? new VideoAssemblyRenderSettingsDto(1080, 1920, 30, "mp4", "h264", "aac")
             : new VideoAssemblyRenderSettingsDto(1920, 1080, 30, "mp4", "h264", "aac");
         var validation = new VideoAssemblyValidationDto(true, true, segments.Length, true, true);
@@ -800,6 +822,10 @@ public sealed class VideoAssemblyIntelligenceService(
             request.RegionId,
             request.Language,
             request.Platform,
+            inputs.ScenePresentationProfile,
+            inputs.SceneApprovalRoot,
+            inputs.VisualAssetPaths.Count,
+            inputs.VisualAssetPaths,
             inputs.Timings.ActualDurationSeconds,
             inputs.AudioPath,
             NormalizePath(Path.Combine(Path.GetDirectoryName(inputs.AudioPath.Replace('/', Path.DirectorySeparatorChar)) ?? string.Empty, FinalVideoFileName)),
@@ -838,13 +864,46 @@ public sealed class VideoAssemblyIntelligenceService(
             throw new ArgumentException("Video assembly validation failed: duration does not match TTS duration.");
         if (!plan.Validation.ReadyForRender)
             throw new ArgumentException("Video assembly validation failed: readyForRender must be true.");
-        if (string.Equals(plan.Platform, "YouTubeShort", StringComparison.OrdinalIgnoreCase)
-            && (plan.RenderSettings.Width != 1080 || plan.RenderSettings.Height != 1920))
-            throw new ArgumentException("Video assembly validation failed: YouTubeShort renderSettings must be 1080x1920.");
+        if (plan.ScenePresentationProfile != ResolveScenePresentationProfile(plan.Platform))
+            throw new ArgumentException("Video assembly validation failed: scenePresentationProfile must match the requested platform.");
+        if (plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm)
+        {
+            if (plan.RenderSettings.Width != 1080 || plan.RenderSettings.Height != 1920)
+                throw new ArgumentException("Video assembly validation failed: ShortForm renderSettings must be 1080x1920.");
+            ValidateShortFormSceneAssetSelection(plan);
+        }
         var lastEndSeconds = plan.Segments[^1].EndSeconds;
         if (Math.Abs(lastEndSeconds - plan.TotalDurationSeconds) > 0.001)
             throw new ArgumentException("Video assembly validation failed: totalDurationSeconds must match the last segment endSeconds.");
     }
+
+
+    private static void ValidateShortFormSceneAssetSelection(VideoAssemblyPlanDto plan)
+    {
+        var shortDirectory = NormalizePath(plan.SceneImageBaseDirectory).TrimEnd('/') + "/";
+        if (!shortDirectory.EndsWith("/scene-approval-v3/short/", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Video assembly validation failed: ShortForm sceneImageBaseDirectory must resolve to scene-approval-v3/short/.");
+        if (plan.SceneCount != 6 || plan.SceneImages.Count != 6)
+            throw new ArgumentException("Video assembly validation failed: ShortForm sceneCount must be 6.");
+        if (plan.Segments.Count != 6)
+            throw new ArgumentException("Video assembly validation failed: ShortForm segment count must be 6.");
+
+        var longScenePaths = plan.SceneImages.Concat(plan.Segments.Select(segment => segment.VisualAssetPath))
+            .Where(IsLongSceneApprovalPath)
+            .ToArray();
+        if (longScenePaths.Length > 0)
+            throw new ArgumentException($"Video assembly validation failed: ShortForm render cannot use long scene assets: {string.Join(", ", longScenePaths)}.");
+
+        if (!plan.SceneImages.All(path => IsShortSceneApprovalPath(path))
+            || !plan.Segments.All(segment => IsShortSceneApprovalPath(segment.VisualAssetPath)))
+            throw new ArgumentException("Video assembly validation failed: ShortForm render must use only scene-approval-v3/short/ assets.");
+    }
+
+    private static bool IsShortSceneApprovalPath(string path)
+        => NormalizePath(path).Contains("/scene-approval-v3/short/", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsLongSceneApprovalPath(string path)
+        => NormalizePath(path).Contains("/scene-approval-v3/long/", StringComparison.OrdinalIgnoreCase);
 
 
     private static void EnsureVideoAssemblyPlanAssetsExist(VideoAssemblyPlanDto plan)
@@ -852,8 +911,9 @@ public sealed class VideoAssemblyIntelligenceService(
         if (!File.Exists(plan.AudioFilePath))
             throw new ArgumentException($"Video assembly validation failed: audio is missing at '{plan.AudioFilePath}'.");
 
-        var missingVisualAssets = plan.Segments
-            .Select(segment => segment.VisualAssetPath)
+        var missingVisualAssets = plan.SceneImages
+            .Concat(plan.Segments.Select(segment => segment.VisualAssetPath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .Where(path => !File.Exists(path))
             .ToArray();
         if (missingVisualAssets.Length > 0)
@@ -1109,12 +1169,7 @@ public sealed class VideoAssemblyIntelligenceService(
         => Path.Combine(BuildThumbnailAssetsRoot(eventId, regionId), ThumbnailLandscapeFileName);
 
     private static string ResolveAssemblyVisualAssetPath(string sceneKey, string thumbnailPath, string sceneApprovalRoot)
-    {
-        var mappedFileName = AssemblySceneVisualMap[sceneKey];
-        return string.Equals(mappedFileName, ThumbnailLandscapeFileName, StringComparison.OrdinalIgnoreCase)
-            ? thumbnailPath
-            : Path.Combine(sceneApprovalRoot, mappedFileName);
-    }
+        => Path.Combine(sceneApprovalRoot, AssemblySceneVisualMap[sceneKey]);
 
     private static void ValidateVideoNarrationScript(VideoNarrationScriptDto script)
     {
@@ -1276,7 +1331,11 @@ public sealed class VideoAssemblyIntelligenceService(
             NormalizePath(outputPath),
             plan.Validation.ReadyForRender,
             plan.Segments.Count,
-            plan.TotalDurationSeconds);
+            plan.TotalDurationSeconds,
+            plan.ScenePresentationProfile,
+            plan.SceneImageBaseDirectory,
+            plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm,
+            plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? plan.SceneImages.Count : 0);
 
 
     private async Task<VideoRenderValidationDto> WriteVideoRenderValidationAsync(VideoAssemblyPlanDto plan, VideoAssemblyGenerationRequest request, string validationPath, CancellationToken cancellationToken)
@@ -1296,21 +1355,62 @@ public sealed class VideoAssemblyIntelligenceService(
             && plan.Segments.Take(plan.Segments.Count - 1).All(segment => segment.TransitionOut.Equals("CrossFade", StringComparison.OrdinalIgnoreCase));
         var hook = plan.Segments.FirstOrDefault(segment => segment.SceneKey.Equals("Hook", StringComparison.OrdinalIgnoreCase));
         var hookOptimizationApplied = hook is not null
-            && hook.VisualAssetPath.EndsWith(ThumbnailLandscapeFileName, StringComparison.OrdinalIgnoreCase)
+            && hook.VisualAssetPath.EndsWith("scene-001-final.png", StringComparison.OrdinalIgnoreCase)
             && hook.Motion.Equals("HookThumbnailZoomIn100To105", StringComparison.OrdinalIgnoreCase)
             && Math.Abs(hook.DurationSeconds - HookOptimizationDurationSeconds) <= 0.01;
         var musicMixValidated = !request.BackgroundMusic
             || (ResolveMusicMixLevel(request) >= 0.10 && ResolveMusicMixLevel(request) <= 0.15);
         var renderPolishScore = kenBurnsApplied && crossFadeApplied && hookOptimizationApplied && musicMixValidated ? 96 : 0;
         var videoFinalReadinessScore = renderPolishScore >= 90 ? 98 : 0;
+        var resolution = $"{plan.RenderSettings.Width}x{plan.RenderSettings.Height}";
+        var renderUsedShortScenes = plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm
+            && plan.SceneImages.Count == 6
+            && plan.SceneImages.All(IsShortSceneApprovalPath)
+            && plan.Segments.All(segment => IsShortSceneApprovalPath(segment.VisualAssetPath));
+        var renderUsedLongScenes = plan.SceneImages.Any(IsLongSceneApprovalPath)
+            || plan.Segments.Any(segment => IsLongSceneApprovalPath(segment.VisualAssetPath));
+        var shortFormSceneCount = plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? plan.SceneImages.Count : 0;
+        var ttsAudioPresent = File.Exists(plan.AudioFilePath);
+        var backgroundMusicPresent = request.BackgroundMusic;
+        var renderValidationPassed = plan.ScenePresentationProfile != ScenePresentationProfile.ShortForm
+            || (renderUsedShortScenes
+                && !renderUsedLongScenes
+                && shortFormSceneCount == 6
+                && string.Equals(resolution, "1080x1920", StringComparison.OrdinalIgnoreCase)
+                && ttsAudioPresent);
 
         return new VideoRenderValidationDto(
+            plan.ScenePresentationProfile,
+            plan.SceneImageBaseDirectory,
+            renderUsedShortScenes,
+            renderUsedLongScenes,
+            shortFormSceneCount,
+            resolution,
+            ttsAudioPresent,
+            backgroundMusicPresent,
+            renderValidationPassed,
             kenBurnsApplied,
             crossFadeApplied,
             hookOptimizationApplied,
             musicMixValidated,
             renderPolishScore,
             videoFinalReadinessScore);
+    }
+
+    private static void EnsureShortFormRenderValidationPassed(VideoRenderValidationDto validation)
+    {
+        if (validation.ScenePresentationProfileUsed != ScenePresentationProfile.ShortForm)
+            return;
+        if (!validation.RenderUsedShortScenes)
+            throw new InvalidOperationException("Video render validation failed: ShortForm render did not use short scene assets.");
+        if (validation.RenderUsedLongScenes)
+            throw new InvalidOperationException("Video render validation failed: ShortForm render used long scene assets.");
+        if (validation.ShortFormSceneCount != 6)
+            throw new InvalidOperationException("Video render validation failed: ShortForm scene count must be 6.");
+        if (!string.Equals(validation.VideoResolution, "1080x1920", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Video render validation failed: ShortForm video resolution must be 1080x1920.");
+        if (!validation.RenderValidationPassed)
+            throw new InvalidOperationException("Video render validation failed: ShortForm render validation did not pass.");
     }
 
     private static VideoAssemblyGenerationResponse BuildRenderResponse(
@@ -1353,6 +1453,10 @@ public sealed class VideoAssemblyIntelligenceService(
             false,
             0,
             0,
+            renderPolish.ScenePresentationProfileUsed,
+            renderPolish.SceneImageSourceDirectory,
+            renderPolish.RenderUsedShortScenes,
+            renderPolish.ShortFormSceneCount,
             renderSucceeded,
             NormalizePath(finalVideoPath),
             finalVideoDurationSeconds,
@@ -1406,6 +1510,8 @@ public sealed class VideoAssemblyIntelligenceService(
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');
 
+    private static string NormalizeDirectoryPath(string path) => NormalizePath(path).TrimEnd('/') + "/";
+
     private sealed record AssemblyInputs(
         VideoAssemblyIntelligenceDto Intelligence,
         VideoNarrationScriptDto Script,
@@ -1413,6 +1519,7 @@ public sealed class VideoAssemblyIntelligenceService(
         string AudioPath,
         string ThumbnailPath,
         string SceneApprovalRoot,
+        ScenePresentationProfile ScenePresentationProfile,
         IReadOnlyList<string> VisualAssetPaths);
 
     private sealed record TtsProviderSelection(string ProviderName, string VoiceUsed, bool IsSynthetic);
