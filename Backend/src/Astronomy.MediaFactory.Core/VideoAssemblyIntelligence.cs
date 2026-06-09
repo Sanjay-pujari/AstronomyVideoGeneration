@@ -17,6 +17,14 @@ public sealed class VideoAssemblyGenerationRequest
     public bool OverwriteExisting { get; set; }
 
     public bool AllowSyntheticSilentTts { get; set; }
+
+    public bool BackgroundMusic { get; set; }
+
+    public string MusicMood { get; set; } = "WonderCuriosity";
+
+    public int MusicLevelPercent { get; set; } = 12;
+
+    public bool DuckMusicUnderNarration { get; set; }
 }
 
 public sealed record VideoAssemblyGenerationResponse(
@@ -48,7 +56,14 @@ public sealed record VideoAssemblyGenerationResponse(
     string VideoAssemblyPlanPath = "",
     bool ReadyForRender = false,
     int SegmentCount = 0,
-    double TotalDurationSeconds = 0);
+    double TotalDurationSeconds = 0,
+    bool VideoRendered = false,
+    string FinalVideoPath = "",
+    double FinalVideoDurationSeconds = 0,
+    string OutputResolution = "",
+    bool AudioTrackPresent = false,
+    bool BackgroundMusicApplied = false,
+    bool RenderSucceeded = false);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,

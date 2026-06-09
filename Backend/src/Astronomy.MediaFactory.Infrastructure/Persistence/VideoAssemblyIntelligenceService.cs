@@ -35,6 +35,7 @@ public sealed class VideoAssemblyIntelligenceService(
     private const string VideoAssemblyPlanFileName = "video-assembly-plan.json";
     private const string ThumbnailLandscapeFileName = "thumbnail-landscape.png";
     private const string FinalVideoFileName = "final-video.mp4";
+    private const double RenderDurationToleranceSeconds = 0.5;
     private const string SelectedOpeningHook = "DON'T MISS THIS TONIGHT";
     private const string SyntheticTtsProviderName = "SyntheticOfflineTtsV1";
     private const string AzureTtsProviderName = "AzureSpeechTts";
@@ -69,8 +70,11 @@ public sealed class VideoAssemblyIntelligenceService(
         if (string.Equals(request.Phase, "Assembly", StringComparison.OrdinalIgnoreCase))
             return await GenerateVideoAssemblyPlanAsync(request, cancellationToken);
 
+        if (string.Equals(request.Phase, "Render", StringComparison.OrdinalIgnoreCase))
+            return await GenerateVideoRenderAsync(request, cancellationToken);
+
         if (!string.Equals(request.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only video assembly phases 'Intelligence', 'Script', 'Tts', and 'Assembly' are implemented in this endpoint version.", nameof(request));
+            throw new ArgumentException("Only video assembly phases 'Intelligence', 'Script', 'Tts', 'Assembly', and 'Render' are implemented in this endpoint version.", nameof(request));
 
         var outputPath = BuildVideoAssemblyIntelligenceOutputPath(request.EventId, request.RegionId);
         if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
@@ -199,6 +203,57 @@ public sealed class VideoAssemblyIntelligenceService(
         }
 
         return BuildAssemblyResponse(request.Phase, plan, outputPath, []);
+    }
+
+
+
+    private async Task<VideoAssemblyGenerationResponse> GenerateVideoRenderAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var planPath = BuildVideoAssemblyPlanOutputPath(request.EventId, request.RegionId);
+        if (!File.Exists(planPath))
+            throw new ArgumentException($"Required render input '{VideoAssemblyPlanFileName}' was not found at '{NormalizePath(planPath)}'.");
+
+        var plan = JsonSerializer.Deserialize<VideoAssemblyPlanDto>(await File.ReadAllTextAsync(planPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException($"Required render input '{VideoAssemblyPlanFileName}' could not be parsed.");
+        ValidateVideoAssemblyPlan(plan);
+        EnsureVideoAssemblyPlanAssetsExist(plan);
+
+        var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId);
+        if (!File.Exists(timingsPath))
+            throw new ArgumentException($"Required render input '{VideoTtsTimingsFileName}' was not found at '{NormalizePath(timingsPath)}'.");
+
+        var timings = JsonSerializer.Deserialize<VideoTtsTimingsDto>(await File.ReadAllTextAsync(timingsPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException($"Required render input '{VideoTtsTimingsFileName}' could not be parsed.");
+        ValidateVideoTtsTimings(timings);
+        EnsureRenderPlanUsesActualTtsTiming(plan, timings);
+
+        var outputPath = NormalizePath(plan.RenderOutputPath);
+        if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
+        {
+            var existingValidation = await ValidateRenderedVideoAsync(outputPath, plan.AudioFilePath, plan, cancellationToken);
+            return BuildRenderResponse(request, outputPath, existingValidation.FinalVideoDurationSeconds, existingValidation.OutputResolution, existingValidation.AudioTrackPresent, existingValidation.RenderSucceeded, []);
+        }
+
+        if (!request.DryRun)
+        {
+            await RenderFinalVideoAsync(plan, request, cancellationToken);
+        }
+
+        var validation = request.DryRun
+            ? new RenderValidation(true, File.Exists(plan.AudioFilePath), true, true, plan.TotalDurationSeconds, $"{plan.RenderSettings.Width}x{plan.RenderSettings.Height}", plan.RenderSettings.Fps, true)
+            : await ValidateRenderedVideoAsync(outputPath, plan.AudioFilePath, plan, cancellationToken);
+
+        if (!validation.VideoExists)
+            throw new InvalidOperationException($"Video render validation failed: video missing at '{outputPath}'.");
+        if (!validation.AudioExists)
+            throw new InvalidOperationException($"Video render validation failed: audio missing at '{plan.AudioFilePath}'.");
+        if (!validation.VideoDurationMatchesAudio)
+            throw new InvalidOperationException($"Video render validation failed: video duration does not match TTS audio duration.");
+        if (!validation.RenderSucceeded)
+            throw new InvalidOperationException("Video render validation failed: render did not succeed.");
+
+        var generatedFiles = request.DryRun ? Array.Empty<string>() : new[] { outputPath };
+        return BuildRenderResponse(request, outputPath, validation.FinalVideoDurationSeconds, validation.OutputResolution, validation.AudioTrackPresent, validation.RenderSucceeded, generatedFiles);
     }
 
     private async Task<VideoNarrationScriptDto> EnsureRequiredTtsInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
@@ -784,6 +839,188 @@ public sealed class VideoAssemblyIntelligenceService(
             throw new ArgumentException($"Video assembly validation failed: visual asset(s) missing at {string.Join(", ", missingVisualAssets)}.");
     }
 
+
+
+    private async Task RenderFinalVideoAsync(VideoAssemblyPlanDto plan, VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var outputPath = plan.RenderOutputPath.Replace('/', Path.DirectorySeparatorChar);
+        var outputDirectory = Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot();
+        Directory.CreateDirectory(outputDirectory);
+        if (File.Exists(outputPath))
+            File.Delete(outputPath);
+
+        var tempDirectory = Path.Combine(outputDirectory, "render-temp");
+        Directory.CreateDirectory(tempDirectory);
+        var segmentPaths = new List<string>();
+        try
+        {
+            foreach (var segment in plan.Segments)
+            {
+                var segmentPath = Path.Combine(tempDirectory, $"segment-{segmentPaths.Count + 1:000}.mp4");
+                await RenderVisualSegmentAsync(segment, plan.RenderSettings, segmentPath, cancellationToken);
+                segmentPaths.Add(segmentPath);
+            }
+
+            var concatPath = Path.Combine(tempDirectory, "segments.txt");
+            await File.WriteAllLinesAsync(concatPath, segmentPaths.Select(path => $"file '{path.Replace("'", "'\\''")}'"), cancellationToken);
+            var silentVideoPath = Path.Combine(tempDirectory, "visual-track.mp4");
+            await RunFfmpegOrThrowAsync([
+                "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", concatPath,
+                "-c", "copy", silentVideoPath
+            ], "concatenate rendered video segments", cancellationToken);
+
+            var finalArgs = BuildFinalMuxArguments(silentVideoPath, plan.AudioFilePath, outputPath, plan.TotalDurationSeconds, request);
+            await RunFfmpegOrThrowAsync(finalArgs, "mux rendered video with narration audio", cancellationToken);
+        }
+        finally
+        {
+            if (!renderingOptions.Value.KeepIntermediateFiles && Directory.Exists(tempDirectory))
+                Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    private async Task RenderVisualSegmentAsync(VideoAssemblyPlanSegmentDto segment, VideoAssemblyRenderSettingsDto renderSettings, string segmentPath, CancellationToken cancellationToken)
+    {
+        var duration = Math.Max(0.1, segment.DurationSeconds);
+        var frameCount = Math.Max(1, (int)Math.Ceiling(duration * renderSettings.Fps));
+        var fadeDuration = Math.Min(renderingOptions.Value.ShortFadeDurationSeconds, duration / 3d);
+        var fadeOutStart = Math.Max(0, duration - fadeDuration);
+        var escapedFrameCount = frameCount.ToString(CultureInfo.InvariantCulture);
+        var vf = string.Join(',',
+            $"scale={renderSettings.Width}:{renderSettings.Height}:force_original_aspect_ratio=increase",
+            $"crop={renderSettings.Width}:{renderSettings.Height}",
+            $"zoompan=z='min(1.0+0.08*on/{escapedFrameCount},1.08)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={renderSettings.Width}x{renderSettings.Height}:fps={renderSettings.Fps}",
+            $"trim=duration={duration.ToString("0.###", CultureInfo.InvariantCulture)}",
+            $"fade=t=in:st=0:d={fadeDuration.ToString("0.###", CultureInfo.InvariantCulture)}",
+            $"fade=t=out:st={fadeOutStart.ToString("0.###", CultureInfo.InvariantCulture)}:d={fadeDuration.ToString("0.###", CultureInfo.InvariantCulture)}",
+            "format=yuv420p");
+
+        await RunFfmpegOrThrowAsync([
+            "-hide_banner", "-y", "-loop", "1", "-framerate", renderSettings.Fps.ToString(CultureInfo.InvariantCulture), "-t", duration.ToString("0.###", CultureInfo.InvariantCulture), "-i", segment.VisualAssetPath,
+            "-vf", vf,
+            "-an", "-c:v", "libx264", "-preset", renderingOptions.Value.ShortsPreset, "-crf", renderingOptions.Value.ShortsCrf.ToString(CultureInfo.InvariantCulture),
+            "-r", renderSettings.Fps.ToString(CultureInfo.InvariantCulture), "-movflags", "+faststart", segmentPath
+        ], $"render visual segment {segment.SceneKey}", cancellationToken);
+    }
+
+    private IReadOnlyList<string> BuildFinalMuxArguments(string silentVideoPath, string narrationAudioPath, string outputPath, double durationSeconds, VideoAssemblyGenerationRequest request)
+    {
+        var args = new List<string> { "-hide_banner", "-y", "-i", silentVideoPath, "-i", narrationAudioPath };
+        var musicLevel = Math.Clamp(request.MusicLevelPercent, 0, 100) / 100d;
+        var backgroundMusicPath = renderingOptions.Value.BackgroundMusicPath;
+        if (request.BackgroundMusic)
+        {
+            if (!string.IsNullOrWhiteSpace(backgroundMusicPath) && File.Exists(backgroundMusicPath))
+            {
+                args.AddRange(["-stream_loop", "-1", "-i", backgroundMusicPath]);
+            }
+            else
+            {
+                args.AddRange(["-f", "lavfi", "-t", durationSeconds.ToString("0.###", CultureInfo.InvariantCulture), "-i", ResolveSyntheticMusicSource(request.MusicMood)]);
+            }
+
+            var volume = musicLevel.ToString("0.###", CultureInfo.InvariantCulture);
+            var audioFilter = request.DuckMusicUnderNarration
+                ? $"[2:a]volume={volume}[music];[music][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=250[ducked];[1:a][ducked]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+                : $"[2:a]volume={volume}[music];[1:a][music]amix=inputs=2:duration=first:dropout_transition=0[aout]";
+            args.AddRange(["-filter_complex", audioFilter, "-map", "0:v:0", "-map", "[aout]"]);
+        }
+        else
+        {
+            args.AddRange(["-map", "0:v:0", "-map", "1:a:0"]);
+        }
+
+        args.AddRange([
+            "-c:v", "libx264", "-preset", renderingOptions.Value.ShortsPreset, "-crf", renderingOptions.Value.ShortsCrf.ToString(CultureInfo.InvariantCulture),
+            "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", "-b:a", renderingOptions.Value.ShortsAudioBitrate,
+            "-shortest", "-movflags", "+faststart", outputPath
+        ]);
+        return args;
+    }
+
+    private static string ResolveSyntheticMusicSource(string mood)
+    {
+        var frequency = string.Equals(mood, "WonderCuriosity", StringComparison.OrdinalIgnoreCase) ? 220 : 196;
+        return $"sine=frequency={frequency}:sample_rate=44100";
+    }
+
+    private async Task RunFfmpegOrThrowAsync(IReadOnlyList<string> arguments, string operation, CancellationToken cancellationToken)
+    {
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        var result = await RunProcessAsync(ffmpegPath, arguments, cancellationToken);
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"Video render failed while attempting to {operation}. ffmpeg exit code {result.ExitCode}. {result.Error}{result.Output}");
+    }
+
+    private async Task<RenderValidation> ValidateRenderedVideoAsync(string outputPath, string audioPath, VideoAssemblyPlanDto plan, CancellationToken cancellationToken)
+    {
+        var videoExists = File.Exists(outputPath);
+        var audioExists = File.Exists(audioPath);
+        if (!videoExists || !audioExists)
+            return new RenderValidation(videoExists, audioExists, false, false, 0, string.Empty, 0, false);
+
+        var finalDuration = await ProbeDurationSecondsAsync(outputPath, cancellationToken);
+        var audioDuration = await ProbeDurationSecondsAsync(audioPath, cancellationToken);
+        if (audioDuration <= 0)
+            audioDuration = plan.TotalDurationSeconds;
+        var metadata = await ProbeVideoMetadataAsync(outputPath, cancellationToken);
+        var durationMatchesAudio = finalDuration > 0 && Math.Abs(finalDuration - audioDuration) <= RenderDurationToleranceSeconds;
+        var resolution = metadata.Width > 0 && metadata.Height > 0 ? $"{metadata.Width}x{metadata.Height}" : string.Empty;
+        var fpsMatches = Math.Abs(metadata.Fps - plan.RenderSettings.Fps) <= 0.1;
+        var resolutionMatches = resolution == $"{plan.RenderSettings.Width}x{plan.RenderSettings.Height}";
+        var renderSucceeded = videoExists && audioExists && durationMatchesAudio && metadata.AudioTrackPresent && resolutionMatches && fpsMatches;
+        return new RenderValidation(videoExists, audioExists, durationMatchesAudio, renderSucceeded, Math.Round(finalDuration, 3, MidpointRounding.AwayFromZero), resolution, (int)Math.Round(metadata.Fps), metadata.AudioTrackPresent);
+    }
+
+    private async Task<VideoProbeMetadata> ProbeVideoMetadataAsync(string videoPath, CancellationToken cancellationToken)
+    {
+        var ffprobePath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfprobePath) ? "ffprobe" : renderingOptions.Value.FfprobePath;
+        var result = await RunProcessAsync(ffprobePath,
+            ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", videoPath],
+            cancellationToken);
+        var audioResult = await RunProcessAsync(ffprobePath,
+            ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", videoPath],
+            cancellationToken);
+        if (result.ExitCode != 0)
+            return new VideoProbeMetadata(0, 0, 0, false);
+
+        using var document = JsonDocument.Parse(result.Output);
+        var stream = document.RootElement.TryGetProperty("streams", out var streams) && streams.GetArrayLength() > 0 ? streams[0] : default;
+        var width = stream.ValueKind == JsonValueKind.Object && stream.TryGetProperty("width", out var widthElement) ? widthElement.GetInt32() : 0;
+        var height = stream.ValueKind == JsonValueKind.Object && stream.TryGetProperty("height", out var heightElement) ? heightElement.GetInt32() : 0;
+        var fps = stream.ValueKind == JsonValueKind.Object && stream.TryGetProperty("r_frame_rate", out var fpsElement) ? ParseFrameRate(fpsElement.GetString()) : 0;
+        return new VideoProbeMetadata(width, height, fps, audioResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(audioResult.Output));
+    }
+
+    private static double ParseFrameRate(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return 0;
+        var parts = value.Split('/');
+        if (parts.Length == 2
+            && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var numerator)
+            && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var denominator)
+            && denominator != 0)
+            return numerator / denominator;
+        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var fps) ? fps : 0;
+    }
+
+    private static void EnsureRenderPlanUsesActualTtsTiming(VideoAssemblyPlanDto plan, VideoTtsTimingsDto timings)
+    {
+        if (Math.Abs(plan.TotalDurationSeconds - timings.ActualDurationSeconds) > 0.001)
+            throw new ArgumentException("Video render validation failed: video assembly plan duration must match actual TTS timing duration.");
+        if (plan.Segments.Count != timings.SceneTimings.Count)
+            throw new ArgumentException("Video render validation failed: video assembly plan segment count must match TTS timing segment count.");
+
+        foreach (var (segment, timing) in plan.Segments.Zip(timings.SceneTimings))
+        {
+            if (!string.Equals(segment.SceneKey, timing.SceneKey, StringComparison.OrdinalIgnoreCase)
+                || Math.Abs(segment.StartSeconds - timing.StartSeconds) > 0.001
+                || Math.Abs(segment.EndSeconds - timing.EndSeconds) > 0.001)
+                throw new ArgumentException("Video render validation failed: video assembly plan segments must use actual TTS timings from video-tts-timings.json.");
+        }
+    }
+
     private string BuildThumbnailLandscapeOutputPath(string eventId, string regionId)
         => Path.Combine(BuildThumbnailAssetsRoot(eventId, regionId), ThumbnailLandscapeFileName);
 
@@ -957,6 +1194,53 @@ public sealed class VideoAssemblyIntelligenceService(
             plan.Segments.Count,
             plan.TotalDurationSeconds);
 
+
+    private static VideoAssemblyGenerationResponse BuildRenderResponse(
+        VideoAssemblyGenerationRequest request,
+        string finalVideoPath,
+        double finalVideoDurationSeconds,
+        string outputResolution,
+        bool audioTrackPresent,
+        bool renderSucceeded,
+        IReadOnlyList<string> generatedFiles)
+        => new(
+            request.Phase,
+            "Render",
+            false,
+            string.Empty,
+            string.Empty,
+            0,
+            true,
+            true,
+            generatedFiles,
+            false,
+            string.Empty,
+            0,
+            true,
+            false,
+            false,
+            string.Empty,
+            string.Empty,
+            0,
+            string.Empty,
+            false,
+            false,
+            false,
+            0,
+            0,
+            false,
+            string.Empty,
+            false,
+            0,
+            0,
+            renderSucceeded,
+            NormalizePath(finalVideoPath),
+            finalVideoDurationSeconds,
+            outputResolution,
+            audioTrackPresent,
+            request.BackgroundMusic,
+            renderSucceeded);
+
     private string BuildQuestionEngineRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
 
@@ -1006,6 +1290,18 @@ public sealed class VideoAssemblyIntelligenceService(
         IReadOnlyList<string> VisualAssetPaths);
 
     private sealed record TtsProviderSelection(string ProviderName, string VoiceUsed, bool IsSynthetic);
+
+    private sealed record RenderValidation(
+        bool VideoExists,
+        bool AudioExists,
+        bool VideoDurationMatchesAudio,
+        bool RenderSucceeded,
+        double FinalVideoDurationSeconds,
+        string OutputResolution,
+        int Fps,
+        bool AudioTrackPresent);
+
+    private sealed record VideoProbeMetadata(int Width, int Height, double Fps, bool AudioTrackPresent);
 
     private sealed record ProcessResult(int ExitCode, string Output, string Error);
 }

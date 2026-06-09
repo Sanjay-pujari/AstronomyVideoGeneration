@@ -377,7 +377,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
     }
 
     [Fact]
-    public async Task GenerateVideoAssemblyAsync_RejectsUnimplementedPhases()
+    public async Task GenerateVideoAssemblyAsync_RenderFailsWhenAssemblyPlanMissing()
     {
         var workingDirectory = CreateWorkingDirectory();
         await WriteRequiredInputsAsync(workingDirectory);
@@ -394,7 +394,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             OverwriteExisting = true
         }, CancellationToken.None));
 
-        Assert.Contains("Only video assembly phases 'Intelligence', 'Script', 'Tts', and 'Assembly'", error.Message);
+        Assert.Contains("Required render input 'video-assembly-plan.json'", error.Message);
     }
 
     private static VideoAssemblyIntelligenceService CreateService(string workingDirectory)
