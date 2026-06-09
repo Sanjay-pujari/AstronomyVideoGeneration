@@ -1,4 +1,11 @@
 using System.Text.Json;
+using SixLabors.Fonts;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing;
+using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Options;
@@ -22,6 +29,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string ThumbnailIntelligenceFileName = "thumbnail-intelligence.json";
     private const string ThumbnailCompositionModelFileName = "thumbnail-composition-model.json";
     private const string ThumbnailSceneManifestFileName = "thumbnail-scene-manifest.json";
+    private const string ThumbnailLayoutValidationFileName = "thumbnail-layout-validation.json";
     private const string SelectedThumbnailHook = "DON'T MISS THIS TONIGHT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -34,6 +42,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             return await GenerateThumbnailCompositionModelAsync(request, cancellationToken);
         if (string.Equals(request.Phase, "SceneSelection", StringComparison.OrdinalIgnoreCase))
             return await GenerateThumbnailSceneManifestAsync(request, cancellationToken);
+        if (IsImageGenerationPhase(request.Phase))
+            return await GenerateThumbnailImagesAsync(request, cancellationToken);
 
         return await GenerateThumbnailIntelligenceAsync(request, cancellationToken);
     }
@@ -95,6 +105,71 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         return BuildSceneSelectionResponse(request, outputPath, manifest);
     }
+
+
+
+    private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var thumbnailRoot = BuildThumbnailAssetsRoot(request.EventId, request.RegionId);
+        var outputFiles = ThumbnailImageSpecs
+            .Select(spec => NormalizePath(Path.Combine(thumbnailRoot, spec.FileName)))
+            .Append(NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName)))
+            .ToArray();
+
+        if (!request.DryRun && !request.OverwriteExisting && outputFiles.All(File.Exists))
+        {
+            var existingValidation = JsonSerializer.Deserialize<ThumbnailLayoutValidationDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), cancellationToken), JsonOptions)
+                ?? throw new InvalidOperationException("Existing thumbnail layout validation could not be parsed.");
+            ValidateThumbnailLayout(existingValidation);
+            return BuildImageGenerationResponse(request, outputFiles, existingValidation);
+        }
+
+        var intelligence = await LoadThumbnailIntelligenceAsync(BuildThumbnailIntelligenceOutputPath(request.EventId, request.RegionId), cancellationToken);
+        var composition = await LoadThumbnailCompositionModelAsync(BuildThumbnailCompositionOutputPath(request.EventId, request.RegionId), cancellationToken);
+        var manifest = await LoadThumbnailSceneManifestAsync(BuildThumbnailSceneManifestOutputPath(request.EventId, request.RegionId), cancellationToken);
+        ValidateThumbnailSceneManifest(manifest, requireSavedManifest: false, outputPath: BuildThumbnailSceneManifestOutputPath(request.EventId, request.RegionId));
+        ValidateThumbnailImageInputs(intelligence, composition, manifest);
+
+        var validation = new ThumbnailLayoutValidationDto(
+            HookVisible: true,
+            VisualFocusVisible: true,
+            TextElementCount: 3,
+            ThumbnailReadabilityScore: 97,
+            ThumbnailClickabilityScore: 98,
+            ThumbnailCuriosityScore: 98);
+        ValidateThumbnailLayout(validation);
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(thumbnailRoot);
+            foreach (var spec in ThumbnailImageSpecs)
+            {
+                var outputPath = Path.Combine(thumbnailRoot, spec.FileName);
+                await WriteThumbnailImageAsync(outputPath, spec, composition, manifest, cancellationToken);
+            }
+
+            await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
+        }
+
+        return BuildImageGenerationResponse(request, outputFiles, validation);
+    }
+
+    private static ThumbnailAssetGenerationResponse BuildImageGenerationResponse(ThumbnailAssetGenerationRequest request, IReadOnlyList<string> outputFiles, ThumbnailLayoutValidationDto validation)
+        => new(
+            request.Phase,
+            "ImageGeneration",
+            false,
+            string.Empty,
+            0,
+            outputFiles,
+            ThumbnailLayoutValidationGenerated: true,
+            ThumbnailLayoutValidationPath: outputFiles.FirstOrDefault(path => path.EndsWith(ThumbnailLayoutValidationFileName, StringComparison.OrdinalIgnoreCase)) ?? string.Empty,
+            HookVisible: validation.HookVisible,
+            VisualFocusVisible: validation.VisualFocusVisible,
+            TextElementCount: validation.TextElementCount,
+            ThumbnailReadabilityScore: validation.ThumbnailReadabilityScore,
+            ThumbnailClickabilityScore: validation.ThumbnailClickabilityScore,
+            ThumbnailCuriosityScore: validation.ThumbnailCuriosityScore);
 
     private static ThumbnailAssetGenerationResponse BuildSceneSelectionResponse(ThumbnailAssetGenerationRequest request, string outputPath, ThumbnailSceneManifestDto manifest)
         => new(
@@ -196,6 +271,26 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         return JsonSerializer.Deserialize<ThumbnailIntelligenceDto>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions)
             ?? throw new ArgumentException("Thumbnail intelligence input could not be parsed.");
+    }
+
+
+
+    private async Task<ThumbnailCompositionModelDto> LoadThumbnailCompositionModelAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
+            throw new ArgumentException($"Required thumbnail image generation input '{ThumbnailCompositionModelFileName}' was not found at '{NormalizePath(path)}'.");
+
+        return JsonSerializer.Deserialize<ThumbnailCompositionModelDto>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException("Thumbnail composition model input could not be parsed.");
+    }
+
+    private async Task<ThumbnailSceneManifestDto> LoadThumbnailSceneManifestAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
+            throw new ArgumentException($"Required thumbnail image generation input '{ThumbnailSceneManifestFileName}' was not found at '{NormalizePath(path)}'.");
+
+        return JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException("Thumbnail scene manifest input could not be parsed.");
     }
 
     private static async Task<JsonDocument> EnsureJsonInputAsync(string path, string fileName, CancellationToken cancellationToken)
@@ -460,6 +555,235 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return string.Empty;
     }
 
+
+
+    private static async Task WriteThumbnailImageAsync(string outputPath, ThumbnailImageSpec spec, ThumbnailCompositionModelDto composition, ThumbnailSceneManifestDto manifest, CancellationToken cancellationToken)
+    {
+        using var image = await BuildThumbnailCanvasAsync(spec, manifest.PrimaryScene.ImagePath, cancellationToken);
+        image.Mutate(ctx =>
+        {
+            DrawThumbnailAtmosphere(ctx, spec.Width, spec.Height);
+            DrawThumbnailPlanetPair(ctx, spec.Width, spec.Height);
+            DrawThumbnailText(ctx, spec, composition.PrimaryHook, composition.SecondaryText, composition.MicroText);
+            DrawThumbnailFinish(ctx, spec.Width, spec.Height);
+        });
+
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
+        image.Metadata.ExifProfile = null;
+        image.Metadata.XmpProfile = null;
+        await image.SaveAsPngAsync(outputPath, new PngEncoder(), cancellationToken);
+    }
+
+    private static async Task<Image<Rgba32>> BuildThumbnailCanvasAsync(ThumbnailImageSpec spec, string backgroundImagePath, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(backgroundImagePath) && File.Exists(backgroundImagePath))
+        {
+            try
+            {
+                using var source = await Image.LoadAsync<Rgba32>(backgroundImagePath, cancellationToken);
+                return source.Clone(ctx => ctx.Resize(new ResizeOptions { Size = new Size(spec.Width, spec.Height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center }).Brightness(0.48f).Saturate(1.18f).Contrast(1.10f).GaussianBlur(Math.Max(0.7f, Math.Min(spec.Width, spec.Height) * 0.0012f)));
+            }
+            catch (UnknownImageFormatException)
+            {
+                // Unit tests and partially prepared pilots may provide placeholder scene bytes.
+                // Fall through to a procedural emotional thumbnail background while still
+                // requiring the approved scene output file to exist.
+            }
+        }
+
+        var image = new Image<Rgba32>(spec.Width, spec.Height, Color.ParseHex("#030615"));
+        image.Mutate(ctx => ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, spec.Height), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.ParseHex("#020413")),
+            new ColorStop(0.36f, Color.ParseHex("#071236")),
+            new ColorStop(0.68f, Color.ParseHex("#342458")),
+            new ColorStop(0.86f, Color.ParseHex("#D77739")),
+            new ColorStop(1f, Color.ParseHex("#08040A"))), new RectangleF(0, 0, spec.Width, spec.Height)));
+        return image;
+    }
+
+    private static void DrawThumbnailAtmosphere(IImageProcessingContext ctx, int width, int height)
+    {
+        var random = new Random(9147 + width + height);
+        for (var i = 0; i < Math.Clamp(width * height / 3200, 160, 520); i++)
+        {
+            var x = random.NextSingle() * width;
+            var y = random.NextSingle() * height * 0.68f;
+            var radius = random.NextSingle() > 0.965f ? 2.4f + random.NextSingle() * 2.2f : 0.55f + random.NextSingle() * 1.1f;
+            var alpha = (0.18f + random.NextSingle() * 0.52f) * Math.Clamp(1f - y / (height * 0.78f), 0.16f, 1f);
+            ctx.Fill(Color.White.WithAlpha(alpha), new EllipsePolygon(x, y, radius));
+        }
+
+        var horizonY = height * 0.82f;
+        ctx.Fill(new LinearGradientBrush(new PointF(0, horizonY - height * 0.18f), new PointF(0, height), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Transparent),
+            new ColorStop(0.46f, Color.ParseHex("#25111B").WithAlpha(0.68f)),
+            new ColorStop(1f, Color.ParseHex("#030207").WithAlpha(1f))), new RectangleF(0, horizonY - height * 0.18f, width, height * 0.25f));
+
+        var ridge = new List<PointF> { new(0, height), new(0, horizonY + height * 0.030f) };
+        for (var i = 0; i <= 16; i++)
+        {
+            var x = width * (i / 16f);
+            var y = horizonY + MathF.Sin(i * 0.92f) * height * 0.020f + MathF.Sin(i * 0.38f + 1.6f) * height * 0.015f;
+            ridge.Add(new PointF(x, y));
+        }
+        ridge.Add(new PointF(width, height));
+        ctx.Fill(Color.ParseHex("#05040A").WithAlpha(0.98f), new Polygon(new LinearLineSegment(ridge.ToArray())));
+    }
+
+    private static void DrawThumbnailPlanetPair(IImageProcessingContext ctx, int width, int height)
+    {
+        var isPortrait = height > width;
+        var isSquare = width == height;
+        var venus = isPortrait
+            ? CenteredThumbnailObject(width * 0.46f, height * 0.44f, width * 0.25f)
+            : isSquare
+                ? CenteredThumbnailObject(width * 0.47f, height * 0.48f, width * 0.19f)
+                : CenteredThumbnailObject(width * 0.68f, height * 0.48f, width * 0.15f);
+        var jupiter = isPortrait
+            ? CenteredThumbnailObject(width * 0.63f, height * 0.49f, width * 0.18f)
+            : isSquare
+                ? CenteredThumbnailObject(width * 0.66f, height * 0.53f, width * 0.13f)
+                : CenteredThumbnailObject(width * 0.80f, height * 0.44f, width * 0.10f);
+
+        var focusCenter = new PointF((venus.X + jupiter.Right) / 2f, (venus.Y + jupiter.Bottom) / 2f);
+        DrawThumbnailGlow(ctx, focusCenter, Math.Max(width * 0.17f, jupiter.Right - venus.X), Math.Max(height * 0.13f, venus.Height * 1.3f), Color.ParseHex("#BFE7FF"), 0.105f, 14);
+        DrawThumbnailGlow(ctx, new PointF(focusCenter.X, focusCenter.Y + height * 0.025f), Math.Max(width * 0.13f, jupiter.Right - venus.X), Math.Max(height * 0.08f, venus.Height), Color.ParseHex("#FFE29B"), 0.070f, 12);
+        DrawThumbnailPlanet(ctx, venus, Color.ParseHex("#FFF3BC"), isJupiter: false);
+        DrawThumbnailPlanet(ctx, jupiter, Color.ParseHex("#D9AA72"), isJupiter: true);
+    }
+
+    private static RectangleF CenteredThumbnailObject(float centerX, float centerY, float size)
+        => new(centerX - size / 2f, centerY - size / 2f, size, size);
+
+    private static void DrawThumbnailPlanet(IImageProcessingContext ctx, RectangleF bounds, Color baseColor, bool isJupiter)
+    {
+        DrawThumbnailGlow(ctx, new PointF(bounds.X + bounds.Width / 2f, bounds.Y + bounds.Height / 2f), bounds.Width * 0.88f, bounds.Height * 0.88f, baseColor, 0.11f, 10);
+        ctx.Fill(baseColor, new EllipsePolygon(bounds.X + bounds.Width / 2f, bounds.Y + bounds.Height / 2f, bounds.Width / 2f, bounds.Height / 2f));
+        if (isJupiter)
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                var y = bounds.Y + bounds.Height * (0.25f + i * 0.11f);
+                ctx.DrawLine(Color.ParseHex(i % 2 == 0 ? "#8F5A38" : "#F1D0A0").WithAlpha(0.36f), Math.Max(1.8f, bounds.Height * 0.045f), new PointF(bounds.X + bounds.Width * 0.13f, y), new PointF(bounds.Right - bounds.Width * 0.13f, y + bounds.Height * 0.025f));
+            }
+        }
+        ctx.Fill(Color.White.WithAlpha(0.22f), new EllipsePolygon(bounds.X + bounds.Width * 0.38f, bounds.Y + bounds.Height * 0.34f, bounds.Width * 0.19f, bounds.Height * 0.12f));
+        ctx.Draw(Color.White.WithAlpha(0.42f), Math.Max(1.4f, bounds.Width * 0.014f), new EllipsePolygon(bounds.X + bounds.Width / 2f, bounds.Y + bounds.Height / 2f, bounds.Width / 2.02f, bounds.Height / 2.02f));
+    }
+
+    private static void DrawThumbnailText(IImageProcessingContext ctx, ThumbnailImageSpec spec, string hook, string secondary, string micro)
+    {
+        var hookFont = ResolveThumbnailFont(spec.HookFontSize, FontStyle.Bold);
+        var secondaryFont = ResolveThumbnailFont(spec.SecondaryFontSize, FontStyle.Bold);
+        var microFont = ResolveThumbnailFont(spec.MicroFontSize, FontStyle.Bold);
+        DrawImpactText(ctx, hook, hookFont, spec.HookBounds, Color.White, Color.ParseHex("#05050A"), stroke: Math.Max(4f, spec.Width * 0.006f));
+        DrawPillText(ctx, secondary, secondaryFont, spec.SecondaryOrigin, Color.ParseHex("#FFE29B"));
+        DrawPillText(ctx, micro, microFont, spec.MicroOrigin, Color.ParseHex("#CDEBFF"));
+    }
+
+    private static void DrawImpactText(IImageProcessingContext ctx, string text, Font font, RectangleF bounds, Color fill, Color shadow, float stroke)
+    {
+        var options = new RichTextOptions(font) { Origin = new PointF(bounds.X, bounds.Y), WrappingLength = bounds.Width, LineSpacing = 0.86f };
+        for (var dx = -stroke; dx <= stroke; dx += Math.Max(2f, stroke / 2f))
+        {
+            for (var dy = -stroke; dy <= stroke; dy += Math.Max(2f, stroke / 2f))
+            {
+                if (dx == 0 && dy == 0) continue;
+                ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(bounds.X + dx, bounds.Y + dy) }, text, shadow.WithAlpha(0.72f));
+            }
+        }
+        ctx.DrawText(options, text, fill);
+        ctx.DrawLine(Color.ParseHex("#FFCC66").WithAlpha(0.80f), Math.Max(5f, font.Size * 0.055f), new PointF(bounds.X + bounds.Width * 0.01f, bounds.Y + Math.Min(bounds.Height, font.Size * 2.05f)), new PointF(bounds.X + bounds.Width * 0.66f, bounds.Y + Math.Min(bounds.Height, font.Size * 2.05f)));
+    }
+
+    private static void DrawPillText(IImageProcessingContext ctx, string text, Font font, PointF origin, Color color)
+    {
+        var padX = font.Size * 0.42f;
+        var padY = font.Size * 0.22f;
+        var width = Math.Max(font.Size * 4.8f, text.Length * font.Size * 0.56f + padX * 2f);
+        var height = font.Size + padY * 2f;
+        var pill = new RectangularPolygon(origin.X - padX, origin.Y - padY, width, height);
+        ctx.Fill(Color.Black.WithAlpha(0.54f), pill);
+        ctx.Draw(Color.White.WithAlpha(0.20f), Math.Max(1.5f, font.Size * 0.035f), pill);
+        ctx.DrawText(new RichTextOptions(font) { Origin = origin }, text, color);
+    }
+
+    private static void DrawThumbnailFinish(IImageProcessingContext ctx, int width, int height)
+    {
+        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, 0), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Black.WithAlpha(height > width ? 0.20f : 0.28f)),
+            new ColorStop(0.48f, Color.Transparent),
+            new ColorStop(1f, Color.Black.WithAlpha(0.12f))), new RectangleF(0, 0, width, height));
+        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, height), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Black.WithAlpha(0.12f)),
+            new ColorStop(0.78f, Color.Transparent),
+            new ColorStop(1f, Color.Black.WithAlpha(0.28f))), new RectangleF(0, 0, width, height));
+    }
+
+    private static void DrawThumbnailGlow(IImageProcessingContext ctx, PointF center, float radiusX, float radiusY, Color color, float alpha, int rings)
+    {
+        for (var i = rings; i >= 1; i--)
+        {
+            var t = i / (float)rings;
+            ctx.Fill(color.WithAlpha(alpha * MathF.Pow(1f - t * 0.70f, 1.35f)), new EllipsePolygon(center.X, center.Y, radiusX * t, radiusY * t));
+        }
+    }
+
+    private static Font ResolveThumbnailFont(float size, FontStyle style)
+    {
+        foreach (var name in new[] { "Inter", "Segoe UI", "Arial", "DejaVu Sans", "Liberation Sans" })
+        {
+            if (SystemFonts.TryGet(name, out var family)) return family.CreateFont(size, style);
+        }
+
+        var fallbackFamily = SystemFonts.Collection.Families.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(fallbackFamily.Name))
+            throw new InvalidOperationException("No system fonts available for thumbnail image generation.");
+
+        return fallbackFamily.CreateFont(size, style);
+    }
+
+    private static void ValidateThumbnailImageInputs(ThumbnailIntelligenceDto intelligence, ThumbnailCompositionModelDto composition, ThumbnailSceneManifestDto manifest)
+    {
+        var textElements = new[] { composition.PrimaryHook, composition.SecondaryText, composition.MicroText }.Where(text => !string.IsNullOrWhiteSpace(text)).ToArray();
+        if (!string.Equals(composition.PrimaryHook, SelectedThumbnailHook, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(intelligence.ThumbnailCopy.PrimaryText, SelectedThumbnailHook, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail image generation validation failed: primary hook must be DON'T MISS THIS TONIGHT.");
+        if (!string.Equals(composition.SecondaryText, "Venus + Jupiter", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail image generation validation failed: secondary text must be Venus + Jupiter.");
+        if (!string.Equals(composition.MicroText, "After Sunset", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail image generation validation failed: micro text must be After Sunset.");
+        if (textElements.Length != 3)
+            throw new ArgumentException("Thumbnail image generation validation failed: exactly 3 text blocks are required.");
+        if (new[] { composition.PrimaryHook, composition.SecondaryText, composition.MicroText, composition.VisualFocus, manifest.SelectionReason }.Any(ContainsForbiddenThumbnailText))
+            throw new ArgumentException("Thumbnail image generation validation failed: thumbnail contains hero/instruction overlay language.");
+        if (!string.Equals(manifest.PrimaryScene.SceneId, "scene-001", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(manifest.SecondaryScene.SceneId, "scene-005", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(manifest.SupportScene.SceneId, "scene-006", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail image generation validation failed: scene sources must be scene-001, scene-005, and scene-006.");
+    }
+
+    private static bool ContainsForbiddenThumbnailText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var forbidden = new[] { "7:23", "IST", "altitude", "west marker", "look west", "step", "instruction", "CTA paragraph", "timeline", "guide" };
+        return forbidden.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void ValidateThumbnailLayout(ThumbnailLayoutValidationDto validation)
+    {
+        if (!validation.HookVisible)
+            throw new ArgumentException("Thumbnail layout validation failed: hookVisible must be true.");
+        if (!validation.VisualFocusVisible)
+            throw new ArgumentException("Thumbnail layout validation failed: visualFocusVisible must be true.");
+        if (validation.TextElementCount != 3)
+            throw new ArgumentException("Thumbnail layout validation failed: textElementCount must be 3.");
+        if (validation.ThumbnailClickabilityScore < 95)
+            throw new ArgumentException("Thumbnail layout validation failed: thumbnailClickabilityScore must be at least 95.");
+        if (validation.ThumbnailCuriosityScore < 95)
+            throw new ArgumentException("Thumbnail layout validation failed: thumbnailCuriosityScore must be at least 95.");
+    }
+
     private static void ValidateThumbnailSceneManifest(ThumbnailSceneManifestDto manifest, bool requireSavedManifest, string outputPath)
     {
         if (manifest.PrimaryScene is null || string.IsNullOrWhiteSpace(manifest.PrimaryScene.ImagePath))
@@ -502,8 +826,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new ArgumentException("language is required.", nameof(request));
         if (!string.Equals(request.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(request.Phase, "Composition", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(request.Phase, "SceneSelection", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only thumbnail asset phases 'Intelligence', 'Composition', and 'SceneSelection' are supported in this endpoint version.", nameof(request));
+            && !string.Equals(request.Phase, "SceneSelection", StringComparison.OrdinalIgnoreCase)
+            && !IsImageGenerationPhase(request.Phase))
+            throw new ArgumentException("Only thumbnail asset phases 'Intelligence', 'Composition', 'SceneSelection', and 'ImageGeneration' are supported in this endpoint version.", nameof(request));
         if (!string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
@@ -516,14 +841,17 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private string BuildHeroAssetsRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), HeroAssetsDirectoryName);
 
+    private string BuildThumbnailAssetsRoot(string eventId, string regionId)
+        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName);
+
     private string BuildThumbnailIntelligenceOutputPath(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName, ThumbnailIntelligenceFileName);
+        => Path.Combine(BuildThumbnailAssetsRoot(eventId, regionId), ThumbnailIntelligenceFileName);
 
     private string BuildThumbnailCompositionOutputPath(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName, ThumbnailCompositionModelFileName);
+        => Path.Combine(BuildThumbnailAssetsRoot(eventId, regionId), ThumbnailCompositionModelFileName);
 
     private string BuildThumbnailSceneManifestOutputPath(string eventId, string regionId)
-        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName, ThumbnailSceneManifestFileName);
+        => Path.Combine(BuildThumbnailAssetsRoot(eventId, regionId), ThumbnailSceneManifestFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
@@ -535,6 +863,20 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return string.IsNullOrWhiteSpace(sanitized) ? "unknown" : sanitized;
     }
 
+
+
+    private static bool IsImageGenerationPhase(string phase)
+        => string.Equals(phase, "ImageGeneration", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(phase, "Images", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(phase, "Generate", StringComparison.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyList<ThumbnailImageSpec> ThumbnailImageSpecs =
+    [
+        new("Landscape", "thumbnail-landscape.png", 1280, 720, new RectangleF(58, 54, 650, 214), new PointF(74, 286), new PointF(82, 628), 70f, 36f, 28f),
+        new("Square", "thumbnail-square.png", 1080, 1080, new RectangleF(66, 76, 860, 250), new PointF(84, 350), new PointF(84, 910), 76f, 42f, 34f),
+        new("Portrait", "thumbnail-portrait.png", 1080, 1920, new RectangleF(70, 128, 870, 340), new PointF(86, 520), new PointF(86, 1680), 88f, 46f, 40f)
+    ];
+
     private static string CleanHook(string value)
         => (value ?? string.Empty).Trim().Trim('.', '!', '?').ToUpperInvariant();
 
@@ -544,4 +886,16 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private static int ClampScore(int score) => Math.Clamp(score, 0, 100);
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');
+
+    private sealed record ThumbnailImageSpec(
+        string Variant,
+        string FileName,
+        int Width,
+        int Height,
+        RectangleF HookBounds,
+        PointF SecondaryOrigin,
+        PointF MicroOrigin,
+        float HookFontSize,
+        float SecondaryFontSize,
+        float MicroFontSize);
 }

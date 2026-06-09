@@ -30,7 +30,23 @@ public sealed record ThumbnailAssetGenerationResponse(
     string ThumbnailSceneManifestPath = "",
     string PrimaryScene = "",
     string SecondaryScene = "",
-    string SupportScene = "");
+    string SupportScene = "",
+    bool ThumbnailLayoutValidationGenerated = false,
+    string ThumbnailLayoutValidationPath = "",
+    bool HookVisible = false,
+    bool VisualFocusVisible = false,
+    int TextElementCount = 0,
+    int ThumbnailReadabilityScore = 0,
+    int ThumbnailClickabilityScore = 0,
+    int ThumbnailCuriosityScore = 0);
+
+public sealed record ThumbnailLayoutValidationDto(
+    bool HookVisible,
+    bool VisualFocusVisible,
+    int TextElementCount,
+    int ThumbnailReadabilityScore,
+    int ThumbnailClickabilityScore,
+    int ThumbnailCuriosityScore);
 
 public sealed record ThumbnailSceneManifestDto(
     string EventId,
