@@ -295,6 +295,11 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             Language = "en",
             Platform = "YouTubeShort",
             Phase = "Assembly",
+            ScenePresentationProfile = ScenePresentationProfile.ShortForm,
+            BackgroundMusic = true,
+            MusicMood = "WonderCuriosity",
+            MusicLevelPercent = 12,
+            DuckMusicUnderNarration = true,
             DryRun = false,
             OverwriteExisting = true
         }, CancellationToken.None);
@@ -306,6 +311,11 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(planPath.Replace('\\', '/'), result.VideoAssemblyPlanPath);
         Assert.True(result.ReadyForRender);
         Assert.Equal(6, result.SegmentCount);
+        Assert.True(result.RenderUsedShortScenes);
+        Assert.False(result.RenderUsedLongScenes);
+        Assert.True(result.SceneMappingValid);
+        Assert.True(result.BackgroundMusicPlanned);
+        Assert.Equal(12, result.MusicLevelPercent);
         Assert.Equal(21.456, result.TotalDurationSeconds);
         Assert.Empty(result.GeneratedFiles);
         Assert.True(File.Exists(planPath));
@@ -334,7 +344,19 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal("CrossFade", saved.Style.TransitionStyle);
         Assert.Equal("SubtleKenBurns", saved.Style.MotionStyle);
         Assert.Equal("UseExistingSceneTextOnly", saved.Style.TextOverlayStyle);
-        Assert.False(saved.Style.BackgroundMusic);
+        Assert.True(saved.BackgroundMusic);
+        Assert.True(saved.Style.BackgroundMusic);
+        Assert.True(saved.SceneMappingValidation.HookUsesScene001);
+        Assert.True(saved.SceneMappingValidation.WhatUsesScene001);
+        Assert.True(saved.SceneMappingValidation.WhyUsesScene005);
+        Assert.True(saved.SceneMappingValidation.WhereUsesScene002);
+        Assert.True(saved.SceneMappingValidation.WhenUsesScene003);
+        Assert.True(saved.SceneMappingValidation.ActionUsesScene006);
+        Assert.True(saved.SceneMappingValidation.SceneMappingValid);
+        Assert.True(saved.RenderMusicPlan.BackgroundMusic);
+        Assert.Equal("WonderCuriosity", saved.RenderMusicPlan.MusicMood);
+        Assert.Equal(12, saved.RenderMusicPlan.MusicLevelPercent);
+        Assert.True(saved.RenderMusicPlan.DuckMusicUnderNarration);
         Assert.True(saved.Validation.AudioExists);
         Assert.True(saved.Validation.AllVisualAssetsExist);
         Assert.Equal(6, saved.Validation.SegmentCount);
@@ -351,7 +373,10 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal("None", saved.Segments[0].TransitionIn);
         Assert.Equal("CrossFade", saved.Segments[0].TransitionOut);
         Assert.Equal("HookThumbnailZoomIn100To105", saved.Segments[0].Motion);
-        Assert.EndsWith("scene-003-final.png", saved.Segments[2].VisualAssetPath);
+        Assert.EndsWith("scene-005-final.png", saved.Segments[2].VisualAssetPath);
+        Assert.EndsWith("scene-001-final.png", saved.Segments[1].VisualAssetPath);
+        Assert.EndsWith("scene-002-final.png", saved.Segments[3].VisualAssetPath);
+        Assert.EndsWith("scene-003-final.png", saved.Segments[4].VisualAssetPath);
         Assert.Equal(18.238, saved.Segments[5].StartSeconds);
         Assert.Equal(21.456, saved.Segments[5].EndSeconds);
         Assert.Equal("None", saved.Segments[5].TransitionOut);

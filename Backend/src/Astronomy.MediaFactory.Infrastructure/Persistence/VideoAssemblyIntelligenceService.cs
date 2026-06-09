@@ -52,10 +52,10 @@ public sealed class VideoAssemblyIntelligenceService(
     private static readonly IReadOnlyDictionary<string, string> AssemblySceneVisualMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["Hook"] = "scene-001-final.png",
-        ["What"] = "scene-002-final.png",
-        ["Why"] = "scene-003-final.png",
-        ["Where"] = "scene-004-final.png",
-        ["When"] = "scene-005-final.png",
+        ["What"] = "scene-001-final.png",
+        ["Why"] = "scene-005-final.png",
+        ["Where"] = "scene-002-final.png",
+        ["When"] = "scene-003-final.png",
         ["Action"] = "scene-006-final.png"
     };
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
@@ -218,6 +218,9 @@ public sealed class VideoAssemblyIntelligenceService(
         }
 
         var inputs = await EnsureRequiredAssemblyInputsAsync(request.EventId, request.RegionId, request.Platform, cancellationToken);
+        if (request.ScenePresentationProfile.HasValue && request.ScenePresentationProfile.Value != inputs.ScenePresentationProfile)
+            throw new ArgumentException("Video assembly validation failed: requested scenePresentationProfile must match the platform scene presentation profile.");
+
         var plan = BuildVideoAssemblyPlan(request, inputs);
         ValidateVideoAssemblyPlan(plan);
 
@@ -831,11 +834,44 @@ public sealed class VideoAssemblyIntelligenceService(
             NormalizePath(Path.Combine(Path.GetDirectoryName(inputs.AudioPath.Replace('/', Path.DirectorySeparatorChar)) ?? string.Empty, FinalVideoFileName)),
             segments,
             renderSettings,
-            new VideoAssemblyStyleDto("CrossFade", "SubtleKenBurns", "UseExistingSceneTextOnly", false),
+            true,
+            new VideoAssemblyStyleDto("CrossFade", "SubtleKenBurns", "UseExistingSceneTextOnly", true),
             validation,
+            BuildSceneMappingValidation(segments),
+            BuildRenderMusicPlan(request),
             [],
             DateTimeOffset.UtcNow);
     }
+
+    private static VideoAssemblySceneMappingValidationDto BuildSceneMappingValidation(IReadOnlyList<VideoAssemblyPlanSegmentDto> segments)
+    {
+        var visualByScene = segments.ToDictionary(segment => segment.SceneKey, segment => NormalizePath(segment.VisualAssetPath), StringComparer.OrdinalIgnoreCase);
+        var hookUsesScene001 = SegmentUsesScene(visualByScene, "Hook", "scene-001-final.png");
+        var whatUsesScene001 = SegmentUsesScene(visualByScene, "What", "scene-001-final.png");
+        var whyUsesScene005 = SegmentUsesScene(visualByScene, "Why", "scene-005-final.png");
+        var whereUsesScene002 = SegmentUsesScene(visualByScene, "Where", "scene-002-final.png");
+        var whenUsesScene003 = SegmentUsesScene(visualByScene, "When", "scene-003-final.png");
+        var actionUsesScene006 = SegmentUsesScene(visualByScene, "Action", "scene-006-final.png");
+
+        return new VideoAssemblySceneMappingValidationDto(
+            hookUsesScene001,
+            whatUsesScene001,
+            whyUsesScene005,
+            whereUsesScene002,
+            whenUsesScene003,
+            actionUsesScene006,
+            hookUsesScene001 && whatUsesScene001 && whyUsesScene005 && whereUsesScene002 && whenUsesScene003 && actionUsesScene006);
+    }
+
+    private static bool SegmentUsesScene(IReadOnlyDictionary<string, string> visualByScene, string sceneKey, string expectedFileName)
+        => visualByScene.TryGetValue(sceneKey, out var visualAssetPath)
+            && visualAssetPath.EndsWith(expectedFileName, StringComparison.OrdinalIgnoreCase);
+
+    private static VideoAssemblyRenderMusicPlanDto BuildRenderMusicPlan(VideoAssemblyGenerationRequest request)
+        => new(true,
+            string.IsNullOrWhiteSpace(request.MusicMood) ? "WonderCuriosity" : request.MusicMood,
+            request.MusicLevelPercent <= 0 ? 12 : request.MusicLevelPercent,
+            request.DuckMusicUnderNarration);
 
     private static string ResolveSegmentMotion(string sceneKey)
         => sceneKey switch
@@ -864,8 +900,19 @@ public sealed class VideoAssemblyIntelligenceService(
             throw new ArgumentException("Video assembly validation failed: duration does not match TTS duration.");
         if (!plan.Validation.ReadyForRender)
             throw new ArgumentException("Video assembly validation failed: readyForRender must be true.");
+        if (plan.SceneMappingValidation is null)
+            throw new ArgumentException("Video assembly validation failed: sceneMappingValidation is required.");
+        if (!plan.SceneMappingValidation.SceneMappingValid)
+            throw new ArgumentException("Video assembly validation failed: sceneMappingValid must be true.");
+        var backgroundMusicExpected = plan.BackgroundMusic || plan.Style.BackgroundMusic;
+        if (backgroundMusicExpected && plan.RenderMusicPlan is null)
+            throw new ArgumentException("Video assembly validation failed: renderMusicPlan is required when backgroundMusic is expected.");
+        if (backgroundMusicExpected && !plan.RenderMusicPlan.BackgroundMusic)
+            throw new ArgumentException("Video assembly validation failed: renderMusicPlan.backgroundMusic must be true when backgroundMusic is expected.");
         if (plan.ScenePresentationProfile != ResolveScenePresentationProfile(plan.Platform))
             throw new ArgumentException("Video assembly validation failed: scenePresentationProfile must match the requested platform.");
+        if (string.Equals(plan.Platform, "YouTubeShort", StringComparison.OrdinalIgnoreCase) && plan.ScenePresentationProfile != ScenePresentationProfile.ShortForm)
+            throw new ArgumentException("Video assembly validation failed: YouTubeShort requires scenePresentationProfile ShortForm.");
         if (plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm)
         {
             if (plan.RenderSettings.Width != 1080 || plan.RenderSettings.Height != 1920)
@@ -897,6 +944,10 @@ public sealed class VideoAssemblyIntelligenceService(
         if (!plan.SceneImages.All(path => IsShortSceneApprovalPath(path))
             || !plan.Segments.All(segment => IsShortSceneApprovalPath(segment.VisualAssetPath)))
             throw new ArgumentException("Video assembly validation failed: ShortForm render must use only scene-approval-v3/short/ assets.");
+
+        var allSegmentPathsContainShortDirectory = plan.Segments.All(segment => NormalizePath(segment.VisualAssetPath).Contains("/short/", StringComparison.OrdinalIgnoreCase));
+        if (!allSegmentPathsContainShortDirectory)
+            throw new ArgumentException("Video assembly validation failed: ShortForm visualAssetPath values must contain /short/.");
     }
 
     private static bool IsShortSceneApprovalPath(string path)
@@ -947,7 +998,7 @@ public sealed class VideoAssemblyIntelligenceService(
             var silentVideoPath = Path.Combine(tempDirectory, "visual-track.mp4");
             await RenderCrossFadedVisualTrackAsync(segmentPaths, plan, silentVideoPath, cancellationToken);
 
-            var finalArgs = BuildFinalMuxArguments(silentVideoPath, plan.AudioFilePath, outputPath, plan.TotalDurationSeconds, request);
+            var finalArgs = BuildFinalMuxArguments(silentVideoPath, plan.AudioFilePath, outputPath, plan.TotalDurationSeconds, plan.RenderMusicPlan);
             await RunFfmpegOrThrowAsync(finalArgs, "mux rendered video with narration audio", cancellationToken);
         }
         finally
@@ -1037,12 +1088,12 @@ public sealed class VideoAssemblyIntelligenceService(
             _ => (0.0, 0.0)
         };
 
-    private IReadOnlyList<string> BuildFinalMuxArguments(string silentVideoPath, string narrationAudioPath, string outputPath, double durationSeconds, VideoAssemblyGenerationRequest request)
+    private IReadOnlyList<string> BuildFinalMuxArguments(string silentVideoPath, string narrationAudioPath, string outputPath, double durationSeconds, VideoAssemblyRenderMusicPlanDto renderMusicPlan)
     {
         var args = new List<string> { "-hide_banner", "-y", "-i", silentVideoPath, "-i", narrationAudioPath };
-        var musicLevel = ResolveMusicMixLevel(request);
+        var musicLevel = ResolveMusicMixLevel(renderMusicPlan);
         var backgroundMusicPath = renderingOptions.Value.BackgroundMusicPath;
-        if (request.BackgroundMusic)
+        if (renderMusicPlan.BackgroundMusic)
         {
             if (!string.IsNullOrWhiteSpace(backgroundMusicPath) && File.Exists(backgroundMusicPath))
             {
@@ -1050,11 +1101,11 @@ public sealed class VideoAssemblyIntelligenceService(
             }
             else
             {
-                args.AddRange(["-f", "lavfi", "-t", durationSeconds.ToString("0.###", CultureInfo.InvariantCulture), "-i", ResolveSyntheticMusicSource(request.MusicMood)]);
+                args.AddRange(["-f", "lavfi", "-t", durationSeconds.ToString("0.###", CultureInfo.InvariantCulture), "-i", ResolveSyntheticMusicSource(renderMusicPlan.MusicMood)]);
             }
 
             var volume = musicLevel.ToString("0.###", CultureInfo.InvariantCulture);
-            var duckMusic = request.DuckMusicUnderNarration || request.BackgroundMusic;
+            var duckMusic = renderMusicPlan.DuckMusicUnderNarration || renderMusicPlan.BackgroundMusic;
             var audioFilter = duckMusic
                 ? $"[2:a]volume={volume}[music];[music][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=350[ducked];[1:a][ducked]amix=inputs=2:duration=first:weights=1 1:dropout_transition=0[mix];[mix]alimiter=limit=0.95[aout]"
                 : $"[2:a]volume={volume}[music];[1:a][music]amix=inputs=2:duration=first:weights=1 1:dropout_transition=0[mix];[mix]alimiter=limit=0.95[aout]";
@@ -1074,12 +1125,12 @@ public sealed class VideoAssemblyIntelligenceService(
     }
 
 
-    private static double ResolveMusicMixLevel(VideoAssemblyGenerationRequest request)
+    private static double ResolveMusicMixLevel(VideoAssemblyRenderMusicPlanDto renderMusicPlan)
     {
-        if (!request.BackgroundMusic)
+        if (!renderMusicPlan.BackgroundMusic)
             return 0;
 
-        return Math.Clamp(request.MusicLevelPercent, 10, 15) / 100d;
+        return Math.Clamp(renderMusicPlan.MusicLevelPercent, 10, 15) / 100d;
     }
 
     private static string ResolveSyntheticMusicSource(string mood)
@@ -1335,7 +1386,21 @@ public sealed class VideoAssemblyIntelligenceService(
             plan.ScenePresentationProfile,
             plan.SceneImageBaseDirectory,
             plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm,
-            plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? plan.SceneImages.Count : 0);
+            plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? plan.SceneImages.Count : 0,
+            false,
+            string.Empty,
+            0,
+            string.Empty,
+            false,
+            false,
+            false,
+            string.Empty,
+            0,
+            0,
+            plan.SceneImages.Any(IsLongSceneApprovalPath) || plan.Segments.Any(segment => IsLongSceneApprovalPath(segment.VisualAssetPath)),
+            plan.SceneMappingValidation.SceneMappingValid,
+            plan.RenderMusicPlan.BackgroundMusic,
+            plan.RenderMusicPlan.MusicLevelPercent);
 
 
     private async Task<VideoRenderValidationDto> WriteVideoRenderValidationAsync(VideoAssemblyPlanDto plan, VideoAssemblyGenerationRequest request, string validationPath, CancellationToken cancellationToken)
@@ -1358,8 +1423,9 @@ public sealed class VideoAssemblyIntelligenceService(
             && hook.VisualAssetPath.EndsWith("scene-001-final.png", StringComparison.OrdinalIgnoreCase)
             && hook.Motion.Equals("HookThumbnailZoomIn100To105", StringComparison.OrdinalIgnoreCase)
             && Math.Abs(hook.DurationSeconds - HookOptimizationDurationSeconds) <= 0.01;
-        var musicMixValidated = !request.BackgroundMusic
-            || (ResolveMusicMixLevel(request) >= 0.10 && ResolveMusicMixLevel(request) <= 0.15);
+        var renderMusicPlan = plan.RenderMusicPlan ?? new VideoAssemblyRenderMusicPlanDto(false, "WonderCuriosity", 0, false);
+        var musicMixValidated = !renderMusicPlan.BackgroundMusic
+            || (ResolveMusicMixLevel(renderMusicPlan) >= 0.10 && ResolveMusicMixLevel(renderMusicPlan) <= 0.15);
         var renderPolishScore = kenBurnsApplied && crossFadeApplied && hookOptimizationApplied && musicMixValidated ? 96 : 0;
         var videoFinalReadinessScore = renderPolishScore >= 90 ? 98 : 0;
         var resolution = $"{plan.RenderSettings.Width}x{plan.RenderSettings.Height}";
@@ -1371,7 +1437,7 @@ public sealed class VideoAssemblyIntelligenceService(
             || plan.Segments.Any(segment => IsLongSceneApprovalPath(segment.VisualAssetPath));
         var shortFormSceneCount = plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? plan.SceneImages.Count : 0;
         var ttsAudioPresent = File.Exists(plan.AudioFilePath);
-        var backgroundMusicPresent = request.BackgroundMusic;
+        var backgroundMusicPresent = renderMusicPlan.BackgroundMusic;
         var renderValidationPassed = plan.ScenePresentationProfile != ScenePresentationProfile.ShortForm
             || (renderUsedShortScenes
                 && !renderUsedLongScenes
@@ -1462,11 +1528,15 @@ public sealed class VideoAssemblyIntelligenceService(
             finalVideoDurationSeconds,
             outputResolution,
             audioTrackPresent,
-            request.BackgroundMusic,
+            renderPolish.BackgroundMusicPresent,
             renderSucceeded,
             NormalizePath(videoRenderValidationPath),
             renderPolish.RenderPolishScore,
-            renderPolish.VideoFinalReadinessScore);
+            renderPolish.VideoFinalReadinessScore,
+            renderPolish.RenderUsedLongScenes,
+            false,
+            renderPolish.BackgroundMusicPresent,
+            0);
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);

@@ -34,7 +34,10 @@ public sealed class VideoAssemblyGenerationRequest
     public int MusicLevelPercent { get; set; } = 12;
 
     public bool DuckMusicUnderNarration { get; set; } = true;
+
+    public ScenePresentationProfile? ScenePresentationProfile { get; set; }
 }
+
 
 public sealed record VideoAssemblyGenerationResponse(
     string PhaseRequested,
@@ -79,7 +82,11 @@ public sealed record VideoAssemblyGenerationResponse(
     bool RenderSucceeded = false,
     string VideoRenderValidationPath = "",
     int RenderPolishScore = 0,
-    int VideoFinalReadinessScore = 0);
+    int VideoFinalReadinessScore = 0,
+    bool RenderUsedLongScenes = false,
+    bool SceneMappingValid = false,
+    bool BackgroundMusicPlanned = false,
+    int MusicLevelPercent = 0);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -212,8 +219,11 @@ public sealed record VideoAssemblyPlanDto(
     string RenderOutputPath,
     IReadOnlyList<VideoAssemblyPlanSegmentDto> Segments,
     VideoAssemblyRenderSettingsDto RenderSettings,
+    bool BackgroundMusic,
     VideoAssemblyStyleDto Style,
     VideoAssemblyValidationDto Validation,
+    VideoAssemblySceneMappingValidationDto SceneMappingValidation,
+    VideoAssemblyRenderMusicPlanDto RenderMusicPlan,
     IReadOnlyList<string> Warnings,
     DateTimeOffset GeneratedUtc);
 
@@ -248,6 +258,21 @@ public sealed record VideoAssemblyValidationDto(
     int SegmentCount,
     bool DurationMatchesAudio,
     bool ReadyForRender);
+
+public sealed record VideoAssemblySceneMappingValidationDto(
+    bool HookUsesScene001,
+    bool WhatUsesScene001,
+    bool WhyUsesScene005,
+    bool WhereUsesScene002,
+    bool WhenUsesScene003,
+    bool ActionUsesScene006,
+    bool SceneMappingValid);
+
+public sealed record VideoAssemblyRenderMusicPlanDto(
+    bool BackgroundMusic,
+    string MusicMood,
+    int MusicLevelPercent,
+    bool DuckMusicUnderNarration);
 
 public sealed record VideoRenderValidationDto(
     ScenePresentationProfile ScenePresentationProfileUsed,
