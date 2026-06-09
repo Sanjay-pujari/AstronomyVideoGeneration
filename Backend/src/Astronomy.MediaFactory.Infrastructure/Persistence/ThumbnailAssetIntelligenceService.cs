@@ -21,6 +21,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private const string HeroCompositionModelFileName = "hero-composition-model.json";
     private const string ThumbnailIntelligenceFileName = "thumbnail-intelligence.json";
     private const string ThumbnailCompositionModelFileName = "thumbnail-composition-model.json";
+    private const string ThumbnailSceneManifestFileName = "thumbnail-scene-manifest.json";
     private const string SelectedThumbnailHook = "DON'T MISS THIS TONIGHT";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -31,6 +32,8 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         if (string.Equals(request.Phase, "Composition", StringComparison.OrdinalIgnoreCase))
             return await GenerateThumbnailCompositionModelAsync(request, cancellationToken);
+        if (string.Equals(request.Phase, "SceneSelection", StringComparison.OrdinalIgnoreCase))
+            return await GenerateThumbnailSceneManifestAsync(request, cancellationToken);
 
         return await GenerateThumbnailIntelligenceAsync(request, cancellationToken);
     }
@@ -62,6 +65,50 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
         return new ThumbnailAssetGenerationResponse(request.Phase, "Composition", true, NormalizePath(outputPath), model.Validation.ThumbnailCompositionReadinessScore, []);
     }
+
+    private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailSceneManifestAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var outputPath = BuildThumbnailSceneManifestOutputPath(request.EventId, request.RegionId);
+        if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
+        {
+            var existing = JsonSerializer.Deserialize<ThumbnailSceneManifestDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
+                ?? throw new InvalidOperationException("Existing thumbnail scene manifest could not be parsed.");
+            ValidateThumbnailSceneManifest(existing, requireSavedManifest: false, outputPath: outputPath);
+            return BuildSceneSelectionResponse(request, outputPath, existing);
+        }
+
+        var heroAssetsRoot = BuildHeroAssetsRoot(request.EventId, request.RegionId);
+        var thumbnailRoot = Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot();
+        await LoadThumbnailIntelligenceAsync(BuildThumbnailIntelligenceOutputPath(request.EventId, request.RegionId), cancellationToken);
+        await EnsureJsonInputAsync(Path.Combine(thumbnailRoot, ThumbnailCompositionModelFileName), ThumbnailCompositionModelFileName, cancellationToken);
+        var heroSceneManifest = await EnsureJsonInputAsync(Path.Combine(heroAssetsRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
+
+        var manifest = BuildThumbnailSceneManifest(request, heroSceneManifest);
+        ValidateThumbnailSceneManifest(manifest, requireSavedManifest: false, outputPath: outputPath);
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(thumbnailRoot);
+            await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
+            ValidateThumbnailSceneManifest(manifest, requireSavedManifest: true, outputPath: outputPath);
+        }
+
+        return BuildSceneSelectionResponse(request, outputPath, manifest);
+    }
+
+    private static ThumbnailAssetGenerationResponse BuildSceneSelectionResponse(ThumbnailAssetGenerationRequest request, string outputPath, ThumbnailSceneManifestDto manifest)
+        => new(
+            request.Phase,
+            "SceneSelection",
+            false,
+            string.Empty,
+            0,
+            [],
+            ThumbnailSceneManifestGenerated: true,
+            ThumbnailSceneManifestPath: NormalizePath(outputPath),
+            PrimaryScene: manifest.PrimaryScene.SceneId,
+            SecondaryScene: manifest.SecondaryScene.SceneId,
+            SupportScene: manifest.SupportScene.SceneId);
 
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailIntelligenceAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
@@ -361,6 +408,80 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         return warnings;
     }
 
+    private ThumbnailSceneManifestDto BuildThumbnailSceneManifest(ThumbnailAssetGenerationRequest request, JsonDocument heroSceneManifest)
+    {
+        var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(request.EventId, request.RegionId), SceneApprovalDirectoryName);
+        var primaryImagePath = Path.Combine(sceneApprovalRoot, "scene-001-final.png");
+        var secondaryImagePath = Path.Combine(sceneApprovalRoot, "scene-005-final.png");
+        var supportImagePath = Path.Combine(sceneApprovalRoot, "scene-006-final.png");
+
+        if (!HeroManifestContainsSuitablePrimaryScene(heroSceneManifest))
+            throw new ArgumentException("Thumbnail scene selection validation failed: primary scene scene-001 / What is not visually suitable for thumbnail use.");
+
+        return new ThumbnailSceneManifestDto(
+            request.EventId,
+            new ThumbnailSceneManifestEntryDto(1, "What", NormalizePath(primaryImagePath), "PrimaryVisual"),
+            new ThumbnailSceneManifestEntryDto(5, "Why", NormalizePath(secondaryImagePath), "EmotionalSignificance"),
+            new ThumbnailSceneManifestEntryDto(6, "Action", NormalizePath(supportImagePath), "UrgencyCue"),
+            "Use What scene for visual focus, Why scene for emotional pull, and Action scene for urgency.");
+    }
+
+    private static bool HeroManifestContainsSuitablePrimaryScene(JsonDocument heroSceneManifest)
+    {
+        var root = heroSceneManifest.RootElement;
+        if (!root.TryGetProperty("primaryScene", out var primaryScene))
+            return false;
+
+        if (primaryScene.ValueKind != JsonValueKind.Object)
+            return false;
+
+        var sceneId = ResolveSceneId(primaryScene);
+        var sceneKey = primaryScene.TryGetProperty("sceneKey", out var sceneKeyElement) ? sceneKeyElement.GetString() : null;
+        var role = primaryScene.TryGetProperty("role", out var roleElement) ? roleElement.GetString() : null;
+
+        return string.Equals(sceneId, "scene-001", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(sceneKey, "What", StringComparison.OrdinalIgnoreCase)
+            && (string.IsNullOrWhiteSpace(role) || string.Equals(role, "PrimaryVisual", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string ResolveSceneId(JsonElement sceneElement)
+    {
+        if (sceneElement.TryGetProperty("sceneId", out var sceneIdElement) && !string.IsNullOrWhiteSpace(sceneIdElement.GetString()))
+            return sceneIdElement.GetString()!;
+        if (sceneElement.TryGetProperty("sceneNumber", out var sceneNumberElement) && sceneNumberElement.TryGetInt32(out var sceneNumber))
+            return $"scene-{sceneNumber:000}";
+        if (sceneElement.TryGetProperty("imagePath", out var imagePathElement))
+        {
+            var fileName = Path.GetFileNameWithoutExtension(imagePathElement.GetString() ?? string.Empty);
+            if (fileName.Length >= "scene-000".Length)
+                return fileName[.."scene-000".Length];
+        }
+
+        return string.Empty;
+    }
+
+    private static void ValidateThumbnailSceneManifest(ThumbnailSceneManifestDto manifest, bool requireSavedManifest, string outputPath)
+    {
+        if (manifest.PrimaryScene is null || string.IsNullOrWhiteSpace(manifest.PrimaryScene.ImagePath))
+            throw new ArgumentException("Thumbnail scene selection validation failed: primaryScene is required.");
+        if (!string.Equals(manifest.PrimaryScene.SceneId, "scene-001", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(manifest.PrimaryScene.SceneKey, "What", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(manifest.PrimaryScene.Role, "PrimaryVisual", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Thumbnail scene selection validation failed: primary scene is not visually suitable.");
+
+        var selectedImagePaths = new[]
+        {
+            manifest.PrimaryScene.ImagePath,
+            manifest.SecondaryScene.ImagePath,
+            manifest.SupportScene.ImagePath
+        };
+        var missingImages = selectedImagePaths.Where(path => string.IsNullOrWhiteSpace(path) || !File.Exists(path)).Select(NormalizePath).ToArray();
+        if (missingImages.Length > 0)
+            throw new ArgumentException($"Thumbnail scene selection validation failed: selected image file(s) missing: {string.Join(", ", missingImages)}.");
+        if (requireSavedManifest && !File.Exists(outputPath))
+            throw new ArgumentException($"Thumbnail scene selection validation failed: manifest was not saved at '{NormalizePath(outputPath)}'.");
+    }
+
     private static string ResolveRecommendedSourceScene(JsonDocument compositionModel)
     {
         if (compositionModel.RootElement.TryGetProperty("visualBlock", out var visualBlock)
@@ -380,8 +501,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         if (string.IsNullOrWhiteSpace(request.Language))
             throw new ArgumentException("language is required.", nameof(request));
         if (!string.Equals(request.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(request.Phase, "Composition", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only thumbnail asset phases 'Intelligence' and 'Composition' are supported in this endpoint version.", nameof(request));
+            && !string.Equals(request.Phase, "Composition", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(request.Phase, "SceneSelection", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Only thumbnail asset phases 'Intelligence', 'Composition', and 'SceneSelection' are supported in this endpoint version.", nameof(request));
         if (!string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
@@ -399,6 +521,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
 
     private string BuildThumbnailCompositionOutputPath(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName, ThumbnailCompositionModelFileName);
+
+    private string BuildThumbnailSceneManifestOutputPath(string eventId, string regionId)
+        => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), ThumbnailAssetsDirectoryName, ThumbnailSceneManifestFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
