@@ -18,15 +18,31 @@ public sealed class AstronomyInfographicRenderer(
     EducationalLayerRenderer educationalLayer,
     AnnotationLayerRenderer annotationLayer) : IAstronomyInfographicRenderer
 {
-    public async Task RenderAsync(string finalPath, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken)
+    public async Task RenderAsync(string finalPath, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken, AstronomyInfographicRenderVariant? variant = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
         if (!File.Exists(venusAssetPath)) throw new ArgumentException($"Required local Venus asset was not found at '{venusAssetPath}'.", nameof(venusAssetPath));
         if (!File.Exists(jupiterAssetPath)) throw new ArgumentException($"Required local Jupiter asset was not found at '{jupiterAssetPath}'.", nameof(jupiterAssetPath));
 
-        using var image = await AstronomyVisualCompositionEngine.ComposeAsync(new AstronomyVisualCompositionRequest(
-            1920,
-            1080,
+        var targetVariant = variant ?? AstronomyInfographicRenderVariant.LongForm;
+        using var longFormImage = await RenderApprovedLongFormAsync(spec, venusAssetPath, jupiterAssetPath, cancellationToken);
+        Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
+
+        if (targetVariant.VariantName.Equals(AstronomyInfographicRenderVariant.ShortForm.VariantName, StringComparison.OrdinalIgnoreCase))
+        {
+            using var shortFormImage = CreateShortFormImage(longFormImage, spec, targetVariant);
+            await shortFormImage.SaveAsPngAsync(finalPath, new PngEncoder(), cancellationToken);
+            return;
+        }
+
+        await longFormImage.SaveAsPngAsync(finalPath, new PngEncoder(), cancellationToken);
+    }
+
+    private async Task<Image<Rgba32>> RenderApprovedLongFormAsync(QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken)
+    {
+        var image = await AstronomyVisualCompositionEngine.ComposeAsync(new AstronomyVisualCompositionRequest(
+            AstronomyInfographicRenderVariant.LongForm.Width,
+            AstronomyInfographicRenderVariant.LongForm.Height,
             spec.ViewerQuestion,
             spec.ViewerTakeaway,
             spec.QuestionType,
@@ -46,8 +62,68 @@ public sealed class AstronomyInfographicRenderer(
             backgroundLayer.RenderVignette(ctx);
         });
 
-        Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
-        await image.SaveAsPngAsync(finalPath, new PngEncoder(), cancellationToken);
+        return image;
+    }
+
+    private static Image<Rgba32> CreateShortFormImage(Image<Rgba32> longFormImage, QuestionDrivenVisualSpec spec, AstronomyInfographicRenderVariant variant)
+    {
+        var shortImage = new Image<Rgba32>(variant.Width, variant.Height, Color.ParseHex("#040814"));
+        using var background = longFormImage.Clone(ctx => ctx
+            .Resize(new ResizeOptions { Size = new Size(variant.Width, variant.Height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center })
+            .GaussianBlur(18f)
+            .Brightness(.58f));
+        var heroWidth = variant.Width - 104;
+        var heroHeight = (int)MathF.Round(heroWidth * AstronomyInfographicRenderVariant.LongForm.Height / (float)AstronomyInfographicRenderVariant.LongForm.Width);
+        using var hero = longFormImage.Clone(ctx => ctx.Resize(new ResizeOptions
+        {
+            Size = new Size(heroWidth, heroHeight),
+            Mode = ResizeMode.Stretch
+        }));
+
+        var fonts = EditorialFonts.CreateScaled(variant.TextScale);
+        shortImage.Mutate(ctx =>
+        {
+            ctx.DrawImage(background, 1f);
+            ctx.Fill(Color.Black.WithAlpha(.22f), new RectangleF(0, 0, variant.Width, variant.Height));
+            DrawShortFormSafeArea(ctx, variant.Width, variant.Height);
+
+            var heroY = GetShortFormHeroY(spec.QuestionType);
+            ctx.DrawImage(hero, new Point((variant.Width - hero.Width) / 2, heroY), .98f);
+            ctx.Draw(Color.White.WithAlpha(.18f), 2, new RectangleF((variant.Width - hero.Width) / 2f, heroY, hero.Width, hero.Height));
+
+            DrawShortFormText(ctx, spec, fonts, variant);
+        });
+
+        return shortImage;
+    }
+
+    private static int GetShortFormHeroY(string questionType) => questionType.ToLowerInvariant() switch
+    {
+        "when" => 560,
+        "how" => 620,
+        "why" => 610,
+        "action" => 590,
+        _ => 585
+    };
+
+    private static void DrawShortFormSafeArea(IImageProcessingContext ctx, int width, int height)
+    {
+        ctx.Fill(Color.Black.WithAlpha(.20f), new RectangleF(0, 0, width, 168));
+        ctx.Fill(Color.Black.WithAlpha(.18f), new RectangleF(0, height - 236, width, 236));
+    }
+
+    private static void DrawShortFormText(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, EditorialFonts fonts, AstronomyInfographicRenderVariant variant)
+    {
+        var title = spec.OverlayText.FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)) ?? spec.ViewerQuestion;
+        var subtitle = spec.OverlayText.Skip(1).FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)) ?? spec.ViewerTakeaway;
+        var lowerText = spec.CaptionText.Length <= 92 ? spec.CaptionText : spec.ViewerTakeaway;
+        var margin = 74f;
+        var textWidth = variant.Width - margin * 2f;
+
+        ctx.DrawText(new RichTextOptions(fonts.TitleFont) { Origin = new PointF(margin, 210), WrappingLength = textWidth }, title, Color.White);
+        ctx.DrawText(new RichTextOptions(fonts.SubtitleFont) { Origin = new PointF(margin, 335), WrappingLength = textWidth }, subtitle, Color.ParseHex("#F6C177"));
+        ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(margin, 1510), WrappingLength = textWidth }, lowerText, Color.White.WithAlpha(.94f));
+        ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(margin, 1666), WrappingLength = textWidth }, spec.ViewerQuestion, Color.ParseHex("#B7E0FF").WithAlpha(.92f));
     }
 }
 
@@ -746,7 +822,9 @@ internal sealed class CollisionAwareTextPainter(IImageProcessingContext ctx)
 
 public sealed record EditorialFonts(Font TitleFont, Font SubtitleFont, Font LabelFont, Font SmallFont)
 {
-    public static EditorialFonts Create() => new(Resolve(60, FontStyle.Bold), Resolve(36, FontStyle.Bold), Resolve(30, FontStyle.Bold), Resolve(24, FontStyle.Regular));
+    public static EditorialFonts Create() => CreateScaled(1f);
+
+    public static EditorialFonts CreateScaled(float scale) => new(Resolve(60 * scale, FontStyle.Bold), Resolve(36 * scale, FontStyle.Bold), Resolve(30 * scale, FontStyle.Bold), Resolve(24 * scale, FontStyle.Regular));
 
     private static Font Resolve(float size, FontStyle style)
     {

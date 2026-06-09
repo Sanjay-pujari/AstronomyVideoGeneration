@@ -32,7 +32,7 @@ public sealed class QuestionDrivenVisualComposer(
 
     public async Task<QuestionDrivenVisualGenerationResponse> GenerateQuestionDrivenVisualsAsync(QuestionDrivenVisualGenerationRequest request, CancellationToken cancellationToken)
     {
-        var response = await GenerateEditorialAstronomyInfographicsAsync(request, cancellationToken);
+        var response = await GenerateEditorialAstronomyInfographicsCoreAsync(request, includeSceneApprovalVariants: false, cancellationToken);
         return new QuestionDrivenVisualGenerationResponse(
             response.EventId,
             response.SceneCount,
@@ -57,7 +57,10 @@ public sealed class QuestionDrivenVisualComposer(
             SharedAstronomyVisualComposerStatus: response.SharedAstronomyVisualComposerStatus);
     }
 
-    public async Task<EditorialAstronomyInfographicGenerationResponse> GenerateEditorialAstronomyInfographicsAsync(QuestionDrivenVisualGenerationRequest request, CancellationToken cancellationToken)
+    public Task<EditorialAstronomyInfographicGenerationResponse> GenerateEditorialAstronomyInfographicsAsync(QuestionDrivenVisualGenerationRequest request, CancellationToken cancellationToken)
+        => GenerateEditorialAstronomyInfographicsCoreAsync(request, includeSceneApprovalVariants: true, cancellationToken);
+
+    private async Task<EditorialAstronomyInfographicGenerationResponse> GenerateEditorialAstronomyInfographicsCoreAsync(QuestionDrivenVisualGenerationRequest request, bool includeSceneApprovalVariants, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
@@ -92,6 +95,7 @@ public sealed class QuestionDrivenVisualComposer(
 
         var finalImageCount = 0;
         var srtCount = 0;
+        var variantFinalImages = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
         var approvedSceneCount = 0;
         var failedSceneCount = 0;
         var seenSrtTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -121,7 +125,14 @@ public sealed class QuestionDrivenVisualComposer(
             var overlayPlan = BuildOverlayPlan(spec);
             var review = BuildReview(spec, srt, seenSrtTexts, seenLayoutKeys, venusAsset is not null, jupiterAsset is not null);
 
-            var finalPath = Path.Combine(outputRoot, $"{numberPrefix}-final.png");
+            var finalPath = includeSceneApprovalVariants
+                ? Path.Combine(outputRoot, "long", $"{numberPrefix}-final.png")
+                : Path.Combine(outputRoot, $"{numberPrefix}-final.png");
+            var shortFinalPath = Path.Combine(outputRoot, "short", $"{numberPrefix}-final.png");
+            if (includeSceneApprovalVariants)
+            {
+                variantFinalImages[numberPrefix] = [NormalizePath(finalPath), NormalizePath(shortFinalPath)];
+            }
             var srtPath = Path.Combine(outputRoot, $"{numberPrefix}.srt");
             var narrationTextPath = Path.Combine(outputRoot, $"{numberPrefix}-narration.txt");
             var specPath = Path.Combine(outputRoot, $"{numberPrefix}-infographic-spec.json");
@@ -136,7 +147,11 @@ public sealed class QuestionDrivenVisualComposer(
             if (isolationValidation.LeakageWarnings.Count > 0) warnings.AddRange(isolationValidation.LeakageWarnings.Select(issue => $"Scene {sceneNumber:000}: {issue}"));
             if (request.DryRun) continue;
 
-            if (!request.OverwriteExisting && new[] { finalPath, srtPath, narrationTextPath, specPath, reviewPath }.Any(File.Exists))
+            var approvalAssets = includeSceneApprovalVariants
+                ? new[] { finalPath, shortFinalPath, srtPath, narrationTextPath, specPath, reviewPath }
+                : new[] { finalPath, srtPath, narrationTextPath, specPath, reviewPath };
+
+            if (!request.OverwriteExisting && approvalAssets.Any(File.Exists))
             {
                 warnings.Add($"Skipped scene {sceneNumber:000} because one or more approval assets already exist and overwriteExisting is false.");
                 continue;
@@ -150,13 +165,25 @@ public sealed class QuestionDrivenVisualComposer(
                 continue;
             }
 
-            await infographicRenderer.RenderAsync(finalPath, spec, venusAsset, jupiterAsset, cancellationToken);
+            await infographicRenderer.RenderAsync(finalPath, spec, venusAsset, jupiterAsset, cancellationToken, AstronomyInfographicRenderVariant.LongForm);
+            if (includeSceneApprovalVariants)
+            {
+                await infographicRenderer.RenderAsync(shortFinalPath, spec, venusAsset, jupiterAsset, cancellationToken, AstronomyInfographicRenderVariant.ShortForm);
+            }
             await File.WriteAllTextAsync(srtPath, srt, cancellationToken);
             await File.WriteAllTextAsync(narrationTextPath, spec.NarrationText + Environment.NewLine, cancellationToken);
             await File.WriteAllTextAsync(specPath, JsonSerializer.Serialize(spec, JsonOptions), cancellationToken);
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
-            generatedFiles.AddRange([finalPath, srtPath, narrationTextPath, specPath, reviewPath]);
-            finalImageCount++;
+            if (includeSceneApprovalVariants)
+            {
+                generatedFiles.AddRange([finalPath, shortFinalPath, srtPath, narrationTextPath, specPath, reviewPath]);
+                finalImageCount += 2;
+            }
+            else
+            {
+                generatedFiles.AddRange([finalPath, srtPath, narrationTextPath, specPath, reviewPath]);
+                finalImageCount++;
+            }
             srtCount++;
         }
 
@@ -175,7 +202,7 @@ public sealed class QuestionDrivenVisualComposer(
         return new EditorialAstronomyInfographicGenerationResponse(
             request.EventId,
             scenes.Length,
-            plannedScenes.Count,
+            includeSceneApprovalVariants ? plannedScenes.Count * 2 : plannedScenes.Count,
             finalImageCount,
             srtCount,
             approvedSceneCount,
@@ -191,7 +218,8 @@ public sealed class QuestionDrivenVisualComposer(
             AstronomySceneEngineV1Status: "FROZEN",
             SharedAstronomyVisualComposerStatus: "FROZEN",
             HeroAssetRulesApplied: heroAssetRulesApplied,
-            DuplicateObjectRenderingDetected: duplicateObjectRenderingDetected);
+            DuplicateObjectRenderingDetected: duplicateObjectRenderingDetected,
+            SceneVariantFinalImages: includeSceneApprovalVariants ? variantFinalImages : null);
     }
 
     private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt)
