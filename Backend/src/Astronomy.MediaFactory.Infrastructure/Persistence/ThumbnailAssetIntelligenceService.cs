@@ -164,23 +164,28 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         }
 
-        return BuildImageGenerationResponse(request, outputFiles, validation, ["PhotoCinematicThumbnailRenderer was not used."]);
+        return BuildImageGenerationResponse(
+            request,
+            outputFiles,
+            validation,
+            ["PhotoCinematicThumbnailRenderer was not used."],
+            requestedRenderer: "PhotoCinematicThumbnailRenderer",
+            actualRendererUsed: string.Empty,
+            rendererSelectionReason: "Legacy image generation path selected for ImageGeneration phase without PhotoCinematic visual style.",
+            oldRendererBypassed: false,
+            photoCinematicRendererEntered: false,
+            photoCinematicRendererCompleted: false,
+            outputWriteSource: "LegacyThumbnailImageRenderer",
+            outputOverwriteDetected: false);
     }
 
     private async Task<ThumbnailAssetGenerationResponse> GeneratePhotoCinematicThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
     {
-        var outputFiles = PhotoCinematicThumbnailRenderer.PlannedOutputFiles(thumbnailRoot)
-            .Append(NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName)))
-            .ToArray();
+        const string rendererName = "PhotoCinematicThumbnailRenderer";
+        Console.WriteLine($"[ThumbnailImages] Requested renderer = {rendererName}");
 
-        if (!request.DryRun && !request.OverwriteExisting && outputFiles.All(File.Exists))
-        {
-            var existingValidation = JsonSerializer.Deserialize<ThumbnailLayoutValidationDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), cancellationToken), JsonOptions)
-                ?? throw new InvalidOperationException("Existing photo-cinematic thumbnail layout validation could not be parsed.");
-            ValidateThumbnailLayout(existingValidation);
-            if (existingValidation.PhotoCinematicRendererUsed && existingValidation.OldThumbnailRendererBypassed)
-                return BuildImageGenerationResponse(request, outputFiles, existingValidation);
-        }
+        var outputFiles = PhotoCinematicThumbnailRenderer.PlannedOutputFiles(thumbnailRoot).ToArray();
+        var validationPath = NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName));
 
         var validation = new ThumbnailLayoutValidationDto(
             HookVisible: true,
@@ -207,16 +212,65 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             JupiterRenderedAsPlanet: true);
         ValidateThumbnailLayout(validation);
 
+        var renderEntered = false;
+        var renderCompleted = false;
         if (!request.DryRun)
         {
-            await PhotoCinematicThumbnailRenderer.RenderAsync(thumbnailRoot, cancellationToken);
+            foreach (var file in outputFiles)
+            {
+                var variant = Path.GetFileNameWithoutExtension(file).Replace("thumbnail-", string.Empty, StringComparison.OrdinalIgnoreCase);
+                Console.WriteLine($"[ThumbnailImages] Writing {variant} = {file}");
+            }
+
+            var renderResult = await PhotoCinematicThumbnailRenderer.RenderAsync(thumbnailRoot, cancellationToken);
+            renderEntered = renderResult.Entered;
+            renderCompleted = renderResult.Completed;
+            if (!renderEntered || !renderCompleted)
+                throw new InvalidOperationException("PhotoCinematicThumbnailRenderer was not invoked.");
+
+            var missingWrites = outputFiles.Except(renderResult.WrittenFiles, StringComparer.OrdinalIgnoreCase).ToArray();
+            if (missingWrites.Length > 0)
+                throw new InvalidOperationException($"PhotoCinematicThumbnailRenderer did not write expected thumbnail file(s): {string.Join(", ", missingWrites)}.");
+
             await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         }
+        else
+        {
+            renderEntered = true;
+            renderCompleted = true;
+        }
 
-        return BuildImageGenerationResponse(request, outputFiles, validation);
+        Console.WriteLine($"[ThumbnailImages] Actual renderer = {rendererName}");
+
+        return BuildImageGenerationResponse(
+            request,
+            outputFiles,
+            validation,
+            requestedRenderer: rendererName,
+            actualRendererUsed: rendererName,
+            rendererSelectionReason: "Images phase forced directly to PhotoCinematicThumbnailRenderer; legacy scene crop, hero, and shared infographic renderers bypassed.",
+            oldRendererBypassed: true,
+            photoCinematicRendererEntered: renderEntered,
+            photoCinematicRendererCompleted: renderCompleted,
+            outputWriteSource: rendererName,
+            outputOverwriteDetected: false,
+            thumbnailLayoutValidationPath: validationPath);
     }
 
-    private static ThumbnailAssetGenerationResponse BuildImageGenerationResponse(ThumbnailAssetGenerationRequest request, IReadOnlyList<string> outputFiles, ThumbnailLayoutValidationDto validation, IReadOnlyList<string>? warnings = null)
+    private static ThumbnailAssetGenerationResponse BuildImageGenerationResponse(
+        ThumbnailAssetGenerationRequest request,
+        IReadOnlyList<string> outputFiles,
+        ThumbnailLayoutValidationDto validation,
+        IReadOnlyList<string>? warnings = null,
+        string requestedRenderer = "PhotoCinematicThumbnailRenderer",
+        string actualRendererUsed = "",
+        string rendererSelectionReason = "",
+        bool oldRendererBypassed = false,
+        bool photoCinematicRendererEntered = false,
+        bool photoCinematicRendererCompleted = false,
+        string outputWriteSource = "",
+        bool outputOverwriteDetected = false,
+        string? thumbnailLayoutValidationPath = null)
         => new(
             request.Phase,
             "ImageGeneration",
@@ -225,7 +279,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             0,
             outputFiles,
             ThumbnailLayoutValidationGenerated: true,
-            ThumbnailLayoutValidationPath: outputFiles.FirstOrDefault(path => path.EndsWith(ThumbnailLayoutValidationFileName, StringComparison.OrdinalIgnoreCase)) ?? string.Empty,
+            ThumbnailLayoutValidationPath: thumbnailLayoutValidationPath ?? outputFiles.FirstOrDefault(path => path.EndsWith(ThumbnailLayoutValidationFileName, StringComparison.OrdinalIgnoreCase)) ?? string.Empty,
             HookVisible: validation.HookVisible,
             VisualFocusVisible: validation.VisualFocusVisible,
             TextElementCount: validation.TextElementCount,
@@ -244,6 +298,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             TextBoxesRemoved: validation.TextBoxesRemoved,
             VenusRenderedAsStarPoint: validation.VenusRenderedAsStarPoint,
             JupiterRenderedAsPlanet: validation.JupiterRenderedAsPlanet,
+            RequestedRenderer: requestedRenderer,
+            ActualRendererUsed: actualRendererUsed,
+            RendererSelectionReason: rendererSelectionReason,
+            OldRendererBypassed: oldRendererBypassed,
+            PhotoCinematicRendererEntered: photoCinematicRendererEntered,
+            PhotoCinematicRendererCompleted: photoCinematicRendererCompleted,
+            OutputWriteSource: outputWriteSource,
+            OutputOverwriteDetected: outputOverwriteDetected,
             Warnings: warnings ?? Array.Empty<string>());
 
     private static ThumbnailAssetGenerationResponse BuildSceneSelectionResponse(ThumbnailAssetGenerationRequest request, string outputPath, ThumbnailSceneManifestDto manifest)

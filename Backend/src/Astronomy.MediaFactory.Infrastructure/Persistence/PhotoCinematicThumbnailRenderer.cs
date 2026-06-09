@@ -25,9 +25,10 @@ internal static class PhotoCinematicThumbnailRenderer
     public static IReadOnlyList<string> PlannedOutputFiles(string thumbnailRoot)
         => Specs.Select(spec => NormalizePath(Path.Combine(thumbnailRoot, spec.FileName))).ToArray();
 
-    public static async Task RenderAsync(string thumbnailRoot, CancellationToken cancellationToken)
+    public static async Task<PhotoCinematicThumbnailRenderResult> RenderAsync(string thumbnailRoot, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(thumbnailRoot);
+        var writtenFiles = new List<string>();
         foreach (var spec in Specs)
         {
             using var image = new Image<Rgba32>(spec.Width, spec.Height, Color.ParseHex("#040617"));
@@ -40,12 +41,17 @@ internal static class PhotoCinematicThumbnailRenderer
                 DrawPlanetsAndLabels(ctx, spec);
                 DrawTypography(ctx, spec);
                 DrawCinematicFinish(ctx, spec);
+                DrawVerificationWatermark(ctx, spec);
             });
 
             image.Metadata.ExifProfile = null;
             image.Metadata.XmpProfile = null;
-            await image.SaveAsPngAsync(Path.Combine(thumbnailRoot, spec.FileName), new PngEncoder(), cancellationToken);
+            var outputPath = Path.Combine(thumbnailRoot, spec.FileName);
+            await image.SaveAsPngAsync(outputPath, new PngEncoder(), cancellationToken);
+            writtenFiles.Add(NormalizePath(outputPath));
         }
+
+        return new PhotoCinematicThumbnailRenderResult(true, true, writtenFiles);
     }
 
     private static void DrawTwilightSky(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec)
@@ -182,6 +188,22 @@ internal static class PhotoCinematicThumbnailRenderer
             new ColorStop(1f, Color.Black.WithAlpha(0.32f))), new RectangleF(0, 0, spec.Width, spec.Height));
     }
 
+
+    private static void DrawVerificationWatermark(IImageProcessingContext ctx, PhotoCinematicThumbnailSpec spec)
+    {
+        const string watermark = "PHOTO CINEMATIC RENDERER";
+        var font = ResolveFont(spec.IsPortrait ? 24f : spec.IsSquare ? 20f : 18f, FontStyle.Bold);
+        var size = TextMeasurer.MeasureSize(watermark, new TextOptions(font));
+        var paddingX = spec.IsPortrait ? 26f : 20f;
+        var paddingY = spec.IsPortrait ? 34f : 24f;
+        var origin = new PointF(spec.Width - size.Width - paddingX, spec.Height - size.Height - paddingY);
+        var background = new RectangleF(origin.X - 12f, origin.Y - 8f, size.Width + 24f, size.Height + 16f);
+
+        ctx.Fill(Color.Black.WithAlpha(0.58f), background);
+        ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(origin.X + 1.5f, origin.Y + 1.5f) }, watermark, Color.Black.WithAlpha(0.85f));
+        ctx.DrawText(new RichTextOptions(font) { Origin = origin }, watermark, Color.ParseHex("#FFE66D"));
+    }
+
     private static void DrawGlow(IImageProcessingContext ctx, PointF center, float radiusX, float radiusY, Color color, float alpha, int rings)
     {
         for (var i = rings; i >= 1; i--)
@@ -206,6 +228,8 @@ internal static class PhotoCinematicThumbnailRenderer
     }
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');
+
+    public sealed record PhotoCinematicThumbnailRenderResult(bool Entered, bool Completed, IReadOnlyList<string> WrittenFiles);
 
     private sealed record PhotoCinematicThumbnailSpec(string Variant, string FileName, int Width, int Height)
     {
