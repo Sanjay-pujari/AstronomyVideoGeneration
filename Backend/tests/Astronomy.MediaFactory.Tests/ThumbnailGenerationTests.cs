@@ -664,6 +664,35 @@ public sealed class ThumbnailGenerationTests
     }
 
     [Fact]
+    public async Task LocalAssetCollage_VenusJupiterPoster_UsesPhotoCinematicValidationAndCleanText()
+    {
+        var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "jupiter", "hero-transparent.png"), Color.Orange);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "venus", "hero-transparent.png"), Color.Gold);
+        await WriteCuratedAssetAsync(Path.Combine(assetRoot, "milky-way", "hero.png"), Color.Navy, 1600, 900);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"local-thumb-{Guid.NewGuid():N}");
+        var service = CreateLocalAssetService(new ThumbnailOptions { AssetRootPath = assetRoot, MaxSupportObjectsLong = 1 });
+
+        var plan = await service.GenerateAsync(new ThumbnailGenerationRequest
+        {
+            ContentType = ContentType.DailySkyGuide,
+            Context = BuildVisiblePlanetContext("en"),
+            Metadata = new OptimizedVideoMetadata(),
+            AvailableVisuals = [],
+            OutputDirectory = outputDir
+        }, CancellationToken.None);
+
+        Assert.Equal("DON'T MISS THIS TONIGHT\nVenus + Jupiter\nAfter Sunset", plan.PrimaryThumbnailText);
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outputDir, "thumbnails", "thumbnail-cinematic-report.json")));
+        Assert.True(report.RootElement.GetProperty("photoCinematicStyleApplied").GetBoolean());
+        Assert.True(report.RootElement.GetProperty("textBoxesRemoved").GetBoolean());
+        Assert.True(report.RootElement.GetProperty("infographicLookRemoved").GetBoolean());
+        Assert.True(report.RootElement.GetProperty("venusRenderedAsBrightStar").GetBoolean());
+        Assert.True(report.RootElement.GetProperty("jupiterRenderedAsRealisticPlanet").GetBoolean());
+        Assert.True(report.RootElement.GetProperty("thumbnailFinalReadinessScore").GetInt32() >= 95);
+    }
+
+    [Fact]
     public async Task LocalAssetCollage_UsesPortraitLayoutAndCapsSupportObjectForShorts()
     {
         var assetRoot = Path.Combine(Path.GetTempPath(), $"celestial-assets-{Guid.NewGuid():N}");

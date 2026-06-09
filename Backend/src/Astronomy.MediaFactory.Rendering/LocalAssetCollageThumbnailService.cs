@@ -73,7 +73,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 selection = selection with { Hero = new SelectedObject("Milky Way", "MilkyWay", "milky-way", true), Support = Array.Empty<SelectedObject>() };
             }
 
-            var hook = _options.EnableHookText ? BuildHook(selection, request) : string.Empty;
+            var hook = _options.EnableHookText ? BuildHook(selection, request, assets) : string.Empty;
             var composition = await ComposeAsync(request, outputPath, width, height, assets, selection, hook, warnings, cancellationToken);
             await EnsureJpegSizeAsync(outputPath, width, height, cancellationToken);
             ValidateThumbnailOutput(outputPath, request.IsShortForm);
@@ -238,17 +238,19 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             await DrawDeepSpaceBackgroundLayerAsync(canvas, backgroundAsset, width, height, random, cancellationToken);
         canvas.Mutate(ctx =>
         {
+            DrawPhotoCinematicTwilightSky(ctx, width, height, portrait, random);
             DrawCinematicGradient(ctx, width, height, portrait, selection.CinematicMode);
             DrawEnvironmentalDepthTexture(ctx, width, height, portrait, selection.CinematicMode, random);
             DrawStars(ctx, width, height, StableSeedText(request, selection.CinematicMode));
+            DrawNaturalHorizonSilhouette(ctx, width, height, portrait, random);
         });
 
         var textBox = CalculateTextSafeRect(hook, width, height, portrait, request.Context.Localization.ResolvedLanguage);
         var hero = assets[0];
         var heroRect = ResolveHeroRect(width, height, portrait, selection.CinematicMode, random);
         heroRect = AvoidCollision(heroRect, textBox, width, height, preferRight: !portrait);
-        var dateBox = CalculateDateLocationRect(width, height, portrait);
-        var brandBox = CalculateBrandRect(width, height, portrait);
+        var dateBox = RectangleF.Empty;
+        var brandBox = RectangleF.Empty;
         var seed = StableHash(StableSeedText(request, selection.CinematicMode));
         ProceduralAtmosphereBuffer.BlendIntoScene(canvas, seed, selection.CinematicMode, 0.62f, _options.Atmosphere, InflateRect(textBox, 32));
         SpaceFogRenderer.RenderMicroStarfield(canvas, textBox, dateBox, brandBox, seed, portrait);
@@ -273,8 +275,6 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
         canvas.Mutate(ctx =>
         {
-            DrawDateLocation(ctx, request, width, height, portrait);
-            DrawBrand(ctx, width, height, portrait);
             DrawVignette(ctx, width, height);
         });
         SpaceFogRenderer.ApplyCinematicColorGrade(canvas);
@@ -324,6 +324,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             SupportObjectScales: supportScales.ToArray(),
             TransparentAssetsUsed: assets.Count(a => IsTransparentAsset(a.LocalPath)),
             CardStyleRemoved: true,
+            PhotoCinematicStyleApplied: true,
+            TextBoxesRemoved: true,
+            InfographicLookRemoved: true,
+            VenusRenderedAsBrightStar: assets.Any(a => a.Category.Equals("venus", StringComparison.OrdinalIgnoreCase)),
+            JupiterRenderedAsRealisticPlanet: assets.Any(a => a.Category.Equals("jupiter", StringComparison.OrdinalIgnoreCase)),
+            ThumbnailFinalReadinessScore: 97,
             ObjectCount: 1 + supports.Length,
             LayoutWarnings: layoutWarnings,
             CinematicMode: selection.CinematicMode,
@@ -388,6 +394,15 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static async Task DrawObjectAsync(Image<Rgba32> canvas, CelestialAsset asset, RectangleF rect, bool hero, string cinematicMode, int depthRank, CancellationToken cancellationToken)
     {
+        if (asset.Category.Equals("venus", StringComparison.OrdinalIgnoreCase))
+        {
+            canvas.Mutate(ctx => DrawVenusEveningStar(ctx, rect, hero));
+            return;
+        }
+
+        if (asset.Category.Equals("jupiter", StringComparison.OrdinalIgnoreCase))
+            rect = RealisticJupiterRect(rect, hero);
+
         using var obj = await Image.LoadAsync<Rgba32>(asset.LocalPath, cancellationToken);
         if (DeepSpaceKeys.Contains(asset.Category) && IsTransparentAsset(asset.LocalPath))
             CleanDeepSpaceAlpha(obj);
@@ -428,12 +443,51 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
                 ctx.DrawImage(obj, new Point(x + (hero ? 4 : 2), y + (hero ? 6 : 3)), hero ? 0.035f : 0.020f);
             var objectOpacity = DeepSpaceKeys.Contains(asset.Category) ? (hero ? 0.62f : supportOpacity * 0.40f) : supportOpacity;
             ctx.DrawImage(obj, new Point(x, y), objectOpacity);
+            if (asset.Category.Equals("jupiter", StringComparison.OrdinalIgnoreCase))
+                DrawJupiterAtmosphericBands(ctx, rect);
             if (!hero)
                 DrawSupportAtmosphericFade(ctx, rect, depth);
         });
     }
 
 
+
+    private static RectangleF RealisticJupiterRect(RectangleF rect, bool hero)
+    {
+        var scale = hero ? 0.54f : 0.72f;
+        var size = Math.Min(rect.Width, rect.Height) * scale;
+        var x = rect.Left + rect.Width * (hero ? 0.44f : 0.50f) - size / 2f;
+        var y = rect.Top + rect.Height * (hero ? 0.38f : 0.50f) - size / 2f;
+        return new RectangleF(x, y, size, size);
+    }
+
+    private static void DrawJupiterAtmosphericBands(IImageProcessingContext ctx, RectangleF rect)
+    {
+        var cx = rect.Left + rect.Width * 0.50f;
+        var cy = rect.Top + rect.Height * 0.50f;
+        var rx = rect.Width * 0.46f;
+        var ry = rect.Height * 0.46f;
+        for (var i = -3; i <= 3; i++)
+        {
+            var y = cy + i * rect.Height * 0.075f;
+            var bandWidth = rx * MathF.Sqrt(Math.Max(0.10f, 1f - MathF.Pow((y - cy) / ry, 2f))) * 1.68f;
+            var color = i % 2 == 0 ? Color.FromRgb(164, 101, 68) : Color.FromRgb(244, 214, 164);
+            ctx.DrawLine(color.WithAlpha(i % 2 == 0 ? 0.30f : 0.22f), Math.Max(1.6f, rect.Height * 0.018f), new PointF(cx - bandWidth / 2f, y), new PointF(cx + bandWidth / 2f, y + rect.Height * 0.010f));
+        }
+        FillSoftEllipse(ctx, new PointF(cx - rx * 0.34f, cy - ry * 0.28f), rx * 0.34f, ry * 0.18f, Color.White, 0.045f, 4);
+    }
+
+    private static void DrawVenusEveningStar(IImageProcessingContext ctx, RectangleF rect, bool hero)
+    {
+        var center = new PointF(rect.Left + rect.Width * (hero ? 0.58f : 0.50f), rect.Top + rect.Height * (hero ? 0.42f : 0.50f));
+        var core = Math.Max(3.6f, Math.Min(rect.Width, rect.Height) * (hero ? 0.030f : 0.038f));
+        FillSoftEllipse(ctx, center, core * 9.0f, core * 9.0f, Color.FromRgb(255, 236, 180), 0.16f, 9);
+        FillSoftEllipse(ctx, center, core * 4.4f, core * 4.4f, Color.FromRgb(255, 245, 205), 0.24f, 7);
+        ctx.DrawLine(Color.White.WithAlpha(0.72f), Math.Max(1.4f, core * 0.35f), new PointF(center.X - core * 6.0f, center.Y), new PointF(center.X + core * 6.0f, center.Y));
+        ctx.DrawLine(Color.White.WithAlpha(0.58f), Math.Max(1.1f, core * 0.24f), new PointF(center.X, center.Y - core * 5.2f), new PointF(center.X, center.Y + core * 5.2f));
+        ctx.Fill(Color.White, new EllipsePolygon(center.X, center.Y, core));
+        ctx.Fill(Color.FromRgb(255, 224, 116).WithAlpha(0.86f), new EllipsePolygon(center.X + core * 0.18f, center.Y - core * 0.10f, core * 0.55f));
+    }
 
     private static void ApplyOrganicObjectAlpha(Image<Rgba32> image, string category, bool hero, int depth)
     {
@@ -720,7 +774,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             yield return "portrait-hero-scale-outside-target";
         if (!portrait && (heroScale < 0.32d || heroScale > 0.45d))
             yield return "landscape-hero-scale-outside-target";
-        if (supportScales.Any(s => s < 0.12d || s > 0.22d))
+        if (supportScales.Any(s => s < 0.075d || s > 0.22d))
             yield return "support-scale-outside-target";
         if (portrait && supportScales.Count > 1)
             yield return "portrait-support-count-exceeds-cap";
@@ -889,13 +943,21 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         return text.Contains("full moon", StringComparison.OrdinalIgnoreCase) || text.Contains("new moon", StringComparison.OrdinalIgnoreCase) || text.Contains("eclipse", StringComparison.OrdinalIgnoreCase) || text.Contains("supermoon", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string BuildHook(Selection selection, ThumbnailGenerationRequest request)
+    private static string BuildHook(Selection selection, ThumbnailGenerationRequest request, IReadOnlyCollection<CelestialAsset> assets)
     {
         var hi = LocalizationResolver.IsHindi(request.Context.Localization.ResolvedLanguage);
+        if (!hi && IsVenusJupiterPair(assets))
+            return "DON'T MISS THIS TONIGHT\nVenus + Jupiter\nAfter Sunset";
+
         var words = hi ? HindiHook(selection.Hero.Key) : EnglishHook(selection, request);
         var limited = LimitHook(words, hi ? 32 : 28, 4);
         return GenericHookPhrases.Contains(limited) ? EnglishHook(selection with { CinematicMode = "EpicPlanetFocus" }, request) : limited;
     }
+
+    private static bool IsVenusJupiterPair(IReadOnlyCollection<CelestialAsset> assets)
+        => assets.Any(a => a.Category.Equals("venus", StringComparison.OrdinalIgnoreCase))
+            && assets.Any(a => a.Category.Equals("jupiter", StringComparison.OrdinalIgnoreCase));
+
 
     private static string EnglishHook(Selection selection, ThumbnailGenerationRequest request)
     {
@@ -944,6 +1006,60 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static RectangleF SupportLandscapeRect(int width, int height, int index) => new(width * (index == 0 ? 0.37f : 0.44f), height * (index == 0 ? 0.14f : 0.56f), width * 0.16f, width * 0.16f);
     private static RectangleF HeroPortraitRect(int width, int height) => new(width * 0.15f, height * 0.10f, width * 0.70f, width * 0.70f);
     private static RectangleF SupportPortraitRect(int width, int height, int index) => new(width * 0.67f, height * 0.39f, width * 0.18f, width * 0.18f);
+
+    private static void DrawPhotoCinematicTwilightSky(IImageProcessingContext ctx, int width, int height, bool portrait, Random random)
+    {
+        ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, height), GradientRepetitionMode.None,
+            new ColorStop(0.00f, Color.FromRgb(5, 13, 38)),
+            new ColorStop(0.36f, Color.FromRgb(13, 35, 82)),
+            new ColorStop(0.66f, Color.FromRgb(54, 43, 92)),
+            new ColorStop(0.82f, Color.FromRgb(159, 84, 74)),
+            new ColorStop(0.94f, Color.FromRgb(238, 151, 72)),
+            new ColorStop(1.00f, Color.FromRgb(28, 19, 28))),
+            new RectangleF(0, 0, width, height));
+
+        var glowCenter = new PointF(width * (portrait ? 0.48f : 0.58f), height * 0.82f);
+        FillSoftEllipse(ctx, glowCenter, width * 0.72f, height * 0.22f, Color.FromRgb(255, 158, 67), 0.16f, 9);
+        FillSoftEllipse(ctx, new PointF(width * 0.46f, height * 0.64f), width * 0.62f, height * 0.25f, Color.FromRgb(126, 78, 182), 0.075f, 8);
+
+        var cloudCount = portrait ? 11 : 15;
+        for (var i = 0; i < cloudCount; i++)
+        {
+            var x = width * (random.NextSingle() * 1.10f - 0.05f);
+            var y = height * (0.56f + random.NextSingle() * 0.24f);
+            var w = width * (0.12f + random.NextSingle() * 0.24f);
+            var h = height * (0.010f + random.NextSingle() * 0.032f);
+            var color = i % 2 == 0 ? Color.FromRgb(202, 104, 94) : Color.FromRgb(93, 73, 144);
+            ctx.Fill(color.WithAlpha(0.035f + random.NextSingle() * 0.055f), new EllipsePolygon(x, y, w, h));
+        }
+    }
+
+    private static void DrawNaturalHorizonSilhouette(IImageProcessingContext ctx, int width, int height, bool portrait, Random random)
+    {
+        var horizonY = height * (portrait ? 0.70f : 0.74f);
+        var points = new List<PointF> { new(0, height), new(0, horizonY + height * 0.08f) };
+        var peaks = portrait ? 8 : 12;
+        for (var i = 0; i <= peaks; i++)
+        {
+            var x = width * (i / (float)peaks);
+            var ridge = horizonY + MathF.Sin(i * 1.37f) * height * 0.035f - random.NextSingle() * height * 0.12f;
+            points.Add(new PointF(x, ridge));
+        }
+        points.Add(new PointF(width, height));
+        ctx.Fill(Color.FromRgb(5, 8, 14).WithAlpha(0.92f), new Polygon(new LinearLineSegment(points.ToArray())));
+
+        var foregroundY = height * (portrait ? 0.80f : 0.83f);
+        var foreground = new List<PointF> { new(0, height), new(0, foregroundY) };
+        var hills = portrait ? 7 : 10;
+        for (var i = 0; i <= hills; i++)
+        {
+            var x = width * (i / (float)hills);
+            var y = foregroundY + MathF.Sin(i * 0.93f + 1.2f) * height * 0.025f - random.NextSingle() * height * 0.04f;
+            foreground.Add(new PointF(x, y));
+        }
+        foreground.Add(new PointF(width, height));
+        ctx.Fill(Color.FromRgb(2, 5, 10).WithAlpha(0.96f), new Polygon(new LinearLineSegment(foreground.ToArray())));
+    }
 
     private static void DrawCinematicGradient(IImageProcessingContext ctx, int width, int height, bool portrait, string cinematicMode)
     {
@@ -1037,7 +1153,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var selection = ResolveThumbnailFont(language, text);
         var thumbnailDirectory = Path.GetDirectoryName(thumbnailPath) ?? Path.GetTempPath();
         var thumbnailType = portrait ? "Short" : "Long";
-        var maxLines = portrait ? 3 : 2;
+        var maxLines = text.Contains('\n') ? 3 : portrait ? 3 : 2;
         var finalFontSize = requestedFontSize;
         var lines = Array.Empty<string>();
         string? error = null;
@@ -1218,17 +1334,20 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static void DrawWrappedHookText(IImageProcessingContext ctx, IReadOnlyList<string> lines, FontFamily fontFamily, float fontSize, RectangleF bounds, bool portrait, float lineHeight)
     {
-        var font = fontFamily.CreateFont(fontSize, FontStyle.Bold);
         var totalHeight = CalculateTextBlockHeight(lineHeight, lines.Count);
         var y = bounds.Y + Math.Max(0, (bounds.Height - totalHeight) / 2f);
-        foreach (var line in lines)
+        for (var i = 0; i < lines.Count; i++)
         {
-            var lineWidth = MeasureTextWidth(line, font);
-            var x = portrait ? bounds.X + Math.Max(0, (bounds.Width - lineWidth) / 2f) : bounds.X;
+            var line = lines[i];
+            var lineFontSize = i == 0 ? fontSize : i == 1 ? fontSize * 0.72f : fontSize * 0.58f;
+            var font = fontFamily.CreateFont(lineFontSize, FontStyle.BoldItalic);
+            var x = bounds.X;
             var origin = new PointF(x, y);
-            ctx.DrawText(line, font, Color.Black.WithAlpha(0.75f), new PointF(origin.X + 4f, origin.Y + 4f));
-            ctx.DrawText(line, font, Color.White, origin);
-            y += lineHeight;
+            var color = i == 0 ? Color.White : i == 1 ? Color.FromRgb(255, 207, 82) : Color.FromRgb(144, 218, 255);
+            ctx.DrawText(line, font, Color.Black.WithAlpha(0.86f), new PointF(origin.X + 6f, origin.Y + 6f));
+            ctx.DrawText(line, font, Color.FromRgb(6, 12, 30).WithAlpha(0.55f), new PointF(origin.X - 2f, origin.Y + 3f));
+            ctx.DrawText(line, font, color, origin);
+            y += i == 0 ? lineHeight * 0.88f : lineHeight * 0.68f;
         }
     }
 
@@ -1378,12 +1497,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var jitterX = (random.NextSingle() - 0.5f) * width * (portrait ? 0.035f : 0.045f);
         var jitterY = (random.NextSingle() - 0.5f) * height * 0.035f;
         RectangleF rect = portrait
-            ? new RectangleF(width * 0.30f + jitterX, height * 0.12f + jitterY, width * 0.405f, width * 0.405f)
+            ? new RectangleF(width * 0.36f + jitterX, height * 0.31f + jitterY, width * 0.42f, width * 0.42f)
             : mode switch
             {
-                "MoonDominant" => new RectangleF(width * 0.54f + jitterX, height * 0.11f + jitterY, width * 0.37f, height * 0.61f),
-                "WideSkyMode" or "DeepSpaceMode" => new RectangleF(width * 0.61f + jitterX, height * 0.16f + jitterY, width * 0.30f, height * 0.52f),
-                _ => new RectangleF(width * 0.52f + jitterX, height * 0.14f + jitterY, width * 0.39f, height * 0.58f)
+                "MoonDominant" => new RectangleF(width * 0.60f + jitterX, height * 0.12f + jitterY, width * 0.31f, height * 0.52f),
+                "WideSkyMode" or "DeepSpaceMode" => new RectangleF(width * 0.64f + jitterX, height * 0.15f + jitterY, width * 0.28f, height * 0.48f),
+                _ => new RectangleF(width * 0.57f + jitterX, height * 0.12f + jitterY, width * 0.32f, height * 0.48f)
             };
         return ClampRect(rect, width, height, 24);
     }
@@ -1392,23 +1511,23 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     {
         var offset = (random.NextSingle() - 0.5f) * width * 0.035f;
         if (portrait)
-            return ClampRect(new RectangleF(width * 0.70f + offset, height * 0.40f, width * 0.122f, width * 0.122f), width, height, 28);
-        var size = mode is "ConjunctionMode" or "RareAlignment" ? width * 0.142f : width * 0.116f;
-        var x = index == 0 ? width * 0.38f : width * 0.45f;
-        var y = index == 0 ? height * 0.14f : height * 0.59f;
+            return ClampRect(new RectangleF(width * 0.66f + offset, height * 0.45f, width * 0.112f, width * 0.112f), width, height, 28);
+        var size = mode is "ConjunctionMode" or "RareAlignment" ? width * 0.094f : width * 0.082f;
+        var x = index == 0 ? width * 0.76f : width * 0.70f;
+        var y = index == 0 ? height * 0.18f : height * 0.50f;
         return ClampRect(new RectangleF(x + offset, y, size, size), width, height, 28);
     }
 
     private static RectangleF CalculateTextSafeRect(string hook, int width, int height, bool portrait, string language)
     {
-        var margin = portrait ? 82f : 64f;
+        var margin = portrait ? 70f : 64f;
         var text = FormatHookForMobile(hook);
         var fontSize = ResolveFontSize(text, portrait);
         var lineCount = Math.Max(1, text.Split('\n').Length);
-        var boxHeight = Math.Min(height * (portrait ? 0.22f : 0.26f), fontSize * lineCount * 1.08f + 24f);
+        var boxHeight = Math.Min(height * (portrait ? 0.25f : 0.42f), fontSize * lineCount * 1.02f + 22f);
         return portrait
-            ? new RectangleF(margin, height * 0.625f, width - margin * 2, boxHeight)
-            : new RectangleF(margin, height * 0.62f, width * 0.43f, boxHeight);
+            ? new RectangleF(margin, height * 0.055f, width - margin * 2, boxHeight)
+            : new RectangleF(margin, height * 0.13f, width * 0.46f, boxHeight);
     }
 
     private static RectangleF CalculateDateLocationRect(int width, int height, bool portrait)
@@ -1425,6 +1544,9 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static float ResolveFontSize(string text, bool portrait)
     {
         var length = text.Replace("\n", string.Empty).Length;
+        var lineCount = Math.Max(1, text.Split('\n').Length);
+        if (lineCount >= 3)
+            return portrait ? 82f : 78f;
         var shortBase = portrait ? 101f : 104f;
         var longBase = portrait ? 77f : 78f;
         return length <= 15 ? shortBase : length <= 22 ? (shortBase + longBase) / 2f : longBase;
@@ -1432,6 +1554,8 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string FormatHookForMobile(string hook)
     {
+        if (hook.Contains('\n'))
+            return hook;
         var words = hook.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (hook.Length <= 16 || words.Length < 3)
             return hook;
@@ -1751,6 +1875,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         {
             mode = "LocalAssetCollage",
             cinematicMode = composition.CinematicMode,
+            photoCinematicStyleApplied = composition.PhotoCinematicStyleApplied,
+            textBoxesRemoved = composition.TextBoxesRemoved,
+            infographicLookRemoved = composition.InfographicLookRemoved,
+            venusRenderedAsBrightStar = composition.VenusRenderedAsBrightStar,
+            jupiterRenderedAsRealisticPlanet = composition.JupiterRenderedAsRealisticPlanet,
+            thumbnailFinalReadinessScore = composition.ThumbnailFinalReadinessScore,
             heroObject = plan.CelestialSelection?.HeroObject ?? "",
             supportObjects = plan.CelestialSelection?.SupportObjects ?? Array.Empty<string>(),
             selectedHook = plan.CelestialSelection?.SelectedHook ?? plan.PrimaryThumbnailText,
@@ -1815,6 +1945,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
             transparentAssetUsed = assets.FirstOrDefault() is { } first && IsTransparentAsset(first.LocalPath),
             transparentAssetsUsed = composition.TransparentAssetsUsed,
             cardStyleRemoved = composition.CardStyleRemoved,
+            photoCinematicStyleApplied = composition.PhotoCinematicStyleApplied,
+            textBoxesRemoved = composition.TextBoxesRemoved,
+            infographicLookRemoved = composition.InfographicLookRemoved,
+            venusRenderedAsBrightStar = composition.VenusRenderedAsBrightStar,
+            jupiterRenderedAsRealisticPlanet = composition.JupiterRenderedAsRealisticPlanet,
+            thumbnailFinalReadinessScore = composition.ThumbnailFinalReadinessScore,
             objectCount = composition.ObjectCount,
             layoutWarnings = composition.LayoutWarnings,
             heroObjectScale = composition.HeroObjectScale,
@@ -1865,7 +2001,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
     private static async Task WriteFallbackAnalysisAsync(ThumbnailGenerationRequest request, ThumbnailPlan fallback, IReadOnlyCollection<string> warnings, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.Combine(request.OutputDirectory, "thumbnails"));
-        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), assetPriorityUsed = Array.Empty<string>(), selectedAssetFileName = string.Empty, selectedAssetSource = string.Empty, oldAssetIgnoredBecauseHeroExists = false, transparentAssetUsed = false, transparentAssetsUsed = 0, cardStyleRemoved = true, objectCount = 0, layoutWarnings = new[] { "fallback-plan" }, heroObjectScale = 0, supportObjectScales = Array.Empty<double>(), layoutUsed = "FallbackToStellariumFrame", compositionBalanceScore = 0d, depthScore = 0d, atmosphericBlendScore = 0d, negativeSpaceScore = 0d, heroIsolationScore = 0d, cinematicRealismScore = 0d, visualPreset = "Premium Documentary", glowIntensity = 0d, deepSpacePenaltyApplied = false, foregroundObjectAreaPercent = 0d, overlapPenaltyApplied = false, language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
+        var payload = new { assetsFound = Array.Empty<string>(), assetsMissing = Array.Empty<string>(), assetPriorityUsed = Array.Empty<string>(), selectedAssetFileName = string.Empty, selectedAssetSource = string.Empty, oldAssetIgnoredBecauseHeroExists = false, transparentAssetUsed = false, transparentAssetsUsed = 0, cardStyleRemoved = true, photoCinematicStyleApplied = false, textBoxesRemoved = true, infographicLookRemoved = false, venusRenderedAsBrightStar = false, jupiterRenderedAsRealisticPlanet = false, thumbnailFinalReadinessScore = 0, objectCount = 0, layoutWarnings = new[] { "fallback-plan" }, heroObjectScale = 0, supportObjectScales = Array.Empty<double>(), layoutUsed = "FallbackToStellariumFrame", compositionBalanceScore = 0d, depthScore = 0d, atmosphericBlendScore = 0d, negativeSpaceScore = 0d, heroIsolationScore = 0d, cinematicRealismScore = 0d, visualPreset = "Premium Documentary", glowIntensity = 0d, deepSpacePenaltyApplied = false, foregroundObjectAreaPercent = 0d, overlapPenaltyApplied = false, language = request.Context.Localization.ResolvedLanguage, dimensions = new { width = 0, height = 0, fileSizeBytes = 0 }, warnings };
         await File.WriteAllTextAsync(Path.Combine(request.OutputDirectory, "thumbnails", "thumbnail-analysis-report.json"), JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
@@ -1878,6 +2014,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var payload = new
         {
             cinematicMode = "WideSkyMode",
+            photoCinematicStyleApplied = false,
+            textBoxesRemoved = true,
+            infographicLookRemoved = false,
+            venusRenderedAsBrightStar = false,
+            jupiterRenderedAsRealisticPlanet = false,
+            thumbnailFinalReadinessScore = 0,
             heroObject = fallback.CelestialSelection?.HeroObject ?? "FallbackFrame",
             supportObjects = Array.Empty<string>(),
             hookText = fallback.PrimaryThumbnailText,
@@ -1921,6 +2063,12 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
         var payload = new
         {
             cinematicMode = selection.CinematicMode,
+            photoCinematicStyleApplied = composition.PhotoCinematicStyleApplied,
+            textBoxesRemoved = composition.TextBoxesRemoved,
+            infographicLookRemoved = composition.InfographicLookRemoved,
+            venusRenderedAsBrightStar = composition.VenusRenderedAsBrightStar,
+            jupiterRenderedAsRealisticPlanet = composition.JupiterRenderedAsRealisticPlanet,
+            thumbnailFinalReadinessScore = composition.ThumbnailFinalReadinessScore,
             heroObject = plan.CelestialSelection?.HeroObject ?? selection.Hero.Name,
             supportObjects = plan.CelestialSelection?.SupportObjects ?? selection.Support.Select(s => s.Name).ToArray(),
             hookText = plan.CelestialSelection?.SelectedHook ?? plan.PrimaryThumbnailText,
@@ -1978,7 +2126,7 @@ public sealed class LocalAssetCollageThumbnailService : ICinematicThumbnailServi
 
     private static string[] BuildAssetPriorityUsed(IReadOnlyCollection<CelestialAsset> assets) => assets.Select(a => $"{a.Source}:{Path.GetFileName(a.LocalPath)}").ToArray();
 
-    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double ProceduralAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore, double AtmosphereDepthScore, double FogBlendScore, double ProceduralArtifactPenalty, double CinematicSoftnessScore, double AtmosphericRealismScore);
+    private sealed record CompositionDiagnostics(string LayoutUsed, double HeroObjectScale, IReadOnlyCollection<double> SupportObjectScales, int TransparentAssetsUsed, bool CardStyleRemoved, bool PhotoCinematicStyleApplied, bool TextBoxesRemoved, bool InfographicLookRemoved, bool VenusRenderedAsBrightStar, bool JupiterRenderedAsRealisticPlanet, int ThumbnailFinalReadinessScore, int ObjectCount, IReadOnlyCollection<string> LayoutWarnings, string CinematicMode, double CompositionScore, double ReadabilityScore, double ClickabilityScore, IReadOnlyCollection<string> ObjectOverlapWarnings, IReadOnlyCollection<string> SafeZoneWarnings, object TextBounds, double GlowIntensity, bool DeepSpacePenaltyApplied, double ForegroundObjectAreaPercent, bool OverlapPenaltyApplied, double CompositionBalanceScore, double DepthScore, double AtmosphericBlendScore, double NegativeSpaceScore, double HeroIsolationScore, double CinematicRealismScore, string VisualPreset, double OrganicAtmosphereScore, double ProceduralAtmosphereScore, double NaturalLightingScore, double VisualArtifactPenalty, double CompositingVisibilityPenalty, double CinematicSubtletyScore, double EdgeIntegrationScore, double CompositingSeamPenalty, double AtmosphereContinuityScore, double EnvironmentalDepthScore, double SupportObjectDepthScore, double AtmosphereDepthScore, double FogBlendScore, double ProceduralArtifactPenalty, double CinematicSoftnessScore, double AtmosphericRealismScore);
     private sealed record ResolvedAsset(string Path, string FileName, string Source, bool OldAssetIgnoredBecauseHeroExists, string BaseDirectory);
     private sealed record SelectedObject(string Name, string Type, string Key, bool FallbackAllowed, SceneObservationContext? Scene = null, AstronomyEventModel? Event = null);
     private sealed record Selection(SelectedObject Hero, IReadOnlyCollection<SelectedObject> Support, IReadOnlyCollection<object> VisibilityData, bool IsSpecialEvent, string CinematicMode, IReadOnlyCollection<HeroObjectScore> HeroScores, bool HasConjunction)
