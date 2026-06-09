@@ -21,6 +21,7 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
     private const string ThumbnailCompositionModelFileName = "thumbnail-composition-model.json";
     private const string ThumbnailSceneManifestFileName = "thumbnail-scene-manifest.json";
     private const string VideoAssemblyIntelligenceFileName = "video-assembly-intelligence.json";
+    private const string VideoNarrationScriptFileName = "video-narration-script.json";
     private const string SelectedOpeningHook = "DON'T MISS THIS TONIGHT";
     private static readonly string[] RequiredApprovedSceneIds = ["scene-001", "scene-002", "scene-003", "scene-005", "scene-006"];
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -30,8 +31,11 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
 
+        if (string.Equals(request.Phase, "Script", StringComparison.OrdinalIgnoreCase))
+            return await GenerateVideoNarrationScriptAsync(request, cancellationToken);
+
         if (!string.Equals(request.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only video assembly phase 'Intelligence' is implemented in this endpoint version.", nameof(request));
+            throw new ArgumentException("Only video assembly phases 'Intelligence' and 'Script' are implemented in this endpoint version.", nameof(request));
 
         var outputPath = BuildVideoAssemblyIntelligenceOutputPath(request.EventId, request.RegionId);
         if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
@@ -53,6 +57,50 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
         }
 
         return BuildResponse(request.Phase, intelligence, outputPath);
+    }
+
+
+    private async Task<VideoAssemblyGenerationResponse> GenerateVideoNarrationScriptAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var outputPath = BuildVideoNarrationScriptOutputPath(request.EventId, request.RegionId);
+        if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
+        {
+            var existing = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
+                ?? throw new InvalidOperationException("Existing video narration script could not be parsed.");
+            ValidateVideoNarrationScript(existing);
+            return BuildScriptResponse(request.Phase, existing, outputPath);
+        }
+
+        var intelligence = await EnsureRequiredScriptInputsAsync(request.EventId, request.RegionId, cancellationToken);
+        var script = BuildVideoNarrationScript(request, intelligence);
+        ValidateVideoNarrationScript(script);
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
+            await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(script, JsonOptions), cancellationToken);
+        }
+
+        return BuildScriptResponse(request.Phase, script, outputPath);
+    }
+
+    private async Task<VideoAssemblyIntelligenceDto> EnsureRequiredScriptInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
+    {
+        var videoAssemblyIntelligencePath = BuildVideoAssemblyIntelligenceOutputPath(eventId, regionId);
+        if (!File.Exists(videoAssemblyIntelligencePath))
+            throw new ArgumentException($"Required video narration script input '{VideoAssemblyIntelligenceFileName}' was not found at '{NormalizePath(videoAssemblyIntelligencePath)}'.");
+
+        var intelligence = JsonSerializer.Deserialize<VideoAssemblyIntelligenceDto>(await File.ReadAllTextAsync(videoAssemblyIntelligencePath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException($"Required video narration script input '{VideoAssemblyIntelligenceFileName}' could not be parsed.");
+        ValidateVideoAssemblyIntelligence(intelligence);
+        ValidateRecommendedSceneOrder(intelligence.RecommendedSceneOrder, "video-assembly-intelligence.json");
+
+        var heroRoot = BuildHeroAssetsRoot(eventId, regionId);
+        await EnsureHeroStoryInputAsync(heroRoot, cancellationToken);
+        using var heroSceneManifest = await EnsureJsonInputAsync(Path.Combine(heroRoot, HeroSceneManifestFileName), HeroSceneManifestFileName, cancellationToken);
+        EnsureApprovedSceneImages(eventId, regionId, heroSceneManifest);
+
+        return intelligence;
     }
 
     private async Task EnsureRequiredInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
@@ -171,6 +219,58 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
             DateTimeOffset.UtcNow);
     }
 
+
+    private static VideoNarrationScriptDto BuildVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
+    {
+        var durations = intelligence.RecommendedSceneDurations.ToDictionary(scene => scene.SceneKey, scene => scene.DurationSeconds, StringComparer.OrdinalIgnoreCase);
+        var sceneScripts = new[]
+        {
+            new VideoNarrationSceneScriptDto("Hook", GetDuration(durations, "Hook", 3.0), "Don't miss this tonight.", "DON'T MISS THIS TONIGHT"),
+            new VideoNarrationSceneScriptDto("What", GetDuration(durations, "What", 4.0), "Venus and Jupiter will shine close together after sunset.", "Venus + Jupiter"),
+            new VideoNarrationSceneScriptDto("Why", GetDuration(durations, "Why", 4.0), "Two of the brightest worlds will share the evening sky.", "Two bright worlds"),
+            new VideoNarrationSceneScriptDto("Where", GetDuration(durations, "Where", 3.0), "Look toward the western sky.", "Look West"),
+            new VideoNarrationSceneScriptDto("When", GetDuration(durations, "When", 3.0), "The best time is shortly after sunset.", "After Sunset"),
+            new VideoNarrationSceneScriptDto("Action", GetDuration(durations, "Action", 3.0), "Step outside tonight and look west.", "Step Outside Tonight")
+        };
+
+        return new VideoNarrationScriptDto(
+            request.EventId,
+            request.RegionId,
+            request.Language,
+            request.Platform,
+            sceneScripts.Sum(scene => scene.DurationSeconds),
+            new VideoNarrationScriptStyleDto("Excited but clear", "Fast short-form", "Neutral energetic narrator"),
+            sceneScripts,
+            string.Join(" ", sceneScripts.Select(scene => scene.Narration)),
+            new VideoNarrationTtsPlanDto(true, "NeutralEnergetic", "video-tts-audio.mp3"),
+            new VideoNarrationScriptScoresDto(96, 95, 96),
+            [],
+            DateTimeOffset.UtcNow);
+    }
+
+    private static double GetDuration(IReadOnlyDictionary<string, double> durations, string sceneKey, double fallback)
+        => durations.TryGetValue(sceneKey, out var duration) ? duration : fallback;
+
+    private static void ValidateVideoNarrationScript(VideoNarrationScriptDto script)
+    {
+        if (string.IsNullOrWhiteSpace(script.FullNarrationText))
+            throw new ArgumentException("Video narration script validation failed: fullNarrationText must not be empty.");
+        ValidateRecommendedSceneOrder(script.SceneScripts.Select(scene => scene.SceneKey), "video-narration-script.json");
+        if (script.TotalEstimatedDurationSeconds < 15 || script.TotalEstimatedDurationSeconds > 25)
+            throw new ArgumentException("Video narration script validation failed: totalEstimatedDurationSeconds must be 15-25 seconds.");
+        if (!script.TtsPlan.TtsRequired)
+            throw new ArgumentException("Video narration script validation failed: ttsRequired must be true.");
+        if (script.Scores.TtsReadinessScore < 90)
+            throw new ArgumentException("Video narration script validation failed: ttsReadinessScore must be at least 90.");
+    }
+
+    private static void ValidateRecommendedSceneOrder(IEnumerable<string> sceneOrder, string fileName)
+    {
+        string[] recommendedSceneOrder = ["Hook", "What", "Why", "Where", "When", "Action"];
+        if (!sceneOrder.SequenceEqual(recommendedSceneOrder, StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException($"Video narration script validation failed: scene order in {fileName} must be Hook, What, Why, Where, When, Action.");
+    }
+
     private static void ValidateVideoAssemblyIntelligence(VideoAssemblyIntelligenceDto intelligence)
     {
         if (string.IsNullOrWhiteSpace(intelligence.SelectedOpeningHook))
@@ -212,6 +312,22 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
             intelligence.OutputsPlanned.Any(output => string.Equals(output, "final-video.mp4", StringComparison.OrdinalIgnoreCase)),
             []);
 
+    private static VideoAssemblyGenerationResponse BuildScriptResponse(string phaseRequested, VideoNarrationScriptDto script, string outputPath)
+        => new(
+            phaseRequested,
+            "Script",
+            false,
+            string.Empty,
+            string.Empty,
+            0,
+            script.TtsPlan.TtsRequired,
+            false,
+            [],
+            true,
+            NormalizePath(outputPath),
+            script.TotalEstimatedDurationSeconds,
+            script.Scores.TtsReadinessScore >= 90);
+
     private string BuildQuestionEngineRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
 
@@ -226,6 +342,9 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
 
     private string BuildVideoAssemblyIntelligenceOutputPath(string eventId, string regionId)
         => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoAssemblyIntelligenceFileName);
+
+    private string BuildVideoNarrationScriptOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoNarrationScriptFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;

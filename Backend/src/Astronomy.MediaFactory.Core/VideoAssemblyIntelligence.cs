@@ -26,7 +26,11 @@ public sealed record VideoAssemblyGenerationResponse(
     double RecommendedTotalDurationSeconds,
     bool TtsRequired,
     bool FinalVideoPlanned,
-    IReadOnlyList<string> GeneratedFiles);
+    IReadOnlyList<string> GeneratedFiles,
+    bool VideoNarrationScriptGenerated = false,
+    string VideoNarrationScriptPath = "",
+    double TotalEstimatedDurationSeconds = 0,
+    bool TtsReady = false);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -80,3 +84,39 @@ public interface IVideoAssemblyIntelligenceService
 {
     Task<VideoAssemblyGenerationResponse> GenerateVideoAssemblyAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken);
 }
+
+
+public sealed record VideoNarrationScriptDto(
+    string EventId,
+    string RegionId,
+    string Language,
+    string Platform,
+    double TotalEstimatedDurationSeconds,
+    VideoNarrationScriptStyleDto ScriptStyle,
+    IReadOnlyList<VideoNarrationSceneScriptDto> SceneScripts,
+    string FullNarrationText,
+    VideoNarrationTtsPlanDto TtsPlan,
+    VideoNarrationScriptScoresDto Scores,
+    IReadOnlyList<string> Warnings,
+    DateTimeOffset GeneratedUtc);
+
+public sealed record VideoNarrationScriptStyleDto(
+    string Tone,
+    string Pace,
+    string VoiceType);
+
+public sealed record VideoNarrationSceneScriptDto(
+    string SceneKey,
+    double DurationSeconds,
+    string Narration,
+    string OnScreenText);
+
+public sealed record VideoNarrationTtsPlanDto(
+    bool TtsRequired,
+    string RecommendedVoice,
+    string OutputFileName);
+
+public sealed record VideoNarrationScriptScoresDto(
+    int ClarityScore,
+    int ShortFormPaceScore,
+    int TtsReadinessScore);
