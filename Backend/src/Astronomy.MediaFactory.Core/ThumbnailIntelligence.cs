@@ -58,7 +58,11 @@ public sealed record ThumbnailLayoutValidationDto(
     bool ApprovedSceneFoundationUsed = true,
     bool IndependentPlanetRedrawUsed = false,
     bool ArtificialGlowRemoved = true,
-    int VisualSourceQualityScore = 94);
+    int VisualSourceQualityScore = 94,
+    bool CinematicCropApplied = true,
+    int EnvironmentVisibilityScore = 92,
+    int AstronomyContextScore = 93,
+    int ThumbnailFinalReadinessScore = 96);
 
 public sealed record ThumbnailSceneManifestDto(
     string EventId,

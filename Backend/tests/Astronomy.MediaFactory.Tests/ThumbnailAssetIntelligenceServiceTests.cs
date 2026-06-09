@@ -270,6 +270,10 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.False(validation.IndependentPlanetRedrawUsed);
         Assert.True(validation.ArtificialGlowRemoved);
         Assert.True(validation.VisualSourceQualityScore >= 90);
+        Assert.True(validation.CinematicCropApplied);
+        Assert.True(validation.EnvironmentVisibilityScore >= 90);
+        Assert.True(validation.AstronomyContextScore >= 90);
+        Assert.True(validation.ThumbnailFinalReadinessScore >= 95);
     }
 
     [Fact]
