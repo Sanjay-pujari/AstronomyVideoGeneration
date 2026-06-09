@@ -185,7 +185,8 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             Platform = "YouTubeShort",
             Phase = "Tts",
             DryRun = false,
-            OverwriteExisting = true
+            OverwriteExisting = true,
+            AllowSyntheticSilentTts = true
         }, CancellationToken.None);
 
         var audioPath = Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-tts-audio.mp3");
@@ -197,6 +198,10 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(audioPath.Replace('\\', '/'), result.AudioFilePath);
         Assert.Equal(timingsPath.Replace('\\', '/'), result.TimingsFilePath);
         Assert.Equal(20.0, result.ActualDurationSeconds);
+        Assert.Equal("SyntheticOfflineTtsV1", result.TtsProvider);
+        Assert.True(result.IsSyntheticTts);
+        Assert.True(result.IsSilentAudio);
+        Assert.False(result.AudioValidationPassed);
         Assert.True(File.Exists(audioPath));
         Assert.True(File.Exists(timingsPath));
         Assert.DoesNotContain(Directory.GetFiles(BuildVideoAssemblyRoot(workingDirectory)), path => Path.GetExtension(path).Equals(".mp4", StringComparison.OrdinalIgnoreCase));
@@ -217,6 +222,61 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(20.0, saved.SceneTimings[^1].EndSeconds);
         Assert.Equal("SyntheticOfflineTtsV1", saved.TtsProvider);
         Assert.Equal("NeutralEnergetic", saved.VoiceUsed);
+        Assert.NotNull(saved.AudioValidation);
+        Assert.True(saved.AudioValidation!.IsSilentAudio);
+        Assert.False(saved.AudioValidation.AudioValidationPassed);
+    }
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_TtsNonDryRunWithoutRealProviderFailsClearly()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Intelligence",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Script",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var originalOpenAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", null);
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+            {
+                EventId = EventId,
+                RegionId = RegionId,
+                Language = "en",
+                Platform = "YouTubeShort",
+                Phase = "Tts",
+                DryRun = false,
+                OverwriteExisting = true
+            }, CancellationToken.None));
+
+            Assert.Equal("Real TTS provider is not configured. SyntheticOfflineTtsV1 is disabled for dryRun=false.", error.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", originalOpenAiApiKey);
+        }
     }
 
     [Fact]

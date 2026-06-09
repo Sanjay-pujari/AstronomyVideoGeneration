@@ -15,6 +15,8 @@ public sealed class VideoAssemblyGenerationRequest
     public bool DryRun { get; set; } = true;
 
     public bool OverwriteExisting { get; set; }
+
+    public bool AllowSyntheticSilentTts { get; set; }
 }
 
 public sealed record VideoAssemblyGenerationResponse(
@@ -35,7 +37,13 @@ public sealed record VideoAssemblyGenerationResponse(
     bool TtsTimingsGenerated = false,
     string AudioFilePath = "",
     string TimingsFilePath = "",
-    double ActualDurationSeconds = 0);
+    double ActualDurationSeconds = 0,
+    string TtsProvider = "",
+    bool IsSyntheticTts = false,
+    bool IsSilentAudio = false,
+    bool AudioValidationPassed = false,
+    double AudioPeakDb = 0,
+    double AudioRmsDb = 0);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -138,7 +146,14 @@ public sealed record VideoTtsTimingsDto(
     IReadOnlyList<VideoTtsSceneTimingDto> SceneTimings,
     string TtsProvider,
     string VoiceUsed,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    VideoTtsAudioValidationDto? AudioValidation = null);
+
+public sealed record VideoTtsAudioValidationDto(
+    bool IsSilentAudio,
+    double AudioPeakDb,
+    double AudioRmsDb,
+    bool AudioValidationPassed = true);
 
 public sealed record VideoTtsSceneTimingDto(
     string SceneKey,

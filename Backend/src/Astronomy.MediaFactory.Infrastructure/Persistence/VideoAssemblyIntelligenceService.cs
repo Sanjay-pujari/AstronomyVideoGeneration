@@ -1,14 +1,20 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Options;
 using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> renderingOptions) : IVideoAssemblyIntelligenceService
+public sealed class VideoAssemblyIntelligenceService(
+    IOptions<RenderingOptions> renderingOptions,
+    IOptions<AzureSpeechOptions>? azureSpeechOptions = null,
+    IAzureSpeechClient? azureSpeechClient = null) : IVideoAssemblyIntelligenceService
 {
     private const string HeroAssetsDirectoryName = "hero-assets";
     private const string ThumbnailAssetsDirectoryName = "thumbnail-assets";
@@ -27,6 +33,12 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
     private const string VideoTtsAudioFileName = "video-tts-audio.mp3";
     private const string VideoTtsTimingsFileName = "video-tts-timings.json";
     private const string SelectedOpeningHook = "DON'T MISS THIS TONIGHT";
+    private const string SyntheticTtsProviderName = "SyntheticOfflineTtsV1";
+    private const string AzureTtsProviderName = "AzureSpeechTts";
+    private const string OpenAiTtsProviderName = "OpenAITts";
+    private const long MinimumMp3FileSizeBytes = 1024;
+    private const double SilencePeakThresholdDb = -55.0;
+    private const double SilenceRmsThresholdDb = -60.0;
     private static readonly string[] RequiredApprovedSceneIds = ["scene-001", "scene-002", "scene-003", "scene-005", "scene-006"];
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -97,30 +109,54 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
         var audioPath = BuildVideoTtsAudioOutputPath(request.EventId, request.RegionId);
         var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId);
 
+        var syntheticTtsAllowed = request.DryRun || request.AllowSyntheticSilentTts;
+
         if (!request.DryRun && !request.OverwriteExisting && File.Exists(audioPath) && File.Exists(timingsPath))
         {
             var existing = JsonSerializer.Deserialize<VideoTtsTimingsDto>(await File.ReadAllTextAsync(timingsPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing video TTS timings could not be parsed.");
             ValidateVideoTtsTimings(existing);
-            return BuildTtsResponse(request.Phase, audioPath, timingsPath, existing.ActualDurationSeconds, generatedFiles: []);
+            if (IsSyntheticProvider(existing.TtsProvider) && !syntheticTtsAllowed)
+                throw new InvalidOperationException("Real TTS provider is not configured. SyntheticOfflineTtsV1 is disabled for dryRun=false.");
+
+            var existingValidation = await ValidateMp3AudioAsync(audioPath, enforceNonSilent: !IsSyntheticProvider(existing.TtsProvider), cancellationToken);
+            if (!existingValidation.AudioValidationPassed && !IsSyntheticProvider(existing.TtsProvider))
+                throw new InvalidOperationException("Generated TTS audio validation failed: audio is silent or invalid.");
+
+            return BuildTtsResponse(request.Phase, audioPath, timingsPath, existing.ActualDurationSeconds, [], existing.TtsProvider, IsSyntheticProvider(existing.TtsProvider), existingValidation);
         }
 
         var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, cancellationToken);
+        var provider = ResolveTtsProvider(request, script);
         var actualDurationSeconds = NormalizeTtsDuration(script.TotalEstimatedDurationSeconds);
-        var timings = BuildVideoTtsTimings(request, script, audioPath, actualDurationSeconds);
-        ValidateVideoTtsTimings(timings);
 
         var generatedFiles = new List<string>();
+        VideoTtsAudioValidationDto audioValidation = new(false, 0, 0, request.DryRun);
         if (!request.DryRun)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(audioPath) ?? ResolveWorkingDirectoryRoot());
-            await WriteTtsAudioAsync(script.FullNarrationText, audioPath, actualDurationSeconds, cancellationToken);
-            await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
+            await WriteTtsAudioAsync(script.FullNarrationText, audioPath, actualDurationSeconds, provider, cancellationToken);
+            audioValidation = await ValidateMp3AudioAsync(audioPath, enforceNonSilent: !provider.IsSynthetic, cancellationToken);
+            var measuredDurationSeconds = await ProbeDurationSecondsAsync(audioPath, cancellationToken);
+            if (!provider.IsSynthetic && measuredDurationSeconds > 0)
+                actualDurationSeconds = Math.Round(measuredDurationSeconds, 3, MidpointRounding.AwayFromZero);
+
+            if (!audioValidation.AudioValidationPassed && !provider.IsSynthetic)
+                throw new InvalidOperationException("Generated TTS audio validation failed: audio is silent or invalid.");
+
             generatedFiles.Add(NormalizePath(audioPath));
+        }
+
+        var timings = BuildVideoTtsTimings(request, script, audioPath, actualDurationSeconds, provider.ProviderName, provider.VoiceUsed, audioValidation);
+        ValidateVideoTtsTimings(timings);
+
+        if (!request.DryRun)
+        {
+            await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
             generatedFiles.Add(NormalizePath(timingsPath));
         }
 
-        return BuildTtsResponse(request.Phase, audioPath, timingsPath, timings.ActualDurationSeconds, generatedFiles);
+        return BuildTtsResponse(request.Phase, audioPath, timingsPath, timings.ActualDurationSeconds, generatedFiles, provider.ProviderName, provider.IsSynthetic, audioValidation);
     }
 
     private async Task<VideoNarrationScriptDto> EnsureRequiredTtsInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
@@ -303,7 +339,7 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
         => durations.TryGetValue(sceneKey, out var duration) ? duration : fallback;
 
 
-    private static VideoTtsTimingsDto BuildVideoTtsTimings(VideoAssemblyGenerationRequest request, VideoNarrationScriptDto script, string audioPath, double actualDurationSeconds)
+    private static VideoTtsTimingsDto BuildVideoTtsTimings(VideoAssemblyGenerationRequest request, VideoNarrationScriptDto script, string audioPath, double actualDurationSeconds, string ttsProvider, string voiceUsed, VideoTtsAudioValidationDto audioValidation)
     {
         var estimatedDurationSeconds = script.TotalEstimatedDurationSeconds;
         var sceneTimings = new List<VideoTtsSceneTimingDto>();
@@ -331,20 +367,106 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
             estimatedDurationSeconds,
             actualDurationSeconds,
             sceneTimings,
-            "SyntheticOfflineTtsV1",
-            string.IsNullOrWhiteSpace(script.TtsPlan.RecommendedVoice) ? "NeutralEnergetic" : script.TtsPlan.RecommendedVoice,
-            DateTimeOffset.UtcNow);
+            ttsProvider,
+            voiceUsed,
+            DateTimeOffset.UtcNow,
+            audioValidation);
     }
 
     private static double NormalizeTtsDuration(double estimatedDurationSeconds)
         => Math.Round(Math.Clamp(estimatedDurationSeconds, 15.0, 25.0), 3, MidpointRounding.AwayFromZero);
 
-    private async Task WriteTtsAudioAsync(string narrationText, string audioPath, double durationSeconds, CancellationToken cancellationToken)
+    private async Task WriteTtsAudioAsync(string narrationText, string audioPath, double durationSeconds, TtsProviderSelection provider, CancellationToken cancellationToken)
     {
+        if (provider.ProviderName == AzureTtsProviderName)
+        {
+            if (azureSpeechClient is null || azureSpeechOptions is null)
+                throw new InvalidOperationException("Azure Speech TTS provider is not available.");
+
+            var audioBytes = await azureSpeechClient.SynthesizeMp3Async(narrationText, azureSpeechOptions.Value, cancellationToken);
+            await File.WriteAllBytesAsync(audioPath, audioBytes, cancellationToken);
+            return;
+        }
+
+        if (provider.ProviderName == OpenAiTtsProviderName)
+        {
+            var audioBytes = await SynthesizeOpenAiMp3Async(narrationText, provider.VoiceUsed, cancellationToken);
+            await File.WriteAllBytesAsync(audioPath, audioBytes, cancellationToken);
+            return;
+        }
+
         if (await TryWriteSilentMp3WithFfmpegAsync(audioPath, durationSeconds, cancellationToken))
             return;
 
         await File.WriteAllBytesAsync(audioPath, BuildFallbackMp3Placeholder(narrationText, durationSeconds), cancellationToken);
+    }
+
+    private TtsProviderSelection ResolveTtsProvider(VideoAssemblyGenerationRequest request, VideoNarrationScriptDto script)
+    {
+        var voice = string.IsNullOrWhiteSpace(script.TtsPlan.RecommendedVoice) ? "NeutralEnergetic" : script.TtsPlan.RecommendedVoice;
+        if (request.DryRun || request.AllowSyntheticSilentTts)
+            return new TtsProviderSelection(SyntheticTtsProviderName, voice, true);
+
+        if (IsAzureSpeechConfigured(azureSpeechOptions?.Value))
+            return new TtsProviderSelection(AzureTtsProviderName, ResolveAzureVoice(script.FullNarrationText), false);
+
+        if (IsOpenAiTtsConfigured())
+            return new TtsProviderSelection(OpenAiTtsProviderName, Environment.GetEnvironmentVariable("OPENAI_TTS_VOICE") ?? "alloy", false);
+
+        throw new InvalidOperationException("Real TTS provider is not configured. SyntheticOfflineTtsV1 is disabled for dryRun=false.");
+    }
+
+    private string ResolveAzureVoice(string narrationText)
+    {
+        if (azureSpeechOptions is null)
+            return "";
+
+        var language = DetectNarrationLanguage(narrationText);
+        return azureSpeechOptions.Value.GetPreferredVoices(language).FirstOrDefault() ?? azureSpeechOptions.Value.DefaultVoiceName ?? "";
+    }
+
+    private static bool IsAzureSpeechConfigured(AzureSpeechOptions? options)
+    {
+        if (options is null)
+            return false;
+
+        if (options.UseManagedIdentity)
+            return !string.IsNullOrWhiteSpace(options.Region) && !string.IsNullOrWhiteSpace(options.ResourceId);
+
+        return !string.IsNullOrWhiteSpace(options.Key)
+            && (!string.IsNullOrWhiteSpace(options.Region) || !string.IsNullOrWhiteSpace(options.Endpoint));
+    }
+
+    private static bool IsOpenAiTtsConfigured()
+        => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
+
+    private static bool IsSyntheticProvider(string provider)
+        => string.Equals(provider, SyntheticTtsProviderName, StringComparison.OrdinalIgnoreCase);
+
+    private static string DetectNarrationLanguage(string text)
+        => text.Any(ch => ch >= '\u0900' && ch <= '\u097F') ? "hi" : "en";
+
+    private static async Task<byte[]> SynthesizeOpenAiMp3Async(string narrationText, string voice, CancellationToken cancellationToken)
+    {
+        var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw new InvalidOperationException("OpenAI TTS configuration is missing OPENAI_API_KEY.");
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+        var endpoint = Environment.GetEnvironmentVariable("OPENAI_TTS_ENDPOINT") ?? "https://api.openai.com/v1/audio/speech";
+        var model = Environment.GetEnvironmentVariable("OPENAI_TTS_MODEL") ?? "gpt-4o-mini-tts";
+        var payload = JsonSerializer.Serialize(new { model, voice, input = narrationText, response_format = "mp3" }, JsonOptions);
+        using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync(endpoint, content, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException($"OpenAI TTS synthesis failed. Status={(int)response.StatusCode}; Details={error}");
+        }
+
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken);
     }
 
     private async Task<bool> TryWriteSilentMp3WithFfmpegAsync(string audioPath, double durationSeconds, CancellationToken cancellationToken)
@@ -365,7 +487,7 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
             startInfo.ArgumentList.Add("-i");
             startInfo.ArgumentList.Add("anullsrc=channel_layout=mono:sample_rate=24000");
             startInfo.ArgumentList.Add("-t");
-            startInfo.ArgumentList.Add(durationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+            startInfo.ArgumentList.Add(durationSeconds.ToString("0.###", CultureInfo.InvariantCulture));
             startInfo.ArgumentList.Add("-codec:a");
             startInfo.ArgumentList.Add("libmp3lame");
             startInfo.ArgumentList.Add("-b:a");
@@ -384,6 +506,101 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
             return false;
         }
     }
+
+    private async Task<VideoTtsAudioValidationDto> ValidateMp3AudioAsync(string audioPath, bool enforceNonSilent, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(audioPath))
+            return new VideoTtsAudioValidationDto(true, -120, -120, false);
+
+        if (new FileInfo(audioPath).Length < MinimumMp3FileSizeBytes)
+            return new VideoTtsAudioValidationDto(true, -120, -120, false);
+
+        var duration = await ProbeDurationSecondsAsync(audioPath, cancellationToken);
+        if (duration <= 0)
+            return new VideoTtsAudioValidationDto(true, -120, -120, false);
+
+        var (peakDb, rmsDb) = await ProbeAudioLevelsAsync(audioPath, cancellationToken);
+        var isSilent = double.IsNegativeInfinity(peakDb)
+            || double.IsNegativeInfinity(rmsDb)
+            || peakDb < SilencePeakThresholdDb
+            || rmsDb < SilenceRmsThresholdDb;
+        var passed = !isSilent;
+        return new VideoTtsAudioValidationDto(isSilent, RoundDb(peakDb), RoundDb(rmsDb), passed);
+    }
+
+    private async Task<double> ProbeDurationSecondsAsync(string audioPath, CancellationToken cancellationToken)
+    {
+        var ffprobePath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfprobePath) ? "ffprobe" : renderingOptions.Value.FfprobePath;
+        var result = await RunProcessAsync(ffprobePath,
+            ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audioPath],
+            cancellationToken);
+        return result.ExitCode == 0 && double.TryParse(result.Output.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var duration)
+            ? duration
+            : 0;
+    }
+
+    private async Task<(double PeakDb, double RmsDb)> ProbeAudioLevelsAsync(string audioPath, CancellationToken cancellationToken)
+    {
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        var result = await RunProcessAsync(ffmpegPath, ["-hide_banner", "-i", audioPath, "-af", "astats=metadata=1:reset=0", "-f", "null", "-"], cancellationToken);
+        var output = result.Output + "\n" + result.Error;
+        return (ParseLastDbValue(output, "Peak level dB"), ParseLastDbValue(output, "RMS level dB"));
+    }
+
+    private static double ParseLastDbValue(string output, string label)
+    {
+        var value = double.NegativeInfinity;
+        foreach (var line in output.Split('\n'))
+        {
+            var index = line.IndexOf(label, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+                continue;
+
+            var colon = line.IndexOf(':', index);
+            if (colon < 0)
+                continue;
+
+            var raw = line[(colon + 1)..].Trim();
+            if (raw.Equals("-inf", StringComparison.OrdinalIgnoreCase))
+                value = double.NegativeInfinity;
+            else if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                value = parsed;
+        }
+
+        return value;
+    }
+
+    private async Task<ProcessResult> RunProcessAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            };
+            foreach (var argument in arguments)
+                startInfo.ArgumentList.Add(argument);
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+                return new ProcessResult(-1, string.Empty, string.Empty);
+
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            return new ProcessResult(process.ExitCode, await outputTask, await errorTask);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new ProcessResult(-1, string.Empty, string.Empty);
+        }
+    }
+
+    private static double RoundDb(double value)
+        => double.IsNegativeInfinity(value) || double.IsNaN(value) ? -120 : double.IsPositiveInfinity(value) ? 0 : Math.Round(value, 3, MidpointRounding.AwayFromZero);
 
     private static byte[] BuildFallbackMp3Placeholder(string narrationText, double durationSeconds)
     {
@@ -450,6 +667,8 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
             throw new ArgumentException("Video TTS timings validation failed: ttsProvider is required.");
         if (string.IsNullOrWhiteSpace(timings.VoiceUsed))
             throw new ArgumentException("Video TTS timings validation failed: voiceUsed is required.");
+        if (timings.AudioValidation is null)
+            throw new ArgumentException("Video TTS timings validation failed: audioValidation is required.");
     }
 
     private static void ValidateRequest(VideoAssemblyGenerationRequest request)
@@ -499,7 +718,10 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
         string audioPath,
         string timingsPath,
         double actualDurationSeconds,
-        IReadOnlyList<string> generatedFiles)
+        IReadOnlyList<string> generatedFiles,
+        string ttsProvider = "",
+        bool isSyntheticTts = false,
+        VideoTtsAudioValidationDto? audioValidation = null)
         => new(
             phaseRequested,
             "Tts",
@@ -518,7 +740,13 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
             true,
             NormalizePath(audioPath),
             NormalizePath(timingsPath),
-            actualDurationSeconds);
+            actualDurationSeconds,
+            ttsProvider,
+            isSyntheticTts,
+            audioValidation?.IsSilentAudio ?? false,
+            audioValidation?.AudioValidationPassed ?? false,
+            audioValidation?.AudioPeakDb ?? 0,
+            audioValidation?.AudioRmsDb ?? 0);
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
@@ -555,4 +783,8 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
     }
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');
+
+    private sealed record TtsProviderSelection(string ProviderName, string VoiceUsed, bool IsSynthetic);
+
+    private sealed record ProcessResult(int ExitCode, string Output, string Error);
 }
