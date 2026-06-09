@@ -100,12 +100,20 @@ public sealed class AstronomyInfographicRenderer(
 
     private static void DrawShortFormAtmosphere(IImageProcessingContext ctx, int sceneNumber, int width, int height)
     {
-        var glowColor = Color.ParseHex(sceneNumber is 1 or 3 or 6 ? "#FF9A45" : "#B7E0FF");
         ctx.Fill(Color.ParseHex("#050915").WithAlpha(.10f), new RectangleF(0, 0, width, height));
         ctx.Fill(Color.Black.WithAlpha(.16f), new RectangleF(0, 0, width, 112));
         ctx.Fill(Color.Black.WithAlpha(.18f), new RectangleF(0, height - 178, width, 178));
-        ctx.Fill(glowColor.WithAlpha(.050f), new EllipsePolygon(width * .52f, height * .64f, width * .78f, height * .20f));
-        ctx.Fill(glowColor.WithAlpha(.034f), new EllipsePolygon(width * .52f, height * .72f, width * 1.18f, height * .28f));
+
+        if (sceneNumber == 6)
+        {
+            ctx.Fill(new LinearGradientBrush(new PointF(0, height * .54f), new PointF(0, height), GradientRepetitionMode.None,
+                new ColorStop(0f, Color.Transparent),
+                new ColorStop(.52f, Color.ParseHex("#B55D33").WithAlpha(.12f)),
+                new ColorStop(.78f, Color.ParseHex("#F6A65D").WithAlpha(.18f)),
+                new ColorStop(1f, Color.ParseHex("#05040A").WithAlpha(.30f))),
+                new RectangleF(0, height * .54f, width, height * .46f));
+            ctx.Fill(Color.ParseHex("#06040A").WithAlpha(.72f), new RectangleF(0, height * .905f, width, height * .095f));
+        }
     }
 
     private static void DrawNativeShortFormVisual(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath)
@@ -122,11 +130,10 @@ public sealed class AstronomyInfographicRenderer(
         switch (spec.QuestionType.ToLowerInvariant())
         {
             case "where":
-                DrawPortraitAltitudeGuide(ctx, layout.Venus.Center);
-                DrawPortraitText(ctx, "WEST", 72, 1204, 140, Color.ParseHex("#B7E0FF"), 34, FontStyle.Bold);
+                DrawPortraitWestIndicator(ctx);
                 break;
             case "when":
-                DrawPortraitTimeMarker(ctx);
+                DrawPortraitBestTimeCard(ctx);
                 break;
             case "how":
                 DrawPortraitGuideLine(ctx, layout.Venus.Center, layout.Jupiter.Center);
@@ -135,7 +142,7 @@ public sealed class AstronomyInfographicRenderer(
                 DrawPortraitClosenessCue(ctx, layout.Venus.Center, layout.Jupiter.Center);
                 break;
             case "action":
-                ctx.Fill(Color.ParseHex("#FFD08A").WithAlpha(.035f), new EllipsePolygon(540, 1050, 760, 210));
+                DrawPortraitClosingHorizon(ctx);
                 break;
         }
     }
@@ -147,8 +154,9 @@ public sealed class AstronomyInfographicRenderer(
         var textWidth = variant.Width - margin * 2f;
         ctx.DrawText(new RichTextOptions(fonts.TitleFont) { Origin = new PointF(margin, 120), WrappingLength = textWidth }, copy.Title, Color.White);
         ctx.DrawText(new RichTextOptions(fonts.SubtitleFont) { Origin = new PointF(margin, 236), WrappingLength = textWidth }, copy.Subtitle, Color.ParseHex("#F6C177"));
-        ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(margin, 1572), WrappingLength = textWidth }, copy.Caption, Color.White.WithAlpha(.96f));
-        ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(margin, 1660), WrappingLength = textWidth }, spec.ViewerQuestion, Color.ParseHex("#B7E0FF").WithAlpha(.92f));
+        var captionFonts = EditorialFonts.CreateScaled(variant.TextScale * .88f);
+        ctx.DrawText(new RichTextOptions(captionFonts.SmallFont) { Origin = new PointF(margin, 1572), WrappingLength = textWidth }, copy.Caption, Color.White.WithAlpha(.94f));
+        ctx.DrawText(new RichTextOptions(captionFonts.SmallFont) { Origin = new PointF(margin, 1652), WrappingLength = textWidth }, spec.ViewerQuestion, Color.ParseHex("#B7E0FF").WithAlpha(.90f));
     }
 
     private static (string Title, string Subtitle, string Caption) GetShortFormCopy(QuestionDrivenVisualSpec spec) => spec.QuestionType.ToLowerInvariant() switch
@@ -165,10 +173,10 @@ public sealed class AstronomyInfographicRenderer(
     private static PlanetPairPlacement GetNativeShortFormLayout(string questionType) => questionType.ToLowerInvariant() switch
     {
         "what" => new(new(new PointF(470, 820), 118), new(new PointF(635, 890), 82)),
-        "where" => new(new(new PointF(510, 840), 96), new(new PointF(642, 895), 68)),
+        "where" => new(new(new PointF(506, 838), 96), new(new PointF(626, 888), 68)),
         "how" => new(new(new PointF(430, 840), 108), new(new PointF(650, 910), 74)),
-        "why" => new(new(new PointF(455, 830), 106), new(new PointF(605, 875), 86)),
-        "action" => new(new(new PointF(486, 785), 96), new(new PointF(622, 840), 70)),
+        "why" => new(new(new PointF(485, 832), 112), new(new PointF(588, 862), 90)),
+        "action" => new(new(new PointF(486, 772), 112), new(new PointF(620, 824), 82)),
         _ => new(new(new PointF(-100, -100), 1), new(new PointF(-100, -100), 1))
     };
 
@@ -197,28 +205,38 @@ public sealed class AstronomyInfographicRenderer(
 
     private static void DrawPortraitClosenessCue(IImageProcessingContext ctx, PointF a, PointF b)
     {
-        ctx.Draw(Color.ParseHex("#FFF1C4").WithAlpha(.28f), 4, new PathBuilder().AddLine(new PointF(a.X, a.Y + 86), new PointF(b.X, b.Y + 86)).Build());
-        ctx.Fill(Color.ParseHex("#D9E7FF").WithAlpha(.050f), new EllipsePolygon((a.X + b.X) / 2f, (a.Y + b.Y) / 2f, 420, 180));
+        ctx.Draw(Color.ParseHex("#FFF1C4").WithAlpha(.42f), 5, new PathBuilder().AddLine(new PointF(a.X + 42, a.Y + 72), new PointF(b.X - 34, b.Y + 72)).Build());
+        DrawPortraitText(ctx, "together", (a.X + b.X) / 2f - 88, Math.Max(a.Y, b.Y) + 116, 220, Color.ParseHex("#FFF2B8"), 30, FontStyle.Bold);
     }
 
-    private static void DrawPortraitAltitudeGuide(IImageProcessingContext ctx, PointF center)
+    private static void DrawPortraitWestIndicator(IImageProcessingContext ctx)
     {
-        ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.28f), 3, new PathBuilder().AddLine(new PointF(150, 1218), new PointF(930, 1218)).Build());
-        ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.45f), 3, new PathBuilder().AddLine(new PointF(180, 1218), center).Build());
+        DrawPortraitText(ctx, "LOOK WEST", 72, 1194, 330, Color.ParseHex("#B7E0FF"), 38, FontStyle.Bold);
+        ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.42f), 4, new PathBuilder().AddLine(new PointF(72, 1250), new PointF(252, 1250)).Build());
     }
 
-    private static void DrawPortraitTimeMarker(IImageProcessingContext ctx)
+    private static void DrawPortraitBestTimeCard(IImageProcessingContext ctx)
     {
-        ctx.Fill(Color.ParseHex("#FFD08A").WithAlpha(.12f), new EllipsePolygon(540, 850, 380, 380));
-        ctx.Draw(Color.ParseHex("#FFD08A").WithAlpha(.72f), 5, new PathBuilder().AddLine(new PointF(540, 670), new PointF(540, 1020)).Build());
-        ctx.Fill(Color.ParseHex("#FFF2B8"), new EllipsePolygon(540, 850, 18, 18));
-        DrawPortraitText(ctx, "after sunset", 388, 1042, 360, Color.ParseHex("#F6C177"), 28, FontStyle.Bold);
+        DrawPortraitText(ctx, "BEST TIME", 330, 712, 420, Color.White, 42, FontStyle.Bold);
+        DrawPortraitText(ctx, "7:23 PM IST", 258, 802, 600, Color.ParseHex("#FFF2B8"), 66, FontStyle.Bold);
+        DrawPortraitText(ctx, "After Sunset", 330, 910, 420, Color.ParseHex("#F6C177"), 38, FontStyle.Bold);
+    }
+
+    private static void DrawPortraitClosingHorizon(IImageProcessingContext ctx)
+    {
+        ctx.Fill(new LinearGradientBrush(new PointF(0, 1210), new PointF(0, 1840), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Transparent),
+            new ColorStop(.46f, Color.ParseHex("#D77A42").WithAlpha(.16f)),
+            new ColorStop(1f, Color.ParseHex("#05040A").WithAlpha(.38f))),
+            new RectangleF(0, 1210, 1080, 630));
+        ctx.Fill(Color.ParseHex("#05040A").WithAlpha(.82f), new RectangleF(0, 1746, 1080, 174));
     }
 
     private static void DrawPortraitText(IImageProcessingContext ctx, string text, float x, float y, float width, Color color, float size, FontStyle style)
     {
-        var font = EditorialFonts.CreateScaled(1f).SmallFont;
-        if (size > 30) font = EditorialFonts.CreateScaled(1f).LabelFont;
+        var scale = Math.Max(.5f, size / 24f);
+        var fonts = EditorialFonts.CreateScaled(scale);
+        var font = style == FontStyle.Bold ? fonts.SmallFont : fonts.SmallFont;
         ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(x, y), WrappingLength = width }, text, color);
     }
 
