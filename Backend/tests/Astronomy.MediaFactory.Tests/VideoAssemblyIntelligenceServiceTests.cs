@@ -57,7 +57,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(6, saved.RecommendedSceneDurations.Count);
         Assert.Equal(20.0, saved.RecommendedTotalDurationSeconds);
         Assert.True(saved.AudioPlan.TtsRequired);
-        Assert.True(saved.OutputsPlanned.Contains("final-video.mp4"));
+        Assert.True(saved.OutputsPlanned.Contains("final-video-short.mp4"));
         Assert.True(saved.Scores.VideoAssemblyReadinessScore >= 90);
         Assert.Empty(saved.Warnings);
     }
@@ -334,7 +334,7 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.All(saved.SceneImages, path => Assert.Contains("/scene-approval-v3/short/", path));
         Assert.Equal(21.456, saved.TotalDurationSeconds);
         Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-tts-audio.mp3").Replace('\\', '/'), saved.AudioFilePath);
-        Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "final-video.mp4").Replace('\\', '/'), saved.RenderOutputPath);
+        Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "final-video-short.mp4").Replace('\\', '/'), saved.RenderOutputPath);
         Assert.Equal(1080, saved.RenderSettings.Width);
         Assert.Equal(1920, saved.RenderSettings.Height);
         Assert.Equal(30, saved.RenderSettings.Fps);

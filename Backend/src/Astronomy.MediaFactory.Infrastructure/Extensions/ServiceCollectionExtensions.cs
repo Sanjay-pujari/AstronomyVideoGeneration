@@ -36,6 +36,10 @@ public static class ServiceCollectionExtensions
             .Validate(opt => opt.VideoWidth > 0 && opt.VideoHeight > 0 && opt.FrameRate > 0, "Rendering dimensions and frame rate must be > 0.")
             .ValidateOnStart();
 
+        services.AddOptions<VideoAssemblyOptions>()
+            .Bind(configuration.GetSection(VideoAssemblyOptions.SectionName))
+            .ValidateOnStart();
+
         services.AddOptions<AstronomyApiOptions>()
             .Bind(configuration.GetSection(AstronomyApiOptions.SectionName))
             .ValidateOnStart();
