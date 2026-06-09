@@ -73,6 +73,8 @@ public sealed class QuestionDrivenVisualComposer(
         var sceneValidation = new List<SceneQuestionIsolationValidation>();
         var questionEngineRoot = BuildQuestionEngineRoot(request.EventId, request.RegionId);
         var outputRoot = Path.Combine(questionEngineRoot, OutputDirectoryName);
+        var longOutputRoot = Path.Combine(outputRoot, "long");
+        var shortOutputRoot = Path.Combine(outputRoot, "short");
 
         var answerSetPath = Path.Combine(questionEngineRoot, QuestionAnswerSetFileName);
         var planPath = Path.Combine(questionEngineRoot, EnrichedPlanFileName);
@@ -95,7 +97,8 @@ public sealed class QuestionDrivenVisualComposer(
 
         var finalImageCount = 0;
         var srtCount = 0;
-        var variantFinalImages = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        var longFormFinalImages = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var shortFormFinalImages = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var approvedSceneCount = 0;
         var failedSceneCount = 0;
         var seenSrtTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -125,19 +128,23 @@ public sealed class QuestionDrivenVisualComposer(
             var overlayPlan = BuildOverlayPlan(spec);
             var review = BuildReview(spec, srt, seenSrtTexts, seenLayoutKeys, venusAsset is not null, jupiterAsset is not null);
 
-            var finalPath = includeSceneApprovalVariants
-                ? Path.Combine(outputRoot, "long", $"{numberPrefix}-final.png")
-                : Path.Combine(outputRoot, $"{numberPrefix}-final.png");
-            var shortFinalPath = Path.Combine(outputRoot, "short", $"{numberPrefix}-final.png");
+            var legacyFinalPath = Path.Combine(outputRoot, $"{numberPrefix}-final.png");
+            var longFinalPath = Path.Combine(longOutputRoot, $"{numberPrefix}-final.png");
+            var shortFinalPath = Path.Combine(shortOutputRoot, $"{numberPrefix}-final.png");
+            var finalPath = legacyFinalPath;
             if (includeSceneApprovalVariants)
             {
-                variantFinalImages[numberPrefix] = [NormalizePath(finalPath), NormalizePath(shortFinalPath)];
+                longFormFinalImages[numberPrefix] = NormalizePath(longFinalPath);
+                shortFormFinalImages[numberPrefix] = NormalizePath(shortFinalPath);
             }
             var srtPath = Path.Combine(outputRoot, $"{numberPrefix}.srt");
             var narrationTextPath = Path.Combine(outputRoot, $"{numberPrefix}-narration.txt");
             var specPath = Path.Combine(outputRoot, $"{numberPrefix}-infographic-spec.json");
             var reviewPath = Path.Combine(outputRoot, $"{numberPrefix}-review.json");
-            var plannedOutputs = new QuestionDrivenPlannedOutputs(NormalizePath(finalPath), NormalizePath(srtPath), NormalizePath(narrationTextPath), NormalizePath(specPath), string.Empty, NormalizePath(reviewPath));
+            var presentationVariants = includeSceneApprovalVariants
+                ? new QuestionDrivenPresentationVariants(NormalizePath(longFinalPath), NormalizePath(shortFinalPath))
+                : null;
+            var plannedOutputs = new QuestionDrivenPlannedOutputs(NormalizePath(finalPath), NormalizePath(srtPath), NormalizePath(narrationTextPath), NormalizePath(specPath), string.Empty, NormalizePath(reviewPath), presentationVariants);
             var validationPreview = BuildValidationPreview(spec, srt, review, overlayPlan, plannedOutputs);
             var isolationValidation = ValidateSceneQuestionIsolation(spec, overlayPlan);
             sceneValidation.Add(isolationValidation);
@@ -148,10 +155,10 @@ public sealed class QuestionDrivenVisualComposer(
             if (request.DryRun) continue;
 
             var approvalAssets = includeSceneApprovalVariants
-                ? new[] { finalPath, shortFinalPath, srtPath, narrationTextPath, specPath, reviewPath }
+                ? new[] { longFinalPath, shortFinalPath, srtPath, narrationTextPath, specPath, reviewPath }
                 : new[] { finalPath, srtPath, narrationTextPath, specPath, reviewPath };
 
-            if (!request.OverwriteExisting && approvalAssets.Any(File.Exists))
+            if (!includeSceneApprovalVariants && !request.OverwriteExisting && approvalAssets.Any(File.Exists))
             {
                 warnings.Add($"Skipped scene {sceneNumber:000} because one or more approval assets already exist and overwriteExisting is false.");
                 continue;
@@ -165,10 +172,14 @@ public sealed class QuestionDrivenVisualComposer(
                 continue;
             }
 
-            await infographicRenderer.RenderAsync(finalPath, spec, venusAsset, jupiterAsset, cancellationToken, AstronomyInfographicRenderVariant.LongForm);
             if (includeSceneApprovalVariants)
             {
+                await infographicRenderer.RenderAsync(longFinalPath, spec, venusAsset, jupiterAsset, cancellationToken, AstronomyInfographicRenderVariant.LongForm);
                 await infographicRenderer.RenderAsync(shortFinalPath, spec, venusAsset, jupiterAsset, cancellationToken, AstronomyInfographicRenderVariant.ShortForm);
+            }
+            else
+            {
+                await infographicRenderer.RenderAsync(finalPath, spec, venusAsset, jupiterAsset, cancellationToken, AstronomyInfographicRenderVariant.LongForm);
             }
             await File.WriteAllTextAsync(srtPath, srt, cancellationToken);
             await File.WriteAllTextAsync(narrationTextPath, spec.NarrationText + Environment.NewLine, cancellationToken);
@@ -176,7 +187,7 @@ public sealed class QuestionDrivenVisualComposer(
             await File.WriteAllTextAsync(reviewPath, JsonSerializer.Serialize(review, JsonOptions), cancellationToken);
             if (includeSceneApprovalVariants)
             {
-                generatedFiles.AddRange([finalPath, shortFinalPath, srtPath, narrationTextPath, specPath, reviewPath]);
+                generatedFiles.AddRange([longFinalPath, shortFinalPath, srtPath, narrationTextPath, specPath, reviewPath]);
                 finalImageCount += 2;
             }
             else
@@ -199,6 +210,41 @@ public sealed class QuestionDrivenVisualComposer(
         if (heroAssetRulesApplied) throw new InvalidOperationException("Editorial astronomy infographic validation failed: hero asset rules were applied.");
         if (duplicateObjectRenderingDetected) throw new InvalidOperationException("Editorial astronomy infographic validation failed: duplicate object rendering was detected.");
 
+        var sceneVariantFinalImages = includeSceneApprovalVariants
+            ? new SceneVariantFinalImagesResponse(
+                new SceneVariantFinalImageSet(
+                    AstronomyInfographicRenderVariant.LongForm.VariantName,
+                    EnsureTrailingSlash(NormalizePath(longOutputRoot)),
+                    AstronomyInfographicRenderVariant.LongForm.Width,
+                    AstronomyInfographicRenderVariant.LongForm.Height,
+                    longFormFinalImages),
+                new SceneVariantFinalImageSet(
+                    AstronomyInfographicRenderVariant.ShortForm.VariantName,
+                    EnsureTrailingSlash(NormalizePath(shortOutputRoot)),
+                    AstronomyInfographicRenderVariant.ShortForm.Width,
+                    AstronomyInfographicRenderVariant.ShortForm.Height,
+                    shortFormFinalImages))
+            : null;
+        var longFormImageCount = includeSceneApprovalVariants && !request.DryRun ? CountExistingVariantImages(longFormFinalImages) : 0;
+        var shortFormImageCount = includeSceneApprovalVariants && !request.DryRun ? CountExistingVariantImages(shortFormFinalImages) : 0;
+        var diagnostics = includeSceneApprovalVariants
+            ? new SceneVariantGenerationDiagnostics(
+                SceneVariantGenerationEnabled: true,
+                LongFormGenerated: !request.DryRun && longFormImageCount == scenes.Length,
+                ShortFormGenerated: !request.DryRun && shortFormImageCount == scenes.Length,
+                LongFormImageCount: longFormImageCount,
+                ShortFormImageCount: shortFormImageCount)
+            : null;
+
+        if (includeSceneApprovalVariants && !request.DryRun)
+        {
+            if (sceneVariantFinalImages is null) throw new InvalidOperationException("Editorial astronomy infographic validation failed: sceneVariantFinalImages is null.");
+            if (!Directory.Exists(longOutputRoot)) throw new InvalidOperationException("Editorial astronomy infographic validation failed: long scene variant directory is missing.");
+            if (!Directory.Exists(shortOutputRoot)) throw new InvalidOperationException("Editorial astronomy infographic validation failed: short scene variant directory is missing.");
+            if (longFormImageCount != scenes.Length) throw new InvalidOperationException($"Editorial astronomy infographic validation failed: long image count must be {scenes.Length}, but was {longFormImageCount}.");
+            if (shortFormImageCount != scenes.Length) throw new InvalidOperationException($"Editorial astronomy infographic validation failed: short image count must be {scenes.Length}, but was {shortFormImageCount}.");
+        }
+
         return new EditorialAstronomyInfographicGenerationResponse(
             request.EventId,
             scenes.Length,
@@ -219,7 +265,8 @@ public sealed class QuestionDrivenVisualComposer(
             SharedAstronomyVisualComposerStatus: "FROZEN",
             HeroAssetRulesApplied: heroAssetRulesApplied,
             DuplicateObjectRenderingDetected: duplicateObjectRenderingDetected,
-            SceneVariantFinalImages: includeSceneApprovalVariants ? variantFinalImages : null);
+            SceneVariantFinalImages: sceneVariantFinalImages,
+            Diagnostics: diagnostics);
     }
 
     private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt)
@@ -561,6 +608,8 @@ public sealed class QuestionDrivenVisualComposer(
     }
 
     private static string BuildSrt(QuestionDrivenVisualSpec spec) { var end = TimeSpan.FromSeconds(Math.Max(4, spec.EstimatedDurationSeconds)); return string.Join(Environment.NewLine, new[] { "1", $"00:00:00,000 --> {FormatSrtTime(end)}", spec.CaptionText, string.Empty }); }
+    private static int CountExistingVariantImages(IReadOnlyDictionary<string, string> images) => images.Values.Count(File.Exists);
+    private static string EnsureTrailingSlash(string path) => path.EndsWith('/', StringComparison.Ordinal) ? path : path + "/";
     private static string FormatSrtTime(TimeSpan value) => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
     private static string? FindLocalAsset(string objectName)
     {

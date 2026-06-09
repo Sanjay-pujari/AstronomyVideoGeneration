@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class EditorialAstronomyInfographicComposer(
-    IQuestionDrivenVisualComposer questionDrivenVisualComposer,
+    QuestionDrivenVisualComposer questionDrivenVisualComposer,
     IAstronomyInfographicDesignSystem designSystem,
     ILogger<EditorialAstronomyInfographicComposer> logger) : IEditorialAstronomyInfographicComposer
 {
@@ -13,7 +13,7 @@ public sealed class EditorialAstronomyInfographicComposer(
         ArgumentNullException.ThrowIfNull(request);
         logger.LogInformation("Composing golden-event editorial astronomy infographics with the professional design system. EventId={EventId}; RegionId={RegionId}; DryRun={DryRun}", request.EventId, request.RegionId, request.DryRun);
 
-        var response = await questionDrivenVisualComposer.GenerateQuestionDrivenVisualsAsync(request, cancellationToken);
+        var response = await questionDrivenVisualComposer.GenerateEditorialAstronomyInfographicsAsync(request, cancellationToken);
         var plannedScenes = response.PlannedScenes ?? [];
 
         // Materialize design-system templates during dry runs too, so invalid scene/question layouts fail before any image generation.
@@ -43,7 +43,7 @@ public sealed class EditorialAstronomyInfographicComposer(
         return new EditorialAstronomyInfographicGenerationResponse(
             response.EventId,
             response.SceneCount,
-            response.PlannedImageCount,
+            response.PlannedInfographicCount,
             response.FinalImageCount,
             response.SrtCount,
             response.ApprovedSceneCount,
@@ -60,6 +60,8 @@ public sealed class EditorialAstronomyInfographicComposer(
             response.AstronomySceneEngineV1Status,
             response.SharedAstronomyVisualComposerStatus,
             response.HeroAssetRulesApplied,
-            response.DuplicateObjectRenderingDetected);
+            response.DuplicateObjectRenderingDetected,
+            response.SceneVariantFinalImages,
+            response.Diagnostics);
     }
 }
