@@ -246,7 +246,8 @@ public sealed record EditorialAstronomyInfographicGenerationResponse(
     bool HeroAssetRulesApplied = false,
     bool DuplicateObjectRenderingDetected = false,
     SceneVariantFinalImagesResponse? SceneVariantFinalImages = null,
-    SceneVariantGenerationDiagnostics? Diagnostics = null);
+    SceneVariantGenerationDiagnostics? Diagnostics = null,
+    ShortFormValidation? ShortFormValidation = null);
 
 public sealed record SceneVariantFinalImagesResponse(
     SceneVariantFinalImageSet LongForm,
@@ -265,6 +266,16 @@ public sealed record SceneVariantGenerationDiagnostics(
     bool ShortFormGenerated,
     int LongFormImageCount,
     int ShortFormImageCount);
+
+public sealed record ShortFormValidation(
+    bool NativeShortFormComposerUsed,
+    bool EmbeddedLongFormImageDetected,
+    bool InnerFrameDetected,
+    int ShortFormImageCount,
+    int ShortFormWidth,
+    int ShortFormHeight,
+    int ShortFormReadabilityScore,
+    int ShortFormReelSuitabilityScore);
 
 public sealed record SceneQuestionIsolationValidation(
     int SceneNumber,
