@@ -279,6 +279,103 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         }
     }
 
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_AssemblyNonDryRunWritesPlanOnly()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        await WriteAssemblyPhaseInputsAsync(workingDirectory, service);
+
+        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Assembly",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var planPath = Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-assembly-plan.json");
+        Assert.Equal("Assembly", result.PhaseRequested);
+        Assert.Equal("Assembly", result.PhaseExecuted);
+        Assert.True(result.VideoAssemblyPlanGenerated);
+        Assert.Equal(planPath.Replace('\\', '/'), result.VideoAssemblyPlanPath);
+        Assert.True(result.ReadyForRender);
+        Assert.Equal(6, result.SegmentCount);
+        Assert.Equal(21.456, result.TotalDurationSeconds);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.True(File.Exists(planPath));
+        Assert.DoesNotContain(Directory.GetFiles(BuildVideoAssemblyRoot(workingDirectory)), path => Path.GetExtension(path).Equals(".mp4", StringComparison.OrdinalIgnoreCase));
+
+        var saved = JsonSerializer.Deserialize<VideoAssemblyPlanDto>(await File.ReadAllTextAsync(planPath), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.Equal(EventId, saved!.EventId);
+        Assert.Equal(RegionId, saved.RegionId);
+        Assert.Equal("en", saved.Language);
+        Assert.Equal("YouTubeShort", saved.Platform);
+        Assert.Equal(21.456, saved.TotalDurationSeconds);
+        Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-tts-audio.mp3").Replace('\\', '/'), saved.AudioFilePath);
+        Assert.Equal(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "final-video.mp4").Replace('\\', '/'), saved.RenderOutputPath);
+        Assert.Equal(1080, saved.RenderSettings.Width);
+        Assert.Equal(1920, saved.RenderSettings.Height);
+        Assert.Equal(30, saved.RenderSettings.Fps);
+        Assert.Equal("mp4", saved.RenderSettings.Format);
+        Assert.Equal("h264", saved.RenderSettings.Codec);
+        Assert.Equal("aac", saved.RenderSettings.AudioCodec);
+        Assert.Equal("SmoothFade", saved.Style.TransitionStyle);
+        Assert.Equal("SubtleKenBurns", saved.Style.MotionStyle);
+        Assert.Equal("UseExistingSceneTextOnly", saved.Style.TextOverlayStyle);
+        Assert.False(saved.Style.BackgroundMusic);
+        Assert.True(saved.Validation.AudioExists);
+        Assert.True(saved.Validation.AllVisualAssetsExist);
+        Assert.Equal(6, saved.Validation.SegmentCount);
+        Assert.True(saved.Validation.DurationMatchesAudio);
+        Assert.True(saved.Validation.ReadyForRender);
+        Assert.Empty(saved.Warnings);
+        Assert.Equal(new[] { "Hook", "What", "Why", "Where", "When", "Action" }, saved.Segments.Select(segment => segment.SceneKey));
+        Assert.Equal(0.0, saved.Segments[0].StartSeconds);
+        Assert.Equal(3.218, saved.Segments[0].EndSeconds);
+        Assert.Equal(3.218, saved.Segments[0].DurationSeconds);
+        Assert.EndsWith("thumbnail-landscape.png", saved.Segments[0].VisualAssetPath);
+        Assert.Equal("Don't miss this tonight.", saved.Segments[0].Narration);
+        Assert.Equal("None", saved.Segments[0].TransitionIn);
+        Assert.Equal("SmoothFade", saved.Segments[0].TransitionOut);
+        Assert.Equal("SubtleZoomIn", saved.Segments[0].Motion);
+        Assert.EndsWith("scene-005-final.png", saved.Segments[2].VisualAssetPath);
+        Assert.Equal(18.238, saved.Segments[5].StartSeconds);
+        Assert.Equal(21.456, saved.Segments[5].EndSeconds);
+        Assert.Equal("None", saved.Segments[5].TransitionOut);
+    }
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_AssemblyFailsWhenVisualAssetMissing()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        await WriteAssemblyPhaseInputsAsync(workingDirectory, service);
+        File.Delete(Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3", "scene-006-final.png"));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Assembly",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None));
+
+        Assert.Contains("Required video assembly visual asset", error.Message);
+        Assert.Contains("scene-006-final.png", error.Message);
+        Assert.False(File.Exists(Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-assembly-plan.json")));
+    }
+
     [Fact]
     public async Task GenerateVideoAssemblyAsync_RejectsUnimplementedPhases()
     {
@@ -297,11 +394,73 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             OverwriteExisting = true
         }, CancellationToken.None));
 
-        Assert.Contains("Only video assembly phases 'Intelligence', 'Script', and 'Tts'", error.Message);
+        Assert.Contains("Only video assembly phases 'Intelligence', 'Script', 'Tts', and 'Assembly'", error.Message);
     }
 
     private static VideoAssemblyIntelligenceService CreateService(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }));
+
+
+    private static async Task WriteAssemblyPhaseInputsAsync(string workingDirectory, VideoAssemblyIntelligenceService service)
+    {
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Intelligence",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Script",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var videoAssemblyRoot = BuildVideoAssemblyRoot(workingDirectory);
+        Directory.CreateDirectory(videoAssemblyRoot);
+        await File.WriteAllBytesAsync(Path.Combine(videoAssemblyRoot, "video-tts-audio.mp3"), Enumerable.Repeat((byte)1, 2048).ToArray());
+
+        var timings = new VideoTtsTimingsDto(
+            EventId,
+            RegionId,
+            "en",
+            "YouTubeShort",
+            Path.Combine(videoAssemblyRoot, "video-tts-audio.mp3").Replace('\\', '/'),
+            21.456,
+            21.456,
+            [
+                new VideoTtsSceneTimingDto("Hook", 0.000, 3.218, "Don't miss this tonight."),
+                new VideoTtsSceneTimingDto("What", 3.218, 7.510, "Venus and Jupiter will shine close together after sunset."),
+                new VideoTtsSceneTimingDto("Why", 7.510, 11.801, "Two of the brightest worlds will share the evening sky."),
+                new VideoTtsSceneTimingDto("Where", 11.801, 15.019, "Look toward the western sky."),
+                new VideoTtsSceneTimingDto("When", 15.019, 18.238, "The best time is shortly after sunset."),
+                new VideoTtsSceneTimingDto("Action", 18.238, 21.456, "Step outside tonight and look west.")
+            ],
+            "AzureSpeechTts",
+            "en-US-JennyNeural",
+            DateTimeOffset.UtcNow,
+            new VideoTtsAudioValidationDto(false, -3.0, -18.0));
+        await File.WriteAllTextAsync(Path.Combine(videoAssemblyRoot, "video-tts-timings.json"), JsonSerializer.Serialize(timings, JsonOptions));
+
+        await WriteThumbnailLandscapeAsync(workingDirectory);
+    }
+
+    private static async Task WriteThumbnailLandscapeAsync(string workingDirectory)
+    {
+        var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
+        Directory.CreateDirectory(thumbnailRoot);
+        var pngBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
+        await File.WriteAllBytesAsync(Path.Combine(thumbnailRoot, "thumbnail-landscape.png"), pngBytes);
+    }
 
     private static async Task WriteRequiredInputsAsync(string workingDirectory)
     {

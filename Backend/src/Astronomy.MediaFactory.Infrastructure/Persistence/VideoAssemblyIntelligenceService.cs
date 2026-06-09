@@ -32,6 +32,9 @@ public sealed class VideoAssemblyIntelligenceService(
     private const string VideoNarrationScriptFileName = "video-narration-script.json";
     private const string VideoTtsAudioFileName = "video-tts-audio.mp3";
     private const string VideoTtsTimingsFileName = "video-tts-timings.json";
+    private const string VideoAssemblyPlanFileName = "video-assembly-plan.json";
+    private const string ThumbnailLandscapeFileName = "thumbnail-landscape.png";
+    private const string FinalVideoFileName = "final-video.mp4";
     private const string SelectedOpeningHook = "DON'T MISS THIS TONIGHT";
     private const string SyntheticTtsProviderName = "SyntheticOfflineTtsV1";
     private const string AzureTtsProviderName = "AzureSpeechTts";
@@ -40,6 +43,16 @@ public sealed class VideoAssemblyIntelligenceService(
     private const double SilencePeakThresholdDb = -55.0;
     private const double SilenceRmsThresholdDb = -60.0;
     private static readonly string[] RequiredApprovedSceneIds = ["scene-001", "scene-002", "scene-003", "scene-005", "scene-006"];
+    private static readonly string[] RequiredAssemblySceneOrder = ["Hook", "What", "Why", "Where", "When", "Action"];
+    private static readonly IReadOnlyDictionary<string, string> AssemblySceneVisualMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Hook"] = ThumbnailLandscapeFileName,
+        ["What"] = "scene-001-final.png",
+        ["Why"] = "scene-005-final.png",
+        ["Where"] = "scene-002-final.png",
+        ["When"] = "scene-003-final.png",
+        ["Action"] = "scene-006-final.png"
+    };
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     public async Task<VideoAssemblyGenerationResponse> GenerateVideoAssemblyAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
@@ -53,8 +66,11 @@ public sealed class VideoAssemblyIntelligenceService(
         if (string.Equals(request.Phase, "Tts", StringComparison.OrdinalIgnoreCase))
             return await GenerateTtsAudioAsync(request, cancellationToken);
 
+        if (string.Equals(request.Phase, "Assembly", StringComparison.OrdinalIgnoreCase))
+            return await GenerateVideoAssemblyPlanAsync(request, cancellationToken);
+
         if (!string.Equals(request.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only video assembly phases 'Intelligence', 'Script', and 'Tts' are implemented in this endpoint version.", nameof(request));
+            throw new ArgumentException("Only video assembly phases 'Intelligence', 'Script', 'Tts', and 'Assembly' are implemented in this endpoint version.", nameof(request));
 
         var outputPath = BuildVideoAssemblyIntelligenceOutputPath(request.EventId, request.RegionId);
         if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
@@ -157,6 +173,32 @@ public sealed class VideoAssemblyIntelligenceService(
         }
 
         return BuildTtsResponse(request.Phase, audioPath, timingsPath, timings.ActualDurationSeconds, generatedFiles, provider.ProviderName, provider.IsSynthetic, audioValidation);
+    }
+
+
+    private async Task<VideoAssemblyGenerationResponse> GenerateVideoAssemblyPlanAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var outputPath = BuildVideoAssemblyPlanOutputPath(request.EventId, request.RegionId);
+        if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
+        {
+            var existing = JsonSerializer.Deserialize<VideoAssemblyPlanDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
+                ?? throw new InvalidOperationException("Existing video assembly plan could not be parsed.");
+            ValidateVideoAssemblyPlan(existing);
+            EnsureVideoAssemblyPlanAssetsExist(existing);
+            return BuildAssemblyResponse(request.Phase, existing, outputPath, []);
+        }
+
+        var inputs = await EnsureRequiredAssemblyInputsAsync(request.EventId, request.RegionId, cancellationToken);
+        var plan = BuildVideoAssemblyPlan(request, inputs);
+        ValidateVideoAssemblyPlan(plan);
+
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
+            await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
+        }
+
+        return BuildAssemblyResponse(request.Phase, plan, outputPath, []);
     }
 
     private async Task<VideoNarrationScriptDto> EnsureRequiredTtsInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
@@ -619,6 +661,140 @@ public sealed class VideoAssemblyIntelligenceService(
         return header.Concat(payload).ToArray();
     }
 
+
+    private async Task<AssemblyInputs> EnsureRequiredAssemblyInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
+    {
+        var intelligencePath = BuildVideoAssemblyIntelligenceOutputPath(eventId, regionId);
+        var scriptPath = BuildVideoNarrationScriptOutputPath(eventId, regionId);
+        var audioPath = BuildVideoTtsAudioOutputPath(eventId, regionId);
+        var timingsPath = BuildVideoTtsTimingsOutputPath(eventId, regionId);
+        var thumbnailPath = BuildThumbnailLandscapeOutputPath(eventId, regionId);
+        var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(eventId, regionId), SceneApprovalDirectoryName);
+
+        if (!File.Exists(intelligencePath))
+            throw new ArgumentException($"Required video assembly input '{VideoAssemblyIntelligenceFileName}' was not found at '{NormalizePath(intelligencePath)}'.");
+        if (!File.Exists(scriptPath))
+            throw new ArgumentException($"Required video assembly input '{VideoNarrationScriptFileName}' was not found at '{NormalizePath(scriptPath)}'.");
+        if (!File.Exists(audioPath))
+            throw new ArgumentException($"Required video assembly input '{VideoTtsAudioFileName}' was not found at '{NormalizePath(audioPath)}'.");
+        if (!File.Exists(timingsPath))
+            throw new ArgumentException($"Required video assembly input '{VideoTtsTimingsFileName}' was not found at '{NormalizePath(timingsPath)}'.");
+        if (!File.Exists(thumbnailPath))
+            throw new ArgumentException($"Required video assembly visual asset '{ThumbnailLandscapeFileName}' was not found at '{NormalizePath(thumbnailPath)}'.");
+
+        var intelligence = JsonSerializer.Deserialize<VideoAssemblyIntelligenceDto>(await File.ReadAllTextAsync(intelligencePath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException($"Required video assembly input '{VideoAssemblyIntelligenceFileName}' could not be parsed.");
+        var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(scriptPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException($"Required video assembly input '{VideoNarrationScriptFileName}' could not be parsed.");
+        var timings = JsonSerializer.Deserialize<VideoTtsTimingsDto>(await File.ReadAllTextAsync(timingsPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException($"Required video assembly input '{VideoTtsTimingsFileName}' could not be parsed.");
+
+        ValidateVideoAssemblyIntelligence(intelligence);
+        ValidateVideoNarrationScript(script);
+        ValidateVideoTtsTimings(timings);
+        ValidateRecommendedSceneOrder(timings.SceneTimings.Select(scene => scene.SceneKey), VideoTtsTimingsFileName);
+
+        var visualAssetPaths = RequiredAssemblySceneOrder
+            .Select(sceneKey => ResolveAssemblyVisualAssetPath(sceneKey, thumbnailPath, sceneApprovalRoot))
+            .ToArray();
+        var missingVisualAssets = visualAssetPaths.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
+        if (missingVisualAssets.Length > 0)
+            throw new ArgumentException($"Required video assembly visual asset(s) were not found: {string.Join(", ", missingVisualAssets)}.");
+
+        var durationMatchesAudio = Math.Abs(timings.SceneTimings[^1].EndSeconds - timings.ActualDurationSeconds) <= 0.001;
+        if (!durationMatchesAudio)
+            throw new ArgumentException($"Video assembly validation failed: TTS scene timings end at {timings.SceneTimings[^1].EndSeconds:0.###} seconds, but actual TTS duration is {timings.ActualDurationSeconds:0.###} seconds.");
+
+        return new AssemblyInputs(intelligence, script, timings, NormalizePath(audioPath), NormalizePath(thumbnailPath), NormalizePath(sceneApprovalRoot), visualAssetPaths.Select(NormalizePath).ToArray());
+    }
+
+    private static VideoAssemblyPlanDto BuildVideoAssemblyPlan(VideoAssemblyGenerationRequest request, AssemblyInputs inputs)
+    {
+        var visualByScene = RequiredAssemblySceneOrder.Zip(inputs.VisualAssetPaths, (scene, path) => new { scene, path })
+            .ToDictionary(item => item.scene, item => item.path, StringComparer.OrdinalIgnoreCase);
+        var segments = inputs.Timings.SceneTimings.Select((timing, index) =>
+        {
+            var duration = Math.Round(timing.EndSeconds - timing.StartSeconds, 3, MidpointRounding.AwayFromZero);
+            return new VideoAssemblyPlanSegmentDto(
+                timing.SceneKey,
+                timing.StartSeconds,
+                timing.EndSeconds,
+                duration,
+                visualByScene[timing.SceneKey],
+                timing.Narration,
+                index == 0 ? "None" : "SmoothFade",
+                index == inputs.Timings.SceneTimings.Count - 1 ? "None" : "SmoothFade",
+                "SubtleZoomIn");
+        }).ToArray();
+
+        var renderSettings = string.Equals(request.Platform, "YouTubeShort", StringComparison.OrdinalIgnoreCase)
+            ? new VideoAssemblyRenderSettingsDto(1080, 1920, 30, "mp4", "h264", "aac")
+            : new VideoAssemblyRenderSettingsDto(1920, 1080, 30, "mp4", "h264", "aac");
+        var validation = new VideoAssemblyValidationDto(true, true, segments.Length, true, true);
+        return new VideoAssemblyPlanDto(
+            request.EventId,
+            request.RegionId,
+            request.Language,
+            request.Platform,
+            inputs.Timings.ActualDurationSeconds,
+            inputs.AudioPath,
+            NormalizePath(Path.Combine(Path.GetDirectoryName(inputs.AudioPath.Replace('/', Path.DirectorySeparatorChar)) ?? string.Empty, FinalVideoFileName)),
+            segments,
+            renderSettings,
+            new VideoAssemblyStyleDto("SmoothFade", "SubtleKenBurns", "UseExistingSceneTextOnly", false),
+            validation,
+            [],
+            DateTimeOffset.UtcNow);
+    }
+
+    private static void ValidateVideoAssemblyPlan(VideoAssemblyPlanDto plan)
+    {
+        ValidateRecommendedSceneOrder(plan.Segments.Select(segment => segment.SceneKey), VideoAssemblyPlanFileName);
+        if (plan.Segments.Count != 6)
+            throw new ArgumentException("Video assembly validation failed: segmentCount must be 6.");
+        if (!plan.Validation.AudioExists)
+            throw new ArgumentException("Video assembly validation failed: audio is missing.");
+        if (!plan.Validation.AllVisualAssetsExist)
+            throw new ArgumentException("Video assembly validation failed: one or more visual assets are missing.");
+        if (plan.Validation.SegmentCount != 6)
+            throw new ArgumentException("Video assembly validation failed: validation.segmentCount must be 6.");
+        if (!plan.Validation.DurationMatchesAudio)
+            throw new ArgumentException("Video assembly validation failed: duration does not match TTS duration.");
+        if (!plan.Validation.ReadyForRender)
+            throw new ArgumentException("Video assembly validation failed: readyForRender must be true.");
+        if (string.Equals(plan.Platform, "YouTubeShort", StringComparison.OrdinalIgnoreCase)
+            && (plan.RenderSettings.Width != 1080 || plan.RenderSettings.Height != 1920))
+            throw new ArgumentException("Video assembly validation failed: YouTubeShort renderSettings must be 1080x1920.");
+        var lastEndSeconds = plan.Segments[^1].EndSeconds;
+        if (Math.Abs(lastEndSeconds - plan.TotalDurationSeconds) > 0.001)
+            throw new ArgumentException("Video assembly validation failed: totalDurationSeconds must match the last segment endSeconds.");
+    }
+
+
+    private static void EnsureVideoAssemblyPlanAssetsExist(VideoAssemblyPlanDto plan)
+    {
+        if (!File.Exists(plan.AudioFilePath))
+            throw new ArgumentException($"Video assembly validation failed: audio is missing at '{plan.AudioFilePath}'.");
+
+        var missingVisualAssets = plan.Segments
+            .Select(segment => segment.VisualAssetPath)
+            .Where(path => !File.Exists(path))
+            .ToArray();
+        if (missingVisualAssets.Length > 0)
+            throw new ArgumentException($"Video assembly validation failed: visual asset(s) missing at {string.Join(", ", missingVisualAssets)}.");
+    }
+
+    private string BuildThumbnailLandscapeOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildThumbnailAssetsRoot(eventId, regionId), ThumbnailLandscapeFileName);
+
+    private static string ResolveAssemblyVisualAssetPath(string sceneKey, string thumbnailPath, string sceneApprovalRoot)
+    {
+        var mappedFileName = AssemblySceneVisualMap[sceneKey];
+        return string.Equals(mappedFileName, ThumbnailLandscapeFileName, StringComparison.OrdinalIgnoreCase)
+            ? thumbnailPath
+            : Path.Combine(sceneApprovalRoot, mappedFileName);
+    }
+
     private static void ValidateVideoNarrationScript(VideoNarrationScriptDto script)
     {
         if (string.IsNullOrWhiteSpace(script.FullNarrationText))
@@ -748,6 +924,39 @@ public sealed class VideoAssemblyIntelligenceService(
             audioValidation?.AudioPeakDb ?? 0,
             audioValidation?.AudioRmsDb ?? 0);
 
+
+    private static VideoAssemblyGenerationResponse BuildAssemblyResponse(string phaseRequested, VideoAssemblyPlanDto plan, string outputPath, IReadOnlyList<string> generatedFiles)
+        => new(
+            phaseRequested,
+            "Assembly",
+            false,
+            string.Empty,
+            string.Empty,
+            0,
+            true,
+            false,
+            generatedFiles,
+            false,
+            string.Empty,
+            0,
+            true,
+            false,
+            false,
+            plan.AudioFilePath,
+            string.Empty,
+            0,
+            string.Empty,
+            false,
+            false,
+            false,
+            0,
+            0,
+            true,
+            NormalizePath(outputPath),
+            plan.Validation.ReadyForRender,
+            plan.Segments.Count,
+            plan.TotalDurationSeconds);
+
     private string BuildQuestionEngineRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
 
@@ -772,6 +981,9 @@ public sealed class VideoAssemblyIntelligenceService(
     private string BuildVideoTtsTimingsOutputPath(string eventId, string regionId)
         => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoTtsTimingsFileName);
 
+    private string BuildVideoAssemblyPlanOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoAssemblyPlanFileName);
+
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
 
@@ -783,6 +995,15 @@ public sealed class VideoAssemblyIntelligenceService(
     }
 
     private static string NormalizePath(string path) => path.Replace('\\', '/');
+
+    private sealed record AssemblyInputs(
+        VideoAssemblyIntelligenceDto Intelligence,
+        VideoNarrationScriptDto Script,
+        VideoTtsTimingsDto Timings,
+        string AudioPath,
+        string ThumbnailPath,
+        string SceneApprovalRoot,
+        IReadOnlyList<string> VisualAssetPaths);
 
     private sealed record TtsProviderSelection(string ProviderName, string VoiceUsed, bool IsSynthetic);
 

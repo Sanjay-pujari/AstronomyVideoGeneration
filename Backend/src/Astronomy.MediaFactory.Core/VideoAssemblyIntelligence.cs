@@ -43,7 +43,12 @@ public sealed record VideoAssemblyGenerationResponse(
     bool IsSilentAudio = false,
     bool AudioValidationPassed = false,
     double AudioPeakDb = 0,
-    double AudioRmsDb = 0);
+    double AudioRmsDb = 0,
+    bool VideoAssemblyPlanGenerated = false,
+    string VideoAssemblyPlanPath = "",
+    bool ReadyForRender = false,
+    int SegmentCount = 0,
+    double TotalDurationSeconds = 0);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -160,3 +165,51 @@ public sealed record VideoTtsSceneTimingDto(
     double StartSeconds,
     double EndSeconds,
     string Narration);
+
+
+public sealed record VideoAssemblyPlanDto(
+    string EventId,
+    string RegionId,
+    string Language,
+    string Platform,
+    double TotalDurationSeconds,
+    string AudioFilePath,
+    string RenderOutputPath,
+    IReadOnlyList<VideoAssemblyPlanSegmentDto> Segments,
+    VideoAssemblyRenderSettingsDto RenderSettings,
+    VideoAssemblyStyleDto Style,
+    VideoAssemblyValidationDto Validation,
+    IReadOnlyList<string> Warnings,
+    DateTimeOffset GeneratedUtc);
+
+public sealed record VideoAssemblyPlanSegmentDto(
+    string SceneKey,
+    double StartSeconds,
+    double EndSeconds,
+    double DurationSeconds,
+    string VisualAssetPath,
+    string Narration,
+    string TransitionIn,
+    string TransitionOut,
+    string Motion);
+
+public sealed record VideoAssemblyRenderSettingsDto(
+    int Width,
+    int Height,
+    int Fps,
+    string Format,
+    string Codec,
+    string AudioCodec);
+
+public sealed record VideoAssemblyStyleDto(
+    string TransitionStyle,
+    string MotionStyle,
+    string TextOverlayStyle,
+    bool BackgroundMusic);
+
+public sealed record VideoAssemblyValidationDto(
+    bool AudioExists,
+    bool AllVisualAssetsExist,
+    int SegmentCount,
+    bool DurationMatchesAudio,
+    bool ReadyForRender);
