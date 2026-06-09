@@ -231,6 +231,12 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
 
         Assert.Equal("ImageGeneration", result.PhaseExecuted);
         Assert.True(result.ThumbnailLayoutValidationGenerated);
+        Assert.Equal("ApprovedSceneSmartCrop", result.ThumbnailVisualSourceMode);
+        Assert.Equal("scene-001", result.SourceSceneUsed);
+        Assert.True(result.ApprovedSceneFoundationUsed);
+        Assert.False(result.IndependentPlanetRedrawUsed);
+        Assert.True(result.ArtificialGlowRemoved);
+        Assert.True(result.VisualSourceQualityScore >= 90);
         Assert.Equal(validationPath.Replace('\\', '/'), result.ThumbnailLayoutValidationPath);
         Assert.Contains(landscapePath.Replace('\\', '/'), result.GeneratedFiles);
         Assert.Contains(squarePath.Replace('\\', '/'), result.GeneratedFiles);
@@ -258,6 +264,12 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.Equal(3, validation.TextElementCount);
         Assert.True(validation.ThumbnailClickabilityScore >= 95);
         Assert.True(validation.ThumbnailCuriosityScore >= 95);
+        Assert.Equal("ApprovedSceneSmartCrop", validation.ThumbnailVisualSourceMode);
+        Assert.Equal("scene-001", validation.SourceSceneUsed);
+        Assert.True(validation.ApprovedSceneFoundationUsed);
+        Assert.False(validation.IndependentPlanetRedrawUsed);
+        Assert.True(validation.ArtificialGlowRemoved);
+        Assert.True(validation.VisualSourceQualityScore >= 90);
     }
 
     [Fact]
