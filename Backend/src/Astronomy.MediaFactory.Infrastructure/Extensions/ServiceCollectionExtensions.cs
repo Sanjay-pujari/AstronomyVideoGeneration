@@ -513,7 +513,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<EducationalLayerRenderer>();
         services.AddScoped<AnnotationLayerRenderer>();
         services.AddScoped<IAstronomyInfographicRenderer, AstronomyInfographicRenderer>();
-        services.AddScoped<IQuestionDrivenVisualComposer, QuestionDrivenVisualComposer>();
+        services.AddScoped<QuestionDrivenVisualComposer>();
+        services.AddScoped<IQuestionDrivenVisualComposer>(sp => sp.GetRequiredService<QuestionDrivenVisualComposer>());
         services.AddScoped<IEditorialAstronomyInfographicComposer, EditorialAstronomyInfographicComposer>();
         services.AddScoped<IAstronomyVisualAssetStrategyService, AstronomyVisualAssetStrategyService>();
         services.AddScoped<IInfographicLayoutBlueprintGenerator, InfographicLayoutBlueprintGenerator>();

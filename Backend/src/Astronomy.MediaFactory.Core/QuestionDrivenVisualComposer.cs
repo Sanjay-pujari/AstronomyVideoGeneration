@@ -63,7 +63,12 @@ public sealed record QuestionDrivenPlannedOutputs(
     string NarrationTextPath,
     string VisualSpecPath,
     string ImagePromptPath,
-    string ReviewPath);
+    string ReviewPath,
+    QuestionDrivenPresentationVariants? PresentationVariants = null);
+
+public sealed record QuestionDrivenPresentationVariants(
+    string LongFormFinalImagePath,
+    string ShortFormFinalImagePath);
 
 public sealed record QuestionDrivenValidationPreview(
     bool ImageSceneSpecific,
@@ -240,7 +245,26 @@ public sealed record EditorialAstronomyInfographicGenerationResponse(
     string SharedAstronomyVisualComposerStatus = "FROZEN",
     bool HeroAssetRulesApplied = false,
     bool DuplicateObjectRenderingDetected = false,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? SceneVariantFinalImages = null);
+    SceneVariantFinalImagesResponse? SceneVariantFinalImages = null,
+    SceneVariantGenerationDiagnostics? Diagnostics = null);
+
+public sealed record SceneVariantFinalImagesResponse(
+    SceneVariantFinalImageSet LongForm,
+    SceneVariantFinalImageSet ShortForm);
+
+public sealed record SceneVariantFinalImageSet(
+    string Profile,
+    string BaseDirectory,
+    int Width,
+    int Height,
+    IReadOnlyDictionary<string, string> Images);
+
+public sealed record SceneVariantGenerationDiagnostics(
+    bool SceneVariantGenerationEnabled,
+    bool LongFormGenerated,
+    bool ShortFormGenerated,
+    int LongFormImageCount,
+    int ShortFormImageCount);
 
 public sealed record SceneQuestionIsolationValidation(
     int SceneNumber,

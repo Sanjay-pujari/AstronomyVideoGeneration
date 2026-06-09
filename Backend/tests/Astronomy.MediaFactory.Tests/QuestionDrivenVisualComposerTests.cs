@@ -4,6 +4,7 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using SixLabors.ImageSharp;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -121,25 +122,90 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.Equal(0, result.FinalImageCount);
         Assert.Empty(result.GeneratedFiles);
         Assert.NotNull(result.SceneVariantFinalImages);
-        Assert.Equal(6, result.SceneVariantFinalImages!.Count);
+        Assert.Equal("LongForm", result.SceneVariantFinalImages!.LongForm.Profile);
+        Assert.Equal(1920, result.SceneVariantFinalImages.LongForm.Width);
+        Assert.Equal(1080, result.SceneVariantFinalImages.LongForm.Height);
+        Assert.Equal("ShortForm", result.SceneVariantFinalImages.ShortForm.Profile);
+        Assert.Equal(1080, result.SceneVariantFinalImages.ShortForm.Width);
+        Assert.Equal(1920, result.SceneVariantFinalImages.ShortForm.Height);
+        Assert.Equal(6, result.SceneVariantFinalImages.LongForm.Images.Count);
+        Assert.Equal(6, result.SceneVariantFinalImages.ShortForm.Images.Count);
+        Assert.NotNull(result.Diagnostics);
+        Assert.True(result.Diagnostics!.SceneVariantGenerationEnabled);
 
         foreach (var sceneNumber in Enumerable.Range(1, 6))
         {
             var key = $"scene-{sceneNumber:000}";
-            Assert.True(result.SceneVariantFinalImages.ContainsKey(key));
-            Assert.Contains($"scene-approval-v3/long/{key}-final.png", result.SceneVariantFinalImages[key][0]);
-            Assert.Contains($"scene-approval-v3/short/{key}-final.png", result.SceneVariantFinalImages[key][1]);
+            Assert.True(result.SceneVariantFinalImages.LongForm.Images.ContainsKey(key));
+            Assert.True(result.SceneVariantFinalImages.ShortForm.Images.ContainsKey(key));
+            Assert.Contains($"scene-approval-v3/long/{key}-final.png", result.SceneVariantFinalImages.LongForm.Images[key]);
+            Assert.Contains($"scene-approval-v3/short/{key}-final.png", result.SceneVariantFinalImages.ShortForm.Images[key]);
         }
 
         Assert.All(result.PlannedScenes, scene =>
         {
-            Assert.Contains("scene-approval-v3/long/", scene.PlannedOutputs.FinalImagePath);
+            Assert.Contains("scene-approval-v3/", scene.PlannedOutputs.FinalImagePath);
+            Assert.DoesNotContain("scene-approval-v3/long/", scene.PlannedOutputs.FinalImagePath);
+            Assert.NotNull(scene.PlannedOutputs.PresentationVariants);
+            Assert.Contains("scene-approval-v3/long/", scene.PlannedOutputs.PresentationVariants!.LongFormFinalImagePath);
+            Assert.Contains("scene-approval-v3/short/", scene.PlannedOutputs.PresentationVariants.ShortFormFinalImagePath);
             Assert.False(string.IsNullOrWhiteSpace(scene.NarrationText));
             Assert.False(string.IsNullOrWhiteSpace(scene.CaptionText));
             Assert.True(scene.ValidationPreview.ImageSceneSpecific);
             Assert.True(scene.ValidationPreview.NarrationAligned);
             Assert.Empty(scene.ValidationPreview.Issues);
         });
+    }
+
+
+
+    [Fact]
+    public async Task GenerateEditorialAstronomyInfographicsAsync_WritesLongAndShortVariantImages()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteInputFilesAsync(workingDirectory);
+        var composer = CreateComposer(workingDirectory);
+
+        var result = await composer.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(
+            EventId,
+            RegionId,
+            "en",
+            DryRun: false,
+            OverwriteExisting: false), CancellationToken.None);
+
+        Assert.Equal(12, result.FinalImageCount);
+        Assert.NotNull(result.SceneVariantFinalImages);
+        Assert.NotNull(result.Diagnostics);
+        Assert.True(result.Diagnostics!.LongFormGenerated);
+        Assert.True(result.Diagnostics.ShortFormGenerated);
+        Assert.Equal(6, result.Diagnostics.LongFormImageCount);
+        Assert.Equal(6, result.Diagnostics.ShortFormImageCount);
+
+        var longRoot = Path.Combine(BuildSceneApprovalPath(workingDirectory), "long");
+        var shortRoot = Path.Combine(BuildSceneApprovalPath(workingDirectory), "short");
+        Assert.True(Directory.Exists(longRoot));
+        Assert.True(Directory.Exists(shortRoot));
+        Assert.Equal(6, Directory.EnumerateFiles(longRoot, "scene-*-final.png").Count());
+        Assert.Equal(6, Directory.EnumerateFiles(shortRoot, "scene-*-final.png").Count());
+
+        foreach (var sceneNumber in Enumerable.Range(1, 6))
+        {
+            var key = $"scene-{sceneNumber:000}";
+            var longPath = Path.Combine(longRoot, $"{key}-final.png");
+            var shortPath = Path.Combine(shortRoot, $"{key}-final.png");
+            Assert.True(File.Exists(longPath));
+            Assert.True(File.Exists(shortPath));
+            Assert.Contains(Normalize(longPath), result.GeneratedFiles);
+            Assert.Contains(Normalize(shortPath), result.GeneratedFiles);
+            using var longImage = Image.Load(longPath);
+            using var shortImage = Image.Load(shortPath);
+            Assert.Equal(1920, longImage.Width);
+            Assert.Equal(1080, longImage.Height);
+            Assert.Equal(1080, shortImage.Width);
+            Assert.Equal(1920, shortImage.Height);
+            Assert.Contains($"scene-approval-v3/long/{key}-final.png", result.SceneVariantFinalImages!.LongForm.Images[key]);
+            Assert.Contains($"scene-approval-v3/short/{key}-final.png", result.SceneVariantFinalImages.ShortForm.Images[key]);
+        }
     }
 
     private static QuestionDrivenVisualComposer CreateComposer(string workingDirectory)
@@ -238,6 +304,8 @@ public sealed class QuestionDrivenVisualComposerTests
 
     private static string BuildSceneApprovalPath(string workingDirectory)
         => Path.Combine(BuildQuestionEnginePath(workingDirectory), "scene-approval-v3");
+
+    private static string Normalize(string path) => path.Replace('\\', '/');
 
     private static string CreateWorkingDirectory()
     {
