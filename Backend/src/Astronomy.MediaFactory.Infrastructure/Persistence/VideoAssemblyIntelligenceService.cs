@@ -806,7 +806,7 @@ public sealed class VideoAssemblyIntelligenceService(
         return new AssemblyInputs(intelligence, script, timings, NormalizePath(audioPath), NormalizePath(thumbnailPath), NormalizeDirectoryPath(sceneApprovalRoot), presentationProfile, visualAssetPaths.Select(NormalizePath).ToArray());
     }
 
-    private static VideoAssemblyPlanDto BuildVideoAssemblyPlan(VideoAssemblyGenerationRequest request, AssemblyInputs inputs)
+    private VideoAssemblyPlanDto BuildVideoAssemblyPlan(VideoAssemblyGenerationRequest request, AssemblyInputs inputs)
     {
         var visualByScene = RequiredAssemblySceneOrder.Zip(inputs.VisualAssetPaths, (scene, path) => new { scene, path })
             .ToDictionary(item => item.scene, item => item.path, StringComparer.OrdinalIgnoreCase);
