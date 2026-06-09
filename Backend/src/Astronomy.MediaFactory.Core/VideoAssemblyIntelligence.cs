@@ -30,7 +30,12 @@ public sealed record VideoAssemblyGenerationResponse(
     bool VideoNarrationScriptGenerated = false,
     string VideoNarrationScriptPath = "",
     double TotalEstimatedDurationSeconds = 0,
-    bool TtsReady = false);
+    bool TtsReady = false,
+    bool TtsAudioGenerated = false,
+    bool TtsTimingsGenerated = false,
+    string AudioFilePath = "",
+    string TimingsFilePath = "",
+    double ActualDurationSeconds = 0);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -120,3 +125,23 @@ public sealed record VideoNarrationScriptScoresDto(
     int ClarityScore,
     int ShortFormPaceScore,
     int TtsReadinessScore);
+
+
+public sealed record VideoTtsTimingsDto(
+    string EventId,
+    string RegionId,
+    string Language,
+    string Platform,
+    string AudioFilePath,
+    double EstimatedDurationSeconds,
+    double ActualDurationSeconds,
+    IReadOnlyList<VideoTtsSceneTimingDto> SceneTimings,
+    string TtsProvider,
+    string VoiceUsed,
+    DateTimeOffset GeneratedUtc);
+
+public sealed record VideoTtsSceneTimingDto(
+    string SceneKey,
+    double StartSeconds,
+    double EndSeconds,
+    string Narration);

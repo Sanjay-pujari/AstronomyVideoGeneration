@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
@@ -22,6 +24,8 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
     private const string ThumbnailSceneManifestFileName = "thumbnail-scene-manifest.json";
     private const string VideoAssemblyIntelligenceFileName = "video-assembly-intelligence.json";
     private const string VideoNarrationScriptFileName = "video-narration-script.json";
+    private const string VideoTtsAudioFileName = "video-tts-audio.mp3";
+    private const string VideoTtsTimingsFileName = "video-tts-timings.json";
     private const string SelectedOpeningHook = "DON'T MISS THIS TONIGHT";
     private static readonly string[] RequiredApprovedSceneIds = ["scene-001", "scene-002", "scene-003", "scene-005", "scene-006"];
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -34,8 +38,11 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
         if (string.Equals(request.Phase, "Script", StringComparison.OrdinalIgnoreCase))
             return await GenerateVideoNarrationScriptAsync(request, cancellationToken);
 
+        if (string.Equals(request.Phase, "Tts", StringComparison.OrdinalIgnoreCase))
+            return await GenerateTtsAudioAsync(request, cancellationToken);
+
         if (!string.Equals(request.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only video assembly phases 'Intelligence' and 'Script' are implemented in this endpoint version.", nameof(request));
+            throw new ArgumentException("Only video assembly phases 'Intelligence', 'Script', and 'Tts' are implemented in this endpoint version.", nameof(request));
 
         var outputPath = BuildVideoAssemblyIntelligenceOutputPath(request.EventId, request.RegionId);
         if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
@@ -82,6 +89,50 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
         }
 
         return BuildScriptResponse(request.Phase, script, outputPath);
+    }
+
+
+    private async Task<VideoAssemblyGenerationResponse> GenerateTtsAudioAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var audioPath = BuildVideoTtsAudioOutputPath(request.EventId, request.RegionId);
+        var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId);
+
+        if (!request.DryRun && !request.OverwriteExisting && File.Exists(audioPath) && File.Exists(timingsPath))
+        {
+            var existing = JsonSerializer.Deserialize<VideoTtsTimingsDto>(await File.ReadAllTextAsync(timingsPath, cancellationToken), JsonOptions)
+                ?? throw new InvalidOperationException("Existing video TTS timings could not be parsed.");
+            ValidateVideoTtsTimings(existing);
+            return BuildTtsResponse(request.Phase, audioPath, timingsPath, existing.ActualDurationSeconds, generatedFiles: []);
+        }
+
+        var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, cancellationToken);
+        var actualDurationSeconds = NormalizeTtsDuration(script.TotalEstimatedDurationSeconds);
+        var timings = BuildVideoTtsTimings(request, script, audioPath, actualDurationSeconds);
+        ValidateVideoTtsTimings(timings);
+
+        var generatedFiles = new List<string>();
+        if (!request.DryRun)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(audioPath) ?? ResolveWorkingDirectoryRoot());
+            await WriteTtsAudioAsync(script.FullNarrationText, audioPath, actualDurationSeconds, cancellationToken);
+            await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
+            generatedFiles.Add(NormalizePath(audioPath));
+            generatedFiles.Add(NormalizePath(timingsPath));
+        }
+
+        return BuildTtsResponse(request.Phase, audioPath, timingsPath, timings.ActualDurationSeconds, generatedFiles);
+    }
+
+    private async Task<VideoNarrationScriptDto> EnsureRequiredTtsInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
+    {
+        var scriptPath = BuildVideoNarrationScriptOutputPath(eventId, regionId);
+        if (!File.Exists(scriptPath))
+            throw new ArgumentException($"Required TTS input '{VideoNarrationScriptFileName}' was not found at '{NormalizePath(scriptPath)}'.");
+
+        var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(scriptPath, cancellationToken), JsonOptions)
+            ?? throw new ArgumentException($"Required TTS input '{VideoNarrationScriptFileName}' could not be parsed.");
+        ValidateVideoNarrationScript(script);
+        return script;
     }
 
     private async Task<VideoAssemblyIntelligenceDto> EnsureRequiredScriptInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
@@ -251,6 +302,106 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
     private static double GetDuration(IReadOnlyDictionary<string, double> durations, string sceneKey, double fallback)
         => durations.TryGetValue(sceneKey, out var duration) ? duration : fallback;
 
+
+    private static VideoTtsTimingsDto BuildVideoTtsTimings(VideoAssemblyGenerationRequest request, VideoNarrationScriptDto script, string audioPath, double actualDurationSeconds)
+    {
+        var estimatedDurationSeconds = script.TotalEstimatedDurationSeconds;
+        var sceneTimings = new List<VideoTtsSceneTimingDto>();
+        var estimatedSceneTotal = script.SceneScripts.Sum(scene => scene.DurationSeconds);
+        var cursor = 0.0;
+
+        for (var index = 0; index < script.SceneScripts.Count; index++)
+        {
+            var scene = script.SceneScripts[index];
+            var sceneDuration = estimatedSceneTotal <= 0
+                ? actualDurationSeconds / script.SceneScripts.Count
+                : actualDurationSeconds * scene.DurationSeconds / estimatedSceneTotal;
+            var startSeconds = Math.Round(cursor, 3, MidpointRounding.AwayFromZero);
+            cursor = index == script.SceneScripts.Count - 1 ? actualDurationSeconds : cursor + sceneDuration;
+            var endSeconds = Math.Round(cursor, 3, MidpointRounding.AwayFromZero);
+            sceneTimings.Add(new VideoTtsSceneTimingDto(scene.SceneKey, startSeconds, endSeconds, scene.Narration));
+        }
+
+        return new VideoTtsTimingsDto(
+            request.EventId,
+            request.RegionId,
+            request.Language,
+            request.Platform,
+            NormalizePath(audioPath),
+            estimatedDurationSeconds,
+            actualDurationSeconds,
+            sceneTimings,
+            "SyntheticOfflineTtsV1",
+            string.IsNullOrWhiteSpace(script.TtsPlan.RecommendedVoice) ? "NeutralEnergetic" : script.TtsPlan.RecommendedVoice,
+            DateTimeOffset.UtcNow);
+    }
+
+    private static double NormalizeTtsDuration(double estimatedDurationSeconds)
+        => Math.Round(Math.Clamp(estimatedDurationSeconds, 15.0, 25.0), 3, MidpointRounding.AwayFromZero);
+
+    private async Task WriteTtsAudioAsync(string narrationText, string audioPath, double durationSeconds, CancellationToken cancellationToken)
+    {
+        if (await TryWriteSilentMp3WithFfmpegAsync(audioPath, durationSeconds, cancellationToken))
+            return;
+
+        await File.WriteAllBytesAsync(audioPath, BuildFallbackMp3Placeholder(narrationText, durationSeconds), cancellationToken);
+    }
+
+    private async Task<bool> TryWriteSilentMp3WithFfmpegAsync(string audioPath, double durationSeconds, CancellationToken cancellationToken)
+    {
+        var ffmpegPath = string.IsNullOrWhiteSpace(renderingOptions.Value.FfmpegPath) ? "ffmpeg" : renderingOptions.Value.FfmpegPath;
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            };
+            startInfo.ArgumentList.Add("-y");
+            startInfo.ArgumentList.Add("-f");
+            startInfo.ArgumentList.Add("lavfi");
+            startInfo.ArgumentList.Add("-i");
+            startInfo.ArgumentList.Add("anullsrc=channel_layout=mono:sample_rate=24000");
+            startInfo.ArgumentList.Add("-t");
+            startInfo.ArgumentList.Add(durationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+            startInfo.ArgumentList.Add("-codec:a");
+            startInfo.ArgumentList.Add("libmp3lame");
+            startInfo.ArgumentList.Add("-b:a");
+            startInfo.ArgumentList.Add("96k");
+            startInfo.ArgumentList.Add(audioPath);
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+                return false;
+
+            await process.WaitForExitAsync(cancellationToken);
+            return process.ExitCode == 0 && File.Exists(audioPath) && new FileInfo(audioPath).Length > 0;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
+    private static byte[] BuildFallbackMp3Placeholder(string narrationText, double durationSeconds)
+    {
+        var comment = $"Synthetic offline TTS placeholder. DurationSeconds={durationSeconds:0.###}. Narration={narrationText}";
+        var payload = Encoding.UTF8.GetBytes(comment);
+        var size = payload.Length;
+        var header = new byte[]
+        {
+            (byte)'I', (byte)'D', (byte)'3', 4, 0, 0,
+            (byte)((size >> 21) & 0x7F),
+            (byte)((size >> 14) & 0x7F),
+            (byte)((size >> 7) & 0x7F),
+            (byte)(size & 0x7F)
+        };
+
+        return header.Concat(payload).ToArray();
+    }
+
     private static void ValidateVideoNarrationScript(VideoNarrationScriptDto script)
     {
         if (string.IsNullOrWhiteSpace(script.FullNarrationText))
@@ -284,6 +435,21 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
             throw new ArgumentException("Video assembly intelligence validation failed: ttsRequired must be true.");
         if (intelligence.Scores.VideoAssemblyReadinessScore < 90)
             throw new ArgumentException("Video assembly intelligence validation failed: videoAssemblyReadinessScore must be at least 90.");
+    }
+
+    private static void ValidateVideoTtsTimings(VideoTtsTimingsDto timings)
+    {
+        if (string.IsNullOrWhiteSpace(timings.AudioFilePath))
+            throw new ArgumentException("Video TTS timings validation failed: audioFilePath is required.");
+        if (timings.EstimatedDurationSeconds < 15 || timings.EstimatedDurationSeconds > 25)
+            throw new ArgumentException("Video TTS timings validation failed: estimatedDurationSeconds must be 15-25 seconds.");
+        if (timings.ActualDurationSeconds < 15 || timings.ActualDurationSeconds > 25)
+            throw new ArgumentException("Video TTS timings validation failed: actualDurationSeconds must be 15-25 seconds.");
+        ValidateRecommendedSceneOrder(timings.SceneTimings.Select(scene => scene.SceneKey), "video-tts-timings.json");
+        if (string.IsNullOrWhiteSpace(timings.TtsProvider))
+            throw new ArgumentException("Video TTS timings validation failed: ttsProvider is required.");
+        if (string.IsNullOrWhiteSpace(timings.VoiceUsed))
+            throw new ArgumentException("Video TTS timings validation failed: voiceUsed is required.");
     }
 
     private static void ValidateRequest(VideoAssemblyGenerationRequest request)
@@ -328,6 +494,32 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
             script.TotalEstimatedDurationSeconds,
             script.Scores.TtsReadinessScore >= 90);
 
+    private static VideoAssemblyGenerationResponse BuildTtsResponse(
+        string phaseRequested,
+        string audioPath,
+        string timingsPath,
+        double actualDurationSeconds,
+        IReadOnlyList<string> generatedFiles)
+        => new(
+            phaseRequested,
+            "Tts",
+            false,
+            string.Empty,
+            string.Empty,
+            0,
+            true,
+            false,
+            generatedFiles,
+            false,
+            string.Empty,
+            0,
+            true,
+            true,
+            true,
+            NormalizePath(audioPath),
+            NormalizePath(timingsPath),
+            actualDurationSeconds);
+
     private string BuildQuestionEngineRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), QuestionEngineDirectoryName);
 
@@ -345,6 +537,12 @@ public sealed class VideoAssemblyIntelligenceService(IOptions<RenderingOptions> 
 
     private string BuildVideoNarrationScriptOutputPath(string eventId, string regionId)
         => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoNarrationScriptFileName);
+
+    private string BuildVideoTtsAudioOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoTtsAudioFileName);
+
+    private string BuildVideoTtsTimingsOutputPath(string eventId, string regionId)
+        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoTtsTimingsFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;

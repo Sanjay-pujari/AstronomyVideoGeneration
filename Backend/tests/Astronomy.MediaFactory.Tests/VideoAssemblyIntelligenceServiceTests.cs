@@ -149,6 +149,77 @@ public sealed class VideoAssemblyIntelligenceServiceTests
     }
 
     [Fact]
+    public async Task GenerateVideoAssemblyAsync_TtsNonDryRunWritesAudioAndTimingsOnly()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Intelligence",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Script",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeShort",
+            Phase = "Tts",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var audioPath = Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-tts-audio.mp3");
+        var timingsPath = Path.Combine(BuildVideoAssemblyRoot(workingDirectory), "video-tts-timings.json");
+        Assert.Equal("Tts", result.PhaseRequested);
+        Assert.Equal("Tts", result.PhaseExecuted);
+        Assert.True(result.TtsAudioGenerated);
+        Assert.True(result.TtsTimingsGenerated);
+        Assert.Equal(audioPath.Replace('\\', '/'), result.AudioFilePath);
+        Assert.Equal(timingsPath.Replace('\\', '/'), result.TimingsFilePath);
+        Assert.Equal(20.0, result.ActualDurationSeconds);
+        Assert.True(File.Exists(audioPath));
+        Assert.True(File.Exists(timingsPath));
+        Assert.DoesNotContain(Directory.GetFiles(BuildVideoAssemblyRoot(workingDirectory)), path => Path.GetExtension(path).Equals(".mp4", StringComparison.OrdinalIgnoreCase));
+
+        var saved = JsonSerializer.Deserialize<VideoTtsTimingsDto>(await File.ReadAllTextAsync(timingsPath), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.Equal(EventId, saved!.EventId);
+        Assert.Equal(RegionId, saved.RegionId);
+        Assert.Equal("en", saved.Language);
+        Assert.Equal("YouTubeShort", saved.Platform);
+        Assert.Equal(audioPath.Replace('\\', '/'), saved.AudioFilePath);
+        Assert.Equal(20.0, saved.EstimatedDurationSeconds);
+        Assert.Equal(20.0, saved.ActualDurationSeconds);
+        Assert.Equal(new[] { "Hook", "What", "Why", "Where", "When", "Action" }, saved.SceneTimings.Select(scene => scene.SceneKey));
+        Assert.Equal(0.0, saved.SceneTimings[0].StartSeconds);
+        Assert.Equal(3.0, saved.SceneTimings[0].EndSeconds);
+        Assert.Equal("Don't miss this tonight.", saved.SceneTimings[0].Narration);
+        Assert.Equal(20.0, saved.SceneTimings[^1].EndSeconds);
+        Assert.Equal("SyntheticOfflineTtsV1", saved.TtsProvider);
+        Assert.Equal("NeutralEnergetic", saved.VoiceUsed);
+    }
+
+    [Fact]
     public async Task GenerateVideoAssemblyAsync_RejectsUnimplementedPhases()
     {
         var workingDirectory = CreateWorkingDirectory();
@@ -161,12 +232,12 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             RegionId = RegionId,
             Language = "en",
             Platform = "YouTubeShort",
-            Phase = "Tts",
+            Phase = "Render",
             DryRun = false,
             OverwriteExisting = true
         }, CancellationToken.None));
 
-        Assert.Contains("Only video assembly phases 'Intelligence' and 'Script'", error.Message);
+        Assert.Contains("Only video assembly phases 'Intelligence', 'Script', and 'Tts'", error.Message);
     }
 
     private static VideoAssemblyIntelligenceService CreateService(string workingDirectory)
