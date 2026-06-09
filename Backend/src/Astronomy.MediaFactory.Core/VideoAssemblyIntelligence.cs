@@ -24,7 +24,7 @@ public sealed class VideoAssemblyGenerationRequest
 
     public int MusicLevelPercent { get; set; } = 12;
 
-    public bool DuckMusicUnderNarration { get; set; }
+    public bool DuckMusicUnderNarration { get; set; } = true;
 }
 
 public sealed record VideoAssemblyGenerationResponse(
@@ -63,7 +63,10 @@ public sealed record VideoAssemblyGenerationResponse(
     string OutputResolution = "",
     bool AudioTrackPresent = false,
     bool BackgroundMusicApplied = false,
-    bool RenderSucceeded = false);
+    bool RenderSucceeded = false,
+    string VideoRenderValidationPath = "",
+    int RenderPolishScore = 0,
+    int VideoFinalReadinessScore = 0);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -228,3 +231,11 @@ public sealed record VideoAssemblyValidationDto(
     int SegmentCount,
     bool DurationMatchesAudio,
     bool ReadyForRender);
+
+public sealed record VideoRenderValidationDto(
+    bool KenBurnsApplied,
+    bool CrossFadeApplied,
+    bool HookOptimizationApplied,
+    bool MusicMixValidated,
+    int RenderPolishScore,
+    int VideoFinalReadinessScore);

@@ -466,6 +466,9 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
                 response.AudioTrackPresent,
                 response.BackgroundMusicApplied,
                 response.RenderSucceeded,
+                response.VideoRenderValidationPath,
+                response.RenderPolishScore,
+                response.VideoFinalReadinessScore,
                 response.GeneratedFiles
             });
         }
