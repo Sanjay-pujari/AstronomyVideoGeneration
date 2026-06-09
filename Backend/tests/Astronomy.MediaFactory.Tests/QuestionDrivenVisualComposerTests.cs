@@ -203,6 +203,22 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.Equal(6, Directory.EnumerateFiles(longRoot, "scene-*-final.png").Count());
         Assert.Equal(6, Directory.EnumerateFiles(shortRoot, "scene-*-final.png").Count());
 
+        var polishValidationPath = Path.Combine(shortRoot, "shortform-polish-validation.json");
+        Assert.True(File.Exists(polishValidationPath));
+        Assert.Contains(Normalize(polishValidationPath), result.GeneratedFiles);
+        using (var polishValidationDocument = JsonDocument.Parse(await File.ReadAllTextAsync(polishValidationPath)))
+        {
+            var root = polishValidationDocument.RootElement;
+            Assert.True(root.GetProperty("shortFormPolishApplied").GetBoolean());
+            Assert.False(root.GetProperty("decorativeEllipseOverlayDetected").GetBoolean());
+            Assert.True(root.GetProperty("scene2GuideComplexityReduced").GetBoolean());
+            Assert.True(root.GetProperty("scene3TimelineSimplified").GetBoolean());
+            Assert.True(root.GetProperty("scene5PlanetProximityEnhanced").GetBoolean());
+            Assert.True(root.GetProperty("scene6CtaEnhanced").GetBoolean());
+            Assert.True(root.GetProperty("captionDensityReduced").GetBoolean());
+            Assert.True(root.GetProperty("shortFormPolishScore").GetInt32() >= 95);
+        }
+
         foreach (var sceneNumber in Enumerable.Range(1, 6))
         {
             var key = $"scene-{sceneNumber:000}";
