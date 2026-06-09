@@ -450,6 +450,13 @@ app.MapPost("/api/astronomy-intelligence/generate-thumbnail-assets", async (Thum
             response.IndependentPlanetRedrawUsed,
             response.ArtificialGlowRemoved,
             response.VisualSourceQualityScore,
+            response.PhotoCinematicRendererUsed,
+            response.OldThumbnailRendererBypassed,
+            response.SceneTextLabelsRemoved,
+            response.TextBoxesRemoved,
+            response.VenusRenderedAsStarPoint,
+            response.JupiterRenderedAsPlanet,
+            response.Warnings,
             response.GeneratedFiles
         });
     }

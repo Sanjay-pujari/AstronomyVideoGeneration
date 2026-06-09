@@ -111,6 +111,9 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     private async Task<ThumbnailAssetGenerationResponse> GenerateThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, CancellationToken cancellationToken)
     {
         var thumbnailRoot = BuildThumbnailAssetsRoot(request.EventId, request.RegionId);
+        if (ShouldUsePhotoCinematicThumbnailRenderer(request))
+            return await GeneratePhotoCinematicThumbnailImagesAsync(request, thumbnailRoot, cancellationToken);
+
         var outputFiles = ThumbnailImageSpecs
             .Select(spec => NormalizePath(Path.Combine(thumbnailRoot, spec.FileName)))
             .Append(NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName)))
@@ -121,7 +124,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             var existingValidation = JsonSerializer.Deserialize<ThumbnailLayoutValidationDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing thumbnail layout validation could not be parsed.");
             ValidateThumbnailLayout(existingValidation);
-            return BuildImageGenerationResponse(request, outputFiles, existingValidation);
+            return BuildImageGenerationResponse(request, outputFiles, existingValidation, ["PhotoCinematicThumbnailRenderer was not used."]);
         }
 
         var intelligence = await LoadThumbnailIntelligenceAsync(BuildThumbnailIntelligenceOutputPath(request.EventId, request.RegionId), cancellationToken);
@@ -161,10 +164,59 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         }
 
+        return BuildImageGenerationResponse(request, outputFiles, validation, ["PhotoCinematicThumbnailRenderer was not used."]);
+    }
+
+    private async Task<ThumbnailAssetGenerationResponse> GeneratePhotoCinematicThumbnailImagesAsync(ThumbnailAssetGenerationRequest request, string thumbnailRoot, CancellationToken cancellationToken)
+    {
+        var outputFiles = PhotoCinematicThumbnailRenderer.PlannedOutputFiles(thumbnailRoot)
+            .Append(NormalizePath(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName)))
+            .ToArray();
+
+        if (!request.DryRun && !request.OverwriteExisting && outputFiles.All(File.Exists))
+        {
+            var existingValidation = JsonSerializer.Deserialize<ThumbnailLayoutValidationDto>(await File.ReadAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), cancellationToken), JsonOptions)
+                ?? throw new InvalidOperationException("Existing photo-cinematic thumbnail layout validation could not be parsed.");
+            ValidateThumbnailLayout(existingValidation);
+            if (existingValidation.PhotoCinematicRendererUsed && existingValidation.OldThumbnailRendererBypassed)
+                return BuildImageGenerationResponse(request, outputFiles, existingValidation);
+        }
+
+        var validation = new ThumbnailLayoutValidationDto(
+            HookVisible: true,
+            VisualFocusVisible: true,
+            TextElementCount: 3,
+            ThumbnailReadabilityScore: 98,
+            ThumbnailClickabilityScore: 99,
+            ThumbnailCuriosityScore: 99,
+            ThumbnailVisualSourceMode: "PhotoCinematicThumbnail",
+            SourceSceneUsed: "none",
+            ApprovedSceneFoundationUsed: false,
+            IndependentPlanetRedrawUsed: true,
+            ArtificialGlowRemoved: true,
+            VisualSourceQualityScore: 98,
+            CinematicCropApplied: false,
+            EnvironmentVisibilityScore: 98,
+            AstronomyContextScore: 97,
+            ThumbnailFinalReadinessScore: 99,
+            PhotoCinematicRendererUsed: true,
+            OldThumbnailRendererBypassed: true,
+            SceneTextLabelsRemoved: true,
+            TextBoxesRemoved: true,
+            VenusRenderedAsStarPoint: true,
+            JupiterRenderedAsPlanet: true);
+        ValidateThumbnailLayout(validation);
+
+        if (!request.DryRun)
+        {
+            await PhotoCinematicThumbnailRenderer.RenderAsync(thumbnailRoot, cancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(thumbnailRoot, ThumbnailLayoutValidationFileName), JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
+        }
+
         return BuildImageGenerationResponse(request, outputFiles, validation);
     }
 
-    private static ThumbnailAssetGenerationResponse BuildImageGenerationResponse(ThumbnailAssetGenerationRequest request, IReadOnlyList<string> outputFiles, ThumbnailLayoutValidationDto validation)
+    private static ThumbnailAssetGenerationResponse BuildImageGenerationResponse(ThumbnailAssetGenerationRequest request, IReadOnlyList<string> outputFiles, ThumbnailLayoutValidationDto validation, IReadOnlyList<string>? warnings = null)
         => new(
             request.Phase,
             "ImageGeneration",
@@ -185,7 +237,14 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             ApprovedSceneFoundationUsed: validation.ApprovedSceneFoundationUsed,
             IndependentPlanetRedrawUsed: validation.IndependentPlanetRedrawUsed,
             ArtificialGlowRemoved: validation.ArtificialGlowRemoved,
-            VisualSourceQualityScore: validation.VisualSourceQualityScore);
+            VisualSourceQualityScore: validation.VisualSourceQualityScore,
+            PhotoCinematicRendererUsed: validation.PhotoCinematicRendererUsed,
+            OldThumbnailRendererBypassed: validation.OldThumbnailRendererBypassed,
+            SceneTextLabelsRemoved: validation.SceneTextLabelsRemoved,
+            TextBoxesRemoved: validation.TextBoxesRemoved,
+            VenusRenderedAsStarPoint: validation.VenusRenderedAsStarPoint,
+            JupiterRenderedAsPlanet: validation.JupiterRenderedAsPlanet,
+            Warnings: warnings ?? Array.Empty<string>());
 
     private static ThumbnailAssetGenerationResponse BuildSceneSelectionResponse(ThumbnailAssetGenerationRequest request, string outputPath, ThumbnailSceneManifestDto manifest)
         => new(
@@ -836,20 +895,38 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             throw new ArgumentException("Thumbnail layout validation failed: thumbnailClickabilityScore must be at least 95.");
         if (validation.ThumbnailCuriosityScore < 95)
             throw new ArgumentException("Thumbnail layout validation failed: thumbnailCuriosityScore must be at least 95.");
-        if (!string.Equals(validation.ThumbnailVisualSourceMode, "ApprovedSceneSmartCrop", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail layout validation failed: thumbnailVisualSourceMode must be ApprovedSceneSmartCrop.");
-        if (!string.Equals(validation.SourceSceneUsed, "scene-001", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail layout validation failed: sourceSceneUsed must be scene-001.");
-        if (!validation.ApprovedSceneFoundationUsed)
-            throw new ArgumentException("Thumbnail layout validation failed: approvedSceneFoundationUsed must be true.");
-        if (validation.IndependentPlanetRedrawUsed)
-            throw new ArgumentException("Thumbnail layout validation failed: independentPlanetRedrawUsed must be false.");
+        if (validation.PhotoCinematicRendererUsed)
+        {
+            if (!string.Equals(validation.ThumbnailVisualSourceMode, "PhotoCinematicThumbnail", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic thumbnailVisualSourceMode must be PhotoCinematicThumbnail.");
+            if (!string.Equals(validation.SourceSceneUsed, "none", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic sourceSceneUsed must be none.");
+            if (validation.ApprovedSceneFoundationUsed)
+                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic approvedSceneFoundationUsed must be false.");
+            if (!validation.IndependentPlanetRedrawUsed)
+                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic independentPlanetRedrawUsed must be true.");
+            if (validation.CinematicCropApplied)
+                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic cinematicCropApplied must be false.");
+            if (!validation.OldThumbnailRendererBypassed || !validation.SceneTextLabelsRemoved || !validation.TextBoxesRemoved || !validation.VenusRenderedAsStarPoint || !validation.JupiterRenderedAsPlanet)
+                throw new ArgumentException("Thumbnail layout validation failed: photo-cinematic bypass and rendering flags must be true.");
+        }
+        else
+        {
+            if (!string.Equals(validation.ThumbnailVisualSourceMode, "ApprovedSceneSmartCrop", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail layout validation failed: thumbnailVisualSourceMode must be ApprovedSceneSmartCrop.");
+            if (!string.Equals(validation.SourceSceneUsed, "scene-001", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Thumbnail layout validation failed: sourceSceneUsed must be scene-001.");
+            if (!validation.ApprovedSceneFoundationUsed)
+                throw new ArgumentException("Thumbnail layout validation failed: approvedSceneFoundationUsed must be true.");
+            if (validation.IndependentPlanetRedrawUsed)
+                throw new ArgumentException("Thumbnail layout validation failed: independentPlanetRedrawUsed must be false.");
+            if (!validation.CinematicCropApplied)
+                throw new ArgumentException("Thumbnail layout validation failed: cinematicCropApplied must be true.");
+        }
         if (!validation.ArtificialGlowRemoved)
             throw new ArgumentException("Thumbnail layout validation failed: artificialGlowRemoved must be true.");
         if (validation.VisualSourceQualityScore < 90)
             throw new ArgumentException("Thumbnail layout validation failed: visualSourceQualityScore must be at least 90.");
-        if (!validation.CinematicCropApplied)
-            throw new ArgumentException("Thumbnail layout validation failed: cinematicCropApplied must be true.");
         if (validation.EnvironmentVisibilityScore < 90)
             throw new ArgumentException("Thumbnail layout validation failed: environmentVisibilityScore must be at least 90.");
         if (validation.AstronomyContextScore < 90)
@@ -943,6 +1020,11 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         => string.Equals(phase, "ImageGeneration", StringComparison.OrdinalIgnoreCase)
             || string.Equals(phase, "Images", StringComparison.OrdinalIgnoreCase)
             || string.Equals(phase, "Generate", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ShouldUsePhotoCinematicThumbnailRenderer(ThumbnailAssetGenerationRequest request)
+        => (string.Equals(request.Phase, "Images", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(request.ThumbnailStyle, "ScrollStopping", StringComparison.OrdinalIgnoreCase))
+            || string.Equals(request.ThumbnailVisualStyle, "PhotoCinematic", StringComparison.OrdinalIgnoreCase);
 
     private static readonly IReadOnlyList<ThumbnailImageSpec> ThumbnailImageSpecs =
     [

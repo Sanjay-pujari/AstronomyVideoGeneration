@@ -13,6 +13,10 @@ public sealed class ThumbnailAssetGenerationRequest
     public bool DryRun { get; set; } = true;
 
     public bool OverwriteExisting { get; set; }
+
+    public string ThumbnailStyle { get; set; } = string.Empty;
+
+    public string ThumbnailVisualStyle { get; set; } = string.Empty;
 }
 
 public sealed record ThumbnailAssetGenerationResponse(
@@ -44,7 +48,14 @@ public sealed record ThumbnailAssetGenerationResponse(
     bool ApprovedSceneFoundationUsed = false,
     bool IndependentPlanetRedrawUsed = false,
     bool ArtificialGlowRemoved = false,
-    int VisualSourceQualityScore = 0);
+    int VisualSourceQualityScore = 0,
+    bool PhotoCinematicRendererUsed = false,
+    bool OldThumbnailRendererBypassed = false,
+    bool SceneTextLabelsRemoved = false,
+    bool TextBoxesRemoved = false,
+    bool VenusRenderedAsStarPoint = false,
+    bool JupiterRenderedAsPlanet = false,
+    IReadOnlyList<string>? Warnings = null);
 
 public sealed record ThumbnailLayoutValidationDto(
     bool HookVisible,
@@ -62,7 +73,13 @@ public sealed record ThumbnailLayoutValidationDto(
     bool CinematicCropApplied = true,
     int EnvironmentVisibilityScore = 92,
     int AstronomyContextScore = 93,
-    int ThumbnailFinalReadinessScore = 96);
+    int ThumbnailFinalReadinessScore = 96,
+    bool PhotoCinematicRendererUsed = false,
+    bool OldThumbnailRendererBypassed = false,
+    bool SceneTextLabelsRemoved = false,
+    bool TextBoxesRemoved = false,
+    bool VenusRenderedAsStarPoint = false,
+    bool JupiterRenderedAsPlanet = false);
 
 public sealed record ThumbnailSceneManifestDto(
     string EventId,

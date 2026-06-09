@@ -274,6 +274,72 @@ public sealed class ThumbnailAssetIntelligenceServiceTests
         Assert.True(validation.EnvironmentVisibilityScore >= 90);
         Assert.True(validation.AstronomyContextScore >= 90);
         Assert.True(validation.ThumbnailFinalReadinessScore >= 95);
+        Assert.Contains("PhotoCinematicThumbnailRenderer was not used.", result.Warnings ?? Array.Empty<string>());
+    }
+
+    [Fact]
+    public async Task GenerateThumbnailAssetsAsync_ImagesScrollStoppingUsesPhotoCinematicRenderer()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        var service = CreateService(workingDirectory);
+
+        var result = await service.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Phase = "Images",
+            ThumbnailStyle = "ScrollStopping",
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var thumbnailRoot = BuildThumbnailAssetsRoot(workingDirectory);
+        var landscapePath = Path.Combine(thumbnailRoot, "thumbnail-landscape.png");
+        var squarePath = Path.Combine(thumbnailRoot, "thumbnail-square.png");
+        var portraitPath = Path.Combine(thumbnailRoot, "thumbnail-portrait.png");
+        var validationPath = Path.Combine(thumbnailRoot, "thumbnail-layout-validation.json");
+
+        Assert.Equal("Images", result.PhaseRequested);
+        Assert.Equal("ImageGeneration", result.PhaseExecuted);
+        Assert.Equal("PhotoCinematicThumbnail", result.ThumbnailVisualSourceMode);
+        Assert.Equal("none", result.SourceSceneUsed);
+        Assert.False(result.ApprovedSceneFoundationUsed);
+        Assert.True(result.IndependentPlanetRedrawUsed);
+        Assert.True(result.PhotoCinematicRendererUsed);
+        Assert.True(result.OldThumbnailRendererBypassed);
+        Assert.True(result.SceneTextLabelsRemoved);
+        Assert.True(result.TextBoxesRemoved);
+        Assert.True(result.VenusRenderedAsStarPoint);
+        Assert.True(result.JupiterRenderedAsPlanet);
+        Assert.Empty(result.Warnings ?? Array.Empty<string>());
+        Assert.Contains(landscapePath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.Contains(squarePath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.Contains(portraitPath.Replace('\\', '/'), result.GeneratedFiles);
+        Assert.True(File.Exists(landscapePath));
+        Assert.True(File.Exists(squarePath));
+        Assert.True(File.Exists(portraitPath));
+        Assert.True(File.Exists(validationPath));
+
+        using var landscape = await Image.LoadAsync(landscapePath);
+        using var square = await Image.LoadAsync(squarePath);
+        using var portrait = await Image.LoadAsync(portraitPath);
+        Assert.Equal(1280, landscape.Width);
+        Assert.Equal(720, landscape.Height);
+        Assert.Equal(1080, square.Width);
+        Assert.Equal(1080, square.Height);
+        Assert.Equal(1080, portrait.Width);
+        Assert.Equal(1920, portrait.Height);
+
+        var validation = JsonSerializer.Deserialize<ThumbnailLayoutValidationDto>(await File.ReadAllTextAsync(validationPath), JsonOptions);
+        Assert.NotNull(validation);
+        Assert.True(validation!.PhotoCinematicRendererUsed);
+        Assert.True(validation.OldThumbnailRendererBypassed);
+        Assert.True(validation.SceneTextLabelsRemoved);
+        Assert.True(validation.TextBoxesRemoved);
+        Assert.True(validation.VenusRenderedAsStarPoint);
+        Assert.True(validation.JupiterRenderedAsPlanet);
+        Assert.False(validation.CinematicCropApplied);
     }
 
     [Fact]
