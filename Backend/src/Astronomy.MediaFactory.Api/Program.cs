@@ -444,6 +444,10 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
     {
         return Results.BadRequest(new { message = ex.Message });
     }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
 });
 
 
