@@ -1,4 +1,13 @@
+using System.Text.Json.Serialization;
+
 namespace Astronomy.MediaFactory.Core;
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ScenePresentationProfile
+{
+    LongForm,
+    ShortForm
+}
 
 public sealed class VideoAssemblyGenerationRequest
 {
@@ -57,6 +66,10 @@ public sealed record VideoAssemblyGenerationResponse(
     bool ReadyForRender = false,
     int SegmentCount = 0,
     double TotalDurationSeconds = 0,
+    ScenePresentationProfile ScenePresentationProfileUsed = ScenePresentationProfile.LongForm,
+    string SceneImageSourceDirectory = "",
+    bool RenderUsedShortScenes = false,
+    int ShortFormSceneCount = 0,
     bool VideoRendered = false,
     string FinalVideoPath = "",
     double FinalVideoDurationSeconds = 0,
@@ -190,6 +203,10 @@ public sealed record VideoAssemblyPlanDto(
     string RegionId,
     string Language,
     string Platform,
+    ScenePresentationProfile ScenePresentationProfile,
+    string SceneImageBaseDirectory,
+    int SceneCount,
+    IReadOnlyList<string> SceneImages,
     double TotalDurationSeconds,
     string AudioFilePath,
     string RenderOutputPath,
@@ -233,6 +250,15 @@ public sealed record VideoAssemblyValidationDto(
     bool ReadyForRender);
 
 public sealed record VideoRenderValidationDto(
+    ScenePresentationProfile ScenePresentationProfileUsed,
+    string SceneImageSourceDirectory,
+    bool RenderUsedShortScenes,
+    bool RenderUsedLongScenes,
+    int ShortFormSceneCount,
+    string VideoResolution,
+    bool TtsAudioPresent,
+    bool BackgroundMusicPresent,
+    bool RenderValidationPassed,
     bool KenBurnsApplied,
     bool CrossFadeApplied,
     bool HookOptimizationApplied,
