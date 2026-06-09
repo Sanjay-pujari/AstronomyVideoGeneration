@@ -418,6 +418,20 @@ app.MapPost("/api/astronomy-intelligence/generate-hero-assets", async (HeroAsset
     }
 });
 
+app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoAssemblyGenerationRequest request, IVideoAssemblyIntelligenceService videoAssembly, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Video assembly generation request received for {RegionId}. EventId={EventId}; Phase={Phase}; DryRun={DryRun}", request.RegionId, request.EventId, request.Phase, request.DryRun);
+    try
+    {
+        return Results.Ok(await videoAssembly.GenerateVideoAssemblyAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
+
 app.MapPost("/api/astronomy-intelligence/generate-thumbnail-assets", async (ThumbnailAssetGenerationRequest request, IThumbnailAssetIntelligenceService thumbnailAssets, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Thumbnail asset generation request received for {RegionId}. EventId={EventId}; Phase={Phase}; DryRun={DryRun}", request.RegionId, request.EventId, request.Phase, request.DryRun);
