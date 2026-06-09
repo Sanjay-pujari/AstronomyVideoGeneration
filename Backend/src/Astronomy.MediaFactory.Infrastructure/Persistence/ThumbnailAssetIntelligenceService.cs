@@ -607,78 +607,30 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         }
 
         var image = new Image<Rgba32>(spec.Width, spec.Height, Color.ParseHex("#030615"));
-        image.Mutate(ctx => ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, spec.Height), GradientRepetitionMode.None,
-            new ColorStop(0f, Color.ParseHex("#020413")),
-            new ColorStop(0.36f, Color.ParseHex("#071236")),
-            new ColorStop(0.68f, Color.ParseHex("#342458")),
-            new ColorStop(0.86f, Color.ParseHex("#D77739")),
-            new ColorStop(1f, Color.ParseHex("#08040A"))), new RectangleF(0, 0, spec.Width, spec.Height)));
+        image.Mutate(ctx =>
+        {
+            ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, spec.Height), GradientRepetitionMode.None,
+                new ColorStop(0f, Color.ParseHex("#020413")),
+                new ColorStop(0.36f, Color.ParseHex("#071236")),
+                new ColorStop(0.68f, Color.ParseHex("#342458")),
+                new ColorStop(0.86f, Color.ParseHex("#D77739")),
+                new ColorStop(1f, Color.ParseHex("#08040A"))), new RectangleF(0, 0, spec.Width, spec.Height));
+            DrawThumbnailAtmosphere(ctx, spec.Width, spec.Height);
+            DrawThumbnailPlanetPair(ctx, spec.Width, spec.Height);
+        });
         return image;
     }
 
     private static Image<Rgba32> BuildCinematicCropCanvas(Image<Rgba32> source, ThumbnailImageSpec spec)
-    {
-        var canvas = source.Clone(ctx => ctx.Resize(new ResizeOptions
+        => source.Clone(ctx => ctx.Resize(new ResizeOptions
             {
                 Size = new Size(spec.Width, spec.Height),
                 Mode = ResizeMode.Crop,
                 Position = ResolveApprovedSceneCropAnchor(spec)
             })
-            .GaussianBlur(8f)
-            .Brightness(0.64f)
-            .Saturate(1.08f)
-            .Contrast(1.08f));
-
-        var framedSize = ResolveCinematicSceneFrameSize(spec);
-        using var framedScene = source.Clone(ctx => ctx.Resize(new ResizeOptions
-            {
-                Size = framedSize,
-                Mode = ResizeMode.Max,
-                Position = ResolveApprovedSceneCropAnchor(spec)
-            })
-            .Brightness(0.74f)
-            .Saturate(1.07f)
-            .Contrast(1.08f));
-
-        var origin = ResolveCinematicSceneFrameOrigin(spec, framedScene.Width, framedScene.Height);
-        canvas.Mutate(ctx =>
-        {
-            ctx.Fill(Color.ParseHex("#05040A").WithAlpha(0.22f), new RectangleF(0, 0, spec.Width, spec.Height));
-            ctx.DrawImage(framedScene, origin, 1f);
-        });
-
-        return canvas;
-    }
-
-    private static Size ResolveCinematicSceneFrameSize(ThumbnailImageSpec spec)
-        => spec.Variant switch
-        {
-            // Landscape was already strongest; a 95% framed scene softens the previous
-            // edge-to-edge smart crop and keeps a little more twilight horizon visible.
-            "Landscape" => new Size(Math.Max(1, (int)MathF.Round(spec.Width * 0.95f)), Math.Max(1, (int)MathF.Round(spec.Height * 0.95f))),
-            // Square preserves the approved composition while revealing roughly 10% more
-            // surrounding sky, stars, and twilight gradient around the event.
-            "Square" => new Size(Math.Max(1, (int)MathF.Round(spec.Width * 0.90f)), Math.Max(1, (int)MathF.Round(spec.Height * 0.90f))),
-            // Portrait receives the largest framing relief so the scene reads as a rare
-            // astronomy event with sky, negative space, and horizon instead of a poster.
-            "Portrait" => new Size(Math.Max(1, (int)MathF.Round(spec.Width * 0.84f)), Math.Max(1, (int)MathF.Round(spec.Height * 0.84f))),
-            _ => new Size(spec.Width, spec.Height)
-        };
-
-    private static Point ResolveCinematicSceneFrameOrigin(ThumbnailImageSpec spec, int frameWidth, int frameHeight)
-    {
-        var x = (spec.Width - frameWidth) / 2;
-        var centeredY = (spec.Height - frameHeight) / 2;
-        var y = spec.Variant switch
-        {
-            "Landscape" => Math.Max(0, centeredY + (int)MathF.Round(spec.Height * 0.015f)),
-            "Square" => Math.Max(0, centeredY + (int)MathF.Round(spec.Height * 0.025f)),
-            "Portrait" => Math.Max(0, centeredY + (int)MathF.Round(spec.Height * 0.050f)),
-            _ => Math.Max(0, centeredY)
-        };
-
-        return new Point(Math.Max(0, x), y);
-    }
+            .Brightness(0.88f)
+            .Saturate(1.06f)
+            .Contrast(1.04f));
 
     private static AnchorPositionMode ResolveApprovedSceneCropAnchor(ThumbnailImageSpec spec)
         => spec.Variant switch
@@ -694,24 +646,22 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var width = spec.Width;
         var height = spec.Height;
 
-        // Cinematic darkening keeps the approved twilight scene as the foundation while
-        // suppressing any existing scene labels under the new thumbnail copy.
-        ctx.Fill(Color.Black.WithAlpha(0.20f), new RectangleF(0, 0, width, height));
+        // Keep the approved scene as the poster itself: only transparent grading and
+        // soft text-lift gradients are added, with no framed screenshot or text panel.
+        ctx.Fill(Color.Black.WithAlpha(height > width ? 0.08f : 0.10f), new RectangleF(0, 0, width, height));
         ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(width, 0), GradientRepetitionMode.None,
-            new ColorStop(0f, Color.Black.WithAlpha(height > width ? 0.50f : 0.62f)),
-            new ColorStop(0.42f, Color.Black.WithAlpha(height > width ? 0.28f : 0.18f)),
+            new ColorStop(0f, Color.Black.WithAlpha(height > width ? 0.28f : 0.34f)),
+            new ColorStop(0.40f, Color.Black.WithAlpha(height > width ? 0.12f : 0.08f)),
             new ColorStop(1f, Color.Transparent)), new RectangleF(0, 0, width, height));
         ctx.Fill(new LinearGradientBrush(new PointF(0, 0), new PointF(0, height), GradientRepetitionMode.None,
-            new ColorStop(0f, Color.Black.WithAlpha(0.34f)),
-            new ColorStop(0.46f, Color.Transparent),
-            new ColorStop(1f, Color.Black.WithAlpha(0.38f))), new RectangleF(0, 0, width, height));
-
-        var textPanelWidth = height > width ? width * 0.96f : width * 0.58f;
-        var textPanelHeight = height > width ? height * 0.31f : height * 0.48f;
-        ctx.Fill(new LinearGradientBrush(new PointF(0, spec.HookBounds.Y), new PointF(textPanelWidth, spec.HookBounds.Y), GradientRepetitionMode.None,
-            new ColorStop(0f, Color.Black.WithAlpha(0.56f)),
-            new ColorStop(0.72f, Color.Black.WithAlpha(0.30f)),
-            new ColorStop(1f, Color.Transparent)), new RectangleF(0, Math.Max(0, spec.HookBounds.Y - height * 0.035f), textPanelWidth, textPanelHeight));
+            new ColorStop(0f, Color.Black.WithAlpha(height > width ? 0.22f : 0.18f)),
+            new ColorStop(0.30f, Color.Transparent),
+            new ColorStop(0.74f, Color.Transparent),
+            new ColorStop(1f, Color.Black.WithAlpha(0.24f))), new RectangleF(0, 0, width, height));
+        ctx.Fill(new LinearGradientBrush(new PointF(0, spec.HookBounds.Y), new PointF(width * (height > width ? 0.78f : 0.54f), spec.HookBounds.Y), GradientRepetitionMode.None,
+            new ColorStop(0f, Color.Black.WithAlpha(height > width ? 0.20f : 0.24f)),
+            new ColorStop(0.62f, Color.Black.WithAlpha(0.07f)),
+            new ColorStop(1f, Color.Transparent)), new RectangleF(0, Math.Max(0, spec.HookBounds.Y - height * 0.045f), width, Math.Min(height, spec.HookBounds.Height + height * 0.16f)));
     }
 
     private static void DrawThumbnailAtmosphere(IImageProcessingContext ctx, int width, int height)
@@ -790,35 +740,26 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
         var secondaryFont = ResolveThumbnailFont(spec.SecondaryFontSize, FontStyle.Bold);
         var microFont = ResolveThumbnailFont(spec.MicroFontSize, FontStyle.Bold);
         DrawImpactText(ctx, hook, hookFont, spec.HookBounds, Color.White, Color.ParseHex("#05050A"), stroke: Math.Max(4f, spec.Width * 0.006f));
-        DrawPillText(ctx, secondary, secondaryFont, spec.SecondaryOrigin, Color.ParseHex("#FFE29B"));
-        DrawPillText(ctx, micro, microFont, spec.MicroOrigin, Color.ParseHex("#CDEBFF"));
+        DrawIntegratedText(ctx, secondary, secondaryFont, spec.SecondaryOrigin, Color.ParseHex("#FFE29B"));
+        DrawIntegratedText(ctx, micro, microFont, spec.MicroOrigin, Color.ParseHex("#CDEBFF"));
     }
 
     private static void DrawImpactText(IImageProcessingContext ctx, string text, Font font, RectangleF bounds, Color fill, Color shadow, float stroke)
     {
         var options = new RichTextOptions(font) { Origin = new PointF(bounds.X, bounds.Y), WrappingLength = bounds.Width, LineSpacing = 0.86f };
-        for (var dx = -stroke; dx <= stroke; dx += Math.Max(2f, stroke / 2f))
-        {
-            for (var dy = -stroke; dy <= stroke; dy += Math.Max(2f, stroke / 2f))
-            {
-                if (dx == 0 && dy == 0) continue;
-                ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(bounds.X + dx, bounds.Y + dy) }, text, shadow.WithAlpha(0.72f));
-            }
-        }
+        var deepShadowOffset = Math.Max(3f, stroke * 0.72f);
+        var softShadowOffset = Math.Max(1.5f, stroke * 0.30f);
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(bounds.X + deepShadowOffset, bounds.Y + deepShadowOffset) }, text, shadow.WithAlpha(0.68f));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(bounds.X + softShadowOffset, bounds.Y + softShadowOffset) }, text, shadow.WithAlpha(0.38f));
         ctx.DrawText(options, text, fill);
-        ctx.DrawLine(Color.ParseHex("#FFCC66").WithAlpha(0.80f), Math.Max(5f, font.Size * 0.055f), new PointF(bounds.X + bounds.Width * 0.01f, bounds.Y + Math.Min(bounds.Height, font.Size * 2.05f)), new PointF(bounds.X + bounds.Width * 0.66f, bounds.Y + Math.Min(bounds.Height, font.Size * 2.05f)));
     }
 
-    private static void DrawPillText(IImageProcessingContext ctx, string text, Font font, PointF origin, Color color)
+    private static void DrawIntegratedText(IImageProcessingContext ctx, string text, Font font, PointF origin, Color color)
     {
-        var padX = font.Size * 0.42f;
-        var padY = font.Size * 0.22f;
-        var width = Math.Max(font.Size * 4.8f, text.Length * font.Size * 0.56f + padX * 2f);
-        var height = font.Size + padY * 2f;
-        var pill = new RectangularPolygon(origin.X - padX, origin.Y - padY, width, height);
-        ctx.Fill(Color.Black.WithAlpha(0.54f), pill);
-        ctx.Draw(Color.White.WithAlpha(0.20f), Math.Max(1.5f, font.Size * 0.035f), pill);
-        ctx.DrawText(new RichTextOptions(font) { Origin = origin }, text, color);
+        var options = new RichTextOptions(font) { Origin = origin };
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(origin.X + 3f, origin.Y + 3f) }, text, Color.Black.WithAlpha(0.72f));
+        ctx.DrawText(new RichTextOptions(options) { Origin = new PointF(origin.X + 1f, origin.Y + 1f) }, text, Color.Black.WithAlpha(0.36f));
+        ctx.DrawText(options, text, color);
     }
 
     private static void DrawThumbnailFinish(IImageProcessingContext ctx, int width, int height)
@@ -1007,7 +948,7 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
     [
         new("Landscape", "thumbnail-landscape.png", 1280, 720, new RectangleF(58, 54, 650, 214), new PointF(74, 286), new PointF(82, 628), 70f, 36f, 28f),
         new("Square", "thumbnail-square.png", 1080, 1080, new RectangleF(66, 76, 860, 250), new PointF(84, 350), new PointF(84, 910), 76f, 42f, 34f),
-        new("Portrait", "thumbnail-portrait.png", 1080, 1920, new RectangleF(70, 128, 870, 340), new PointF(86, 520), new PointF(86, 1680), 88f, 46f, 40f)
+        new("Portrait", "thumbnail-portrait.png", 1080, 1920, new RectangleF(70, 112, 920, 360), new PointF(86, 1288), new PointF(86, 1404), 96f, 58f, 44f)
     ];
 
     private static string CleanHook(string value)
