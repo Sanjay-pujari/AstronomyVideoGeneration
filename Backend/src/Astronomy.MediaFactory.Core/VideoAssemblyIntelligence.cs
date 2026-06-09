@@ -86,7 +86,10 @@ public sealed record VideoAssemblyGenerationResponse(
     bool RenderUsedLongScenes = false,
     bool SceneMappingValid = false,
     bool BackgroundMusicPlanned = false,
-    int MusicLevelPercent = 0);
+    int MusicLevelPercent = 0,
+    bool BackgroundMusicRequested = false,
+    string BackgroundMusicSourcePath = "",
+    bool DuckMusicUnderNarration = false);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -289,4 +292,17 @@ public sealed record VideoRenderValidationDto(
     bool HookOptimizationApplied,
     bool MusicMixValidated,
     int RenderPolishScore,
-    int VideoFinalReadinessScore);
+    int VideoFinalReadinessScore,
+    string OutputFileName = "",
+    bool BackgroundMusicRequested = false,
+    bool BackgroundMusicSourceFound = false,
+    bool BackgroundMusicMixed = false,
+    string MusicMood = "WonderCuriosity",
+    int MusicLevelPercent = 0,
+    bool DuckMusicUnderNarration = false,
+    bool AudioTrackPresent = false,
+    bool FinalAudioContainsNarration = false,
+    bool FinalAudioContainsMusic = false,
+    bool RenderSucceeded = false,
+    string BackgroundMusicSourcePath = "",
+    IReadOnlyList<string>? Warnings = null);

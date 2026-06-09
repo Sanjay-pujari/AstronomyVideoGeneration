@@ -317,6 +317,21 @@ public enum VideoRenderProfileKind
     MetaReelFinal = 4
 }
 
+public sealed class VideoAssemblyOptions
+{
+    public const string SectionName = "VideoAssembly";
+    public VideoAssemblyBackgroundMusicOptions BackgroundMusic { get; set; } = new();
+}
+
+public sealed class VideoAssemblyBackgroundMusicOptions
+{
+    public bool Enabled { get; set; } = true;
+    public string? WonderCuriosityPath { get; set; }
+    public string? DefaultPath { get; set; }
+    public int DefaultLevelPercent { get; set; } = 12;
+    public bool DuckUnderNarration { get; set; } = true;
+}
+
 public sealed class RenderingOptions
 {
     public const string SectionName = "Rendering";
