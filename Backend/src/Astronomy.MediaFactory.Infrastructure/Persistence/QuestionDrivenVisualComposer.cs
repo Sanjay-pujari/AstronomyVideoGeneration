@@ -609,7 +609,7 @@ public sealed class QuestionDrivenVisualComposer(
 
     private static string BuildSrt(QuestionDrivenVisualSpec spec) { var end = TimeSpan.FromSeconds(Math.Max(4, spec.EstimatedDurationSeconds)); return string.Join(Environment.NewLine, new[] { "1", $"00:00:00,000 --> {FormatSrtTime(end)}", spec.CaptionText, string.Empty }); }
     private static int CountExistingVariantImages(IReadOnlyDictionary<string, string> images) => images.Values.Count(File.Exists);
-    private static string EnsureTrailingSlash(string path) => path.EndsWith('/', StringComparison.Ordinal) ? path : path + "/";
+    private static string EnsureTrailingSlash(string path) => path.EndsWith("/", StringComparison.Ordinal) ? path : path + "/";
     private static string FormatSrtTime(TimeSpan value) => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
     private static string? FindLocalAsset(string objectName)
     {
