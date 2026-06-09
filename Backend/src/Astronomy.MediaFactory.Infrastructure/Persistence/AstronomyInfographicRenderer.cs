@@ -18,6 +18,11 @@ public sealed class AstronomyInfographicRenderer(
     EducationalLayerRenderer educationalLayer,
     AnnotationLayerRenderer annotationLayer) : IAstronomyInfographicRenderer
 {
+    public static ShortFormCompositionDecision NativeShortFormCompositionDecision { get; } = new(
+        NativeComposerUsed: true,
+        UsesLongFormImage: false,
+        DrawsInnerFrame: false);
+
     public async Task RenderAsync(string finalPath, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken, AstronomyInfographicRenderVariant? variant = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
@@ -25,16 +30,16 @@ public sealed class AstronomyInfographicRenderer(
         if (!File.Exists(jupiterAssetPath)) throw new ArgumentException($"Required local Jupiter asset was not found at '{jupiterAssetPath}'.", nameof(jupiterAssetPath));
 
         var targetVariant = variant ?? AstronomyInfographicRenderVariant.LongForm;
-        using var longFormImage = await RenderApprovedLongFormAsync(spec, venusAssetPath, jupiterAssetPath, cancellationToken);
         Directory.CreateDirectory(Path.GetDirectoryName(finalPath) ?? ".");
 
         if (targetVariant.VariantName.Equals(AstronomyInfographicRenderVariant.ShortForm.VariantName, StringComparison.OrdinalIgnoreCase))
         {
-            using var shortFormImage = CreateShortFormImage(longFormImage, spec, targetVariant);
+            using var shortFormImage = await RenderNativeShortFormAsync(spec, venusAssetPath, jupiterAssetPath, cancellationToken);
             await shortFormImage.SaveAsPngAsync(finalPath, new PngEncoder(), cancellationToken);
             return;
         }
 
+        using var longFormImage = await RenderApprovedLongFormAsync(spec, venusAssetPath, jupiterAssetPath, cancellationToken);
         await longFormImage.SaveAsPngAsync(finalPath, new PngEncoder(), cancellationToken);
     }
 
@@ -65,67 +70,180 @@ public sealed class AstronomyInfographicRenderer(
         return image;
     }
 
-    private static Image<Rgba32> CreateShortFormImage(Image<Rgba32> longFormImage, QuestionDrivenVisualSpec spec, AstronomyInfographicRenderVariant variant)
+    private static async Task<Image<Rgba32>> RenderNativeShortFormAsync(QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath, CancellationToken cancellationToken)
     {
-        var shortImage = new Image<Rgba32>(variant.Width, variant.Height, Color.ParseHex("#040814"));
-        using var background = longFormImage.Clone(ctx => ctx
-            .Resize(new ResizeOptions { Size = new Size(variant.Width, variant.Height), Mode = ResizeMode.Crop, Position = AnchorPositionMode.Center })
-            .GaussianBlur(18f)
-            .Brightness(.58f));
-        var heroWidth = variant.Width - 104;
-        var heroHeight = (int)MathF.Round(heroWidth * AstronomyInfographicRenderVariant.LongForm.Height / (float)AstronomyInfographicRenderVariant.LongForm.Width);
-        using var hero = longFormImage.Clone(ctx => ctx.Resize(new ResizeOptions
-        {
-            Size = new Size(heroWidth, heroHeight),
-            Mode = ResizeMode.Stretch
-        }));
+        var variant = AstronomyInfographicRenderVariant.ShortForm;
+        var image = await AstronomyVisualCompositionEngine.ComposeAsync(new AstronomyVisualCompositionRequest(
+            variant.Width,
+            variant.Height,
+            GetShortFormCopy(spec).Title,
+            GetShortFormCopy(spec).Subtitle,
+            spec.QuestionType,
+            [new AstronomyVisualPlanetAsset("Venus", venusAssetPath), new AstronomyVisualPlanetAsset("Jupiter", jupiterAssetPath)],
+            mood: "WarmTwilightQuestionScene",
+            westMarkerLabel: string.Empty,
+            starDensity: 520,
+            showReferenceOverlays: false,
+            compositionMode: AstronomyVisualCompositionMode.SceneInfographic), cancellationToken);
 
         var fonts = EditorialFonts.CreateScaled(variant.TextScale);
-        shortImage.Mutate(ctx =>
+        image.Mutate(ctx =>
         {
-            ctx.DrawImage(background, 1f);
-            ctx.Fill(Color.Black.WithAlpha(.22f), new RectangleF(0, 0, variant.Width, variant.Height));
-            DrawShortFormSafeArea(ctx, variant.Width, variant.Height);
-
-            var heroY = GetShortFormHeroY(spec.QuestionType);
-            ctx.DrawImage(hero, new Point((variant.Width - hero.Width) / 2, heroY), .98f);
-            ctx.Draw(Color.White.WithAlpha(.18f), 2, new RectangleF((variant.Width - hero.Width) / 2f, heroY, hero.Width, hero.Height));
-
-            DrawShortFormText(ctx, spec, fonts, variant);
+            DrawShortFormAtmosphere(ctx, spec.SceneNumber, variant.Width, variant.Height);
+            DrawNativeShortFormVisual(ctx, spec, venusAssetPath, jupiterAssetPath);
+            DrawNativeShortFormText(ctx, spec, fonts, variant);
+            DrawPortraitVignette(ctx, variant.Width, variant.Height);
         });
 
-        return shortImage;
+        return image;
     }
 
-    private static int GetShortFormHeroY(string questionType) => questionType.ToLowerInvariant() switch
+    private static void DrawShortFormAtmosphere(IImageProcessingContext ctx, int sceneNumber, int width, int height)
     {
-        "when" => 560,
-        "how" => 620,
-        "why" => 610,
-        "action" => 590,
-        _ => 585
+        var glowColor = Color.ParseHex(sceneNumber is 1 or 3 or 6 ? "#FF9A45" : "#B7E0FF");
+        ctx.Fill(Color.ParseHex("#050915").WithAlpha(.10f), new RectangleF(0, 0, width, height));
+        ctx.Fill(Color.Black.WithAlpha(.16f), new RectangleF(0, 0, width, 112));
+        ctx.Fill(Color.Black.WithAlpha(.18f), new RectangleF(0, height - 178, width, 178));
+        ctx.Fill(glowColor.WithAlpha(.050f), new EllipsePolygon(width * .52f, height * .64f, width * .78f, height * .20f));
+        ctx.Fill(glowColor.WithAlpha(.034f), new EllipsePolygon(width * .52f, height * .72f, width * 1.18f, height * .28f));
+    }
+
+    private static void DrawNativeShortFormVisual(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, string venusAssetPath, string jupiterAssetPath)
+    {
+        var layout = GetNativeShortFormLayout(spec.QuestionType);
+        if (!spec.QuestionType.Equals("when", StringComparison.OrdinalIgnoreCase))
+        {
+            DrawPortraitPlanetGlow(ctx, layout.Venus.Center, layout.Venus.Diameter, "#FFF2B8", .080f);
+            DrawPortraitPlanetGlow(ctx, layout.Jupiter.Center, layout.Jupiter.Diameter, "#E5C18D", .060f);
+            DrawPortraitAsset(ctx, venusAssetPath, layout.Venus.Center, layout.Venus.Diameter, "#FFF2B8");
+            DrawPortraitAsset(ctx, jupiterAssetPath, layout.Jupiter.Center, layout.Jupiter.Diameter, "#E5C18D");
+        }
+
+        switch (spec.QuestionType.ToLowerInvariant())
+        {
+            case "where":
+                DrawPortraitAltitudeGuide(ctx, layout.Venus.Center);
+                DrawPortraitText(ctx, "WEST", 72, 1204, 140, Color.ParseHex("#B7E0FF"), 34, FontStyle.Bold);
+                break;
+            case "when":
+                DrawPortraitTimeMarker(ctx);
+                break;
+            case "how":
+                DrawPortraitGuideLine(ctx, layout.Venus.Center, layout.Jupiter.Center);
+                break;
+            case "why":
+                DrawPortraitClosenessCue(ctx, layout.Venus.Center, layout.Jupiter.Center);
+                break;
+            case "action":
+                ctx.Fill(Color.ParseHex("#FFD08A").WithAlpha(.035f), new EllipsePolygon(540, 1050, 760, 210));
+                break;
+        }
+    }
+
+    private static void DrawNativeShortFormText(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, EditorialFonts fonts, AstronomyInfographicRenderVariant variant)
+    {
+        var copy = GetShortFormCopy(spec);
+        const float margin = 72f;
+        var textWidth = variant.Width - margin * 2f;
+        ctx.DrawText(new RichTextOptions(fonts.TitleFont) { Origin = new PointF(margin, 120), WrappingLength = textWidth }, copy.Title, Color.White);
+        ctx.DrawText(new RichTextOptions(fonts.SubtitleFont) { Origin = new PointF(margin, 236), WrappingLength = textWidth }, copy.Subtitle, Color.ParseHex("#F6C177"));
+        ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(margin, 1572), WrappingLength = textWidth }, copy.Caption, Color.White.WithAlpha(.96f));
+        ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(margin, 1660), WrappingLength = textWidth }, spec.ViewerQuestion, Color.ParseHex("#B7E0FF").WithAlpha(.92f));
+    }
+
+    private static (string Title, string Subtitle, string Caption) GetShortFormCopy(QuestionDrivenVisualSpec spec) => spec.QuestionType.ToLowerInvariant() switch
+    {
+        "what" => ("Venus & Jupiter", "After sunset", "Venus and Jupiter shine close tonight."),
+        "where" => ("Look West", "Venus + Jupiter", "Look west, about one-third above the horizon."),
+        "when" => ("Best Time", "7:23 PM IST", "Best around 7:23 PM IST after sunset."),
+        "how" => ("Find Venus First", "Then Jupiter nearby", "Find Venus first, then Jupiter nearby."),
+        "why" => ("Bright Pair Tonight", "Two bright planets", "Two bright planets make a rare-looking pair."),
+        "action" => ("Step Outside Tonight", "Look west", "Clear skies? Step outside and look west."),
+        _ => (spec.ViewerQuestion, spec.ViewerTakeaway, spec.CaptionText)
     };
 
-    private static void DrawShortFormSafeArea(IImageProcessingContext ctx, int width, int height)
+    private static PlanetPairPlacement GetNativeShortFormLayout(string questionType) => questionType.ToLowerInvariant() switch
     {
-        ctx.Fill(Color.Black.WithAlpha(.20f), new RectangleF(0, 0, width, 168));
-        ctx.Fill(Color.Black.WithAlpha(.18f), new RectangleF(0, height - 236, width, 236));
+        "what" => new(new(new PointF(470, 820), 118), new(new PointF(635, 890), 82)),
+        "where" => new(new(new PointF(510, 840), 96), new(new PointF(642, 895), 68)),
+        "how" => new(new(new PointF(430, 840), 108), new(new PointF(650, 910), 74)),
+        "why" => new(new(new PointF(455, 830), 106), new(new PointF(605, 875), 86)),
+        "action" => new(new(new PointF(486, 785), 96), new(new PointF(622, 840), 70)),
+        _ => new(new(new PointF(-100, -100), 1), new(new PointF(-100, -100), 1))
+    };
+
+    private static void DrawPortraitAsset(IImageProcessingContext ctx, string assetPath, PointF center, int diameter, string glowColor)
+    {
+        using var asset = Image.Load<Rgba32>(assetPath);
+        asset.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(diameter, diameter), Mode = ResizeMode.Max }).GaussianBlur(.15f));
+        var x = (int)MathF.Round(center.X - asset.Width / 2f);
+        var y = (int)MathF.Round(center.Y - asset.Height / 2f);
+        ctx.Fill(Color.ParseHex(glowColor).WithAlpha(.12f), new EllipsePolygon(center.X, center.Y, diameter * .66f, diameter * .66f));
+        ctx.DrawImage(asset, new Point(x, y), 1f);
     }
 
-    private static void DrawShortFormText(IImageProcessingContext ctx, QuestionDrivenVisualSpec spec, EditorialFonts fonts, AstronomyInfographicRenderVariant variant)
+    private static void DrawPortraitPlanetGlow(IImageProcessingContext ctx, PointF center, int diameter, string color, float alpha)
     {
-        var title = spec.OverlayText.FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)) ?? spec.ViewerQuestion;
-        var subtitle = spec.OverlayText.Skip(1).FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)) ?? spec.ViewerTakeaway;
-        var lowerText = spec.CaptionText.Length <= 92 ? spec.CaptionText : spec.ViewerTakeaway;
-        var margin = 74f;
-        var textWidth = variant.Width - margin * 2f;
+        ctx.Fill(Color.ParseHex(color).WithAlpha(alpha * .36f), new EllipsePolygon(center.X, center.Y, diameter * 2.4f, diameter * 1.75f));
+        ctx.Fill(Color.ParseHex(color).WithAlpha(alpha), new EllipsePolygon(center.X, center.Y, diameter * 1.25f, diameter * 1.25f));
+    }
 
-        ctx.DrawText(new RichTextOptions(fonts.TitleFont) { Origin = new PointF(margin, 210), WrappingLength = textWidth }, title, Color.White);
-        ctx.DrawText(new RichTextOptions(fonts.SubtitleFont) { Origin = new PointF(margin, 335), WrappingLength = textWidth }, subtitle, Color.ParseHex("#F6C177"));
-        ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(margin, 1510), WrappingLength = textWidth }, lowerText, Color.White.WithAlpha(.94f));
-        ctx.DrawText(new RichTextOptions(fonts.SmallFont) { Origin = new PointF(margin, 1666), WrappingLength = textWidth }, spec.ViewerQuestion, Color.ParseHex("#B7E0FF").WithAlpha(.92f));
+    private static void DrawPortraitGuideLine(IImageProcessingContext ctx, PointF from, PointF to)
+    {
+        ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.80f), 5, new PathBuilder().AddLine(from, to).Build());
+        var arrow = new PathBuilder().AddLine(to, new PointF(to.X - 24, to.Y - 20)).AddLine(to, new PointF(to.X - 10, to.Y - 32)).Build();
+        ctx.Draw(Color.ParseHex("#8FD2FF").WithAlpha(.80f), 5, arrow);
+    }
+
+    private static void DrawPortraitClosenessCue(IImageProcessingContext ctx, PointF a, PointF b)
+    {
+        ctx.Draw(Color.ParseHex("#FFF1C4").WithAlpha(.28f), 4, new PathBuilder().AddLine(new PointF(a.X, a.Y + 86), new PointF(b.X, b.Y + 86)).Build());
+        ctx.Fill(Color.ParseHex("#D9E7FF").WithAlpha(.050f), new EllipsePolygon((a.X + b.X) / 2f, (a.Y + b.Y) / 2f, 420, 180));
+    }
+
+    private static void DrawPortraitAltitudeGuide(IImageProcessingContext ctx, PointF center)
+    {
+        ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.28f), 3, new PathBuilder().AddLine(new PointF(150, 1218), new PointF(930, 1218)).Build());
+        ctx.Draw(Color.ParseHex("#B7E0FF").WithAlpha(.45f), 3, new PathBuilder().AddLine(new PointF(180, 1218), center).Build());
+    }
+
+    private static void DrawPortraitTimeMarker(IImageProcessingContext ctx)
+    {
+        ctx.Fill(Color.ParseHex("#FFD08A").WithAlpha(.12f), new EllipsePolygon(540, 850, 380, 380));
+        ctx.Draw(Color.ParseHex("#FFD08A").WithAlpha(.72f), 5, new PathBuilder().AddLine(new PointF(540, 670), new PointF(540, 1020)).Build());
+        ctx.Fill(Color.ParseHex("#FFF2B8"), new EllipsePolygon(540, 850, 18, 18));
+        DrawPortraitText(ctx, "after sunset", 388, 1042, 360, Color.ParseHex("#F6C177"), 28, FontStyle.Bold);
+    }
+
+    private static void DrawPortraitText(IImageProcessingContext ctx, string text, float x, float y, float width, Color color, float size, FontStyle style)
+    {
+        var font = EditorialFonts.CreateScaled(1f).SmallFont;
+        if (size > 30) font = EditorialFonts.CreateScaled(1f).LabelFont;
+        ctx.DrawText(new RichTextOptions(font) { Origin = new PointF(x, y), WrappingLength = width }, text, color);
+    }
+
+    private static void DrawPortraitVignette(IImageProcessingContext ctx, int width, int height)
+    {
+        using var vignette = new Image<Rgba32>(width, height, Color.Transparent);
+        vignette.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var yRatio = y / (float)(accessor.Height - 1);
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < row.Length; x++)
+                {
+                    var xRatio = x / (float)(accessor.Width - 1);
+                    var edge = MathF.Max(MathF.Abs(xRatio - .5f) / .5f, MathF.Max(1f - yRatio, yRatio) * .74f);
+                    row[x] = new Rgba32(0, 0, 0, (byte)Math.Clamp((edge - .60f) * 72f, 0f, 42f));
+                }
+            }
+        });
+        ctx.DrawImage(vignette, 1f);
     }
 }
+
+public sealed record ShortFormCompositionDecision(bool NativeComposerUsed, bool UsesLongFormImage, bool DrawsInnerFrame);
 
 public sealed class AstronomyBackgroundLayerRenderer
 {

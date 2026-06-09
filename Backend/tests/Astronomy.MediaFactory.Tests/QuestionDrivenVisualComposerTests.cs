@@ -132,6 +132,12 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.Equal(6, result.SceneVariantFinalImages.ShortForm.Images.Count);
         Assert.NotNull(result.Diagnostics);
         Assert.True(result.Diagnostics!.SceneVariantGenerationEnabled);
+        Assert.NotNull(result.ShortFormValidation);
+        Assert.True(result.ShortFormValidation!.NativeShortFormComposerUsed);
+        Assert.False(result.ShortFormValidation.EmbeddedLongFormImageDetected);
+        Assert.False(result.ShortFormValidation.InnerFrameDetected);
+        Assert.Equal(1080, result.ShortFormValidation.ShortFormWidth);
+        Assert.Equal(1920, result.ShortFormValidation.ShortFormHeight);
 
         foreach (var sceneNumber in Enumerable.Range(1, 6))
         {
@@ -180,6 +186,15 @@ public sealed class QuestionDrivenVisualComposerTests
         Assert.True(result.Diagnostics.ShortFormGenerated);
         Assert.Equal(6, result.Diagnostics.LongFormImageCount);
         Assert.Equal(6, result.Diagnostics.ShortFormImageCount);
+        Assert.NotNull(result.ShortFormValidation);
+        Assert.True(result.ShortFormValidation!.NativeShortFormComposerUsed);
+        Assert.False(result.ShortFormValidation.EmbeddedLongFormImageDetected);
+        Assert.False(result.ShortFormValidation.InnerFrameDetected);
+        Assert.Equal(6, result.ShortFormValidation.ShortFormImageCount);
+        Assert.Equal(1080, result.ShortFormValidation.ShortFormWidth);
+        Assert.Equal(1920, result.ShortFormValidation.ShortFormHeight);
+        Assert.InRange(result.ShortFormValidation.ShortFormReadabilityScore, 90, 100);
+        Assert.InRange(result.ShortFormValidation.ShortFormReelSuitabilityScore, 90, 100);
 
         var longRoot = Path.Combine(BuildSceneApprovalPath(workingDirectory), "long");
         var shortRoot = Path.Combine(BuildSceneApprovalPath(workingDirectory), "short");

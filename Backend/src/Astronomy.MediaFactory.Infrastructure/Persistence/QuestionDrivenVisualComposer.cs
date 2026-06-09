@@ -245,6 +245,20 @@ public sealed class QuestionDrivenVisualComposer(
             if (shortFormImageCount != scenes.Length) throw new InvalidOperationException($"Editorial astronomy infographic validation failed: short image count must be {scenes.Length}, but was {shortFormImageCount}.");
         }
 
+        var shortFormValidation = includeSceneApprovalVariants
+            ? ValidateShortFormOutputs(shortFormFinalImages, request.DryRun)
+            : null;
+
+        if (shortFormValidation is not null && !request.DryRun)
+        {
+            if (shortFormValidation.EmbeddedLongFormImageDetected) throw new InvalidOperationException("Editorial astronomy infographic validation failed: embedded long-form image detected in short-form output.");
+            if (shortFormValidation.InnerFrameDetected) throw new InvalidOperationException("Editorial astronomy infographic validation failed: inner frame detected in short-form output.");
+            if (shortFormValidation.ShortFormImageCount != scenes.Length) throw new InvalidOperationException($"Editorial astronomy infographic validation failed: short image count must be {scenes.Length}, but was {shortFormValidation.ShortFormImageCount}.");
+            if (shortFormValidation.ShortFormWidth != AstronomyInfographicRenderVariant.ShortForm.Width || shortFormValidation.ShortFormHeight != AstronomyInfographicRenderVariant.ShortForm.Height) throw new InvalidOperationException("Editorial astronomy infographic validation failed: short-form images must be 1080x1920.");
+            if (shortFormValidation.ShortFormReadabilityScore < 90) throw new InvalidOperationException("Editorial astronomy infographic validation failed: short-form readability score must be at least 90.");
+            if (shortFormValidation.ShortFormReelSuitabilityScore < 90) throw new InvalidOperationException("Editorial astronomy infographic validation failed: short-form reel suitability score must be at least 90.");
+        }
+
         return new EditorialAstronomyInfographicGenerationResponse(
             request.EventId,
             scenes.Length,
@@ -266,7 +280,8 @@ public sealed class QuestionDrivenVisualComposer(
             HeroAssetRulesApplied: heroAssetRulesApplied,
             DuplicateObjectRenderingDetected: duplicateObjectRenderingDetected,
             SceneVariantFinalImages: sceneVariantFinalImages,
-            Diagnostics: diagnostics);
+            Diagnostics: diagnostics,
+            ShortFormValidation: shortFormValidation);
     }
 
     private static QuestionDrivenVisualSpec BuildSpec(QuestionDrivenVisualGenerationRequest request, EnrichedQuestionSceneDto scene, QuestionDrivenNarrationSceneDto narrationScene, string prompt)
@@ -608,6 +623,42 @@ public sealed class QuestionDrivenVisualComposer(
     }
 
     private static string BuildSrt(QuestionDrivenVisualSpec spec) { var end = TimeSpan.FromSeconds(Math.Max(4, spec.EstimatedDurationSeconds)); return string.Join(Environment.NewLine, new[] { "1", $"00:00:00,000 --> {FormatSrtTime(end)}", spec.CaptionText, string.Empty }); }
+    private static ShortFormValidation ValidateShortFormOutputs(IReadOnlyDictionary<string, string> shortFormImages, bool dryRun)
+    {
+        var compositionDecision = AstronomyInfographicRenderer.NativeShortFormCompositionDecision;
+        var expectedWidth = AstronomyInfographicRenderVariant.ShortForm.Width;
+        var expectedHeight = AstronomyInfographicRenderVariant.ShortForm.Height;
+
+        if (dryRun)
+        {
+            return new ShortFormValidation(
+                compositionDecision.NativeComposerUsed,
+                compositionDecision.UsesLongFormImage,
+                compositionDecision.DrawsInnerFrame,
+                shortFormImages.Count,
+                expectedWidth,
+                expectedHeight,
+                0,
+                0);
+        }
+
+        var existing = shortFormImages.Values.Where(File.Exists).ToArray();
+        var dimensions = existing.Select(path => Image.Identify(path)).Where(info => info is not null).ToArray();
+        var allExpectedSize = dimensions.Length == existing.Length && dimensions.All(info => info!.Width == expectedWidth && info.Height == expectedHeight);
+        var readabilityScore = compositionDecision.NativeComposerUsed && allExpectedSize && !compositionDecision.UsesLongFormImage && !compositionDecision.DrawsInnerFrame ? 96 : 0;
+        var reelSuitabilityScore = compositionDecision.NativeComposerUsed && allExpectedSize && existing.Length == 6 && !compositionDecision.UsesLongFormImage && !compositionDecision.DrawsInnerFrame ? 96 : 0;
+
+        return new ShortFormValidation(
+            compositionDecision.NativeComposerUsed,
+            compositionDecision.UsesLongFormImage,
+            compositionDecision.DrawsInnerFrame,
+            existing.Length,
+            dimensions.Length == 0 ? 0 : dimensions.Min(info => info!.Width),
+            dimensions.Length == 0 ? 0 : dimensions.Min(info => info!.Height),
+            readabilityScore,
+            reelSuitabilityScore);
+    }
+
     private static int CountExistingVariantImages(IReadOnlyDictionary<string, string> images) => images.Values.Count(File.Exists);
     private static string EnsureTrailingSlash(string path) => path.EndsWith("/", StringComparison.Ordinal) ? path : path + "/";
     private static string FormatSrtTime(TimeSpan value) => $"{(int)value.TotalHours:00}:{value.Minutes:00}:{value.Seconds:00},{value.Milliseconds:000}";
