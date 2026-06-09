@@ -55,6 +55,14 @@ public sealed record ThumbnailAssetGenerationResponse(
     bool TextBoxesRemoved = false,
     bool VenusRenderedAsStarPoint = false,
     bool JupiterRenderedAsPlanet = false,
+    string RequestedRenderer = "",
+    string ActualRendererUsed = "",
+    string RendererSelectionReason = "",
+    bool OldRendererBypassed = false,
+    bool PhotoCinematicRendererEntered = false,
+    bool PhotoCinematicRendererCompleted = false,
+    string OutputWriteSource = "",
+    bool OutputOverwriteDetected = false,
     IReadOnlyList<string>? Warnings = null);
 
 public sealed record ThumbnailLayoutValidationDto(
