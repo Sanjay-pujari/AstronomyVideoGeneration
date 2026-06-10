@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
