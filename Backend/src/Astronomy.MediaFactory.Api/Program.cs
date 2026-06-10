@@ -498,6 +498,24 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
             });
         }
 
+
+        if (string.Equals(response.PhaseExecuted, "LongFormRender", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Ok(new
+            {
+                response.PhaseRequested,
+                response.PhaseExecuted,
+                response.VideoRendered,
+                response.FinalVideoPath,
+                response.FinalVideoDurationSeconds,
+                response.OutputResolution,
+                response.AudioTrackPresent,
+                response.BackgroundMusicApplied,
+                ScenePresentationProfileUsed = response.ScenePresentationProfileUsed.ToString(),
+                response.RenderSucceeded
+            });
+        }
+
         if (string.Equals(response.PhaseExecuted, "Render", StringComparison.OrdinalIgnoreCase))
         {
             return Results.Ok(new

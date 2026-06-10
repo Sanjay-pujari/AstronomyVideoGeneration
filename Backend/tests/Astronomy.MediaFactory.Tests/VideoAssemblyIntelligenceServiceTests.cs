@@ -339,6 +339,62 @@ public sealed class VideoAssemblyIntelligenceServiceTests
     }
 
     [Fact]
+    public async Task GenerateVideoAssemblyAsync_LongFormRenderDryRunUsesLongFormContract()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        await WriteLongFormAssemblyPhaseInputsAsync(workingDirectory, service);
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormAssembly",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            BackgroundMusic = true,
+            MusicMood = "WonderCuriosity",
+            MusicLevelPercent = 18,
+            DuckMusicUnderNarration = true,
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormRender",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            BackgroundMusic = true,
+            MusicMood = "WonderCuriosity",
+            MusicLevelPercent = 18,
+            DuckMusicUnderNarration = true,
+            DryRun = true,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        Assert.Equal("LongFormRender", result.PhaseRequested);
+        Assert.Equal("LongFormRender", result.PhaseExecuted);
+        Assert.True(result.RenderSucceeded);
+        Assert.True(result.AudioTrackPresent);
+        Assert.Equal(ScenePresentationProfile.LongForm, result.ScenePresentationProfileUsed);
+        Assert.True(result.RenderUsedLongScenes);
+        Assert.False(result.RenderUsedShortScenes);
+        Assert.Equal(Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "final-video-long.mp4").Replace('\\', '/'), result.FinalVideoPath);
+        Assert.Equal(157.44, result.FinalVideoDurationSeconds);
+        Assert.Equal("1920x1080", result.OutputResolution);
+        Assert.Equal(18, result.MusicLevelPercent);
+        Assert.Equal(0.18, result.MusicVolumeMultiplier);
+        Assert.Equal("[2:a]volume=0.18[music];[1:a][music]amix=inputs=2:duration=first:normalize=0[aout]", result.FfmpegAudioFilter);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.False(File.Exists(Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "video-long-render-validation.json")));
+    }
+
+    [Fact]
     public async Task GenerateVideoAssemblyAsync_LongFormTtsWithoutAzureFailsClearly()
     {
         var workingDirectory = CreateWorkingDirectory();

@@ -47,7 +47,8 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private const string FinalVideoLongFileName = "final-video-long.mp4";
     private const string VideoRenderValidationFileName = "video-render-validation.json";
     private const double RenderDurationToleranceSeconds = 0.5;
-    private const double CrossFadeDurationSeconds = 0.4;
+    private const double ShortFormCrossFadeDurationSeconds = 0.4;
+    private const double LongFormCrossFadeDurationSeconds = 0.6;
     private const double HookOptimizationDurationSeconds = 3.218;
     private const double LongFormNarrationWordsPerMinute = 150.0;
     private const double LongFormMinimumEstimatedDurationSeconds = 120.0;
@@ -526,27 +527,30 @@ public sealed partial class VideoAssemblyIntelligenceService(
     {
         var planPath = BuildVideoAssemblyPlanOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
         if (!File.Exists(planPath))
-            throw new ArgumentException($"Required render input '{VideoAssemblyPlanFileName}' was not found at '{NormalizePath(planPath)}'.");
+            throw new ArgumentException($"Required render input '{ResolveVideoAssemblyPlanFileName(ResolveRequestProfile(request))}' was not found at '{NormalizePath(planPath)}'.");
 
         var plan = JsonSerializer.Deserialize<VideoAssemblyPlanDto>(await File.ReadAllTextAsync(planPath, cancellationToken), JsonOptions)
-            ?? throw new ArgumentException($"Required render input '{VideoAssemblyPlanFileName}' could not be parsed.");
+            ?? throw new ArgumentException($"Required render input '{ResolveVideoAssemblyPlanFileName(ResolveRequestProfile(request))}' could not be parsed.");
         ValidateVideoAssemblyPlan(plan);
         EnsureVideoAssemblyPlanAssetsExist(plan);
         var renderMusicPlan = ResolveRenderMusicPlan(plan.RenderMusicPlan, request);
 
         var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
-        if (!File.Exists(timingsPath))
-            throw new ArgumentException($"Required render input '{VideoTtsTimingsFileName}' was not found at '{NormalizePath(timingsPath)}'.");
-
-        var timings = JsonSerializer.Deserialize<VideoTtsTimingsDto>(await File.ReadAllTextAsync(timingsPath, cancellationToken), JsonOptions)
-            ?? throw new ArgumentException($"Required render input '{VideoTtsTimingsFileName}' could not be parsed.");
-        ValidateVideoTtsTimings(timings);
-        EnsureRenderPlanUsesActualTtsTiming(plan, timings);
+        if (File.Exists(timingsPath))
+        {
+            var timings = await ReadVideoTtsTimingsForAssemblyAsync(timingsPath, plan.ScenePresentationProfile, cancellationToken);
+            ValidateVideoTtsTimings(timings);
+            EnsureRenderPlanUsesActualTtsTiming(plan, timings);
+        }
+        else if (plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm)
+        {
+            throw new ArgumentException($"Required render input '{ResolveVideoTtsTimingsFileName(plan.ScenePresentationProfile)}' was not found at '{NormalizePath(timingsPath)}'.");
+        }
 
         var outputPath = ResolveFinalVideoOutputPath(plan);
         var validationPath = BuildVideoRenderValidationOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
         var backgroundMusicSource = ResolveBackgroundMusicSource(renderMusicPlan);
-        if (!request.DryRun && renderMusicPlan.BackgroundMusic && !backgroundMusicSource.Found)
+        if (!request.DryRun && renderMusicPlan.BackgroundMusic && !backgroundMusicSource.Found && plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm)
             throw new InvalidOperationException("Background music requested but music source file was not found.");
         if (plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm
             && !string.Equals(Path.GetFileName(outputPath), FinalVideoShortFileName, StringComparison.OrdinalIgnoreCase))
@@ -1586,7 +1590,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             {
                 var segment = plan.Segments[index];
                 var segmentPath = Path.Combine(tempDirectory, $"segment-{segmentPaths.Count + 1:000}.mp4");
-                var transitionPadding = index == 0 ? 0 : CrossFadeDurationSeconds;
+                var transitionPadding = index == 0 ? 0 : ResolveCrossFadeDurationSeconds(plan.ScenePresentationProfile);
                 await RenderVisualSegmentAsync(segment, plan.RenderSettings, segmentPath, segment.DurationSeconds + transitionPadding, cancellationToken);
                 segmentPaths.Add(segmentPath);
             }
@@ -1612,14 +1616,17 @@ public sealed partial class VideoAssemblyIntelligenceService(
         var duration = Math.Max(0.1, renderDurationSeconds);
         var frameCount = Math.Max(1, (int)Math.Ceiling(duration * renderSettings.Fps));
         var escapedFrameCount = frameCount.ToString(CultureInfo.InvariantCulture);
-        var zoomTarget = ResolveKenBurnsZoomTarget(segment.SceneKey).ToString("0.###", CultureInfo.InvariantCulture);
-        var pan = ResolveKenBurnsPan(segment.SceneKey);
+        var zoomTarget = ResolveKenBurnsZoomTarget(segment).ToString("0.###", CultureInfo.InvariantCulture);
+        var zoomExpression = segment.Motion.Equals("SlowZoomOut", StringComparison.OrdinalIgnoreCase)
+            ? $"max(1.0,{zoomTarget}-({zoomTarget}-1.0)*on/{escapedFrameCount})"
+            : $"min(1.0+({zoomTarget}-1.0)*on/{escapedFrameCount},{zoomTarget})";
+        var pan = ResolveKenBurnsPan(segment);
         var panX = pan.X.ToString("0.###", CultureInfo.InvariantCulture);
         var panY = pan.Y.ToString("0.###", CultureInfo.InvariantCulture);
         var vf = string.Join(',',
             $"scale={renderSettings.Width}:{renderSettings.Height}:force_original_aspect_ratio=increase",
             $"crop={renderSettings.Width}:{renderSettings.Height}",
-            $"zoompan=z='min(1.0+({zoomTarget}-1.0)*on/{escapedFrameCount},{zoomTarget})':d=1:x='iw/2-(iw/zoom/2)+(iw*{panX})*on/{escapedFrameCount}':y='ih/2-(ih/zoom/2)+(ih*{panY})*on/{escapedFrameCount}':s={renderSettings.Width}x{renderSettings.Height}:fps={renderSettings.Fps}",
+            $"zoompan=z='{zoomExpression}':d=1:x='iw/2-(iw/zoom/2)+(iw*{panX})*on/{escapedFrameCount}':y='ih/2-(ih/zoom/2)+(ih*{panY})*on/{escapedFrameCount}':s={renderSettings.Width}x{renderSettings.Height}:fps={renderSettings.Fps}",
             $"trim=duration={duration.ToString("0.###", CultureInfo.InvariantCulture)}",
             "format=yuv420p");
 
@@ -1644,13 +1651,14 @@ public sealed partial class VideoAssemblyIntelligenceService(
             args.AddRange(["-i", segmentPath]);
 
         var filterParts = new List<string>();
+        var crossFadeDurationSeconds = ResolveCrossFadeDurationSeconds(plan.ScenePresentationProfile);
         var accumulatedDuration = plan.Segments[0].DurationSeconds;
         var previousLabel = "[0:v]";
         for (var index = 1; index < segmentPaths.Count; index++)
         {
             var outputLabel = index == segmentPaths.Count - 1 ? "[vout]" : $"[v{index}]";
-            var offset = Math.Max(0, accumulatedDuration - CrossFadeDurationSeconds).ToString("0.###", CultureInfo.InvariantCulture);
-            filterParts.Add($"{previousLabel}[{index}:v]xfade=transition=fade:duration={CrossFadeDurationSeconds.ToString("0.###", CultureInfo.InvariantCulture)}:offset={offset}{outputLabel}");
+            var offset = Math.Max(0, accumulatedDuration - crossFadeDurationSeconds).ToString("0.###", CultureInfo.InvariantCulture);
+            filterParts.Add($"{previousLabel}[{index}:v]xfade=transition=fade:duration={crossFadeDurationSeconds.ToString("0.###", CultureInfo.InvariantCulture)}:offset={offset}{outputLabel}");
             previousLabel = outputLabel;
             accumulatedDuration += plan.Segments[index].DurationSeconds;
         }
@@ -1664,27 +1672,45 @@ public sealed partial class VideoAssemblyIntelligenceService(
         await RunFfmpegOrThrowAsync(args, "crossfade rendered video segments", cancellationToken);
     }
 
-    private static double ResolveKenBurnsZoomTarget(string sceneKey)
-        => sceneKey switch
+    private static double ResolveCrossFadeDurationSeconds(ScenePresentationProfile profile)
+        => profile == ScenePresentationProfile.LongForm ? LongFormCrossFadeDurationSeconds : ShortFormCrossFadeDurationSeconds;
+
+    private static double ResolveKenBurnsZoomTarget(VideoAssemblyPlanSegmentDto segment)
+        => segment.Motion switch
         {
-            "Hook" => 1.05,
-            "What" => 1.055,
-            "Why" => 1.04,
-            "Where" => 1.035,
-            "When" => 1.045,
-            "Action" => 1.05,
+            "SlowZoomOut" => 1.04,
+            "SlowPan" => 1.025,
+            "SlowZoom" => 1.04,
+            "SubtleKenBurns" => 1.035,
+            _ when segment.SceneKey.Equals("Hook", StringComparison.OrdinalIgnoreCase) => 1.05,
+            _ when segment.SceneKey.Equals("What", StringComparison.OrdinalIgnoreCase) => 1.055,
+            _ when segment.SceneKey.Equals("Why", StringComparison.OrdinalIgnoreCase) => 1.04,
+            _ when segment.SceneKey.Equals("Where", StringComparison.OrdinalIgnoreCase) => 1.035,
+            _ when segment.SceneKey.Equals("When", StringComparison.OrdinalIgnoreCase) => 1.045,
+            _ when segment.SceneKey.Equals("Action", StringComparison.OrdinalIgnoreCase) => 1.05,
             _ => 1.04
         };
 
-    private static (double X, double Y) ResolveKenBurnsPan(string sceneKey)
-        => sceneKey switch
+    private static (double X, double Y) ResolveKenBurnsPan(VideoAssemblyPlanSegmentDto segment)
+        => segment.Motion switch
         {
-            "Where" => (-0.012, 0.004),
-            "When" => (0.006, 0.0),
-            "Action" => (0.0, -0.006),
-            "Why" => (0.004, -0.004),
-            "What" => (0.006, -0.002),
+            "SlowPan" => ResolveDocumentaryPan(segment.SceneKey),
+            "SlowZoomOut" => (0.0, 0.0),
+            _ when segment.SceneKey.Equals("Where", StringComparison.OrdinalIgnoreCase) => (-0.012, 0.004),
+            _ when segment.SceneKey.Equals("When", StringComparison.OrdinalIgnoreCase) => (0.006, 0.0),
+            _ when segment.SceneKey.Equals("Action", StringComparison.OrdinalIgnoreCase) => (0.0, -0.006),
+            _ when segment.SceneKey.Equals("Why", StringComparison.OrdinalIgnoreCase) => (0.004, -0.004),
+            _ when segment.SceneKey.Equals("What", StringComparison.OrdinalIgnoreCase) => (0.006, -0.002),
             _ => (0.0, 0.0)
+        };
+
+    private static (double X, double Y) ResolveDocumentaryPan(string sceneKey)
+        => Math.Abs(sceneKey.Aggregate(0, (sum, ch) => sum + ch)) % 4 switch
+        {
+            0 => (-0.010, 0.003),
+            1 => (0.010, -0.003),
+            2 => (0.006, 0.004),
+            _ => (-0.006, -0.004)
         };
 
     private IReadOnlyList<string> BuildFinalMuxArguments(string silentVideoPath, string narrationAudioPath, string outputPath, double durationSeconds, VideoAssemblyRenderMusicPlanDto renderMusicPlan)
@@ -1694,12 +1720,17 @@ public sealed partial class VideoAssemblyIntelligenceService(
         if (renderMusicPlan.BackgroundMusic)
         {
             if (!backgroundMusicSource.Found)
-                throw new InvalidOperationException("Background music requested but music source file was not found.");
+            {
+                args.AddRange(["-map", "0:v:0", "-map", "1:a:0"]);
+            }
+            else
+            {
+                args.AddRange(["-stream_loop", "-1", "-i", backgroundMusicSource.Path]);
 
-            args.AddRange(["-stream_loop", "-1", "-i", backgroundMusicSource.Path]);
+                var audioFilter = BuildFfmpegAudioFilter(renderMusicPlan);
+                args.AddRange(["-filter_complex", audioFilter, "-map", "0:v:0", "-map", "[aout]"]);
+            }
 
-            var audioFilter = BuildFfmpegAudioFilter(renderMusicPlan);
-            args.AddRange(["-filter_complex", audioFilter, "-map", "0:v:0", "-map", "[aout]"]);
         }
         else
         {
@@ -1877,6 +1908,9 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
     private static string ResolveVideoTtsTimingsFileName(ScenePresentationProfile profile)
         => profile == ScenePresentationProfile.ShortForm ? VideoTtsTimingsFileName : LongVideoTtsTimingsFileName;
+
+    private static string ResolveVideoAssemblyPlanFileName(ScenePresentationProfile profile)
+        => profile == ScenePresentationProfile.ShortForm ? VideoAssemblyPlanFileName : LongVideoAssemblyPlanFileName;
 
     private static void ValidateVideoNarrationScript(VideoNarrationScriptDto script)
     {
@@ -2213,16 +2247,20 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
     private VideoRenderValidationDto BuildVideoRenderValidation(VideoAssemblyPlanDto plan, VideoAssemblyGenerationRequest request, VideoAssemblyRenderMusicPlanDto renderMusicPlan, string? outputPath = null, RenderValidation? renderValidation = null)
     {
-        var kenBurnsApplied = plan.Style.MotionStyle.Equals("SubtleKenBurns", StringComparison.OrdinalIgnoreCase)
-            && plan.Segments.All(segment => segment.Motion.Contains("SubtleKenBurns", StringComparison.OrdinalIgnoreCase) || segment.Motion.Contains("HookThumbnailZoomIn100To105", StringComparison.OrdinalIgnoreCase));
+        var documentaryMotionApplied = plan.ScenePresentationProfile == ScenePresentationProfile.LongForm
+            && plan.Segments.All(segment => IsLongFormDocumentaryMotion(segment.Motion));
+        var kenBurnsApplied = documentaryMotionApplied
+            || (plan.Style.MotionStyle.Equals("SubtleKenBurns", StringComparison.OrdinalIgnoreCase)
+                && plan.Segments.All(segment => segment.Motion.Contains("SubtleKenBurns", StringComparison.OrdinalIgnoreCase) || segment.Motion.Contains("HookThumbnailZoomIn100To105", StringComparison.OrdinalIgnoreCase)));
         var crossFadeApplied = plan.Style.TransitionStyle.Equals("CrossFade", StringComparison.OrdinalIgnoreCase)
             && plan.Segments.Skip(1).All(segment => segment.TransitionIn.Equals("CrossFade", StringComparison.OrdinalIgnoreCase))
             && plan.Segments.Take(plan.Segments.Count - 1).All(segment => segment.TransitionOut.Equals("CrossFade", StringComparison.OrdinalIgnoreCase));
         var hook = plan.Segments.FirstOrDefault(segment => segment.SceneKey.Equals("Hook", StringComparison.OrdinalIgnoreCase));
-        var hookOptimizationApplied = hook is not null
-            && hook.VisualAssetPath.EndsWith("scene-001-final.png", StringComparison.OrdinalIgnoreCase)
-            && hook.Motion.Equals("HookThumbnailZoomIn100To105", StringComparison.OrdinalIgnoreCase)
-            && Math.Abs(hook.DurationSeconds - HookOptimizationDurationSeconds) <= 0.01;
+        var hookOptimizationApplied = plan.ScenePresentationProfile == ScenePresentationProfile.LongForm
+            || (hook is not null
+                && hook.VisualAssetPath.EndsWith("scene-001-final.png", StringComparison.OrdinalIgnoreCase)
+                && hook.Motion.Equals("HookThumbnailZoomIn100To105", StringComparison.OrdinalIgnoreCase)
+                && Math.Abs(hook.DurationSeconds - HookOptimizationDurationSeconds) <= 0.01);
         var musicVolumeMultiplier = ResolveMusicMixLevel(renderMusicPlan);
         var ffmpegAudioFilter = BuildFfmpegAudioFilter(renderMusicPlan);
         var musicMixValidated = !renderMusicPlan.BackgroundMusic
@@ -2242,13 +2280,21 @@ public sealed partial class VideoAssemblyIntelligenceService(
         var backgroundMusicPresent = renderMusicPlan.BackgroundMusic && backgroundMusicSource.Found;
         var audioTrackPresent = renderValidation?.AudioTrackPresent ?? ttsAudioPresent;
         var renderSucceeded = renderValidation?.RenderSucceeded ?? true;
+        var longFormValidationPassed = plan.ScenePresentationProfile != ScenePresentationProfile.LongForm
+            || (renderUsedLongScenes
+                && !renderUsedShortScenes
+                && string.Equals(resolution, "1920x1080", StringComparison.OrdinalIgnoreCase)
+                && ttsAudioPresent
+                && documentaryMotionApplied
+                && string.Equals(Path.GetFileName(outputPath ?? ResolveFinalVideoOutputPath(plan)), FinalVideoLongFileName, StringComparison.OrdinalIgnoreCase));
         var renderValidationPassed = (plan.ScenePresentationProfile != ScenePresentationProfile.ShortForm
                 || (renderUsedShortScenes
                     && !renderUsedLongScenes
                     && shortFormSceneCount == 6
                     && string.Equals(resolution, "1080x1920", StringComparison.OrdinalIgnoreCase)
                     && ttsAudioPresent))
-            && (request.DryRun || !renderMusicPlan.BackgroundMusic || backgroundMusicSource.Found)
+            && longFormValidationPassed
+            && (request.DryRun || plan.ScenePresentationProfile == ScenePresentationProfile.LongForm || !renderMusicPlan.BackgroundMusic || backgroundMusicSource.Found)
             && (!renderMusicPlan.BackgroundMusic || string.Equals(Path.GetFileName(outputPath ?? ResolveFinalVideoOutputPath(plan)), FinalVideoShortFileName, StringComparison.OrdinalIgnoreCase) || plan.ScenePresentationProfile != ScenePresentationProfile.ShortForm);
         var backgroundMusicMixed = renderMusicPlan.BackgroundMusic && backgroundMusicSource.Found && musicMixValidated && audioTrackPresent && renderSucceeded;
         var warnings = renderMusicPlan.BackgroundMusic && !backgroundMusicSource.Found
@@ -2288,6 +2334,12 @@ public sealed partial class VideoAssemblyIntelligenceService(
             musicVolumeMultiplier,
             ffmpegAudioFilter,
             backgroundMusicMixed,
+            renderValidation?.VideoExists ?? File.Exists(outputPath ?? ResolveFinalVideoOutputPath(plan)),
+            renderValidation?.AudioExists ?? ttsAudioPresent,
+            renderValidation?.VideoDurationMatchesAudio ?? request.DryRun,
+            renderValidation?.FinalVideoDurationSeconds ?? (request.DryRun ? plan.TotalDurationSeconds : 0),
+            renderValidation?.OutputResolution ?? resolution,
+            renderValidation?.Fps ?? plan.RenderSettings.Fps,
             warnings);
     }
 
