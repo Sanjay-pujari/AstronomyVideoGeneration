@@ -46,7 +46,8 @@ public sealed record BatchGenerateFromPlansResponse(
     bool LongVideoGenerated = false,
     string? FinalShortVideoPath = null,
     string? FinalLongVideoPath = null,
-    object? ProductionPipelineRequest = null);
+    object? ProductionPipelineRequest = null,
+    IReadOnlyList<string>? PlannedSteps = null);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
