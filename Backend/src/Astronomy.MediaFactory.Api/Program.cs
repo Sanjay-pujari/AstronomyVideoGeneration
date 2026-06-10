@@ -88,6 +88,28 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
     }
 });
 
+
+app.MapPost("/api/astronomy-intelligence/verify-astronomy-events", async (AstronomyEventVerificationRequest request, IWebHostEnvironment environment, CancellationToken ct) =>
+{
+    try
+    {
+        var result = await VerifyAstronomyEventsAsync(request, environment.ContentRootPath, ct);
+        return Results.Ok(result);
+    }
+    catch (FileNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { message = ex.Message });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/assets/celestial/extract-pack", async (ICelestialAssetPackExtractor extractor, CancellationToken ct) =>
 {
     var report = await extractor.ExtractAsync(ct);
@@ -598,3 +620,401 @@ static IReadOnlyCollection<string> GetChangedFields(RunPipelineRequest original,
     if (original.RegionId != result.RegionId) changed.Add(nameof(RunPipelineRequest.RegionId));
     return changed;
 }
+
+static async Task<AstronomyEventVerificationResponse> VerifyAstronomyEventsAsync(AstronomyEventVerificationRequest request, string contentRootPath, CancellationToken ct)
+{
+    if (request.Year < 1900 || request.Year > 2200)
+        throw new ArgumentException("Year must be between 1900 and 2200.");
+
+    var regionId = string.IsNullOrWhiteSpace(request.RegionId) ? "Global" : request.RegionId.Trim();
+    var language = string.IsNullOrWhiteSpace(request.Language) ? "en" : request.Language.Trim();
+    var discoveryDirectory = Path.Combine(FindRepositoryRoot(contentRootPath), "event-discovery", request.Year.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    var previewPath = Path.Combine(discoveryDirectory, $"astronomy-event-preview-{request.Year}.json");
+    var verifiedPath = Path.Combine(discoveryDirectory, $"astronomy-event-verified-{request.Year}.json");
+
+    if (!File.Exists(previewPath))
+        throw new FileNotFoundException($"Astronomy event preview file was not found: {previewPath}");
+
+    if (File.Exists(verifiedPath) && !request.OverwriteExisting && !request.DryRun)
+        throw new InvalidOperationException($"Verified astronomy event file already exists: {verifiedPath}");
+
+    var sourceJson = await File.ReadAllTextAsync(previewPath, ct);
+    var sourceNode = JsonNode.Parse(sourceJson) ?? throw new ArgumentException("Preview file is not valid JSON.");
+    var inputEvents = ExtractAstronomyEventArray(sourceNode).Select(e => e.DeepClone().AsObject()).ToList();
+    var inputCount = inputEvents.Count;
+    var warnings = ExtractStringArray(sourceNode is JsonObject sourceObject ? sourceObject["warnings"] : null);
+
+    var deduplicated = DeduplicateMoonEvents(inputEvents);
+    var verifiedEvents = new JsonArray();
+    var eventTypeCounts = new SortedDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    var verificationSummary = new SortedDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    var highPriorityCount = 0;
+    var manualReviewCount = 0;
+    var autoGenerateAllowedCount = 0;
+
+    foreach (var astronomyEvent in deduplicated.Events)
+    {
+        ClassifyAstronomyEvent(astronomyEvent, regionId);
+        RefineRecommendedContentTypes(astronomyEvent);
+
+        var eventType = GetEventType(astronomyEvent);
+        eventTypeCounts[eventType] = eventTypeCounts.TryGetValue(eventType, out var currentTypeCount) ? currentTypeCount + 1 : 1;
+
+        var verificationStatus = GetString(astronomyEvent, "verificationStatus", "NeedsManualReview");
+        verificationSummary[verificationStatus] = verificationSummary.TryGetValue(verificationStatus, out var currentStatusCount) ? currentStatusCount + 1 : 1;
+        if (verificationStatus.Equals("NeedsManualReview", StringComparison.OrdinalIgnoreCase)) manualReviewCount++;
+        if (GetString(astronomyEvent, "publishPriority", "Low").Equals("High", StringComparison.OrdinalIgnoreCase)) highPriorityCount++;
+        if (GetBool(astronomyEvent, "autoGenerateAllowed")) autoGenerateAllowedCount++;
+
+        verifiedEvents.Add(astronomyEvent);
+    }
+
+    warnings.AddRange(deduplicated.Warnings);
+
+    var topEvents = new JsonArray();
+    foreach (var astronomyEvent in verifiedEvents.OfType<JsonObject>())
+    {
+        if (GetDouble(astronomyEvent, "contentWorthinessScore") >= 85
+            && GetString(astronomyEvent, "publishPriority", "Low").Equals("High", StringComparison.OrdinalIgnoreCase)
+            && GetBool(astronomyEvent, "autoGenerateAllowed"))
+        {
+            topEvents.Add(astronomyEvent.DeepClone());
+        }
+    }
+
+    var output = new JsonObject
+    {
+        ["year"] = request.Year,
+        ["regionId"] = regionId,
+        ["language"] = language,
+        ["inputEventCount"] = inputCount,
+        ["verifiedEventCount"] = deduplicated.Events.Count,
+        ["deduplicatedCount"] = deduplicated.DeduplicatedCount,
+        ["highPriorityCount"] = highPriorityCount,
+        ["manualReviewCount"] = manualReviewCount,
+        ["autoGenerateAllowedCount"] = autoGenerateAllowedCount,
+        ["events"] = verifiedEvents,
+        ["topEvents"] = topEvents,
+        ["eventTypeCounts"] = ToJsonObject(eventTypeCounts),
+        ["verificationSummary"] = ToJsonObject(verificationSummary),
+        ["warnings"] = ToJsonArray(warnings.Distinct(StringComparer.OrdinalIgnoreCase)),
+        ["generatedUtc"] = DateTimeOffset.UtcNow.ToString("O")
+    };
+
+    var generatedFiles = new List<string>();
+    if (!request.DryRun)
+    {
+        Directory.CreateDirectory(discoveryDirectory);
+        await File.WriteAllTextAsync(verifiedPath, output.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ct);
+        generatedFiles.Add(verifiedPath);
+    }
+
+    return new AstronomyEventVerificationResponse(
+        request.Year,
+        regionId,
+        !request.DryRun,
+        verifiedPath,
+        inputCount,
+        deduplicated.Events.Count,
+        deduplicated.DeduplicatedCount,
+        highPriorityCount,
+        manualReviewCount,
+        autoGenerateAllowedCount,
+        generatedFiles);
+}
+
+static IReadOnlyList<JsonObject> ExtractAstronomyEventArray(JsonNode sourceNode)
+{
+    if (sourceNode is JsonArray rootArray)
+        return rootArray.OfType<JsonObject>().ToArray();
+
+    if (sourceNode is JsonObject rootObject && rootObject["events"] is JsonArray eventsArray)
+        return eventsArray.OfType<JsonObject>().ToArray();
+
+    throw new ArgumentException("Preview file must be a JSON array or contain an 'events' array.");
+}
+
+static DeduplicatedAstronomyEvents DeduplicateMoonEvents(IReadOnlyList<JsonObject> inputEvents)
+{
+    var events = new List<JsonObject>();
+    var deduplicated = 0;
+    var warnings = new List<string>();
+
+    foreach (var astronomyEvent in inputEvents.OrderBy(GetPeakUtcOrMax))
+    {
+        var eventType = GetEventType(astronomyEvent);
+        if (IsDuplicateMoonType(eventType))
+        {
+            var peakUtc = GetPeakUtc(astronomyEvent);
+            var match = peakUtc.HasValue
+                ? events.FirstOrDefault(existing => IsMoonPrimaryType(GetEventType(existing)) && IsNearSamePeak(GetPeakUtc(existing), peakUtc))
+                : null;
+
+            if (match is not null)
+            {
+                MergeMoonDuplicate(match, astronomyEvent, eventType);
+                deduplicated++;
+                continue;
+            }
+        }
+
+        if (eventType.Equals("FullMoon", StringComparison.OrdinalIgnoreCase))
+        {
+            var peakUtc = GetPeakUtc(astronomyEvent);
+            var namedMatch = peakUtc.HasValue
+                ? events.FirstOrDefault(existing => GetEventType(existing).Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) && IsNearSamePeak(GetPeakUtc(existing), peakUtc))
+                : null;
+            if (namedMatch is not null)
+            {
+                MergeMoonDuplicate(namedMatch, astronomyEvent, eventType);
+                deduplicated++;
+                continue;
+            }
+        }
+
+        events.Add(astronomyEvent);
+    }
+
+    for (var i = events.Count - 1; i >= 0; i--)
+    {
+        var astronomyEvent = events[i];
+        var eventType = GetEventType(astronomyEvent);
+        if (!eventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase)) continue;
+
+        var peakUtc = GetPeakUtc(astronomyEvent);
+        if (!peakUtc.HasValue) continue;
+
+        for (var j = events.Count - 1; j >= 0; j--)
+        {
+            if (i == j) continue;
+            var candidate = events[j];
+            var candidateType = GetEventType(candidate);
+            if (!candidateType.Equals("FullMoon", StringComparison.OrdinalIgnoreCase) || !IsNearSamePeak(GetPeakUtc(candidate), peakUtc)) continue;
+
+            MergeMoonDuplicate(astronomyEvent, candidate, candidateType);
+            events.RemoveAt(j);
+            deduplicated++;
+            if (j < i) i--;
+        }
+    }
+
+    if (deduplicated > 0)
+        warnings.Add($"Deduplicated {deduplicated} moon event(s) by near-matching peakUtc values and preserving named full moons as primary events.");
+
+    return new DeduplicatedAstronomyEvents(events, deduplicated, warnings);
+}
+
+static void MergeMoonDuplicate(JsonObject primary, JsonObject duplicate, string duplicateType)
+{
+    if (duplicateType.Equals("FullMoon", StringComparison.OrdinalIgnoreCase))
+        AddUniqueString(primary, "aliases", "Full Moon");
+
+    if (duplicateType.Equals("BlueMoon", StringComparison.OrdinalIgnoreCase) || duplicateType.Equals("Supermoon", StringComparison.OrdinalIgnoreCase))
+        AddUniqueString(primary, "specialTags", duplicateType);
+
+    foreach (var alias in ExtractStringArray(duplicate["aliases"])) AddUniqueString(primary, "aliases", alias);
+    foreach (var tag in ExtractStringArray(duplicate["specialTags"])) AddUniqueString(primary, "specialTags", tag);
+
+    var duplicateNotes = GetString(duplicate, "verificationNotes", "");
+    if (!string.IsNullOrWhiteSpace(duplicateNotes))
+        AppendNote(primary, "verificationNotes", duplicateNotes);
+}
+
+static void ClassifyAstronomyEvent(JsonObject astronomyEvent, string regionId)
+{
+    var eventType = GetEventType(astronomyEvent);
+    var source = GetString(astronomyEvent, "source", GetString(astronomyEvent, "eventSource", ""));
+    var existingWarnings = string.Join(" ", ExtractStringArray(astronomyEvent["warnings"]));
+    var approximate = ContainsAny(existingWarnings, "approx", "approximate") || ContainsAny(GetString(astronomyEvent, "timingAccuracy", ""), "approx");
+    var manualSeed = ContainsAny(source, "manual") || ContainsAny(GetString(astronomyEvent, "verificationSource", ""), "ManualSeed");
+
+    var verificationSource = manualSeed ? "ManualSeed" : IsKnownCalendarRuleEvent(eventType) ? "KnownCalendarRule" : HasPrecisePeak(astronomyEvent) ? "Skyfield" : "ExternalReferencePending";
+    var verificationStatus = manualSeed ? "NeedsManualReview" : approximate ? "Approximate" : verificationSource.Equals("ExternalReferencePending", StringComparison.OrdinalIgnoreCase) ? "NeedsManualReview" : "Verified";
+
+    astronomyEvent["verificationStatus"] = verificationStatus;
+    astronomyEvent["verificationSource"] = verificationSource;
+    astronomyEvent["verificationNotes"] = BuildVerificationNotes(astronomyEvent, approximate, manualSeed, verificationSource);
+
+    var globalVisibility = GetBool(astronomyEvent, "globalVisibility") || ContainsAny(GetString(astronomyEvent, "visibility", ""), "global");
+    var visibilityRegions = ExtractStringArray(astronomyEvent["visibilityRegions"]);
+    var regionMatched = visibilityRegions.Any(r => r.Contains(regionId, StringComparison.OrdinalIgnoreCase) || r.Contains("Global", StringComparison.OrdinalIgnoreCase));
+    var localEvent = ContainsAny(GetString(astronomyEvent, "regionId", ""), regionId) || regionMatched;
+    var notVisible = ContainsAny(GetString(astronomyEvent, "visibility", ""), "not visible", "not locally visible") || ContainsAny(existingWarnings, "not locally visible");
+
+    var visibilityType = notVisible ? "NotLocallyVisible" : localEvent ? "Local" : globalVisibility ? "Global" : visibilityRegions.Count > 0 ? "Regional" : IsGlobalEventType(eventType) ? "Global" : "Regional";
+    astronomyEvent["visibilityType"] = visibilityType;
+    astronomyEvent["localVisibilityConfirmed"] = visibilityType.Equals("Local", StringComparison.OrdinalIgnoreCase);
+    astronomyEvent["localVisibilityNotes"] = visibilityType switch
+    {
+        "Local" => $"Visibility metadata matches {regionId}.",
+        "NotLocallyVisible" => $"Preview metadata indicates this event is not locally visible in {regionId}.",
+        "Global" => "Event is suitable for broad/global astronomy coverage; local visibility was not independently computed.",
+        _ => "Regional visibility is based on preview metadata and should be reviewed before local viewing claims."
+    };
+
+    var worthiness = GetDouble(astronomyEvent, "contentWorthinessScore", GetDouble(astronomyEvent, "opportunityScore") * 100);
+    if (worthiness <= 1 && worthiness > 0) worthiness *= 100;
+    if (worthiness == 0) worthiness = DefaultWorthinessScore(eventType);
+    astronomyEvent["contentWorthinessScore"] = Math.Round(worthiness, 2);
+
+    var highImpact = worthiness >= 85 || IsHighImpactEventType(eventType);
+    var mediumMoon = eventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) || eventType.Equals("FullMoon", StringComparison.OrdinalIgnoreCase);
+    var lowNewMoon = eventType.Equals("NewMoon", StringComparison.OrdinalIgnoreCase);
+    var autoAllowed = !manualSeed && !visibilityType.Equals("NotLocallyVisible", StringComparison.OrdinalIgnoreCase) && !lowNewMoon && (verificationStatus is "Verified" or "Approximate");
+    var publishPriority = highImpact && autoAllowed ? "High" : mediumMoon && !manualSeed ? "Medium" : "Low";
+
+    astronomyEvent["publishPriority"] = publishPriority;
+    astronomyEvent["autoGenerateAllowed"] = autoAllowed;
+    astronomyEvent["contentStrategy"] = !autoAllowed ? (lowNewMoon ? "EducationalOnly" : "SkipAutoGeneration") : visibilityType.Equals("Local", StringComparison.OrdinalIgnoreCase) ? "LocalViewingGuide" : highImpact ? "GlobalAstronomyNews" : mediumMoon ? "GlobalAstronomyNews" : "EducationalOnly";
+}
+
+static void RefineRecommendedContentTypes(JsonObject astronomyEvent)
+{
+    var priority = GetString(astronomyEvent, "publishPriority", "Low");
+    var strategy = GetString(astronomyEvent, "contentStrategy", "EducationalOnly");
+    var eventType = GetEventType(astronomyEvent);
+    IEnumerable<string> contentTypes = priority switch
+    {
+        "High" => ["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"],
+        "Medium" when eventType.Contains("Moon", StringComparison.OrdinalIgnoreCase) => ["ShortVideo", "HeroAsset", "Thumbnail"],
+        _ when strategy.Equals("EducationalOnly", StringComparison.OrdinalIgnoreCase) => ["EducationalOnly"],
+        _ => ["SkipAutoGeneration"]
+    };
+
+    astronomyEvent["recommendedContentTypes"] = ToJsonArray(contentTypes);
+}
+
+static string FindRepositoryRoot(string contentRootPath)
+{
+    var directory = new DirectoryInfo(contentRootPath);
+    while (directory is not null)
+    {
+        if (File.Exists(Path.Combine(directory.FullName, "Backend", "Astronomy.MediaFactory.slnx")) || Directory.Exists(Path.Combine(directory.FullName, ".git")))
+            return directory.FullName;
+        directory = directory.Parent;
+    }
+
+    return contentRootPath;
+}
+
+static JsonObject ToJsonObject(IReadOnlyDictionary<string, int> values)
+{
+    var node = new JsonObject();
+    foreach (var item in values) node[item.Key] = item.Value;
+    return node;
+}
+
+static JsonArray ToJsonArray(IEnumerable<string> values)
+{
+    var array = new JsonArray();
+    foreach (var value in values.Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase)) array.Add(value);
+    return array;
+}
+
+static void AddUniqueString(JsonObject target, string propertyName, string value)
+{
+    if (string.IsNullOrWhiteSpace(value)) return;
+    var values = ExtractStringArray(target[propertyName]);
+    if (!values.Contains(value, StringComparer.OrdinalIgnoreCase)) values.Add(value);
+    target[propertyName] = ToJsonArray(values);
+}
+
+static List<string> ExtractStringArray(JsonNode? node)
+{
+    if (node is JsonArray array)
+        return array.Select(item => item?.GetValue<string>()).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).ToList();
+    return [];
+}
+
+static void AppendNote(JsonObject target, string propertyName, string note)
+{
+    var existing = GetString(target, propertyName, "");
+    target[propertyName] = string.IsNullOrWhiteSpace(existing) ? note : $"{existing} {note}";
+}
+
+static string BuildVerificationNotes(JsonObject astronomyEvent, bool approximate, bool manualSeed, string verificationSource)
+{
+    var notes = new List<string>();
+    if (manualSeed) notes.Add("ManualSeed event requires human review before publishing.");
+    if (approximate) notes.Add("Timing remains approximate; preserve preview warnings in content planning.");
+    if (verificationSource.Equals("ExternalReferencePending", StringComparison.OrdinalIgnoreCase)) notes.Add("External reference verification is pending.");
+    if (!HasPrecisePeak(astronomyEvent)) notes.Add("No exact computed peakUtc is available; avoid exact timing claims.");
+    return string.Join(" ", notes);
+}
+
+static bool HasPrecisePeak(JsonObject astronomyEvent) => GetPeakUtc(astronomyEvent).HasValue;
+
+static DateTimeOffset GetPeakUtcOrMax(JsonObject astronomyEvent) => GetPeakUtc(astronomyEvent) ?? DateTimeOffset.MaxValue;
+
+static DateTimeOffset? GetPeakUtc(JsonObject astronomyEvent)
+{
+    foreach (var propertyName in new[] { "peakUtc", "peakTimeUtc", "eventUtc", "dateUtc", "startUtc" })
+    {
+        var value = GetString(astronomyEvent, propertyName, "");
+        if (DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var parsed))
+            return parsed.ToUniversalTime();
+    }
+
+    return null;
+}
+
+static bool IsNearSamePeak(DateTimeOffset? left, DateTimeOffset? right) => left.HasValue && right.HasValue && Math.Abs((left.Value - right.Value).TotalHours) <= 36;
+static bool IsMoonPrimaryType(string eventType) => eventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) || eventType.Equals("FullMoon", StringComparison.OrdinalIgnoreCase);
+static bool IsDuplicateMoonType(string eventType) => eventType.Equals("FullMoon", StringComparison.OrdinalIgnoreCase) || eventType.Equals("BlueMoon", StringComparison.OrdinalIgnoreCase) || eventType.Equals("Supermoon", StringComparison.OrdinalIgnoreCase);
+static bool IsKnownCalendarRuleEvent(string eventType) => eventType.Contains("Moon", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Equinox", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Solstice", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Meteor", StringComparison.OrdinalIgnoreCase);
+static bool IsGlobalEventType(string eventType) => eventType.Contains("Moon", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Meteor", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Equinox", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Solstice", StringComparison.OrdinalIgnoreCase);
+static bool IsHighImpactEventType(string eventType) => eventType.Contains("Eclipse", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Meteor", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Conjunction", StringComparison.OrdinalIgnoreCase) || eventType.Contains("Occultation", StringComparison.OrdinalIgnoreCase);
+
+static double DefaultWorthinessScore(string eventType)
+{
+    if (IsHighImpactEventType(eventType)) return 90;
+    if (eventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase)) return 70;
+    if (eventType.Equals("FullMoon", StringComparison.OrdinalIgnoreCase)) return 60;
+    if (eventType.Equals("NewMoon", StringComparison.OrdinalIgnoreCase)) return 25;
+    return 50;
+}
+
+static string GetEventType(JsonObject astronomyEvent) => GetString(astronomyEvent, "eventType", GetString(astronomyEvent, "type", GetString(astronomyEvent, "category", "Unknown")));
+
+static string GetString(JsonObject astronomyEvent, string propertyName, string fallback)
+{
+    if (astronomyEvent.TryGetPropertyValue(propertyName, out var node) && node is not null)
+    {
+        if (node is JsonValue value && value.TryGetValue<string>(out var text)) return text;
+        return node.ToString();
+    }
+
+    return fallback;
+}
+
+static bool GetBool(JsonObject astronomyEvent, string propertyName)
+{
+    if (!astronomyEvent.TryGetPropertyValue(propertyName, out var node) || node is null) return false;
+    if (node is JsonValue value)
+    {
+        if (value.TryGetValue<bool>(out var boolValue)) return boolValue;
+        if (value.TryGetValue<string>(out var stringValue) && bool.TryParse(stringValue, out var parsed)) return parsed;
+    }
+
+    return false;
+}
+
+static double GetDouble(JsonObject astronomyEvent, string propertyName, double fallback = 0)
+{
+    if (!astronomyEvent.TryGetPropertyValue(propertyName, out var node) || node is null) return fallback;
+    if (node is JsonValue value)
+    {
+        if (value.TryGetValue<double>(out var number)) return number;
+        if (value.TryGetValue<int>(out var integer)) return integer;
+        if (value.TryGetValue<string>(out var text) && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed)) return parsed;
+    }
+
+    return fallback;
+}
+
+static bool ContainsAny(string value, params string[] needles) => !string.IsNullOrWhiteSpace(value) && needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
+
+
+public sealed record AstronomyEventVerificationRequest(int Year, string? RegionId, string? Language, bool DryRun, bool OverwriteExisting);
+public sealed record AstronomyEventVerificationResponse(int Year, string RegionId, bool EventVerificationGenerated, string EventVerificationPath, int InputEventCount, int VerifiedEventCount, int DeduplicatedCount, int HighPriorityCount, int ManualReviewCount, int AutoGenerateAllowedCount, IReadOnlyList<string> GeneratedFiles);
+sealed record DeduplicatedAstronomyEvents(IReadOnlyList<JsonObject> Events, int DeduplicatedCount, IReadOnlyList<string> Warnings);
