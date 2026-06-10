@@ -1080,6 +1080,27 @@ app.MapPost("/api/astronomy-intelligence/execute-stellarium-capture", async (Htt
 })
 .Accepts<StellariumAssetCaptureExecutionRequest>("application/json");
 
+app.MapPost("/api/astronomy-intelligence/discover-astronomy-events", async (HttpRequest httpRequest, IAstronomyEventDiscoveryPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
+{
+    var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyEventDiscoveryPreviewRequest>(httpRequest, "request", logger, ct);
+    if (requestBody.HasError)
+    {
+        return requestBody.ErrorResult!;
+    }
+
+    var request = requestBody.Value!;
+    logger.LogInformation("Astronomy event discovery preview request received for {RegionId} in {Year}. DryRun={DryRun}", request.RegionId, request.Year, request.DryRun);
+    try
+    {
+        return Results.Ok(await previews.DiscoverAstronomyEventsAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+})
+.Accepts<AstronomyEventDiscoveryPreviewRequest>("application/json");
+
 app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpRequest httpRequest, IAstronomyAssetProducerPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyAssetProducerPreviewRequest>(httpRequest, "request", logger, ct);
