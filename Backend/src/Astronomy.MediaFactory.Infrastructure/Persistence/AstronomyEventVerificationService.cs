@@ -48,10 +48,15 @@ public sealed class AstronomyEventVerificationService(
             .Select(d => ToVerifiedEvent(d, skyfield, request.RegionId))
             .ToList();
 
-        var computedPlanetEvents = skyfield.PlanetPairings.Select(p => ToPlanetPairingEvent(p, request.RegionId)).ToArray();
+        var computedPlanetEvents = skyfield.PlanetPairings
+            .Select(p => ToPlanetPairingEvent(p, request.RegionId))
+            .ToArray();
         if (computedPlanetEvents.Length > 0)
         {
             verified.RemoveAll(existing => computedPlanetEvents.Any(computed => IsMatchingManualPlanetPairing(existing, computed)));
+            computedPlanetEvents = computedPlanetEvents
+                .Where(computed => !verified.Any(existing => IsSamePlanetPairingEvent(existing, computed)))
+                .ToArray();
             verified.AddRange(computedPlanetEvents);
         }
 
@@ -215,7 +220,7 @@ public sealed class AstronomyEventVerificationService(
         var moonPhaseVerified = default(bool?);
         var phaseType = default(string);
 
-        if (IsMoonPhaseEvent(eventType) && TryFindMoonPhase(skyfield, eventType, draft.Event.PeakUtc, out var moonPhase))
+        if (IsSkyfieldVerifiableMoonPhaseEvent(eventType) && TryFindMoonPhase(skyfield, eventType, draft.Event.PeakUtc, out var moonPhase))
         {
             peakUtc = moonPhase.PeakUtc;
             startUtc = peakUtc.AddHours(-Math.Max(1, (draft.Event.PeakUtc - draft.Event.StartUtc).TotalHours));
@@ -229,7 +234,7 @@ public sealed class AstronomyEventVerificationService(
             moonPhaseVerified = true;
             phaseType = moonPhase.Phase;
         }
-        else if (IsMoonPhaseEvent(eventType))
+        else if (IsSkyfieldVerifiableMoonPhaseEvent(eventType))
         {
             warnings.Add("Skyfield exact lunar phase instant unavailable; this moon timing remains Approximate.");
         }
@@ -252,7 +257,7 @@ public sealed class AstronomyEventVerificationService(
         var radiantVisibilityNote = default(string);
         if (IsMeteorShower(eventType))
         {
-            var meteor = FindMeteorMoonlight(skyfield, draft.Event.EventId, draft.Event.PeakUtc);
+            var meteor = FindMeteorMoonlight(skyfield, draft.Event.EventId);
             if (meteor is not null)
             {
                 moonIlluminationPercent = Math.Round(meteor.MoonIlluminationPercent, 1);
@@ -380,13 +385,16 @@ public sealed class AstronomyEventVerificationService(
         return phase is not null && (phase.PeakUtc - approximatePeak).Duration() <= TimeSpan.FromHours(48);
     }
 
-    private static SkyfieldMeteorMoonlight? FindMeteorMoonlight(SkyfieldAccuracyResult skyfield, string eventId, DateTimeOffset approximatePeak)
+    private static SkyfieldMeteorMoonlight? FindMeteorMoonlight(SkyfieldAccuracyResult skyfield, string eventId)
     {
-        var byId = skyfield.MeteorMoonlight.FirstOrDefault(m => m.EventId.Equals(eventId, StringComparison.OrdinalIgnoreCase));
-        if (byId is not null) return byId;
-        return skyfield.MeteorMoonlight
-            .OrderBy(m => (m.PeakUtc - approximatePeak).Duration())
-            .FirstOrDefault(m => (m.PeakUtc - approximatePeak).Duration() <= TimeSpan.FromDays(2));
+        return skyfield.MeteorMoonlight.FirstOrDefault(m => m.EventId.Equals(eventId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsSamePlanetPairingEvent(AstronomyEventVerifiedItem existing, AstronomyEventVerifiedItem computed)
+    {
+        if (!existing.EventType.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase) && !IsPlanetOnlyConjunction(existing)) return false;
+        if ((existing.PeakUtc - computed.PeakUtc).Duration() > TimeSpan.FromDays(7)) return false;
+        return SameObjectPair(existing.PrimaryObjects, computed.PrimaryObjects);
     }
 
     private static bool IsMatchingManualPlanetPairing(AstronomyEventVerifiedItem existing, AstronomyEventVerifiedItem computed)
@@ -501,6 +509,7 @@ public sealed class AstronomyEventVerificationService(
         if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("regionId is required.", nameof(request));
     }
 
+    private static bool IsSkyfieldVerifiableMoonPhaseEvent(string eventType) => eventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) || eventType.Equals("NewMoon", StringComparison.OrdinalIgnoreCase);
     private static bool IsMoonPhaseEvent(string eventType) => eventType.Equals("FullMoon", StringComparison.OrdinalIgnoreCase) || eventType.Equals("NewMoon", StringComparison.OrdinalIgnoreCase) || eventType.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) || eventType.Equals("BlueMoon", StringComparison.OrdinalIgnoreCase) || eventType.Equals("Supermoon", StringComparison.OrdinalIgnoreCase);
     private static bool IsMeteorShower(string eventType) => eventType.Contains("Meteor", StringComparison.OrdinalIgnoreCase);
     private static bool IsEclipse(string eventType) => eventType.Contains("Eclipse", StringComparison.OrdinalIgnoreCase);

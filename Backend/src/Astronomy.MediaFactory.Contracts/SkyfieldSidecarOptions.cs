@@ -13,5 +13,7 @@ public sealed class SkyfieldSidecarOptions
 
     public int TimeoutSeconds { get; set; } = 30;
 
+    public int YearlyAccuracyTimeoutSeconds { get; set; } = 180;
+
     public bool FallbackOnFailure { get; set; } = true;
 }

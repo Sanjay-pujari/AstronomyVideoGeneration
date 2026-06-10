@@ -304,6 +304,7 @@ public static class ServiceCollectionExtensions
             .ValidateDataAnnotations()
             .Validate(options => !options.Enabled || Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _), "SkyfieldSidecar:BaseUrl must be an absolute URI when enabled.")
             .Validate(options => options.TimeoutSeconds > 0, "SkyfieldSidecar:TimeoutSeconds must be > 0.")
+            .Validate(options => options.YearlyAccuracyTimeoutSeconds > 0, "SkyfieldSidecar:YearlyAccuracyTimeoutSeconds must be > 0.")
             .ValidateOnStart();
 
         services.AddOptions<StartupValidationOptions>()
@@ -561,7 +562,7 @@ public static class ServiceCollectionExtensions
         {
             var options = sp.GetRequiredService<IOptions<SkyfieldSidecarOptions>>().Value;
             client.BaseAddress = new Uri(options.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
+            client.Timeout = TimeSpan.FromSeconds(options.YearlyAccuracyTimeoutSeconds);
         });
         services.AddScoped<IAstronomyEventVerificationService, AstronomyEventVerificationService>();
         services.AddScoped<IStellariumScriptGenerator, StellariumScriptGenerator>();
