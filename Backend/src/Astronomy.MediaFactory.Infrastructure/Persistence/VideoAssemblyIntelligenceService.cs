@@ -35,6 +35,12 @@ public sealed class VideoAssemblyIntelligenceService(
     private const string VideoTtsAudioFileName = "video-tts-audio.mp3";
     private const string VideoTtsTimingsFileName = "video-tts-timings.json";
     private const string VideoAssemblyPlanFileName = "video-assembly-plan.json";
+    private const string LongVideoAssemblyIntelligenceFileName = "video-assembly-long-intelligence.json";
+    private const string LongVideoNarrationScriptFileName = "video-long-narration-script.json";
+    private const string LongVideoTtsAudioFileName = "video-long-tts-audio.mp3";
+    private const string LongVideoTtsTimingsFileName = "video-long-tts-timings.json";
+    private const string LongVideoAssemblyPlanFileName = "video-long-assembly-plan.json";
+    private const string LongVideoRenderValidationFileName = "video-long-render-validation.json";
     private const string ThumbnailLandscapeFileName = "thumbnail-landscape.png";
     private const string FinalVideoShortFileName = "final-video-short.mp4";
     private const string FinalVideoLongFileName = "final-video-long.mp4";
@@ -51,6 +57,7 @@ public sealed class VideoAssemblyIntelligenceService(
     private const double SilenceRmsThresholdDb = -60.0;
     private static readonly string[] RequiredApprovedSceneIds = ["scene-001", "scene-002", "scene-003", "scene-004", "scene-005", "scene-006"];
     private static readonly string[] RequiredAssemblySceneOrder = ["Hook", "What", "Why", "Where", "When", "Action"];
+    private static readonly string[] LongFormSectionOrder = ["Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action"];
     private static readonly IReadOnlyDictionary<string, string> AssemblySceneVisualMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["Hook"] = "scene-001-final.png",
@@ -58,6 +65,22 @@ public sealed class VideoAssemblyIntelligenceService(
         ["Why"] = "scene-005-final.png",
         ["Where"] = "scene-002-final.png",
         ["When"] = "scene-003-final.png",
+        ["Action"] = "scene-006-final.png"
+    };
+    private static readonly IReadOnlyDictionary<string, string> LongFormAssemblySceneVisualMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Hook"] = "scene-001-final.png",
+        ["WhatIsHappening"] = "scene-001-final.png",
+        ["AboutVenus"] = "scene-001-final.png",
+        ["AboutJupiter"] = "scene-005-final.png",
+        ["WhyTheyAppearClose"] = "scene-005-final.png",
+        ["WhereToLook"] = "scene-002-final.png",
+        ["WhenToLook"] = "scene-003-final.png",
+        ["HowToObserve"] = "scene-004-final.png",
+        ["WhatYouWillSee"] = "scene-001-final.png",
+        ["InterestingFact"] = "scene-005-final.png",
+        ["ObservationTips"] = "scene-004-final.png",
+        ["Recap"] = "scene-003-final.png",
         ["Action"] = "scene-006-final.png"
     };
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
@@ -83,28 +106,93 @@ public sealed class VideoAssemblyIntelligenceService(
     private static string ResolveSceneApprovalProfileDirectoryName(ScenePresentationProfile presentationProfile)
         => presentationProfile == ScenePresentationProfile.ShortForm ? "short" : "long";
 
+    private static ScenePresentationProfile ResolveRequestProfile(VideoAssemblyGenerationRequest request)
+        => request.ScenePresentationProfile ?? ResolveScenePresentationProfile(request.Platform);
+
+    private static bool IsLongFormRequest(VideoAssemblyGenerationRequest request)
+        => ResolveRequestProfile(request) == ScenePresentationProfile.LongForm;
+
+    private static VideoAssemblyGenerationRequest NormalizePhaseRequest(VideoAssemblyGenerationRequest request)
+    {
+        if (!request.Phase.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase))
+            return request;
+
+        var phase = request.Phase["LongForm".Length..];
+        phase = string.IsNullOrWhiteSpace(phase) ? "Intelligence" : phase;
+        return CloneRequest(request, phase, ScenePresentationProfile.LongForm, request.LongForm);
+    }
+
+    private static VideoAssemblyGenerationRequest BuildFormRequest(VideoAssemblyGenerationRequest request, ScenePresentationProfile profile, string phase)
+        => CloneRequest(request, phase, profile, profile == ScenePresentationProfile.ShortForm ? request.ShortForm : request.LongForm);
+
+    private static VideoAssemblyGenerationRequest CloneRequest(VideoAssemblyGenerationRequest request, string phase, ScenePresentationProfile profile, VideoAssemblyFormRequest? form)
+        => new()
+        {
+            EventId = request.EventId,
+            RegionId = request.RegionId,
+            Language = request.Language,
+            Platform = string.IsNullOrWhiteSpace(form?.Platform) ? (profile == ScenePresentationProfile.ShortForm ? "YouTubeShort" : "YouTubeLong") : form!.Platform,
+            Phase = phase,
+            OutputMode = request.OutputMode,
+            DryRun = request.DryRun,
+            OverwriteExisting = request.OverwriteExisting,
+            AllowSyntheticSilentTts = request.AllowSyntheticSilentTts,
+            BackgroundMusic = form?.BackgroundMusic ?? request.BackgroundMusic,
+            MusicMood = string.IsNullOrWhiteSpace(form?.MusicMood) ? request.MusicMood : form!.MusicMood,
+            MusicLevelPercent = (form?.MusicLevelPercent ?? 0) > 0 ? form!.MusicLevelPercent : request.MusicLevelPercent,
+            DuckMusicUnderNarration = form?.DuckMusicUnderNarration ?? request.DuckMusicUnderNarration,
+            ScenePresentationProfile = form?.ScenePresentationProfile ?? profile,
+            ShortForm = request.ShortForm,
+            LongForm = request.LongForm
+        };
+
+    private static bool ShouldRunShortForm(VideoAssemblyGenerationRequest request)
+    {
+        var modeAllows = string.Equals(request.OutputMode, "Both", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(request.OutputMode, "ShortFormOnly", StringComparison.OrdinalIgnoreCase);
+        return modeAllows && (request.ShortForm is null || request.ShortForm.Enabled);
+    }
+
+    private static bool ShouldRunLongForm(VideoAssemblyGenerationRequest request)
+    {
+        var modeAllows = string.Equals(request.OutputMode, "Both", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(request.OutputMode, "LongFormOnly", StringComparison.OrdinalIgnoreCase);
+        return modeAllows && (request.LongForm is null || request.LongForm.Enabled);
+    }
+
+    private static void AddIfNotEmpty(ICollection<string> paths, string path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+            paths.Add(NormalizePath(path));
+    }
+
     public async Task<VideoAssemblyGenerationResponse> GenerateVideoAssemblyAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
 
-        if (string.Equals(request.Phase, "Script", StringComparison.OrdinalIgnoreCase))
-            return await GenerateVideoNarrationScriptAsync(request, cancellationToken);
+        if (string.Equals(request.Phase, "FullPipeline", StringComparison.OrdinalIgnoreCase))
+            return await GenerateFullPipelineAsync(request, cancellationToken);
 
-        if (string.Equals(request.Phase, "Tts", StringComparison.OrdinalIgnoreCase))
-            return await GenerateTtsAudioAsync(request, cancellationToken);
+        var normalizedRequest = NormalizePhaseRequest(request);
 
-        if (string.Equals(request.Phase, "Assembly", StringComparison.OrdinalIgnoreCase))
-            return await GenerateVideoAssemblyPlanAsync(request, cancellationToken);
+        if (string.Equals(normalizedRequest.Phase, "Script", StringComparison.OrdinalIgnoreCase))
+            return await GenerateVideoNarrationScriptAsync(normalizedRequest, cancellationToken);
 
-        if (string.Equals(request.Phase, "Render", StringComparison.OrdinalIgnoreCase))
-            return await GenerateVideoRenderAsync(request, cancellationToken);
+        if (string.Equals(normalizedRequest.Phase, "Tts", StringComparison.OrdinalIgnoreCase))
+            return await GenerateTtsAudioAsync(normalizedRequest, cancellationToken);
 
-        if (!string.Equals(request.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only video assembly phases 'Intelligence', 'Script', 'Tts', 'Assembly', and 'Render' are implemented in this endpoint version.", nameof(request));
+        if (string.Equals(normalizedRequest.Phase, "Assembly", StringComparison.OrdinalIgnoreCase))
+            return await GenerateVideoAssemblyPlanAsync(normalizedRequest, cancellationToken);
 
-        var outputPath = BuildVideoAssemblyIntelligenceOutputPath(request.EventId, request.RegionId);
-        if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
+        if (string.Equals(normalizedRequest.Phase, "Render", StringComparison.OrdinalIgnoreCase))
+            return await GenerateVideoRenderAsync(normalizedRequest, cancellationToken);
+
+        if (!string.Equals(normalizedRequest.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Only video assembly phases 'Intelligence', 'Script', 'Tts', 'Assembly', 'Render', 'LongFormIntelligence', 'LongFormScript', 'LongFormTts', 'LongFormAssembly', 'LongFormRender', and 'FullPipeline' are implemented in this endpoint version.", nameof(request));
+
+        var outputPath = BuildVideoAssemblyIntelligenceOutputPath(normalizedRequest.EventId, normalizedRequest.RegionId, ResolveRequestProfile(normalizedRequest));
+        if (!normalizedRequest.DryRun && !normalizedRequest.OverwriteExisting && File.Exists(outputPath))
         {
             var existing = JsonSerializer.Deserialize<VideoAssemblyIntelligenceDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
                 ?? throw new InvalidOperationException("Existing video assembly intelligence could not be parsed.");
@@ -112,11 +200,11 @@ public sealed class VideoAssemblyIntelligenceService(
             return BuildResponse(request.Phase, existing, outputPath);
         }
 
-        await EnsureRequiredInputsAsync(request.EventId, request.RegionId, request.Platform, cancellationToken);
-        var intelligence = BuildVideoAssemblyIntelligence(request);
+        await EnsureRequiredInputsAsync(normalizedRequest.EventId, normalizedRequest.RegionId, normalizedRequest.Platform, cancellationToken);
+        var intelligence = BuildVideoAssemblyIntelligence(normalizedRequest);
         ValidateVideoAssemblyIntelligence(intelligence);
 
-        if (!request.DryRun)
+        if (!normalizedRequest.DryRun)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ResolveWorkingDirectoryRoot());
             await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(intelligence, JsonOptions), cancellationToken);
@@ -125,10 +213,70 @@ public sealed class VideoAssemblyIntelligenceService(
         return BuildResponse(request.Phase, intelligence, outputPath);
     }
 
+    private async Task<VideoAssemblyGenerationResponse> GenerateFullPipelineAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var generatedFiles = new List<string>();
+        var shortEnabled = ShouldRunShortForm(request);
+        var longEnabled = ShouldRunLongForm(request);
+        var shortResult = shortEnabled
+            ? await RunFullPipelineFormAsync(request, ScenePresentationProfile.ShortForm, cancellationToken)
+            : new VideoAssemblyFullPipelineFormResult(false, "Skipped", string.Empty, 0, ScenePresentationProfile.ShortForm, GeneratedFiles: Array.Empty<string>());
+        generatedFiles.AddRange(shortResult.GeneratedFiles ?? Array.Empty<string>());
+
+        var longResult = longEnabled
+            ? await RunFullPipelineFormAsync(request, ScenePresentationProfile.LongForm, cancellationToken)
+            : new VideoAssemblyFullPipelineFormResult(false, "Skipped", string.Empty, 0, ScenePresentationProfile.LongForm, GeneratedFiles: Array.Empty<string>());
+        generatedFiles.AddRange(longResult.GeneratedFiles ?? Array.Empty<string>());
+
+        return new VideoAssemblyGenerationResponse(
+            request.Phase,
+            "FullPipeline",
+            false,
+            string.Empty,
+            string.Empty,
+            0,
+            true,
+            shortResult.Status == "Succeeded" || longResult.Status == "Succeeded",
+            generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            OutputMode: request.OutputMode,
+            ShortForm: shortResult,
+            LongForm: longResult);
+    }
+
+    private async Task<VideoAssemblyFullPipelineFormResult> RunFullPipelineFormAsync(VideoAssemblyGenerationRequest rootRequest, ScenePresentationProfile profile, CancellationToken cancellationToken)
+    {
+        var generatedFiles = new List<string>();
+        var phaseName = string.Empty;
+        try
+        {
+            foreach (var phase in new[] { "Intelligence", "Script", "Tts", "Assembly", "Render" })
+            {
+                phaseName = profile == ScenePresentationProfile.LongForm ? $"LongForm{phase}" : phase;
+                var response = await GenerateVideoAssemblyAsync(BuildFormRequest(rootRequest, profile, phase), cancellationToken);
+                generatedFiles.AddRange(response.GeneratedFiles);
+                AddIfNotEmpty(generatedFiles, response.VideoAssemblyIntelligencePath);
+                AddIfNotEmpty(generatedFiles, response.VideoNarrationScriptPath);
+                AddIfNotEmpty(generatedFiles, response.AudioFilePath);
+                AddIfNotEmpty(generatedFiles, response.TimingsFilePath);
+                AddIfNotEmpty(generatedFiles, response.VideoAssemblyPlanPath);
+                AddIfNotEmpty(generatedFiles, response.VideoRenderValidationPath);
+                AddIfNotEmpty(generatedFiles, response.FinalVideoPath);
+                if (string.Equals(phase, "Render", StringComparison.OrdinalIgnoreCase))
+                    return new VideoAssemblyFullPipelineFormResult(true, "Succeeded", response.FinalVideoPath, response.FinalVideoDurationSeconds, response.ScenePresentationProfileUsed, GeneratedFiles: generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+            }
+
+            return new VideoAssemblyFullPipelineFormResult(true, "Failed", string.Empty, 0, profile, phaseName, "Pipeline did not reach Render.", generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
+        {
+            return new VideoAssemblyFullPipelineFormResult(true, "Failed", string.Empty, 0, profile, phaseName, ex.Message, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+        }
+    }
+
 
     private async Task<VideoAssemblyGenerationResponse> GenerateVideoNarrationScriptAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
     {
-        var outputPath = BuildVideoNarrationScriptOutputPath(request.EventId, request.RegionId);
+        var outputPath = BuildVideoNarrationScriptOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
         if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
         {
             var existing = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
@@ -137,7 +285,7 @@ public sealed class VideoAssemblyIntelligenceService(
             return BuildScriptResponse(request.Phase, existing, outputPath);
         }
 
-        var intelligence = await EnsureRequiredScriptInputsAsync(request.EventId, request.RegionId, cancellationToken);
+        var intelligence = await EnsureRequiredScriptInputsAsync(request.EventId, request.RegionId, ResolveRequestProfile(request), cancellationToken);
         var script = BuildVideoNarrationScript(request, intelligence);
         ValidateVideoNarrationScript(script);
 
@@ -153,8 +301,8 @@ public sealed class VideoAssemblyIntelligenceService(
 
     private async Task<VideoAssemblyGenerationResponse> GenerateTtsAudioAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
     {
-        var audioPath = BuildVideoTtsAudioOutputPath(request.EventId, request.RegionId);
-        var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId);
+        var audioPath = BuildVideoTtsAudioOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
+        var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
 
         var syntheticTtsAllowed = request.DryRun || request.AllowSyntheticSilentTts;
 
@@ -173,7 +321,7 @@ public sealed class VideoAssemblyIntelligenceService(
             return BuildTtsResponse(request.Phase, audioPath, timingsPath, existing.ActualDurationSeconds, [], existing.TtsProvider, IsSyntheticProvider(existing.TtsProvider), existingValidation);
         }
 
-        var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, cancellationToken);
+        var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, ResolveRequestProfile(request), cancellationToken);
         var provider = ResolveTtsProvider(request, script);
         var actualDurationSeconds = NormalizeTtsDuration(script.TotalEstimatedDurationSeconds);
 
@@ -209,7 +357,7 @@ public sealed class VideoAssemblyIntelligenceService(
 
     private async Task<VideoAssemblyGenerationResponse> GenerateVideoAssemblyPlanAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
     {
-        var outputPath = BuildVideoAssemblyPlanOutputPath(request.EventId, request.RegionId);
+        var outputPath = BuildVideoAssemblyPlanOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
         if (!request.DryRun && !request.OverwriteExisting && File.Exists(outputPath))
         {
             var existing = JsonSerializer.Deserialize<VideoAssemblyPlanDto>(await File.ReadAllTextAsync(outputPath, cancellationToken), JsonOptions)
@@ -219,7 +367,7 @@ public sealed class VideoAssemblyIntelligenceService(
             return BuildAssemblyResponse(request.Phase, existing, outputPath, []);
         }
 
-        var inputs = await EnsureRequiredAssemblyInputsAsync(request.EventId, request.RegionId, request.Platform, cancellationToken);
+        var inputs = await EnsureRequiredAssemblyInputsAsync(request.EventId, request.RegionId, request.Platform, ResolveRequestProfile(request), cancellationToken);
         if (request.ScenePresentationProfile.HasValue && request.ScenePresentationProfile.Value != inputs.ScenePresentationProfile)
             throw new ArgumentException("Video assembly validation failed: requested scenePresentationProfile must match the platform scene presentation profile.");
 
@@ -239,7 +387,7 @@ public sealed class VideoAssemblyIntelligenceService(
 
     private async Task<VideoAssemblyGenerationResponse> GenerateVideoRenderAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
     {
-        var planPath = BuildVideoAssemblyPlanOutputPath(request.EventId, request.RegionId);
+        var planPath = BuildVideoAssemblyPlanOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
         if (!File.Exists(planPath))
             throw new ArgumentException($"Required render input '{VideoAssemblyPlanFileName}' was not found at '{NormalizePath(planPath)}'.");
 
@@ -249,7 +397,7 @@ public sealed class VideoAssemblyIntelligenceService(
         EnsureVideoAssemblyPlanAssetsExist(plan);
         var renderMusicPlan = ResolveRenderMusicPlan(plan.RenderMusicPlan, request);
 
-        var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId);
+        var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
         if (!File.Exists(timingsPath))
             throw new ArgumentException($"Required render input '{VideoTtsTimingsFileName}' was not found at '{NormalizePath(timingsPath)}'.");
 
@@ -259,7 +407,7 @@ public sealed class VideoAssemblyIntelligenceService(
         EnsureRenderPlanUsesActualTtsTiming(plan, timings);
 
         var outputPath = ResolveFinalVideoOutputPath(plan);
-        var validationPath = BuildVideoRenderValidationOutputPath(request.EventId, request.RegionId);
+        var validationPath = BuildVideoRenderValidationOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
         var backgroundMusicSource = ResolveBackgroundMusicSource(renderMusicPlan);
         if (!request.DryRun && renderMusicPlan.BackgroundMusic && !backgroundMusicSource.Found)
             throw new InvalidOperationException("Background music requested but music source file was not found.");
@@ -301,9 +449,9 @@ public sealed class VideoAssemblyIntelligenceService(
         return BuildRenderResponse(request, outputPath, validation.FinalVideoDurationSeconds, validation.OutputResolution, validation.AudioTrackPresent, validation.RenderSucceeded, generatedFiles, validationPath, renderPolish);
     }
 
-    private async Task<VideoNarrationScriptDto> EnsureRequiredTtsInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
+    private async Task<VideoNarrationScriptDto> EnsureRequiredTtsInputsAsync(string eventId, string regionId, ScenePresentationProfile presentationProfile, CancellationToken cancellationToken)
     {
-        var scriptPath = BuildVideoNarrationScriptOutputPath(eventId, regionId);
+        var scriptPath = BuildVideoNarrationScriptOutputPath(eventId, regionId, presentationProfile);
         if (!File.Exists(scriptPath))
             throw new ArgumentException($"Required TTS input '{VideoNarrationScriptFileName}' was not found at '{NormalizePath(scriptPath)}'.");
 
@@ -313,16 +461,17 @@ public sealed class VideoAssemblyIntelligenceService(
         return script;
     }
 
-    private async Task<VideoAssemblyIntelligenceDto> EnsureRequiredScriptInputsAsync(string eventId, string regionId, CancellationToken cancellationToken)
+    private async Task<VideoAssemblyIntelligenceDto> EnsureRequiredScriptInputsAsync(string eventId, string regionId, ScenePresentationProfile presentationProfile, CancellationToken cancellationToken)
     {
-        var videoAssemblyIntelligencePath = BuildVideoAssemblyIntelligenceOutputPath(eventId, regionId);
+        var videoAssemblyIntelligencePath = BuildVideoAssemblyIntelligenceOutputPath(eventId, regionId, presentationProfile);
         if (!File.Exists(videoAssemblyIntelligencePath))
             throw new ArgumentException($"Required video narration script input '{VideoAssemblyIntelligenceFileName}' was not found at '{NormalizePath(videoAssemblyIntelligencePath)}'.");
 
         var intelligence = JsonSerializer.Deserialize<VideoAssemblyIntelligenceDto>(await File.ReadAllTextAsync(videoAssemblyIntelligencePath, cancellationToken), JsonOptions)
             ?? throw new ArgumentException($"Required video narration script input '{VideoAssemblyIntelligenceFileName}' could not be parsed.");
         ValidateVideoAssemblyIntelligence(intelligence);
-        ValidateRecommendedSceneOrder(intelligence.RecommendedSceneOrder, "video-assembly-intelligence.json");
+        if (presentationProfile == ScenePresentationProfile.ShortForm)
+            ValidateRecommendedSceneOrder(intelligence.RecommendedSceneOrder, "video-assembly-intelligence.json");
 
         var heroRoot = BuildHeroAssetsRoot(eventId, regionId);
         await EnsureHeroStoryInputAsync(heroRoot, cancellationToken);
@@ -418,6 +567,9 @@ public sealed class VideoAssemblyIntelligenceService(
 
     private static VideoAssemblyIntelligenceDto BuildVideoAssemblyIntelligence(VideoAssemblyGenerationRequest request)
     {
+        if (IsLongFormRequest(request))
+            return BuildLongFormVideoAssemblyIntelligence(request);
+
         var sceneDurations = new[]
         {
             new VideoAssemblySceneDurationDto("Hook", 3.0, "Stop scroll"),
@@ -441,16 +593,53 @@ public sealed class VideoAssemblyIntelligenceService(
             sceneDurations.Sum(scene => scene.DurationSeconds),
             new VideoAssemblyNarrationStyleDto("Excited but clear", "Fast short-form", "Neutral energetic narrator"),
             new VideoAssemblyVisualStyleDto(true, false, true, "CrossFade", "Minimal"),
-            new VideoAssemblyAudioPlanDto(true, true, "Wonder + urgency", true),
+            new VideoAssemblyAudioPlanDto(true, true, string.IsNullOrWhiteSpace(request.MusicMood) ? "WonderCuriosity" : request.MusicMood, request.DuckMusicUnderNarration),
             ["video-narration-script.json", "video-tts-audio.mp3", "video-assembly-plan.json", "final-video-short.mp4", "video-render-validation.json"],
             new VideoAssemblyScoresDto(96, 95, 96, 95),
             [],
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            20,
+            ScenePresentationProfile.ShortForm,
+            "question-engine/scene-approval-v3/short/",
+            null);
     }
 
+    private static VideoAssemblyIntelligenceDto BuildLongFormVideoAssemblyIntelligence(VideoAssemblyGenerationRequest request)
+    {
+        var targetDurationSeconds = ResolveLongFormTargetDuration(request);
+        var perSection = Math.Round(targetDurationSeconds / LongFormSectionOrder.Length, 3, MidpointRounding.AwayFromZero);
+        var sceneDurations = LongFormSectionOrder.Select(section => new VideoAssemblySceneDurationDto(section, perSection, ResolveLongFormSectionPurpose(section))).ToArray();
+        var adjusted = sceneDurations[..^1].Append(sceneDurations[^1] with { DurationSeconds = Math.Round(targetDurationSeconds - sceneDurations[..^1].Sum(scene => scene.DurationSeconds), 3, MidpointRounding.AwayFromZero) }).ToArray();
+
+        return new VideoAssemblyIntelligenceDto(
+            request.EventId,
+            request.RegionId,
+            request.Language,
+            request.Platform,
+            SelectedOpeningHook,
+            "EducationalAstronomyGuide",
+            "Curiosity → Understanding → Observation → Action",
+            LongFormSectionOrder,
+            adjusted,
+            targetDurationSeconds,
+            new VideoAssemblyNarrationStyleDto("Educational but simple", "Measured long-form", "Clear astronomy guide"),
+            new VideoAssemblyVisualStyleDto(true, false, true, "CrossFade", "Minimal explanatory captions"),
+            new VideoAssemblyAudioPlanDto(true, true, string.IsNullOrWhiteSpace(request.MusicMood) ? "WonderCuriosity" : request.MusicMood, request.DuckMusicUnderNarration),
+            ["video-long-narration-script.json", "video-long-tts-audio.mp3", "video-long-assembly-plan.json", "final-video-long.mp4", "video-long-render-validation.json"],
+            new VideoAssemblyScoresDto(94, 94, 92, 94),
+            [],
+            DateTimeOffset.UtcNow,
+            targetDurationSeconds,
+            ScenePresentationProfile.LongForm,
+            "question-engine/scene-approval-v3/long/",
+            LongFormSectionOrder);
+    }
 
     private static VideoNarrationScriptDto BuildVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
     {
+        if (IsLongFormRequest(request))
+            return BuildLongFormVideoNarrationScript(request, intelligence);
+
         var durations = intelligence.RecommendedSceneDurations.ToDictionary(scene => scene.SceneKey, scene => scene.DurationSeconds, StringComparer.OrdinalIgnoreCase);
         var sceneScripts = new[]
         {
@@ -476,6 +665,87 @@ public sealed class VideoAssemblyIntelligenceService(
             [],
             DateTimeOffset.UtcNow);
     }
+
+    private static VideoNarrationScriptDto BuildLongFormVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
+    {
+        var durations = intelligence.RecommendedSceneDurations.ToDictionary(scene => scene.SceneKey, scene => scene.DurationSeconds, StringComparer.OrdinalIgnoreCase);
+        var sceneScripts = LongFormSectionOrder.Select(section => new VideoNarrationSceneScriptDto(
+            section,
+            GetDuration(durations, section, ResolveLongFormTargetDuration(request) / LongFormSectionOrder.Length),
+            BuildLongFormNarration(section),
+            ResolveLongFormOnScreenText(section))).ToArray();
+
+        return new VideoNarrationScriptDto(
+            request.EventId,
+            request.RegionId,
+            request.Language,
+            request.Platform,
+            sceneScripts.Sum(scene => scene.DurationSeconds),
+            new VideoNarrationScriptStyleDto("Educational but simple", "Measured long-form", "Clear astronomy guide"),
+            sceneScripts,
+            string.Join(" ", sceneScripts.Select(scene => scene.Narration)),
+            new VideoNarrationTtsPlanDto(true, "NeutralEducational", "video-long-tts-audio.mp3"),
+            new VideoNarrationScriptScoresDto(95, 90, 95),
+            [],
+            DateTimeOffset.UtcNow);
+    }
+
+    private static string ResolveLongFormSectionPurpose(string section)
+        => section switch
+        {
+            "Hook" => "Invite curiosity",
+            "WhatIsHappening" => "Explain the sky event in simple terms",
+            "AboutVenus" => "Describe Venus as a bright evening object",
+            "AboutJupiter" => "Describe Jupiter as a bright planetary target",
+            "WhyTheyAppearClose" => "Clarify apparent sky closeness",
+            "WhereToLook" => "Give direction cue",
+            "WhenToLook" => "Give timing cue",
+            "HowToObserve" => "Give practical observation guidance",
+            "WhatYouWillSee" => "Set realistic visual expectations",
+            "InterestingFact" => "Add educational interest",
+            "ObservationTips" => "Improve viewer success",
+            "Recap" => "Summarize the steps",
+            "Action" => "Call viewer outside",
+            _ => "Educational section"
+        };
+
+    private static string BuildLongFormNarration(string section)
+        => section switch
+        {
+            "Hook" => "Tonight's sky gives you a simple but beautiful target: Venus and Jupiter shining near each other after sunset.",
+            "WhatIsHappening" => "This is a close apparent pairing in our sky. The planets are not physically next to each other, but from our viewpoint on Earth they line up in the same part of the evening sky.",
+            "AboutVenus" => "Venus is usually one of the brightest planet-like points you can see. When it is visible after sunset, it often stands out before many stars appear.",
+            "AboutJupiter" => "Jupiter can also look bright and steady. It does not twinkle as much as many stars, so it can be easier to recognize once you know where to look.",
+            "WhyTheyAppearClose" => "The close look is caused by perspective. Each world follows its own path around the Sun, while we see their positions projected onto the dome of the sky.",
+            "WhereToLook" => "For this viewing guide, start by facing the western sky. Choose a place with a clear horizon and as few buildings or trees in the way as possible.",
+            "WhenToLook" => "The best time to begin is shortly after sunset, when the sky is dimming but the planets are still high enough to notice.",
+            "HowToObserve" => "You do not need a telescope. First use your eyes, then try binoculars if you have them. Keep your view steady and give your eyes a few minutes to adjust.",
+            "WhatYouWillSee" => "You should look for two bright points in the same general area of the sky. Venus should appear especially brilliant, while Jupiter may look slightly softer but still bright.",
+            "InterestingFact" => "Planet pairings are useful sky markers because they help beginners learn direction, timing, and how planets move against the background sky over many nights.",
+            "ObservationTips" => "Check the sky before you go out, avoid bright streetlights when possible, and take a photo only after you have enjoyed the view with your own eyes.",
+            "Recap" => "So remember the simple plan: go out after sunset, face west, find the two bright points, and compare their brightness and position.",
+            "Action" => "If the sky is clear, step outside tonight and take a minute to look west. It is an easy astronomy moment to share with someone nearby.",
+            _ => "This section continues the astronomy viewing guide using only the available event details."
+        };
+
+    private static string ResolveLongFormOnScreenText(string section)
+        => section switch
+        {
+            "Hook" => "Venus + Jupiter Tonight",
+            "WhatIsHappening" => "Close in our sky",
+            "AboutVenus" => "Venus: very bright",
+            "AboutJupiter" => "Jupiter: steady glow",
+            "WhyTheyAppearClose" => "Perspective from Earth",
+            "WhereToLook" => "Face West",
+            "WhenToLook" => "After Sunset",
+            "HowToObserve" => "Eyes first, binoculars optional",
+            "WhatYouWillSee" => "Two bright points",
+            "InterestingFact" => "A beginner-friendly sky marker",
+            "ObservationTips" => "Clear horizon helps",
+            "Recap" => "After sunset • West • Two bright points",
+            "Action" => "Step outside tonight",
+            _ => section
+        };
 
     private static double GetDuration(IReadOnlyDictionary<string, double> durations, string sceneKey, double fallback)
         => durations.TryGetValue(sceneKey, out var duration) ? duration : fallback;
@@ -516,7 +786,10 @@ public sealed class VideoAssemblyIntelligenceService(
     }
 
     private static double NormalizeTtsDuration(double estimatedDurationSeconds)
-        => Math.Round(Math.Clamp(estimatedDurationSeconds, 15.0, 25.0), 3, MidpointRounding.AwayFromZero);
+        => Math.Round(Math.Clamp(estimatedDurationSeconds, estimatedDurationSeconds > 60 ? 120.0 : 15.0, estimatedDurationSeconds > 60 ? 180.0 : 25.0), 3, MidpointRounding.AwayFromZero);
+
+    private static double ResolveLongFormTargetDuration(VideoAssemblyGenerationRequest request)
+        => Math.Clamp((request.LongForm?.TargetDurationSeconds ?? 0) > 0 ? request.LongForm!.TargetDurationSeconds : 180, 120, 180);
 
     private async Task WriteTtsAudioAsync(string narrationText, string audioPath, double durationSeconds, TtsProviderSelection provider, CancellationToken cancellationToken)
     {
@@ -762,14 +1035,13 @@ public sealed class VideoAssemblyIntelligenceService(
     }
 
 
-    private async Task<AssemblyInputs> EnsureRequiredAssemblyInputsAsync(string eventId, string regionId, string platform, CancellationToken cancellationToken)
+    private async Task<AssemblyInputs> EnsureRequiredAssemblyInputsAsync(string eventId, string regionId, string platform, ScenePresentationProfile presentationProfile, CancellationToken cancellationToken)
     {
-        var intelligencePath = BuildVideoAssemblyIntelligenceOutputPath(eventId, regionId);
-        var scriptPath = BuildVideoNarrationScriptOutputPath(eventId, regionId);
-        var audioPath = BuildVideoTtsAudioOutputPath(eventId, regionId);
-        var timingsPath = BuildVideoTtsTimingsOutputPath(eventId, regionId);
+        var intelligencePath = BuildVideoAssemblyIntelligenceOutputPath(eventId, regionId, presentationProfile);
+        var scriptPath = BuildVideoNarrationScriptOutputPath(eventId, regionId, presentationProfile);
+        var audioPath = BuildVideoTtsAudioOutputPath(eventId, regionId, presentationProfile);
+        var timingsPath = BuildVideoTtsTimingsOutputPath(eventId, regionId, presentationProfile);
         var thumbnailPath = BuildThumbnailLandscapeOutputPath(eventId, regionId);
-        var presentationProfile = ResolveScenePresentationProfile(platform);
         var sceneApprovalRoot = Path.Combine(BuildQuestionEngineRoot(eventId, regionId), SceneApprovalDirectoryName, ResolveSceneApprovalProfileDirectoryName(presentationProfile));
 
         if (!File.Exists(intelligencePath))
@@ -790,10 +1062,11 @@ public sealed class VideoAssemblyIntelligenceService(
         ValidateVideoAssemblyIntelligence(intelligence);
         ValidateVideoNarrationScript(script);
         ValidateVideoTtsTimings(timings);
-        ValidateRecommendedSceneOrder(timings.SceneTimings.Select(scene => scene.SceneKey), VideoTtsTimingsFileName);
+        ValidateSceneTimingOrder(timings.SceneTimings.Select(scene => scene.SceneKey), presentationProfile, VideoTtsTimingsFileName);
 
-        var visualAssetPaths = RequiredAssemblySceneOrder
-            .Select(sceneKey => ResolveAssemblyVisualAssetPath(sceneKey, thumbnailPath, sceneApprovalRoot))
+        var sceneOrder = presentationProfile == ScenePresentationProfile.ShortForm ? RequiredAssemblySceneOrder : LongFormSectionOrder;
+        var visualAssetPaths = sceneOrder
+            .Select(sceneKey => ResolveAssemblyVisualAssetPath(sceneKey, thumbnailPath, sceneApprovalRoot, presentationProfile))
             .ToArray();
         var missingVisualAssets = visualAssetPaths.Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
         if (missingVisualAssets.Length > 0)
@@ -808,7 +1081,8 @@ public sealed class VideoAssemblyIntelligenceService(
 
     private VideoAssemblyPlanDto BuildVideoAssemblyPlan(VideoAssemblyGenerationRequest request, AssemblyInputs inputs)
     {
-        var visualByScene = RequiredAssemblySceneOrder.Zip(inputs.VisualAssetPaths, (scene, path) => new { scene, path })
+        var sceneOrder = inputs.ScenePresentationProfile == ScenePresentationProfile.ShortForm ? RequiredAssemblySceneOrder : LongFormSectionOrder;
+        var visualByScene = sceneOrder.Zip(inputs.VisualAssetPaths, (scene, path) => new { scene, path })
             .ToDictionary(item => item.scene, item => item.path, StringComparer.OrdinalIgnoreCase);
         var segments = inputs.Timings.SceneTimings.Select((timing, index) =>
         {
@@ -846,30 +1120,51 @@ public sealed class VideoAssemblyIntelligenceService(
             true,
             new VideoAssemblyStyleDto("CrossFade", "SubtleKenBurns", "UseExistingSceneTextOnly", true),
             validation,
-            BuildSceneMappingValidation(segments),
+            BuildSceneMappingValidation(segments, inputs.ScenePresentationProfile),
             BuildRenderMusicPlan(request),
             [],
             DateTimeOffset.UtcNow);
     }
 
-    private static VideoAssemblySceneMappingValidationDto BuildSceneMappingValidation(IReadOnlyList<VideoAssemblyPlanSegmentDto> segments)
+    private static VideoAssemblySceneMappingValidationDto BuildSceneMappingValidation(IReadOnlyList<VideoAssemblyPlanSegmentDto> segments, ScenePresentationProfile profile)
     {
         var visualByScene = segments.ToDictionary(segment => segment.SceneKey, segment => NormalizePath(segment.VisualAssetPath), StringComparer.OrdinalIgnoreCase);
-        var hookUsesScene001 = SegmentUsesScene(visualByScene, "Hook", "scene-001-final.png");
-        var whatUsesScene001 = SegmentUsesScene(visualByScene, "What", "scene-001-final.png");
-        var whyUsesScene005 = SegmentUsesScene(visualByScene, "Why", "scene-005-final.png");
-        var whereUsesScene002 = SegmentUsesScene(visualByScene, "Where", "scene-002-final.png");
-        var whenUsesScene003 = SegmentUsesScene(visualByScene, "When", "scene-003-final.png");
-        var actionUsesScene006 = SegmentUsesScene(visualByScene, "Action", "scene-006-final.png");
+        if (profile == ScenePresentationProfile.LongForm)
+        {
+            var hookUsesScene001 = SegmentUsesScene(visualByScene, "Hook", "scene-001-final.png");
+            var whatUsesScene001 = SegmentUsesScene(visualByScene, "WhatIsHappening", "scene-001-final.png")
+                && SegmentUsesScene(visualByScene, "WhatYouWillSee", "scene-001-final.png");
+            var whyUsesScene005 = SegmentUsesScene(visualByScene, "WhyTheyAppearClose", "scene-005-final.png")
+                && SegmentUsesScene(visualByScene, "InterestingFact", "scene-005-final.png");
+            var whereUsesScene002 = SegmentUsesScene(visualByScene, "WhereToLook", "scene-002-final.png");
+            var whenUsesScene003 = SegmentUsesScene(visualByScene, "WhenToLook", "scene-003-final.png")
+                && SegmentUsesScene(visualByScene, "Recap", "scene-003-final.png");
+            var actionUsesScene006 = SegmentUsesScene(visualByScene, "Action", "scene-006-final.png");
+            return new VideoAssemblySceneMappingValidationDto(
+                hookUsesScene001,
+                whatUsesScene001,
+                whyUsesScene005,
+                whereUsesScene002,
+                whenUsesScene003,
+                actionUsesScene006,
+                hookUsesScene001 && whatUsesScene001 && whyUsesScene005 && whereUsesScene002 && whenUsesScene003 && actionUsesScene006);
+        }
+
+        var shortHookUsesScene001 = SegmentUsesScene(visualByScene, "Hook", "scene-001-final.png");
+        var shortWhatUsesScene001 = SegmentUsesScene(visualByScene, "What", "scene-001-final.png");
+        var shortWhyUsesScene005 = SegmentUsesScene(visualByScene, "Why", "scene-005-final.png");
+        var shortWhereUsesScene002 = SegmentUsesScene(visualByScene, "Where", "scene-002-final.png");
+        var shortWhenUsesScene003 = SegmentUsesScene(visualByScene, "When", "scene-003-final.png");
+        var shortActionUsesScene006 = SegmentUsesScene(visualByScene, "Action", "scene-006-final.png");
 
         return new VideoAssemblySceneMappingValidationDto(
-            hookUsesScene001,
-            whatUsesScene001,
-            whyUsesScene005,
-            whereUsesScene002,
-            whenUsesScene003,
-            actionUsesScene006,
-            hookUsesScene001 && whatUsesScene001 && whyUsesScene005 && whereUsesScene002 && whenUsesScene003 && actionUsesScene006);
+            shortHookUsesScene001,
+            shortWhatUsesScene001,
+            shortWhyUsesScene005,
+            shortWhereUsesScene002,
+            shortWhenUsesScene003,
+            shortActionUsesScene006,
+            shortHookUsesScene001 && shortWhatUsesScene001 && shortWhyUsesScene005 && shortWhereUsesScene002 && shortWhenUsesScene003 && shortActionUsesScene006);
     }
 
     private static bool SegmentUsesScene(IReadOnlyDictionary<string, string> visualByScene, string sceneKey, string expectedFileName)
@@ -880,13 +1175,11 @@ public sealed class VideoAssemblyIntelligenceService(
     {
         var backgroundMusicOptions = videoAssemblyOptions?.Value.BackgroundMusic;
         var defaultLevelPercent = backgroundMusicOptions?.DefaultLevelPercent ?? 12;
-        var defaultDuckMusicUnderNarration = backgroundMusicOptions?.DuckUnderNarration ?? true;
-
         return new VideoAssemblyRenderMusicPlanDto(
             true,
             string.IsNullOrWhiteSpace(request.MusicMood) ? "WonderCuriosity" : request.MusicMood,
             request.MusicLevelPercent <= 0 ? defaultLevelPercent : request.MusicLevelPercent,
-            request.DuckMusicUnderNarration || defaultDuckMusicUnderNarration);
+            request.DuckMusicUnderNarration);
     }
 
     private static string ResolveSegmentMotion(string sceneKey)
@@ -903,15 +1196,17 @@ public sealed class VideoAssemblyIntelligenceService(
 
     private static void ValidateVideoAssemblyPlan(VideoAssemblyPlanDto plan)
     {
-        ValidateRecommendedSceneOrder(plan.Segments.Select(segment => segment.SceneKey), VideoAssemblyPlanFileName);
-        if (plan.Segments.Count != 6)
+        ValidateSceneTimingOrder(plan.Segments.Select(segment => segment.SceneKey), plan.ScenePresentationProfile, VideoAssemblyPlanFileName);
+        if (plan.ScenePresentationProfile == ScenePresentationProfile.ShortForm && plan.Segments.Count != 6)
             throw new ArgumentException("Video assembly validation failed: segmentCount must be 6.");
+        if (plan.ScenePresentationProfile == ScenePresentationProfile.LongForm && (plan.Segments.Count < 10 || plan.Segments.Count > 15))
+            throw new ArgumentException("Video assembly validation failed: LongForm segmentCount must be 10-15.");
         if (!plan.Validation.AudioExists)
             throw new ArgumentException("Video assembly validation failed: audio is missing.");
         if (!plan.Validation.AllVisualAssetsExist)
             throw new ArgumentException("Video assembly validation failed: one or more visual assets are missing.");
-        if (plan.Validation.SegmentCount != 6)
-            throw new ArgumentException("Video assembly validation failed: validation.segmentCount must be 6.");
+        if (plan.Validation.SegmentCount != plan.Segments.Count)
+            throw new ArgumentException("Video assembly validation failed: validation.segmentCount must match segment count.");
         if (!plan.Validation.DurationMatchesAudio)
             throw new ArgumentException("Video assembly validation failed: duration does not match TTS duration.");
         if (!plan.Validation.ReadyForRender)
@@ -934,6 +1229,10 @@ public sealed class VideoAssemblyIntelligenceService(
             if (plan.RenderSettings.Width != 1080 || plan.RenderSettings.Height != 1920)
                 throw new ArgumentException("Video assembly validation failed: ShortForm renderSettings must be 1080x1920.");
             ValidateShortFormSceneAssetSelection(plan);
+        }
+        else if (plan.RenderSettings.Width != 1920 || plan.RenderSettings.Height != 1080)
+        {
+            throw new ArgumentException("Video assembly validation failed: LongForm renderSettings must be 1920x1080.");
         }
         var lastEndSeconds = plan.Segments[^1].EndSeconds;
         if (Math.Abs(lastEndSeconds - plan.TotalDurationSeconds) > 0.001)
@@ -1150,7 +1449,7 @@ public sealed class VideoAssemblyIntelligenceService(
             backgroundMusic,
             string.IsNullOrWhiteSpace(musicMood) ? "WonderCuriosity" : musicMood,
             effectiveMusicLevelPercent,
-            false);
+            request.DuckMusicUnderNarration);
     }
 
     private static int ResolveEffectiveMusicLevelPercent(int musicLevelPercent)
@@ -1283,16 +1582,19 @@ public sealed class VideoAssemblyIntelligenceService(
     private string BuildThumbnailLandscapeOutputPath(string eventId, string regionId)
         => Path.Combine(BuildThumbnailAssetsRoot(eventId, regionId), ThumbnailLandscapeFileName);
 
-    private static string ResolveAssemblyVisualAssetPath(string sceneKey, string thumbnailPath, string sceneApprovalRoot)
-        => Path.Combine(sceneApprovalRoot, AssemblySceneVisualMap[sceneKey]);
+    private static string ResolveAssemblyVisualAssetPath(string sceneKey, string thumbnailPath, string sceneApprovalRoot, ScenePresentationProfile profile)
+        => Path.Combine(sceneApprovalRoot, (profile == ScenePresentationProfile.ShortForm ? AssemblySceneVisualMap : LongFormAssemblySceneVisualMap)[sceneKey]);
 
     private static void ValidateVideoNarrationScript(VideoNarrationScriptDto script)
     {
         if (string.IsNullOrWhiteSpace(script.FullNarrationText))
             throw new ArgumentException("Video narration script validation failed: fullNarrationText must not be empty.");
-        ValidateRecommendedSceneOrder(script.SceneScripts.Select(scene => scene.SceneKey), "video-narration-script.json");
-        if (script.TotalEstimatedDurationSeconds < 15 || script.TotalEstimatedDurationSeconds > 25)
+        var profile = ResolveScenePresentationProfile(script.Platform);
+        ValidateSceneTimingOrder(script.SceneScripts.Select(scene => scene.SceneKey), profile, "video-narration-script.json");
+        if (profile == ScenePresentationProfile.ShortForm && (script.TotalEstimatedDurationSeconds < 15 || script.TotalEstimatedDurationSeconds > 25))
             throw new ArgumentException("Video narration script validation failed: totalEstimatedDurationSeconds must be 15-25 seconds.");
+        if (profile == ScenePresentationProfile.LongForm && (script.TotalEstimatedDurationSeconds < 120 || script.TotalEstimatedDurationSeconds > 180))
+            throw new ArgumentException("Video narration script validation failed: LongForm totalEstimatedDurationSeconds must be 120-180 seconds.");
         if (!script.TtsPlan.TtsRequired)
             throw new ArgumentException("Video narration script validation failed: ttsRequired must be true.");
         if (script.Scores.TtsReadinessScore < 90)
@@ -1301,9 +1603,20 @@ public sealed class VideoAssemblyIntelligenceService(
 
     private static void ValidateRecommendedSceneOrder(IEnumerable<string> sceneOrder, string fileName)
     {
-        string[] recommendedSceneOrder = ["Hook", "What", "Why", "Where", "When", "Action"];
-        if (!sceneOrder.SequenceEqual(recommendedSceneOrder, StringComparer.OrdinalIgnoreCase))
+        if (!sceneOrder.SequenceEqual(RequiredAssemblySceneOrder, StringComparer.OrdinalIgnoreCase))
             throw new ArgumentException($"Video narration script validation failed: scene order in {fileName} must be Hook, What, Why, Where, When, Action.");
+    }
+
+    private static void ValidateSceneTimingOrder(IEnumerable<string> sceneOrder, ScenePresentationProfile profile, string fileName)
+    {
+        if (profile == ScenePresentationProfile.ShortForm)
+        {
+            ValidateRecommendedSceneOrder(sceneOrder, fileName);
+            return;
+        }
+
+        if (!sceneOrder.SequenceEqual(LongFormSectionOrder, StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException($"Video narration script validation failed: LongForm scene order in {fileName} must match the longFormSections plan.");
     }
 
     private static void ValidateVideoAssemblyIntelligence(VideoAssemblyIntelligenceDto intelligence)
@@ -1325,11 +1638,16 @@ public sealed class VideoAssemblyIntelligenceService(
     {
         if (string.IsNullOrWhiteSpace(timings.AudioFilePath))
             throw new ArgumentException("Video TTS timings validation failed: audioFilePath is required.");
-        if (timings.EstimatedDurationSeconds < 15 || timings.EstimatedDurationSeconds > 25)
+        var profile = ResolveScenePresentationProfile(timings.Platform);
+        if (profile == ScenePresentationProfile.ShortForm && (timings.EstimatedDurationSeconds < 15 || timings.EstimatedDurationSeconds > 25))
             throw new ArgumentException("Video TTS timings validation failed: estimatedDurationSeconds must be 15-25 seconds.");
-        if (timings.ActualDurationSeconds < 15 || timings.ActualDurationSeconds > 25)
+        if (profile == ScenePresentationProfile.ShortForm && (timings.ActualDurationSeconds < 15 || timings.ActualDurationSeconds > 25))
             throw new ArgumentException("Video TTS timings validation failed: actualDurationSeconds must be 15-25 seconds.");
-        ValidateRecommendedSceneOrder(timings.SceneTimings.Select(scene => scene.SceneKey), "video-tts-timings.json");
+        if (profile == ScenePresentationProfile.LongForm && (timings.EstimatedDurationSeconds < 120 || timings.EstimatedDurationSeconds > 180))
+            throw new ArgumentException("Video TTS timings validation failed: LongForm estimatedDurationSeconds must be 120-180 seconds.");
+        if (profile == ScenePresentationProfile.LongForm && (timings.ActualDurationSeconds < 120 || timings.ActualDurationSeconds > 180))
+            throw new ArgumentException("Video TTS timings validation failed: LongForm actualDurationSeconds must be 120-180 seconds.");
+        ValidateSceneTimingOrder(timings.SceneTimings.Select(scene => scene.SceneKey), profile, "video-tts-timings.json");
         if (string.IsNullOrWhiteSpace(timings.TtsProvider))
             throw new ArgumentException("Video TTS timings validation failed: ttsProvider is required.");
         if (string.IsNullOrWhiteSpace(timings.VoiceUsed))
@@ -1653,23 +1971,26 @@ public sealed class VideoAssemblyIntelligenceService(
     private string BuildVideoAssemblyRoot(string eventId, string regionId)
         => Path.Combine(ResolveWorkingDirectoryRoot(), "assets", SanitizePathSegment(regionId), "events", SanitizePathSegment(eventId), VideoAssemblyDirectoryName);
 
-    private string BuildVideoAssemblyIntelligenceOutputPath(string eventId, string regionId)
-        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoAssemblyIntelligenceFileName);
+    private string BuildVideoAssemblyProfileRoot(string eventId, string regionId, ScenePresentationProfile profile)
+        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), profile == ScenePresentationProfile.ShortForm ? "short" : "long");
 
-    private string BuildVideoNarrationScriptOutputPath(string eventId, string regionId)
-        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoNarrationScriptFileName);
+    private string BuildVideoAssemblyIntelligenceOutputPath(string eventId, string regionId, ScenePresentationProfile profile)
+        => Path.Combine(BuildVideoAssemblyProfileRoot(eventId, regionId, profile), profile == ScenePresentationProfile.ShortForm ? VideoAssemblyIntelligenceFileName : LongVideoAssemblyIntelligenceFileName);
 
-    private string BuildVideoTtsAudioOutputPath(string eventId, string regionId)
-        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoTtsAudioFileName);
+    private string BuildVideoNarrationScriptOutputPath(string eventId, string regionId, ScenePresentationProfile profile)
+        => Path.Combine(BuildVideoAssemblyProfileRoot(eventId, regionId, profile), profile == ScenePresentationProfile.ShortForm ? VideoNarrationScriptFileName : LongVideoNarrationScriptFileName);
 
-    private string BuildVideoTtsTimingsOutputPath(string eventId, string regionId)
-        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoTtsTimingsFileName);
+    private string BuildVideoTtsAudioOutputPath(string eventId, string regionId, ScenePresentationProfile profile)
+        => Path.Combine(BuildVideoAssemblyProfileRoot(eventId, regionId, profile), profile == ScenePresentationProfile.ShortForm ? VideoTtsAudioFileName : LongVideoTtsAudioFileName);
 
-    private string BuildVideoAssemblyPlanOutputPath(string eventId, string regionId)
-        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoAssemblyPlanFileName);
+    private string BuildVideoTtsTimingsOutputPath(string eventId, string regionId, ScenePresentationProfile profile)
+        => Path.Combine(BuildVideoAssemblyProfileRoot(eventId, regionId, profile), profile == ScenePresentationProfile.ShortForm ? VideoTtsTimingsFileName : LongVideoTtsTimingsFileName);
 
-    private string BuildVideoRenderValidationOutputPath(string eventId, string regionId)
-        => Path.Combine(BuildVideoAssemblyRoot(eventId, regionId), VideoRenderValidationFileName);
+    private string BuildVideoAssemblyPlanOutputPath(string eventId, string regionId, ScenePresentationProfile profile)
+        => Path.Combine(BuildVideoAssemblyProfileRoot(eventId, regionId, profile), profile == ScenePresentationProfile.ShortForm ? VideoAssemblyPlanFileName : LongVideoAssemblyPlanFileName);
+
+    private string BuildVideoRenderValidationOutputPath(string eventId, string regionId, ScenePresentationProfile profile)
+        => Path.Combine(BuildVideoAssemblyProfileRoot(eventId, regionId, profile), profile == ScenePresentationProfile.ShortForm ? VideoRenderValidationFileName : LongVideoRenderValidationFileName);
 
     private string ResolveWorkingDirectoryRoot()
         => string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;

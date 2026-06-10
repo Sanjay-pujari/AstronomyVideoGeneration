@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -8,7 +9,14 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class VideoAssemblyIntelligenceServiceTests
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+        options.Converters.Add(new JsonStringEnumConverter());
+        return options;
+    }
+
     private const string EventId = "e7013ee4-55c6-4f01-b1d0-7c500f26f98b";
     private const string RegionId = "IN-RJ-UDAIPUR";
 
@@ -61,6 +69,53 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.True(saved.Scores.VideoAssemblyReadinessScore >= 90);
         Assert.Empty(saved.Warnings);
     }
+
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_LongFormIntelligenceWritesLongFolderContract()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+
+        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormIntelligence",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            DryRun = false,
+            OverwriteExisting = true,
+            LongForm = new VideoAssemblyFormRequest
+            {
+                Enabled = true,
+                Platform = "YouTubeLong",
+                ScenePresentationProfile = ScenePresentationProfile.LongForm,
+                TargetDurationSeconds = 180,
+                BackgroundMusic = true,
+                MusicMood = "WonderCuriosity",
+                MusicLevelPercent = 18,
+                DuckMusicUnderNarration = true
+            }
+        }, CancellationToken.None);
+
+        var outputPath = Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "video-assembly-long-intelligence.json");
+        Assert.True(result.VideoAssemblyIntelligenceGenerated);
+        Assert.Equal("LongFormIntelligence", result.PhaseRequested);
+        Assert.Equal(outputPath.Replace('\\', '/'), result.VideoAssemblyIntelligencePath);
+        Assert.True(File.Exists(outputPath));
+
+        var saved = JsonSerializer.Deserialize<VideoAssemblyIntelligenceDto>(await File.ReadAllTextAsync(outputPath), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.Equal("EducationalAstronomyGuide", saved!.VideoIntent);
+        Assert.Equal(180, saved.TargetDurationSeconds);
+        Assert.Equal(ScenePresentationProfile.LongForm, saved.RecommendedScenePresentationProfile);
+        Assert.EndsWith("scene-approval-v3/long/", saved.RecommendedSceneDirectory);
+        Assert.Equal(new[] { "Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" }, saved.LongFormSections);
+    }
+
 
 
     [Fact]
@@ -631,11 +686,14 @@ public sealed class VideoAssemblyIntelligenceServiceTests
 
     private static async Task WriteApprovedSceneOutputsAsync(string workingDirectory)
     {
-        var sceneApprovalRoot = Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3", "short");
-        Directory.CreateDirectory(sceneApprovalRoot);
         var pngBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
-        foreach (var sceneId in new[] { "scene-001", "scene-002", "scene-003", "scene-004", "scene-005", "scene-006" })
-            await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, $"{sceneId}-final.png"), pngBytes);
+        foreach (var profileDirectory in new[] { "short", "long" })
+        {
+            var sceneApprovalRoot = Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "question-engine", "scene-approval-v3", profileDirectory);
+            Directory.CreateDirectory(sceneApprovalRoot);
+            foreach (var sceneId in new[] { "scene-001", "scene-002", "scene-003", "scene-004", "scene-005", "scene-006" })
+                await File.WriteAllBytesAsync(Path.Combine(sceneApprovalRoot, $"{sceneId}-final.png"), pngBytes);
+        }
     }
 
     private static string BuildApprovedScenePath(string workingDirectory, string sceneId)
@@ -648,7 +706,10 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "thumbnail-assets");
 
     private static string BuildVideoAssemblyRoot(string workingDirectory)
-        => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "video-assembly");
+        => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "video-assembly", "short");
+
+    private static string BuildLongVideoAssemblyRoot(string workingDirectory)
+        => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "video-assembly", "long");
 
     private static string CreateWorkingDirectory()
     {

@@ -21,6 +21,8 @@ public sealed class VideoAssemblyGenerationRequest
 
     public string Phase { get; set; } = "Intelligence";
 
+    public string OutputMode { get; set; } = "ShortFormOnly";
+
     public bool DryRun { get; set; } = true;
 
     public bool OverwriteExisting { get; set; }
@@ -36,7 +38,40 @@ public sealed class VideoAssemblyGenerationRequest
     public bool DuckMusicUnderNarration { get; set; } = true;
 
     public ScenePresentationProfile? ScenePresentationProfile { get; set; }
+
+    public VideoAssemblyFormRequest? ShortForm { get; set; }
+
+    public VideoAssemblyFormRequest? LongForm { get; set; }
 }
+
+public sealed class VideoAssemblyFormRequest
+{
+    public bool Enabled { get; set; }
+
+    public string Platform { get; set; } = string.Empty;
+
+    public ScenePresentationProfile? ScenePresentationProfile { get; set; }
+
+    public int TargetDurationSeconds { get; set; }
+
+    public bool BackgroundMusic { get; set; }
+
+    public string MusicMood { get; set; } = "WonderCuriosity";
+
+    public int MusicLevelPercent { get; set; }
+
+    public bool DuckMusicUnderNarration { get; set; } = true;
+}
+
+public sealed record VideoAssemblyFullPipelineFormResult(
+    bool Enabled,
+    string Status,
+    string FinalVideoPath,
+    double DurationSeconds,
+    ScenePresentationProfile ScenePresentationProfileUsed,
+    string FailedPhase = "",
+    string ErrorMessage = "",
+    IReadOnlyList<string>? GeneratedFiles = null);
 
 
 public sealed record VideoAssemblyGenerationResponse(
@@ -94,7 +129,10 @@ public sealed record VideoAssemblyGenerationResponse(
     int EffectiveMusicLevelPercent = 0,
     double MusicVolumeMultiplier = 0,
     string FfmpegAudioFilter = "",
-    bool MusicMixApplied = false);
+    bool MusicMixApplied = false,
+    string OutputMode = "",
+    VideoAssemblyFullPipelineFormResult? ShortForm = null,
+    VideoAssemblyFullPipelineFormResult? LongForm = null);
 
 public sealed record VideoAssemblyIntelligenceDto(
     string EventId,
@@ -113,7 +151,11 @@ public sealed record VideoAssemblyIntelligenceDto(
     IReadOnlyList<string> OutputsPlanned,
     VideoAssemblyScoresDto Scores,
     IReadOnlyList<string> Warnings,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    double TargetDurationSeconds = 0,
+    ScenePresentationProfile? RecommendedScenePresentationProfile = null,
+    string RecommendedSceneDirectory = "",
+    IReadOnlyList<string>? LongFormSections = null);
 
 public sealed record VideoAssemblySceneDurationDto(
     string SceneKey,
