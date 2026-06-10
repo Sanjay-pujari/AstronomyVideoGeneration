@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -114,6 +115,85 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.Equal(ScenePresentationProfile.LongForm, saved.RecommendedScenePresentationProfile);
         Assert.EndsWith("scene-approval-v3/long/", saved.RecommendedSceneDirectory);
         Assert.Equal(new[] { "Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" }, saved.LongFormSections);
+    }
+
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_LongFormScriptWritesWordCountEstimatedNarration()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+
+        await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormIntelligence",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            DryRun = false,
+            OverwriteExisting = true,
+            LongForm = new VideoAssemblyFormRequest
+            {
+                Enabled = true,
+                Platform = "YouTubeLong",
+                ScenePresentationProfile = ScenePresentationProfile.LongForm,
+                TargetDurationSeconds = 180,
+                BackgroundMusic = true,
+                MusicMood = "WonderCuriosity",
+                MusicLevelPercent = 18,
+                DuckMusicUnderNarration = true
+            }
+        }, CancellationToken.None);
+
+        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormScript",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            DryRun = false,
+            OverwriteExisting = true,
+            LongForm = new VideoAssemblyFormRequest
+            {
+                Enabled = true,
+                Platform = "YouTubeLong",
+                ScenePresentationProfile = ScenePresentationProfile.LongForm,
+                TargetDurationSeconds = 180,
+                BackgroundMusic = true,
+                MusicMood = "WonderCuriosity",
+                MusicLevelPercent = 18,
+                DuckMusicUnderNarration = true
+            }
+        }, CancellationToken.None);
+
+        var outputPath = Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "video-long-narration-script.json");
+        Assert.Equal("LongFormScript", result.PhaseRequested);
+        Assert.Equal("LongFormScript", result.PhaseExecuted);
+        Assert.True(result.VideoNarrationScriptGenerated);
+        Assert.Equal(outputPath.Replace('\\', '/'), result.VideoNarrationScriptPath);
+        Assert.InRange(result.TotalEstimatedDurationSeconds, 120, 180);
+        Assert.True(File.Exists(outputPath));
+
+        var saved = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(outputPath), JsonOptions);
+        Assert.NotNull(saved);
+        Assert.Equal("YouTubeLong", saved!.Platform);
+        Assert.Equal(new[] { "Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" }, saved.SceneScripts.Select(scene => scene.SceneKey));
+        Assert.InRange(saved.TotalEstimatedDurationSeconds, 120, 180);
+
+        var totalWords = CountTestWords(saved.FullNarrationText);
+        Assert.InRange(totalWords, 330, 430);
+        Assert.Equal(Math.Round(totalWords / 150.0 * 60.0, 3, MidpointRounding.AwayFromZero), saved.TotalEstimatedDurationSeconds);
+        Assert.All(saved.SceneScripts, scene =>
+        {
+            Assert.InRange(CountTestWords(scene.Narration), 25, 35);
+            Assert.True(scene.Narration.Count(c => c == '.') >= 2);
+        });
+        Assert.Equal("video-long-tts-audio.mp3", saved.TtsPlan.OutputFileName);
     }
 
 
@@ -710,6 +790,9 @@ public sealed class VideoAssemblyIntelligenceServiceTests
 
     private static string BuildLongVideoAssemblyRoot(string workingDirectory)
         => Path.Combine(workingDirectory, "assets", RegionId, "events", EventId, "video-assembly", "long");
+
+    private static int CountTestWords(string value)
+        => Regex.Matches(value, "[\\p{L}\\p{N}]+(?:['’\u2010-\u2015-][\\p{L}\\p{N}]+)?").Count;
 
     private static string CreateWorkingDirectory()
     {
