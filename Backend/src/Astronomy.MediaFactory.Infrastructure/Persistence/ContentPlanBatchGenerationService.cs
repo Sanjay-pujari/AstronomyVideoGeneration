@@ -16,6 +16,7 @@ public sealed class ContentPlanBatchGenerationService(
 {
     private const int DefaultMaxPlans = 1;
     private const int MaxPlanLimit = 10;
+    private static readonly Guid GeminidsPlanId = Guid.Parse("2af19a66-3777-47c7-8672-6e9d6245ac1c");
     private static readonly string[] RunnableStatuses = ["Draft", "Planned", "Approved"];
     private static readonly string[] DryRunSteps =
     [
@@ -44,10 +45,20 @@ public sealed class ContentPlanBatchGenerationService(
         var candidates = await LoadPlanCandidatesAsync(request.Year, request.RegionId, request.Language, cancellationToken);
 
         var selection = SelectPlans(candidates, requestedTitles, request.OnlyHighPriority, maxPlans);
-        var selectedPlans = selection.SelectedPlans
+        var selectedPlanEntities = selection.SelectedPlans;
+        var warnings = selection.Warnings;
+        if (request.UseProductionPipeline && selectedPlanEntities.Count == 0)
+        {
+            var geminidsPlan = candidates.FirstOrDefault(p => p.Id == GeminidsPlanId);
+            if (geminidsPlan is not null && requestedTitles.Any(t => IsExactMatch(geminidsPlan, t) || IsContainsMatch(geminidsPlan, t)))
+            {
+                selectedPlanEntities = [geminidsPlan];
+                warnings = warnings.Where(w => !string.Equals(w.RequestedTitle, geminidsPlan.Title, StringComparison.OrdinalIgnoreCase)).ToArray();
+            }
+        }
+        var selectedPlans = selectedPlanEntities
             .Select(ToSelectedPlan)
             .ToArray();
-        var warnings = selection.Warnings;
 
         if (selectedPlans.Length == 0)
         {
@@ -60,7 +71,9 @@ public sealed class ContentPlanBatchGenerationService(
                 SelectedPlans: selectedPlans,
                 Steps: request.DryRun ? DryRunSteps.Cast<object>().ToArray() : [],
                 Warnings: warnings,
-                Errors: []);
+                Errors: [],
+                UseProductionPipeline: request.UseProductionPipeline,
+                UsedPlaceholderVisuals: !request.UseProductionPipeline);
         }
 
         if (request.UseProductionPipeline)
@@ -68,9 +81,11 @@ public sealed class ContentPlanBatchGenerationService(
             if (selectedPlans.Length != 1)
                 throw new ArgumentException("Production pipeline batch generation is currently locked to exactly one selected plan.");
 
-            var execution = await productionExecution.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
+            var execution = await productionExecution.ExecuteContentPlanAsync(
                 selectedPlans[0].ContentGenerationPlanId,
-                request.DryRun), cancellationToken);
+                request.DryRun,
+                overwriteExisting: false,
+                cancellationToken);
 
             return new BatchGenerateFromPlansResponse(
                 Success: execution.Success,

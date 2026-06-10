@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -10,14 +9,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 public sealed class ContentPlanProductionExecutionService(
     MediaFactoryDbContext db,
     IContentPlanProductionRequestMapper mapper,
-    IQuestionEngine questionEngine,
-    IQuestionScenePlanner scenePlanner,
-    IQuestionSceneIntentEnricher sceneIntentEnricher,
-    IQuestionDrivenNarrationGenerator narrationGenerator,
-    IEditorialAstronomyInfographicComposer sceneEngine,
-    IHeroAssetIntelligenceEngine heroEngine,
-    IThumbnailAssetIntelligenceService thumbnailEngine,
-    IVideoAssemblyIntelligenceService videoAssemblyEngine,
+    IProductionPipelineExecutionService productionPipeline,
     IOptions<RenderingOptions> renderingOptions,
     ILogger<ContentPlanProductionExecutionService> logger) : IContentPlanProductionExecutionService
 {
@@ -39,6 +31,9 @@ public sealed class ContentPlanProductionExecutionService(
         "Video Assembly Engine long final video"
     ];
 
+    public Task<ContentPlanProductionExecutionResult> ExecuteContentPlanAsync(Guid contentGenerationPlanId, bool dryRun, bool overwriteExisting, CancellationToken cancellationToken)
+        => ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(contentGenerationPlanId, dryRun, overwriteExisting), cancellationToken);
+
     public async Task<ContentPlanProductionExecutionResult> ExecuteContentPlanWithProductionPipelineAsync(ContentPlanProductionExecutionRequest request, CancellationToken cancellationToken)
     {
         if (request.ContentGenerationPlanId != GeminidsPlanId)
@@ -54,7 +49,6 @@ public sealed class ContentPlanProductionExecutionService(
 
         var productionRequest = mapper.Map(plan, intelligence);
         var outputRoot = BuildPlanOutputRoot(productionRequest);
-        var eventId = intelligence.Id.ToString("D");
         var warnings = new List<string>(productionRequest.Warnings);
         var errors = new List<string>();
         var generatedFiles = new List<string>();
@@ -85,75 +79,20 @@ public sealed class ContentPlanProductionExecutionService(
             plan.Status = "ProductionRunning";
             await db.SaveChangesAsync(cancellationToken);
 
-            var questionResponse = await questionEngine.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(
-                plan.RegionId,
-                PlanIds: [plan.Id.ToString("D")],
-                MaxEvents: 1,
-                Language: plan.Language,
+            var pipelineResult = await productionPipeline.ExecuteAsync(new ProductionPipelineRequest(
+                productionRequest,
+                intelligence.Id,
+                outputRoot,
                 DryRun: false,
                 OverwriteExisting: request.OverwriteExisting), cancellationToken);
-            generatedFiles.AddRange(questionResponse.GeneratedFiles);
-            warnings.AddRange(questionResponse.Warnings);
-
-            var scenePlanResponse = await scenePlanner.GenerateQuestionScenePlanAsync(new QuestionScenePlanRequest(plan.RegionId, eventId, plan.Language, false, request.OverwriteExisting), cancellationToken);
-            generatedFiles.AddRange(scenePlanResponse.GeneratedFiles);
-            warnings.AddRange(scenePlanResponse.Warnings);
-
-            var enrichmentResponse = await sceneIntentEnricher.EnrichQuestionScenePlanAsync(new QuestionSceneIntentEnrichmentRequest(eventId, plan.RegionId, plan.Language, DryRun: false, OverwriteExisting: request.OverwriteExisting), cancellationToken);
-            generatedFiles.AddRange(enrichmentResponse.GeneratedFiles);
-            warnings.AddRange(enrichmentResponse.Warnings);
-
-            var narrationResponse = await narrationGenerator.GenerateQuestionDrivenNarrationAsync(new QuestionDrivenNarrationRequest(eventId, plan.RegionId, plan.Language, false, request.OverwriteExisting), cancellationToken);
-            generatedFiles.AddRange(narrationResponse.GeneratedFiles);
-            warnings.AddRange(narrationResponse.Warnings);
-
-            var sceneResponse = await sceneEngine.GenerateEditorialAstronomyInfographicsAsync(new QuestionDrivenVisualGenerationRequest(eventId, plan.RegionId, plan.Language, false, request.OverwriteExisting), cancellationToken);
-            generatedFiles.AddRange(sceneResponse.GeneratedFiles);
-            warnings.AddRange(sceneResponse.Warnings);
-
-            var heroResponse = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(eventId, plan.RegionId, plan.Language, false, request.OverwriteExisting, HeroAssetGenerationPhase.Full), cancellationToken);
-            generatedFiles.AddRange(heroResponse.GeneratedFiles);
-            warnings.AddRange(heroResponse.Warnings);
-
-            var thumbnailResponse = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest
-            {
-                EventId = eventId,
-                RegionId = plan.RegionId,
-                Language = plan.Language,
-                Phase = "Images",
-                DryRun = false,
-                OverwriteExisting = request.OverwriteExisting,
-                ThumbnailStyle = "ScrollStopping",
-                ThumbnailVisualStyle = "PhotoCinematic"
-            }, cancellationToken);
-            generatedFiles.AddRange(thumbnailResponse.GeneratedFiles);
-            if (thumbnailResponse.Warnings is not null) warnings.AddRange(thumbnailResponse.Warnings);
-
-            var assemblyResponse = await videoAssemblyEngine.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
-            {
-                EventId = eventId,
-                RegionId = plan.RegionId,
-                Language = plan.Language,
-                Platform = "YouTubeShort",
-                Phase = "FullPipeline",
-                DryRun = false,
-                OverwriteExisting = request.OverwriteExisting,
-                OutputMode = "Production",
-                ShortForm = new VideoAssemblyFormRequest { Enabled = true, Platform = "YouTubeShort", ScenePresentationProfile = ScenePresentationProfile.ShortForm, TargetDurationSeconds = 60, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 12, DuckMusicUnderNarration = true },
-                LongForm = new VideoAssemblyFormRequest { Enabled = true, Platform = "YouTubeLong", ScenePresentationProfile = ScenePresentationProfile.LongForm, TargetDurationSeconds = 360, BackgroundMusic = true, MusicMood = "WonderCuriosity", MusicLevelPercent = 10, DuckMusicUnderNarration = true }
-            }, cancellationToken);
-            generatedFiles.AddRange(assemblyResponse.GeneratedFiles);
-
-            var copied = await MaterializePlanFolderAsync(plan, intelligence, outputRoot, generatedFiles, cancellationToken);
-            generatedFiles.AddRange(copied);
+            generatedFiles.AddRange(pipelineResult.GeneratedFiles);
+            warnings.AddRange(pipelineResult.Warnings);
+            errors.AddRange(pipelineResult.Errors);
 
             var shortVideo = Path.Combine(outputRoot, "video-assembly", "short", "final-video-short.mp4");
             var longVideo = Path.Combine(outputRoot, "video-assembly", "long", "final-video-long.mp4");
             var shortOk = File.Exists(shortVideo);
             var longOk = File.Exists(longVideo);
-            if (!shortOk) errors.Add("Short final video was not generated in the DB-plan production folder.");
-            if (!longOk) errors.Add("Long final video was not generated in the DB-plan production folder.");
-
             execution.Status = errors.Count == 0 ? "Completed" : "Failed";
             execution.FinishedUtc = DateTimeOffset.UtcNow;
             execution.ErrorMessage = errors.Count == 0 ? null : string.Join("; ", errors);
