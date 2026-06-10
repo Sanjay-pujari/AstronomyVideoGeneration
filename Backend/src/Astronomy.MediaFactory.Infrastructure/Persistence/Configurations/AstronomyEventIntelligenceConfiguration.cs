@@ -12,6 +12,17 @@ public sealed class AstronomyEventIntelligenceConfiguration : IEntityTypeConfigu
         builder.HasKey(x => x.Id);
 
         builder.Property(x => x.EventCode).HasMaxLength(160).IsRequired();
+        builder.Property(x => x.ExternalEventId)
+            .HasMaxLength(160)
+            .IsRequired();
+        builder.Property(x => x.Language)
+            .HasMaxLength(16)
+            .IsRequired();
+        builder.Property(x => x.VerificationStatus)
+            .HasMaxLength(80)
+            .IsRequired();
+        builder.Property(x => x.ContentStrategy)
+            .HasMaxLength(120);
         builder.Property(x => x.EventType).HasMaxLength(80).IsRequired();
         builder.Property(x => x.Title).HasMaxLength(240).IsRequired();
         builder.Property(x => x.Summary).HasMaxLength(1000);
@@ -36,11 +47,21 @@ public sealed class AstronomyEventIntelligenceConfiguration : IEntityTypeConfigu
         builder.Property(x => x.MetadataJson).HasColumnType("jsonb");
 
         builder.HasIndex(x => x.EventCode).IsUnique();
+        builder.HasIndex(x => new
+        {
+            x.ExternalEventId,
+            x.Year,
+            x.RegionId,
+            x.Language
+        }).IsUnique();
         builder.HasIndex(x => x.EventType);
         builder.HasIndex(x => x.StartUtc);
         builder.HasIndex(x => x.PeakUtc);
         builder.HasIndex(x => x.RegionId);
         builder.HasIndex(x => x.RecommendedCategory);
         builder.HasIndex(x => x.Status);
+        builder.HasIndex(x => x.VerificationStatus);
+        builder.HasIndex(x => x.AutoGenerateAllowed);
+        builder.HasIndex(x => x.ContentStrategy);
     }
 }
