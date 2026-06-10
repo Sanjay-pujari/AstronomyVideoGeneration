@@ -104,14 +104,40 @@ public sealed class AstronomyAssetPlanningServiceTests
     }
 
     [Fact]
-    public async Task GenerateAssetPlansAsync_DuplicateSkipWorksWhenAssetPlanExistsAndOverwriteFalse()
+    public async Task GenerateAssetPlansAsync_ReplacesImportedJsonWithoutAssetRequirementsWhenOverwriteFalse()
     {
         await using var db = CreateInMemoryDb();
         var plan = SeedPlan(db, "RareEventAlert", "Short");
+        plan.RequestedOutputTypesJson = JsonSerializer.Serialize(new[] { "HeroAsset", "Thumbnail", "ShortVideo", "LongVideo" });
         plan.AssetPlanJson = "{\"existing\":true}";
-        plan.AssetPlanStatus = "Planned";
+        plan.AssetPlanStatus = "Imported";
         await db.SaveChangesAsync();
         var service = CreateService(db);
+
+        var result = await service.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: false, OverwriteExisting: false), CancellationToken.None);
+
+        Assert.Equal(1, result.PlanCount);
+        Assert.Equal(1, result.SavedCount);
+        Assert.Equal(0, result.SkippedDuplicates);
+        Assert.Single(result.AssetPlans);
+        Assert.NotEqual("{\"existing\":true}", plan.AssetPlanJson);
+        Assert.Contains("assetRequirements", plan.AssetPlanJson);
+        Assert.Contains("hero_landscape", plan.AssetPlanJson);
+        Assert.Contains("thumbnail_landscape", plan.AssetPlanJson);
+        Assert.Contains("thumbnail_portrait", plan.AssetPlanJson);
+        Assert.Contains("short_scene_portrait", plan.AssetPlanJson);
+        Assert.Contains("long_scene_landscape", plan.AssetPlanJson);
+    }
+
+
+    [Fact]
+    public async Task GenerateAssetPlansAsync_SkipsValidExistingAssetPlanWhenOverwriteFalse()
+    {
+        await using var db = CreateInMemoryDb();
+        var plan = SeedPlan(db, "RareEventAlert", "Short");
+        var service = CreateService(db);
+        await service.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: false), CancellationToken.None);
+        var existing = plan.AssetPlanJson;
 
         var result = await service.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(DryRun: false, OverwriteExisting: false), CancellationToken.None);
 
@@ -119,7 +145,7 @@ public sealed class AstronomyAssetPlanningServiceTests
         Assert.Equal(0, result.SavedCount);
         Assert.Equal(1, result.SkippedDuplicates);
         Assert.Empty(result.AssetPlans);
-        Assert.Equal("{\"existing\":true}", plan.AssetPlanJson);
+        Assert.Equal(existing, plan.AssetPlanJson);
     }
 
 

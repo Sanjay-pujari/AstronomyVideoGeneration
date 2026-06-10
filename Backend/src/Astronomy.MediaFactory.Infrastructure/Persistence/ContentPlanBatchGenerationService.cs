@@ -19,6 +19,7 @@ public sealed class ContentPlanBatchGenerationService(
     private static readonly string[] DryRunSteps =
     [
         "Would create content_pipeline_execution",
+        "Would generate compatible AssetPlanJson for selected plans when missing or imported without asset requirements",
         "Would generate hero asset",
         "Would generate thumbnail",
         "Would generate short narration",
@@ -118,7 +119,25 @@ public sealed class ContentPlanBatchGenerationService(
             .Select(s => $"{s.StepName}: {s.ErrorMessage}")
             .ToArray();
 
-        return new BatchGenerateFromPlansResponse(errors.Length == 0, false, requestedTitles.Length, selectedPlans.Length, maxPlans, selectedPlans, steps, warnings, errors);
+        var counters = BuildCounters(selectedPlans.Length, steps, errors.Length);
+        return new BatchGenerateFromPlansResponse(
+            errors.Length == 0,
+            false,
+            requestedTitles.Length,
+            selectedPlans.Length,
+            maxPlans,
+            selectedPlans,
+            steps,
+            warnings,
+            errors,
+            counters.AssetPlansGenerated,
+            counters.AssetJobsCreated,
+            counters.VisualAssetsGenerated,
+            counters.SceneVideosRendered,
+            0,
+            0,
+            counters.FailedPlans,
+            []);
     }
 
     public async Task<PlansReadyForGenerationResponse> GetPlansReadyForGenerationAsync(
@@ -283,6 +302,37 @@ public sealed class ContentPlanBatchGenerationService(
             return "Excluded because onlyHighPriority was true and plan priority was not high";
         return "Excluded by runnable filters";
     }
+
+    private static BatchCounters BuildCounters(int selectedPlanCount, IReadOnlyList<object> steps, int errorCount)
+    {
+        var assetPlansGenerated = 0;
+        var assetJobsCreated = 0;
+        var visualAssetsGenerated = 0;
+        var sceneVideosRendered = 0;
+
+        foreach (var step in steps.OfType<BatchGenerateFromPlansStepResult>())
+        {
+            switch (step.Result)
+            {
+                case AstronomyAssetPlanningResult assetPlanningResult:
+                    assetPlansGenerated += assetPlanningResult.SavedCount;
+                    break;
+                case AstronomyAssetProductionJobResult jobResult:
+                    assetJobsCreated += jobResult.SavedCount;
+                    break;
+                case VisualAssetGenerationResponse visualResult:
+                    visualAssetsGenerated += visualResult.GeneratedVisualCount;
+                    break;
+                case SceneRenderingResponse sceneResult:
+                    sceneVideosRendered += sceneResult.CompletedCount;
+                    break;
+            }
+        }
+
+        return new BatchCounters(assetPlansGenerated, assetJobsCreated, visualAssetsGenerated, sceneVideosRendered, errorCount == 0 ? 0 : selectedPlanCount);
+    }
+
+    private sealed record BatchCounters(int AssetPlansGenerated, int AssetJobsCreated, int VisualAssetsGenerated, int SceneVideosRendered, int FailedPlans);
 
     private async Task<BatchGenerateFromPlansStepResult> ExecuteStepAsync<T>(string stepName, Func<Task<T>> action)
     {

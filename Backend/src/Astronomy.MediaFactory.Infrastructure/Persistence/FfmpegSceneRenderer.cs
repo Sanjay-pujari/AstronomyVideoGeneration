@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SixLabors.Fonts;
@@ -20,6 +21,7 @@ using Path = System.IO.Path;
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public sealed class FfmpegSceneRenderer(
+    MediaFactoryDbContext db,
     IOptions<RenderingOptions> renderingOptions,
     IProcessRunner processRunner,
     ILogger<FfmpegSceneRenderer> logger) : ISceneRenderer
@@ -28,8 +30,7 @@ public sealed class FfmpegSceneRenderer(
     private const string CapabilityDirectoryName = "render-capabilities";
     private const string RenderedScenesDirectoryName = "rendered-scenes";
     private const string WorkingFramesDirectoryName = "render-working-frames";
-    private const string PilotCategory = "RareEventAlert";
-    private static readonly Guid PilotPlanId = Guid.Parse("36cb768a-4aa6-4189-ac48-f45ae5ee4f6b");
+    private static readonly string[] SupportedBatchCategories = ["RareEventAlert", "CosmicStoryShort"];
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".webp"];
 
@@ -37,12 +38,14 @@ public sealed class FfmpegSceneRenderer(
     {
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.RegionId)) throw new ArgumentException("RegionId is required.");
-        if (request.PlanIds is null || request.PlanIds.Count == 0) throw new ArgumentException("At least one planId is required. Phase 9E.2B pilot does not render all plans.");
+        if (request.PlanIds is null || request.PlanIds.Count == 0) throw new ArgumentException("At least one explicit planId is required; scene rendering never renders all plans.");
         if (request.MaxPlans is < 1) throw new ArgumentException("MaxPlans must be greater than zero when provided.");
 
-        var selectedPlanIds = request.PlanIds.Take(Math.Min(request.MaxPlans ?? 1, 1)).ToArray();
-        if (selectedPlanIds.Any(id => id != PilotPlanId))
-            throw new ArgumentException($"Phase 9E.2B pilot is isolated to RareEventAlert plan {PilotPlanId:D}.");
+        var selectedPlanIds = request.PlanIds.Where(id => id != Guid.Empty).Distinct().Take(request.MaxPlans ?? int.MaxValue).ToArray();
+        if (selectedPlanIds.Length == 0) throw new ArgumentException("At least one non-empty planId is required.");
+
+        var selectedPlanMetadata = await LoadSelectedPlanMetadataAsync(selectedPlanIds, request.RegionId!, cancellationToken);
+        ValidateSelectedPlans(selectedPlanIds, selectedPlanMetadata);
 
         var root = ResolveWorkingDirectoryRoot();
         var warnings = new List<string>();
@@ -59,17 +62,14 @@ public sealed class FfmpegSceneRenderer(
             var outputDirectory = Path.Combine(planRoot, RenderedScenesDirectoryName);
             var frameDirectory = Path.Combine(planRoot, WorkingFramesDirectoryName);
             var recipePaths = Directory.Exists(recipeDirectory)
-                ? Directory.EnumerateFiles(recipeDirectory, "scene-*.recipe.json", SearchOption.TopDirectoryOnly).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).Take(4).ToArray()
+                ? Directory.EnumerateFiles(recipeDirectory, "scene-*.recipe.json", SearchOption.TopDirectoryOnly).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray()
                 : [];
 
             if (recipePaths.Length == 0)
             {
-                warnings.Add($"No render recipes found for pilot plan {planId:D}: {recipeDirectory}");
+                warnings.Add($"No render recipes found for selected plan {planId:D}: {recipeDirectory}");
                 continue;
             }
-            if (recipePaths.Length != 4)
-                warnings.Add($"Phase 9E.2B pilot expects 4 RareEventAlert scene recipes; found {recipePaths.Length} under {recipeDirectory}.");
-
             foreach (var recipePath in recipePaths)
             {
                 var sceneWarnings = new List<string>();
@@ -81,8 +81,8 @@ public sealed class FfmpegSceneRenderer(
                     continue;
                 }
 
-                if (!string.Equals(recipe.ContentCategory, PilotCategory, StringComparison.OrdinalIgnoreCase))
-                    throw new ArgumentException($"Phase 9E.2B pilot only supports {PilotCategory}. Recipe {recipePath} is {recipe.ContentCategory}.");
+                if (!SupportedBatchCategories.Contains(recipe.ContentCategory, StringComparer.OrdinalIgnoreCase))
+                    throw new ArgumentException($"Scene rendering supports only {string.Join(" or ", SupportedBatchCategories)} recipes for selected plan batches. Recipe {recipePath} is {recipe.ContentCategory}.");
 
                 var capabilityPath = Path.Combine(capabilityDirectory, $"scene-{recipe.SceneNumber:000}.capability.json");
                 var capability = File.Exists(capabilityPath) ? await ReadJsonAsync<RenderCapabilityDocument>(capabilityPath, cancellationToken) : null;
@@ -170,6 +170,50 @@ public sealed class FfmpegSceneRenderer(
 
         return new SceneRenderingResponse(selectedPlanIds.Length, planItems.Count, completed, failed, renderedFiles, warnings, planItems);
     }
+
+    private async Task<IReadOnlyDictionary<Guid, SelectedPlanRenderMetadata>> LoadSelectedPlanMetadataAsync(Guid[] selectedPlanIds, string regionId, CancellationToken cancellationToken)
+    {
+        var ids = selectedPlanIds.ToHashSet();
+        return await db.ContentGenerationPlans.AsNoTracking()
+            .Where(p => ids.Contains(p.Id) && p.RegionId == regionId)
+            .Select(p => new SelectedPlanRenderMetadata(p.Id, p.ContentCategoryCode, p.AssetPlanJson))
+            .ToDictionaryAsync(p => p.Id, cancellationToken);
+    }
+
+    private static void ValidateSelectedPlans(Guid[] selectedPlanIds, IReadOnlyDictionary<Guid, SelectedPlanRenderMetadata> selectedPlanMetadata)
+    {
+        var missingPlanIds = selectedPlanIds.Where(id => !selectedPlanMetadata.ContainsKey(id)).ToArray();
+        if (missingPlanIds.Length > 0)
+            throw new ArgumentException($"Scene rendering was requested for plan id(s) not found in the requested region: {string.Join(", ", missingPlanIds.Select(id => id.ToString("D")))}.");
+
+        foreach (var plan in selectedPlanMetadata.Values)
+        {
+            if (!SupportedBatchCategories.Contains(plan.ContentCategoryCode, StringComparer.OrdinalIgnoreCase))
+                throw new ArgumentException($"Scene rendering supports only {string.Join(" or ", SupportedBatchCategories)} selected content categories. Plan {plan.Id:D} is {plan.ContentCategoryCode}.");
+            if (!HasAssetRequirements(plan.AssetPlanJson))
+                throw new ArgumentException($"Scene rendering requires selected plan {plan.Id:D} to have valid AssetPlanJson with asset requirements.");
+        }
+    }
+
+    private static bool HasAssetRequirements(string? assetPlanJson)
+    {
+        if (string.IsNullOrWhiteSpace(assetPlanJson)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(assetPlanJson);
+            if (document.RootElement.TryGetProperty("assetRequirements", out var assetRequirements) && assetRequirements.ValueKind == JsonValueKind.Array && assetRequirements.GetArrayLength() > 0)
+                return true;
+            if (!document.RootElement.TryGetProperty("sceneAssetGroups", out var sceneGroups) || sceneGroups.ValueKind != JsonValueKind.Array)
+                return false;
+            return sceneGroups.EnumerateArray().Any(group => group.TryGetProperty("assetRequirements", out var requirements) && requirements.ValueKind == JsonValueKind.Array && requirements.GetArrayLength() > 0);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private sealed record SelectedPlanRenderMetadata(Guid Id, string ContentCategoryCode, string? AssetPlanJson);
 
     private async Task<ResolvedVisual> ResolveVisualAsync(string planRoot, string frameDirectory, string recipePath, RenderRecipeDocument recipe, bool dryRun, List<string> warnings, CancellationToken cancellationToken)
     {
