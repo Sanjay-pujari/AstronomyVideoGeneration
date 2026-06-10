@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
@@ -23,6 +24,8 @@ public sealed class VisualAssetGenerationService(
 {
     private const string AssemblyFileName = "scene-assembly-plan.json";
     private const string OutputDirectoryName = "visual-assets";
+    private const string RenderRecipeDirectoryName = "render-recipes";
+    private const string JobRecipeGenerationSource = "Phase10A.3";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".webp"];
     private const string StellariumCaptureType = "StellariumCapture";
@@ -31,6 +34,12 @@ public sealed class VisualAssetGenerationService(
     private const string ConstellationGuideVisualType = "ConstellationGuideVisual";
     private const string NasaMetadataVisualType = "NasaMetadataVisual";
     private const string TextOverlayVisualType = "TextOverlayVisual";
+    private const string TextOverlayCardAssetType = "TextOverlayCard";
+    private const string ThumbnailConceptAssetType = "ThumbnailConcept";
+    private const string AiHeroImageAssetType = "AiHeroImage";
+    private const string AiCinematicImageAssetType = "AiCinematicImage";
+    private const string SkyMapCardAssetType = "SkyMapCard";
+    private const string StellariumScreenshotAssetType = "StellariumScreenshot";
     private static readonly string[] ForbiddenTerms =
     [
         "internal asset IDs",
@@ -68,7 +77,13 @@ public sealed class VisualAssetGenerationService(
             var assembly = await ReadJsonAsync<SceneAssemblyPlanDocument>(assemblyPath, cancellationToken);
             if (assembly is null)
             {
-                warnings.Add($"Missing or unreadable scene assembly plan for plan {candidate.Id}: {assemblyPath}");
+                var jobResult = await GenerateFromSelectedPlanJobsAsync(candidate, planRoot, request, generatedFiles, planned, warnings, cancellationToken);
+                sceneCount += jobResult.SceneCount;
+                generatedVisualCount += jobResult.GeneratedVisualCount;
+                approvedVisualCount += jobResult.ApprovedVisualCount;
+                failedVisualCount += jobResult.FailedVisualCount;
+                if (jobResult.SceneCount == 0)
+                    warnings.Add($"Missing or unreadable scene assembly plan and no supported asset production jobs for plan {candidate.Id}: {assemblyPath}");
                 continue;
             }
 
@@ -109,6 +124,8 @@ public sealed class VisualAssetGenerationService(
                     if ((File.Exists(backgroundPath) || File.Exists(manifestPath)) && !request.OverwriteExisting)
                     {
                         warnings.Add($"Skipped existing visual assets for plan {assembly.ContentGenerationPlanId} scene {scene.SceneNumber:000}. Set overwriteExisting=true to replace them.");
+                        var existingRecipePath = await WriteAssemblyRenderRecipeAsync(root, assembly, scene, backgroundPath, File.Exists(overlayPath) ? overlayPath : string.Empty, request, cancellationToken);
+                        if (!string.IsNullOrWhiteSpace(existingRecipePath)) generatedFiles.Add(existingRecipePath);
                         continue;
                     }
 
@@ -137,6 +154,9 @@ public sealed class VisualAssetGenerationService(
                     await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
                     generatedFiles.Add(manifestPath);
 
+                    var recipePath = await WriteAssemblyRenderRecipeAsync(root, assembly, scene, backgroundPath, wroteOverlay ? overlayPath : string.Empty, request, cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(recipePath)) generatedFiles.Add(recipePath);
+
                     if (issues.Count == 0) approvedVisualCount++; else failedVisualCount++;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -158,13 +178,374 @@ public sealed class VisualAssetGenerationService(
         if (!string.IsNullOrWhiteSpace(request.RegionId)) query = query.Where(p => p.RegionId == request.RegionId.Trim());
         if (request.PlanIds is { Count: > 0 })
         {
-            var ids = request.PlanIds.ToHashSet();
+            var ids = request.PlanIds.Where(id => id != Guid.Empty).ToHashSet();
             query = query.Where(p => ids.Contains(p.Id));
+            var selectedPlans = await query.OrderBy(p => p.Id).ToListAsync(cancellationToken);
+            return selectedPlans.Take(request.MaxPlans ?? int.MaxValue).ToArray();
         }
         query = query.Where(p => p.AstronomyContentOpportunityId != null || p.AstronomyEventIntelligenceId != null);
         var plans = await query.OrderByDescending(p => p.ScheduledUtc ?? DateTimeOffset.MinValue).ThenBy(p => p.Id).ToListAsync(cancellationToken);
         return plans.Where(p => File.Exists(Path.Combine(BuildPlanRoot(root, p.RegionId, p.Id.ToString("D")), "assembly", AssemblyFileName))).Take(request.MaxPlans ?? int.MaxValue).ToArray();
     }
+
+
+    private async Task<JobVisualGenerationResult> GenerateFromSelectedPlanJobsAsync(
+        ContentGenerationPlan candidate,
+        string planRoot,
+        VisualAssetGenerationRequest request,
+        List<string> generatedFiles,
+        List<VisualAssetGenerationPlanItem> planned,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        var jobs = await LoadSelectedPlanJobsAsync(candidate.Id, cancellationToken);
+        if (jobs.Count == 0)
+            return new JobVisualGenerationResult(0, 0, 0, 0);
+
+        var supportedJobs = jobs.Where(IsSupportedSelectedPlanJob).ToArray();
+        foreach (var unsupported in jobs.Except(supportedJobs))
+            warnings.Add($"Skipped planning-only or unsupported asset production job '{unsupported.Id}' with asset type '{unsupported.AssetType}' for selected plan {candidate.Id:D}.");
+
+        var sceneGroups = supportedJobs
+            .GroupBy(job => job.SceneNumber <= 0 ? 1 : job.SceneNumber)
+            .OrderBy(group => group.Key)
+            .ToArray();
+
+        var sceneCount = 0;
+        var generatedVisualCount = 0;
+        var approvedVisualCount = 0;
+        var failedVisualCount = 0;
+        var startSecond = 0d;
+
+        foreach (var sceneGroup in sceneGroups)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sceneCount++;
+            var sceneJobs = sceneGroup.OrderBy(job => job.Priority).ThenBy(job => job.Id).ToArray();
+            var primaryJob = SelectPrimaryVisualJob(sceneJobs);
+            if (primaryJob is null)
+            {
+                warnings.Add($"No supported primary visual job found for selected plan {candidate.Id:D} scene {sceneGroup.Key:000}.");
+                failedVisualCount++;
+                continue;
+            }
+
+            var sceneName = string.IsNullOrWhiteSpace(primaryJob.SceneName) ? $"Scene {sceneGroup.Key}" : primaryJob.SceneName;
+            var outputDir = Path.Combine(planRoot, OutputDirectoryName);
+            var backgroundPath = Path.Combine(outputDir, $"scene-{sceneGroup.Key:000}-background.png");
+            var overlayPath = Path.Combine(outputDir, $"scene-{sceneGroup.Key:000}-overlay.png");
+            var manifestPath = Path.Combine(outputDir, $"scene-{sceneGroup.Key:000}-visual-manifest.json");
+            var sourcePath = BuildJobSourcePath(outputDir, primaryJob);
+            var overlayJob = sceneJobs.FirstOrDefault(job => IsAssetType(job, TextOverlayCardAssetType));
+            var overlaySourcePath = overlayJob is null ? string.Empty : BuildJobSourcePath(outputDir, overlayJob);
+            var objects = ObjectNames(primaryJob).DefaultIfEmpty(candidate.Title ?? sceneName).ToArray();
+            var sourceType = VisualSourceTypeForJob(primaryJob);
+            var issues = new List<string>();
+
+            if (IsAssetType(primaryJob, StellariumScreenshotAssetType) && !IsImage(primaryJob.OutputPath))
+                issues.Add("StellariumScreenshot job has no completed image capture; generated a cinematic placeholder from job metadata.");
+            if (IsAssetType(primaryJob, ThumbnailConceptAssetType))
+                issues.Add("ThumbnailConcept is a thumbnail planning asset; generated a reusable concept visual for scene-render input.");
+
+            planned.Add(new VisualAssetGenerationPlanItem(
+                candidate.Id.ToString("D"),
+                candidate.RegionId,
+                sceneGroup.Key,
+                sceneName,
+                backgroundPath,
+                overlayJob is null ? string.Empty : overlayPath,
+                manifestPath,
+                sourceType,
+                sourcePath,
+                objects,
+                issues));
+
+            if (request.DryRun)
+            {
+                startSecond += DefaultSceneDurationSeconds;
+                continue;
+            }
+
+            Directory.CreateDirectory(outputDir);
+            try
+            {
+                if ((File.Exists(backgroundPath) || File.Exists(manifestPath)) && !request.OverwriteExisting)
+                {
+                    warnings.Add($"Skipped existing visual assets for selected plan {candidate.Id:D} scene {sceneGroup.Key:000}. Set overwriteExisting=true to replace them.");
+                    var recipePath = await WriteJobRenderRecipeAsync(candidate, sceneGroup.Key, sceneName, startSecond, DefaultSceneDurationSeconds, backgroundPath, overlayJob is null ? string.Empty : overlayPath, sceneJobs, request, cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(recipePath)) generatedFiles.Add(recipePath);
+                    startSecond += DefaultSceneDurationSeconds;
+                    continue;
+                }
+
+                await WriteJobSourceJsonAsync(sourcePath, primaryJob, candidate, cancellationToken);
+                generatedFiles.Add(sourcePath);
+
+                var assembly = BuildJobAssembly(candidate, sceneGroup.Key, sceneName, startSecond, DefaultSceneDurationSeconds, backgroundPath);
+                var scene = assembly.Scenes.Single();
+                var source = new VisualSource(sourceType, IsImage(primaryJob.OutputPath) ? primaryJob.OutputPath! : sourcePath);
+                await RenderBackgroundAsync(backgroundPath, assembly, scene, source, objects, cancellationToken);
+                generatedFiles.Add(backgroundPath);
+                generatedVisualCount++;
+
+                var wroteOverlay = false;
+                if (overlayJob is not null)
+                {
+                    await WriteJobSourceJsonAsync(overlaySourcePath, overlayJob, candidate, cancellationToken);
+                    generatedFiles.Add(overlaySourcePath);
+                    await RenderOverlayAsync(overlayPath, scene, new VisualSource(TextOverlayVisualType, overlaySourcePath), ObjectNames(overlayJob).DefaultIfEmpty(sceneName).ToArray(), cancellationToken);
+                    generatedFiles.Add(overlayPath);
+                    generatedVisualCount++;
+                    wroteOverlay = true;
+                }
+
+                var manifest = new SceneVisualAssetManifest(sceneGroup.Key, backgroundPath, wroteOverlay ? overlayPath : string.Empty, sourceType, objects, issues.Count == 0, issues, DateTimeOffset.UtcNow);
+                await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
+                generatedFiles.Add(manifestPath);
+
+                var jobRecipePath = await WriteJobRenderRecipeAsync(candidate, sceneGroup.Key, sceneName, startSecond, DefaultSceneDurationSeconds, backgroundPath, wroteOverlay ? overlayPath : string.Empty, sceneJobs, request, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(jobRecipePath)) generatedFiles.Add(jobRecipePath);
+
+                if (issues.Count == 0) approvedVisualCount++; else failedVisualCount++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                failedVisualCount++;
+                warnings.Add($"Visual asset generation from selected asset production jobs failed for plan {candidate.Id:D} scene {sceneGroup.Key:000}: {ex.Message}");
+                logger.LogWarning(ex, "Phase 10A.3 selected-plan visual asset generation failed for plan {PlanId} scene {SceneNumber}", candidate.Id, sceneGroup.Key);
+            }
+
+            startSecond += DefaultSceneDurationSeconds;
+        }
+
+        return new JobVisualGenerationResult(sceneCount, generatedVisualCount, approvedVisualCount, failedVisualCount);
+    }
+
+    private async Task<IReadOnlyList<AstronomyAssetProductionJob>> LoadSelectedPlanJobsAsync(Guid planId, CancellationToken cancellationToken)
+        => await db.AstronomyAssetProductionJobs
+            .AsNoTracking()
+            .Where(job => job.ContentGenerationPlanId == planId)
+            .Where(job => job.Status != AstronomyAssetProductionJobStatuses.Failed)
+            .OrderBy(job => job.SceneNumber)
+            .ThenBy(job => job.Priority)
+            .ThenBy(job => job.Id)
+            .ToArrayAsync(cancellationToken);
+
+    private static bool IsSupportedSelectedPlanJob(AstronomyAssetProductionJob job)
+        => IsAssetType(job, TextOverlayCardAssetType)
+            || IsAssetType(job, ThumbnailConceptAssetType)
+            || IsAssetType(job, AiHeroImageAssetType)
+            || IsAssetType(job, AiCinematicImageAssetType)
+            || IsAssetType(job, SkyMapCardAssetType)
+            || IsAssetType(job, StellariumScreenshotAssetType);
+
+    private static AstronomyAssetProductionJob? SelectPrimaryVisualJob(IReadOnlyList<AstronomyAssetProductionJob> jobs)
+        => jobs.FirstOrDefault(job => IsAssetType(job, StellariumScreenshotAssetType) && IsImage(job.OutputPath))
+            ?? jobs.FirstOrDefault(job => IsAssetType(job, AiHeroImageAssetType) || IsAssetType(job, AiCinematicImageAssetType))
+            ?? jobs.FirstOrDefault(job => IsAssetType(job, SkyMapCardAssetType))
+            ?? jobs.FirstOrDefault(job => IsAssetType(job, StellariumScreenshotAssetType))
+            ?? jobs.FirstOrDefault(job => IsAssetType(job, TextOverlayCardAssetType))
+            ?? jobs.FirstOrDefault(job => IsAssetType(job, ThumbnailConceptAssetType));
+
+    private static string VisualSourceTypeForJob(AstronomyAssetProductionJob job)
+    {
+        if (IsAssetType(job, SkyMapCardAssetType)) return SkyMapVisualType;
+        if (IsAssetType(job, TextOverlayCardAssetType) || IsAssetType(job, ThumbnailConceptAssetType)) return TextOverlayVisualType;
+        if (IsAssetType(job, StellariumScreenshotAssetType)) return StellariumCaptureType;
+        return AiPromptVisualType;
+    }
+
+    private static string BuildJobSourcePath(string outputDir, AstronomyAssetProductionJob job)
+        => Path.Combine(outputDir, $"scene-{Math.Max(1, job.SceneNumber):000}-{NormalizeAssetType(job.AssetType)}-{job.Id:N}.json");
+
+    private async Task WriteJobSourceJsonAsync(string path, AstronomyAssetProductionJob job, ContentGenerationPlan plan, CancellationToken cancellationToken)
+    {
+        var json = BuildJobSourceJson(job, plan);
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(json, JsonOptions), cancellationToken);
+    }
+
+    private static JsonObject BuildJobSourceJson(AstronomyAssetProductionJob job, ContentGenerationPlan plan)
+    {
+        var metadata = ParseMetadata(job.MetadataJson);
+        var objects = ObjectNames(job);
+        return new JsonObject
+        {
+            ["contentGenerationPlanId"] = plan.Id.ToString("D"),
+            ["assetProductionJobId"] = job.Id.ToString("D"),
+            ["assetType"] = job.AssetType,
+            ["title"] = ReadString(metadata, "title", "titleText", "headline", "thumbnailText") ?? job.SceneName,
+            ["subtitle"] = ReadString(metadata, "subtitle", "subtitleText", "shortFact") ?? job.AssetPurpose,
+            ["summary"] = ReadString(metadata, "summary", "caption", "keyMessage", "composition") ?? job.PromptOrInstruction ?? plan.Title ?? job.SceneName,
+            ["instruction"] = job.PromptOrInstruction ?? string.Empty,
+            ["regionId"] = plan.RegionId,
+            ["contentCategory"] = plan.ContentCategoryCode,
+            ["plannedFormat"] = plan.PlannedFormat ?? string.Empty,
+            ["objectNames"] = new JsonArray(objects.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()),
+            ["metadata"] = metadata.DeepClone(),
+            ["generationSource"] = JobRecipeGenerationSource,
+            ["generatedUtc"] = DateTimeOffset.UtcNow.ToString("O")
+        };
+    }
+
+    private static SceneAssemblyPlanDocument BuildJobAssembly(ContentGenerationPlan plan, int sceneNumber, string sceneName, double startSecond, double durationSeconds, string outputSceneVideoPath)
+        => new(
+            plan.Id.ToString("D"),
+            plan.RegionId,
+            plan.ContentCategoryCode,
+            plan.PlannedFormat ?? string.Empty,
+            plan.Title ?? sceneName,
+            "16:9",
+            new SceneAssemblyResolution(1920, 1080),
+            30,
+            durationSeconds,
+            new SceneAssemblyAudio(string.Empty, "cinematic", "medium", false),
+            [new SceneAssemblyScene(
+                sceneNumber,
+                sceneName,
+                startSecond,
+                startSecond + durationSeconds,
+                durationSeconds,
+                outputSceneVideoPath,
+                string.Empty,
+                [],
+                new SceneAssemblyMotion("zoom_in_subtle", "low", "center", 1.0, 1.06),
+                new SceneAssemblyTransition("fade", "fade", 0.35),
+                new SceneAssemblyCaptions(true, "narrationText", "lower-third-safe", "cinematic_subtitle"),
+                [])],
+            new SceneAssemblyRenderReadiness(true, [], []),
+            JobRecipeGenerationSource,
+            DateTimeOffset.UtcNow);
+
+    private async Task<string?> WriteAssemblyRenderRecipeAsync(string root, SceneAssemblyPlanDocument assembly, SceneAssemblyScene scene, string backgroundPath, string overlayPath, VisualAssetGenerationRequest request, CancellationToken cancellationToken)
+    {
+        if (request.DryRun) return null;
+        var recipe = BuildVisualRenderRecipe(assembly.ContentGenerationPlanId, assembly.RegionId, assembly.ContentCategory, assembly.PlannedFormat, scene.SceneNumber, scene.SceneName, scene.StartSecond, scene.DurationSeconds, scene.OutputSceneVideoPath, backgroundPath, overlayPath, scene.AudioPath, scene.Motion, scene.Transition, scene.Captions, assembly.FrameRate, assembly.OutputResolution);
+        var recipePath = Path.Combine(BuildPlanRoot(root, assembly.RegionId, assembly.ContentGenerationPlanId), RenderRecipeDirectoryName, $"scene-{scene.SceneNumber:000}.recipe.json");
+        return await WriteRecipeAsync(recipePath, recipe, request.OverwriteExisting, cancellationToken);
+    }
+
+    private async Task<string?> WriteJobRenderRecipeAsync(ContentGenerationPlan plan, int sceneNumber, string sceneName, double startSecond, double durationSeconds, string backgroundPath, string overlayPath, IReadOnlyList<AstronomyAssetProductionJob> jobs, VisualAssetGenerationRequest request, CancellationToken cancellationToken)
+    {
+        if (request.DryRun) return null;
+        var outputVideoPath = Path.Combine(Directory.GetParent(Path.GetDirectoryName(backgroundPath)!)!.FullName, "rendered-scenes", $"scene-{sceneNumber:000}.mp4");
+        var audioPath = ResolveExistingAudioPath(Directory.GetParent(Path.GetDirectoryName(backgroundPath)!)!.FullName, sceneNumber) ?? string.Empty;
+        var recipe = BuildVisualRenderRecipe(plan.Id.ToString("D"), plan.RegionId, plan.ContentCategoryCode, plan.PlannedFormat ?? string.Empty, sceneNumber, sceneName, startSecond, durationSeconds, outputVideoPath, backgroundPath, overlayPath, audioPath, new SceneAssemblyMotion("zoom_in_subtle", "low", "center", 1.0, 1.06), new SceneAssemblyTransition("fade", "fade", 0.35), new SceneAssemblyCaptions(true, "narrationText", "lower-third-safe", "cinematic_subtitle"), 30, new SceneAssemblyResolution(1920, 1080));
+        var recipePath = Path.Combine(Directory.GetParent(Path.GetDirectoryName(backgroundPath)!)!.FullName, RenderRecipeDirectoryName, $"scene-{sceneNumber:000}.recipe.json");
+        return await WriteRecipeAsync(recipePath, recipe, request.OverwriteExisting, cancellationToken);
+    }
+
+    private static RenderRecipeDocument BuildVisualRenderRecipe(string planId, string regionId, string contentCategory, string plannedFormat, int sceneNumber, string sceneName, double startSecond, double durationSeconds, string outputVideoPath, string backgroundPath, string overlayPath, string audioPath, SceneAssemblyMotion motion, SceneAssemblyTransition transition, SceneAssemblyCaptions captions, int frameRate, SceneAssemblyResolution resolution)
+    {
+        var inputs = new List<RenderRecipeInput>
+        {
+            new("visual", "GeneratedVisualAsset", backgroundPath, "image", 0, "background")
+        };
+        if (!string.IsNullOrWhiteSpace(overlayPath))
+            inputs.Add(new RenderRecipeInput("visual", TextOverlayCardAssetType, overlayPath, "image", 10, "overlay"));
+        inputs.Add(new RenderRecipeInput("audio", "NarrationSegment", audioPath, null, null, "scene_narration"));
+
+        var blockingIssues = new List<string>();
+        if (string.IsNullOrWhiteSpace(audioPath)) blockingIssues.Add("missing scene audio");
+        if (string.IsNullOrWhiteSpace(outputVideoPath)) blockingIssues.Add("missing output path");
+        if (durationSeconds <= 0) blockingIssues.Add("duration <= 0");
+
+        return new RenderRecipeDocument(
+            planId,
+            regionId,
+            contentCategory,
+            plannedFormat,
+            sceneNumber,
+            sceneName,
+            "ffmpeg",
+            Round(durationSeconds),
+            frameRate <= 0 ? 30 : frameRate,
+            new RenderRecipeResolution(resolution.Width <= 0 ? 1920 : resolution.Width, resolution.Height <= 0 ? 1080 : resolution.Height),
+            outputVideoPath,
+            inputs,
+            new RenderRecipeMotion(motion.Type, motion.StartScale, motion.EndScale, motion.Direction, ResolveMotionFilterHint(motion.Type)),
+            new RenderRecipeCaptions(captions.Enabled, captions.Source, captions.SafeZone, captions.Style),
+            new RenderRecipeTransition(transition.In, transition.Out, transition.DurationSeconds),
+            [new RenderRecipeFilter("kenburns", true)],
+            new RenderRecipeExecutionReadiness(blockingIssues.Count == 0, blockingIssues, []),
+            JobRecipeGenerationSource,
+            DateTimeOffset.UtcNow);
+    }
+
+    private static async Task<string?> WriteRecipeAsync(string recipePath, RenderRecipeDocument recipe, bool overwriteExisting, CancellationToken cancellationToken)
+    {
+        if (File.Exists(recipePath) && !overwriteExisting)
+            return null;
+        Directory.CreateDirectory(Path.GetDirectoryName(recipePath) ?? ".");
+        await File.WriteAllTextAsync(recipePath, JsonSerializer.Serialize(recipe, JsonOptions), cancellationToken);
+        return recipePath;
+    }
+
+    private static string? ResolveExistingAudioPath(string planRoot, int sceneNumber)
+    {
+        var audioRoots = new[]
+        {
+            Path.Combine(planRoot, "audio"),
+            Path.Combine(planRoot, "narration"),
+            Path.Combine(planRoot, "narration-segments")
+        };
+        var token = $"scene-{sceneNumber:000}";
+        return audioRoots
+            .Where(Directory.Exists)
+            .SelectMany(root => Directory.EnumerateFiles(root, "*.wav", SearchOption.AllDirectories))
+            .FirstOrDefault(path => Path.GetFileName(path).Contains(token, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static JsonObject ParseMetadata(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson)) return new JsonObject();
+        try { return JsonNode.Parse(metadataJson) as JsonObject ?? new JsonObject(); }
+        catch (JsonException) { return new JsonObject(); }
+    }
+
+    private static string? ReadString(JsonObject metadata, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!metadata.TryGetPropertyValue(key, out var value) || value is null) continue;
+            if (value is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text)) return text;
+        }
+        return null;
+    }
+
+    private static IReadOnlyList<string> ObjectNames(AstronomyAssetProductionJob job)
+    {
+        if (string.IsNullOrWhiteSpace(job.ObjectNamesJson)) return [];
+        try { return JsonSerializer.Deserialize<IReadOnlyList<string>>(job.ObjectNamesJson, JsonOptions)?.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() ?? []; }
+        catch (JsonException) { return []; }
+    }
+
+    private static bool IsAssetType(AstronomyAssetProductionJob job, string assetType)
+        => job.AssetType.Equals(assetType, StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeAssetType(string? assetType)
+        => Regex.Replace(assetType ?? string.Empty, "[^A-Za-z0-9]+", "").ToLowerInvariant();
+
+    private static string ResolveMotionFilterHint(string motionType)
+        => motionType.Trim() switch
+        {
+            "zoom_in_subtle" => "kenburns_zoom_in",
+            "zoom_in_focus" => "kenburns_zoom_in_focus",
+            "pan_hold" => "pan_hold",
+            "parallax_orbit_soft" => "parallax_soft",
+            "zoom_out_subtle" => "kenburns_zoom_out",
+            "hold" => "static_hold",
+            "fade_hold" => "fade_hold",
+            "montage_crossfade" => "montage_crossfade",
+            _ => motionType
+        };
+
+    private static double Round(double value)
+        => Math.Round(value, 3, MidpointRounding.AwayFromZero);
+
+    private const double DefaultSceneDurationSeconds = 6.0;
+
+    private sealed record JobVisualGenerationResult(int SceneCount, int GeneratedVisualCount, int ApprovedVisualCount, int FailedVisualCount);
 
     private static PackageFiles DiscoverPackageFiles(string planRoot)
     {
