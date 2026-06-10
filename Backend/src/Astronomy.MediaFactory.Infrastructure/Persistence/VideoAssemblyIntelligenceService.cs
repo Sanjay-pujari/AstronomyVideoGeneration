@@ -1705,7 +1705,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         };
 
     private static (double X, double Y) ResolveDocumentaryPan(string sceneKey)
-        => Math.Abs(sceneKey.Aggregate(0, (sum, ch) => sum + ch)) % 4 switch
+        => (Math.Abs(sceneKey.Aggregate(0, (sum, ch) => sum + ch)) % 4) switch
         {
             0 => (-0.010, 0.003),
             1 => (0.010, -0.003),
