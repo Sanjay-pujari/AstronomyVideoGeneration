@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
@@ -11,6 +10,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 public sealed class AstronomyEventVerificationService(
     IOptions<RenderingOptions> renderingOptions,
     TimeProvider timeProvider,
+    ISkyfieldAccuracyProvider skyfieldAccuracyProvider,
     ILogger<AstronomyEventVerificationService> logger) : IAstronomyEventVerificationService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -40,7 +40,7 @@ public sealed class AstronomyEventVerificationService(
         warnings.Add("Verification V1 classifies preview events for editorial review and does not create database records or production assets.");
         warnings.Add("ManualSeed events remain NeedsManualReview until checked against an authoritative ephemeris or external reference.");
 
-        var skyfield = await TryComputeSkyfieldAccuracyAsync(request, cancellationToken);
+        var skyfield = await TryComputeSkyfieldAccuracyAsync(request, preview.Events, cancellationToken);
         warnings.AddRange(skyfield.Warnings);
 
         var deduplicatedDrafts = DeduplicateMoonEvents(preview.Events, out var deduplicatedCount);
@@ -69,6 +69,10 @@ public sealed class AstronomyEventVerificationService(
         var moonPhaseVerifiedCount = verified.Count(e => IsMoonPhaseEvent(e.EventType) && e.VerificationSource == "Skyfield" && e.VerificationStatus == "Verified");
         var planetPairingComputedCount = computedPlanetEvents.Length;
         var meteorMoonlightAdjustedCount = verified.Count(e => IsMeteorShower(e.EventType) && e.MoonIlluminationPercent.HasValue);
+        if (skyfieldVerifiedCount == 0) warnings.Add("WARNING: skyfieldVerifiedCount remains 0; no events were promoted by Skyfield accuracy computations.");
+        if (moonPhaseVerifiedCount == 0) warnings.Add("WARNING: moonPhaseVerifiedCount remains 0; exact Skyfield moon phase matching did not verify any preview moon events.");
+        if (planetPairingComputedCount == 0) warnings.Add("WARNING: planetPairingComputedCount remains 0; no visible Skyfield planet pairings met the requested constraints.");
+        if (meteorMoonlightAdjustedCount == 0) warnings.Add("WARNING: meteorMoonlightAdjustedCount remains 0; meteor shower moonlight was not adjusted.");
 
         var topEvents = verified
             .Where(e => e.ContentWorthinessScore >= 85
@@ -148,79 +152,24 @@ public sealed class AstronomyEventVerificationService(
             moonPhaseVerifiedCount,
             meteorMoonlightAdjustedCount,
             generatedFiles)
-        { HighPriorityCount = highPriorityCount };
+        { HighPriorityCount = highPriorityCount, Warnings = warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray() };
     }
 
-    private async Task<SkyfieldAccuracyResult> TryComputeSkyfieldAccuracyAsync(AstronomyEventVerificationRequest request, CancellationToken cancellationToken)
+    private async Task<SkyfieldAccuracyResult> TryComputeSkyfieldAccuracyAsync(AstronomyEventVerificationRequest request, IReadOnlyList<AstronomyEventPreviewItem> events, CancellationToken cancellationToken)
     {
         var region = ResolveRegion(request.RegionId);
         var result = new SkyfieldAccuracyResult();
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"astronomy-event-skyfield-{Guid.NewGuid():N}.py");
-        await File.WriteAllTextAsync(scriptPath, SkyfieldScript, cancellationToken);
-        try
-        {
-            using var process = new Process();
-            process.StartInfo = new ProcessStartInfo
-            {
-                FileName = "python3",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
-            };
-            process.StartInfo.ArgumentList.Add(scriptPath);
-            process.StartInfo.ArgumentList.Add(request.Year.ToString(CultureInfo.InvariantCulture));
-            process.StartInfo.ArgumentList.Add(region.Latitude.ToString(CultureInfo.InvariantCulture));
-            process.StartInfo.ArgumentList.Add(region.Longitude.ToString(CultureInfo.InvariantCulture));
-            process.StartInfo.ArgumentList.Add(region.Timezone);
-            process.StartInfo.ArgumentList.Add(FindEphemerisPath() ?? string.Empty);
-            process.Start();
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-            if (process.ExitCode != 0)
-            {
-                result.Warnings.Add($"Skyfield computation failed; keeping approximate/manual statuses where applicable. {TrimWarning(stderr)}");
-                return result;
-            }
+        var moonPhases = await skyfieldAccuracyProvider.VerifyMoonPhasesAsync(request.Year, region, cancellationToken);
+        var planetPairings = await skyfieldAccuracyProvider.ComputePlanetPairingsAsync(request.Year, region, cancellationToken);
+        var meteorMoonlight = await skyfieldAccuracyProvider.AdjustMeteorMoonlightAsync(events, region, cancellationToken);
 
-            var computed = JsonSerializer.Deserialize<SkyfieldAccuracyResult>(stdout, JsonOptions);
-            if (computed is null)
-            {
-                result.Warnings.Add("Skyfield computation returned no usable JSON; keeping approximate/manual statuses where applicable.");
-                return result;
-            }
-
-            return computed;
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or OperationCanceledException or JsonException)
-        {
-            result.Warnings.Add($"Skyfield computation unavailable; keeping approximate/manual statuses where applicable. {ex.Message}");
-            return result;
-        }
-        finally
-        {
-            try { File.Delete(scriptPath); } catch { }
-        }
-    }
-
-    private static string? FindEphemerisPath()
-    {
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "Backend", "python", "skyfield_sidecar", "de421.bsp"),
-            Path.Combine(Directory.GetCurrentDirectory(), "Backend", "python", "skyfield_sidecar", "de421.bsp"),
-            Path.Combine(Directory.GetCurrentDirectory(), "python", "skyfield_sidecar", "de421.bsp")
-        };
-        return candidates.FirstOrDefault(File.Exists);
-    }
-
-    private static string TrimWarning(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return "No stderr details were provided.";
-        text = text.ReplaceLineEndings(" ").Trim();
-        return text.Length <= 240 ? text : text[..240] + "…";
+        result.MoonPhases.AddRange(moonPhases.MoonPhases);
+        result.PlanetPairings.AddRange(planetPairings.PlanetPairings);
+        result.MeteorMoonlight.AddRange(meteorMoonlight.MeteorMoonlight);
+        result.Warnings.AddRange(moonPhases.Warnings);
+        result.Warnings.AddRange(planetPairings.Warnings);
+        result.Warnings.AddRange(meteorMoonlight.Warnings);
+        return result;
     }
 
     private static IReadOnlyList<AstronomyEventVerificationDraft> DeduplicateMoonEvents(IReadOnlyList<AstronomyEventPreviewItem> events, out int deduplicatedCount)
@@ -274,6 +223,9 @@ public sealed class AstronomyEventVerificationService(
         var localPeakTime = draft.Event.LocalPeakTime;
         var warnings = draft.Warnings.ToHashSet(StringComparer.OrdinalIgnoreCase);
         string? verificationNotes = null;
+        var skyfieldComputed = default(bool?);
+        var moonPhaseVerified = default(bool?);
+        var phaseType = default(string);
 
         if (IsMoonPhaseEvent(eventType) && TryFindMoonPhase(skyfield, eventType, draft.Event.PeakUtc, out var moonPhase))
         {
@@ -284,6 +236,10 @@ public sealed class AstronomyEventVerificationService(
             verificationStatus = "Verified";
             verificationSource = "Skyfield";
             verificationNotes = "Exact lunar phase instant computed with Skyfield almanac; preview mean-cycle timing was not silently promoted.";
+            warnings.RemoveWhere(w => w.Contains("approximate", StringComparison.OrdinalIgnoreCase) || w.Contains("mean lunar", StringComparison.OrdinalIgnoreCase) || w.Contains("verify exact phase", StringComparison.OrdinalIgnoreCase));
+            skyfieldComputed = true;
+            moonPhaseVerified = true;
+            phaseType = moonPhase.Phase;
         }
         else if (IsMoonPhaseEvent(eventType))
         {
@@ -366,7 +322,10 @@ public sealed class AstronomyEventVerificationService(
             MoonIlluminationPercent = moonIlluminationPercent,
             MoonInterference = moonInterference,
             BestViewingWindowLocal = bestViewingWindowLocal,
-            RadiantVisibilityNote = radiantVisibilityNote
+            RadiantVisibilityNote = radiantVisibilityNote,
+            SkyfieldComputed = skyfieldComputed,
+            MoonPhaseVerified = moonPhaseVerified,
+            PhaseType = phaseType
         };
     }
 
@@ -374,12 +333,13 @@ public sealed class AstronomyEventVerificationService(
     {
         var score = PairingScore(pairing.AngularSeparationDegrees);
         var publishPriority = score >= 85 ? "High" : "Medium";
+        var eventType = pairing.AngularSeparationDegrees <= 3 ? "PlanetPairing" : "Conjunction";
         var title = $"{pairing.PrimaryObject} and {pairing.SecondaryObject} Close Pairing";
         var eventId = $"skyfield-planet-pairing-{pairing.PrimaryObject}-{pairing.SecondaryObject}-{pairing.PeakUtc:yyyyMMddHHmm}".ToLowerInvariant();
         var item = new AstronomyEventVerifiedItem
         {
             EventId = eventId,
-            EventType = "PlanetPairing",
+            EventType = eventType,
             Title = title,
             ShortTitle = $"{pairing.PrimaryObject}-{pairing.SecondaryObject}",
             StartUtc = pairing.PeakUtc.AddHours(-4),
@@ -389,7 +349,7 @@ public sealed class AstronomyEventVerificationService(
             VisibilityRegion = regionId,
             PrimaryObjects = [pairing.PrimaryObject, pairing.SecondaryObject],
             SecondaryObjects = [],
-            SkyDirectionHint = "Skyfield-computed close bright-planet pairing; use local altitudes and direction from the verification fields.",
+            SkyDirectionHint = string.IsNullOrWhiteSpace(pairing.SkyDirectionHint) ? "Skyfield-computed close bright-planet pairing; use local altitudes and direction from the verification fields." : pairing.SkyDirectionHint,
             ContentWorthinessScore = score,
             VisibilityScore = Math.Clamp((int)Math.Round(Math.Min(pairing.ObjectAltitudesDegrees.Values.DefaultIfEmpty(8).Min() * 1.8, 95)), 0, 100),
             RarityScore = pairing.AngularSeparationDegrees <= 1.5 ? 86 : pairing.AngularSeparationDegrees <= 3 ? 76 : 62,
@@ -398,7 +358,7 @@ public sealed class AstronomyEventVerificationService(
             SpecialTags = ["SkyfieldComputed", "BrightPlanets"],
             RecommendedContentTypes = score >= 70 ? ["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"] : [],
             RecommendedPublishWindow = new RecommendedPublishWindow(pairing.PeakUtc.AddDays(-7), pairing.PeakUtc.AddHours(-2)),
-            SourceType = "SkyfieldComputed",
+            SourceType = "Computed",
             SourceNotes = "Generated by verification endpoint from Skyfield apparent topocentric alt/az separation search.",
             Warnings = [],
             VerificationStatus = "Verified",
@@ -429,7 +389,7 @@ public sealed class AstronomyEventVerificationService(
             .Where(p => p.Phase.Equals(desired, StringComparison.OrdinalIgnoreCase))
             .OrderBy(p => (p.PeakUtc - approximatePeak).Duration())
             .FirstOrDefault()!;
-        return phase is not null && (phase.PeakUtc - approximatePeak).Duration() <= TimeSpan.FromDays(2.5);
+        return phase is not null && (phase.PeakUtc - approximatePeak).Duration() <= TimeSpan.FromHours(48);
     }
 
     private static SkyfieldMeteorMoonlight? FindMeteorMoonlight(SkyfieldAccuracyResult skyfield, DateTimeOffset approximatePeak) =>
@@ -614,128 +574,12 @@ public sealed class AstronomyEventVerificationService(
         public double? SunAltitudeDegrees { get; set; }
         public string? BestViewingLocalTime { get; set; }
         public bool? SkyfieldComputed { get; set; }
+        public bool? MoonPhaseVerified { get; set; }
+        public string? PhaseType { get; set; }
         public double? MoonIlluminationPercent { get; set; }
         public string? MoonInterference { get; set; }
         public string? BestViewingWindowLocal { get; set; }
         public string? RadiantVisibilityNote { get; set; }
     }
 
-    private sealed class SkyfieldAccuracyResult
-    {
-        public List<SkyfieldPlanetPairing> PlanetPairings { get; set; } = [];
-        public List<SkyfieldMoonPhase> MoonPhases { get; set; } = [];
-        public List<SkyfieldMeteorMoonlight> MeteorMoonlight { get; set; } = [];
-        public List<string> Warnings { get; set; } = [];
-    }
-
-    private sealed class SkyfieldPlanetPairing
-    {
-        public string PrimaryObject { get; set; } = string.Empty;
-        public string SecondaryObject { get; set; } = string.Empty;
-        public DateTimeOffset PeakUtc { get; set; }
-        public double AngularSeparationDegrees { get; set; }
-        public Dictionary<string, double> ObjectAltitudesDegrees { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-        public double SunAltitudeDegrees { get; set; }
-        public string BestViewingLocalTime { get; set; } = string.Empty;
-        public string Quality { get; set; } = string.Empty;
-        public bool InvolvesBrightPlanet { get; set; }
-    }
-
-    private sealed class SkyfieldMoonPhase
-    {
-        public string Phase { get; set; } = string.Empty;
-        public DateTimeOffset PeakUtc { get; set; }
-        public string LocalPeakTime { get; set; } = string.Empty;
-    }
-
-    private sealed class SkyfieldMeteorMoonlight
-    {
-        public DateTimeOffset PeakUtc { get; set; }
-        public double MoonIlluminationPercent { get; set; }
-        public string MoonInterference { get; set; } = string.Empty;
-        public int VisibilityScoreAdjustment { get; set; }
-        public string BestViewingWindowLocal { get; set; } = string.Empty;
-        public string RadiantVisibilityNote { get; set; } = string.Empty;
-    }
-
-    private const string SkyfieldScript = """
-import json, sys, math
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
-try:
-    from skyfield import almanac
-    from skyfield.api import load, wgs84
-except Exception as e:
-    raise SystemExit('Skyfield import failed: %s' % e)
-year=int(sys.argv[1]); lat=float(sys.argv[2]); lon=float(sys.argv[3]); tz=ZoneInfo(sys.argv[4]); eph_path=sys.argv[5]
-ts=load.timescale(); eph=load(eph_path or 'de421.bsp')
-earth=eph['earth']; sun=eph['sun']; observer=earth+wgs84.latlon(lat, lon)
-planets={'Mercury':'mercury','Venus':'venus','Mars':'mars','Jupiter':'jupiter barycenter','Saturn':'saturn barycenter'}
-out={'planetPairings':[], 'moonPhases':[], 'meteorMoonlight':[], 'warnings':[]}
-
-def iso(dt): return dt.astimezone(timezone.utc).isoformat().replace('+00:00','Z')
-def local(dt): return dt.astimezone(tz).strftime('%Y-%m-%d %H:%M %z')
-def quality(sep): return 'Excellent' if sep <= 1.5 else ('Good' if sep <= 3 else 'Broad grouping')
-def moon_illum(dt):
-    try: return float(almanac.fraction_illuminated(eph, 'moon', ts.from_datetime(dt))) * 100.0
-    except Exception:
-        phase=float(almanac.moon_phase(eph, ts.from_datetime(dt)).degrees)
-        return (1-math.cos(math.radians(phase)))/2*100
-# Moon phases
-try:
-    t0=ts.utc(year,1,1); t1=ts.utc(year+1,1,1)
-    times, phases = almanac.find_discrete(t0, t1, almanac.moon_phases(eph))
-    names=['NewMoon','FirstQuarter','FullMoon','LastQuarter']
-    for t,p in zip(times,phases):
-        if names[int(p)] in ('NewMoon','FullMoon'):
-            dt=t.utc_datetime().replace(tzinfo=timezone.utc)
-            out['moonPhases'].append({'phase':names[int(p)], 'peakUtc':iso(dt), 'localPeakTime':local(dt)})
-except Exception as e:
-    out['warnings'].append('Skyfield moon phase computation failed; approximate moon events were not promoted. %s' % e)
-# Planet pairings sampled every two hours; close samples are clustered by pair/date.
-try:
-    samples=[]; start=datetime(year,1,1,tzinfo=timezone.utc); end=datetime(year+1,1,1,tzinfo=timezone.utc); dt=start
-    while dt < end:
-        t=ts.from_datetime(dt)
-        sun_alt=(observer.at(t).observe(sun).apparent()).altaz()[0].degrees
-        if sun_alt <= -6:
-            apparent={}
-            for name,key in planets.items():
-                app=observer.at(t).observe(eph[key]).apparent(); alt,az,d=app.altaz()
-                if alt.degrees >= 8: apparent[name]=(app, alt.degrees)
-            names=list(apparent.keys())
-            for i in range(len(names)):
-                for j in range(i+1,len(names)):
-                    a,b=names[i],names[j]; sep=apparent[a][0].separation_from(apparent[b][0]).degrees
-                    if sep <= 6:
-                        samples.append((a,b,dt,sep,apparent[a][1],apparent[b][1],sun_alt))
-        dt += timedelta(hours=2)
-    best={}
-    for a,b,dt,sep,aa,bb,sa in samples:
-        key=(a,b,dt.astimezone(tz).strftime('%Y-%m-%d'))
-        if key not in best or sep < best[key][3]: best[key]=(a,b,dt,sep,aa,bb,sa)
-    # de-dupe adjacent local-date clusters for each pair
-    chosen=[]
-    for pair in sorted(set((k[0],k[1]) for k in best)):
-        vals=sorted([v for k,v in best.items() if k[:2]==pair], key=lambda x:x[2])
-        cluster=[]
-        for v in vals:
-            if not cluster or (v[2]-cluster[-1][2]).total_seconds() <= 36*3600: cluster.append(v)
-            else:
-                chosen.append(min(cluster, key=lambda x:x[3])); cluster=[v]
-        if cluster: chosen.append(min(cluster, key=lambda x:x[3]))
-    bright={'Venus','Jupiter'}
-    for a,b,dt,sep,aa,bb,sa in sorted(chosen, key=lambda x:(x[2],x[3])):
-        out['planetPairings'].append({'primaryObject':a,'secondaryObject':b,'peakUtc':iso(dt),'angularSeparationDegrees':sep,'objectAltitudesDegrees':{a:aa,b:bb},'sunAltitudeDegrees':sa,'bestViewingLocalTime':local(dt),'quality':quality(sep),'involvesBrightPlanet':a in bright or b in bright})
-except Exception as e:
-    out['warnings'].append('Skyfield planet-pairing computation failed; ManualSeed planet events were not replaced. %s' % e)
-# Meteor moonlight for common calendar-rule peaks used by preview.
-for month,day in [(1,4),(4,22),(5,6),(7,30),(8,12),(10,21),(11,17),(12,14)]:
-    dt=datetime(year,month,day,18,0,0,tzinfo=timezone.utc)
-    illum=moon_illum(dt)
-    interference='Low' if illum < 35 else ('Medium' if illum < 70 else 'High')
-    adj=8 if interference=='Low' else (-6 if interference=='Medium' else -18)
-    out['meteorMoonlight'].append({'peakUtc':iso(dt),'moonIlluminationPercent':illum,'moonInterference':interference,'visibilityScoreAdjustment':adj,'bestViewingWindowLocal':'Post-midnight to pre-dawn local time when radiant is highest and twilight is absent.','radiantVisibilityNote':'Moonlight estimate computed for the rule-based peak; exact radiant altitude model is not asserted.'})
-print(json.dumps(out))
-""";
 }

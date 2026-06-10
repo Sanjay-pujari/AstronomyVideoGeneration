@@ -5,7 +5,8 @@ public sealed record AstronomyEventVerificationRequest(
     string RegionId,
     string Language = "en",
     bool DryRun = false,
-    bool OverwriteExisting = true);
+    bool OverwriteExisting = true,
+    bool AccuracyUpgrade = false);
 
 public sealed record AstronomyEventVerificationResponse(
     int Year,
@@ -24,6 +25,7 @@ public sealed record AstronomyEventVerificationResponse(
     IReadOnlyList<string> GeneratedFiles)
 {
     public int HighPriorityCount { get; init; }
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 

@@ -181,6 +181,6 @@ public sealed class AstronomyEventDiscoveryPreviewServiceTests
     private static AstronomyEventVerificationService CreateVerificationService(string outputRoot)
     {
         var rendering = Options.Create(new RenderingOptions { WorkingDirectory = outputRoot });
-        return new AstronomyEventVerificationService(rendering, TimeProvider.System, NullLogger<AstronomyEventVerificationService>.Instance);
+        return new AstronomyEventVerificationService(rendering, TimeProvider.System, new PythonSkyfieldAccuracyProvider(NullLogger<PythonSkyfieldAccuracyProvider>.Instance), NullLogger<AstronomyEventVerificationService>.Instance);
     }
 }
