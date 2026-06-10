@@ -1,3 +1,4 @@
+using System.Reflection;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -10,12 +11,23 @@ public sealed class ContentPlanBatchGenerationService(
     IAstronomyAssetProductionJobService assetJobs,
     IVisualAssetGenerationService visualAssets,
     ISceneRenderer sceneRenderer,
-    ILogger<ContentPlanBatchGenerationService> logger) : IContentPlanBatchGenerationService
+    ILogger<ContentPlanBatchGenerationService> logger) : IContentPlanBatchGenerationService, IContentPlanGenerationReadinessService
 {
     private const int DefaultMaxPlans = 1;
     private const int MaxPlanLimit = 10;
-    private static readonly string[] RunnablePlanStatuses = ["Planned", "Approved"];
-    private static readonly string[] RunnableStatuses = ["Planned", "ReadyForManualRun"];
+    private static readonly string[] RunnableStatuses = ["Draft", "Planned", "Approved"];
+    private static readonly string[] DryRunSteps =
+    [
+        "Would create content_pipeline_execution",
+        "Would generate hero asset",
+        "Would generate thumbnail",
+        "Would generate short narration",
+        "Would generate long narration",
+        "Would generate short TTS",
+        "Would generate long TTS",
+        "Would generate short video",
+        "Would generate long video"
+    ];
 
     public async Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
     {
@@ -26,47 +38,45 @@ public sealed class ContentPlanBatchGenerationService(
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var titleOrder = requestedTitles.Select((title, index) => new { title, index }).ToDictionary(x => x.title, x => x.index, StringComparer.OrdinalIgnoreCase);
         var maxPlans = Math.Clamp(request.MaxPlans <= 0 ? DefaultMaxPlans : request.MaxPlans, 1, MaxPlanLimit);
-        var yearStart = new DateTimeOffset(request.Year, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        var yearEnd = yearStart.AddYears(1);
+        var candidates = await LoadPlanCandidatesAsync(request.Year, request.RegionId, request.Language, cancellationToken);
 
-        var candidates = await db.ContentGenerationPlans.AsNoTracking()
-            .Where(p => p.RegionId == request.RegionId && p.Language == request.Language)
-            .Where(p => p.ScheduledUtc.HasValue && p.ScheduledUtc.Value >= yearStart && p.ScheduledUtc.Value < yearEnd)
-            .Where(p => p.Title != null && requestedTitles.Contains(p.Title!))
-            .Where(p => RunnablePlanStatuses.Contains(p.PlanStatus) && RunnableStatuses.Contains(p.Status))
-            .Where(p => !request.OnlyHighPriority || p.Priority <= 10 || p.PriorityScore >= 7.5m)
-            .ToListAsync(cancellationToken);
-
-        var selectedPlans = candidates
-            .OrderBy(p => p.Title is not null && titleOrder.TryGetValue(p.Title, out var index) ? index : int.MaxValue)
-            .ThenByDescending(p => p.PriorityScore ?? 0m)
-            .ThenBy(p => p.Priority)
-            .Take(maxPlans)
-            .Select(p => new BatchGenerateFromPlansSelectedPlan(
-                p.Id,
-                p.Title ?? string.Empty,
-                p.ContentCategoryCode,
-                p.PlannedFormat,
-                p.RegionId,
-                p.Language,
-                p.ScheduledUtc,
-                p.Status,
-                p.PlanStatus,
-                p.Priority,
-                p.PriorityScore))
+        var selection = SelectPlans(candidates, requestedTitles, request.OnlyHighPriority, maxPlans);
+        var selectedPlans = selection.SelectedPlans
+            .Select(ToSelectedPlan)
             .ToArray();
+        var warnings = selection.Warnings;
 
-        var warnings = BuildSelectionWarnings(requestedTitles, selectedPlans, maxPlans);
         if (selectedPlans.Length == 0)
         {
-            warnings.Add("No runnable plans matched the supplied titles, year, region, language, priority, and approved/planned status filters.");
-            return new BatchGenerateFromPlansResponse(true, request.DryRun, requestedTitles.Length, 0, maxPlans, selectedPlans, [], warnings, []);
+            return new BatchGenerateFromPlansResponse(
+                Success: true,
+                DryRun: request.DryRun,
+                RequestedTitleCount: requestedTitles.Length,
+                SelectedPlanCount: 0,
+                MaxPlans: maxPlans,
+                SelectedPlans: selectedPlans,
+                Steps: request.DryRun ? DryRunSteps.Cast<object>().ToArray() : [],
+                Warnings: warnings,
+                Errors: []);
+        }
+
+        if (request.DryRun)
+        {
+            return new BatchGenerateFromPlansResponse(
+                Success: true,
+                DryRun: true,
+                RequestedTitleCount: requestedTitles.Length,
+                SelectedPlanCount: selectedPlans.Length,
+                MaxPlans: maxPlans,
+                SelectedPlans: selectedPlans,
+                Steps: DryRunSteps.Cast<object>().ToArray(),
+                Warnings: warnings,
+                Errors: []);
         }
 
         var planIds = selectedPlans.Select(p => p.ContentGenerationPlanId).ToArray();
-        var steps = new List<BatchGenerateFromPlansStepResult>();
+        var steps = new List<object>();
 
         steps.Add(await ExecuteStepAsync(
             "GenerateAssetPlans",
@@ -74,7 +84,7 @@ public sealed class ContentPlanBatchGenerationService(
                 RegionId: request.RegionId,
                 PlanIds: planIds,
                 MaxPlans: selectedPlans.Length,
-                DryRun: request.DryRun,
+                DryRun: false,
                 OverwriteExisting: false), cancellationToken)));
 
         steps.Add(await ExecuteStepAsync(
@@ -83,7 +93,7 @@ public sealed class ContentPlanBatchGenerationService(
                 PlanIds: planIds,
                 RegionId: request.RegionId,
                 MaxPlans: selectedPlans.Length,
-                DryRun: request.DryRun), cancellationToken)));
+                DryRun: false), cancellationToken)));
 
         steps.Add(await ExecuteStepAsync(
             "GenerateVisualAssets",
@@ -91,39 +101,187 @@ public sealed class ContentPlanBatchGenerationService(
                 RegionId: request.RegionId,
                 PlanIds: planIds,
                 MaxPlans: selectedPlans.Length,
-                DryRun: request.DryRun,
+                DryRun: false,
                 OverwriteExisting: false), cancellationToken)));
 
-        if (request.DryRun)
-        {
-            var now = DateTimeOffset.UtcNow;
-            steps.Add(new BatchGenerateFromPlansStepResult(
-                "RenderSceneVideos",
-                "Skipped",
-                now,
-                now,
-                0,
-                "Dry run selected the runnable plans and previewed upstream asset generation inputs; scene video rendering is skipped to avoid invoking media encoders.",
-                null,
-                new { planIds, dryRun = true }));
-        }
-        else
-        {
-            steps.Add(await ExecuteStepAsync(
-                "RenderSceneVideos",
-                () => sceneRenderer.RenderScenesAsync(new SceneRenderingRequest(
-                    RegionId: request.RegionId,
-                    PlanIds: planIds,
-                    MaxPlans: selectedPlans.Length,
-                    DryRun: false,
-                    OverwriteExisting: false), cancellationToken)));
-        }
+        steps.Add(await ExecuteStepAsync(
+            "RenderSceneVideos",
+            () => sceneRenderer.RenderScenesAsync(new SceneRenderingRequest(
+                RegionId: request.RegionId,
+                PlanIds: planIds,
+                MaxPlans: selectedPlans.Length,
+                DryRun: false,
+                OverwriteExisting: false), cancellationToken)));
 
-        var errors = steps.Where(s => string.Equals(s.Status, "Failed", StringComparison.OrdinalIgnoreCase))
+        var errors = steps.OfType<BatchGenerateFromPlansStepResult>()
+            .Where(s => string.Equals(s.Status, "Failed", StringComparison.OrdinalIgnoreCase))
             .Select(s => $"{s.StepName}: {s.ErrorMessage}")
             .ToArray();
 
-        return new BatchGenerateFromPlansResponse(errors.Length == 0, request.DryRun, requestedTitles.Length, selectedPlans.Length, maxPlans, selectedPlans, steps, warnings, errors);
+        return new BatchGenerateFromPlansResponse(errors.Length == 0, false, requestedTitles.Length, selectedPlans.Length, maxPlans, selectedPlans, steps, warnings, errors);
+    }
+
+    public async Task<PlansReadyForGenerationResponse> GetPlansReadyForGenerationAsync(
+        int year,
+        string regionId,
+        string language,
+        bool onlyHighPriority,
+        int? maxPlans,
+        CancellationToken cancellationToken)
+    {
+        if (year is < 2000 or > 2100) throw new ArgumentException("Year must be between 2000 and 2100.");
+        if (string.IsNullOrWhiteSpace(regionId)) throw new ArgumentException("RegionId is required.");
+        if (string.IsNullOrWhiteSpace(language)) throw new ArgumentException("Language is required.");
+        if (maxPlans is < 1) throw new ArgumentException("MaxPlans must be greater than zero.");
+
+        var plans = (await LoadPlanCandidatesAsync(year, regionId.Trim(), language.Trim(), cancellationToken))
+            .Where(p => IsStatusRunnable(p) && IsAstronomyEventRunnable(p) && (!onlyHighPriority || IsHighPriority(p)))
+            .OrderByDescending(p => p.PriorityScore ?? 0m)
+            .ThenBy(p => p.Priority)
+            .ThenBy(p => p.ScheduledUtc)
+            .ToArray();
+        var returnedPlans = plans
+            .Take(maxPlans ?? plans.Length)
+            .Select(ToReadyForGenerationItem)
+            .ToArray();
+
+        return new PlansReadyForGenerationResponse(year, regionId, language, plans.Length, returnedPlans);
+    }
+
+    private async Task<ContentGenerationPlan[]> LoadPlanCandidatesAsync(int year, string regionId, string language, CancellationToken cancellationToken)
+    {
+        var yearStart = new DateTimeOffset(year, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var yearEnd = yearStart.AddYears(1);
+
+        return await db.ContentGenerationPlans.AsNoTracking()
+            .Include(p => p.AstronomyEventIntelligence)
+            .Where(p => p.RegionId == regionId && p.Language == language)
+            .Where(p => p.ScheduledUtc.HasValue && p.ScheduledUtc.Value >= yearStart && p.ScheduledUtc.Value < yearEnd)
+            .ToArrayAsync(cancellationToken);
+    }
+
+    private static SelectionResult SelectPlans(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, bool onlyHighPriority, int maxPlans)
+    {
+        var selected = new List<ContentGenerationPlan>();
+        var warnings = new List<BatchGenerateFromPlansWarning>();
+        var selectedIds = new HashSet<Guid>();
+
+        foreach (var requestedTitle in requestedTitles)
+        {
+            var matches = FindMatches(candidates, requestedTitle)
+                .Where(p => !selectedIds.Contains(p.Id))
+                .ToArray();
+
+            if (matches.Length == 0)
+            {
+                warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, false, false, "No title/source/event match found"));
+                continue;
+            }
+
+            var runnableMatches = matches
+                .Where(IsStatusRunnable)
+                .Where(IsAstronomyEventRunnable)
+                .Where(p => !onlyHighPriority || IsHighPriority(p))
+                .OrderBy(p => IsExactMatch(p, requestedTitle) ? 0 : 1)
+                .ThenByDescending(p => p.PriorityScore ?? 0m)
+                .ThenBy(p => p.Priority)
+                .ToArray();
+
+            if (runnableMatches.Length == 0)
+            {
+                warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, false, BuildExclusionReason(matches[0], onlyHighPriority)));
+                continue;
+            }
+
+            if (selected.Count >= maxPlans)
+            {
+                warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, false, $"Excluded because selection was capped to maxPlans={maxPlans}"));
+                continue;
+            }
+
+            selected.Add(runnableMatches[0]);
+            selectedIds.Add(runnableMatches[0].Id);
+        }
+
+        return new SelectionResult(selected, warnings);
+    }
+
+    private static IReadOnlyList<ContentGenerationPlan> FindMatches(IEnumerable<ContentGenerationPlan> candidates, string requestedTitle)
+    {
+        var exact = candidates.Where(p => IsExactMatch(p, requestedTitle)).ToArray();
+        return exact.Length > 0 ? exact : candidates.Where(p => IsContainsMatch(p, requestedTitle)).ToArray();
+    }
+
+    private static bool IsExactMatch(ContentGenerationPlan plan, string requestedTitle)
+    {
+        var normalizedRequestedTitle = Normalize(requestedTitle);
+        return normalizedRequestedTitle.Length > 0 && MatchValues(plan).Any(value =>
+        {
+            var normalizedValue = Normalize(value);
+            return normalizedValue.Length > 0 && string.Equals(normalizedValue, normalizedRequestedTitle, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    private static bool IsContainsMatch(ContentGenerationPlan plan, string requestedTitle)
+    {
+        var normalizedRequestedTitle = Normalize(requestedTitle);
+        if (normalizedRequestedTitle.Length == 0) return false;
+        return MatchValues(plan).Any(value =>
+        {
+            var normalizedValue = Normalize(value);
+            return normalizedValue.Length > 0
+                && (normalizedValue.Contains(normalizedRequestedTitle, StringComparison.OrdinalIgnoreCase)
+                    || normalizedRequestedTitle.Contains(normalizedValue, StringComparison.OrdinalIgnoreCase));
+        });
+    }
+
+    private static IEnumerable<string?> MatchValues(ContentGenerationPlan plan)
+    {
+        yield return plan.Title;
+        yield return ReadOptionalStringProperty(plan, "Name");
+        yield return plan.SourceExternalEventId;
+        yield return plan.AstronomyEventIntelligence?.Title;
+        yield return ReadOptionalStringProperty(plan.AstronomyEventIntelligence, "ShortTitle") ?? plan.AstronomyEventIntelligence?.Summary;
+        yield return plan.AstronomyEventIntelligence?.ExternalEventId;
+    }
+
+    private static string? ReadOptionalStringProperty(object? value, string propertyName)
+        => value?.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)?.GetValue(value) as string;
+
+    private static string Normalize(string? value) => (value ?? string.Empty).Trim();
+
+    private static bool IsStatusRunnable(ContentGenerationPlan plan)
+        => RunnableStatuses.Contains(plan.Status, StringComparer.OrdinalIgnoreCase)
+            || RunnableStatuses.Contains(plan.PlanStatus, StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsAstronomyEventRunnable(ContentGenerationPlan plan)
+    {
+        var evt = plan.AstronomyEventIntelligence;
+        return evt is not null
+            && evt.AutoGenerateAllowed
+            && !string.Equals(evt.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(evt.ContentStrategy, "SkipAutoGeneration", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(evt.ContentStrategy, "EducationalOnly", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsHighPriority(ContentGenerationPlan plan) => plan.Priority <= 10 || plan.PriorityScore >= 7.5m;
+
+    private static string BuildExclusionReason(ContentGenerationPlan plan, bool onlyHighPriority)
+    {
+        if (!IsStatusRunnable(plan))
+            return $"Excluded because status was {plan.Status} and planStatus was {plan.PlanStatus}; allowed status or planStatus values are Draft, Planned, Approved";
+        if (plan.AstronomyEventIntelligence is null)
+            return "Excluded because linked AstronomyEventIntelligence was missing";
+        if (!plan.AstronomyEventIntelligence.AutoGenerateAllowed)
+            return "Excluded because linked astronomy event AutoGenerateAllowed was false";
+        if (string.Equals(plan.AstronomyEventIntelligence.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase))
+            return "Excluded because linked astronomy event VerificationStatus was NeedsManualReview";
+        if (string.Equals(plan.AstronomyEventIntelligence.ContentStrategy, "SkipAutoGeneration", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(plan.AstronomyEventIntelligence.ContentStrategy, "EducationalOnly", StringComparison.OrdinalIgnoreCase))
+            return $"Excluded because linked astronomy event ContentStrategy was {plan.AstronomyEventIntelligence.ContentStrategy}";
+        if (onlyHighPriority && !IsHighPriority(plan))
+            return "Excluded because onlyHighPriority was true and plan priority was not high";
+        return "Excluded by runnable filters";
     }
 
     private async Task<BatchGenerateFromPlansStepResult> ExecuteStepAsync<T>(string stepName, Func<Task<T>> action)
@@ -143,17 +301,46 @@ public sealed class ContentPlanBatchGenerationService(
         }
     }
 
-    private static List<string> BuildSelectionWarnings(IReadOnlyList<string> requestedTitles, IReadOnlyList<BatchGenerateFromPlansSelectedPlan> selectedPlans, int maxPlans)
-    {
-        var warnings = new List<string>();
-        var selectedTitles = selectedPlans.Select(p => p.Title).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var missingTitles = requestedTitles.Where(t => !selectedTitles.Contains(t)).ToArray();
-        if (missingTitles.Length > 0)
-            warnings.Add($"Skipped unmatched or non-runnable requested plan title(s): {string.Join(", ", missingTitles)}.");
-        if (requestedTitles.Count > maxPlans)
-            warnings.Add($"Selection was capped to maxPlans={maxPlans}; {requestedTitles.Count - maxPlans} requested title(s) may be left unprocessed.");
-        return warnings;
-    }
+    private static BatchGenerateFromPlansSelectedPlan ToSelectedPlan(ContentGenerationPlan plan)
+        => new(
+            plan.Id,
+            plan.Title ?? string.Empty,
+            plan.ContentCategoryCode,
+            plan.PlannedFormat,
+            plan.RegionId,
+            plan.Language,
+            plan.ScheduledUtc,
+            plan.Status,
+            plan.PlanStatus,
+            plan.Priority,
+            plan.PriorityScore,
+            plan.SourceExternalEventId,
+            plan.AstronomyEventIntelligence?.Title,
+            ReadOptionalStringProperty(plan.AstronomyEventIntelligence, "ShortTitle") ?? plan.AstronomyEventIntelligence?.Summary,
+            plan.AstronomyEventIntelligence?.ExternalEventId);
+
+    private static PlanReadyForGenerationItem ToReadyForGenerationItem(ContentGenerationPlan plan)
+        => new(
+            plan.Id,
+            plan.Title ?? string.Empty,
+            plan.SourceExternalEventId,
+            plan.Status,
+            plan.PlanStatus,
+            ResolvePriorityLabel(plan),
+            plan.PriorityScore ?? 0m,
+            plan.ContentCategoryCode,
+            plan.PlannedFormat,
+            plan.ScheduledUtc,
+            plan.RequestedOutputTypesJson,
+            plan.AstronomyEventIntelligence?.Title,
+            ReadOptionalStringProperty(plan.AstronomyEventIntelligence, "ShortTitle") ?? plan.AstronomyEventIntelligence?.Summary,
+            plan.AstronomyEventIntelligence?.EventType,
+            plan.AstronomyEventIntelligence?.VerificationStatus,
+            plan.AstronomyEventIntelligence?.AutoGenerateAllowed,
+            plan.AstronomyEventIntelligence?.ContentStrategy);
+
+    private static string ResolvePriorityLabel(ContentGenerationPlan plan)
+        => IsHighPriority(plan) ? "High" : plan.Priority <= 50 || plan.PriorityScore >= 5m ? "Medium" : "Low";
 
     private static void ValidateRequest(BatchGenerateFromPlansRequest request)
     {
@@ -164,4 +351,6 @@ public sealed class ContentPlanBatchGenerationService(
         if (request.PlanTitles is not { Count: > 0 } || request.PlanTitles.All(string.IsNullOrWhiteSpace))
             throw new ArgumentException("At least one explicit plan title is required for safe batch generation.");
     }
+
+    private sealed record SelectionResult(IReadOnlyList<ContentGenerationPlan> SelectedPlans, IReadOnlyList<BatchGenerateFromPlansWarning> Warnings);
 }

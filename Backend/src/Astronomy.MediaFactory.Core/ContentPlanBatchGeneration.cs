@@ -16,8 +16,8 @@ public sealed record BatchGenerateFromPlansResponse(
     int SelectedPlanCount,
     int MaxPlans,
     IReadOnlyList<BatchGenerateFromPlansSelectedPlan> SelectedPlans,
-    IReadOnlyList<BatchGenerateFromPlansStepResult> Steps,
-    IReadOnlyList<string> Warnings,
+    IReadOnlyList<object> Steps,
+    IReadOnlyList<BatchGenerateFromPlansWarning> Warnings,
     IReadOnlyList<string> Errors);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
@@ -31,7 +31,17 @@ public sealed record BatchGenerateFromPlansSelectedPlan(
     string Status,
     string PlanStatus,
     int Priority,
-    decimal? PriorityScore);
+    decimal? PriorityScore,
+    string? SourceExternalEventId = null,
+    string? AstronomyEventTitle = null,
+    string? AstronomyEventShortTitle = null,
+    string? AstronomyEventExternalEventId = null);
+
+public sealed record BatchGenerateFromPlansWarning(
+    string RequestedTitle,
+    bool Matched,
+    bool Selected,
+    string Reason);
 
 public sealed record BatchGenerateFromPlansStepResult(
     string StepName,
@@ -43,7 +53,44 @@ public sealed record BatchGenerateFromPlansStepResult(
     string? ErrorMessage,
     object? Result);
 
+public sealed record PlansReadyForGenerationResponse(
+    int Year,
+    string RegionId,
+    string Language,
+    int TotalPlansFound,
+    IReadOnlyList<PlanReadyForGenerationItem> Plans);
+
+public sealed record PlanReadyForGenerationItem(
+    Guid PlanId,
+    string Title,
+    string? SourceExternalEventId,
+    string Status,
+    string PlanStatus,
+    string Priority,
+    decimal PriorityScore,
+    string ContentCategoryCode,
+    string? PlannedFormat,
+    DateTimeOffset? ScheduledUtc,
+    string? RequestedOutputTypesJson,
+    string? AstronomyEventTitle,
+    string? AstronomyEventShortTitle,
+    string? AstronomyEventType,
+    string? AstronomyEventVerificationStatus,
+    bool? AstronomyEventAutoGenerateAllowed,
+    string? AstronomyEventContentStrategy);
+
 public interface IContentPlanBatchGenerationService
 {
     Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken);
+}
+
+public interface IContentPlanGenerationReadinessService
+{
+    Task<PlansReadyForGenerationResponse> GetPlansReadyForGenerationAsync(
+        int year,
+        string regionId,
+        string language,
+        bool onlyHighPriority,
+        int? maxPlans,
+        CancellationToken cancellationToken);
 }
