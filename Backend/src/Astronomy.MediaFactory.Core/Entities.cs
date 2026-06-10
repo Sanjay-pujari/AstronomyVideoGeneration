@@ -527,6 +527,8 @@ public sealed class ContentGenerationPlan : EntityBase
     public string Status { get; set; } = "Planned";
     public Guid? AstronomyContentOpportunityId { get; set; }
     public Guid? AstronomyEventIntelligenceId { get; set; }
+    public string? SourceExternalEventId { get; set; }
+    public string? RequestedOutputTypesJson { get; set; }
     public string? SourceEventObjectIdsJson { get; set; }
     public string? PlannedObjectNamesJson { get; set; }
     public string PlanStatus { get; set; } = "Planned";
@@ -621,6 +623,12 @@ public sealed class ContentCategoryStyleSettings : EntityBase
 public sealed class AstronomyEventIntelligence : EntityBase
 {
     public string EventCode { get; set; } = "";
+    public string ExternalEventId { get; set; } = string.Empty;
+    public int Year { get; set; }
+    public string Language { get; set; } = "en";
+    public string VerificationStatus { get; set; } = "Verified";
+    public bool AutoGenerateAllowed { get; set; }
+    public string? ContentStrategy { get; set; }
     public string EventType { get; set; } = "";
     public string Title { get; set; } = "";
     public string? Summary { get; set; }

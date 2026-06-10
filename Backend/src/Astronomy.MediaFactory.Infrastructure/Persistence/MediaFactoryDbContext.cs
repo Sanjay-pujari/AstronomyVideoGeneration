@@ -278,6 +278,8 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentGenerationPlan>().ToTable("content_generation_plans").HasKey(x => x.Id);
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.AstronomyContentOpportunityId).HasColumnName("astronomy_content_opportunity_id");
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.AstronomyEventIntelligenceId).HasColumnName("astronomy_event_intelligence_id");
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.SourceExternalEventId).HasColumnName("source_external_event_id").HasMaxLength(160);
+        modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.RequestedOutputTypesJson).HasColumnName("requested_output_types_json").HasColumnType("jsonb");
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.SourceEventObjectIdsJson).HasColumnName("source_event_object_ids_json").HasColumnType("jsonb");
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.PlannedObjectNamesJson).HasColumnName("planned_object_names_json").HasColumnType("jsonb");
         modelBuilder.Entity<ContentGenerationPlan>().Property(x => x.AssetPlanJson).HasColumnName("asset_plan_json").HasColumnType("jsonb");
@@ -299,6 +301,7 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.Status);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.AstronomyContentOpportunityId);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.AstronomyEventIntelligenceId);
+        modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.SourceExternalEventId);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.PlanStatus);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.PlannedFormat);
         modelBuilder.Entity<ContentGenerationPlan>().HasIndex(x => x.AssetPlanStatus);
