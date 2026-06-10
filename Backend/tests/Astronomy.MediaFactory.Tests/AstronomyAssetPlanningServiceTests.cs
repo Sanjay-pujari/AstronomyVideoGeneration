@@ -131,6 +131,79 @@ public sealed class AstronomyAssetPlanningServiceTests
 
 
     [Fact]
+    public async Task GenerateAssetPlansAsync_SelectedPlanIds_LoadsExactImportedDraftPlanAndSavesDefaultRequirements()
+    {
+        await using var db = CreateInMemoryDb();
+        var selectedPlan = SeedPlan(db, "RareEventAlert", "Short", ["Geminids", "Meteor shower"]);
+        selectedPlan.Status = "Draft";
+        selectedPlan.PlanStatus = "Draft";
+        selectedPlan.SourceExternalEventId = "geminids-2026-peak";
+        selectedPlan.RequestedOutputTypesJson = JsonSerializer.Serialize(new[] { "ShortVideo", "LongVideo", "HeroAsset", "Thumbnail" });
+        selectedPlan.AssetPlanJson = JsonSerializer.Serialize(new { imported = true, assetRequirements = Array.Empty<object>() });
+        selectedPlan.AstronomyEventIntelligence!.EventType = "MeteorShower";
+        selectedPlan.AstronomyEventIntelligence.Title = "Geminids Meteor Shower Peak";
+        selectedPlan.AstronomyEventIntelligence.Summary = "Geminids peak";
+        selectedPlan.AstronomyEventIntelligence.MetadataJson = JsonSerializer.Serialize(new { showerCode = "GEM" });
+        selectedPlan.AstronomyEventIntelligence.RawDataJson = JsonSerializer.Serialize(new { zhr = 120 });
+        selectedPlan.AstronomyEventIntelligence.Objects.Add(new AstronomyEventObject { ObjectName = "Geminids", ObjectType = "MeteorShower", ObjectRole = "Primary" });
+        selectedPlan.AstronomyEventIntelligence.Objects.Add(new AstronomyEventObject { ObjectName = "Castor", ObjectType = "Star", ObjectRole = "Secondary" });
+        var unselectedPlan = SeedPlan(db, "RareEventAlert", "Short", ["Unselected"]);
+        unselectedPlan.RequestedOutputTypesJson = selectedPlan.RequestedOutputTypesJson;
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        var result = await service.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(
+            RegionId: "IN-RJ-UDAIPUR",
+            PlanIds: [selectedPlan.Id],
+            MaxPlans: 1,
+            DryRun: false,
+            OverwriteExisting: false), CancellationToken.None);
+
+        Assert.Equal(1, result.PlanCount);
+        Assert.Equal(1, result.SavedCount);
+        Assert.Equal(0, result.SkippedDuplicates);
+        Assert.True(result.AssetRequirementCount > 0);
+        var assetPlan = Assert.Single(result.AssetPlans);
+        Assert.Contains(assetPlan.AssetRequirements, r => r.SceneName == "hero_landscape");
+        Assert.Contains(assetPlan.AssetRequirements, r => r.SceneName == "thumbnail_landscape");
+        Assert.Contains(assetPlan.AssetRequirements, r => r.SceneName == "thumbnail_portrait");
+        Assert.Contains(assetPlan.AssetRequirements, r => r.SceneName == "short_scene_portrait");
+        Assert.Contains(assetPlan.AssetRequirements, r => r.SceneName == "long_scene_landscape");
+        Assert.Contains("Geminids", assetPlan.ObjectNames);
+        Assert.Contains("Castor", assetPlan.ObjectNames);
+        Assert.Contains("sourceExternalEventId", selectedPlan.AssetPlanJson);
+        Assert.Contains("geminids-2026-peak", selectedPlan.AssetPlanJson);
+        Assert.Contains("MeteorShower", selectedPlan.AssetPlanJson);
+        Assert.Contains("primaryObjects", selectedPlan.AssetPlanJson);
+        Assert.Null(unselectedPlan.AssetPlanJson);
+    }
+
+    [Fact]
+    public async Task GenerateAssetPlansAsync_SelectedPlanIds_WarnsAndSkipsMissingEventOrRequestedOutputs()
+    {
+        await using var db = CreateInMemoryDb();
+        var missingEventPlan = SeedPlan(db, "RareEventAlert", "Short");
+        missingEventPlan.RequestedOutputTypesJson = JsonSerializer.Serialize(new[] { "HeroAsset" });
+        missingEventPlan.AstronomyEventIntelligence = null;
+        missingEventPlan.AstronomyEventIntelligenceId = null;
+        var missingOutputsPlan = SeedPlan(db, "RareEventAlert", "Short");
+        missingOutputsPlan.RequestedOutputTypesJson = null;
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        var result = await service.GenerateAssetPlansAsync(new AstronomyAssetPlanningRequest(
+            PlanIds: [missingEventPlan.Id, missingOutputsPlan.Id],
+            DryRun: false), CancellationToken.None);
+
+        Assert.Equal(2, result.PlanCount);
+        Assert.Equal(0, result.AssetRequirementCount);
+        Assert.Equal(0, result.SavedCount);
+        Assert.Contains(result.Warnings, w => w.Contains("missing linked AstronomyEventIntelligence", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Warnings, w => w.Contains("missing RequestedOutputTypesJson", StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    [Fact]
     public async Task GenerateAssetPlansAsync_SkipsValidExistingAssetPlanWhenOverwriteFalse()
     {
         await using var db = CreateInMemoryDb();

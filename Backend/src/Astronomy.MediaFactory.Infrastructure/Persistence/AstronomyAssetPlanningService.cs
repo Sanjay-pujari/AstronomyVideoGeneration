@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Microsoft.EntityFrameworkCore;
@@ -29,35 +30,50 @@ public sealed class AstronomyAssetPlanningService(
 
         var warnings = new List<string>();
         var planIds = request.PlanIds is { Count: > 0 } ? request.PlanIds.Where(x => x != Guid.Empty).ToHashSet() : null;
+        var hasSelectedPlanIds = planIds is { Count: > 0 };
         var categories = ToSet(request.ContentCategories);
         var formats = ToSet(request.PlannedFormats);
 
         var schemaSupportsSave = await SchemaSupportsAssetPlanAsync(cancellationToken);
         if (!schemaSupportsSave)
-            warnings.Add("content_generation_plans has no suitable asset plan JSON/status fields. Proposed minimal schema: asset_plan_json jsonb nullable; asset_plan_status varchar default 'Planned'. No asset plans were saved.");
+            warnings.Add("unknown AssetPlanJson schema: content_generation_plans has no suitable asset plan JSON/status fields. Proposed minimal schema: asset_plan_json jsonb nullable; asset_plan_status varchar default 'Planned'. No asset plans were saved.");
 
-        var query = db.ContentGenerationPlans
-            .AsQueryable()
-            .Where(p => RunnablePlanStatuses.Contains(p.PlanStatus));
+        var query = db.ContentGenerationPlans.AsQueryable();
 
-        if (!string.IsNullOrWhiteSpace(request.RegionId))
-            query = query.Where(p => p.RegionId == request.RegionId);
-        if (planIds is { Count: > 0 })
-            query = query.Where(p => planIds.Contains(p.Id));
-        if (categories is { Count: > 0 })
-            query = query.Where(p => categories.Contains(p.ContentCategoryCode));
-        if (formats is { Count: > 0 })
-            query = query.Where(p => p.PlannedFormat != null && formats.Contains(p.PlannedFormat));
-        if (request.MinPriorityScore.HasValue)
-            query = query.Where(p => p.PriorityScore >= request.MinPriorityScore.Value);
+        if (hasSelectedPlanIds)
+        {
+            query = query.Where(p => planIds!.Contains(p.Id));
+        }
+        else
+        {
+            query = query.Where(p => RunnablePlanStatuses.Contains(p.PlanStatus));
+            if (!string.IsNullOrWhiteSpace(request.RegionId))
+                query = query.Where(p => p.RegionId == request.RegionId);
+            if (categories is { Count: > 0 })
+                query = query.Where(p => categories.Contains(p.ContentCategoryCode));
+            if (formats is { Count: > 0 })
+                query = query.Where(p => p.PlannedFormat != null && formats.Contains(p.PlannedFormat));
+            if (request.MinPriorityScore.HasValue)
+                query = query.Where(p => p.PriorityScore >= request.MinPriorityScore.Value);
+        }
 
         query = query.OrderByDescending(p => p.PriorityScore ?? 0m).ThenBy(p => p.ScheduledUtc ?? DateTimeOffset.MaxValue);
-        if (request.MaxPlans.HasValue)
+        if (!hasSelectedPlanIds && request.MaxPlans.HasValue)
             query = query.Take(request.MaxPlans.Value);
 
         var plans = schemaSupportsSave || !db.Database.IsRelational()
-            ? await query.Include(p => p.AstronomyEventIntelligence).ToListAsync(cancellationToken)
+            ? await query
+                .Include(p => p.AstronomyEventIntelligence)
+                    .ThenInclude(e => e!.Objects)
+                .ToListAsync(cancellationToken)
             : await LoadPlansWithoutAssetColumnsAsync(query, cancellationToken);
+
+        if (hasSelectedPlanIds)
+        {
+            var loadedIds = plans.Select(p => p.Id).ToHashSet();
+            foreach (var missingPlanId in planIds!.Where(id => !loadedIds.Contains(id)).OrderBy(id => id))
+                warnings.Add($"Content generation plan '{missingPlanId}' could not generate AssetPlanJson: selected plan id was not found.");
+        }
 
         var assetPlans = new List<AstronomyAssetPlanDto>();
         var savedCount = 0;
@@ -65,6 +81,9 @@ public sealed class AstronomyAssetPlanningService(
 
         foreach (var plan in plans)
         {
+            if (hasSelectedPlanIds && !CanGenerateSelectedPlan(plan, warnings))
+                continue;
+
             var existingAssetPlanJson = schemaSupportsSave ? await GetExistingAssetPlanJsonAsync(plan, cancellationToken) : plan.AssetPlanJson;
             var hasReusableExisting = HasAssetRequirements(existingAssetPlanJson);
             if (!request.DryRun && schemaSupportsSave && hasReusableExisting && !request.OverwriteExisting)
@@ -106,6 +125,7 @@ public sealed class AstronomyAssetPlanningService(
                 p.Status,
                 p.AstronomyContentOpportunityId,
                 p.AstronomyEventIntelligenceId,
+                p.SourceExternalEventId,
                 p.SourceEventObjectIdsJson,
                 p.RequestedOutputTypesJson,
                 p.PlannedObjectNamesJson,
@@ -142,6 +162,7 @@ public sealed class AstronomyAssetPlanningService(
                 Status = p.Status,
                 AstronomyContentOpportunityId = p.AstronomyContentOpportunityId,
                 AstronomyEventIntelligenceId = p.AstronomyEventIntelligenceId,
+                SourceExternalEventId = p.SourceExternalEventId,
                 SourceEventObjectIdsJson = p.SourceEventObjectIdsJson,
                 RequestedOutputTypesJson = p.RequestedOutputTypesJson,
                 PlannedObjectNamesJson = p.PlannedObjectNamesJson,
@@ -167,6 +188,29 @@ public sealed class AstronomyAssetPlanningService(
         }).ToList();
     }
 
+    private static bool CanGenerateSelectedPlan(ContentGenerationPlan plan, ICollection<string> warnings)
+    {
+        if (plan.AstronomyEventIntelligence is null)
+        {
+            warnings.Add($"Content generation plan '{plan.Id}' could not generate AssetPlanJson: missing linked AstronomyEventIntelligence.");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(plan.RequestedOutputTypesJson) || ParseRequestedOutputTypes(plan.RequestedOutputTypesJson).Count == 0)
+        {
+            warnings.Add($"Content generation plan '{plan.Id}' could not generate AssetPlanJson: missing RequestedOutputTypesJson.");
+            return false;
+        }
+
+        if (!SceneTemplates.ContainsKey(plan.ContentCategoryCode))
+        {
+            warnings.Add($"Content generation plan '{plan.Id}' could not generate AssetPlanJson: unsupported category '{plan.ContentCategoryCode}'.");
+            return false;
+        }
+
+        return true;
+    }
+
     private static bool HasAssetRequirements(string? assetPlanJson)
     {
         if (string.IsNullOrWhiteSpace(assetPlanJson)) return false;
@@ -184,7 +228,7 @@ public sealed class AstronomyAssetPlanningService(
 
     private AstronomyAssetPlanDto BuildAssetPlan(ContentGenerationPlan plan, List<string> warnings)
     {
-        var objectNames = ParseStringArray(plan.PlannedObjectNamesJson);
+        var objectNames = ResolveObjectNames(plan);
         var requestedOutputs = ParseRequestedOutputTypes(plan.RequestedOutputTypesJson);
         var scenes = ResolveScenes(plan, warnings);
         var groups = new List<AstronomySceneAssetGroupDto>();
@@ -282,10 +326,18 @@ public sealed class AstronomyAssetPlanningService(
                     aspectRatio = outputRequirement.AspectRatio,
                     planTitle = plan.Title,
                     eventTitle = plan.AstronomyEventIntelligence?.Title,
-                    eventShortTitle = plan.AstronomyEventIntelligence?.Summary,
+                    eventShortTitle = EventShortTitle(plan.AstronomyEventIntelligence),
+                    eventType = plan.AstronomyEventIntelligence?.EventType,
+                    sourceExternalEventId = plan.SourceExternalEventId,
+                    regionId = plan.RegionId,
+                    language = plan.Language,
                     locationName = plan.AstronomyEventIntelligence?.LocationName ?? plan.RegionId,
                     scheduledUtc = plan.ScheduledUtc,
                     peakUtc = plan.AstronomyEventIntelligence?.PeakUtc,
+                    primaryObjects = EventObjectsByRole(plan, "Primary"),
+                    secondaryObjects = EventObjectsByRole(plan, "Secondary"),
+                    eventMetadata = TryParseJsonObject(plan.AstronomyEventIntelligence?.MetadataJson),
+                    eventRawData = TryParseJsonObject(plan.AstronomyEventIntelligence?.RawDataJson),
                     prompt = PromptFor(plan, outputRequirement.RequirementCode, outputRequirement.AssetType, objectNames)
                 }
             };
@@ -328,8 +380,15 @@ public sealed class AstronomyAssetPlanningService(
                 targetObjects = objectNames,
                 locationName,
                 regionId = plan.RegionId,
+                language = plan.Language,
+                sourceExternalEventId = plan.SourceExternalEventId,
+                eventTitle = plan.AstronomyEventIntelligence?.Title,
+                eventShortTitle = EventShortTitle(plan.AstronomyEventIntelligence),
+                eventType = plan.AstronomyEventIntelligence?.EventType,
                 scheduledUtc = plan.ScheduledUtc,
                 peakUtc = plan.AstronomyEventIntelligence?.PeakUtc,
+                primaryObjects = EventObjectsByRole(plan, "Primary"),
+                secondaryObjects = EventObjectsByRole(plan, "Secondary"),
                 requiresConstellationLines = sceneName.Contains("Constellation", StringComparison.OrdinalIgnoreCase) || sceneName.Contains("where", StringComparison.OrdinalIgnoreCase),
                 requiresLabels = true,
                 requiresLandscape = true,
@@ -339,6 +398,17 @@ public sealed class AstronomyAssetPlanningService(
             "AiHeroImage" or "AiCinematicImage" => new
             {
                 imagePrompt = prompt,
+                planTitle = plan.Title,
+                eventTitle = plan.AstronomyEventIntelligence?.Title,
+                eventShortTitle = EventShortTitle(plan.AstronomyEventIntelligence),
+                eventType = plan.AstronomyEventIntelligence?.EventType,
+                sourceExternalEventId = plan.SourceExternalEventId,
+                regionId = plan.RegionId,
+                language = plan.Language,
+                scheduledUtc = plan.ScheduledUtc,
+                peakUtc = plan.AstronomyEventIntelligence?.PeakUtc,
+                primaryObjects = EventObjectsByRole(plan, "Primary"),
+                secondaryObjects = EventObjectsByRole(plan, "Secondary"),
                 aspectRatio = plan.PlannedFormat?.Equals("Short", StringComparison.OrdinalIgnoreCase) == true ? "9:16" : "16:9",
                 style = assetType == "AiHeroImage" ? "high-retention cinematic astronomy hero image" : "cinematic educational astronomy illustration",
                 safetyNote = "No real generation in Phase 7E."
@@ -353,12 +423,33 @@ public sealed class AstronomyAssetPlanningService(
             {
                 titleText = TitleText(sceneName, objectNames),
                 subtitleText = SubtitleText(plan, sceneName),
+                eventTitle = plan.AstronomyEventIntelligence?.Title,
+                eventShortTitle = EventShortTitle(plan.AstronomyEventIntelligence),
+                eventType = plan.AstronomyEventIntelligence?.EventType,
+                sourceExternalEventId = plan.SourceExternalEventId,
+                regionId = plan.RegionId,
+                language = plan.Language,
+                scheduledUtc = plan.ScheduledUtc,
+                peakUtc = plan.AstronomyEventIntelligence?.PeakUtc,
+                primaryObjects = EventObjectsByRole(plan, "Primary"),
+                secondaryObjects = EventObjectsByRole(plan, "Secondary"),
                 dataPoints = DataPoints(plan, objectNames)
             },
             "ThumbnailConcept" => new
             {
                 thumbnailText = ThumbnailText(plan.Title, objectNames),
+                planTitle = plan.Title,
+                eventTitle = plan.AstronomyEventIntelligence?.Title,
+                eventShortTitle = EventShortTitle(plan.AstronomyEventIntelligence),
+                eventType = plan.AstronomyEventIntelligence?.EventType,
+                sourceExternalEventId = plan.SourceExternalEventId,
+                regionId = plan.RegionId,
+                language = plan.Language,
+                scheduledUtc = plan.ScheduledUtc,
+                peakUtc = plan.AstronomyEventIntelligence?.PeakUtc,
                 keyObjects = objectNames,
+                primaryObjects = EventObjectsByRole(plan, "Primary"),
+                secondaryObjects = EventObjectsByRole(plan, "Secondary"),
                 emotion = EmotionFor(plan.ContentCategoryCode),
                 composition = "Large readable text, one dominant celestial focal point, high contrast background, safe margins for mobile crops."
             },
@@ -461,6 +552,48 @@ public sealed class AstronomyAssetPlanningService(
         catch (JsonException)
         {
             return [];
+        }
+    }
+
+    private static IReadOnlyList<string> ResolveObjectNames(ContentGenerationPlan plan)
+    {
+        var names = new List<string>();
+        names.AddRange(ParseStringArray(plan.PlannedObjectNamesJson));
+        if (plan.AstronomyEventIntelligence?.Objects is { Count: > 0 })
+            names.AddRange(plan.AstronomyEventIntelligence.Objects.Select(o => o.ObjectName));
+
+        return names
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> EventObjectsByRole(ContentGenerationPlan plan, string role)
+        => plan.AstronomyEventIntelligence?.Objects?
+            .Where(o => string.Equals(o.ObjectRole, role, StringComparison.OrdinalIgnoreCase))
+            .Select(o => o.ObjectName)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? [];
+
+    private static string? EventShortTitle(AstronomyEventIntelligence? evt)
+        => ReadOptionalStringProperty(evt, "ShortTitle") ?? evt?.Summary;
+
+    private static string? ReadOptionalStringProperty(object? value, string propertyName)
+        => value?.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)?.GetValue(value) as string;
+
+    private static object? TryParseJsonObject(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<JsonElement>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
