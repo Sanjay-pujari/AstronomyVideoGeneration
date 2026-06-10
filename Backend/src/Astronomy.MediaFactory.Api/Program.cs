@@ -1101,6 +1101,27 @@ app.MapPost("/api/astronomy-intelligence/discover-astronomy-events", async (Http
 })
 .Accepts<AstronomyEventDiscoveryPreviewRequest>("application/json");
 
+app.MapPost("/api/astronomy-intelligence/verify-astronomy-events", async (HttpRequest httpRequest, IAstronomyEventVerificationService verification, ILogger<Program> logger, CancellationToken ct) =>
+{
+    var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyEventVerificationRequest>(httpRequest, "request", logger, ct);
+    if (requestBody.HasError)
+    {
+        return requestBody.ErrorResult!;
+    }
+
+    var request = requestBody.Value!;
+    logger.LogInformation("Astronomy event verification request received for {RegionId} in {Year}. DryRun={DryRun}", request.RegionId, request.Year, request.DryRun);
+    try
+    {
+        return Results.Ok(await verification.VerifyAstronomyEventsAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+})
+.Accepts<AstronomyEventVerificationRequest>("application/json");
+
 app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpRequest httpRequest, IAstronomyAssetProducerPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyAssetProducerPreviewRequest>(httpRequest, "request", logger, ct);

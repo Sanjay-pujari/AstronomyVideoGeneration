@@ -61,10 +61,102 @@ public sealed class AstronomyEventDiscoveryPreviewServiceTests
         Assert.True(result.EventCount > 0);
     }
 
+
+    [Fact]
+    public async Task VerifyAstronomyEvents_WritesVerifiedJsonAndDeduplicatesFullMoons()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), "event-verification-" + Guid.NewGuid().ToString("N"));
+        var previewService = CreateService(outputRoot);
+        await previewService.DiscoverAstronomyEventsAsync(new AstronomyEventDiscoveryPreviewRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            DryRun: false,
+            OverwriteExisting: true), CancellationToken.None);
+
+        var verificationService = CreateVerificationService(outputRoot);
+        var result = await verificationService.VerifyAstronomyEventsAsync(new AstronomyEventVerificationRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            DryRun: false,
+            OverwriteExisting: true), CancellationToken.None);
+
+        Assert.True(result.EventVerificationGenerated);
+        Assert.Equal(2026, result.Year);
+        Assert.Equal("IN-RJ-UDAIPUR", result.RegionId);
+        Assert.True(result.InputEventCount > result.VerifiedEventCount);
+        Assert.True(result.DeduplicatedCount > 0);
+        Assert.True(result.HighPriorityCount > 0);
+        Assert.True(result.ManualReviewCount > 0);
+        Assert.True(result.AutoGenerateAllowedCount > 0);
+        var expectedPath = Path.Combine(outputRoot, "assets", "IN-RJ-UDAIPUR", "event-discovery", "2026", "astronomy-event-verified-2026.json");
+        Assert.Equal(expectedPath, result.EventVerificationPath);
+        Assert.Equal(expectedPath, Assert.Single(result.GeneratedFiles));
+        Assert.True(File.Exists(expectedPath));
+
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(expectedPath));
+        var root = document.RootElement;
+        Assert.Equal(result.InputEventCount, root.GetProperty("inputEventCount").GetInt32());
+        Assert.Equal(result.VerifiedEventCount, root.GetProperty("verifiedEventCount").GetInt32());
+        Assert.Equal(result.DeduplicatedCount, root.GetProperty("deduplicatedCount").GetInt32());
+        Assert.Equal(result.HighPriorityCount, root.GetProperty("highPriorityCount").GetInt32());
+        Assert.Equal(result.ManualReviewCount, root.GetProperty("manualReviewCount").GetInt32());
+        Assert.Equal(result.AutoGenerateAllowedCount, root.GetProperty("autoGenerateAllowedCount").GetInt32());
+
+        var events = root.GetProperty("events").EnumerateArray().ToArray();
+        Assert.DoesNotContain(events, e => e.GetProperty("eventType").GetString() == "FullMoon");
+        var namedFullMoon = events.First(e => e.GetProperty("eventType").GetString() == "NamedFullMoon");
+        Assert.Contains(namedFullMoon.GetProperty("aliases").EnumerateArray(), a => a.GetString() == "Full Moon");
+        Assert.Equal("Approximate", namedFullMoon.GetProperty("verificationStatus").GetString());
+        Assert.Equal("Medium", namedFullMoon.GetProperty("publishPriority").GetString());
+        Assert.Contains(namedFullMoon.GetProperty("recommendedContentTypes").EnumerateArray(), c => c.GetString() == "ShortVideo");
+        Assert.Contains(events, e => e.GetProperty("verificationStatus").GetString() == "NeedsManualReview" && e.GetProperty("sourceType").GetString() == "ManualSeed");
+        Assert.All(root.GetProperty("topEvents").EnumerateArray(), e =>
+        {
+            Assert.True(e.GetProperty("contentWorthinessScore").GetInt32() >= 85);
+            Assert.Equal("High", e.GetProperty("publishPriority").GetString());
+            Assert.True(e.GetProperty("autoGenerateAllowed").GetBoolean());
+        });
+    }
+
+    [Fact]
+    public async Task VerifyAstronomyEvents_DryRunDoesNotWriteFile()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), "event-verification-" + Guid.NewGuid().ToString("N"));
+        var previewService = CreateService(outputRoot);
+        await previewService.DiscoverAstronomyEventsAsync(new AstronomyEventDiscoveryPreviewRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            DryRun: false,
+            OverwriteExisting: true), CancellationToken.None);
+
+        var verificationService = CreateVerificationService(outputRoot);
+        var result = await verificationService.VerifyAstronomyEventsAsync(new AstronomyEventVerificationRequest(
+            Year: 2026,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            DryRun: true,
+            OverwriteExisting: true), CancellationToken.None);
+
+        Assert.False(result.EventVerificationGenerated);
+        Assert.Empty(result.GeneratedFiles);
+        Assert.False(File.Exists(result.EventVerificationPath));
+        Assert.True(result.InputEventCount > 0);
+        Assert.True(result.DeduplicatedCount > 0);
+    }
+
     private static AstronomyEventDiscoveryPreviewService CreateService(string outputRoot)
     {
         var rendering = Options.Create(new RenderingOptions { WorkingDirectory = outputRoot });
         var scheduler = Options.Create(new SchedulerOptions());
         return new AstronomyEventDiscoveryPreviewService(rendering, scheduler, TimeProvider.System, NullLogger<AstronomyEventDiscoveryPreviewService>.Instance);
+    }
+
+    private static AstronomyEventVerificationService CreateVerificationService(string outputRoot)
+    {
+        var rendering = Options.Create(new RenderingOptions { WorkingDirectory = outputRoot });
+        return new AstronomyEventVerificationService(rendering, TimeProvider.System, NullLogger<AstronomyEventVerificationService>.Instance);
     }
 }
