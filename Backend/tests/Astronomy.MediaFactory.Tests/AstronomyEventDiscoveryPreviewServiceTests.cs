@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -181,6 +182,11 @@ public sealed class AstronomyEventDiscoveryPreviewServiceTests
     private static AstronomyEventVerificationService CreateVerificationService(string outputRoot)
     {
         var rendering = Options.Create(new RenderingOptions { WorkingDirectory = outputRoot });
-        return new AstronomyEventVerificationService(rendering, TimeProvider.System, new PythonSkyfieldAccuracyProvider(NullLogger<PythonSkyfieldAccuracyProvider>.Instance), NullLogger<AstronomyEventVerificationService>.Instance);
+        return new AstronomyEventVerificationService(rendering, TimeProvider.System, new EmptySkyfieldAccuracyProvider(), NullLogger<AstronomyEventVerificationService>.Instance);
+    }
+    private sealed class EmptySkyfieldAccuracyProvider : ISkyfieldAccuracyProvider
+    {
+        public Task<SkyfieldAccuracyResult> ComputeYearlyAccuracyAsync(int year, RegionScheduleOptions region, IReadOnlyList<AstronomyEventPreviewItem> events, CancellationToken cancellationToken) =>
+            Task.FromResult(new SkyfieldAccuracyResult());
     }
 }
