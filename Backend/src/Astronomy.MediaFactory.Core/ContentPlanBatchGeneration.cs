@@ -18,7 +18,15 @@ public sealed record BatchGenerateFromPlansResponse(
     IReadOnlyList<BatchGenerateFromPlansSelectedPlan> SelectedPlans,
     IReadOnlyList<object> Steps,
     IReadOnlyList<BatchGenerateFromPlansWarning> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    int AssetPlansGenerated = 0,
+    int AssetJobsCreated = 0,
+    int VisualAssetsGenerated = 0,
+    int SceneVideosRendered = 0,
+    int ShortVideosGenerated = 0,
+    int LongVideosGenerated = 0,
+    int FailedPlans = 0,
+    IReadOnlyList<object>? Results = null);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,

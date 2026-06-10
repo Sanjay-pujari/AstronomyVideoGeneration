@@ -66,12 +66,15 @@ public sealed class AstronomyAssetPlanningService(
         foreach (var plan in plans)
         {
             var existingAssetPlanJson = schemaSupportsSave ? await GetExistingAssetPlanJsonAsync(plan, cancellationToken) : plan.AssetPlanJson;
-            var hasExisting = !string.IsNullOrWhiteSpace(existingAssetPlanJson);
-            if (!request.DryRun && schemaSupportsSave && hasExisting && !request.OverwriteExisting)
+            var hasReusableExisting = HasAssetRequirements(existingAssetPlanJson);
+            if (!request.DryRun && schemaSupportsSave && hasReusableExisting && !request.OverwriteExisting)
             {
                 skippedDuplicates++;
                 continue;
             }
+
+            if (!request.DryRun && schemaSupportsSave && !string.IsNullOrWhiteSpace(existingAssetPlanJson) && !hasReusableExisting && !request.OverwriteExisting)
+                warnings.Add($"Content generation plan '{plan.Id}' had imported AssetPlanJson without asset requirements; generated a compatible default asset plan.");
 
             var assetPlan = BuildAssetPlan(plan, warnings);
             assetPlans.Add(assetPlan);
@@ -104,6 +107,7 @@ public sealed class AstronomyAssetPlanningService(
                 p.AstronomyContentOpportunityId,
                 p.AstronomyEventIntelligenceId,
                 p.SourceEventObjectIdsJson,
+                p.RequestedOutputTypesJson,
                 p.PlannedObjectNamesJson,
                 p.PlanStatus,
                 p.PlannedFormat,
@@ -139,6 +143,7 @@ public sealed class AstronomyAssetPlanningService(
                 AstronomyContentOpportunityId = p.AstronomyContentOpportunityId,
                 AstronomyEventIntelligenceId = p.AstronomyEventIntelligenceId,
                 SourceEventObjectIdsJson = p.SourceEventObjectIdsJson,
+                RequestedOutputTypesJson = p.RequestedOutputTypesJson,
                 PlannedObjectNamesJson = p.PlannedObjectNamesJson,
                 PlanStatus = p.PlanStatus,
                 PlannedFormat = p.PlannedFormat,
@@ -162,9 +167,25 @@ public sealed class AstronomyAssetPlanningService(
         }).ToList();
     }
 
+    private static bool HasAssetRequirements(string? assetPlanJson)
+    {
+        if (string.IsNullOrWhiteSpace(assetPlanJson)) return false;
+        try
+        {
+            var assetPlan = JsonSerializer.Deserialize<AstronomyAssetPlanDto>(assetPlanJson, JsonOptions);
+            if (assetPlan?.AssetRequirements is { Count: > 0 }) return true;
+            return assetPlan?.SceneAssetGroups?.Any(g => g.AssetRequirements is { Count: > 0 }) == true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private AstronomyAssetPlanDto BuildAssetPlan(ContentGenerationPlan plan, List<string> warnings)
     {
         var objectNames = ParseStringArray(plan.PlannedObjectNamesJson);
+        var requestedOutputs = ParseRequestedOutputTypes(plan.RequestedOutputTypesJson);
         var scenes = ResolveScenes(plan, warnings);
         var groups = new List<AstronomySceneAssetGroupDto>();
         var requirements = new List<AstronomyAssetRequirementDto>();
@@ -179,6 +200,8 @@ public sealed class AstronomyAssetPlanningService(
             groups.Add(new AstronomySceneAssetGroupDto(sceneNumber, sceneName, groupRequirements));
             requirements.AddRange(groupRequirements);
         }
+
+        AddRequestedOutputRequirements(plan, requestedOutputs, objectNames, groups, requirements);
 
         return new AstronomyAssetPlanDto(
             plan.Id,
@@ -204,6 +227,7 @@ public sealed class AstronomyAssetPlanningService(
                 noRendering = true,
                 noAssetGeneration = true,
                 noPipelineExecution = true,
+                requestedOutputTypes = requestedOutputs,
                 visualSceneStrategy = TryExtractSceneStrategy(plan.PlanningReason)
             });
     }
@@ -229,6 +253,70 @@ public sealed class AstronomyAssetPlanningService(
             AstronomyAssetClassificationRules.ResolveExecutionGroup(assetType),
             MetadataFor(plan, sceneName, assetType, objectNames, prompt));
     }
+
+    private static void AddRequestedOutputRequirements(
+        ContentGenerationPlan plan,
+        IReadOnlyList<string> requestedOutputs,
+        IReadOnlyList<string> objectNames,
+        List<AstronomySceneAssetGroupDto> groups,
+        List<AstronomyAssetRequirementDto> requirements)
+    {
+        if (requestedOutputs.Count == 0) return;
+
+        var outputRequirements = ResolveRequestedOutputRequirements(plan, requestedOutputs);
+        foreach (var outputRequirement in outputRequirements)
+        {
+            var requirement = BuildRequirement(
+                plan,
+                outputRequirement.SceneNumber,
+                outputRequirement.RequirementCode,
+                outputRequirement.AssetType,
+                objectNames,
+                requirements.Count) with
+            {
+                MetadataJson = new
+                {
+                    requirementCode = outputRequirement.RequirementCode,
+                    outputType = outputRequirement.OutputType,
+                    orientation = outputRequirement.Orientation,
+                    aspectRatio = outputRequirement.AspectRatio,
+                    planTitle = plan.Title,
+                    eventTitle = plan.AstronomyEventIntelligence?.Title,
+                    eventShortTitle = plan.AstronomyEventIntelligence?.Summary,
+                    locationName = plan.AstronomyEventIntelligence?.LocationName ?? plan.RegionId,
+                    scheduledUtc = plan.ScheduledUtc,
+                    peakUtc = plan.AstronomyEventIntelligence?.PeakUtc,
+                    prompt = PromptFor(plan, outputRequirement.RequirementCode, outputRequirement.AssetType, objectNames)
+                }
+            };
+
+            requirements.Add(requirement);
+            groups.Add(new AstronomySceneAssetGroupDto(outputRequirement.SceneNumber, outputRequirement.RequirementCode, [requirement]));
+        }
+    }
+
+    private static IReadOnlyList<OutputRequirement> ResolveRequestedOutputRequirements(ContentGenerationPlan plan, IReadOnlyList<string> requestedOutputs)
+    {
+        var requirements = new List<OutputRequirement>();
+        var rareEvent = string.Equals(plan.ContentCategoryCode, "RareEventAlert", StringComparison.OrdinalIgnoreCase);
+        if (ContainsOutput(requestedOutputs, "HeroAsset"))
+            requirements.Add(new OutputRequirement(80, "hero_landscape", "HeroAsset", "landscape", "16:9", "AiHeroImage"));
+        if (ContainsOutput(requestedOutputs, "Thumbnail"))
+        {
+            requirements.Add(new OutputRequirement(81, "thumbnail_landscape", "Thumbnail", "landscape", "16:9", "ThumbnailConcept"));
+            if (rareEvent) requirements.Add(new OutputRequirement(82, "thumbnail_portrait", "Thumbnail", "portrait", "9:16", "ThumbnailConcept"));
+        }
+        if (ContainsOutput(requestedOutputs, "ShortVideo"))
+            requirements.Add(new OutputRequirement(83, "short_scene_portrait", "ShortVideo", "portrait", "9:16", "TextOverlayCard"));
+        if (ContainsOutput(requestedOutputs, "LongVideo"))
+            requirements.Add(new OutputRequirement(84, "long_scene_landscape", "LongVideo", "landscape", "16:9", "AiCinematicImage"));
+        return requirements;
+    }
+
+    private static bool ContainsOutput(IReadOnlyList<string> requestedOutputs, string outputType)
+        => requestedOutputs.Any(x => string.Equals(x, outputType, StringComparison.OrdinalIgnoreCase));
+
+    private sealed record OutputRequirement(int SceneNumber, string RequirementCode, string OutputType, string Orientation, string AspectRatio, string AssetType);
 
     private static object MetadataFor(ContentGenerationPlan plan, string sceneName, string assetType, IReadOnlyList<string> objectNames, string prompt)
     {
@@ -390,6 +478,39 @@ public sealed class AstronomyAssetPlanningService(
         {
             return [];
         }
+    }
+
+    private static IReadOnlyList<string> ParseRequestedOutputTypes(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return [];
+
+            return document.RootElement.EnumerateArray()
+                .Select(ReadRequestedOutputType)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static string? ReadRequestedOutputType(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String) return element.GetString();
+        if (element.ValueKind != JsonValueKind.Object) return null;
+        foreach (var propertyName in new[] { "outputType", "type", "code", "name" })
+        {
+            if (element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String)
+                return value.GetString();
+        }
+        return null;
     }
 
     private async Task<bool> SchemaSupportsAssetPlanAsync(CancellationToken cancellationToken)
