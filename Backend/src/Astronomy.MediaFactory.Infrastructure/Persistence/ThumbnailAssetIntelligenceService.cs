@@ -1042,10 +1042,10 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
             && !string.Equals(request.Phase, "SceneSelection", StringComparison.OrdinalIgnoreCase)
             && !IsImageGenerationPhase(request.Phase))
             throw new ArgumentException("Only thumbnail asset phases 'Intelligence', 'Composition', 'SceneSelection', and 'ImageGeneration' are supported in this endpoint version.", nameof(request));
-        if (!string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
+        if (string.IsNullOrWhiteSpace(request.EventId)
             || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Thumbnail intelligence generation is enabled only for the approved golden pilot event e7013ee4-55c6-4f01-b1d0-7c500f26f98b / IN-RJ-UDAIPUR / en.", nameof(request));
+            throw new ArgumentException("Thumbnail intelligence generation requires a non-empty event id for IN-RJ-UDAIPUR / en.", nameof(request));
     }
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)

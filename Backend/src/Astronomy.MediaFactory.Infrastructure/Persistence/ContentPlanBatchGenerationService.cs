@@ -11,6 +11,7 @@ public sealed class ContentPlanBatchGenerationService(
     IAstronomyAssetProductionJobService assetJobs,
     IVisualAssetGenerationService visualAssets,
     ISceneRenderer sceneRenderer,
+    IContentPlanProductionExecutionService productionExecution,
     ILogger<ContentPlanBatchGenerationService> logger) : IContentPlanBatchGenerationService, IContentPlanGenerationReadinessService
 {
     private const int DefaultMaxPlans = 1;
@@ -60,6 +61,47 @@ public sealed class ContentPlanBatchGenerationService(
                 Steps: request.DryRun ? DryRunSteps.Cast<object>().ToArray() : [],
                 Warnings: warnings,
                 Errors: []);
+        }
+
+        if (request.UseProductionPipeline)
+        {
+            if (selectedPlans.Length != 1)
+                throw new ArgumentException("Production pipeline batch generation is currently locked to exactly one selected plan.");
+
+            var execution = await productionExecution.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
+                selectedPlans[0].ContentGenerationPlanId,
+                request.DryRun), cancellationToken);
+
+            return new BatchGenerateFromPlansResponse(
+                Success: execution.Success,
+                DryRun: request.DryRun,
+                RequestedTitleCount: requestedTitles.Length,
+                SelectedPlanCount: selectedPlans.Length,
+                MaxPlans: maxPlans,
+                SelectedPlans: selectedPlans,
+                Steps: execution.PlannedProductionSteps.Cast<object>().ToArray(),
+                Warnings: warnings.Concat(execution.Warnings.Select(w => new BatchGenerateFromPlansWarning(selectedPlans[0].Title, true, true, w))).ToArray(),
+                Errors: execution.Errors,
+                Results: [execution],
+                UseProductionPipeline: true,
+                UsedPlaceholderVisuals: false,
+                PlanId: execution.PlanId,
+                Title: execution.Title,
+                OutputRoot: execution.OutputRoot,
+                QuestionEngineCompleted: execution.QuestionEngineCompleted,
+                ShortScenesGenerated: execution.ShortScenesGenerated,
+                LongScenesGenerated: execution.LongScenesGenerated,
+                HeroGenerated: execution.HeroGenerated,
+                ThumbnailsGenerated: execution.ThumbnailsGenerated,
+                ShortNarrationGenerated: execution.ShortNarrationGenerated,
+                LongNarrationGenerated: execution.LongNarrationGenerated,
+                ShortTtsGenerated: execution.ShortTtsGenerated,
+                LongTtsGenerated: execution.LongTtsGenerated,
+                ShortVideoGenerated: execution.ShortVideoGenerated,
+                LongVideoGenerated: execution.LongVideoGenerated,
+                FinalShortVideoPath: execution.FinalShortVideoPath,
+                FinalLongVideoPath: execution.FinalLongVideoPath,
+                ProductionPipelineRequest: execution.ProductionPipelineRequest);
         }
 
         if (request.DryRun)

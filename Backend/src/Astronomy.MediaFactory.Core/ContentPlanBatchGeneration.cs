@@ -7,7 +7,8 @@ public sealed record BatchGenerateFromPlansRequest(
     int MaxPlans = 1,
     bool OnlyHighPriority = false,
     bool DryRun = true,
-    IReadOnlyList<string>? PlanTitles = null);
+    IReadOnlyList<string>? PlanTitles = null,
+    bool UseProductionPipeline = false);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
@@ -26,7 +27,26 @@ public sealed record BatchGenerateFromPlansResponse(
     int ShortVideosGenerated = 0,
     int LongVideosGenerated = 0,
     int FailedPlans = 0,
-    IReadOnlyList<object>? Results = null);
+    IReadOnlyList<object>? Results = null,
+    bool UseProductionPipeline = false,
+    bool UsedPlaceholderVisuals = true,
+    Guid? PlanId = null,
+    string? Title = null,
+    string? OutputRoot = null,
+    bool QuestionEngineCompleted = false,
+    bool ShortScenesGenerated = false,
+    bool LongScenesGenerated = false,
+    bool HeroGenerated = false,
+    bool ThumbnailsGenerated = false,
+    bool ShortNarrationGenerated = false,
+    bool LongNarrationGenerated = false,
+    bool ShortTtsGenerated = false,
+    bool LongTtsGenerated = false,
+    bool ShortVideoGenerated = false,
+    bool LongVideoGenerated = false,
+    string? FinalShortVideoPath = null,
+    string? FinalLongVideoPath = null,
+    object? ProductionPipelineRequest = null);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
@@ -101,4 +121,83 @@ public interface IContentPlanGenerationReadinessService
         bool onlyHighPriority,
         int? maxPlans,
         CancellationToken cancellationToken);
+}
+
+public sealed record ContentPlanProductionPipelineRequest(
+    Guid PlanId,
+    string Category,
+    string Title,
+    string ShortTitle,
+    string EventType,
+    string RegionId,
+    string Language,
+    IReadOnlyList<string> PrimaryObjects,
+    IReadOnlyList<string> SecondaryObjects,
+    DateTimeOffset? StartUtc,
+    DateTimeOffset? PeakUtc,
+    DateTimeOffset? EndUtc,
+    DateTimeOffset? ScheduledUtc,
+    string? SourceExternalEventId,
+    string? PlannedFormat,
+    IReadOnlyList<string> RequestedOutputs,
+    decimal? VisibilityScore,
+    decimal? RarityScore,
+    decimal? AudienceInterestScore,
+    decimal? ContentOpportunityScore,
+    string? VerificationStatus,
+    string? VerificationSource,
+    string? ContentStrategy,
+    string? LocalPeakTime,
+    string? SkyDirectionHint,
+    string? VisibilityRegion,
+    string? MoonInterference,
+    string? BestViewingWindowLocal,
+    string? RadiantVisibilityNote,
+    decimal? MoonIlluminationPercent,
+    string? RecommendedPublishWindow,
+    IReadOnlyList<string> RecommendedContentTypes,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> SourceNotes);
+
+public sealed record ContentPlanProductionExecutionRequest(
+    Guid ContentGenerationPlanId,
+    bool DryRun,
+    bool OverwriteExisting = false);
+
+public sealed record ContentPlanProductionExecutionResult(
+    bool Success,
+    bool DryRun,
+    bool UseProductionPipeline,
+    bool UsedPlaceholderVisuals,
+    int SelectedPlanCount,
+    Guid PlanId,
+    string Title,
+    string OutputRoot,
+    bool QuestionEngineCompleted,
+    bool ShortScenesGenerated,
+    bool LongScenesGenerated,
+    bool HeroGenerated,
+    bool ThumbnailsGenerated,
+    bool ShortNarrationGenerated,
+    bool LongNarrationGenerated,
+    bool ShortTtsGenerated,
+    bool LongTtsGenerated,
+    bool ShortVideoGenerated,
+    bool LongVideoGenerated,
+    string FinalShortVideoPath,
+    string FinalLongVideoPath,
+    ContentPlanProductionPipelineRequest ProductionPipelineRequest,
+    IReadOnlyList<string> PlannedProductionSteps,
+    IReadOnlyList<string> GeneratedFiles,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
+public interface IContentPlanProductionRequestMapper
+{
+    ContentPlanProductionPipelineRequest Map(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence);
+}
+
+public interface IContentPlanProductionExecutionService
+{
+    Task<ContentPlanProductionExecutionResult> ExecuteContentPlanWithProductionPipelineAsync(ContentPlanProductionExecutionRequest request, CancellationToken cancellationToken);
 }
