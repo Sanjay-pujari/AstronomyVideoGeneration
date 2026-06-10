@@ -216,7 +216,7 @@ public sealed class AstronomyAssetPlanningServiceTests
 
         Assert.Equal(1, result.PlanCount);
         Assert.Equal(0, result.SavedCount);
-        Assert.Equal(1, result.SkippedDuplicates);
+        Assert.Equal(0, result.SkippedDuplicates);
         Assert.Empty(result.AssetPlans);
         Assert.Equal(existing, plan.AssetPlanJson);
     }
@@ -365,6 +365,152 @@ public sealed class AstronomyAssetPlanningServiceTests
         Assert.Equal("StellariumScreenshot", job.AssetType);
         Assert.Equal("Stellarium", job.PlannedProvider);
         Assert.Contains("missing top-level assetRequirements", Assert.Single(result.Warnings));
+    }
+
+
+    [Fact]
+    public async Task CreateAssetProductionJobsAsync_SelectedPlanIds_LoadsExactlySelectedPlansAndDeduplicatesRequirements()
+    {
+        await using var db = CreateInMemoryDb();
+        var selectedPlan = SeedPlan(db, "RareEventAlert", "Short", ["Geminids"]);
+        var unselectedPlan = SeedPlan(db, "PlanetConjunction", "Long", ["Venus"]);
+        selectedPlan.RegionId = "IN-RJ-UDAIPUR";
+        unselectedPlan.RegionId = "IN-RJ-UDAIPUR";
+        selectedPlan.AssetPlanStatus = "Planned";
+        selectedPlan.AstronomyContentOpportunity = null;
+        selectedPlan.AstronomyContentOpportunityId = null;
+        selectedPlan.AssetPlanJson = JsonSerializer.Serialize(new
+        {
+            contentGenerationPlanId = selectedPlan.Id,
+            astronomyContentOpportunityId = (Guid?)null,
+            astronomyEventIntelligenceId = selectedPlan.AstronomyEventIntelligenceId,
+            contentCategory = selectedPlan.ContentCategoryCode,
+            plannedFormat = selectedPlan.PlannedFormat,
+            regionId = selectedPlan.RegionId,
+            locationName = "Udaipur",
+            planStatus = "Planned",
+            assetPlanStatus = "Planned",
+            sceneGroupCount = 1,
+            assetRequirementCount = 2,
+            objectNames = new[] { "Geminids" },
+            assetRequirements = new[]
+            {
+                new
+                {
+                    sceneNumber = 1,
+                    sceneName = "Meteor radiant",
+                    assetType = "StellariumScreenshot",
+                    assetPurpose = "Show the Geminids radiant",
+                    objectNames = new[] { "Geminids" },
+                    plannedProvider = "Stellarium",
+                    promptOrInstruction = "Capture the Geminids radiant over Udaipur.",
+                    expectedOutputType = "png",
+                    priority = 10,
+                    status = "Planned",
+                    dependsOn = Array.Empty<string>(),
+                    assetPriority = "Preferred",
+                    assetExecutionGroup = "AstronomyVisualization",
+                    metadataJson = new { source = "top-level" }
+                }
+            },
+            sceneAssetGroups = new[]
+            {
+                new
+                {
+                    sceneNumber = 1,
+                    sceneName = "Meteor radiant",
+                    assetRequirements = new[]
+                    {
+                        new
+                        {
+                            sceneNumber = 1,
+                            sceneName = "Meteor radiant",
+                            assetType = "StellariumScreenshot",
+                            assetPurpose = "Duplicate top-level requirement",
+                            objectNames = new[] { "Geminids" },
+                            plannedProvider = "Stellarium",
+                            promptOrInstruction = "Different prompt should still be a duplicate for selected imported plans.",
+                            expectedOutputType = "png",
+                            priority = 11,
+                            status = "Planned",
+                            dependsOn = Array.Empty<string>(),
+                            assetPriority = "Preferred",
+                            assetExecutionGroup = "AstronomyVisualization",
+                            metadataJson = new { source = "scene-duplicate" }
+                        },
+                        new
+                        {
+                            sceneNumber = 2,
+                            sceneName = "Hero concept",
+                            assetType = "AiHeroImage",
+                            assetPurpose = "Create a hero visual",
+                            objectNames = new[] { "Geminids" },
+                            plannedProvider = "AI",
+                            promptOrInstruction = "Create a cinematic Geminids hero image.",
+                            expectedOutputType = "jpg",
+                            priority = 20,
+                            status = "Planned",
+                            dependsOn = Array.Empty<string>(),
+                            assetPriority = "Required",
+                            assetExecutionGroup = "Cinematic",
+                            metadataJson = new { source = "scene-new" }
+                        }
+                    }
+                }
+            },
+            metadataJson = new { imported = true }
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        unselectedPlan.AssetPlanJson = JsonSerializer.Serialize(new
+        {
+            contentGenerationPlanId = unselectedPlan.Id,
+            contentCategory = unselectedPlan.ContentCategoryCode,
+            plannedFormat = unselectedPlan.PlannedFormat,
+            regionId = unselectedPlan.RegionId,
+            planStatus = "Planned",
+            assetPlanStatus = "Planned",
+            sceneGroupCount = 0,
+            assetRequirementCount = 1,
+            objectNames = new[] { "Venus" },
+            assetRequirements = new[]
+            {
+                new
+                {
+                    sceneNumber = 1,
+                    sceneName = "Unselected",
+                    assetType = "TextOverlayCard",
+                    assetPurpose = "Should not be processed",
+                    objectNames = new[] { "Venus" },
+                    plannedProvider = "InternalTemplate",
+                    promptOrInstruction = "Do not create this job.",
+                    expectedOutputType = "png",
+                    priority = 10,
+                    status = "Planned",
+                    dependsOn = Array.Empty<string>(),
+                    assetPriority = "Required",
+                    assetExecutionGroup = "Core",
+                    metadataJson = new { selected = false }
+                }
+            }
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        await db.SaveChangesAsync();
+        var service = new AstronomyAssetProductionJobService(db, NullLogger<AstronomyAssetProductionJobService>.Instance);
+
+        var result = await service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(
+            PlanIds: [selectedPlan.Id],
+            RegionId: "DO-NOT-FILTER-SELECTED-IDS",
+            MaxPlans: 1,
+            DryRun: false), CancellationToken.None);
+
+        Assert.Equal(2, result.JobCount);
+        Assert.Equal(2, result.SavedCount);
+        Assert.Equal(0, result.SkippedDuplicates);
+        Assert.Equal(1, result.RequiredJobs);
+        Assert.Equal(1, result.PreferredJobs);
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("has no asset requirements", StringComparison.OrdinalIgnoreCase));
+        Assert.All(result.Jobs, job => Assert.Equal(selectedPlan.Id, job.ContentGenerationPlanId));
+        Assert.Contains(result.Jobs, job => job.AstronomyContentOpportunityId is null && job.AssetType == "AiHeroImage");
+        Assert.Equal(2, await db.AstronomyAssetProductionJobs.CountAsync(j => j.ContentGenerationPlanId == selectedPlan.Id));
+        Assert.Equal(0, await db.AstronomyAssetProductionJobs.CountAsync(j => j.ContentGenerationPlanId == unselectedPlan.Id));
     }
 
     [Fact]
