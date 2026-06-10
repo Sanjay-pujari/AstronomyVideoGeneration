@@ -556,6 +556,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAstronomyAssetProducer, NasaAssetProducer>();
         services.AddScoped<IAstronomyAssetProducer, AiImageAssetProducer>();
         services.AddScoped<IAstronomyAssetProducerPreviewService, AstronomyAssetProducerPreviewService>();
+        services.AddScoped<IAstronomyEventDiscoveryPreviewService, AstronomyEventDiscoveryPreviewService>();
         services.AddScoped<IStellariumScriptGenerator, StellariumScriptGenerator>();
         services.AddScoped<IStellariumImageCaptureExecutor, StellariumImageCaptureExecutor>();
         services.AddScoped<IDailySkyGuideVisualAssetPackager, DailySkyGuideVisualAssetPackager>();
