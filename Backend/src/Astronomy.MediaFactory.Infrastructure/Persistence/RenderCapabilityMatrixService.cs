@@ -55,7 +55,8 @@ public sealed class RenderCapabilityMatrixService(
                     }
 
                     sceneCount++;
-                    var capability = BuildCapability(recipe, recipePath);
+                    var planRoot = BuildPlanRoot(root, recipe.RegionId, recipe.ContentGenerationPlanId);
+                    var capability = BuildCapability(recipe, recipePath, planRoot, renderingOptions.Value.FfmpegPath);
                     capabilities.Add(capability);
                     warnings.AddRange(capability.ExecutionPlan.Warnings.Select(w => $"Plan {recipe.ContentGenerationPlanId} scene {recipe.SceneNumber}: {w}"));
                     warnings.AddRange(capability.ExecutionPlan.BlockingIssues.Select(i => $"Plan {recipe.ContentGenerationPlanId} scene {recipe.SceneNumber}: {i}"));
@@ -123,7 +124,7 @@ public sealed class RenderCapabilityMatrixService(
             .ToList();
     }
 
-    private static RenderCapabilityDocument BuildCapability(RenderRecipeDocument recipe, string recipePath)
+    private static RenderCapabilityDocument BuildCapability(RenderRecipeDocument recipe, string recipePath, string planRoot, string ffmpegPath)
     {
         var warnings = new List<string>();
         var fallbacks = new List<string>();
@@ -135,8 +136,13 @@ public sealed class RenderCapabilityMatrixService(
             .Select(input => BuildVisualHandler(input, warnings, fallbacks, blockingIssues))
             .ToList();
 
-        var hasAudioInput = recipe.Inputs.Any(input => input.InputType.Equals("audio", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(input.AssetPath));
-        var audioHandler = new RenderCapabilityAudioHandler("SceneAudioMuxer", true, hasAudioInput);
+        var audioPath = ResolveNarrationAudioPath(planRoot, recipe.SceneNumber);
+        var audioInputPath = recipe.Inputs
+            .Where(input => input.InputType.Equals("audio", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(input.AssetPath))
+            .Select(input => ResolveAssetPath(planRoot, input.AssetPath))
+            .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
+        var hasAudioInput = !string.IsNullOrWhiteSpace(audioInputPath);
+        var audioHandler = new RenderCapabilityAudioHandler("SceneAudioMuxer", true, !string.IsNullOrWhiteSpace(audioPath) || hasAudioInput);
         if (!audioHandler.Available)
             blockingIssues.Add("missing audio handler");
 
@@ -150,6 +156,36 @@ public sealed class RenderCapabilityMatrixService(
             blockingIssues.Add("missing output video path");
         if (requiredHandlers.Count == 0 || requiredHandlers.All(handler => !handler.Available))
             blockingIssues.Add("missing visual handler");
+
+        var visualPath = ResolveVisualSourcePath(planRoot, recipe);
+        var visualSourceExists = !string.IsNullOrWhiteSpace(visualPath) && File.Exists(visualPath);
+        var overlayExistsOrOptional = recipe.Captions.Enabled || recipe.Inputs.All(input => !IsOverlayInput(input) || File.Exists(ResolveAssetPath(planRoot, input.AssetPath)));
+        var ffmpegAvailable = IsExecutableAvailable(ffmpegPath);
+        var outputFolder = ResolveOutputFolder(planRoot, recipe.OutputVideoPath);
+        var outputFolderWritable = IsOutputFolderWritable(outputFolder);
+        var checks = new RenderCapabilityMatrixChecks(
+            visualSourceExists,
+            overlayExistsOrOptional,
+            (!string.IsNullOrWhiteSpace(audioPath) && File.Exists(audioPath)) || hasAudioInput,
+            ffmpegAvailable,
+            outputFolderWritable,
+            $"{recipe.Resolution.Width}x{recipe.Resolution.Height}",
+            recipe.DurationSeconds,
+            recipe.Renderer,
+            visualPath,
+            audioPath ?? audioInputPath,
+            outputFolder);
+
+        if (!checks.AudioExists)
+            blockingIssues.Add($"missing narration audio for scene {recipe.SceneNumber:000}");
+        if (!checks.FfmpegAvailable)
+            blockingIssues.Add($"ffmpeg unavailable at '{ffmpegPath}'");
+        if (!checks.OutputFolderWritable)
+            blockingIssues.Add($"output folder is not writable: {outputFolder}");
+        if (!checks.VisualSourceExists)
+            warnings.Add("Visual source file not found; renderer may use a generated placeholder frame.");
+        if (!checks.OverlayExistsOrOptional)
+            warnings.Add("Overlay input is missing and captions may render without the planned overlay asset.");
 
         blockingIssues.AddRange(recipe.ExecutionReadiness.BlockingIssues
             .Where(issue => issue.Contains("output", StringComparison.OrdinalIgnoreCase))
@@ -174,7 +210,96 @@ public sealed class RenderCapabilityMatrixService(
             transitionHandler,
             new RenderCapabilityExecutionPlan(distinctBlockingIssues.Length == 0, distinctBlockingIssues, distinctWarnings, distinctFallbacks),
             GenerationSource,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            checks);
+    }
+
+    private static string? ResolveNarrationAudioPath(string planRoot, int sceneNumber)
+    {
+        var narrationAudioDirectory = Path.Combine(planRoot, "narration", "audio");
+        foreach (var candidate in new[]
+        {
+            Path.Combine(narrationAudioDirectory, $"scene-{sceneNumber:000}.wav"),
+            Path.Combine(narrationAudioDirectory, $"scene-{sceneNumber:00}.wav"),
+            Path.Combine(planRoot, "tts", "audio", $"scene-{sceneNumber:000}.wav"),
+            Path.Combine(planRoot, "tts", "audio", $"scene-{sceneNumber:00}.wav")
+        })
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        if (!Directory.Exists(planRoot)) return null;
+        var candidates = new[] { $"scene-{sceneNumber:000}.wav", $"scene-{sceneNumber:00}.wav", $"scene-{sceneNumber}.wav", $"scene-{sceneNumber:000}-*.wav", $"scene-{sceneNumber:00}-*.wav" };
+        foreach (var pattern in candidates)
+        {
+            var match = Directory.EnumerateFiles(planRoot, pattern, SearchOption.AllDirectories).OrderBy(path => path.Length).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(match)) return match;
+        }
+        return null;
+    }
+
+    private static string? ResolveVisualSourcePath(string planRoot, RenderRecipeDocument recipe)
+    {
+        foreach (var candidate in new[]
+        {
+            Path.Combine(planRoot, "production-visuals", $"scene-{recipe.SceneNumber:000}-final.png"),
+            Path.Combine(planRoot, "visual-assets", $"scene-{recipe.SceneNumber:000}-background.png")
+        })
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return recipe.Inputs
+            .Where(input => input.InputType.Equals("visual", StringComparison.OrdinalIgnoreCase) || input.InputType.Equals("planned_visual", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(input.RenderMode))
+            .Select(input => ResolveAssetPath(planRoot, input.AssetPath))
+            .FirstOrDefault(File.Exists);
+    }
+
+    private static bool IsOverlayInput(RenderRecipeInput input)
+        => input.AssetType.Contains("overlay", StringComparison.OrdinalIgnoreCase)
+            || (input.RenderMode?.Contains("overlay", StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static string ResolveOutputFolder(string planRoot, string outputVideoPath)
+    {
+        var outputPath = string.IsNullOrWhiteSpace(outputVideoPath)
+            ? Path.Combine(planRoot, "rendered-scenes", "scene.mp4")
+            : ResolveAssetPath(planRoot, outputVideoPath);
+        return Path.GetDirectoryName(outputPath) ?? Path.Combine(planRoot, "rendered-scenes");
+    }
+
+    private static bool IsExecutableAvailable(string executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath)) return false;
+        if (File.Exists(executablePath)) return true;
+        var pathVariable = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        return pathVariable.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory => Path.Combine(directory, executablePath))
+            .Any(File.Exists);
+    }
+
+    private static bool IsOutputFolderWritable(string outputFolder)
+    {
+        try
+        {
+            Directory.CreateDirectory(outputFolder);
+            var probe = Path.Combine(outputFolder, $".write-test-{Guid.NewGuid():N}.tmp");
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string ResolveAssetPath(string planRoot, string assetPath)
+    {
+        if (string.IsNullOrWhiteSpace(assetPath)) return string.Empty;
+        if (Path.IsPathRooted(assetPath)) return assetPath;
+        var normalized = assetPath.Replace('/', Path.DirectorySeparatorChar);
+        var rooted = Path.Combine(planRoot, normalized);
+        return File.Exists(rooted) ? rooted : assetPath;
     }
 
     private static RenderCapabilityHandler BuildVisualHandler(RenderRecipeInput input, List<string> warnings, List<string> fallbacks, List<string> blockingIssues)

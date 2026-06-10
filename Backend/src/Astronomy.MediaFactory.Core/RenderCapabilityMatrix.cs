@@ -36,7 +36,8 @@ public sealed record RenderCapabilityDocument(
     RenderCapabilityTransitionHandler TransitionHandler,
     RenderCapabilityExecutionPlan ExecutionPlan,
     string GenerationSource,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    RenderCapabilityMatrixChecks? Checks = null);
 
 public sealed record RenderCapabilityHandler(
     string RenderMode,
@@ -72,6 +73,19 @@ public sealed record RenderCapabilityExecutionPlan(
     IReadOnlyList<string> BlockingIssues,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Fallbacks);
+
+public sealed record RenderCapabilityMatrixChecks(
+    bool VisualSourceExists,
+    bool OverlayExistsOrOptional,
+    bool AudioExists,
+    bool FfmpegAvailable,
+    bool OutputFolderWritable,
+    string TargetResolution,
+    double DurationSeconds,
+    string RendererType,
+    string? VisualSourcePath,
+    string? AudioPath,
+    string OutputFolderPath);
 
 public interface IRenderCapabilityMatrixService
 {
