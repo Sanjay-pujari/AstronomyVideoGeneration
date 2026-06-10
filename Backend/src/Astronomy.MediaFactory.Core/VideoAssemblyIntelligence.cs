@@ -377,4 +377,10 @@ public sealed record VideoRenderValidationDto(
     double MusicVolumeMultiplier = 0,
     string FfmpegAudioFilter = "",
     bool MusicMixApplied = false,
+    bool VideoExists = false,
+    bool AudioExists = false,
+    bool VideoDurationMatchesAudio = false,
+    double FinalVideoDurationSeconds = 0,
+    string OutputResolution = "",
+    int Fps = 0,
     IReadOnlyList<string>? Warnings = null);
