@@ -1241,6 +1241,20 @@ app.MapPost("/api/content-planning/run-category-production-preview", async (Cate
     return response.Success ? Results.Ok(response) : Results.BadRequest(response);
 });
 
+app.MapPost("/api/content-planning/batch-generate-from-plans", async (BatchGenerateFromPlansRequest request, IContentPlanBatchGenerationService batchGeneration, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Content plan batch generation requested for {RegionId}/{Language}/{Year}. DryRun={DryRun}; MaxPlans={MaxPlans}; OnlyHighPriority={OnlyHighPriority}; RequestedTitles={RequestedTitleCount}", request.RegionId, request.Language, request.Year, request.DryRun, request.MaxPlans, request.OnlyHighPriority, request.PlanTitles?.Count ?? 0);
+    try
+    {
+        var response = await batchGeneration.GenerateFromPlansAsync(request, ct);
+        return response.Success ? Results.Ok(response) : Results.BadRequest(response);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
 
 app.MapPost("/api/content-planning/weekly-skyforecast-v2/intelligence-preview", async (WeeklySkyForecastV2IntelligenceRequest request, IWeeklySkyForecastV2IntelligenceService service, IContentPlanningService planning, CancellationToken ct) =>
 {

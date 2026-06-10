@@ -11,6 +11,7 @@ public sealed class AstronomyAssetPlanningService(
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = false };
     private const string PlannedStatus = "Planned";
+    private static readonly string[] RunnablePlanStatuses = ["Planned", "Approved"];
 
     private static readonly IReadOnlyDictionary<string, string[]> SceneTemplates = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
     {
@@ -37,7 +38,7 @@ public sealed class AstronomyAssetPlanningService(
 
         var query = db.ContentGenerationPlans
             .AsQueryable()
-            .Where(p => p.PlanStatus == PlannedStatus);
+            .Where(p => RunnablePlanStatuses.Contains(p.PlanStatus));
 
         if (!string.IsNullOrWhiteSpace(request.RegionId))
             query = query.Where(p => p.RegionId == request.RegionId);
