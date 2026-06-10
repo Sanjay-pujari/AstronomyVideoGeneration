@@ -485,6 +485,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IContentCategorySettingsService, ContentCategorySettingsService>();
         services.AddScoped<IContentVarietyGuard, ContentVarietyGuard>();
         services.AddScoped<IContentPlanningService, ContentPlanningService>();
+        services.AddScoped<IContentPlanProductionRequestMapper, ContentPlanProductionRequestMapper>();
+        services.AddScoped<IContentPlanProductionExecutionService, ContentPlanProductionExecutionService>();
         services.AddScoped<ContentPlanBatchGenerationService>();
         services.AddScoped<IContentPlanBatchGenerationService>(sp => sp.GetRequiredService<ContentPlanBatchGenerationService>());
         services.AddScoped<IContentPlanGenerationReadinessService>(sp => sp.GetRequiredService<ContentPlanBatchGenerationService>());

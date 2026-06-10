@@ -1290,10 +1290,10 @@ public sealed class HeroAssetStoryGenerator(
             throw new ArgumentException("regionId is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Language))
             throw new ArgumentException("language is required.", nameof(request));
-        if (!string.Equals(request.EventId, GoldenEventId, StringComparison.OrdinalIgnoreCase)
+        if (string.IsNullOrWhiteSpace(request.EventId)
             || !string.Equals(request.RegionId, GoldenRegionId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(request.Language, GoldenLanguage, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Hero asset story generation is enabled only for the approved golden pilot event e7013ee4-55c6-4f01-b1d0-7c500f26f98b / IN-RJ-UDAIPUR / en.", nameof(request));
+            throw new ArgumentException("Hero asset story generation requires a non-empty event id for IN-RJ-UDAIPUR / en.", nameof(request));
     }
 
     private string BuildQuestionEngineRoot(string eventId, string regionId)
