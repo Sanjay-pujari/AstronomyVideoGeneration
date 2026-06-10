@@ -20,18 +20,23 @@ public sealed class AstronomyAssetProductionJobService(
         var formats = ToSet(request.PlannedFormats);
 
         var query = db.ContentGenerationPlans.AsNoTracking().Where(p => p.AssetPlanJson != null);
-        if (!string.IsNullOrWhiteSpace(request.RegionId))
-            query = query.Where(p => p.RegionId == request.RegionId);
         if (planIds is { Count: > 0 })
+        {
             query = query.Where(p => planIds.Contains(p.Id));
-        if (categories is { Count: > 0 })
-            query = query.Where(p => categories.Contains(p.ContentCategoryCode));
-        if (formats is { Count: > 0 })
-            query = query.Where(p => p.PlannedFormat != null && formats.Contains(p.PlannedFormat));
+        }
+        else
+        {
+            if (!string.IsNullOrWhiteSpace(request.RegionId))
+                query = query.Where(p => p.RegionId == request.RegionId);
+            if (categories is { Count: > 0 })
+                query = query.Where(p => categories.Contains(p.ContentCategoryCode));
+            if (formats is { Count: > 0 })
+                query = query.Where(p => p.PlannedFormat != null && formats.Contains(p.PlannedFormat));
 
-        query = query.OrderByDescending(p => p.PriorityScore ?? 0m).ThenBy(p => p.ScheduledUtc ?? DateTimeOffset.MaxValue);
-        if (request.MaxPlans.HasValue)
-            query = query.Take(request.MaxPlans.Value);
+            query = query.OrderByDescending(p => p.PriorityScore ?? 0m).ThenBy(p => p.ScheduledUtc ?? DateTimeOffset.MaxValue);
+            if (request.MaxPlans.HasValue)
+                query = query.Take(request.MaxPlans.Value);
+        }
 
         var rows = await query.Select(p => new { p.Id, p.AssetPlanJson }).ToListAsync(cancellationToken);
         var jobs = new List<AstronomyAssetProductionJobDto>();
@@ -79,11 +84,11 @@ public sealed class AstronomyAssetProductionJobService(
                 var key = new JobDuplicateKey(
                     assetPlan.ContentGenerationPlanId,
                     requirement.SceneNumber,
+                    sceneName,
                     requirement.AssetType,
-                    plannedProvider,
-                    promptOrInstruction);
+                    expectedOutputType);
 
-                if (!request.DryRun && (!generatedKeys.Add(key) || existingKeys.Contains(key)))
+                if (!generatedKeys.Add(key) || (!request.DryRun && existingKeys.Contains(key)))
                 {
                     skippedDuplicates++;
                     continue;
@@ -163,22 +168,34 @@ public sealed class AstronomyAssetProductionJobService(
 
     private static IReadOnlyList<AstronomyAssetRequirementDto> ResolveAssetRequirements(Guid contentGenerationPlanId, AstronomyAssetPlanDto assetPlan, ICollection<string> warnings)
     {
+        var requirements = new List<AstronomyAssetRequirementDto>();
         if (assetPlan.AssetRequirements is { Count: > 0 })
-            return assetPlan.AssetRequirements.Where(r => r is not null).ToArray();
+            requirements.AddRange(assetPlan.AssetRequirements.Where(r => r is not null));
 
         if (assetPlan.SceneAssetGroups is { Count: > 0 })
         {
-            var requirements = assetPlan.SceneAssetGroups
+            var sceneRequirements = assetPlan.SceneAssetGroups
                 .Where(g => g?.AssetRequirements is { Count: > 0 })
                 .SelectMany(g => g.AssetRequirements)
                 .Where(r => r is not null)
                 .ToArray();
 
-            if (requirements.Length > 0)
-            {
-                warnings.Add($"Content generation plan '{contentGenerationPlanId}' AssetPlanJson is missing top-level assetRequirements; recovered {requirements.Length} requirement(s) from sceneAssetGroups.");
-                return requirements;
-            }
+            requirements.AddRange(sceneRequirements);
+            if (assetPlan.AssetRequirements is not { Count: > 0 } && sceneRequirements.Length > 0)
+                warnings.Add($"Content generation plan '{contentGenerationPlanId}' AssetPlanJson is missing top-level assetRequirements; recovered {sceneRequirements.Length} requirement(s) from sceneAssetGroups.");
+        }
+
+        if (requirements.Count > 0)
+        {
+            var seen = new HashSet<RequirementDuplicateKey>();
+            return requirements
+                .Where(r => seen.Add(new RequirementDuplicateKey(
+                    contentGenerationPlanId,
+                    r.SceneNumber,
+                    string.IsNullOrWhiteSpace(r.SceneName) ? $"Scene {r.SceneNumber}" : r.SceneName,
+                    r.AssetType ?? string.Empty,
+                    r.ExpectedOutputType ?? string.Empty)))
+                .ToArray();
         }
 
         warnings.Add($"Content generation plan '{contentGenerationPlanId}' AssetPlanJson has no asset requirements and was skipped.");
@@ -190,11 +207,11 @@ public sealed class AstronomyAssetProductionJobService(
         var existingRows = await db.AstronomyAssetProductionJobs
             .AsNoTracking()
             .Where(j => planIds.Contains(j.ContentGenerationPlanId))
-            .Select(j => new { j.ContentGenerationPlanId, j.SceneNumber, j.AssetType, j.PlannedProvider, j.PromptOrInstruction })
+            .Select(j => new { j.ContentGenerationPlanId, j.SceneNumber, j.SceneName, j.AssetType, j.ExpectedOutputType })
             .ToListAsync(cancellationToken);
 
         return existingRows
-            .Select(j => new JobDuplicateKey(j.ContentGenerationPlanId, j.SceneNumber, j.AssetType, j.PlannedProvider, j.PromptOrInstruction))
+            .Select(j => new JobDuplicateKey(j.ContentGenerationPlanId, j.SceneNumber, j.SceneName, j.AssetType, j.ExpectedOutputType ?? string.Empty))
             .ToHashSet();
     }
 
@@ -228,5 +245,7 @@ public sealed class AstronomyAssetProductionJobService(
         ? values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase)
         : null;
 
-    private sealed record JobDuplicateKey(Guid ContentGenerationPlanId, int SceneNumber, string AssetType, string PlannedProvider, string? PromptOrInstruction);
+    private sealed record RequirementDuplicateKey(Guid ContentGenerationPlanId, int SceneNumber, string SceneName, string AssetType, string ExpectedOutputType);
+
+    private sealed record JobDuplicateKey(Guid ContentGenerationPlanId, int SceneNumber, string SceneName, string AssetType, string ExpectedOutputType);
 }
