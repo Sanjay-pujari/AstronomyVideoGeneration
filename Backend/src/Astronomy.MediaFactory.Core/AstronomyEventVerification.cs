@@ -15,10 +15,17 @@ public sealed record AstronomyEventVerificationResponse(
     int InputEventCount,
     int VerifiedEventCount,
     int DeduplicatedCount,
-    int HighPriorityCount,
+    int SkyfieldVerifiedCount,
     int ManualReviewCount,
     int AutoGenerateAllowedCount,
-    IReadOnlyList<string> GeneratedFiles);
+    int PlanetPairingComputedCount,
+    int MoonPhaseVerifiedCount,
+    int MeteorMoonlightAdjustedCount,
+    IReadOnlyList<string> GeneratedFiles)
+{
+    public int HighPriorityCount { get; init; }
+}
+
 
 public interface IAstronomyEventVerificationService
 {
