@@ -51,8 +51,24 @@ public sealed class AstronomyAssetProductionJobService(
             if (assetPlan is null)
                 continue;
 
-            foreach (var requirement in assetPlan.AssetRequirements)
+            var requirements = ResolveAssetRequirements(row.Id, assetPlan, warnings);
+
+            foreach (var requirement in requirements)
             {
+                if (string.IsNullOrWhiteSpace(requirement.AssetType))
+                {
+                    warnings.Add($"Content generation plan '{row.Id}' has an asset requirement without an asset type and the requirement was skipped.");
+                    continue;
+                }
+
+                var sceneName = string.IsNullOrWhiteSpace(requirement.SceneName) ? $"Scene {requirement.SceneNumber}" : requirement.SceneName;
+                var assetPurpose = string.IsNullOrWhiteSpace(requirement.AssetPurpose) ? requirement.AssetType : requirement.AssetPurpose;
+                var plannedProvider = string.IsNullOrWhiteSpace(requirement.PlannedProvider) ? "Manual" : requirement.PlannedProvider;
+                var promptOrInstruction = requirement.PromptOrInstruction ?? string.Empty;
+                var expectedOutputType = requirement.ExpectedOutputType ?? string.Empty;
+                var objectNames = requirement.ObjectNames ?? Array.Empty<string>();
+                var dependsOn = requirement.DependsOn ?? Array.Empty<string>();
+
                 var assetPriority = string.IsNullOrWhiteSpace(requirement.AssetPriority)
                     ? AstronomyAssetClassificationRules.ResolvePriority(assetPlan.ContentCategory, requirement.AssetType)
                     : requirement.AssetPriority;
@@ -64,8 +80,8 @@ public sealed class AstronomyAssetProductionJobService(
                     assetPlan.ContentGenerationPlanId,
                     requirement.SceneNumber,
                     requirement.AssetType,
-                    requirement.PlannedProvider,
-                    requirement.PromptOrInstruction);
+                    plannedProvider,
+                    promptOrInstruction);
 
                 if (!request.DryRun && (!generatedKeys.Add(key) || existingKeys.Contains(key)))
                 {
@@ -84,17 +100,17 @@ public sealed class AstronomyAssetProductionJobService(
                     assetPlan.ScheduledUtc,
                     assetPlan.PeakUtc,
                     requirement.SceneNumber,
-                    requirement.SceneName,
+                    sceneName,
                     requirement.AssetType,
-                    requirement.AssetPurpose,
-                    requirement.ObjectNames,
-                    requirement.PlannedProvider,
-                    requirement.PromptOrInstruction,
-                    requirement.ExpectedOutputType,
+                    assetPurpose,
+                    objectNames,
+                    plannedProvider,
+                    promptOrInstruction,
+                    expectedOutputType,
                     requirement.Priority,
                     assetPriority,
                     executionGroup,
-                    requirement.DependsOn,
+                    dependsOn,
                     requirement.MetadataJson,
                     AstronomyAssetProductionJobStatuses.Pending,
                     request.DryRun));
@@ -107,13 +123,13 @@ public sealed class AstronomyAssetProductionJobService(
                         AstronomyContentOpportunityId = assetPlan.AstronomyContentOpportunityId,
                         AstronomyEventIntelligenceId = assetPlan.AstronomyEventIntelligenceId,
                         SceneNumber = requirement.SceneNumber,
-                        SceneName = requirement.SceneName,
+                        SceneName = sceneName,
                         AssetType = requirement.AssetType,
-                        AssetPurpose = requirement.AssetPurpose,
-                        PlannedProvider = requirement.PlannedProvider,
-                        ObjectNamesJson = requirement.ObjectNames.Count > 0 ? JsonSerializer.Serialize(requirement.ObjectNames, JsonOptions) : null,
-                        PromptOrInstruction = string.IsNullOrWhiteSpace(requirement.PromptOrInstruction) ? null : requirement.PromptOrInstruction,
-                        ExpectedOutputType = string.IsNullOrWhiteSpace(requirement.ExpectedOutputType) ? null : requirement.ExpectedOutputType,
+                        AssetPurpose = assetPurpose,
+                        PlannedProvider = plannedProvider,
+                        ObjectNamesJson = objectNames.Count > 0 ? JsonSerializer.Serialize(objectNames, JsonOptions) : null,
+                        PromptOrInstruction = string.IsNullOrWhiteSpace(promptOrInstruction) ? null : promptOrInstruction,
+                        ExpectedOutputType = string.IsNullOrWhiteSpace(expectedOutputType) ? null : expectedOutputType,
                         Priority = requirement.Priority,
                         AssetPriority = assetPriority,
                         AssetExecutionGroup = executionGroup,
@@ -143,6 +159,30 @@ public sealed class AstronomyAssetProductionJobService(
 
         logger.LogInformation("Phase 8A.2 asset production jobs created {JobCount} job DTO(s), saved {SavedCount}, skipped {SkippedDuplicates}: required={RequiredJobs} preferred={PreferredJobs} optional={OptionalJobs} warnings={WarningCount}", result.JobCount, result.SavedCount, result.SkippedDuplicates, result.RequiredJobs, result.PreferredJobs, result.OptionalJobs, result.Warnings.Count);
         return result;
+    }
+
+    private static IReadOnlyList<AstronomyAssetRequirementDto> ResolveAssetRequirements(Guid contentGenerationPlanId, AstronomyAssetPlanDto assetPlan, ICollection<string> warnings)
+    {
+        if (assetPlan.AssetRequirements is { Count: > 0 })
+            return assetPlan.AssetRequirements.Where(r => r is not null).ToArray();
+
+        if (assetPlan.SceneAssetGroups is { Count: > 0 })
+        {
+            var requirements = assetPlan.SceneAssetGroups
+                .Where(g => g?.AssetRequirements is { Count: > 0 })
+                .SelectMany(g => g.AssetRequirements)
+                .Where(r => r is not null)
+                .ToArray();
+
+            if (requirements.Length > 0)
+            {
+                warnings.Add($"Content generation plan '{contentGenerationPlanId}' AssetPlanJson is missing top-level assetRequirements; recovered {requirements.Length} requirement(s) from sceneAssetGroups.");
+                return requirements;
+            }
+        }
+
+        warnings.Add($"Content generation plan '{contentGenerationPlanId}' AssetPlanJson has no asset requirements and was skipped.");
+        return Array.Empty<AstronomyAssetRequirementDto>();
     }
 
     private async Task<HashSet<JobDuplicateKey>> LoadExistingDuplicateKeysAsync(HashSet<Guid> planIds, CancellationToken cancellationToken)

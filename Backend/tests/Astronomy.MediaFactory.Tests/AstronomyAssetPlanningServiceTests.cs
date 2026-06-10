@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Data.Sqlite;
@@ -204,6 +205,94 @@ public sealed class AstronomyAssetPlanningServiceTests
         Assert.Contains("invalid AssetPlanJson", warning);
         Assert.All(result.Jobs, job => Assert.NotEqual(invalidPlan.Id, job.ContentGenerationPlanId));
         Assert.DoesNotContain(db.ChangeTracker.Entries(), entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted);
+    }
+
+
+    [Fact]
+    public async Task CreateAssetProductionJobsAsync_DryRun_RecoversRequirementsFromSceneGroupsWhenTopLevelRequirementsMissing()
+    {
+        await using var db = CreateInMemoryDb();
+        var plan = SeedPlan(db, "PlanetConjunction", "Long", ["Venus"]);
+        plan.AssetPlanJson = JsonSerializer.Serialize(new
+        {
+            contentGenerationPlanId = plan.Id,
+            astronomyContentOpportunityId = plan.AstronomyContentOpportunityId,
+            astronomyEventIntelligenceId = plan.AstronomyEventIntelligenceId,
+            contentCategory = plan.ContentCategoryCode,
+            plannedFormat = plan.PlannedFormat,
+            regionId = plan.RegionId,
+            locationName = "Udaipur",
+            planStatus = plan.PlanStatus,
+            assetPlanStatus = "AssetPlanned",
+            sceneGroupCount = 1,
+            assetRequirementCount = 1,
+            objectNames = new[] { "Venus" },
+            sceneAssetGroups = new[]
+            {
+                new
+                {
+                    sceneNumber = 1,
+                    sceneName = "Opening sky map",
+                    assetRequirements = new[]
+                    {
+                        new
+                        {
+                            sceneNumber = 1,
+                            sceneName = "Opening sky map",
+                            assetType = "StellariumScreenshot",
+                            assetPurpose = "Show the conjunction location",
+                            objectNames = new[] { "Venus" },
+                            plannedProvider = "Stellarium",
+                            promptOrInstruction = "Capture Venus before dawn.",
+                            expectedOutputType = "png",
+                            priority = 10,
+                            status = "Planned",
+                            dependsOn = Array.Empty<string>(),
+                            assetPriority = "Preferred",
+                            assetExecutionGroup = "AstronomyVisualization",
+                            metadataJson = new { recovered = true }
+                        }
+                    }
+                }
+            },
+            metadataJson = new { legacy = true }
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        await db.SaveChangesAsync();
+        var service = new AstronomyAssetProductionJobService(db, NullLogger<AstronomyAssetProductionJobService>.Instance);
+
+        var result = await service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: true), CancellationToken.None);
+
+        var job = Assert.Single(result.Jobs);
+        Assert.Equal("StellariumScreenshot", job.AssetType);
+        Assert.Equal("Stellarium", job.PlannedProvider);
+        Assert.Contains("missing top-level assetRequirements", Assert.Single(result.Warnings));
+    }
+
+    [Fact]
+    public async Task CreateAssetProductionJobsAsync_DryRun_SkipsAssetPlanWithNoRequirements()
+    {
+        await using var db = CreateInMemoryDb();
+        var plan = SeedPlan(db, "PlanetConjunction", "Long", ["Venus"]);
+        plan.AssetPlanJson = JsonSerializer.Serialize(new
+        {
+            contentGenerationPlanId = plan.Id,
+            contentCategory = plan.ContentCategoryCode,
+            plannedFormat = plan.PlannedFormat,
+            regionId = plan.RegionId,
+            planStatus = plan.PlanStatus,
+            assetPlanStatus = "AssetPlanned",
+            sceneGroupCount = 0,
+            assetRequirementCount = 0,
+            objectNames = new[] { "Venus" },
+            metadataJson = new { empty = true }
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        await db.SaveChangesAsync();
+        var service = new AstronomyAssetProductionJobService(db, NullLogger<AstronomyAssetProductionJobService>.Instance);
+
+        var result = await service.CreateAssetProductionJobsAsync(new AstronomyAssetProductionJobRequest(DryRun: true), CancellationToken.None);
+
+        Assert.Equal(0, result.JobCount);
+        Assert.Contains("has no asset requirements", Assert.Single(result.Warnings));
     }
 
     [Fact]
