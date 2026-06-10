@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
@@ -12,7 +13,7 @@ using Path = System.IO.Path;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class VideoAssemblyIntelligenceService(
+public sealed partial class VideoAssemblyIntelligenceService(
     IOptions<RenderingOptions> renderingOptions,
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
     IOptions<AzureSpeechOptions>? azureSpeechOptions = null,
@@ -48,6 +49,9 @@ public sealed class VideoAssemblyIntelligenceService(
     private const double RenderDurationToleranceSeconds = 0.5;
     private const double CrossFadeDurationSeconds = 0.4;
     private const double HookOptimizationDurationSeconds = 3.218;
+    private const double LongFormNarrationWordsPerMinute = 150.0;
+    private const double LongFormMinimumEstimatedDurationSeconds = 120.0;
+    private const double LongFormMaximumEstimatedDurationSeconds = 180.0;
     private const string SelectedOpeningHook = "DON'T MISS THIS TONIGHT";
     private const string SyntheticTtsProviderName = "SyntheticOfflineTtsV1";
     private const string AzureTtsProviderName = "AzureSpeechTts";
@@ -668,27 +672,85 @@ public sealed class VideoAssemblyIntelligenceService(
 
     private static VideoNarrationScriptDto BuildLongFormVideoNarrationScript(VideoAssemblyGenerationRequest request, VideoAssemblyIntelligenceDto intelligence)
     {
-        var durations = intelligence.RecommendedSceneDurations.ToDictionary(scene => scene.SceneKey, scene => scene.DurationSeconds, StringComparer.OrdinalIgnoreCase);
-        var sceneScripts = LongFormSectionOrder.Select(section => new VideoNarrationSceneScriptDto(
-            section,
-            GetDuration(durations, section, ResolveLongFormTargetDuration(request) / LongFormSectionOrder.Length),
-            BuildLongFormNarration(section),
-            ResolveLongFormOnScreenText(section))).ToArray();
+        var sceneScripts = BuildBalancedLongFormSceneScripts();
+        var fullNarrationText = string.Join(" ", sceneScripts.Select(scene => scene.Narration));
+        var totalEstimatedDurationSeconds = EstimateSpokenDurationSeconds(fullNarrationText);
 
         return new VideoNarrationScriptDto(
             request.EventId,
             request.RegionId,
             request.Language,
             request.Platform,
-            sceneScripts.Sum(scene => scene.DurationSeconds),
+            totalEstimatedDurationSeconds,
             new VideoNarrationScriptStyleDto("Educational but simple", "Measured long-form", "Clear astronomy guide"),
             sceneScripts,
-            string.Join(" ", sceneScripts.Select(scene => scene.Narration)),
+            fullNarrationText,
             new VideoNarrationTtsPlanDto(true, "NeutralEducational", "video-long-tts-audio.mp3"),
             new VideoNarrationScriptScoresDto(95, 90, 95),
             [],
             DateTimeOffset.UtcNow);
     }
+
+    private static IReadOnlyList<VideoNarrationSceneScriptDto> BuildBalancedLongFormSceneScripts()
+    {
+        var scripts = LongFormSectionOrder.Select(section => new VideoNarrationSceneScriptDto(
+            section,
+            EstimateSpokenDurationSeconds(BuildLongFormNarration(section)),
+            BuildLongFormNarration(section),
+            ResolveLongFormOnScreenText(section))).ToArray();
+
+        var totalDuration = EstimateSpokenDurationSeconds(string.Join(" ", scripts.Select(scene => scene.Narration)));
+        if (totalDuration < LongFormMinimumEstimatedDurationSeconds)
+            scripts = ExpandLongFormSceneNarration(scripts);
+        else if (totalDuration > LongFormMaximumEstimatedDurationSeconds)
+            scripts = ShortenLongFormSceneNarration(scripts);
+
+        totalDuration = EstimateSpokenDurationSeconds(string.Join(" ", scripts.Select(scene => scene.Narration)));
+        if (totalDuration < LongFormMinimumEstimatedDurationSeconds || totalDuration > LongFormMaximumEstimatedDurationSeconds)
+            throw new ArgumentException("Video narration script validation failed: LongForm narration word-count estimate must be 120-180 seconds.");
+
+        return scripts.Select(scene => scene with { DurationSeconds = EstimateSpokenDurationSeconds(scene.Narration) }).ToArray();
+    }
+
+    private static VideoNarrationSceneScriptDto[] ExpandLongFormSceneNarration(IReadOnlyList<VideoNarrationSceneScriptDto> scripts)
+        => scripts.Select(scene => scene with { Narration = $"{scene.Narration} {BuildLongFormExpansionSentence(scene.SceneKey)}" }).ToArray();
+
+    private static VideoNarrationSceneScriptDto[] ShortenLongFormSceneNarration(IReadOnlyList<VideoNarrationSceneScriptDto> scripts)
+        => scripts.Select(scene => scene with { Narration = KeepFirstTwoSentences(scene.Narration) }).ToArray();
+
+    private static string KeepFirstTwoSentences(string narration)
+    {
+        var sentences = narration.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return sentences.Length <= 2 ? narration : string.Join(". ", sentences.Take(2)) + ".";
+    }
+
+    private static string BuildLongFormExpansionSentence(string section)
+        => section switch
+        {
+            "Hook" => "Keep expectations simple and enjoy the view as a calm evening marker.",
+            "WhatIsHappening" => "The event is about line of sight, brightness, and timing.",
+            "AboutVenus" => "Its brightness makes it a reliable first target in twilight.",
+            "AboutJupiter" => "Its steady glow gives viewers a second point for comparison.",
+            "WhyTheyAppearClose" => "This is normal orbital geometry, seen from our moving planet.",
+            "WhereToLook" => "A clearer horizon usually makes the pairing easier to notice.",
+            "WhenToLook" => "Local sunset time and clouds can change the best minute.",
+            "HowToObserve" => "Move slowly and let the sky become darker around you.",
+            "WhatYouWillSee" => "The beauty is in the contrast between the two lights.",
+            "InterestingFact" => "That slow change is one reason observers return on later nights.",
+            "ObservationTips" => "Safety matters too, so choose a comfortable viewing place.",
+            "Recap" => "Those steps keep the observation easy and grounded.",
+            "Action" => "Even a brief look can make the night sky feel closer.",
+            _ => "Keep the observation simple, safe, and grounded in the visible sky."
+        };
+
+    private static double EstimateSpokenDurationSeconds(string narration)
+        => Math.Round(CountSpokenWords(narration) / LongFormNarrationWordsPerMinute * 60.0, 3, MidpointRounding.AwayFromZero);
+
+    private static int CountSpokenWords(string narration)
+        => string.IsNullOrWhiteSpace(narration) ? 0 : SpokenWordRegex().Matches(narration).Count;
+
+    [GeneratedRegex("[\\p{L}\\p{N}]+(?:['’\u2010-\u2015-][\\p{L}\\p{N}]+)?")]
+    private static partial Regex SpokenWordRegex();
 
     private static string ResolveLongFormSectionPurpose(string section)
         => section switch
@@ -712,19 +774,19 @@ public sealed class VideoAssemblyIntelligenceService(
     private static string BuildLongFormNarration(string section)
         => section switch
         {
-            "Hook" => "Tonight's sky gives you a simple but beautiful target: Venus and Jupiter shining near each other after sunset.",
-            "WhatIsHappening" => "This is a close apparent pairing in our sky. The planets are not physically next to each other, but from our viewpoint on Earth they line up in the same part of the evening sky.",
-            "AboutVenus" => "Venus is usually one of the brightest planet-like points you can see. When it is visible after sunset, it often stands out before many stars appear.",
-            "AboutJupiter" => "Jupiter can also look bright and steady. It does not twinkle as much as many stars, so it can be easier to recognize once you know where to look.",
-            "WhyTheyAppearClose" => "The close look is caused by perspective. Each world follows its own path around the Sun, while we see their positions projected onto the dome of the sky.",
-            "WhereToLook" => "For this viewing guide, start by facing the western sky. Choose a place with a clear horizon and as few buildings or trees in the way as possible.",
-            "WhenToLook" => "The best time to begin is shortly after sunset, when the sky is dimming but the planets are still high enough to notice.",
-            "HowToObserve" => "You do not need a telescope. First use your eyes, then try binoculars if you have them. Keep your view steady and give your eyes a few minutes to adjust.",
-            "WhatYouWillSee" => "You should look for two bright points in the same general area of the sky. Venus should appear especially brilliant, while Jupiter may look slightly softer but still bright.",
-            "InterestingFact" => "Planet pairings are useful sky markers because they help beginners learn direction, timing, and how planets move against the background sky over many nights.",
-            "ObservationTips" => "Check the sky before you go out, avoid bright streetlights when possible, and take a photo only after you have enjoyed the view with your own eyes.",
-            "Recap" => "So remember the simple plan: go out after sunset, face west, find the two bright points, and compare their brightness and position.",
-            "Action" => "If the sky is clear, step outside tonight and take a minute to look west. It is an easy astronomy moment to share with someone nearby.",
+            "Hook" => "Tonight's sky offers an easy place to begin: Venus and Jupiter shining in the evening twilight. They look close together from Earth, making a bright, calm target soon after sunset.",
+            "WhatIsHappening" => "This guide is about an apparent planetary pairing, not a collision or rare danger. Venus and Jupiter are far apart in space, but they appear in the same region of our sky.",
+            "AboutVenus" => "Venus often looks like the brightest steady point after sunset when it is visible. Its thick clouds reflect sunlight well, so beginners can usually spot it before many stars appear.",
+            "AboutJupiter" => "Jupiter is much farther away, but it is large enough to shine clearly in a darkening sky. It may look steady and slightly softer than Venus, especially near twilight.",
+            "WhyTheyAppearClose" => "The close pairing comes from perspective. Earth, Venus, and Jupiter each follow separate orbits around the Sun, while our viewpoint projects their positions onto the same sky background.",
+            "WhereToLook" => "Start by facing the western horizon, because this evening view happens after sunset. Pick a safe open spot with fewer trees, buildings, or bright lights blocking the lower sky.",
+            "WhenToLook" => "Begin looking shortly after sunset, as the sky turns deeper blue but before the planets sink too low. If the horizon is hazy, check again a few minutes later.",
+            "HowToObserve" => "Use your eyes first, then binoculars if you have them. Hold still, let your eyes adjust, and compare the two points rather than expecting telescope-like detail.",
+            "WhatYouWillSee" => "Expect two bright points, not large planet disks. Venus should appear especially brilliant, while Jupiter may look a little dimmer, steady, and close by in the same sky area.",
+            "InterestingFact" => "Planet pairings are helpful for learning the sky because they reveal motion from night to night. A small change in spacing can show how planets slowly shift against the stars.",
+            "ObservationTips" => "Check for clouds before going outside, and give yourself a clear view toward the west. If you take a photo, steady the phone and keep the scene simple.",
+            "Recap" => "Here is the simple plan: go out after sunset, face west, and find the two brightest points near each other. Remember, the closeness is apparent from Earth.",
+            "Action" => "If your sky is clear, step outside tonight for a quiet minute and look west. Share the view with someone nearby, and notice how simple astronomy can feel.",
             _ => "This section continues the astronomy viewing guide using only the available event details."
         };
 
@@ -1593,8 +1655,14 @@ public sealed class VideoAssemblyIntelligenceService(
         ValidateSceneTimingOrder(script.SceneScripts.Select(scene => scene.SceneKey), profile, "video-narration-script.json");
         if (profile == ScenePresentationProfile.ShortForm && (script.TotalEstimatedDurationSeconds < 15 || script.TotalEstimatedDurationSeconds > 25))
             throw new ArgumentException("Video narration script validation failed: totalEstimatedDurationSeconds must be 15-25 seconds.");
-        if (profile == ScenePresentationProfile.LongForm && (script.TotalEstimatedDurationSeconds < 120 || script.TotalEstimatedDurationSeconds > 180))
-            throw new ArgumentException("Video narration script validation failed: LongForm totalEstimatedDurationSeconds must be 120-180 seconds.");
+        if (profile == ScenePresentationProfile.LongForm)
+        {
+            var calculatedDurationSeconds = EstimateSpokenDurationSeconds(script.FullNarrationText);
+            if (Math.Abs(script.TotalEstimatedDurationSeconds - calculatedDurationSeconds) > 1.0)
+                throw new ArgumentException("Video narration script validation failed: LongForm totalEstimatedDurationSeconds must be calculated from narration word count or TTS estimate.");
+            if (script.TotalEstimatedDurationSeconds < LongFormMinimumEstimatedDurationSeconds || script.TotalEstimatedDurationSeconds > LongFormMaximumEstimatedDurationSeconds)
+                throw new ArgumentException("Video narration script validation failed: LongForm totalEstimatedDurationSeconds must be 120-180 seconds.");
+        }
         if (!script.TtsPlan.TtsRequired)
             throw new ArgumentException("Video narration script validation failed: ttsRequired must be true.");
         if (script.Scores.TtsReadinessScore < 90)
