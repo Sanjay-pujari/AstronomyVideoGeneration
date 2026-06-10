@@ -1262,7 +1262,7 @@ app.MapGet("/api/content-planning/plans-ready-for-generation", async (int year, 
 
 app.MapPost("/api/content-planning/batch-generate-from-plans", async (BatchGenerateFromPlansRequest request, IContentPlanBatchGenerationService batchGeneration, ILogger<Program> logger, CancellationToken ct) =>
 {
-    logger.LogInformation("Content plan batch generation requested for {RegionId}/{Language}/{Year}. DryRun={DryRun}; MaxPlans={MaxPlans}; OnlyHighPriority={OnlyHighPriority}; RequestedTitles={RequestedTitleCount}", request.RegionId, request.Language, request.Year, request.DryRun, request.MaxPlans, request.OnlyHighPriority, request.PlanTitles?.Count ?? 0);
+    logger.LogInformation("Content plan batch generation requested for {RegionId}/{Language}/{Year}. DryRun={DryRun}; MaxPlans={MaxPlans}; OnlyHighPriority={OnlyHighPriority}; UseProductionPipeline={UseProductionPipeline}; RequestedTitles={RequestedTitleCount}", request.RegionId, request.Language, request.Year, request.DryRun, request.MaxPlans, request.OnlyHighPriority, request.UseProductionPipeline, request.PlanTitles?.Count ?? 0);
     try
     {
         var response = await batchGeneration.GenerateFromPlansAsync(request, ct);

@@ -81,6 +81,8 @@ public sealed class ContentPlanBatchGenerationService(
             if (selectedPlans.Length != 1)
                 throw new ArgumentException("Production pipeline batch generation is currently locked to exactly one selected plan.");
 
+            logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", selectedPlans[0].ContentGenerationPlanId);
+
             var execution = await productionExecution.ExecuteContentPlanAsync(
                 selectedPlans[0].ContentGenerationPlanId,
                 request.DryRun,
@@ -116,8 +118,11 @@ public sealed class ContentPlanBatchGenerationService(
                 LongVideoGenerated: execution.LongVideoGenerated,
                 FinalShortVideoPath: execution.FinalShortVideoPath,
                 FinalLongVideoPath: execution.FinalLongVideoPath,
-                ProductionPipelineRequest: execution.ProductionPipelineRequest);
+                ProductionPipelineRequest: execution.ProductionPipelineRequest,
+                PlannedSteps: execution.PlannedProductionSteps);
         }
+
+        logger.LogInformation("Using placeholder planning pipeline");
 
         if (request.DryRun)
         {

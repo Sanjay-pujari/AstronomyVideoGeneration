@@ -18,18 +18,17 @@ public sealed class ContentPlanProductionExecutionService(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ProductionSteps =
     [
-        "Build Production Pipeline Request",
         "Question Engine",
-        "Scene Engine short scenes",
-        "Scene Engine long scenes",
+        "Scene Engine Short",
+        "Scene Engine Long",
         "Hero Engine",
         "Thumbnail Engine",
-        "Narration Engine short narration",
-        "Narration Engine long narration",
-        "TTS Engine short audio",
-        "TTS Engine long audio",
-        "Video Assembly Engine short final video",
-        "Video Assembly Engine long final video"
+        "Narration Short",
+        "Narration Long",
+        "TTS Short",
+        "TTS Long",
+        "Video Assembly Short",
+        "Video Assembly Long"
     ];
 
     public Task<ContentPlanProductionExecutionResult> ExecuteContentPlanAsync(Guid contentGenerationPlanId, bool dryRun, bool overwriteExisting, CancellationToken cancellationToken)
@@ -50,6 +49,7 @@ public sealed class ContentPlanProductionExecutionService(
 
         var productionRequest = mapper.Map(plan, intelligence);
         var outputRoot = BuildPlanOutputRoot(productionRequest);
+        logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", plan.Id);
         var warnings = new List<string>(productionRequest.Warnings);
         var errors = new List<string>();
         var generatedFiles = new List<string>();
