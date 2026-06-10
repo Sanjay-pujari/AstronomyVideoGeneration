@@ -164,6 +164,33 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool DryRun,
     bool OverwriteExisting = false);
 
+public sealed record ProductionPipelineRequest(
+    ContentPlanProductionPipelineRequest Request,
+    Guid AstronomyEventIntelligenceId,
+    string OutputRoot,
+    bool DryRun,
+    bool OverwriteExisting = false);
+
+public sealed record ProductionPipelineExecutionResult(
+    bool Success,
+    bool DryRun,
+    bool QuestionEngineCompleted,
+    bool ShortScenesGenerated,
+    bool LongScenesGenerated,
+    bool HeroGenerated,
+    bool ThumbnailsGenerated,
+    bool ShortNarrationGenerated,
+    bool LongNarrationGenerated,
+    bool ShortTtsGenerated,
+    bool LongTtsGenerated,
+    bool ShortVideoGenerated,
+    bool LongVideoGenerated,
+    string FinalShortVideoPath,
+    string FinalLongVideoPath,
+    IReadOnlyList<string> GeneratedFiles,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
 public sealed record ContentPlanProductionExecutionResult(
     bool Success,
     bool DryRun,
@@ -197,7 +224,13 @@ public interface IContentPlanProductionRequestMapper
     ContentPlanProductionPipelineRequest Map(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence);
 }
 
+public interface IProductionPipelineExecutionService
+{
+    Task<ProductionPipelineExecutionResult> ExecuteAsync(ProductionPipelineRequest request, CancellationToken cancellationToken);
+}
+
 public interface IContentPlanProductionExecutionService
 {
+    Task<ContentPlanProductionExecutionResult> ExecuteContentPlanAsync(Guid contentGenerationPlanId, bool dryRun, bool overwriteExisting, CancellationToken cancellationToken);
     Task<ContentPlanProductionExecutionResult> ExecuteContentPlanWithProductionPipelineAsync(ContentPlanProductionExecutionRequest request, CancellationToken cancellationToken);
 }
