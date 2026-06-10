@@ -385,8 +385,20 @@ public sealed class FfmpegSceneRenderer(
 
     private static string? ResolveAudioPath(string planRoot, int sceneNumber)
     {
+        var narrationAudioDirectory = Path.Combine(planRoot, "narration", "audio");
+        foreach (var candidate in new[]
+        {
+            Path.Combine(narrationAudioDirectory, $"scene-{sceneNumber:000}.wav"),
+            Path.Combine(narrationAudioDirectory, $"scene-{sceneNumber:00}.wav"),
+            Path.Combine(planRoot, "tts", "audio", $"scene-{sceneNumber:000}.wav"),
+            Path.Combine(planRoot, "tts", "audio", $"scene-{sceneNumber:00}.wav")
+        })
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+
         if (!Directory.Exists(planRoot)) return null;
-        var candidates = new[] { $"scene-{sceneNumber:00}.wav", $"scene-{sceneNumber:000}.wav", $"scene-{sceneNumber}.wav", $"scene-{sceneNumber:00}-*.wav", $"scene-{sceneNumber:000}-*.wav" };
+        var candidates = new[] { $"scene-{sceneNumber:000}.wav", $"scene-{sceneNumber:00}.wav", $"scene-{sceneNumber}.wav", $"scene-{sceneNumber:000}-*.wav", $"scene-{sceneNumber:00}-*.wav" };
         foreach (var pattern in candidates)
         {
             var match = Directory.EnumerateFiles(planRoot, pattern, SearchOption.AllDirectories).OrderBy(x => x.Length).FirstOrDefault();
