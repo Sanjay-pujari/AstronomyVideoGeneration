@@ -565,6 +565,7 @@ public static class ServiceCollectionExtensions
             client.Timeout = TimeSpan.FromSeconds(options.YearlyAccuracyTimeoutSeconds);
         });
         services.AddScoped<IAstronomyEventVerificationService, AstronomyEventVerificationService>();
+        services.AddScoped<IAstronomyEventVerifiedImportService, AstronomyEventVerifiedImportService>();
         services.AddScoped<IStellariumScriptGenerator, StellariumScriptGenerator>();
         services.AddScoped<IStellariumImageCaptureExecutor, StellariumImageCaptureExecutor>();
         services.AddScoped<IDailySkyGuideVisualAssetPackager, DailySkyGuideVisualAssetPackager>();

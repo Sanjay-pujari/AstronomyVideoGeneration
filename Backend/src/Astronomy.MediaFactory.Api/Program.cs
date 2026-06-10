@@ -1122,6 +1122,31 @@ app.MapPost("/api/astronomy-intelligence/verify-astronomy-events", async (HttpRe
 })
 .Accepts<AstronomyEventVerificationRequest>("application/json");
 
+app.MapPost("/api/astronomy-intelligence/import-verified-events", async (HttpRequest httpRequest, IAstronomyEventVerifiedImportService importer, ILogger<Program> logger, CancellationToken ct) =>
+{
+    var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyEventVerifiedImportRequest>(httpRequest, "request", logger, ct);
+    if (requestBody.HasError)
+    {
+        return requestBody.ErrorResult!;
+    }
+
+    var request = requestBody.Value!;
+    logger.LogInformation("Astronomy verified event import request received for {RegionId} in {Year}. DryRun={DryRun} CreateContentPlans={CreateContentPlans}", request.RegionId, request.Year, request.DryRun, request.CreateContentPlans);
+    try
+    {
+        return Results.Ok(await importer.ImportVerifiedEventsAsync(request, ct));
+    }
+    catch (FileNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+})
+.Accepts<AstronomyEventVerifiedImportRequest>("application/json");
+
 app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpRequest httpRequest, IAstronomyAssetProducerPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyAssetProducerPreviewRequest>(httpRequest, "request", logger, ct);
