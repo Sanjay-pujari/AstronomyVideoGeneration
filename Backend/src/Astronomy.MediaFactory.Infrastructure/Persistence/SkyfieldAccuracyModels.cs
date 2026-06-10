@@ -5,9 +5,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 public interface ISkyfieldAccuracyProvider
 {
-    Task<SkyfieldAccuracyResult> VerifyMoonPhasesAsync(int year, RegionScheduleOptions region, CancellationToken cancellationToken);
-    Task<SkyfieldAccuracyResult> ComputePlanetPairingsAsync(int year, RegionScheduleOptions region, CancellationToken cancellationToken);
-    Task<SkyfieldAccuracyResult> AdjustMeteorMoonlightAsync(IReadOnlyList<AstronomyEventPreviewItem> events, RegionScheduleOptions region, CancellationToken cancellationToken);
+    Task<SkyfieldAccuracyResult> ComputeYearlyAccuracyAsync(int year, RegionScheduleOptions region, IReadOnlyList<AstronomyEventPreviewItem> events, CancellationToken cancellationToken);
 }
 
 public sealed class SkyfieldAccuracyResult
@@ -41,6 +39,7 @@ public sealed class SkyfieldMoonPhase
 
 public sealed class SkyfieldMeteorMoonlight
 {
+    public string EventId { get; set; } = string.Empty;
     public DateTimeOffset PeakUtc { get; set; }
     public double MoonIlluminationPercent { get; set; }
     public string MoonInterference { get; set; } = string.Empty;

@@ -51,8 +51,7 @@ public sealed class AstronomyEventVerificationService(
         var computedPlanetEvents = skyfield.PlanetPairings.Select(p => ToPlanetPairingEvent(p, request.RegionId)).ToArray();
         if (computedPlanetEvents.Length > 0)
         {
-            verified.RemoveAll(e => e.SourceType.Equals("ManualSeed", StringComparison.OrdinalIgnoreCase)
-                && (e.EventType.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase) || IsPlanetOnlyConjunction(e)));
+            verified.RemoveAll(existing => computedPlanetEvents.Any(computed => IsMatchingManualPlanetPairing(existing, computed)));
             verified.AddRange(computedPlanetEvents);
         }
 
@@ -71,7 +70,7 @@ public sealed class AstronomyEventVerificationService(
         var meteorMoonlightAdjustedCount = verified.Count(e => IsMeteorShower(e.EventType) && e.MoonIlluminationPercent.HasValue);
         if (skyfieldVerifiedCount == 0) warnings.Add("WARNING: skyfieldVerifiedCount remains 0; no events were promoted by Skyfield accuracy computations.");
         if (moonPhaseVerifiedCount == 0) warnings.Add("WARNING: moonPhaseVerifiedCount remains 0; exact Skyfield moon phase matching did not verify any preview moon events.");
-        if (planetPairingComputedCount == 0) warnings.Add("WARNING: planetPairingComputedCount remains 0; no visible Skyfield planet pairings met the requested constraints.");
+        if (planetPairingComputedCount == 0) warnings.Add("Skyfield yearly pairing computation succeeded, but no pairings met visibility/separation constraints.");
         if (meteorMoonlightAdjustedCount == 0) warnings.Add("WARNING: meteorMoonlightAdjustedCount remains 0; meteor shower moonlight was not adjusted.");
 
         var topEvents = verified
@@ -158,18 +157,7 @@ public sealed class AstronomyEventVerificationService(
     private async Task<SkyfieldAccuracyResult> TryComputeSkyfieldAccuracyAsync(AstronomyEventVerificationRequest request, IReadOnlyList<AstronomyEventPreviewItem> events, CancellationToken cancellationToken)
     {
         var region = ResolveRegion(request.RegionId);
-        var result = new SkyfieldAccuracyResult();
-        var moonPhases = await skyfieldAccuracyProvider.VerifyMoonPhasesAsync(request.Year, region, cancellationToken);
-        var planetPairings = await skyfieldAccuracyProvider.ComputePlanetPairingsAsync(request.Year, region, cancellationToken);
-        var meteorMoonlight = await skyfieldAccuracyProvider.AdjustMeteorMoonlightAsync(events, region, cancellationToken);
-
-        result.MoonPhases.AddRange(moonPhases.MoonPhases);
-        result.PlanetPairings.AddRange(planetPairings.PlanetPairings);
-        result.MeteorMoonlight.AddRange(meteorMoonlight.MeteorMoonlight);
-        result.Warnings.AddRange(moonPhases.Warnings);
-        result.Warnings.AddRange(planetPairings.Warnings);
-        result.Warnings.AddRange(meteorMoonlight.Warnings);
-        return result;
+        return await skyfieldAccuracyProvider.ComputeYearlyAccuracyAsync(request.Year, region, events, cancellationToken);
     }
 
     private static IReadOnlyList<AstronomyEventVerificationDraft> DeduplicateMoonEvents(IReadOnlyList<AstronomyEventPreviewItem> events, out int deduplicatedCount)
@@ -264,7 +252,7 @@ public sealed class AstronomyEventVerificationService(
         var radiantVisibilityNote = default(string);
         if (IsMeteorShower(eventType))
         {
-            var meteor = FindMeteorMoonlight(skyfield, draft.Event.PeakUtc);
+            var meteor = FindMeteorMoonlight(skyfield, draft.Event.EventId, draft.Event.PeakUtc);
             if (meteor is not null)
             {
                 moonIlluminationPercent = Math.Round(meteor.MoonIlluminationPercent, 1);
@@ -333,7 +321,7 @@ public sealed class AstronomyEventVerificationService(
     {
         var score = PairingScore(pairing.AngularSeparationDegrees);
         var publishPriority = score >= 85 ? "High" : "Medium";
-        var eventType = pairing.AngularSeparationDegrees <= 3 ? "PlanetPairing" : "Conjunction";
+        var eventType = "PlanetPairing";
         var title = $"{pairing.PrimaryObject} and {pairing.SecondaryObject} Close Pairing";
         var eventId = $"skyfield-planet-pairing-{pairing.PrimaryObject}-{pairing.SecondaryObject}-{pairing.PeakUtc:yyyyMMddHHmm}".ToLowerInvariant();
         var item = new AstronomyEventVerifiedItem
@@ -392,10 +380,30 @@ public sealed class AstronomyEventVerificationService(
         return phase is not null && (phase.PeakUtc - approximatePeak).Duration() <= TimeSpan.FromHours(48);
     }
 
-    private static SkyfieldMeteorMoonlight? FindMeteorMoonlight(SkyfieldAccuracyResult skyfield, DateTimeOffset approximatePeak) =>
-        skyfield.MeteorMoonlight
+    private static SkyfieldMeteorMoonlight? FindMeteorMoonlight(SkyfieldAccuracyResult skyfield, string eventId, DateTimeOffset approximatePeak)
+    {
+        var byId = skyfield.MeteorMoonlight.FirstOrDefault(m => m.EventId.Equals(eventId, StringComparison.OrdinalIgnoreCase));
+        if (byId is not null) return byId;
+        return skyfield.MeteorMoonlight
             .OrderBy(m => (m.PeakUtc - approximatePeak).Duration())
             .FirstOrDefault(m => (m.PeakUtc - approximatePeak).Duration() <= TimeSpan.FromDays(2));
+    }
+
+    private static bool IsMatchingManualPlanetPairing(AstronomyEventVerifiedItem existing, AstronomyEventVerifiedItem computed)
+    {
+        if (!existing.SourceType.Equals("ManualSeed", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!existing.EventType.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase) && !IsPlanetOnlyConjunction(existing)) return false;
+        if ((existing.PeakUtc - computed.PeakUtc).Duration() > TimeSpan.FromDays(7)) return false;
+        return SameObjectPair(existing.PrimaryObjects, computed.PrimaryObjects);
+    }
+
+    private static bool SameObjectPair(IReadOnlyList<string> first, IReadOnlyList<string> second)
+    {
+        if (first.Count < 2 || second.Count < 2) return false;
+        var left = first.Take(2).OrderBy(o => o, StringComparer.OrdinalIgnoreCase).ToArray();
+        var right = second.Take(2).OrderBy(o => o, StringComparer.OrdinalIgnoreCase).ToArray();
+        return left.SequenceEqual(right, StringComparer.OrdinalIgnoreCase);
+    }
 
     private static string ResolveVerificationStatus(string sourceType, string eventType)
     {

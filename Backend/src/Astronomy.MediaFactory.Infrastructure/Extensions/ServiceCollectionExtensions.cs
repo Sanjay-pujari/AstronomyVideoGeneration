@@ -557,7 +557,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAstronomyAssetProducer, AiImageAssetProducer>();
         services.AddScoped<IAstronomyAssetProducerPreviewService, AstronomyAssetProducerPreviewService>();
         services.AddScoped<IAstronomyEventDiscoveryPreviewService, AstronomyEventDiscoveryPreviewService>();
-        services.AddScoped<ISkyfieldAccuracyProvider, PythonSkyfieldAccuracyProvider>();
+        services.AddHttpClient<ISkyfieldAccuracyProvider, SkyfieldSidecarAccuracyProvider>((sp, client) =>
+        {
+            var options = sp.GetRequiredService<IOptions<SkyfieldSidecarOptions>>().Value;
+            client.BaseAddress = new Uri(options.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
+        });
         services.AddScoped<IAstronomyEventVerificationService, AstronomyEventVerificationService>();
         services.AddScoped<IStellariumScriptGenerator, StellariumScriptGenerator>();
         services.AddScoped<IStellariumImageCaptureExecutor, StellariumImageCaptureExecutor>();

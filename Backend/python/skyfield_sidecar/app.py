@@ -269,6 +269,61 @@ class WeeklySkyForecastResponse(BaseModel):
 
 
 
+
+class YearlyAccuracyMeteorPeak(BaseModel):
+    event_id: Annotated[str, Field(alias="eventId", min_length=1)]
+    peak_utc: Annotated[str, Field(alias="peakUtc", min_length=1)]
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+
+class YearlyAccuracyRequest(BaseModel):
+    year: Annotated[int, Field(ge=1900, le=2100)]
+    latitude: Annotated[float, Field(ge=-90, le=90)]
+    longitude: Annotated[float, Field(ge=-180, le=180)]
+    timezone: Annotated[str, Field(min_length=1)]
+    modes: list[str] = ["moonPhases", "planetPairings", "meteorMoonlight"]
+    meteor_peaks: Annotated[list[YearlyAccuracyMeteorPeak], Field(alias="meteorPeaks")] = []
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+
+class YearlyMoonPhase(BaseModel):
+    phase_type: Annotated[str, Field(alias="phaseType")]
+    peak_utc: Annotated[str, Field(alias="peakUtc")]
+    local_peak_time: Annotated[str, Field(alias="localPeakTime")]
+    illumination_percent: Annotated[float, Field(alias="illuminationPercent")]
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class YearlyPlanetPairing(BaseModel):
+    event_type: Annotated[str, Field(alias="eventType")] = "PlanetPairing"
+    primary_objects: Annotated[list[str], Field(alias="primaryObjects")]
+    peak_utc: Annotated[str, Field(alias="peakUtc")]
+    local_peak_time: Annotated[str, Field(alias="localPeakTime")]
+    best_viewing_local_time: Annotated[str, Field(alias="bestViewingLocalTime")]
+    angular_separation_degrees: Annotated[float, Field(alias="angularSeparationDegrees")]
+    object_altitudes_degrees: Annotated[dict[str, float], Field(alias="objectAltitudesDegrees")]
+    sun_altitude_degrees: Annotated[float, Field(alias="sunAltitudeDegrees")]
+    sky_direction_hint: Annotated[str, Field(alias="skyDirectionHint")]
+    quality: str
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class YearlyMeteorMoonlight(BaseModel):
+    event_id: Annotated[str, Field(alias="eventId")]
+    moon_illumination_percent: Annotated[float, Field(alias="moonIlluminationPercent")]
+    moon_interference: Annotated[str, Field(alias="moonInterference")]
+    best_viewing_window_local: Annotated[str, Field(alias="bestViewingWindowLocal")]
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class YearlyAccuracyResponse(BaseModel):
+    year: int
+    moon_phases: Annotated[list[YearlyMoonPhase], Field(alias="moonPhases")]
+    planet_pairings: Annotated[list[YearlyPlanetPairing], Field(alias="planetPairings")]
+    meteor_moonlight: Annotated[list[YearlyMeteorMoonlight], Field(alias="meteorMoonlight")]
+    warnings: list[str]
+    model_config = ConfigDict(populate_by_name=True)
+
 def get_ranked_visible_objects(objects: list[VisibleObjectForecastItem]) -> list[VisibleObjectForecastItem]:
     ranked = [
         obj
@@ -284,6 +339,140 @@ def get_ranked_visible_objects(objects: list[VisibleObjectForecastItem]) -> list
         reverse=True,
     )
     return ranked
+
+def _utc_iso(dt: datetime) -> str:
+    return dt.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z")
+
+
+def _local_time_label(dt: datetime, tz: ZoneInfo) -> str:
+    return dt.astimezone(tz).strftime("%Y-%m-%d %H:%M %z")
+
+
+def _parse_utc_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(ZoneInfo("UTC"))
+
+
+def _moon_illumination_percent(t) -> float:
+    return max(0.0, min(100.0, float(almanac.fraction_illuminated(eph, "moon", t)) * 100.0))
+
+
+def _pairing_quality(separation: float) -> str:
+    if separation <= 1.5:
+        return "Excellent"
+    if separation <= 3.0:
+        return "Good"
+    return "BroadGrouping"
+
+
+def _compute_yearly_moon_phases(year: int, tz: ZoneInfo, warnings: list[str]) -> list[YearlyMoonPhase]:
+    phases: list[YearlyMoonPhase] = []
+    try:
+        times, phase_codes = almanac.find_discrete(ts.utc(year, 1, 1), ts.utc(year + 1, 1, 1), almanac.moon_phases(eph))
+        names = ["NewMoon", "FirstQuarter", "FullMoon", "LastQuarter"]
+        illuminations = {"NewMoon": 0.0, "FullMoon": 100.0}
+        for t, code in zip(times, phase_codes):
+            phase_type = names[int(code)]
+            if phase_type not in illuminations:
+                continue
+            dt = t.utc_datetime().replace(tzinfo=ZoneInfo("UTC"))
+            phases.append(YearlyMoonPhase(
+                phaseType=phase_type,
+                peakUtc=_utc_iso(dt),
+                localPeakTime=_local_time_label(dt, tz),
+                illuminationPercent=illuminations[phase_type]))
+    except Exception as exc:
+        warnings.append(f"Skyfield yearly moon phase computation failed; exact phase verification unavailable. {exc}")
+    return phases
+
+
+def _compute_yearly_planet_pairings(year: int, latitude: float, longitude: float, tz: ZoneInfo, warnings: list[str]) -> list[YearlyPlanetPairing]:
+    planet_keys = {"Mercury": "mercury", "Venus": "venus", "Mars": "mars", "Jupiter": "jupiter barycenter", "Saturn": "saturn barycenter"}
+    observer = eph["earth"] + wgs84.latlon(latitude_degrees=latitude, longitude_degrees=longitude)
+    sun = eph["sun"]
+    samples: list[tuple[str, str, datetime, float, float, float, float, float]] = []
+    try:
+        current = datetime(year, 1, 1, tzinfo=ZoneInfo("UTC"))
+        end = datetime(year + 1, 1, 1, tzinfo=ZoneInfo("UTC"))
+        while current < end:
+            t = ts.from_datetime(current)
+            sun_alt = observer.at(t).observe(sun).apparent().altaz()[0].degrees
+            if sun_alt <= -6.0:
+                apparent: dict[str, tuple[object, float, float]] = {}
+                for name, key in planet_keys.items():
+                    app = observer.at(t).observe(eph[key]).apparent()
+                    alt, az, _ = app.altaz()
+                    if alt.degrees >= 8.0:
+                        apparent[name] = (app, alt.degrees, az.degrees)
+                names = list(apparent.keys())
+                for i, first in enumerate(names):
+                    for second in names[i + 1:]:
+                        separation = apparent[first][0].separation_from(apparent[second][0]).degrees
+                        if separation <= 6.0:
+                            avg_az = (apparent[first][2] + apparent[second][2]) / 2.0
+                            samples.append((first, second, current, separation, apparent[first][1], apparent[second][1], sun_alt, avg_az))
+            current += timedelta(hours=2)
+
+        by_pair: dict[tuple[str, str], list[tuple[str, str, datetime, float, float, float, float, float]]] = {}
+        for sample in samples:
+            by_pair.setdefault((sample[0], sample[1]), []).append(sample)
+
+        chosen: list[tuple[str, str, datetime, float, float, float, float, float]] = []
+        for pair_samples in by_pair.values():
+            cluster: list[tuple[str, str, datetime, float, float, float, float, float]] = []
+            for sample in sorted(pair_samples, key=lambda item: item[2]):
+                if not cluster or (sample[2] - cluster[-1][2]) <= timedelta(days=4):
+                    cluster.append(sample)
+                else:
+                    chosen.append(min(cluster, key=lambda item: item[3]))
+                    cluster = [sample]
+            if cluster:
+                chosen.append(min(cluster, key=lambda item: item[3]))
+
+        pairings: list[YearlyPlanetPairing] = []
+        for first, second, peak, separation, first_alt, second_alt, sun_alt, az in sorted(chosen, key=lambda item: (item[2], item[3])):
+            pairings.append(YearlyPlanetPairing(
+                eventType="PlanetPairing",
+                primaryObjects=[first, second],
+                peakUtc=_utc_iso(peak),
+                localPeakTime=_local_time_label(peak, tz),
+                bestViewingLocalTime=_local_time_label(peak, tz),
+                angularSeparationDegrees=round(separation, 3),
+                objectAltitudesDegrees={first: round(first_alt, 3), second: round(second_alt, 3)},
+                sunAltitudeDegrees=round(sun_alt, 3),
+                skyDirectionHint=_cardinal(az),
+                quality=_pairing_quality(separation)))
+        return pairings
+    except Exception as exc:
+        warnings.append(f"Skyfield yearly planet pairing computation failed; ManualSeed planet pairings were not promoted. {exc}")
+        return []
+
+
+def _compute_meteor_moonlight(peaks: list[YearlyAccuracyMeteorPeak], tz: ZoneInfo, warnings: list[str]) -> list[YearlyMeteorMoonlight]:
+    records: list[YearlyMeteorMoonlight] = []
+    for peak in peaks:
+        try:
+            dt = _parse_utc_datetime(peak.peak_utc)
+            illumination = _moon_illumination_percent(ts.from_datetime(dt))
+            if illumination <= 30.0:
+                interference = "Low"
+            elif illumination <= 70.0:
+                interference = "Medium"
+            else:
+                interference = "High"
+            local_peak = dt.astimezone(tz)
+            window_start = local_peak.replace(hour=0, minute=0, second=0, microsecond=0)
+            window_end = local_peak.replace(hour=5, minute=0, second=0, microsecond=0)
+            if local_peak.hour < 5:
+                window_start -= timedelta(days=1)
+            records.append(YearlyMeteorMoonlight(
+                eventId=peak.event_id,
+                moonIlluminationPercent=round(illumination, 1),
+                moonInterference=interference,
+                bestViewingWindowLocal=f"{window_start.strftime('%Y-%m-%d %H:%M')}–{window_end.strftime('%H:%M %Z')}"))
+        except Exception as exc:
+            warnings.append(f"Skyfield meteor moonlight computation failed for {peak.event_id}; visibility score was not adjusted. {exc}")
+    return records
+
 def _cardinal(az: float) -> str:
     return ["N","NE","E","SE","S","SW","W","NW"][round(az / 45) % 8]
 
@@ -349,6 +538,24 @@ def _altitude_score(max_altitude: float) -> float:
     if max_altitude >= 10:
         return 30.0
     return 0.0
+
+
+@app.post('/events/yearly-accuracy', response_model=YearlyAccuracyResponse)
+def yearly_accuracy(req: YearlyAccuracyRequest):
+    warnings: list[str] = []
+    tz = ZoneInfo(req.timezone)
+    modes = {mode.strip() for mode in req.modes}
+    moon_phases = _compute_yearly_moon_phases(req.year, tz, warnings) if "moonPhases" in modes else []
+    planet_pairings = _compute_yearly_planet_pairings(req.year, req.latitude, req.longitude, tz, warnings) if "planetPairings" in modes else []
+    meteor_moonlight = _compute_meteor_moonlight(req.meteor_peaks, tz, warnings) if "meteorMoonlight" in modes else []
+    if "planetPairings" in modes and not planet_pairings and not any("planet pairing computation failed" in w for w in warnings):
+        warnings.append("Skyfield yearly pairing computation succeeded, but no pairings met visibility/separation constraints.")
+    return YearlyAccuracyResponse(
+        year=req.year,
+        moonPhases=moon_phases,
+        planetPairings=planet_pairings,
+        meteorMoonlight=meteor_moonlight,
+        warnings=warnings)
 
 @app.post('/visibility/night-plan', response_model=NightPlanResponse)
 def night_plan(req: NightPlanRequest):
