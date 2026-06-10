@@ -424,6 +424,18 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
     try
     {
         var response = await videoAssembly.GenerateVideoAssemblyAsync(request, ct);
+        if (string.Equals(response.PhaseExecuted, "FullPipeline", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Ok(new
+            {
+                response.PhaseRequested,
+                response.OutputMode,
+                response.ShortForm,
+                response.LongForm,
+                response.GeneratedFiles
+            });
+        }
+
         if (string.Equals(response.PhaseExecuted, "Script", StringComparison.OrdinalIgnoreCase))
         {
             return Results.Ok(new
