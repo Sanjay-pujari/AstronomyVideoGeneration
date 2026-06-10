@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -194,6 +195,87 @@ public sealed class VideoAssemblyIntelligenceServiceTests
             Assert.True(scene.Narration.Count(c => c == '.') >= 2);
         });
         Assert.Equal("video-long-tts-audio.mp3", saved.TtsPlan.OutputFileName);
+    }
+
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_LongFormTtsUsesAzureAndWritesActualSectionTimings()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateAzureService(workingDirectory);
+        await WriteLongFormScriptInputsAsync(service);
+
+        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormTts",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            DryRun = false,
+            OverwriteExisting = true,
+            LongForm = new VideoAssemblyFormRequest
+            {
+                Enabled = true,
+                Platform = "YouTubeLong",
+                ScenePresentationProfile = ScenePresentationProfile.LongForm,
+                TargetDurationSeconds = 150
+            }
+        }, CancellationToken.None);
+
+        var audioPath = Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "video-long-tts-audio.mp3");
+        var timingsPath = Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "video-long-tts-timings.json");
+        Assert.Equal("LongFormTts", result.PhaseRequested);
+        Assert.Equal("LongFormTts", result.PhaseExecuted);
+        Assert.True(result.TtsAudioGenerated);
+        Assert.True(result.TtsTimingsGenerated);
+        Assert.Equal(audioPath.Replace('\\', '/'), result.AudioFilePath);
+        Assert.Equal(timingsPath.Replace('\\', '/'), result.TimingsFilePath);
+        Assert.InRange(result.ActualDurationSeconds, 120, 180);
+        Assert.Equal("AzureSpeechTts", result.TtsProvider);
+        Assert.True(result.AudioValidationPassed);
+        Assert.False(result.IsSyntheticTts);
+        Assert.False(result.IsSilentAudio);
+        Assert.True(File.Exists(audioPath));
+        Assert.True(File.Exists(timingsPath));
+
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(timingsPath));
+        var root = document.RootElement;
+        Assert.Equal("YouTubeLong", root.GetProperty("platform").GetString());
+        Assert.Equal("AzureSpeechTts", root.GetProperty("ttsProvider").GetString());
+        Assert.Equal("en-US-JennyNeural", root.GetProperty("voiceUsed").GetString());
+        Assert.True(root.GetProperty("audioValidation").GetProperty("audioValidationPassed").GetBoolean());
+        Assert.False(root.TryGetProperty("sceneTimings", out _));
+        var sectionTimings = root.GetProperty("sectionTimings").EnumerateArray().ToArray();
+        Assert.Equal(new[] { "Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" }, sectionTimings.Select(section => section.GetProperty("sectionKey").GetString()));
+        Assert.Equal(0.0, sectionTimings[0].GetProperty("startSeconds").GetDouble());
+        Assert.Equal(root.GetProperty("actualDurationSeconds").GetDouble(), sectionTimings[^1].GetProperty("endSeconds").GetDouble(), 3);
+        Assert.All(sectionTimings, section => Assert.False(string.IsNullOrWhiteSpace(section.GetProperty("narration").GetString())));
+    }
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_LongFormTtsWithoutAzureFailsClearly()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        await WriteLongFormScriptInputsAsync(service);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormTts",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None));
+
+        Assert.Equal("Azure Speech TTS provider is not available for LongFormTts.", error.Message);
     }
 
 
@@ -615,6 +697,38 @@ public sealed class VideoAssemblyIntelligenceServiceTests
     private static VideoAssemblyIntelligenceService CreateService(string workingDirectory)
         => new(Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }));
 
+    private static VideoAssemblyIntelligenceService CreateAzureService(string workingDirectory)
+        => new(
+            Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }),
+            azureSpeechOptions: Options.Create(new AzureSpeechOptions { Key = "fake-key", Region = "eastus", Voices = new(StringComparer.OrdinalIgnoreCase) { ["en"] = "en-US-JennyNeural" } }),
+            azureSpeechClient: new DurationAwareAzureSpeechClient());
+
+    private static async Task WriteLongFormScriptInputsAsync(VideoAssemblyIntelligenceService service)
+    {
+        var request = new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormIntelligence",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            DryRun = false,
+            OverwriteExisting = true,
+            LongForm = new VideoAssemblyFormRequest
+            {
+                Enabled = true,
+                Platform = "YouTubeLong",
+                ScenePresentationProfile = ScenePresentationProfile.LongForm,
+                TargetDurationSeconds = 150
+            }
+        };
+
+        await service.GenerateVideoAssemblyAsync(request, CancellationToken.None);
+        request.Phase = "LongFormScript";
+        await service.GenerateVideoAssemblyAsync(request, CancellationToken.None);
+    }
+
 
     private static async Task WriteAssemblyPhaseInputsAsync(string workingDirectory, VideoAssemblyIntelligenceService service)
     {
@@ -799,5 +913,49 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         var path = Path.Combine(Path.GetTempPath(), "video-assembly-intelligence-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private sealed class DurationAwareAzureSpeechClient : IAzureSpeechClient
+    {
+        public Task<byte[]> SynthesizeMp3Async(string text, AzureSpeechOptions options, CancellationToken cancellationToken)
+            => Task.FromResult(BuildTestWaveAudioBytes(EstimateTestDurationSeconds(text)));
+
+        public Task<byte[]> SynthesizeWavSsmlAsync(string ssml, AzureSpeechOptions options, CancellationToken cancellationToken)
+            => Task.FromResult(BuildTestWaveAudioBytes(EstimateTestDurationSeconds(ssml)));
+    }
+
+    private static double EstimateTestDurationSeconds(string text)
+        => Math.Clamp(CountTestWords(text) / 150.0 * 60.0, 2.0, 180.0);
+
+    private static byte[] BuildTestWaveAudioBytes(double durationSeconds)
+    {
+        const int sampleRate = 24_000;
+        const short channels = 1;
+        const short bitsPerSample = 16;
+        var sampleCount = Math.Max(1, (int)Math.Round(durationSeconds * sampleRate, MidpointRounding.AwayFromZero));
+        var dataLength = sampleCount * channels * bitsPerSample / 8;
+        using var stream = new MemoryStream(44 + dataLength);
+        using var writer = new BinaryWriter(stream);
+        writer.Write(new byte[] { (byte)'R', (byte)'I', (byte)'F', (byte)'F' });
+        writer.Write(36 + dataLength);
+        writer.Write(new byte[] { (byte)'W', (byte)'A', (byte)'V', (byte)'E' });
+        writer.Write(new byte[] { (byte)'f', (byte)'m', (byte)'t', (byte)' ' });
+        writer.Write(16);
+        writer.Write((short)1);
+        writer.Write(channels);
+        writer.Write(sampleRate);
+        writer.Write(sampleRate * channels * bitsPerSample / 8);
+        writer.Write((short)(channels * bitsPerSample / 8));
+        writer.Write(bitsPerSample);
+        writer.Write(new byte[] { (byte)'d', (byte)'a', (byte)'t', (byte)'a' });
+        writer.Write(dataLength);
+
+        for (var i = 0; i < sampleCount; i++)
+        {
+            var value = (short)(Math.Sin(2.0 * Math.PI * 440.0 * i / sampleRate) * short.MaxValue * 0.20);
+            writer.Write(value);
+        }
+
+        return stream.ToArray();
     }
 }

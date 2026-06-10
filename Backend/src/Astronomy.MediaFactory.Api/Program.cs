@@ -450,6 +450,22 @@ app.MapPost("/api/astronomy-intelligence/generate-video-assembly", async (VideoA
             });
         }
 
+        if (string.Equals(response.PhaseExecuted, "LongFormTts", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Ok(new
+            {
+                response.PhaseRequested,
+                response.PhaseExecuted,
+                response.TtsAudioGenerated,
+                response.TtsTimingsGenerated,
+                response.AudioFilePath,
+                response.TimingsFilePath,
+                response.ActualDurationSeconds,
+                response.TtsProvider,
+                response.AudioValidationPassed
+            });
+        }
+
         if (string.Equals(response.PhaseExecuted, "Assembly", StringComparison.OrdinalIgnoreCase))
         {
             return Results.Ok(new

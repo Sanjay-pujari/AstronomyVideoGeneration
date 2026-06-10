@@ -254,6 +254,26 @@ public sealed record VideoTtsSceneTimingDto(
     double EndSeconds,
     string Narration);
 
+public sealed record LongFormVideoTtsTimingsDto(
+    string EventId,
+    string RegionId,
+    string Language,
+    string Platform,
+    string AudioFilePath,
+    double EstimatedDurationSeconds,
+    double ActualDurationSeconds,
+    IReadOnlyList<LongFormVideoTtsSectionTimingDto> SectionTimings,
+    string TtsProvider,
+    string VoiceUsed,
+    VideoTtsAudioValidationDto AudioValidation,
+    DateTimeOffset GeneratedUtc);
+
+public sealed record LongFormVideoTtsSectionTimingDto(
+    string SectionKey,
+    double StartSeconds,
+    double EndSeconds,
+    string Narration);
+
 
 public sealed record VideoAssemblyPlanDto(
     string EventId,

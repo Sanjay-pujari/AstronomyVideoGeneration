@@ -116,14 +116,16 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private static bool IsLongFormRequest(VideoAssemblyGenerationRequest request)
         => ResolveRequestProfile(request) == ScenePresentationProfile.LongForm;
 
+    private static bool IsRequestedPhase(string phase, string expected)
+        => string.Equals(phase, expected, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(phase, $"LongForm{expected}", StringComparison.OrdinalIgnoreCase);
+
     private static VideoAssemblyGenerationRequest NormalizePhaseRequest(VideoAssemblyGenerationRequest request)
     {
         if (!request.Phase.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase))
             return request;
 
-        var phase = request.Phase["LongForm".Length..];
-        phase = string.IsNullOrWhiteSpace(phase) ? "Intelligence" : phase;
-        return CloneRequest(request, phase, ScenePresentationProfile.LongForm, request.LongForm);
+        return CloneRequest(request, request.Phase, ScenePresentationProfile.LongForm, request.LongForm);
     }
 
     private static VideoAssemblyGenerationRequest BuildFormRequest(VideoAssemblyGenerationRequest request, ScenePresentationProfile profile, string phase)
@@ -178,21 +180,24 @@ public sealed partial class VideoAssemblyIntelligenceService(
         if (string.Equals(request.Phase, "FullPipeline", StringComparison.OrdinalIgnoreCase))
             return await GenerateFullPipelineAsync(request, cancellationToken);
 
+        if (string.Equals(request.Phase, "LongFormTts", StringComparison.OrdinalIgnoreCase))
+            return await GenerateLongFormTtsAudioAsync(CloneRequest(request, "LongFormTts", ScenePresentationProfile.LongForm, request.LongForm), cancellationToken);
+
         var normalizedRequest = NormalizePhaseRequest(request);
 
-        if (string.Equals(normalizedRequest.Phase, "Script", StringComparison.OrdinalIgnoreCase))
+        if (IsRequestedPhase(normalizedRequest.Phase, "Script"))
             return await GenerateVideoNarrationScriptAsync(normalizedRequest, cancellationToken);
 
-        if (string.Equals(normalizedRequest.Phase, "Tts", StringComparison.OrdinalIgnoreCase))
+        if (IsRequestedPhase(normalizedRequest.Phase, "Tts"))
             return await GenerateTtsAudioAsync(normalizedRequest, cancellationToken);
 
-        if (string.Equals(normalizedRequest.Phase, "Assembly", StringComparison.OrdinalIgnoreCase))
+        if (IsRequestedPhase(normalizedRequest.Phase, "Assembly"))
             return await GenerateVideoAssemblyPlanAsync(normalizedRequest, cancellationToken);
 
-        if (string.Equals(normalizedRequest.Phase, "Render", StringComparison.OrdinalIgnoreCase))
+        if (IsRequestedPhase(normalizedRequest.Phase, "Render"))
             return await GenerateVideoRenderAsync(normalizedRequest, cancellationToken);
 
-        if (!string.Equals(normalizedRequest.Phase, "Intelligence", StringComparison.OrdinalIgnoreCase))
+        if (!IsRequestedPhase(normalizedRequest.Phase, "Intelligence"))
             throw new ArgumentException("Only video assembly phases 'Intelligence', 'Script', 'Tts', 'Assembly', 'Render', 'LongFormIntelligence', 'LongFormScript', 'LongFormTts', 'LongFormAssembly', 'LongFormRender', and 'FullPipeline' are implemented in this endpoint version.", nameof(request));
 
         var outputPath = BuildVideoAssemblyIntelligenceOutputPath(normalizedRequest.EventId, normalizedRequest.RegionId, ResolveRequestProfile(normalizedRequest));
@@ -256,7 +261,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
             foreach (var phase in new[] { "Intelligence", "Script", "Tts", "Assembly", "Render" })
             {
                 phaseName = profile == ScenePresentationProfile.LongForm ? $"LongForm{phase}" : phase;
-                var response = await GenerateVideoAssemblyAsync(BuildFormRequest(rootRequest, profile, phase), cancellationToken);
+                var response = await GenerateVideoAssemblyAsync(BuildFormRequest(rootRequest, profile, phaseName), cancellationToken);
                 generatedFiles.AddRange(response.GeneratedFiles);
                 AddIfNotEmpty(generatedFiles, response.VideoAssemblyIntelligencePath);
                 AddIfNotEmpty(generatedFiles, response.VideoNarrationScriptPath);
@@ -305,6 +310,9 @@ public sealed partial class VideoAssemblyIntelligenceService(
 
     private async Task<VideoAssemblyGenerationResponse> GenerateTtsAudioAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
     {
+        if (IsLongFormRequest(request))
+            return await GenerateLongFormTtsAudioAsync(CloneRequest(request, "LongFormTts", ScenePresentationProfile.LongForm, request.LongForm), cancellationToken);
+
         var audioPath = BuildVideoTtsAudioOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
         var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId, ResolveRequestProfile(request));
 
@@ -356,6 +364,131 @@ public sealed partial class VideoAssemblyIntelligenceService(
         }
 
         return BuildTtsResponse(request.Phase, audioPath, timingsPath, timings.ActualDurationSeconds, generatedFiles, provider.ProviderName, provider.IsSynthetic, audioValidation);
+    }
+
+
+    private async Task<VideoAssemblyGenerationResponse> GenerateLongFormTtsAudioAsync(VideoAssemblyGenerationRequest request, CancellationToken cancellationToken)
+    {
+        var audioPath = BuildVideoTtsAudioOutputPath(request.EventId, request.RegionId, ScenePresentationProfile.LongForm);
+        var timingsPath = BuildVideoTtsTimingsOutputPath(request.EventId, request.RegionId, ScenePresentationProfile.LongForm);
+
+        if (!request.OverwriteExisting && File.Exists(audioPath) && File.Exists(timingsPath))
+        {
+            var existing = await ReadLongFormVideoTtsTimingsAsync(timingsPath, cancellationToken);
+            ValidateLongFormVideoTtsTimings(existing);
+            var existingValidation = await ValidateMp3AudioAsync(audioPath, enforceNonSilent: true, cancellationToken);
+            if (!existingValidation.AudioValidationPassed)
+                throw new InvalidOperationException("Generated long-form TTS audio validation failed: audio is silent or invalid.");
+
+            return BuildLongFormTtsResponse(request.Phase, audioPath, timingsPath, existing.ActualDurationSeconds, [], AzureTtsProviderName, existingValidation);
+        }
+
+        EnsureLongFormAzureTtsAvailable();
+        var script = await EnsureRequiredTtsInputsAsync(request.EventId, request.RegionId, ScenePresentationProfile.LongForm, cancellationToken);
+        var voiceUsed = ResolveNeutralEducationalAzureVoice(script);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(audioPath) ?? ResolveWorkingDirectoryRoot());
+        await WriteAzureLongFormTtsAudioAsync(script.FullNarrationText, audioPath, cancellationToken);
+
+        var audioValidation = await ValidateMp3AudioAsync(audioPath, enforceNonSilent: true, cancellationToken);
+        if (!audioValidation.AudioValidationPassed)
+            throw new InvalidOperationException("Generated long-form TTS audio validation failed: audio is silent or invalid.");
+
+        var actualDurationSeconds = Math.Round(await ProbeDurationSecondsAsync(audioPath, cancellationToken), 3, MidpointRounding.AwayFromZero);
+        if (actualDurationSeconds < LongFormMinimumEstimatedDurationSeconds || actualDurationSeconds > LongFormMaximumEstimatedDurationSeconds)
+            throw new InvalidOperationException($"Generated long-form TTS audio duration must be 120-180 seconds. ActualDurationSeconds={actualDurationSeconds:0.###}.");
+
+        var sectionTimings = await BuildActualLongFormSectionTimingsAsync(script, actualDurationSeconds, cancellationToken);
+        var timings = new LongFormVideoTtsTimingsDto(
+            request.EventId,
+            request.RegionId,
+            request.Language,
+            "YouTubeLong",
+            NormalizePath(audioPath),
+            script.TotalEstimatedDurationSeconds,
+            actualDurationSeconds,
+            sectionTimings,
+            AzureTtsProviderName,
+            voiceUsed,
+            audioValidation,
+            DateTimeOffset.UtcNow);
+        ValidateLongFormVideoTtsTimings(timings);
+
+        await File.WriteAllTextAsync(timingsPath, JsonSerializer.Serialize(timings, JsonOptions), cancellationToken);
+
+        return BuildLongFormTtsResponse(
+            request.Phase,
+            audioPath,
+            timingsPath,
+            timings.ActualDurationSeconds,
+            [NormalizePath(audioPath), NormalizePath(timingsPath)],
+            AzureTtsProviderName,
+            audioValidation);
+    }
+
+    private void EnsureLongFormAzureTtsAvailable()
+    {
+        if (azureSpeechClient is null || azureSpeechOptions is null || !IsAzureSpeechConfigured(azureSpeechOptions.Value))
+            throw new InvalidOperationException("Azure Speech TTS provider is not available for LongFormTts.");
+    }
+
+    private async Task WriteAzureLongFormTtsAudioAsync(string narrationText, string audioPath, CancellationToken cancellationToken)
+    {
+        EnsureLongFormAzureTtsAvailable();
+        var audioBytes = await azureSpeechClient!.SynthesizeMp3Async(narrationText, azureSpeechOptions!.Value, cancellationToken);
+        await File.WriteAllBytesAsync(audioPath, audioBytes, cancellationToken);
+    }
+
+    private string ResolveNeutralEducationalAzureVoice(VideoNarrationScriptDto script)
+    {
+        if (!string.Equals(script.TtsPlan.RecommendedVoice, "NeutralEducational", StringComparison.OrdinalIgnoreCase))
+            return ResolveAzureVoice(script.FullNarrationText);
+
+        return azureSpeechOptions?.Value.GetPreferredVoices("en").FirstOrDefault() ?? "en-US-JennyNeural";
+    }
+
+    private async Task<IReadOnlyList<LongFormVideoTtsSectionTimingDto>> BuildActualLongFormSectionTimingsAsync(VideoNarrationScriptDto script, double actualDurationSeconds, CancellationToken cancellationToken)
+    {
+        var measuredDurations = new List<double>();
+        var tempRoot = Path.Combine(Path.GetTempPath(), "astronomy-longform-tts", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            for (var index = 0; index < script.SceneScripts.Count; index++)
+            {
+                var section = script.SceneScripts[index];
+                var tempPath = Path.Combine(tempRoot, $"section-{index:000}.mp3");
+                await WriteAzureLongFormTtsAudioAsync(section.Narration, tempPath, cancellationToken);
+                var measured = await ProbeDurationSecondsAsync(tempPath, cancellationToken);
+                if (measured <= 0)
+                    throw new InvalidOperationException($"Generated long-form TTS section '{section.SceneKey}' duration could not be measured.");
+                measuredDurations.Add(measured);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(tempRoot, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        var measuredTotal = measuredDurations.Sum();
+        if (measuredTotal <= 0)
+            throw new InvalidOperationException("Generated long-form TTS section timings could not be measured.");
+
+        var timings = new List<LongFormVideoTtsSectionTimingDto>();
+        var cursor = 0.0;
+        for (var index = 0; index < script.SceneScripts.Count; index++)
+        {
+            var section = script.SceneScripts[index];
+            var duration = measuredDurations[index] / measuredTotal * actualDurationSeconds;
+            var startSeconds = Math.Round(cursor, 3, MidpointRounding.AwayFromZero);
+            cursor = index == script.SceneScripts.Count - 1 ? actualDurationSeconds : cursor + duration;
+            var endSeconds = Math.Round(cursor, 3, MidpointRounding.AwayFromZero);
+            timings.Add(new LongFormVideoTtsSectionTimingDto(section.SceneKey, startSeconds, endSeconds, section.Narration));
+        }
+
+        return timings;
     }
 
 
@@ -453,14 +586,39 @@ public sealed partial class VideoAssemblyIntelligenceService(
         return BuildRenderResponse(request, outputPath, validation.FinalVideoDurationSeconds, validation.OutputResolution, validation.AudioTrackPresent, validation.RenderSucceeded, generatedFiles, validationPath, renderPolish);
     }
 
+    private static async Task<LongFormVideoTtsTimingsDto> ReadLongFormVideoTtsTimingsAsync(string timingsPath, CancellationToken cancellationToken)
+    {
+        var document = await File.ReadAllTextAsync(timingsPath, cancellationToken);
+        var longForm = JsonSerializer.Deserialize<LongFormVideoTtsTimingsDto>(document, JsonOptions);
+        if (longForm?.SectionTimings is { Count: > 0 })
+            return longForm;
+
+        var legacy = JsonSerializer.Deserialize<VideoTtsTimingsDto>(document, JsonOptions)
+            ?? throw new InvalidOperationException("Existing long-form video TTS timings could not be parsed.");
+        return new LongFormVideoTtsTimingsDto(
+            legacy.EventId,
+            legacy.RegionId,
+            legacy.Language,
+            legacy.Platform,
+            legacy.AudioFilePath,
+            legacy.EstimatedDurationSeconds,
+            legacy.ActualDurationSeconds,
+            legacy.SceneTimings.Select(scene => new LongFormVideoTtsSectionTimingDto(scene.SceneKey, scene.StartSeconds, scene.EndSeconds, scene.Narration)).ToArray(),
+            legacy.TtsProvider,
+            legacy.VoiceUsed,
+            legacy.AudioValidation ?? new VideoTtsAudioValidationDto(true, -120, -120, false),
+            legacy.GeneratedUtc);
+    }
+
     private async Task<VideoNarrationScriptDto> EnsureRequiredTtsInputsAsync(string eventId, string regionId, ScenePresentationProfile presentationProfile, CancellationToken cancellationToken)
     {
         var scriptPath = BuildVideoNarrationScriptOutputPath(eventId, regionId, presentationProfile);
+        var scriptFileName = presentationProfile == ScenePresentationProfile.LongForm ? LongVideoNarrationScriptFileName : VideoNarrationScriptFileName;
         if (!File.Exists(scriptPath))
-            throw new ArgumentException($"Required TTS input '{VideoNarrationScriptFileName}' was not found at '{NormalizePath(scriptPath)}'.");
+            throw new ArgumentException($"Required TTS input '{scriptFileName}' was not found at '{NormalizePath(scriptPath)}'.");
 
         var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(scriptPath, cancellationToken), JsonOptions)
-            ?? throw new ArgumentException($"Required TTS input '{VideoNarrationScriptFileName}' could not be parsed.");
+            ?? throw new ArgumentException($"Required TTS input '{scriptFileName}' could not be parsed.");
         ValidateVideoNarrationScript(script);
         return script;
     }
@@ -1702,6 +1860,28 @@ public sealed partial class VideoAssemblyIntelligenceService(
             throw new ArgumentException("Video assembly intelligence validation failed: videoAssemblyReadinessScore must be at least 90.");
     }
 
+    private static void ValidateLongFormVideoTtsTimings(LongFormVideoTtsTimingsDto timings)
+    {
+        if (string.IsNullOrWhiteSpace(timings.AudioFilePath))
+            throw new ArgumentException("Long-form video TTS timings validation failed: audioFilePath is required.");
+        if (!string.Equals(timings.Platform, "YouTubeLong", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Long-form video TTS timings validation failed: platform must be YouTubeLong.");
+        if (timings.EstimatedDurationSeconds < LongFormMinimumEstimatedDurationSeconds || timings.EstimatedDurationSeconds > LongFormMaximumEstimatedDurationSeconds)
+            throw new ArgumentException("Long-form video TTS timings validation failed: estimatedDurationSeconds must be 120-180 seconds.");
+        if (timings.ActualDurationSeconds < LongFormMinimumEstimatedDurationSeconds || timings.ActualDurationSeconds > LongFormMaximumEstimatedDurationSeconds)
+            throw new ArgumentException("Long-form video TTS timings validation failed: actualDurationSeconds must be 120-180 seconds.");
+        if (!string.Equals(timings.TtsProvider, AzureTtsProviderName, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Long-form video TTS timings validation failed: ttsProvider must be AzureSpeechTts.");
+        if (string.IsNullOrWhiteSpace(timings.VoiceUsed))
+            throw new ArgumentException("Long-form video TTS timings validation failed: voiceUsed is required.");
+        if (timings.AudioValidation is null || !timings.AudioValidation.AudioValidationPassed || timings.AudioValidation.IsSilentAudio)
+            throw new ArgumentException("Long-form video TTS timings validation failed: audioValidation must pass and must not be silent.");
+        if (timings.SectionTimings.Count == 0)
+            throw new ArgumentException("Long-form video TTS timings validation failed: sectionTimings are required.");
+        ValidateSceneTimingOrder(timings.SectionTimings.Select(section => section.SectionKey), ScenePresentationProfile.LongForm, "video-long-tts-timings.json");
+        ValidateTimingContinuity(timings.SectionTimings.Select(section => (section.StartSeconds, section.EndSeconds)).ToArray(), timings.ActualDurationSeconds, "Long-form video TTS timings validation failed");
+    }
+
     private static void ValidateVideoTtsTimings(VideoTtsTimingsDto timings)
     {
         if (string.IsNullOrWhiteSpace(timings.AudioFilePath))
@@ -1724,6 +1904,23 @@ public sealed partial class VideoAssemblyIntelligenceService(
             throw new ArgumentException("Video TTS timings validation failed: audioValidation is required.");
     }
 
+    private static void ValidateTimingContinuity(IReadOnlyList<(double StartSeconds, double EndSeconds)> timings, double actualDurationSeconds, string messagePrefix)
+    {
+        var cursor = 0.0;
+        for (var index = 0; index < timings.Count; index++)
+        {
+            var (startSeconds, endSeconds) = timings[index];
+            if (Math.Abs(startSeconds - cursor) > 0.02)
+                throw new ArgumentException($"{messagePrefix}: timing section {index + 1} must start at the previous section end.");
+            if (endSeconds <= startSeconds)
+                throw new ArgumentException($"{messagePrefix}: timing section {index + 1} must have positive duration.");
+            cursor = endSeconds;
+        }
+
+        if (Math.Abs(cursor - actualDurationSeconds) > 0.02)
+            throw new ArgumentException($"{messagePrefix}: final section end must match actualDurationSeconds.");
+    }
+
     private static void ValidateRequest(VideoAssemblyGenerationRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.EventId))
@@ -1741,7 +1938,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private static VideoAssemblyGenerationResponse BuildResponse(string phaseRequested, VideoAssemblyIntelligenceDto intelligence, string outputPath)
         => new(
             phaseRequested,
-            "Intelligence",
+            phaseRequested.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase) ? "LongFormIntelligence" : "Intelligence",
             true,
             NormalizePath(outputPath),
             intelligence.SelectedOpeningHook,
@@ -1753,7 +1950,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
     private static VideoAssemblyGenerationResponse BuildScriptResponse(string phaseRequested, VideoNarrationScriptDto script, string outputPath)
         => new(
             phaseRequested,
-            "Script",
+            phaseRequested.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase) ? "LongFormScript" : "Script",
             false,
             string.Empty,
             string.Empty,
@@ -1802,10 +1999,43 @@ public sealed partial class VideoAssemblyIntelligenceService(
             audioValidation?.AudioRmsDb ?? 0);
 
 
+    private static VideoAssemblyGenerationResponse BuildLongFormTtsResponse(
+        string phaseRequested,
+        string audioPath,
+        string timingsPath,
+        double actualDurationSeconds,
+        IReadOnlyList<string> generatedFiles,
+        string ttsProvider,
+        VideoTtsAudioValidationDto audioValidation)
+        => new(
+            phaseRequested,
+            "LongFormTts",
+            false,
+            string.Empty,
+            string.Empty,
+            0,
+            true,
+            false,
+            generatedFiles,
+            TtsReady: true,
+            TtsAudioGenerated: true,
+            TtsTimingsGenerated: true,
+            AudioFilePath: NormalizePath(audioPath),
+            TimingsFilePath: NormalizePath(timingsPath),
+            ActualDurationSeconds: actualDurationSeconds,
+            TtsProvider: ttsProvider,
+            IsSyntheticTts: false,
+            IsSilentAudio: audioValidation.IsSilentAudio,
+            AudioValidationPassed: audioValidation.AudioValidationPassed,
+            AudioPeakDb: audioValidation.AudioPeakDb,
+            AudioRmsDb: audioValidation.AudioRmsDb,
+            ScenePresentationProfileUsed: ScenePresentationProfile.LongForm);
+
+
     private static VideoAssemblyGenerationResponse BuildAssemblyResponse(string phaseRequested, VideoAssemblyPlanDto plan, string outputPath, IReadOnlyList<string> generatedFiles)
         => new(
             phaseRequested,
-            "Assembly",
+            phaseRequested.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase) ? "LongFormAssembly" : "Assembly",
             false,
             string.Empty,
             string.Empty,
@@ -1972,7 +2202,7 @@ public sealed partial class VideoAssemblyIntelligenceService(
         VideoRenderValidationDto renderPolish)
         => new(
             request.Phase,
-            "Render",
+            request.Phase.StartsWith("LongForm", StringComparison.OrdinalIgnoreCase) ? "LongFormRender" : "Render",
             false,
             string.Empty,
             string.Empty,
