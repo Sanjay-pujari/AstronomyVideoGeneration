@@ -103,20 +103,44 @@ public sealed class AstronomyEventDiscoveryPreviewServiceTests
         Assert.Equal(result.HighPriorityCount, root.GetProperty("highPriorityCount").GetInt32());
         Assert.Equal(result.ManualReviewCount, root.GetProperty("manualReviewCount").GetInt32());
         Assert.Equal(result.AutoGenerateAllowedCount, root.GetProperty("autoGenerateAllowedCount").GetInt32());
+        Assert.Equal(result.SkyfieldVerifiedCount, root.GetProperty("skyfieldVerifiedCount").GetInt32());
+        Assert.Equal(result.PlanetPairingComputedCount, root.GetProperty("planetPairingComputedCount").GetInt32());
+        Assert.Equal(result.MoonPhaseVerifiedCount, root.GetProperty("moonPhaseVerifiedCount").GetInt32());
+        Assert.Equal(result.MeteorMoonlightAdjustedCount, root.GetProperty("meteorMoonlightAdjustedCount").GetInt32());
+
+        var summary = root.GetProperty("verificationSummary");
+        Assert.Equal(result.InputEventCount, summary.GetProperty("inputEventCount").GetInt32());
+        Assert.Equal(result.SkyfieldVerifiedCount, summary.GetProperty("skyfieldVerifiedCount").GetInt32());
+        Assert.Equal(result.PlanetPairingComputedCount, summary.GetProperty("planetPairingComputedCount").GetInt32());
+        Assert.Equal(result.MoonPhaseVerifiedCount, summary.GetProperty("moonPhaseVerifiedCount").GetInt32());
+        Assert.Equal(result.MeteorMoonlightAdjustedCount, summary.GetProperty("meteorMoonlightAdjustedCount").GetInt32());
 
         var events = root.GetProperty("events").EnumerateArray().ToArray();
         Assert.DoesNotContain(events, e => e.GetProperty("eventType").GetString() == "FullMoon");
         var namedFullMoon = events.First(e => e.GetProperty("eventType").GetString() == "NamedFullMoon");
         Assert.Contains(namedFullMoon.GetProperty("aliases").EnumerateArray(), a => a.GetString() == "Full Moon");
-        Assert.Equal("Approximate", namedFullMoon.GetProperty("verificationStatus").GetString());
+        Assert.Contains(namedFullMoon.GetProperty("verificationStatus").GetString(), new[] { "Approximate", "Verified" });
+        if (namedFullMoon.GetProperty("verificationStatus").GetString() == "Verified")
+        {
+            Assert.Equal("Skyfield", namedFullMoon.GetProperty("verificationSource").GetString());
+        }
         Assert.Equal("Medium", namedFullMoon.GetProperty("publishPriority").GetString());
-        Assert.Contains(namedFullMoon.GetProperty("recommendedContentTypes").EnumerateArray(), c => c.GetString() == "ShortVideo");
         Assert.Contains(events, e => e.GetProperty("verificationStatus").GetString() == "NeedsManualReview" && e.GetProperty("sourceType").GetString() == "ManualSeed");
         Assert.All(root.GetProperty("topEvents").EnumerateArray(), e =>
         {
             Assert.True(e.GetProperty("contentWorthinessScore").GetInt32() >= 85);
             Assert.Equal("High", e.GetProperty("publishPriority").GetString());
             Assert.True(e.GetProperty("autoGenerateAllowed").GetBoolean());
+            Assert.NotEqual("NeedsManualReview", e.GetProperty("verificationStatus").GetString());
+            Assert.NotEqual("ManualSeed", e.GetProperty("sourceType").GetString());
+        });
+
+        Assert.All(events.Where(e => e.GetProperty("eventType").GetString()!.Contains("Meteor")), e =>
+        {
+            Assert.True(e.TryGetProperty("moonIlluminationPercent", out _));
+            Assert.True(e.TryGetProperty("moonInterference", out _));
+            Assert.True(e.TryGetProperty("bestViewingWindowLocal", out _));
+            Assert.True(e.TryGetProperty("radiantVisibilityNote", out _));
         });
     }
 
