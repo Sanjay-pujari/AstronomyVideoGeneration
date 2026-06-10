@@ -255,6 +255,89 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         Assert.All(sectionTimings, section => Assert.False(string.IsNullOrWhiteSpace(section.GetProperty("narration").GetString())));
     }
 
+
+    [Fact]
+    public async Task GenerateVideoAssemblyAsync_LongFormAssemblyWritesDocumentaryPlanFromSectionTimings()
+    {
+        var workingDirectory = CreateWorkingDirectory();
+        await WriteRequiredInputsAsync(workingDirectory);
+        var service = CreateService(workingDirectory);
+        await WriteLongFormAssemblyPhaseInputsAsync(workingDirectory, service);
+
+        var result = await service.GenerateVideoAssemblyAsync(new VideoAssemblyGenerationRequest
+        {
+            EventId = EventId,
+            RegionId = RegionId,
+            Language = "en",
+            Platform = "YouTubeLong",
+            Phase = "LongFormAssembly",
+            ScenePresentationProfile = ScenePresentationProfile.LongForm,
+            BackgroundMusic = true,
+            MusicMood = "WonderCuriosity",
+            MusicLevelPercent = 18,
+            DuckMusicUnderNarration = true,
+            DryRun = false,
+            OverwriteExisting = true
+        }, CancellationToken.None);
+
+        var planPath = Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "video-long-assembly-plan.json");
+        Assert.Equal("LongFormAssembly", result.PhaseRequested);
+        Assert.Equal("LongFormAssembly", result.PhaseExecuted);
+        Assert.True(result.VideoAssemblyPlanGenerated);
+        Assert.Equal(planPath.Replace('\\', '/'), result.VideoAssemblyPlanPath);
+        Assert.Equal(ScenePresentationProfile.LongForm, result.ScenePresentationProfileUsed);
+        Assert.True(result.ReadyForRender);
+        Assert.Equal(13, result.SegmentCount);
+        Assert.Equal(157.44, result.TotalDurationSeconds);
+        Assert.True(result.RenderUsedLongScenes);
+        Assert.False(result.RenderUsedShortScenes);
+        Assert.True(result.BackgroundMusicPlanned);
+        Assert.Equal(18, result.MusicLevelPercent);
+        Assert.True(File.Exists(planPath));
+        Assert.DoesNotContain(Directory.GetFiles(BuildLongVideoAssemblyRoot(workingDirectory)), path => Path.GetExtension(path).Equals(".mp4", StringComparison.OrdinalIgnoreCase));
+
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(planPath));
+        var root = document.RootElement;
+        Assert.Equal("YouTubeLong", root.GetProperty("platform").GetString());
+        Assert.Equal("LongForm", root.GetProperty("scenePresentationProfile").GetString());
+        Assert.EndsWith("/scene-approval-v3/long/", root.GetProperty("sceneImageBaseDirectory").GetString());
+        Assert.Equal(157.44, root.GetProperty("totalDurationSeconds").GetDouble());
+        Assert.Equal(Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "video-long-tts-audio.mp3").Replace('\\', '/'), root.GetProperty("audioFilePath").GetString());
+        Assert.Equal(Path.Combine(BuildLongVideoAssemblyRoot(workingDirectory), "final-video-long.mp4").Replace('\\', '/'), root.GetProperty("renderOutputPath").GetString());
+        Assert.True(root.GetProperty("backgroundMusic").GetBoolean());
+        Assert.True(root.GetProperty("renderMusicPlan").GetProperty("backgroundMusic").GetBoolean());
+        Assert.Equal("WonderCuriosity", root.GetProperty("renderMusicPlan").GetProperty("musicMood").GetString());
+        Assert.Equal(18, root.GetProperty("renderMusicPlan").GetProperty("musicLevelPercent").GetInt32());
+        Assert.True(root.GetProperty("renderMusicPlan").GetProperty("duckMusicUnderNarration").GetBoolean());
+        Assert.True(root.GetProperty("validation").GetProperty("readyForRender").GetBoolean());
+
+        var segments = root.GetProperty("segments").EnumerateArray().ToArray();
+        Assert.Equal(13, segments.Length);
+        Assert.Equal(new[] { "Hook", "WhatIsHappening", "AboutVenus", "AboutJupiter", "WhyTheyAppearClose", "WhereToLook", "WhenToLook", "HowToObserve", "WhatYouWillSee", "InterestingFact", "ObservationTips", "Recap", "Action" }, segments.Select(segment => segment.GetProperty("sectionKey").GetString()));
+        Assert.Equal(0.0, segments[0].GetProperty("startSeconds").GetDouble());
+        Assert.Equal(13.455, segments[0].GetProperty("endSeconds").GetDouble());
+        Assert.Equal(13.455, segments[0].GetProperty("durationSeconds").GetDouble());
+        Assert.Equal("None", segments[0].GetProperty("transitionIn").GetString());
+        Assert.Equal("CrossFade", segments[0].GetProperty("transitionOut").GetString());
+        Assert.Equal("SlowZoom", segments[0].GetProperty("motion").GetString());
+        Assert.All(segments, segment => Assert.Contains(segment.GetProperty("motion").GetString(), new[] { "SubtleKenBurns", "SlowPan", "SlowZoom", "SlowZoomOut" }));
+        Assert.EndsWith("scene-001-final.png", segments[0].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-001-final.png", segments[1].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-001-final.png", segments[2].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-005-final.png", segments[3].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-005-final.png", segments[4].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-002-final.png", segments[5].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-003-final.png", segments[6].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-004-final.png", segments[7].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-001-final.png", segments[8].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-005-final.png", segments[9].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-004-final.png", segments[10].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-003-final.png", segments[11].GetProperty("visualAssetPath").GetString());
+        Assert.EndsWith("scene-006-final.png", segments[12].GetProperty("visualAssetPath").GetString());
+        Assert.Equal(157.44, segments[^1].GetProperty("endSeconds").GetDouble());
+        Assert.Equal("None", segments[^1].GetProperty("transitionOut").GetString());
+    }
+
     [Fact]
     public async Task GenerateVideoAssemblyAsync_LongFormTtsWithoutAzureFailsClearly()
     {
@@ -729,6 +812,35 @@ public sealed class VideoAssemblyIntelligenceServiceTests
         await service.GenerateVideoAssemblyAsync(request, CancellationToken.None);
     }
 
+
+
+    private static async Task WriteLongFormAssemblyPhaseInputsAsync(string workingDirectory, VideoAssemblyIntelligenceService service)
+    {
+        await WriteLongFormScriptInputsAsync(service);
+
+        var videoAssemblyRoot = BuildLongVideoAssemblyRoot(workingDirectory);
+        Directory.CreateDirectory(videoAssemblyRoot);
+        await File.WriteAllBytesAsync(Path.Combine(videoAssemblyRoot, "video-long-tts-audio.mp3"), BuildTestWaveAudioBytes(157.44));
+
+        var script = JsonSerializer.Deserialize<VideoNarrationScriptDto>(await File.ReadAllTextAsync(Path.Combine(videoAssemblyRoot, "video-long-narration-script.json")), JsonOptions)!;
+        var starts = new[] { 0.000, 13.455, 25.547, 37.639, 49.731, 61.823, 73.915, 86.007, 98.099, 110.191, 122.283, 134.375, 146.467 };
+        var ends = new[] { 13.455, 25.547, 37.639, 49.731, 61.823, 73.915, 86.007, 98.099, 110.191, 122.283, 134.375, 146.467, 157.44 };
+        var sectionTimings = script.SceneScripts.Select((scene, index) => new LongFormVideoTtsSectionTimingDto(scene.SceneKey, starts[index], ends[index], scene.Narration)).ToArray();
+        var timings = new LongFormVideoTtsTimingsDto(
+            EventId,
+            RegionId,
+            "en",
+            "YouTubeLong",
+            Path.Combine(videoAssemblyRoot, "video-long-tts-audio.mp3").Replace('\\', '/'),
+            script.TotalEstimatedDurationSeconds,
+            157.44,
+            sectionTimings,
+            "AzureSpeechTts",
+            "en-US-JennyNeural",
+            new VideoTtsAudioValidationDto(false, -3.0, -18.0),
+            DateTimeOffset.UtcNow);
+        await File.WriteAllTextAsync(Path.Combine(videoAssemblyRoot, "video-long-tts-timings.json"), JsonSerializer.Serialize(timings, JsonOptions));
+    }
 
     private static async Task WriteAssemblyPhaseInputsAsync(string workingDirectory, VideoAssemblyIntelligenceService service)
     {
