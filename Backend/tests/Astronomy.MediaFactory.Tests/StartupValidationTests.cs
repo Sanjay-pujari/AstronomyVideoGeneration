@@ -11,6 +11,16 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class StartupValidationTests
 {
+
+    [Fact]
+    public void SkyfieldSidecarOptions_DefaultsYearlyAccuracyTimeoutTo180Seconds()
+    {
+        var options = new SkyfieldSidecarOptions();
+
+        Assert.Equal(30, options.TimeoutSeconds);
+        Assert.Equal(180, options.YearlyAccuracyTimeoutSeconds);
+    }
+
     [Fact]
     public void ProductionValidation_Fails_WhenCriticalAzureSettingsMissing()
     {
