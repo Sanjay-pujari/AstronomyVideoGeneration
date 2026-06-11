@@ -17,6 +17,7 @@ public sealed class ContentPlanBatchGenerationService(
     private const int DefaultMaxPlans = 1;
     private const int MaxPlanLimit = 10;
     private static readonly string[] RunnableStatuses = ["Draft", "Planned", "Approved"];
+    private static readonly string[] RetryRunnableStatuses = ["Draft", "Planned", "Approved", "ProductionFailed"];
     private static readonly string[] DryRunSteps =
     [
         "Would create content_pipeline_execution",
@@ -43,7 +44,8 @@ public sealed class ContentPlanBatchGenerationService(
         var maxPlans = Math.Clamp(request.MaxPlans <= 0 ? DefaultMaxPlans : request.MaxPlans, 1, MaxPlanLimit);
         var candidates = await LoadPlanCandidatesAsync(request.Year, request.RegionId, request.Language, cancellationToken);
 
-        var selection = SelectPlans(candidates, requestedTitles, request.OnlyHighPriority, maxPlans);
+        var allowFailedPlanRetry = IsFailedPlanRetryMode(request);
+        var selection = SelectPlans(candidates, requestedTitles, request.OnlyHighPriority, maxPlans, allowFailedPlanRetry);
         var selectedPlanEntities = selection.SelectedPlans;
         var warnings = selection.Warnings;
         var selectedPlans = selectedPlanEntities
@@ -233,8 +235,9 @@ public sealed class ContentPlanBatchGenerationService(
             .ToArrayAsync(cancellationToken);
     }
 
-    private static SelectionResult SelectPlans(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, bool onlyHighPriority, int maxPlans)
+    private static SelectionResult SelectPlans(IReadOnlyList<ContentGenerationPlan> candidates, IReadOnlyList<string> requestedTitles, bool onlyHighPriority, int maxPlans, bool allowFailedPlanRetry)
     {
+        var allowedStatuses = allowFailedPlanRetry ? RetryRunnableStatuses : RunnableStatuses;
         var selected = new List<ContentGenerationPlan>();
         var warnings = new List<BatchGenerateFromPlansWarning>();
         var selectedIds = new HashSet<Guid>();
@@ -252,7 +255,7 @@ public sealed class ContentPlanBatchGenerationService(
             }
 
             var runnableMatches = matches
-                .Where(IsStatusRunnable)
+                .Where(p => IsStatusRunnable(p, allowedStatuses))
                 .Where(IsAstronomyEventRunnable)
                 .Where(p => !onlyHighPriority || IsHighPriority(p))
                 .OrderBy(p => IsExactMatch(p, requestedTitle) ? 0 : 1)
@@ -262,7 +265,7 @@ public sealed class ContentPlanBatchGenerationService(
 
             if (runnableMatches.Length == 0)
             {
-                warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, false, BuildExclusionReason(matches[0], onlyHighPriority)));
+                warnings.Add(new BatchGenerateFromPlansWarning(requestedTitle, true, false, BuildExclusionReason(matches[0], onlyHighPriority, allowedStatuses)));
                 continue;
             }
 
@@ -323,9 +326,16 @@ public sealed class ContentPlanBatchGenerationService(
 
     private static string Normalize(string? value) => (value ?? string.Empty).Trim();
 
+    private static bool IsFailedPlanRetryMode(BatchGenerateFromPlansRequest request)
+        => request.UseProductionPipeline
+            && (request.RetryFailedOnly || request.StartPhaseNo.HasValue || request.AllowFailedPlanRetry);
+
     private static bool IsStatusRunnable(ContentGenerationPlan plan)
-        => RunnableStatuses.Contains(plan.Status, StringComparer.OrdinalIgnoreCase)
-            || RunnableStatuses.Contains(plan.PlanStatus, StringComparer.OrdinalIgnoreCase);
+        => IsStatusRunnable(plan, RunnableStatuses);
+
+    private static bool IsStatusRunnable(ContentGenerationPlan plan, IReadOnlyCollection<string> allowedStatuses)
+        => allowedStatuses.Contains(plan.Status, StringComparer.OrdinalIgnoreCase)
+            || allowedStatuses.Contains(plan.PlanStatus, StringComparer.OrdinalIgnoreCase);
 
     private static bool IsAstronomyEventRunnable(ContentGenerationPlan plan)
     {
@@ -339,10 +349,10 @@ public sealed class ContentPlanBatchGenerationService(
 
     private static bool IsHighPriority(ContentGenerationPlan plan) => plan.Priority <= 10 || plan.PriorityScore >= 7.5m;
 
-    private static string BuildExclusionReason(ContentGenerationPlan plan, bool onlyHighPriority)
+    private static string BuildExclusionReason(ContentGenerationPlan plan, bool onlyHighPriority, IReadOnlyCollection<string> allowedStatuses)
     {
-        if (!IsStatusRunnable(plan))
-            return $"Excluded because status was {plan.Status} and planStatus was {plan.PlanStatus}; allowed status or planStatus values are Draft, Planned, Approved";
+        if (!IsStatusRunnable(plan, allowedStatuses))
+            return $"Excluded because status was {plan.Status} and planStatus was {plan.PlanStatus}; allowed status or planStatus values are {string.Join(", ", allowedStatuses)}";
         if (plan.AstronomyEventIntelligence is null)
             return "Excluded because linked AstronomyEventIntelligence was missing";
         if (!plan.AstronomyEventIntelligence.AutoGenerateAllowed)
