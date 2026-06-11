@@ -333,7 +333,7 @@ public sealed class QuestionScenePlanner(
         var answersByType = questionSet.Answers
             .GroupBy(a => a.QuestionType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.OrderBy(a => a.DisplayOrder).First(), StringComparer.OrdinalIgnoreCase);
-        var isMeteorShower = questionSet.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase)
+        var isMeteorShower = questionSet.AstronomyEventIntelligence?.EventType.Contains("meteor", StringComparison.OrdinalIgnoreCase) == true
             || questionSet.AstronomyEventIntelligence?.Title.Contains("meteor", StringComparison.OrdinalIgnoreCase) == true;
 
         var scenes = SceneOrder.Select((questionType, index) =>

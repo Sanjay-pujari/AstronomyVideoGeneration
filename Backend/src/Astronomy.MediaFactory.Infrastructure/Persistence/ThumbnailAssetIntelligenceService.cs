@@ -245,7 +245,6 @@ public sealed class ThumbnailAssetIntelligenceService(IOptions<RenderingOptions>
                 ctx.Fill(color, new RectangleF(0, y, width, 1));
             }
             var rng = new Random(20261214 + width + height);
-            using var starPen = Pens.Solid(Color.FromRgba(255, 255, 255, 150), 1);
             for (var i = 0; i < 180; i++)
             {
                 var x = rng.Next(width);
